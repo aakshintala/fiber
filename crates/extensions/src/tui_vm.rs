@@ -651,12 +651,17 @@ impl TuiVm {
     /// Calls the renderer of `slot` for `session_id` with `input`, an object,
     /// and returns its lines with whether the item keeps animating. The
     /// renderer receives `input` with `session_id` set to the argument, the
-    /// `frame` count, and the width. A plain list or `{ lines }` continues
-    /// at the declared interval; only `{ lines, animate = false }` stops,
-    /// drawing once. Any other shape is the existing wrong-shape failure.
+    /// `frame` count and the frame's `now` in Unix milliseconds, and the
+    /// width. A plain list or `{ lines }` continues at the declared
+    /// interval; only `{ lines, animate = false }` stops, drawing once.
+    /// Any other shape is the existing wrong-shape failure.
     ///
     /// A timeout switches the VM off: every later call is [`Error::TuiOff`].
     /// The caller decides the fallback.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame and its wall time travel with the draw context"
+    )]
     pub fn call_animated(
         &mut self,
         slot: &str,
@@ -664,24 +669,25 @@ impl TuiVm {
         input: &Value,
         width: u16,
         frame: u64,
+        now: u64,
         builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
     ) -> Result<RenderOut, Error> {
-        self.invoke(slot, session_id, input, width, Some(frame), builtin)
+        self.invoke(slot, session_id, input, width, Some((frame, now)), builtin)
             .and_then(|returned| render_out_from(&returned))
     }
 
     /// Runs the renderer once under its declared timeout and returns what
-    /// it returned. `frame` counts the frame into the input object when
-    /// set; a plain call sends no `frame` key and Lua reads nil. Shares
-    /// the deadline, the off latch and the `builtin` scope with every
-    /// animated call.
+    /// it returned. An animated call's `frame` and `now` travel into the
+    /// input object together; a plain call sends neither key and Lua reads
+    /// nil. Shares the deadline, the off latch and the `builtin` scope
+    /// with every animated call.
     fn invoke(
         &mut self,
         slot: &str,
         session_id: Option<&str>,
         input: &Value,
         width: u16,
-        frame: Option<u64>,
+        frame_now: Option<(u64, u64)>,
         builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
     ) -> Result<mlua::Value, Error> {
         if self.off {
@@ -703,8 +709,9 @@ impl TuiVm {
                 Value::String(session_id.to_owned()),
             );
         }
-        if let Some(frame) = frame {
+        if let Some((frame, now)) = frame_now {
             object.insert("frame".to_owned(), Value::from(frame));
+            object.insert("now".to_owned(), Value::from(now));
         }
         // JSON null is nil, so an absent field and a null one read alike.
         let options = SerializeOptions::new()

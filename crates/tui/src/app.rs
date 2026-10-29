@@ -1708,7 +1708,9 @@ impl App {
             || crate::surface::edged(self.input_height(), room),
             |panel| crate::view::request::height(&panel, self.column_width(), room),
         );
-        let under = input + self.steering_below() + usize::from(self.working_row_shown());
+        let under = input
+            + crate::view::steering_queue::count(self, self.column_width())
+            + crate::view::working_line::count(self, self.column_width());
         // The notice rows draw above the working line, so their room is
         // what is left above it; the badge and hint draw above them. The
         // count runs through the same seam the draw will, so hidden

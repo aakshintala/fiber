@@ -29,10 +29,25 @@ pub enum Input<'a> {
     ErrorLine(ErrorLine<'a>),
     /// One notice, wherever the built-in draws one.
     Notice(Notice<'a>),
+    /// The working line: how long the turn runs, or its wait to retry.
+    WorkingLine(WorkingLine),
+    /// The queued steering messages, oldest first.
+    SteeringQueue(SteeringQueue<'a>),
+    /// The narrow layout's status rows.
+    StatusRows(StatusRows<'a>),
+    /// One panel card's source data.
+    Card(Card<'a>),
 }
 
+mod chrome;
 mod slots;
 mod turn;
+
+pub use chrome::{
+    BranchName, Card, ChangedFile, ChangedFiles, Delegate, DelegatesCard, Job, JobsCard,
+    QueuedImage, Quota, SessionCard, SessionContext, Spend, StatusRows, SteeringMessage,
+    SteeringQueue, WidgetCard, WorkingLine, WorkingRetry,
+};
 
 pub use slots::{
     Answers, ErrorLine, GroupLine, HandoffBand, LedgerRow, Notice, Prompt, PromptImage, ReplyText,

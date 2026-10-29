@@ -42,8 +42,11 @@ fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decisi
 }
 
 use crate::ext::{
-    AnswerDisposition, CallState, CardPrompt, Failure, Input, LedgerResult, LedgerRow, Prompt,
-    PromptImage, RawSpan, ReplyText, ThinkingLine, TurnCard, TurnCardState, TurnEnded,
+    AnswerDisposition, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles,
+    Delegate, DelegatesCard, Failure, Input, Job, JobsCard, LedgerResult, LedgerRow, Prompt,
+    PromptImage, Quota, RawSpan, ReplyText, SessionCard, SessionContext, Spend, StatusRows,
+    SteeringMessage, SteeringQueue, ThinkingLine, TurnCard, TurnCardState, TurnEnded, WidgetCard,
+    WorkingLine, WorkingRetry,
 };
 
 fn raw(text: &str) -> RawSpan {
@@ -863,6 +866,582 @@ fn notice_input(text: &'static str) -> Input<'static> {
         text,
         flat: false,
     })
+}
+
+fn working_line(started: Option<u64>, flat: bool) -> Input<'static> {
+    Input::WorkingLine(WorkingLine {
+        started,
+        retry: None,
+        flat,
+    })
+}
+
+fn working_retry() -> Input<'static> {
+    Input::WorkingLine(WorkingLine {
+        started: Some(7),
+        retry: Some(WorkingRetry {
+            code: contract::ErrorCode::RateLimited,
+            attempt: 2,
+            last_attempt: 4,
+            delay_ms: 4000,
+            ts: 9,
+        }),
+        flat: false,
+    })
+}
+
+fn steering_message(text: &'static str, selected: bool) -> SteeringMessage<'static> {
+    SteeringMessage {
+        text,
+        images: Vec::new(),
+        droppable: true,
+        selectable: true,
+        selected,
+    }
+}
+
+fn steering_queue(messages: Vec<SteeringMessage<'static>>, flat: bool) -> Input<'static> {
+    Input::SteeringQueue(SteeringQueue { messages, flat })
+}
+
+fn usage(cost: Option<f64>) -> contract::shapes::Usage {
+    contract::shapes::Usage {
+        tokens: contract::shapes::Tokens {
+            input: 1,
+            output: 2,
+            cache_read: 3,
+            cache_write: std::collections::BTreeMap::new(),
+        },
+        cost,
+        subscription_cost: 0.5,
+    }
+}
+
+fn session_card<'a>(
+    model: Option<&'a str>,
+    spend: Option<Spend<'a>>,
+    tools_down: &'a std::collections::BTreeSet<String>,
+    waiting: Option<usize>,
+) -> SessionCard<'a> {
+    SessionCard {
+        workspace: Some("~/work/fiber"),
+        branch: Some(BranchName::Named("main")),
+        model,
+        thinking: Some("high"),
+        context: Some(SessionContext {
+            tokens: 268000,
+            window: 1000000,
+            trigger_at: Some(400000),
+        }),
+        spend,
+        budget: Some(20.0),
+        speed: Some(64),
+        turns: 12,
+        tools_down,
+        waiting,
+        flat: false,
+    }
+}
+
+fn status_rows<'a>(
+    session: SessionCard<'a>,
+    files: &'a [ChangedFile<'a>],
+    waiting: Option<usize>,
+    quota: Option<Quota<'a>>,
+) -> Input<'a> {
+    Input::StatusRows(StatusRows {
+        cards: vec!["session".to_owned(), "changed_files".to_owned()],
+        session,
+        changed_files: ChangedFiles { files, flat: false },
+        delegates_running: 1,
+        jobs_running: 0,
+        widgets: Vec::new(),
+        waiting,
+        quota,
+        flat: false,
+    })
+}
+
+fn quota_info(provider: &str) -> contract::events::QuotaInfo {
+    contract::events::QuotaInfo {
+        provider: provider.to_owned(),
+        credential: "work".to_owned(),
+        windows: Some(vec![contract::events::QuotaWindow {
+            name: "weekly".to_owned(),
+            percent_used: Some(35.0),
+            reset: None,
+            resets_at: None,
+        }]),
+        credit: None,
+        unreachable: None,
+    }
+}
+
+fn delegate(
+    job_id: &'static str,
+    outcome: Option<contract::events::Outcome>,
+    ended: Option<u64>,
+) -> Delegate<'static> {
+    Delegate {
+        job_id,
+        description: "review the diff",
+        harness: "fiber",
+        model: "m",
+        calls: 14,
+        step: Some("read app.rs"),
+        started: Some(1720000000000),
+        outcome,
+        ended,
+    }
+}
+
+#[test]
+fn each_chrome_slot_caches_by_input_and_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(Some(4.12));
+    let files = [
+        ChangedFile {
+            path: "crates/tui/src/app.rs",
+            added: 38,
+            removed: 9,
+        },
+        ChangedFile {
+            path: "crates/tui/src/view.rs",
+            added: 1,
+            removed: 2,
+        },
+    ];
+    let jobs = [Job {
+        job_id: "7",
+        description: "bench",
+    }];
+    let lines: Vec<String> = vec!["one".to_owned()];
+    let cases: Vec<(&str, Input<'_>, Input<'_>)> = vec![
+        (
+            "working_line",
+            working_line(Some(1), false),
+            working_line(Some(2), false),
+        ),
+        (
+            "working_line",
+            working_line(Some(7), false),
+            working_retry(),
+        ),
+        (
+            "steering_queue",
+            steering_queue(vec![steering_message("fix the flake", false)], false),
+            steering_queue(vec![steering_message("fix the flake", true)], false),
+        ),
+        (
+            "status_rows",
+            status_rows(
+                session_card(Some("m"), Some(Spend::Status(&spend)), &tools_down, None),
+                &files,
+                None,
+                None,
+            ),
+            status_rows(
+                session_card(Some("m"), Some(Spend::Status(&spend)), &tools_down, None),
+                &files,
+                Some(2),
+                None,
+            ),
+        ),
+        (
+            "card:session",
+            Input::Card(Card::Session(session_card(
+                Some("m"),
+                Some(Spend::Status(&spend)),
+                &tools_down,
+                None,
+            ))),
+            Input::Card(Card::Session(session_card(
+                Some("n"),
+                Some(Spend::Status(&spend)),
+                &tools_down,
+                None,
+            ))),
+        ),
+        (
+            "card:changed_files",
+            Input::Card(Card::ChangedFiles(ChangedFiles {
+                files: &files,
+                flat: false,
+            })),
+            Input::Card(Card::ChangedFiles(ChangedFiles {
+                files: &files[1..],
+                flat: false,
+            })),
+        ),
+        (
+            "card:delegates",
+            Input::Card(Card::Delegates(DelegatesCard {
+                delegates: vec![delegate("3", None, None)],
+                flat: false,
+            })),
+            Input::Card(Card::Delegates(DelegatesCard {
+                delegates: vec![delegate(
+                    "3",
+                    Some(contract::events::Outcome::Completed),
+                    Some(1720000001000),
+                )],
+                flat: false,
+            })),
+        ),
+        (
+            "card:jobs",
+            Input::Card(Card::Jobs(JobsCard {
+                jobs: &jobs,
+                open: false,
+                flat: false,
+            })),
+            Input::Card(Card::Jobs(JobsCard {
+                jobs: &jobs,
+                open: true,
+                flat: false,
+            })),
+        ),
+        (
+            "card:e/w",
+            Input::Card(Card::Widget(WidgetCard {
+                extension: "e",
+                widget: "w",
+                lines: &lines,
+                open: false,
+                flat: false,
+            })),
+            Input::Card(Card::Widget(WidgetCard {
+                extension: "e",
+                widget: "w",
+                lines: &lines,
+                open: true,
+                flat: false,
+            })),
+        ),
+    ];
+    for (slot, first, second) in &cases {
+        let before = calls.get();
+        assert!(
+            draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
+            "{slot} draws"
+        );
+        assert!(
+            draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
+            "{slot} hits"
+        );
+        // A renderer runs again only when its input or the width
+        // changes (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 1, "{slot} hits the cache");
+        assert!(
+            draw_counted(&cache, slot, first, 24, &calls, drawn("hi")).is_some(),
+            "{slot} draws at a new width"
+        );
+        // The width rides the entry key beside the input
+        // (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 2, "{slot} keys the width");
+        assert!(
+            draw_counted(&cache, slot, second, 20, &calls, drawn("hi")).is_some(),
+            "{slot} draws a new input"
+        );
+        // The key covers the slot and every field
+        // (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 3, "{slot} keys the input");
+    }
+}
+
+#[test]
+fn chrome_keys_cover_flat_order_slot_and_spend_shape() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    // Flat rides the key: the same working line draws again flat.
+    let before = calls.get();
+    assert!(
+        draw_counted(
+            &cache,
+            "working_line",
+            &working_line(Some(1), false),
+            20,
+            &calls,
+            drawn("hi")
+        )
+        .is_some()
+    );
+    assert!(
+        draw_counted(
+            &cache,
+            "working_line",
+            &working_line(Some(1), false),
+            20,
+            &calls,
+            drawn("hi")
+        )
+        .is_some()
+    );
+    assert_eq!(calls.get(), before + 1, "same input hits");
+    assert!(
+        draw_counted(
+            &cache,
+            "working_line",
+            &working_line(Some(1), true),
+            20,
+            &calls,
+            drawn("hi")
+        )
+        .is_some()
+    );
+    assert_eq!(calls.get(), before + 2, "flat misses");
+    // Nested order matters: the same messages newest-first miss.
+    let before = calls.get();
+    let oldest = steering_queue(
+        vec![
+            steering_message("one", false),
+            steering_message("two", false),
+        ],
+        false,
+    );
+    let newest = steering_queue(
+        vec![
+            steering_message("two", false),
+            steering_message("one", false),
+        ],
+        false,
+    );
+    assert!(draw_counted(&cache, "steering_queue", &oldest, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "steering_queue", &newest, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before + 2, "message order misses");
+    // Images ride the key: the same text with an image misses.
+    let before = calls.get();
+    let imaged = SteeringMessage {
+        text: "one",
+        images: vec![PromptImage {
+            path: "artifacts/a.png",
+            width: 8,
+            height: 8,
+        }],
+        droppable: true,
+        selectable: false,
+        selected: false,
+    };
+    let with_image = steering_queue(vec![imaged], false);
+    assert!(
+        draw_counted(
+            &cache,
+            "steering_queue",
+            &with_image,
+            20,
+            &calls,
+            drawn("hi")
+        )
+        .is_some()
+    );
+    assert_eq!(calls.get(), before + 1, "images miss");
+    // The slot rides the key: the same working line under another slot
+    // misses.
+    let before = calls.get();
+    let line = working_line(Some(1), false);
+    assert!(draw_counted(&cache, "working_line", &line, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before, "same slot hits");
+    assert!(draw_counted(&cache, "card:session", &line, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before + 1, "another slot misses");
+    // The two spend shapes key apart: the status spend whole against
+    // the attached fallback's cost alone.
+    let before = calls.get();
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(Some(4.12));
+    let whole = Input::Card(Card::Session(session_card(
+        Some("m"),
+        Some(Spend::Status(&spend)),
+        &tools_down,
+        None,
+    )));
+    let fallback = Input::Card(Card::Session(session_card(
+        Some("m"),
+        Some(Spend::Attached { cost: 4.12 }),
+        &tools_down,
+        None,
+    )));
+    assert!(draw_counted(&cache, "card:session", &whole, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "card:session", &fallback, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before + 2, "spend shapes miss");
+    // Quota presence keys, and its rows keep their order.
+    let before = calls.get();
+    let files: [ChangedFile<'_>; 0] = [];
+    let codex = [quota_info("codex")];
+    let both = [quota_info("codex"), quota_info("openrouter")];
+    let swapped = [quota_info("openrouter"), quota_info("codex")];
+    let bare = status_rows(
+        session_card(Some("m"), None, &tools_down, None),
+        &files,
+        None,
+        None,
+    );
+    let quoted = status_rows(
+        session_card(Some("m"), None, &tools_down, None),
+        &files,
+        None,
+        Some(Quota {
+            rows: &codex,
+            notice_at: 80.0,
+        }),
+    );
+    let ordered = status_rows(
+        session_card(Some("m"), None, &tools_down, None),
+        &files,
+        None,
+        Some(Quota {
+            rows: &both,
+            notice_at: 80.0,
+        }),
+    );
+    let reordered = status_rows(
+        session_card(Some("m"), None, &tools_down, None),
+        &files,
+        None,
+        Some(Quota {
+            rows: &swapped,
+            notice_at: 80.0,
+        }),
+    );
+    assert!(draw_counted(&cache, "status_rows", &bare, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "status_rows", &quoted, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "status_rows", &ordered, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "status_rows", &reordered, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before + 4, "quota presence and order miss");
+}
+
+#[test]
+fn chrome_spend_cost_is_in_the_key() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let tools_down = std::collections::BTreeSet::new();
+    let low = usage(Some(4.12));
+    let high = usage(Some(4.13));
+    let cheap = Input::Card(Card::Session(session_card(
+        Some("m"),
+        Some(Spend::Status(&low)),
+        &tools_down,
+        None,
+    )));
+    let dear = Input::Card(Card::Session(session_card(
+        Some("m"),
+        Some(Spend::Status(&high)),
+        &tools_down,
+        None,
+    )));
+    let first = draw_counted(&cache, "card:session", &cheap, 20, &calls, drawn("hi"))
+        .expect("a cached line");
+    assert!(text_of(&first).starts_with("hi"));
+    assert!(draw_counted(&cache, "card:session", &cheap, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), 1, "same spend hits");
+    assert!(draw_counted(&cache, "card:session", &dear, 20, &calls, drawn("hi")).is_some());
+    // Only the session spend's cost differs, so a miss proves the key
+    // carries the float (`docs/tui.md`, "How a TUI extension runs").
+    assert_eq!(calls.get(), 2, "a changed cost misses");
+}
+
+#[test]
+fn chrome_delegate_outcomes_key_apart() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let ended = Some(1720000001000);
+    for outcome in [
+        contract::events::Outcome::Completed,
+        contract::events::Outcome::Failed,
+        contract::events::Outcome::Cancelled,
+    ] {
+        let card = Input::Card(Card::Delegates(DelegatesCard {
+            delegates: vec![delegate("3", Some(outcome), ended)],
+            flat: false,
+        }));
+        assert!(
+            draw_counted(&cache, "card:delegates", &card, 20, &calls, drawn("hi")).is_some(),
+            "{outcome:?} draws"
+        );
+    }
+    // Every field but the outcome matches, and every outcome is `Some`,
+    // so three misses prove the key reaches the variant
+    // (`docs/tui.md`, "How a TUI extension runs").
+    assert_eq!(calls.get(), 3, "each outcome misses");
+}
+
+#[test]
+fn chrome_card_flat_drops_the_style_through_the_closed_path() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let lines = vec!["hi".to_owned()];
+    let card = |flat: bool| {
+        Input::Card(Card::Widget(WidgetCard {
+            extension: "e",
+            widget: "w",
+            lines: &lines,
+            open: false,
+            flat,
+        }))
+    };
+    let styled = vec![vec![RawSpan {
+        text: "hi".to_owned(),
+        fg: Some("accent".to_owned()),
+        ..RawSpan::default()
+    }]];
+    let draw = |flat: bool| {
+        cache
+            .lines_animated_closed(
+                page(0),
+                "card:e/w",
+                "test",
+                None,
+                &card(flat),
+                20,
+                |frame| {
+                    calls.set(calls.get() + 1);
+                    assert_eq!(frame, 0);
+                    (
+                        Decision::Draw {
+                            extension: "test".into(),
+                            lines: styled.clone(),
+                        },
+                        true,
+                    )
+                },
+            )
+            .expect("a fitted line")
+    };
+    let vivid = draw(false);
+    assert!(text_of(&vivid).starts_with("hi"));
+    assert_ne!(
+        vivid
+            .first()
+            .expect("one line")
+            .line
+            .spans
+            .first()
+            .expect("one span")
+            .style,
+        ratatui::style::Style::default(),
+        "a styled span keeps its style"
+    );
+    let flat = draw(true);
+    assert!(text_of(&flat).starts_with("hi"));
+    // (`docs/tui.md`, "The slots": `flat` is true when the terminal drops every style.)
+    assert_eq!(
+        flat.first()
+            .expect("one line")
+            .line
+            .spans
+            .first()
+            .expect("one span")
+            .style,
+        ratatui::style::Style::default(),
+        "flat drops the style"
+    );
+    assert_eq!(calls.get(), 2, "flat misses");
 }
 
 /// Draws `row` at `width`, counting renderer calls.
@@ -1991,7 +2570,8 @@ fn closed_draws_cache_the_still_or_stored_frame_without_animation_state() {
     assert_eq!(answers.frames.borrow().clone(), vec![0, 0, 0, 1, 1]); // docs/tui.md:2994: closed draws cache frame 0 without changing animation state.
 }
 
-/// A notice seam holding `fake` on page 0.
+/// A notice seam holding `fake` on page 0, with the frame wall time
+/// set, so animated draws run.
 fn notice_bound(fake: std::rc::Rc<dyn crate::ext::Renderer>) -> crate::ext::Bound {
     let handle = crate::ext::Handle::create();
     handle.set(fake);
@@ -2004,6 +2584,7 @@ fn notice_bound(fake: std::rc::Rc<dyn crate::ext::Renderer>) -> crate::ext::Boun
             halves: None,
         },
         flat: false,
+        now: Some(1_000),
     }
 }
 
@@ -2061,6 +2642,265 @@ fn an_animated_notice_draws_its_cached_frame_zero_still() {
     assert_eq!(fake.frames.borrow().clone(), vec![0, 0]);
     bound.cache.mark_painted(&[tag_of(&second)]);
     assert_eq!(bound.cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+}
+
+#[test]
+fn an_animated_notice_without_wall_time_draws_builtin() {
+    use crate::ext::tests::AnimatedRenderer;
+    crate::work::take();
+    let cache = Cache::default();
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling("notice", ANIM_INTERVAL, 1));
+    let handle = crate::ext::Handle::create();
+    handle.set(fake.clone());
+    let bound = crate::ext::Bound {
+        handle,
+        cache: Arc::new(cache),
+        page: page(0),
+        ctx: crate::ext::SessionCtx {
+            session_id: Some(contract::SessionId("s".into())),
+            halves: None,
+        },
+        flat: false,
+        now: None,
+    };
+    // Without the frame wall time there is no animated call: the slot
+    // draws its built-in, invoking and memoizing nothing.
+    assert!(bound.notice_lines(7, "io_failed", "x", 20).is_none());
+    assert!(fake.frames.borrow().is_empty());
+    assert!(bound.cache.take_failures().is_empty());
+}
+
+#[test]
+fn a_warm_count_promotes_its_paint_at_a_new_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let arguments = serde_json::json!({});
+    let row = input("shell", "first", &arguments);
+    let draw = |frame: u64| {
+        calls.set(calls.get() + 1);
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![raw(&format!("f{frame}"))]],
+            },
+            true,
+        )
+    };
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    // A cold count stores frame 0 through the closed path, writing no
+    // animation state and asking no due: the dues check stays shut
+    // until a paint marks, so it runs only after the promotion below.
+    let counted = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 20, draw)
+        .expect("counted frame 0");
+    assert_eq!(calls.get(), 1);
+    assert!(text_of(&counted).starts_with("f0"), "{counted:?}");
+    // The paint promotes the stored frame 0 instead of calling again,
+    // initializing the item's animation state as a fresh draw would.
+    let painted = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 0");
+    assert_eq!(calls.get(), 1, "paint promotes the count");
+    assert_eq!(text_of(&painted), text_of(&counted));
+    cache.mark_painted(&[tag_of(&painted)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // The next frame advances with a call; a count at a new width stores
+    // that warmer frame, and the paint there promotes it.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let advanced = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("advanced frame 1");
+    assert_eq!(calls.get(), 2);
+    assert!(text_of(&advanced).starts_with("f1"), "{advanced:?}");
+    let counted_wide = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 24, draw)
+        .expect("counted frame 1 at the new width");
+    assert_eq!(calls.get(), 3);
+    assert!(text_of(&counted_wide).starts_with("f1"), "{counted_wide:?}");
+    let painted_wide = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            24,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 1 at the new width");
+    assert_eq!(calls.get(), 3, "a warm paint promotes the warm count");
+    assert_eq!(text_of(&painted_wide), text_of(&counted_wide));
+}
+
+#[test]
+fn a_due_paint_promotes_its_count_at_a_new_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let arguments = serde_json::json!({});
+    let row = input("shell", "first", &arguments);
+    let draw = |frame: u64| {
+        calls.set(calls.get() + 1);
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![raw(&format!("f{frame}"))]],
+            },
+            true,
+        )
+    };
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let counted = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 20, draw)
+        .expect("counted frame 0");
+    assert!(text_of(&counted).starts_with("f0"), "{counted:?}");
+    let painted = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 0");
+    assert_eq!(calls.get(), 1, "paint promotes the count");
+    cache.mark_painted(&[tag_of(&painted)]);
+    assert_eq!(cache.anim_dues(), vec![(t0, ANIM_INTERVAL)]);
+    // Advance at the old width and mark it, so the next frame is both
+    // painted and due.
+    cache.begin_anim_frame(Some(at(t0, 500)), false);
+    let advanced = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("advanced frame 1");
+    assert_eq!(calls.get(), 2);
+    assert!(text_of(&advanced).starts_with("f1"), "{advanced:?}");
+    cache.mark_painted(&[tag_of(&advanced)]);
+    assert_eq!(cache.anim_dues(), vec![(at(t0, 500), ANIM_INTERVAL)]);
+    // The next frame is due, so a paint without promotion would advance
+    // to frame 2: the count at the new width stores frame 1, and the
+    // paint there must promote it instead of calling again.
+    cache.begin_anim_frame(Some(at(t0, 1_000)), false);
+    let counted_wide = cache
+        .lines_animated_closed(page(0), "ledger_row", "test", None, &row, 24, draw)
+        .expect("counted frame 1 at the new width");
+    assert_eq!(calls.get(), 3);
+    assert!(text_of(&counted_wide).starts_with("f1"), "{counted_wide:?}");
+    let painted_wide = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            24,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("painted frame 1 at the new width");
+    assert_eq!(calls.get(), 3, "a due paint promotes the due count");
+    assert_eq!(text_of(&painted_wide), text_of(&counted_wide));
+}
+
+#[test]
+fn dropping_a_page_drops_its_closed_draw_but_promotes_the_other() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let frames = std::cell::RefCell::new(Vec::new());
+    let arguments = serde_json::json!({"command": "ls"});
+    let row = input("shell", "first", &arguments);
+    let draw = |frame: u64| {
+        calls.set(calls.get() + 1);
+        frames.borrow_mut().push(frame);
+        (
+            Decision::Draw {
+                extension: "test".into(),
+                lines: vec![vec![raw(&format!("f{frame}"))]],
+            },
+            true,
+        )
+    };
+    let counted = |at: usize| {
+        cache
+            .lines_animated_closed(page(at), "ledger_row", "test", None, &row, 20, draw)
+            .expect("a counted frame")
+    };
+    let first = counted(0);
+    let second = counted(1);
+    assert!(text_of(&first).starts_with("f0"), "{first:?}");
+    assert!(text_of(&second).starts_with("f0"), "{second:?}");
+    assert_eq!(calls.get(), 2);
+    cache.drop_page(page(0));
+    // The cache lives with the paging window and is dropped with its
+    // pages (`docs/tui.md`, "How a TUI extension runs"): the dropped
+    // page paints again from frame 0 with a call ...
+    let t0 = origin();
+    cache.begin_anim_frame(Some(t0), false);
+    let repainted = cache
+        .lines_animated_paint(
+            page(0),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("a repainted frame 0");
+    assert!(text_of(&repainted).starts_with("f0"), "{repainted:?}");
+    assert_eq!(calls.get(), 3, "the dropped page calls again");
+    // ... while the kept page promotes its counted frame without one:
+    // one call per cache miss, none on a hit.
+    let promoted = cache
+        .lines_animated_paint(
+            page(1),
+            "ledger_row",
+            "test",
+            None,
+            &row,
+            20,
+            ANIM_INTERVAL,
+            draw,
+        )
+        .expect("a promoted frame 0");
+    assert_eq!(text_of(&promoted), text_of(&second));
+    assert_eq!(calls.get(), 3, "the kept page promotes without a call");
+    assert_eq!(frames.borrow().clone(), vec![0, 0, 0]);
 }
 
 /// Paints animated notice `id` holding `text` at `width` on `cache`,
@@ -2321,6 +3161,10 @@ impl crate::ext::Renderer for FailingNotice {
     ) -> Option<std::time::Duration> {
         Some(ANIM_INTERVAL)
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame and its wall time travel with the draw context"
+    )]
     fn render_animated(
         &self,
         _ctx: &crate::ext::SessionCtx,
@@ -2328,6 +3172,7 @@ impl crate::ext::Renderer for FailingNotice {
         _input: &crate::ext::Input<'_>,
         _width: u16,
         frame: u64,
+        _now: u64,
         _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
     ) -> (Decision, bool) {
         let _ = frame;
@@ -2335,7 +3180,8 @@ impl crate::ext::Renderer for FailingNotice {
     }
 }
 
-/// A failing `notice` bound on shared `cache` at page `index`.
+/// A failing `notice` bound on shared `cache` at page `index`, with
+/// the frame wall time set, so animated draws run.
 fn failing_bound(cache: Arc<Cache>, index: usize) -> crate::ext::Bound {
     let handle = crate::ext::Handle::create();
     handle.set(std::rc::Rc::new(FailingNotice));
@@ -2348,6 +3194,7 @@ fn failing_bound(cache: Arc<Cache>, index: usize) -> crate::ext::Bound {
             halves: None,
         },
         flat: false,
+        now: Some(1_000),
     }
 }
 

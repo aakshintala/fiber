@@ -2157,6 +2157,10 @@ impl crate::ext::Renderer for ItemAndNotice {
             self.item.animate_interval(ctx, slot)
         }
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame and its wall time travel with the draw context"
+    )]
     fn render_animated(
         &self,
         ctx: &crate::ext::SessionCtx,
@@ -2164,14 +2168,15 @@ impl crate::ext::Renderer for ItemAndNotice {
         input: &crate::ext::Input<'_>,
         width: u16,
         frame: u64,
+        now: u64,
         builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
     ) -> (crate::ext::Decision, bool) {
         if slot == "notice" {
             self.notice
-                .render_animated(ctx, slot, input, width, frame, builtin)
+                .render_animated(ctx, slot, input, width, frame, now, builtin)
         } else {
             self.item
-                .render_animated(ctx, slot, input, width, frame, builtin)
+                .render_animated(ctx, slot, input, width, frame, now, builtin)
         }
     }
 }
@@ -2214,8 +2219,9 @@ fn painted_item_and_notice_keys_join_the_shared_frame_mark() {
 /// tool turn at width 60: heights below cut or drop the summary by row
 /// arithmetic, and every test proves its premise on the buffer.
 fn summary_geometry() -> (usize, usize) {
-    let (app, _) = animated_summary();
+    let (mut app, _) = animated_summary();
     let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_now(t0, 1_000);
     let full = paint_conversation(&app, t0, 40);
     let body = text(&full);
     assert!(body.contains("anim0-2"), "{body}");
@@ -2233,8 +2239,9 @@ fn an_offscreen_item_never_advances_or_asks() {
     // A twin app fixes the geometry: this app's first paint is
     // already offscreen, so the item is never marked.
     let (start, total) = summary_geometry();
-    let (app, fake) = animated_summary();
+    let (mut app, fake) = animated_summary();
     let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_now(t0, 1_000);
     // The viewport starts past the summary's last row: the short paint
     // draws without it, and the buffer proves the premise.
     let height =
@@ -2254,8 +2261,9 @@ fn an_offscreen_item_never_advances_or_asks() {
 
 #[test]
 fn a_partially_painted_item_stays_active_with_dues() {
-    let (app, fake) = animated_summary();
+    let (mut app, fake) = animated_summary();
     let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_now(t0, 1_000);
     // The full paint draws all three animated rows at frame 0.
     let full = paint_conversation(&app, t0, 40);
     let body = text(&full);
@@ -2315,8 +2323,9 @@ fn a_changed_frame_line_count_recounts_before_the_corrective_paint() {
 
 #[test]
 fn a_scrolled_off_item_resumes_without_restarting() {
-    let (app, fake) = animated_summary();
+    let (mut app, fake) = animated_summary();
     let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_now(t0, 1_000);
     let full = paint_conversation(&app, t0, 40);
     let body = text(&full);
     assert!(body.contains("anim0-0"), "{body}");
@@ -2492,8 +2501,9 @@ fn recount_ignores_a_stale_session_for_a_resident_page_index() {
 
 #[test]
 fn shown_exposes_animation_tags_only_for_in_range_items() {
-    let (app, _) = animated_summary();
+    let (mut app, _) = animated_summary();
     let t0 = fakes::clock::FakeClock::new().origin();
+    app.set_now(t0, 1_000);
     let full = paint_conversation(&app, t0, 40);
     let body = text(&full);
     let total = app.scroll().1;

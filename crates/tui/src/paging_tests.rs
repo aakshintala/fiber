@@ -5352,3 +5352,30 @@ fn copy_says_a_paged_out_reply_is_paged_out_until_the_end_loads_it() {
     assert!(text.starts_with("reply 2_29: "), "{text}");
     assert!(app.copied());
 }
+
+#[test]
+fn a_dropped_page_draw_keeps_the_frame_wall_time() {
+    use crate::ext::tests::AnimatedRenderer;
+    use std::time::Duration;
+    let (mut pages, _lines) = work_pages(4, 80);
+    drop_half(&mut pages);
+    assert!(pages.part(0).is_none(), "page 0 is dropped");
+    let resident = pages.part(2).cloned().expect("page 2 is resident");
+    // The window binds a dropped page through a scratch cache sharing
+    // the resident install, flag and wall time.
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "reply",
+        Duration::from_millis(500),
+        1,
+    ));
+    pages.ext.handle = crate::ext::Handle::create();
+    pages
+        .ext
+        .handle
+        .set(fake.clone() as std::rc::Rc<dyn crate::ext::Renderer>);
+    pages.ext.wall_ms = Some(1_000);
+    let ((rows, _, _, _), _) = pages.draw_sourced(0, &resident, super::Draw::Shown);
+    assert!(!rows.is_empty(), "the dropped page draws");
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(fake.nows.borrow().clone(), vec![1_000]);
+}

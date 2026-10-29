@@ -8,6 +8,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
+use crate::ext::{Input, RawSpan, SlotDraw, SteeringQueue};
 use crate::format;
 use crate::mouse::{Target, TargetId};
 use crate::theme::{Role, style};
@@ -25,14 +26,140 @@ const CROSS: &str = "  ✕";
 /// past them (`docs/tui.md`, "Steering").
 const PREFIX_CELLS: usize = 4;
 
+/// The steering queue's renderer input: its messages oldest first.
+fn input(app: &App, flat: bool) -> SteeringQueue<'_> {
+    SteeringQueue {
+        messages: app.steering_messages(),
+        flat,
+    }
+}
+
+/// The built-in queue as spans: the heading, one span line per laid row
+/// and the footer. The paint path below draws the same rows from the
+/// laid rows directly, so its buffers never depend on this conversion.
+fn builtin_spans(app: &App, width: u16) -> Vec<Vec<RawSpan>> {
+    let dim = style(Role::Muted);
+    let mut out = vec![crate::ext::spans::from_ratatui(&[Span::styled(
+        format!("{INDENT}{HEADING}"),
+        dim,
+    )])];
+    for row in app.steering_rows() {
+        let crossed = row.droppable
+            && PREFIX_CELLS + format::width(&row.text) + format::width(CROSS) <= usize::from(width);
+        let mut spans = vec![
+            Span::styled(INDENT, dim),
+            Span::styled(
+                if row.selected { "▸ " } else { "↳ " },
+                if row.selected {
+                    style(Role::Attention)
+                } else {
+                    dim
+                },
+            ),
+            Span::styled(row.text, if row.selected { Style::default() } else { dim }),
+        ];
+        if crossed {
+            spans.push(Span::styled(CROSS, dim));
+        }
+        out.push(crate::ext::spans::from_ratatui(&spans));
+    }
+    out.push(crate::ext::spans::from_ratatui(&[Span::styled(
+        format!("{INDENT}{FOOTER}"),
+        dim,
+    )]));
+    out
+}
+
+/// How many rows the steering queue reserves: a replacement's line
+/// count, or one row per message with the heading above and the footer
+/// below them. A zero-line replacement hides all three, and nothing
+/// draws or runs on an empty queue.
+pub(crate) fn count(app: &App, width: u16) -> usize {
+    let bound = super::notice_rows::frame_bound(app);
+    let folded = input(app, bound.flat);
+    if folded.messages.is_empty() {
+        return 0;
+    }
+    let builtin = &|_: &Input<'_>, width: u16| builtin_spans(app, width);
+    match bound.slot_lines(
+        SlotDraw::Count,
+        "steering_queue",
+        &Input::SteeringQueue(folded),
+        width,
+        builtin,
+    ) {
+        Some(lines) => lines.len(),
+        // A miss draws the built-in: one row per message with the
+        // heading above and the footer below them.
+        None => app.steering_below(),
+    }
+}
+
 /// Draws the steering queue on the rows above `bottom`: the heading, one
 /// row each with the row's `✕` after its text, and the footer, all dim
 /// and indented two columns. A selected row's mark is in `attention` and
 /// its text in the default foreground. Each row is a target over its
 /// whole row, and a drawn `✕` a target over its cell
 /// (`docs/tui.md`, "Steering"). Moves `bottom` above them; nothing while
-/// the queue is empty.
+/// the queue is empty. A replacement draws its own lines with no
+/// per-message target instead: keys still drop and pick rows.
 pub(super) fn draw(
+    app: &App,
+    area: Rect,
+    bottom: &mut u16,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) {
+    let bound = super::notice_rows::frame_bound(app);
+    let folded = input(app, bound.flat);
+    if folded.messages.is_empty() {
+        return;
+    }
+    let builtin = &|_: &Input<'_>, width: u16| builtin_spans(app, width);
+    let Some(fitted) = bound.slot_lines(
+        SlotDraw::Paint,
+        "steering_queue",
+        &Input::SteeringQueue(folded),
+        area.width,
+        builtin,
+    ) else {
+        paint_builtin(app, area, bottom, buf, targets);
+        return;
+    };
+    if fitted.is_empty() {
+        // An empty replacement hides the heading, the rows and the
+        // footer: no rows and no targets.
+        return;
+    }
+    paint_replacement(area, bottom, buf, &fitted);
+}
+
+/// Paints a replacement's lines bottom-up, newest row lowest, with no
+/// target: keys still drop and pick rows.
+fn paint_replacement(
+    area: Rect,
+    bottom: &mut u16,
+    buf: &mut Buffer,
+    fitted: &[crate::ext::spans::FittedLine],
+) {
+    let count = fitted
+        .len()
+        .min(usize::from(u16::MAX))
+        .min(bottom.saturating_sub(area.y) as usize);
+    if count == 0 {
+        return;
+    }
+    *bottom = bottom.saturating_sub(u16::try_from(count).unwrap_or(u16::MAX));
+    for (dy, line) in fitted.iter().take(count).enumerate() {
+        let row = bottom.saturating_add(u16::try_from(dy).unwrap_or(u16::MAX));
+        buf.set_line(area.x, row, &line.line, area.width);
+    }
+}
+
+/// Paints the built-in queue: the footer, one row each with the row's
+/// `✕` after its text, and the heading, each a target over its whole
+/// row with a drawn `✕` a target over its cell.
+fn paint_builtin(
     app: &App,
     area: Rect,
     bottom: &mut u16,
