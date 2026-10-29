@@ -999,6 +999,13 @@ fn builtin_outcome(
                 if word.substituted {
                     return Outcome::Executes;
                 }
+                // A recursive read that follows links is never read-only,
+                // even when the person lists the flag: the credential deny
+                // sees only the paths a call names, never a link below
+                // them.
+                if follows_links(entry.name, &word.cooked) {
+                    return Outcome::Executes;
+                }
                 // The built-in's flags are kept and the configured ones are
                 // added: a word the table refuses may still read under the
                 // same-named entry's grammar below.
@@ -1020,6 +1027,27 @@ fn builtin_outcome(
         operands.remove(0);
     }
     path_tail(&operands, dirs)
+}
+
+/// Whether `word` is a flag that makes a recursive read of `command`
+/// follow symbolic links, such as `grep -R`: the credential deny sees only
+/// the paths a call names, never a link below them, so the call is reviewed
+/// even when the person lists the flag. The built-in list omits these
+/// spellings; this guard keeps a merged entry from adding one back. Only a
+/// flag-position word reaches it: an operand after `--` keeps its meaning.
+fn follows_links(command: &str, word: &str) -> bool {
+    let spelling = word.split('=').next().unwrap_or(word);
+    matches!(
+        (command, spelling),
+        ("grep", "-R")
+            | ("grep", "--dereference-recursive")
+            | ("rg", "-L")
+            | ("rg", "--follow")
+            | ("find", "-L")
+            | ("find", "-H")
+            | ("find", "-follow")
+            | ("ls", "-L")
+    )
 }
 
 /// Whether the merged entry accepts one flag word under the configured

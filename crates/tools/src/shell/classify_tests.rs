@@ -1533,6 +1533,102 @@ fn a_configured_flag_on_a_built_in_command_reads() {
 }
 
 #[test]
+fn a_configured_subcommand_flag_on_git_status_reads() {
+    // A configured subcommand path under a built-in with subcommand entries
+    // merges too: `git status` has a flag list.
+    let entries = [configured("git status", &["--long"])];
+    for command in ["git status --long", "git status -s"] {
+        let effects = classified_with(command, &entries);
+        assert_eq!(effects.declared.effects, vec![Effect::Reads], "{command}");
+        assert!(effects.declared.reversible, "{command}");
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // The bare exact form keeps precedence with no paths.
+    let bare = classified_with("git status", &entries);
+    assert_eq!(bare.declared.effects, vec![Effect::Reads]);
+    assert!(bare.declared.paths.is_none());
+    // A flag on neither list still executes.
+    assert_configured_closed("git status --bogus", &entries);
+    // Without the entry the configured-only flag executes.
+    assert_closed("git status --long");
+}
+
+#[test]
+fn a_configured_value_flag_on_a_built_in_never_takes_a_substitution() {
+    let entries = [configured("cat", &["--foo="])];
+    assert_configured_reads("cat --foo=bar f", &entries, &["/work/f"]);
+    assert_configured_reads("cat --foo bar f", &entries, &["/work/f"]);
+    assert_configured_closed("cat --foo", &entries);
+    assert_configured_closed("cat --foo $(echo bar) f", &entries);
+}
+
+#[test]
+fn a_path_qualified_grep_entry_adds_nothing_to_grep() {
+    // Exact key match only: `/usr/bin/grep` never merges into `grep`, so
+    // neither spelling reads with the configured-only flag.
+    let entries = [configured("/usr/bin/grep", &["-P"])];
+    assert_configured_closed("/usr/bin/grep -P x", &entries);
+    assert_configured_closed("grep -P x", &entries);
+    // A built-in flag still reads.
+    assert_configured_reads("grep -n pat file", &entries, &["/work/file"]);
+}
+
+#[test]
+fn a_flagless_built_in_takes_no_configured_flags() {
+    // Table entries with no flag list take nothing: the exact-form
+    // `git branch --show-current` and `pwd` merge no configured flags.
+    let branch = [configured("git branch --show-current", &["--foo"])];
+    assert_configured_closed("git branch --show-current --foo", &branch);
+    assert_reads("git branch --show-current x");
+    let pwd = [configured("pwd", &["--foo"])];
+    assert_configured_closed("pwd --foo", &pwd);
+    assert_reads("pwd");
+}
+
+#[test]
+fn a_configured_link_following_flag_stays_reviewed() {
+    // A recursive read that follows links is never read-only, even when the
+    // person lists the flag: the credential deny sees only the paths a call
+    // names, never a link below them.
+    for (command, name, flags) in [
+        ("grep -R x ws", "grep", &["-R"] as &[&str]),
+        ("grep -R", "grep", &["-R"]),
+        (
+            "grep --dereference-recursive x ws",
+            "grep",
+            &["--dereference-recursive"],
+        ),
+        (
+            "grep --dereference-recursive=x ws",
+            "grep",
+            &["--dereference-recursive="],
+        ),
+        ("rg -L x", "rg", &["-L"]),
+        ("rg --follow x", "rg", &["--follow"]),
+        ("find -L x", "find", &["-L"]),
+        ("find -H x", "find", &["-H"]),
+        ("find -follow x", "find", &["-follow"]),
+        ("ls -L x", "ls", &["-L"]),
+    ] {
+        let entries = [configured(name, flags)];
+        assert_configured_closed(command, &entries);
+    }
+    // Near misses still read: the guard fires on the exact spelling in
+    // flag position only.
+    for command in [
+        "grep -r x ws",
+        "grep -L x ws",
+        "rg -l x",
+        "find -name x",
+        "ls -l x",
+        "grep -- -R ws",
+        "ls -- -L x",
+    ] {
+        assert_reads(command);
+    }
+}
+
+#[test]
 fn a_path_qualified_or_owned_configured_name_is_never_consulted() {
     // A plain built-in basename merges instead (the test above); what stays
     // unconsulted is a path-qualified name, `sed` with its own grammar, a
