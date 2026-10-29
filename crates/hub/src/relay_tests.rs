@@ -813,7 +813,7 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_1".to_owned(),
         command("c_1", "prompt"),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     assert!(
         settle(
@@ -835,7 +835,7 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_2".to_owned(),
         command("c_2", "subscribe"),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     match settle(
         acknowledgement(&ack("c_2")).as_ref(),
@@ -870,7 +870,7 @@ fn a_rejected_subscribe_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_1".to_owned(),
         subscribe("c_1"),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     assert!(
         settle(
@@ -888,7 +888,7 @@ fn a_rejected_subscribe_settles_to_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_2".to_owned(),
         subscribe("c_2"),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     assert!(
         settle(
@@ -953,7 +953,7 @@ fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
         let kept: Kept = Arc::new(Mutex::new(vec![(
             "c_1".to_owned(),
             queued,
-            KeptState::Queued,
+            CommandState::Queued,
         )]));
         crate::connection::lock(&relays).entries.push(Relay {
             session: SID.to_owned(),
@@ -1047,7 +1047,7 @@ fn an_accepted_rewind_settles_to_the_session_it_names() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_rw1".to_owned(),
         command,
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     let ack = serde_json::to_vec(&json!({
         "kind": "command_accepted", "ts": 1, "schema_version": 1,
@@ -1070,7 +1070,7 @@ fn a_rewind_without_a_minted_session_settles_to_nothing() {
         std::sync::Arc::new(std::sync::Mutex::new(vec![(
             "c_rw1".to_owned(),
             command.as_object().unwrap().clone(),
-            KeptState::Sent,
+            CommandState::Written,
         )]))
     };
     let rewind = json!({"id": "c_rw1", "command": "rewind", "args": {}});
@@ -1141,7 +1141,7 @@ fn an_accepted_prompt_naming_a_minted_session_starts_nothing() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_p1".to_owned(),
         prompt,
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     // Only a rewind starts a session, whatever result an acknowledgement carries.
     let ack = serde_json::to_vec(&json!({
@@ -1347,7 +1347,7 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
         kept: Arc::new(Mutex::new(vec![(
             "c_4".to_owned(),
             command("c_4", "reply"),
-            KeptState::Queued,
+            CommandState::Queued,
         )])),
         replayed: Replayed::default(),
         thread: Some(parked),
@@ -1367,7 +1367,7 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
         kept: Arc::new(Mutex::new(vec![(
             "c_2".to_owned(),
             command("c_2", "reply"),
-            KeptState::Queued,
+            CommandState::Queued,
         )])),
         replayed: Replayed::default(),
         thread: None,
@@ -1992,7 +1992,7 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
             .as_object()
             .unwrap()
             .clone(),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     order.enqueue(SID, "c_later");
     order.mark_rerouted("c_earlier", SID, EPOCH);
@@ -2052,7 +2052,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
                     .as_object()
                     .unwrap()
                     .clone(),
-                KeptState::Sent,
+                CommandState::Written,
             ),
             (
                 "c_queued".to_owned(),
@@ -2060,7 +2060,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
                     .as_object()
                     .unwrap()
                     .clone(),
-                KeptState::Queued,
+                CommandState::Queued,
             ),
         ];
         if !expect_pop {
@@ -2075,7 +2075,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
                         .as_object()
                         .unwrap()
                         .clone(),
-                    KeptState::Sent,
+                    CommandState::Written,
                 ),
             );
         }
@@ -2179,7 +2179,7 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
             .as_object()
             .unwrap()
             .clone(),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     let (entry_writer, _entry_peer) = UnixStream::pair().unwrap();
     crate::connection::lock(&relays).entries.push(Relay {
@@ -2243,16 +2243,20 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
     let relays = Arc::new(Mutex::new(Relays::default()));
     let order = crate::connection::lock(&relays).order.clone();
     let kept: Kept = Arc::new(Mutex::new(vec![
-        ("c_sent".to_owned(), serde_json::Map::new(), KeptState::Sent),
+        (
+            "c_sent".to_owned(),
+            serde_json::Map::new(),
+            CommandState::Written,
+        ),
         (
             "c_unsent1".to_owned(),
             serde_json::Map::new(),
-            KeptState::Queued,
+            CommandState::Queued,
         ),
         (
             "c_unsent2".to_owned(),
             serde_json::Map::new(),
-            KeptState::Queued,
+            CommandState::Queued,
         ),
     ]));
     for id in ["c_sent", "c_unsent1", "c_unsent2"] {
@@ -2303,7 +2307,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
             .as_object()
             .unwrap()
             .clone(),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     let (entry_writer, _entry_peer) = UnixStream::pair().unwrap();
     crate::connection::lock(&relays).entries.push(Relay {
@@ -2410,7 +2414,7 @@ fn the_relay_parses_each_session_line_once() {
                 .as_object()
                 .unwrap()
                 .clone(),
-            KeptState::Sent,
+            CommandState::Written,
         ),
         (
             "c_rw".to_owned(),
@@ -2418,7 +2422,7 @@ fn the_relay_parses_each_session_line_once() {
                 .as_object()
                 .unwrap()
                 .clone(),
-            KeptState::Sent,
+            CommandState::Written,
         ),
     ]));
     // `replayed` holds `c_hub`.
@@ -2621,17 +2625,98 @@ fn a_replay_that_cannot_start_is_refused_io_failed() {
     );
 }
 
-/// `docs/invocation.md`, "Lifecycle": a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
+/// `docs/invocation.md`, "What the hub speaks": only the move into
+/// `Rerouted` claims a command's one permitted re-route, and only from
+/// `Written`. Every other second claim, every move out of a terminal
+/// state, and every move for an unrecorded command is refused, and a
+/// refused move leaves the recorded state alone.
 #[test]
-fn hand_once_takes_an_id_once_until_it_is_forgotten() {
-    let order = crate::retire::AckOrder::default();
-    assert!(order.hand_once("c_1"));
-    assert!(!order.hand_once("c_1"), "the second handover is refused");
-    assert!(order.hand_once("c_2"), "another id has its own");
-    order.forget_handed("c_1");
-    assert!(order.hand_once("c_1"), "a forgotten id may be handed again");
-    order.drop_ids(&[("s".to_owned(), "c_2".to_owned())]);
-    assert!(order.hand_once("c_2"), "a dropped id is forgotten");
+fn transition_allows_each_documented_move_and_refuses_the_rest() {
+    use crate::relay::CommandState;
+    use crate::retire::{AckOrder, IllegalTransition};
+    use CommandState::{Answered, Dropped, Partial, Queued, Read, Rerouted, Written};
+    let states = [Read, Queued, Written, Partial, Rerouted, Answered, Dropped];
+    fn allowed(from: CommandState, to: CommandState) -> bool {
+        matches!(
+            (from, to),
+            (Read, Queued | Written | Partial | Answered)
+                | (Queued, Queued | Written | Partial | Answered | Dropped)
+                | (Written, Written | Rerouted | Answered | Dropped)
+                | (Partial, Answered | Dropped)
+                | (Rerouted, Written | Answered | Dropped)
+        )
+    }
+    fn stage(order: &AckOrder, from: CommandState) {
+        order.enqueue("s", "c_1");
+        match from {
+            Read => {}
+            Queued => {
+                order.transition("c_1", Queued).unwrap();
+            }
+            Written | Rerouted => {
+                order.transition("c_1", Written).unwrap();
+                if from == Rerouted {
+                    order.transition("c_1", Rerouted).unwrap();
+                }
+            }
+            Partial => {
+                order.transition("c_1", Partial).unwrap();
+            }
+            Answered => {
+                order.transition("c_1", Answered).unwrap();
+            }
+            Dropped => {
+                order.transition("c_1", Queued).unwrap();
+                order.transition("c_1", Dropped).unwrap();
+            }
+        }
+        assert_eq!(order.state("c_1"), Some(from), "staging {from:?}");
+    }
+    for from in states {
+        for to in states {
+            let order = AckOrder::default();
+            stage(&order, from);
+            match order.transition("c_1", to) {
+                Ok(previous) => {
+                    assert!(
+                        allowed(from, to),
+                        "the move from {from:?} to {to:?} is refused"
+                    );
+                    assert_eq!(previous, from, "the move reports what it moved from");
+                    assert_eq!(order.state("c_1"), Some(to), "the move lands");
+                }
+                Err(IllegalTransition::Forbidden {
+                    id,
+                    from: at,
+                    to: want,
+                }) => {
+                    assert!(
+                        !allowed(from, to),
+                        "the move from {from:?} to {to:?} is allowed"
+                    );
+                    assert_eq!(id, "c_1");
+                    assert_eq!(at, from);
+                    assert_eq!(want, to);
+                    assert_eq!(
+                        order.state("c_1"),
+                        Some(from),
+                        "a refused move changes nothing"
+                    );
+                }
+                Err(IllegalTransition::Unknown(_)) => {
+                    panic!("c_1 is recorded in {from:?}: no move is unknown");
+                }
+            }
+        }
+    }
+    let order = AckOrder::default();
+    for to in states {
+        assert_eq!(
+            order.transition("c_unrecorded", to),
+            Err(IllegalTransition::Unknown("c_unrecorded".to_owned())),
+            "an unrecorded command never moves to {to:?}",
+        );
+    }
 }
 
 /// One relay thread at its session's end, over a hub with a fake starter
@@ -2695,13 +2780,18 @@ impl Ended {
         };
         let mut queued = Vec::new();
         for id in sent {
-            queued.push(((*id).to_owned(), command(id), KeptState::Sent));
+            queued.push(((*id).to_owned(), command(id), CommandState::Written));
         }
         for id in unsent {
-            queued.push(((*id).to_owned(), command(id), KeptState::Queued));
+            queued.push(((*id).to_owned(), command(id), CommandState::Queued));
         }
         for (id, _, _) in &queued {
             order.enqueue(END_SID, id);
+        }
+        // The fixture stands in for `route`'s write: the relay wrote every
+        // staged command, so the canonical state matches the kept one.
+        for (id, _, state) in &queued {
+            order.transition(id, *state).unwrap();
         }
         let kept: Kept = Arc::new(Mutex::new(queued));
         let mut entry_peer = None;
@@ -2852,7 +2942,10 @@ fn a_queue_pump_reroute_rechecks_the_connection_attribution() {
 #[test]
 fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
-    assert!(ended.order.hand_once("c_1"), "the first handover happened");
+    ended
+        .order
+        .transition("c_1", CommandState::Rerouted)
+        .expect("the first handover claims the re-route");
     ended.close_session();
     let line = ended.line();
     assert_eq!(line["kind"], "command_rejected", "{line}");
@@ -2865,14 +2958,21 @@ fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
     assert_eq!(ended.order.session_for("c_1"), None);
-    assert!(ended.order.hand_once("c_1"), "the answered id is forgotten");
+    assert_eq!(
+        ended.order.state("c_1"),
+        None,
+        "the answered id is forgotten"
+    );
 }
 
 /// `docs/invocation.md`, "Lifecycle": a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
 #[test]
 fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
-    assert!(ended.order.hand_once("c_1"), "the first handover happened");
+    ended
+        .order
+        .transition("c_1", CommandState::Rerouted)
+        .expect("the first handover claims the re-route");
     ended.say(rejection("c_1", "closing"));
     let line = ended.line();
     assert_eq!(line["kind"], "command_rejected", "{line}");
@@ -2967,7 +3067,7 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
             .as_object()
             .unwrap()
             .clone(),
-        KeptState::Partial,
+        CommandState::Partial,
     ));
     ended.close_session();
     let passed = Deadline::after(MUST_SUCCEED_WITHIN)
@@ -3233,12 +3333,14 @@ fn the_command_writer_counts_accepted_bytes_before_its_failure() {
     );
 }
 
-/// `docs/invocation.md:728`, "Lifecycle": a `closing` answer for a command
-/// the hub only partly wrote is the session's own answer. It reaches the
-/// client instead of routing the command again, so the command is never
-/// delivered twice.
+/// `docs/invocation.md`, "Lifecycle": a command the hub had started
+/// writing to the session when the write failed may have been read, so it
+/// is rejected `indeterminate` however the session ends, and is never
+/// delivered again. Any answer the session sends for the cut command is
+/// suspect, so the hub suppresses it and settles one `indeterminate`
+/// answer instead.
 #[test]
-fn a_closing_answer_for_a_partly_written_command_is_not_routed_again() {
+fn a_closing_answer_for_a_partly_written_command_is_suppressed_for_indeterminate() {
     let held = fakes::TempDir::new("rs");
     let hub = hub(&held);
     let sid = "s_aaaaaaaaaaaaaaaa";
@@ -3254,11 +3356,12 @@ fn a_closing_answer_for_a_partly_written_command_is_not_routed_again() {
     let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
         "c_1".to_owned(),
         command,
-        KeptState::Partial,
+        CommandState::Partial,
     )]));
     assert!(
-        settle(acknowledgement(&closing).as_ref(), &kept, &hub, sid, true).is_none(),
-        "a partly written command's closing answer is its own"
+        matches!(settle(acknowledgement(&closing).as_ref(), &kept, &hub, sid, true),
+            Some(Settled::Indeterminate(ref id)) if id == "c_1"),
+        "a partly written command settles one indeterminate answer",
     );
     assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
 }
@@ -3327,7 +3430,7 @@ fn a_failed_change_workspace_start_keeps_the_old_subscription_for_the_retry() {
             .as_object()
             .unwrap()
             .clone(),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
     let reader = hub_session.try_clone().unwrap();

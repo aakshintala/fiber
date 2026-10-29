@@ -3597,6 +3597,14 @@ fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queu
         &contract::CommandId("c_1".to_owned()),
         &stripped,
     );
+    // The fixture stands in for the relay's write and the re-route claim:
+    // the command was written, then handed to the resumed session.
+    order
+        .transition("c_1", crate::relay::CommandState::Written)
+        .unwrap();
+    order
+        .transition("c_1", crate::relay::CommandState::Rerouted)
+        .unwrap();
     order.mark_rerouted("c_1", SID, epoch);
     crate::relay::route(
         &contract::CommandId("c_1".to_owned()),

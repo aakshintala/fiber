@@ -46,7 +46,7 @@ mod ack;
 mod relays;
 
 use crate::connection::{Hub, Refused, lock, reject};
-use crate::retire::{AckOrder, Retire};
+use crate::retire::{AckOrder, Retire, report};
 
 #[cfg(test)]
 pub(crate) use ack::ack_parses;
@@ -59,19 +59,34 @@ pub(crate) use relays::Relays;
 /// `session_id`, and how far its write got, so a `closing`
 /// answer can route it again and a retiring relay can pass on what it
 /// never wrote. Shared by the relay entry and its thread.
-pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>, KeptState)>>>;
+pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>, CommandState)>>>;
 
-/// How far a kept command's write got: queued but never written, fully
-/// written, or cut short by a failed write that may still have reached
-/// the session.
+/// One relayed command's delivery state
+/// (`docs/invocation.md`, "What the hub speaks"): the canonical state
+/// lives in [`crate::retire::AckOrder`], which owns every move between
+/// these states; a relay entry's kept commands only ever hold the three
+/// write outcomes (`Queued`, `Written`, `Partial`), since an entry drops
+/// a command once it is answered and only passes on what it never wrote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KeptState {
-    /// Queued on a retiring relay, never written.
+pub(crate) enum CommandState {
+    /// The hub read the command; it reached no session socket.
+    Read,
+    /// Held unsent, never read by a session: queued on a retiring relay,
+    /// or kept back by a write that accepted nothing.
     Queued,
-    /// Fully written to the session socket.
-    Sent,
-    /// The write failed after accepting bytes the session may have read.
+    /// The whole line reached the session socket; the hub waits for its
+    /// answer.
+    Written,
+    /// The write failed after accepting bytes the session may have read,
+    /// including a whole JSON body without its line feed.
     Partial,
+    /// Handed to the resumed session: the one permitted re-route.
+    Rerouted,
+    /// Exactly one answer reached the client.
+    Answered,
+    /// Ended with no answer: the client disconnected, or the session was
+    /// rewound or moved.
+    Dropped,
 }
 
 /// The hub-minted `subscribe` ids whose acknowledgements one relay thread
@@ -577,8 +592,11 @@ pub(crate) fn route(
             // it on in the order it was read. Never written: the
             // session is exiting or gone.
             if let Some(entry) = held.entries.get(at) {
-                lock(&entry.kept).push((id.0.clone(), stripped.clone(), KeptState::Queued));
+                lock(&entry.kept).push((id.0.clone(), stripped.clone(), CommandState::Queued));
             }
+            // A recovered command is already queued; a rerouted one keeps
+            // its claim.
+            report(&order, &id.0, CommandState::Queued);
             return true;
         }
         // Kept before the write, so the relay thread finds it when the
@@ -592,10 +610,13 @@ pub(crate) fn route(
         #[cfg(not(test))]
         let cap = None;
         let outcome = held.entries.get(at).map(|entry| {
-            lock(&entry.kept).push((id.0.clone(), stripped.clone(), KeptState::Sent));
+            lock(&entry.kept).push((id.0.clone(), stripped.clone(), CommandState::Written));
             write_client_command(&entry.writer, &bytes, cap)
         });
         if matches!(outcome, Some(Ok(()))) {
+            // The whole line landed. A rerouted command keeps its claim
+            // through the write.
+            report(&order, &id.0, CommandState::Written);
             return true;
         }
         // The write failed: the session is gone. Only the write half
@@ -613,15 +634,26 @@ pub(crate) fn route(
                 .find(|(kept, _, _)| *kept == id.0)
             {
                 kept.2 = if partial {
-                    KeptState::Partial
+                    CommandState::Partial
                 } else {
-                    KeptState::Queued
+                    CommandState::Queued
                 };
             }
             match entry.writer.shutdown(Shutdown::Write) {
                 Ok(()) | Err(_) => {}
             }
         }
+        // A rerouted command keeps its claim through the failed write: a
+        // second clean exit still answers it `closing`.
+        report(
+            &order,
+            &id.0,
+            if matches!(&outcome, Some(Err(partial)) if partial.written > 0) {
+                CommandState::Partial
+            } else {
+                CommandState::Queued
+            },
+        );
         true
     };
     if serve_existing() {
@@ -964,10 +996,14 @@ fn replay_exited_delegate(
     }
     let order = lock(relays).order.clone();
     crate::retire::enqueue_new(&order, session, id, stripped);
+    // The preloaded fold is the synthetic session's read: the replayed
+    // command counts as written, so its end may still claim the one
+    // re-route.
+    report(&order, &id.0, CommandState::Written);
     let kept: Kept = Arc::new(Mutex::new(vec![(
         id.0.clone(),
         stripped.clone(),
-        KeptState::Sent,
+        CommandState::Written,
     )]));
     let mark = crate::rejoin::Mark::now(&hub.home, session);
     let (hub_end, preload_end) = match UnixStream::pair() {
@@ -1386,7 +1422,7 @@ fn attach_inner_with_spawner(
     let kept: Kept = Arc::new(Mutex::new(
         command
             .as_ref()
-            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone(), KeptState::Sent))
+            .map(|(id, _, stripped)| (id.0.clone(), stripped.clone(), CommandState::Written))
             .into_iter()
             .collect(),
     ));
@@ -1403,7 +1439,7 @@ fn attach_inner_with_spawner(
             return AttachOutcome::Stale;
         }
     };
-    if let Some((_, bytes, _)) = &command {
+    if let Some((id, bytes, _)) = &command {
         // `attach_rejoin` passes no command, so this never runs while the
         // rejoin guard holds the relays lock: taking the hook here cannot
         // deadlock.
@@ -1415,12 +1451,27 @@ fn attach_inner_with_spawner(
             drop(admission);
             // Nothing accepted goes stale for a resume and retry, while
             // accepted bytes may have reached the session: that command
-            // is answered `indeterminate`, never resumed.
+            // is answered `indeterminate`, never resumed. A rerouted
+            // command keeps its claim, and the refusal settles it either
+            // way.
+            report(
+                &lock(relays).order.clone(),
+                &id.0,
+                if partial.written > 0 {
+                    CommandState::Partial
+                } else {
+                    CommandState::Queued
+                },
+            );
             if partial.written > 0 {
                 return AttachOutcome::Indeterminate;
             }
             return AttachOutcome::Stale;
         }
+        // The whole line landed: a later `closing` answer may still claim
+        // the command's one re-route. A rerouted command keeps its claim
+        // through the write.
+        report(&lock(relays).order.clone(), &id.0, CommandState::Written);
     }
     let mut held = match admission {
         Some(held) => held,
@@ -1647,8 +1698,10 @@ fn relay(
                         exiting = true;
                         // A command re-routes once: the session it was
                         // handed to also ended without answering, so its
-                        // own `closing` goes to the client as it is.
-                        if order.hand_once(&id) {
+                        // own `closing` goes to the client as it is. Only
+                        // the move into `Rerouted` claims the re-route: a
+                        // refused claim falls through to the forward below.
+                        if order.transition(&id, CommandState::Rerouted).is_ok() {
                             if crate::retire::hand_over(&order, relays, session, epoch, &id, &line)
                             {
                                 route(
@@ -1664,7 +1717,11 @@ fn relay(
                                 );
                                 crate::retire::pass_on(session, epoch, &kept, hub, writer, relays);
                             } else {
-                                order.forget_handed(&id);
+                                // The entry is gone: the client
+                                // disconnected, so the claimed command is
+                                // dropped with the connection instead of
+                                // answered.
+                                order.drop_ids(&[(session.to_owned(), id)]);
                             }
                             continue;
                         }
@@ -1702,6 +1759,33 @@ fn relay(
                                 }
                             }
                         }
+                    }
+                    Some(Settled::Indeterminate(id)) => {
+                        // The session answered a command the hub only
+                        // partly wrote: end-of-file framing may have
+                        // delivered the cut bytes as a final line, so the
+                        // answer is suspect. The hub suppresses it and
+                        // answers `indeterminate` itself, exactly once,
+                        // and never routes the command again
+                        // (`docs/invocation.md`, "Lifecycle"). The forward
+                        // below writes the rejection in command order.
+                        let mut rejection = crate::connection::line(
+                            hub,
+                            "command_rejected",
+                            crate::connection::rejection(
+                                Some(&CommandId(id.clone())),
+                                &ErrorCode::Indeterminate,
+                                crate::retire::PARTIAL_WRITE_MAY_HAVE_RUN,
+                            ),
+                        );
+                        rejection.push(b'\n');
+                        buf = rejection;
+                        ack = Some(Ack {
+                            id,
+                            verdict: Verdict::Rejected,
+                            rewound: None,
+                            last_seq: None,
+                        });
                     }
                     Some(Settled::Subscribed(line)) => {
                         #[cfg(test)]

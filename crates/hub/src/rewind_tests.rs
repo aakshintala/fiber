@@ -1110,7 +1110,7 @@ fn a_refused_rewind_keeps_the_old_sessions_kept_level_for_the_retry() {
             .as_object()
             .unwrap()
             .clone(),
-        crate::relay::KeptState::Sent,
+        crate::relay::CommandState::Written,
     )]));
     let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
     let reader = hub_session.try_clone().unwrap();
@@ -1218,7 +1218,7 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
                 .as_object()
                 .unwrap()
                 .clone(),
-            crate::relay::KeptState::Sent,
+            crate::relay::CommandState::Written,
         ),
         (
             "c_rw".to_owned(),
@@ -1226,12 +1226,23 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
                 .as_object()
                 .unwrap()
                 .clone(),
-            crate::relay::KeptState::Sent,
+            crate::relay::CommandState::Written,
         ),
     ]));
     let order = lock(&relays).order.clone();
     order.enqueue(&old, "c_earlier");
     order.enqueue(&old, "c_rw");
+    // The fixture stands in for the relay's writes and the earlier
+    // handover's claim: both commands were written, and `c_earlier` was
+    // already handed to the live relay, whose answer releases the queue.
+    for id in ["c_earlier", "c_rw"] {
+        order
+            .transition(id, crate::relay::CommandState::Written)
+            .unwrap();
+    }
+    order
+        .transition("c_earlier", crate::relay::CommandState::Rerouted)
+        .unwrap();
     order.mark_rerouted("c_earlier", &old, epoch);
     let (waited_tx, waited_rx) = mpsc::channel();
     *lock(&order.before_wait_rerouted) = Some(Box::new(move || {
@@ -1259,7 +1270,7 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
             .as_object()
             .unwrap()
             .clone(),
-        crate::relay::KeptState::Sent,
+        crate::relay::CommandState::Written,
     )]));
     let (live_session, mut live_peer) = UnixStream::pair().unwrap();
     let live_reader = live_session.try_clone().unwrap();
