@@ -55,7 +55,9 @@ pub(crate) fn frame_bound(app: &App) -> Bound {
 /// them: at most the rows above `area.y`, the lowest rows kept, so rows
 /// past the top are dropped from the top. Nothing at width zero. A bound
 /// `notice` renderer replaces a notice row whole; its notice and dismiss
-/// targets stay on the replacement rows.
+/// targets stay on the replacement rows. Returns the animation keys of
+/// the replacement rows actually painted: rows dropped past the top
+/// contribute none, and built-in rows carry none.
 pub(super) fn draw(
     app: &App,
     area: Rect,
@@ -63,21 +65,23 @@ pub(super) fn draw(
     bottom: &mut u16,
     targets: &mut Vec<Target>,
     bound: &Bound,
-) {
+) -> Vec<crate::ext::anim::AnimKey> {
     let width = usize::from(area.width);
     if width == 0 {
-        return;
+        return Vec::new();
     }
     let lines = app.notices.visible_lines(bound, area.width);
     let room = bottom.saturating_sub(area.y) as usize;
     let skip = lines.len().saturating_sub(room);
+    let mut painted = Vec::new();
     let mut noted: Vec<crate::app::SpanRow> = Vec::new();
     for line in lines.iter().skip(skip).rev() {
         match line {
             NoticeLine::Notice { id, code, text } => {
-                if paint_replacement(
+                if let Some(keys) = paint_replacement(
                     bound, *id, code, text, area, buf, targets, &mut noted, bottom,
                 ) {
+                    painted.extend(keys);
                     continue;
                 }
                 let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
@@ -137,15 +141,18 @@ pub(super) fn draw(
         rows: noted,
     });
     super::marks::paint_selection(app, buf, crate::app::SurfaceId::Notices, area);
+    painted
 }
 
 /// Paints the bound renderer's `notice` lines that fit above `area.y`,
 /// keeping the notice target on each painted row and the dismiss target
-/// on their last column: true when the replacement owns the notice. The
-/// replacement owns its painted rows whole, ✕ cell included. A renderer
-/// returning no lines hides the notice instead; the frame already dropped
-/// those before the split, so an empty result here falls back to the
-/// built-in row ([`Bound::notice_lines`]).
+/// on their last column: `Some` keys when the replacement owns the
+/// notice, `None` when the built-in row draws instead. The replacement
+/// owns its painted rows whole, ✕ cell included; only painted rows lend
+/// their animation tag, so a row dropped past the top marks nothing. A
+/// renderer returning no lines hides the notice instead; the frame
+/// already dropped those before the split, so an empty result here falls
+/// back to the built-in row ([`Bound::notice_lines`]).
 #[allow(clippy::too_many_arguments, reason = "one row's paint inputs")]
 fn paint_replacement(
     bound: &Bound,
@@ -157,20 +164,18 @@ fn paint_replacement(
     targets: &mut Vec<Target>,
     noted: &mut Vec<crate::app::SpanRow>,
     bottom: &mut u16,
-) -> bool {
-    let Some(fitted) = bound.notice_lines(code, text, area.width) else {
-        return false;
-    };
+) -> Option<Vec<crate::ext::anim::AnimKey>> {
+    let fitted = bound.notice_lines(id, code, text, area.width)?;
     if fitted.is_empty() {
         // An empty replacement falls back to the built-in row.
-        return false;
+        return None;
     }
     let count = fitted
         .len()
         .min(usize::from(u16::MAX))
         .min(bottom.saturating_sub(area.y) as usize);
     if count == 0 {
-        return true;
+        return Some(Vec::new());
     }
     *bottom = bottom.saturating_sub(to_u16(count));
     for (dy, line) in fitted.iter().take(count).enumerate() {
@@ -192,7 +197,13 @@ fn paint_replacement(
         id: TargetId::DismissNotice(id),
         rect: Rect::new(area.right().saturating_sub(1), *bottom, 1, to_u16(count)),
     });
-    true
+    Some(
+        fitted
+            .iter()
+            .take(count)
+            .filter_map(|line| line.anim.clone())
+            .collect(),
+    )
 }
 
 /// Draws the notice overlay over `area` in the shared frame, hiding the

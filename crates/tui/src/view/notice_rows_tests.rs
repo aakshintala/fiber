@@ -892,3 +892,109 @@ fn an_extension_failed_notice_ignores_the_renderer() {
     assert!(row.contains('⚠'), "{row:?}");
     assert!(!row.contains("custom"), "{row:?}");
 }
+
+/// An app with one notice and an animated `notice` renderer installed,
+/// drawing `rows` lines a frame.
+fn animated_app(rows: usize) -> (App, std::rc::Rc<crate::ext::tests::AnimatedRenderer>) {
+    let mut app = app_with_notice("io_failed", "x");
+    let fake = std::rc::Rc::new(crate::ext::tests::AnimatedRenderer::filling(
+        "notice",
+        std::time::Duration::from_millis(500),
+        rows,
+    ));
+    app.install_renderer(fake.clone());
+    (app, fake)
+}
+
+/// Draws the app's notice rows at `width` by `height` in frame time
+/// `at`, returning the painted replacement rows' animation keys.
+fn draw_keys(
+    app: &App,
+    width: u16,
+    height: u16,
+    at: std::time::Instant,
+) -> (Buffer, Vec<crate::ext::anim::AnimKey>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    app.pages().ext.cache.begin_anim_frame(Some(at), false);
+    let bound = super::frame_bound(app);
+    let keys = super::draw(app, area, &mut buf, &mut bottom, &mut targets, &bound);
+    (buf, keys)
+}
+
+#[test]
+fn draw_returns_exactly_the_painted_replacement_rows_keys() {
+    let (app, fake) = animated_app(1);
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let (buf, keys) = draw_keys(&app, 30, 24, t0);
+    // One replacement row painted: one key, carrying the notice instance.
+    // docs/tui.md:3017: frames advance only while a replacement row was painted.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys.first().expect("one key").notice_id(), Some(0));
+    assert!(row_text(&buf, 23).contains("anim0-0"), "{buf:?}");
+    // The key is the live animation: marking it schedules the notice.
+    app.pages().ext.cache.mark_painted(&keys);
+    assert_eq!(
+        app.pages().ext.cache.anim_dues(),
+        vec![(t0, std::time::Duration::from_millis(500))]
+    );
+}
+
+#[test]
+fn draw_drops_rows_past_the_top_without_their_keys() {
+    use crate::ext::tests::AnimatedRenderer;
+    let mut app = app_with_notice("io_failed", "x");
+    let fake = std::rc::Rc::new(AnimatedRenderer::growing(
+        "notice",
+        std::time::Duration::from_millis(500),
+        2,
+    ));
+    app.install_renderer(fake.clone());
+    let t0 = fakes::clock::FakeClock::new().origin();
+    // Frame 0 draws two lines, and the tall draw paints both keys.
+    // docs/tui.md:2740: a notice replacement with more lines than the
+    // notice rows left keeps its first lines in order and drops the rest.
+    let (full, full_keys) = draw_keys(&app, 30, 2, t0);
+    assert_eq!(full_keys.len(), 2);
+    let body = crate::view::text(&full);
+    assert!(
+        body.contains("anim0-0") && body.contains("anim0-1"),
+        "{body}"
+    );
+    // The clipped repaint hits the stored two-line frame but lends only
+    // the painted row's key, with no new renderer call.
+    let (buf, keys) = draw_keys(&app, 30, 1, t0);
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(keys.len(), 1);
+    assert!(row_text(&buf, 0).contains("anim0-0"), "{buf:?}");
+}
+
+#[test]
+fn draw_ignores_builtin_rows() {
+    // No renderer installed: the built-in row draws, carrying no key.
+    let app = app_with_notice("io_failed", "x");
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let (_, keys) = draw_keys(&app, 30, 24, t0);
+    assert!(keys.is_empty());
+}
+
+#[test]
+fn an_empty_replacement_hides_the_notice_without_a_key() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let mut app = app_with_notice("io_failed", "x");
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![]),
+    ));
+    app.install_renderer(fake.clone());
+    let t0 = fakes::clock::FakeClock::new().origin();
+    let (buf, keys) = draw_keys(&app, 30, 24, t0);
+    // No row paints and nothing marks: the hidden notice never advances
+    // or schedules.
+    // docs/tui.md:3023: no replacement lines stay hidden without advancing.
+    assert!(keys.is_empty());
+    assert!(!crate::view::text(&buf).contains("io_failed"));
+}
