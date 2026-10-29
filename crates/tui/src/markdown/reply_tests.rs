@@ -714,9 +714,13 @@ fn code_block_counts_match_drawn_rows_at_fit_boundaries() {
 
 #[test]
 fn table_counts_match_drawn_rows_at_fit_boundaries() {
-    assert_count_rows_match_drawn_rows(
-        "| left | right |\n|---|---|\n| a longer cell | 123456789 |\n| x | 界 |",
-    );
+    let table = "| left | right |\n|---|---|\n| a longer cell | 123456789 |\n| x | 界 |";
+    assert_count_rows_match_drawn_rows(table);
+
+    let counted = Reply::new(table.to_owned(), 17).counted(0);
+    assert!(!counted.over_width, "zero-width rows are not split");
+    let (shown, counted) = count_and_draw(table, 0);
+    assert_eq!(counted.len(), shown.len(), "zero-width row parity");
 }
 
 #[test]
