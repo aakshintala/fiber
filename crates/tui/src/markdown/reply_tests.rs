@@ -569,6 +569,13 @@ fn markdown_wrapping_keeps_word_moves_trailing_newlines_and_empty_input() {
 }
 
 #[test]
+fn code_block_counts_keep_trailing_blank_lines() {
+    let text = "```\na\n\n```";
+    let (shown, counted) = count_and_draw(text, 80);
+    assert_eq!(counted.len(), shown.len(), "trailing blank code line");
+}
+
+#[test]
 fn code_block_counts_keep_tab_width_and_language_fallback_boundaries() {
     for text in ["```\na\tb\n```", "```\nabc\tdef\n```", "```\nrust\n```"] {
         for width in [5, 8, 9, 10, 11, 15, 16, 17, 20] {
@@ -726,6 +733,85 @@ fn code_block_counts_match_drawn_rows_at_fit_boundaries() {
 fn table_counts_match_drawn_rows_at_fit_boundaries() {
     let table = "| left | right |\n|---|---|\n| a longer cell | 123456789 |\n| x | 界 |";
     assert_count_rows_match_drawn_rows(table);
+
+    let cells = [
+        "x",
+        "xy",
+        "123",
+        "界",
+        "❤️",
+        "👩‍💻",
+        "e\u{301}",
+        "\u{301}x",
+        "e*\u{301}*",
+        "*e*\u{301}",
+    ];
+    for alignment in ["---", ":---", "---:", ":---:"] {
+        for left in cells {
+            for right in cells {
+                let text = format!("| a | b |\n|{alignment}|{alignment}|\n| {left} | {right} |");
+                for width in 0..=12 {
+                    let reply = Reply::new(text.clone(), 17);
+                    let rendered = reply.rendered(width);
+                    let counted = reply.counted(width);
+                    let drawn_needs_split = rendered
+                        .lines
+                        .iter()
+                        .any(|line| crate::rows::fitted(line, width) > 1);
+                    assert_eq!(
+                        counted.over_width, drawn_needs_split,
+                        "fallback at width {width}: {text:?}"
+                    );
+                    let mut drawn = crate::rows::Rows::default();
+                    reply.rows(width, &mut drawn);
+                    drawn.pad(0, 0, width);
+                    let mut counted_rows = crate::rows::Rows::count_only();
+                    reply.count_rows(width, &mut counted_rows);
+                    counted_rows.pad(0, 0, width);
+                    assert_eq!(
+                        counted_rows.len(),
+                        drawn.len(),
+                        "padded rows at width {width}: {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    for header in ["e*\u{301}*", "*e*\u{301}", "❤*️*"] {
+        let text = format!("| {header} | b |\n|:---:|:---:|\n| x | y |");
+        for width in 0..=12 {
+            let reply = Reply::new(text.clone(), 17);
+            let rendered = reply.rendered(width);
+            let counted = reply.counted(width);
+            assert_eq!(
+                counted.over_width,
+                rendered
+                    .lines
+                    .iter()
+                    .any(|line| crate::rows::fitted(line, width) > 1),
+                "header style boundary at width {width}: {text:?}"
+            );
+        }
+    }
+
+    let one_column = "| ❤**️**❤**️** |\n|---|\n| x |";
+    let reply = Reply::new(one_column.to_owned(), 17);
+    let rendered = reply.rendered(3);
+    let counted = reply.counted(3);
+    assert_eq!(
+        counted.over_width,
+        rendered
+            .lines
+            .iter()
+            .any(|line| crate::rows::fitted(line, 3) > 1),
+        "one-column styled graphemes"
+    );
+    assert!(
+        !Reply::new("| a |\n|---|\n| x |".to_owned(), 17)
+            .counted(2)
+            .over_width
+    );
 
     let counted = Reply::new(table.to_owned(), 17).counted(0);
     assert!(!counted.over_width, "zero-width rows are not split");

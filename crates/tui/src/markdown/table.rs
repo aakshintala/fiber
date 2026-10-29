@@ -70,11 +70,7 @@ impl Table {
         }
         let numeric = numeric_columns(&self.rows, count);
         shrink(&mut widths, width);
-        let table_width = widths
-            .iter()
-            .fold(0usize, |sum, column| sum.saturating_add(*column))
-            .saturating_add(count.saturating_sub(1).saturating_mul(GAP));
-        let mut over_width = width > 0 && table_width > width;
+        let mut over_width = false;
         let mut lines = 0usize;
         for (at, row) in self.rows.iter().enumerate() {
             let mut height = 1usize;
@@ -92,15 +88,7 @@ impl Table {
                     *column_width,
                     *column_width,
                     true,
-                    |range, _| {
-                        let piece_width = cell_widths
-                            .get(range.clone())
-                            .unwrap_or_default()
-                            .iter()
-                            .fold(0usize, |sum, width| sum.saturating_add(*width));
-                        over_width |= piece_width > *column_width;
-                        ranges.push(range);
-                    },
+                    |range, _| ranges.push(range),
                 );
                 height = height.max(ranges.len());
                 wrapped.push((cell_widths, ranges));
@@ -108,7 +96,7 @@ impl Table {
             for line in 0..height {
                 let mut parts = Vec::new();
                 for (column, column_width) in widths.iter().enumerate() {
-                    if column > 0 {
+                    if column != 0 {
                         parts.push(" ".repeat(GAP));
                     }
                     let cell = row.get(column).map_or(&[][..], |(cell, _)| cell.as_slice());
@@ -118,36 +106,20 @@ impl Table {
                         .and_then(|range| cell.get(range.clone()))
                         .unwrap_or_default();
                     let pad = column_width.saturating_sub(cells_width(piece));
-                    let align = if numeric.get(column).copied().unwrap_or_default() {
-                        Alignment::Right
-                    } else {
-                        self.aligns.get(column).copied().unwrap_or(Alignment::None)
-                    };
-                    let before = match align {
-                        Alignment::Right => pad,
-                        Alignment::Center => pad / 2,
-                        Alignment::Left | Alignment::None => 0,
-                    };
-                    if before > 0 {
-                        parts.push(" ".repeat(before));
-                    }
                     append_cell_parts(
                         &mut parts,
                         piece,
                         at == 0,
                         numeric.get(column).copied().unwrap_or_default(),
                     );
-                    let after = pad.saturating_sub(before);
-                    if after > 0 {
-                        parts.push(" ".repeat(after));
+                    if pad != 0 {
+                        parts.push(" ".repeat(pad));
                     }
                 }
                 if width > 0 {
-                    let joined = parts.concat();
                     let (span_width, pad_width) =
                         crate::rows::row_widths(parts.iter().map(String::as_str));
-                    over_width |=
-                        crate::text::width(&joined).max(span_width).max(pad_width) > width;
+                    over_width |= span_width.max(pad_width) > width;
                 }
             }
             lines = lines.saturating_add(height);

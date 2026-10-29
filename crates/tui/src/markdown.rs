@@ -695,7 +695,6 @@ impl Writer {
         };
         self.counted_rows = self.counted_rows.saturating_add(2);
 
-        let code = code.strip_suffix('\n').unwrap_or(code);
         let digits = code.split('\n').count().to_string().len().max(NUMBER_WIDTH);
         let gutter = digits.saturating_add(2);
         let room = content.saturating_sub(gutter).max(1);
