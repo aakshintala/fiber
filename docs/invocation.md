@@ -590,7 +590,7 @@ that point. When the projects differ, `forked_from.project` names the old
 project key; otherwise it is absent. The child starts with no summary and no
 prompt. Each session keeps the workspace recorded in its own
 `session_started`. If child startup fails, the old log stays ended and the hub
-retries the same child id when the old process exits, as for rewind. The
+retries the same child id once when the old process exits, as for rewind. The
 command answers with the child id or the start failure code. No rollback or
 new child id is made. The new folder's configuration layers, instruction
 files, MCP servers, extensions and repository approval load as they do for any
