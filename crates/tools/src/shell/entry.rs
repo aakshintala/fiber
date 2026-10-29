@@ -1,10 +1,11 @@
 //! The read-only lookup: one lookup over the built-in list and the
 //! person's `shell.read_only` entries, by command path.
 //!
-//! The built-in list always wins: a call matching a built-in entry never
-//! consults configuration, and a configured entry under a built-in path (or
-//! a basename the built-ins own) is never consulted. Anything neither owns
-//! is not read-only.
+//! A call matching a built-in entry merges the person's same-named entry:
+//! the built-in's flags are kept and the configured ones are added. A
+//! configured entry under any other built-in path (or a basename the
+//! built-ins own) is never consulted. Anything neither owns is not
+//! read-only.
 
 use super::classify::Outcome;
 use super::read_only::{COMMANDS, Command, EXACT, Flag};
@@ -12,8 +13,9 @@ use super::syntax::Word;
 
 /// What the lookup found for a stage's words.
 pub(super) enum Found<'a> {
-    /// A built-in entry, matched by its longest command path.
-    Builtin(&'static Command),
+    /// A built-in entry, matched by its longest command path, with the
+    /// flags of the person's same-named entry, if any.
+    Builtin(&'static Command, &'a [String]),
     /// The person's first matching entry: its flag spellings, and how
     /// many leading words it consumes.
     Configured(&'a [String], usize),
@@ -22,19 +24,36 @@ pub(super) enum Found<'a> {
 }
 
 /// Find the entry for a stage's words: the longest matching built-in path
-/// first, then the person's first matching entry unless a built-in owns its
-/// name. An empty word list matches nothing.
+/// first, with the flags of the person's same-named entry merged in, then
+/// the person's first matching entry unless a built-in owns its name. An
+/// empty word list matches nothing.
 pub(super) fn find<'a>(words: &[Word], configured: &'a [(String, Vec<String>)]) -> Found<'a> {
     if words.is_empty() {
         return Found::None;
     }
     if let Some(entry) = locate_builtin(words) {
-        return Found::Builtin(entry);
+        return Found::Builtin(entry, merged_flags(entry, configured));
     }
     match locate_configured(words, configured) {
         Some((consumed, flags)) => Found::Configured(flags, consumed),
         None => Found::None,
     }
+}
+
+/// The flags the person's entries add to a matched built-in entry: the
+/// first entry named exactly the entry's command path, word for word. A
+/// longer or shorter name never merges, so neither does a path-qualified
+/// one, and an entry with no flag list, such as the exact-form
+/// `git branch --show-current`, takes no added flags.
+fn merged_flags<'a>(entry: &Command, configured: &'a [(String, Vec<String>)]) -> &'a [String] {
+    if entry.flags.is_empty() {
+        return &[];
+    }
+    configured
+        .iter()
+        .find(|(name, _)| *name == entry.name)
+        .map(|(_, flags)| flags.as_slice())
+        .unwrap_or(&[])
 }
 
 /// Whether a configured entry name is never consulted: `sed`, which has its
