@@ -24,6 +24,218 @@ impl Loader {
     }
 }
 
+/// Moves one loaded extension's key bindings into the composite: each
+/// malformed registration becomes one `extension_failed` notice and is
+/// skipped, while a person-owned binding stays dormant with its notice.
+fn register_keys(
+    composite: &mut Composite,
+    candidate: &Candidate,
+    person_owned: &BTreeSet<String>,
+    notices: &mut Vec<(String, String)>,
+) {
+    let name = &candidate.manifest.name;
+    let vm = candidate.vm.borrow();
+    for rejection in vm.key_rejections() {
+        notices.push((
+            "extension_failed".into(),
+            format!(
+                "extension {name}: {}; loading skips that registration.",
+                rejection.reason
+            ),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for binding in vm.key_bindings() {
+        let raw = binding.raw;
+        let Some(canonical) = tui::canonical_key(&raw) else {
+            notices.push((
+                "extension_failed".into(),
+                format!(
+                    "extension {name} binds {raw:?}, which is not a key name; loading skips that registration."
+                ),
+            ));
+            continue;
+        };
+        if canonical == "ctrl+c" {
+            notices.push((
+                "extension_failed".into(),
+                format!(
+                    "extension {name} binds ctrl+c, which always clears, then quits; loading skips that registration."
+                ),
+            ));
+            continue;
+        }
+        let action = match &binding.form {
+            extensions::KeyForm::Run { .. } => None,
+            extensions::KeyForm::Action { id, variant } => {
+                if let Some(reason) = tui::check_action(id, variant.as_deref()) {
+                    notices.push((
+                        "extension_failed".into(),
+                        format!(
+                            "extension {name} binds {canonical}: {reason}; loading skips that registration."
+                        ),
+                    ));
+                    continue;
+                }
+                Some((id.clone(), variant.clone()))
+            }
+        };
+        if !seen.insert(canonical.clone()) {
+            notices.push((
+                "extension_failed".into(),
+                format!(
+                    "extension {name} binds {canonical} twice; loading keeps the first registration."
+                ),
+            ));
+            continue;
+        }
+        if person_owned.contains(&canonical) {
+            notices.push((
+                "extension_failed".into(),
+                format!(
+                    "extension {name} binds {canonical}, which is bound in keys; the person keeps it."
+                ),
+            ));
+            composite.person_seen.borrow_mut().insert(KeyNoticeKey {
+                slot: format!("key:{canonical}"),
+                extension: name.clone(),
+            });
+        }
+        composite
+            .keys
+            .entry(format!("key:{canonical}"))
+            .or_default()
+            .push(KeyContender {
+                extension: name.clone(),
+                raw,
+                action,
+            });
+    }
+}
+
+/// Reports an incompatible extension once per extension, TUI version and
+/// half, with the same text the drawable path gives.
+fn notice_incompatible(
+    composite: &Composite,
+    extension: &str,
+    tui_version: &str,
+    half: SessionVersion,
+) {
+    if half == SessionVersion::Unseen {
+        return;
+    }
+    let key = VersionNoticeKey {
+        extension: extension.to_owned(),
+        tui_version: tui_version.to_owned(),
+        half: half.clone(),
+    };
+    if composite.versions.borrow_mut().insert(key) {
+        let half = match half {
+            SessionVersion::NotLoaded => "not loaded".to_owned(),
+            SessionVersion::Version(version) => version,
+            SessionVersion::Unseen => return,
+        };
+        composite.pending.borrow_mut().push((
+            "extension_incompatible".into(),
+            format!("extension {extension} TUI {tui_version} does not support session half {half}; the built-in is drawn"),
+        ));
+    }
+}
+
+/// The compatible contenders for a canonical key, in load order: a
+/// switched-off or incompatible extension contends for nothing, with the
+/// same version notice the drawable path gives.
+fn key_contenders(composite: &Composite, ctx: &SessionCtx, canonical: &str) -> Vec<KeyContender> {
+    let slot = format!("key:{canonical}");
+    let Some(contenders) = composite.keys.get(&slot) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for contender in contenders {
+        let Some(candidate) = composite.candidates.get(&contender.extension) else {
+            continue;
+        };
+        if candidate.off.get() {
+            continue;
+        }
+        if candidate.compatible(ctx) {
+            out.push(contender.clone());
+            continue;
+        }
+        notice_incompatible(
+            composite,
+            &contender.extension,
+            &candidate.manifest.version,
+            candidate.half(ctx),
+        );
+    }
+    out
+}
+
+/// The winning contender for a canonical key: the configured winner when
+/// it contends, else the lone contender. A configured setting that names
+/// no contender selects no winner, with no further notice: the load
+/// already reported the full setting.
+fn key_winner(composite: &Composite, ctx: &SessionCtx, canonical: &str) -> Option<KeyContender> {
+    let contenders = key_contenders(composite, ctx, canonical);
+    if contenders.is_empty() {
+        return None;
+    }
+    let slot = format!("key:{canonical}");
+    if let Some(winner) = composite.configured.get(&slot) {
+        return contenders
+            .into_iter()
+            .find(|contender| &contender.extension == winner);
+    }
+    if contenders.len() == 1 {
+        return contenders.into_iter().next();
+    }
+    let names: Vec<String> = contenders
+        .iter()
+        .map(|contender| contender.extension.clone())
+        .collect();
+    let key = ConflictNoticeKey {
+        slot: slot.clone(),
+        contenders: names.clone(),
+        configured: None,
+    };
+    if composite.conflicts.borrow_mut().insert(key) {
+        composite.pending.borrow_mut().push((
+            "command_conflict".into(),
+            format!(
+                "extensions {} replace {slot}; the built-in stays",
+                names.join(", ")
+            ),
+        ));
+    }
+    None
+}
+
+/// Reports every contender holding `canonical` as person-owned, once per
+/// key and extension until `/reload`: the binding stays dormant for the
+/// stroke.
+fn notice_person(composite: &Composite, canonical: &str) {
+    let slot = format!("key:{canonical}");
+    let Some(contenders) = composite.keys.get(&slot) else {
+        return;
+    };
+    for contender in contenders {
+        let key = KeyNoticeKey {
+            slot: slot.clone(),
+            extension: contender.extension.clone(),
+        };
+        if composite.person_seen.borrow_mut().insert(key) {
+            composite.pending.borrow_mut().push((
+                "extension_failed".into(),
+                format!(
+                    "extension {} binds {canonical}, which is bound in keys; the person keeps it.",
+                    contender.extension
+                ),
+            ));
+        }
+    }
+}
+
 impl Load for Loader {
     fn load(&self) -> (Rc<dyn Renderer>, Vec<(String, String)>) {
         let mut composite = Composite::default();
@@ -44,6 +256,14 @@ impl Load for Loader {
                 );
             }
         };
+        // The merged `keys` object as written, empty when no file sets it:
+        // the same read as the launch's user keys, so a key the person
+        // still sets after clash reversion stays theirs in every context.
+        let user: serde_json::Map<String, serde_json::Value> = config
+            .get("keys", None)
+            .and_then(|(value, _)| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+        let person_owned = tui::person_bound_keys(&user);
         let root = config::extensions_dir(&self.sources.home);
         let entries = match std::fs::read_dir(&root) {
             Ok(entries) => entries,
@@ -85,6 +305,7 @@ impl Load for Loader {
                             composite.configured.insert(slot.clone(), winner);
                         }
                     }
+                    register_keys(&mut composite, &candidate, &person_owned, &mut notices);
                     composite
                         .candidates
                         .insert(candidate.manifest.name.clone(), candidate);
@@ -94,6 +315,49 @@ impl Load for Loader {
                     "extension_failed".into(),
                     format!("{}: {error}", dir.display()),
                 )),
+            }
+        }
+        // Key-slot winners name an extension the same way drawable slots
+        // do, with the suffix canonicalized by the key parser. Neither an
+        // unparseable suffix nor a parseable setting naming no contender
+        // can be reported through `fills_for`, so each selects no winner
+        // with one `command_conflict` notice naming the full setting.
+        if let Some((value, _)) = config.get("tui.slots", None)
+            && let Ok(slots) =
+                serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(value)
+        {
+            for (key, setting) in &slots {
+                let Some(suffix) = key.strip_prefix("key:") else {
+                    continue;
+                };
+                let name = format!("tui.slots.\"{key}\"");
+                let Some(canonical) = tui::canonical_key(suffix) else {
+                    notices.push((
+                        "command_conflict".into(),
+                        format!(
+                            "Invalid key binding setting: {name}; the key does not parse; no extension wins."
+                        ),
+                    ));
+                    continue;
+                };
+                let Some(winner) = setting.as_str() else {
+                    continue;
+                };
+                let slot = format!("key:{canonical}");
+                let contends = composite.keys.get(&slot).is_some_and(|contenders| {
+                    contenders
+                        .iter()
+                        .any(|contender| contender.extension == winner)
+                });
+                composite.configured.insert(slot, winner.to_owned());
+                if !contends {
+                    notices.push((
+                        "command_conflict".into(),
+                        format!(
+                            "Invalid key binding setting: {name}; no registered contender matches the selected extension; no extension wins."
+                        ),
+                    ));
+                }
             }
         }
         (Rc::new(composite), notices)
@@ -160,6 +424,24 @@ struct ConflictNoticeKey {
     configured: Option<String>,
 }
 
+/// One extension's contender for a canonical whole-screen key: the
+/// extension, its raw spelling for the VM call, and, for an action
+/// binding, its action and variant.
+#[derive(Debug, Clone)]
+struct KeyContender {
+    extension: String,
+    raw: String,
+    action: Option<(String, Option<String>)>,
+}
+
+/// A key slot and extension pair already noticed: hook and person notices
+/// come once per extension and key slot until `/reload`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct KeyNoticeKey {
+    slot: String,
+    extension: String,
+}
+
 #[derive(Debug, Default)]
 struct Composite {
     candidates: BTreeMap<String, Candidate>,
@@ -167,6 +449,16 @@ struct Composite {
     versions: RefCell<BTreeSet<VersionNoticeKey>>,
     conflicts: RefCell<BTreeSet<ConflictNoticeKey>>,
     pending: RefCell<Vec<(String, String)>>,
+    /// Whole-screen key contenders by canonical slot name
+    /// (`key:<canonical>`), in load order: a dormant person-owned binding
+    /// contends on, reactivated at once when the person binding lifts.
+    keys: BTreeMap<String, Vec<KeyContender>>,
+    /// Person-owned key and extension pairs already noticed: load seeds
+    /// the pairs it reports, so load and runtime share the once-until-
+    /// reload rule.
+    person_seen: RefCell<BTreeSet<KeyNoticeKey>>,
+    /// Hook failures already reported per key slot and extension.
+    key_hooks: RefCell<BTreeSet<KeyNoticeKey>>,
 }
 
 impl Candidate {
@@ -217,6 +509,15 @@ impl Renderer for Composite {
         })
     }
     fn fills_for(&self, ctx: &SessionCtx, slot: &str) -> SlotSelection {
+        if let Some(canonical) = slot.strip_prefix("key:") {
+            return match key_winner(self, ctx, canonical) {
+                Some(winner) => SlotSelection::Draw {
+                    extension: winner.extension,
+                },
+                None if key_contenders(self, ctx, canonical).is_empty() => SlotSelection::Absent,
+                None => SlotSelection::Suppressed,
+            };
+        }
         let mut contenders = Vec::new();
         for (name, candidate) in &self.candidates {
             if candidate.off.get() || !candidate.vm.borrow().slots().contains_key(slot) {
@@ -226,23 +527,7 @@ impl Renderer for Composite {
                 contenders.push(name.clone());
                 continue;
             }
-            let half = candidate.half(ctx);
-            if half == SessionVersion::Unseen {
-                continue;
-            }
-            let key = VersionNoticeKey {
-                extension: name.clone(),
-                tui_version: candidate.manifest.version.clone(),
-                half: half.clone(),
-            };
-            if self.versions.borrow_mut().insert(key) {
-                let half = match half {
-                    SessionVersion::NotLoaded => "not loaded".to_owned(),
-                    SessionVersion::Version(v) => v,
-                    SessionVersion::Unseen => continue,
-                };
-                self.pending.borrow_mut().push(("extension_incompatible".into(), format!("extension {name} TUI {} does not support session half {half}; the built-in is drawn", candidate.manifest.version)));
-            }
+            notice_incompatible(self, name, &candidate.manifest.version, candidate.half(ctx));
         }
         let configured = self.configured.get(slot).cloned();
         if contenders.len() == 1 {
@@ -407,6 +692,72 @@ impl Renderer for Composite {
                 Decision::Fail(Self::failure(candidate, extension, error)),
                 false,
             ),
+        }
+    }
+    fn key_action(
+        &self,
+        ctx: &SessionCtx,
+        key: &str,
+        person_bound: bool,
+    ) -> Option<(String, Option<String>)> {
+        // With no session on screen neither kind of binding acts.
+        ctx.session_id.as_ref()?;
+        if person_bound {
+            notice_person(self, key);
+            return None;
+        }
+        key_winner(self, ctx, key)?.action
+    }
+    fn run_key(&self, ctx: &SessionCtx, key: &str, person_bound: bool) -> tui::ext::KeyOutcome {
+        let Some(session_id) = ctx.session_id.as_ref() else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        if person_bound {
+            notice_person(self, key);
+            return tui::ext::KeyOutcome::NotHandled;
+        }
+        let Some(winner) = key_winner(self, ctx, key) else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        let Some(candidate) = self.candidates.get(&winner.extension) else {
+            return tui::ext::KeyOutcome::NotHandled;
+        };
+        let slot = format!("key:{key}");
+        match candidate
+            .vm
+            .borrow_mut()
+            .run_key(&winner.raw, session_id.0.as_str())
+        {
+            Ok(true) => tui::ext::KeyOutcome::Handled,
+            Ok(false) => tui::ext::KeyOutcome::NotHandled,
+            Err(extensions::Error::TuiTimeout) => {
+                candidate.off.set(true);
+                self.pending.borrow_mut().push((
+                    "extension_failed".into(),
+                    format!(
+                        "extension {} passed its key timeout for `{slot}`; it is switched off until `/reload`",
+                        winner.extension
+                    ),
+                ));
+                tui::ext::KeyOutcome::NotHandled
+            }
+            Err(extensions::Error::TuiOff) => tui::ext::KeyOutcome::NotHandled,
+            Err(error) => {
+                let seen = KeyNoticeKey {
+                    slot: slot.clone(),
+                    extension: winner.extension.clone(),
+                };
+                if self.key_hooks.borrow_mut().insert(seen) {
+                    self.pending.borrow_mut().push((
+                        "hook_failed".into(),
+                        format!(
+                            "extension {}'s key binding for `{slot}` failed: {error}",
+                            winner.extension
+                        ),
+                    ));
+                }
+                tui::ext::KeyOutcome::NotHandled
+            }
         }
     }
 }

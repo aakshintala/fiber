@@ -2956,6 +2956,18 @@ built-in rather than drawing the row again.
   session's id and never an empty one. A client-only half draws for every
   home notice; a range-bound half stays inert without notice until the
   session's first `extensions_loaded`, as on a session it has not seen.
+- **A TUI extension binds whole-screen keys with `fiber.key`.**
+  `fiber.key(name, { timeout, run })` runs `run` for the key when nothing
+  built in should, and `fiber.key(name, { action, variant })` dispatches a
+  built-in action through its checked canonical event for that variant
+  (`docs/extensions.md`, "Whole-screen keys"). `run` receives exactly
+  `{ session_id = "…" }` and returns `true` when it handled the key;
+  anything else falls through to the built-in key map. Only `true`
+  handles: `false` and `nil` do not, and any other value is the usual
+  wrong-shape failure. A timeout switches the extension off until
+  `/reload`, exactly as a still call does. A client-only extension stays
+  compatible before the first `extensions_loaded`, with no session half at
+  all.
 
 Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
 ([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a
@@ -2974,6 +2986,18 @@ top. An extension's view or overlay takes focus when it opens.
   or `shift+enter`, and typed text as text. A paste is one event. The handler
   returns whether it handled the key. A key it did not handle goes to the key
   map as if no extension were there.
+- **Whole-screen bindings act before the built-in key map.** An eligible
+  `run` binding runs before every built-in early path; an action binding
+  runs before them where the Bindings table lists it for the context on
+  screen ("Bindings"). Neither kind acts with no session on screen, on a
+  job's live PTY view, or for a key the person set in `keys`. A `run`
+  binding never acts while an overlay, a picker or search has the keyboard,
+  and bare typing never reaches it in the input box: a single character
+  with no modifier but Shift, the space bar, and shift+space type instead.
+  A handled `run` settles with nothing built in running; drained notices
+  settle before the fallthrough, and action events keep their built-in
+  settle behavior. Only Ctrl+C reaches the bindings from the `/keys`
+  screen, so no screen code skips dispatch: Ctrl+C itself is unregistrable.
 - **Esc** closes whatever is on top, unless the focused slot handles it
   itself.
 - **The second Ctrl+C always quits** ("Quit"), whatever the focused
@@ -3030,7 +3054,12 @@ and a timeout switches the extension off as a still one does.
   again until that input changes. One notice names the extension, the slot
   and the Lua error, once for each extension and slot until `/reload`. A key or click handler that errors
   counts as not having handled the input. An extension's own view or overlay
-  has no built-in, so it closes.
+  has no built-in, so it closes. A key handler that errors or returns the
+  wrong shape likewise counts as not handled, falling back to the built-in
+  key map with one `hook_failed` notice for each extension and key slot
+  until `/reload`; a key handler that passes its timeout switches the
+  extension off until `/reload`, with one `extension_failed` notice, as a
+  still renderer does.
 - **A timeout** switches the extension off in this terminal until `/reload`
   (the terminal command; the `reload` driver command acts on the session
   only), with one notice. Every slot it replaced
@@ -3052,7 +3081,26 @@ one tool, the input box, the layout, or one key.
   (`docs/extensions.md`, "Commands and screens").
   The notice comes once for each slot and set of contenders until `/reload`. A `tui.slots."<slot>"` that names none of them picks no winner, and the notice names the setting.
 - **A key the person bound in `keys`** is the person's. An extension that
-  binds the same key does not get it, and a notice names the extension.
+  binds the same key does not get it, and a notice names the extension. The
+  registration stays dormant and reactivates at once when the person binding
+  lifts, so a `/keys` change flips the owner per stroke. A key the person
+  owns stays theirs in every context, even where the action does not act.
+
+Whole-screen keys canonicalize before they contend, with the same grammar
+as `keys` ("Bindings"): modifier order and the case of modifier and key
+names never distinguish two spellings, while an uppercase letter reads as
+Shift with that letter, so `Ctrl+C` parses as `ctrl+shift+c` and stays
+bindable, and plain `ctrl+c` never binds. The first registration to
+canonicalize to a key wins; a later one is skipped with one notice naming
+the extension. A key with one contender and no setting still selects that
+contender. An unparseable key suffix, or a setting naming no registered
+contender, selects no winner, with one notice naming the full setting, for
+example:
+
+`Invalid key binding setting: tui.slots."key:ctrl+"; the key does not parse; no extension wins.`
+
+A setting that names an extension that does not contend for the key never
+silently falls back to the one that does.
 - **A per-tool ledger row beats the catch-all** `ledger_row`, with no notice.
 - **An extension replacing a built-in** is not a conflict. The extension wins,
   as it does for a tool it registers by name.
