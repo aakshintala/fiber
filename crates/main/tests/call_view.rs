@@ -511,6 +511,146 @@ fn shell_output() -> String {
     out
 }
 
+/// One wheel step up over the conversation column at 160x48.
+const WHEEL_UP: &[u8] = b"\x1b[<64;21;41M";
+/// One wheel step down over the conversation column at 160x48.
+const WHEEL_DOWN: &[u8] = b"\x1b[<65;21;41M";
+
+/// The thought row's marker: the turn ran one command, so the finished
+/// turn names it once.
+const THOUGHT: &str = "Ran 1 command";
+
+/// The wheel over a call's view scrolls the view, never the hidden
+/// conversation (`docs/tui.md:576`, "Swapped views"; see #3578): with the
+/// conversation scrolled up to its thought row, three wheel-downs over
+/// the open view move its first visible row nine rows while the
+/// conversation's top marker stays exactly where the wheel found it.
+#[test]
+fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
+    let setup = Setup::new();
+    // Enough reply filler that the finished turn is taller than the
+    // screen: the conversation can scroll, and the thought row can leave
+    // the followed bottom. Reply lines wrap, so the filler stays one
+    // space-joined paragraph.
+    let mut filler: Vec<String> = (1..=800).map(|n| format!("F{n:04}")).collect();
+    filler.push("Done.".to_owned());
+    script(
+        &setup,
+        json!([
+            {"reasoning": REASONING, "tool_calls": [
+                {"name": "shell", "arguments": {"command": "awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf(\"%03d %220s\", i, \"x\"); print \"TA\" \"IL\" }'"}},
+            ]},
+            {"text": [filler.join(" ")]},
+        ]),
+    );
+    config(&setup);
+    allow(&setup);
+    let (mut run, from) = started(&setup);
+    finish(&mut run, "F0800");
+    run.turn_finished(from);
+    // Scroll the conversation up until its thought row shows: each step
+    // must move the rows, so a step that would sit on the top clamp fails
+    // the wait instead of settling short. The marker itself is recorded
+    // after the call opens below.
+    let mut scrolled = false;
+    for _ in 0..6 {
+        let prev = run.screen();
+        run.write(WHEEL_UP);
+        let grid = run.wait_screen("the thought row scrolling into view", |next| {
+            match (find_row(&prev.rows, THOUGHT), find_row(&next.rows, THOUGHT)) {
+                (None, Some(_)) => true,
+                (Some(before), Some(after)) => after > before,
+                (Some(_), None) | (None, None) => false,
+            }
+        });
+        if find_row(&grid.rows, THOUGHT).is_some() {
+            scrolled = true;
+            break;
+        }
+    }
+    assert!(
+        scrolled,
+        "the conversation never scrolled its thought row into view"
+    );
+    // Open the ledger and the call. The marker is recorded after the call
+    // opens: opening flips the thought row from its collapsed to its
+    // expanded mark, and the expansion lands below it, so the row keeps
+    // its screen row.
+    let (_grid, gutter) = open_ledger(&mut run);
+    let grid = open_call(&mut run, gutter, "shell", "awk", "exit 0");
+    let top_y = find_row(&grid.rows, THOUGHT).expect("the thought row above the opened call");
+    let top_marker = grid.rows[usize::from(top_y)].clone();
+    // Click the more row of the opened call. The turn is taller than the
+    // screen, so the shared helper's settled wait (which also wants the
+    // completed paint on screen) never lands: the turn already finished
+    // before the ledger opened, so the first grid showing the more row
+    // has its final position.
+    let grid = run.wait_screen("the more row", |grid| {
+        grid.rows.iter().any(|row| row.contains("more lines"))
+    });
+    // Dismiss the reviewer notice first: while it is up, the click on the
+    // more row below misses, so the view never opens.
+    let notice_row = find_row(&grid.rows, "no_model").expect("the reviewer notice");
+    let notice_text = row_text(&grid, notice_row);
+    let dismiss_x = notice_text.find('✕').unwrap_or(159) as u16 + 1;
+    click(&mut run, dismiss_x, notice_row);
+    let grid = run.wait_screen("the dismissed notice", |grid| {
+        grid.rows.iter().all(|row| !row.contains("no_model"))
+    });
+    let row = find_row(&grid.rows, "more lines").expect("the more row");
+    let text = row_text(&grid, row);
+    let x = text.find("more lines").unwrap_or(20) as u16 + 1;
+    click(&mut run, x, row);
+    // The view follows to the resume marker at the tail.
+    run.wait_screen("the call's view", |grid| {
+        grid.rows
+            .iter()
+            .any(|row| row.contains("── the model's view resumes ──"))
+    });
+    // PageUp twice: the ups page past the held tail window, so the tail
+    // pages drop and the window re-anchors to the held head segment,
+    // whose last output rows are 036 and 037 above the end marker. The
+    // marker appears only once its edge pages are held, so it signals the
+    // refetch that fills this segment has landed.
+    run.write(b"\x1b[5~");
+    run.write(b"\x1b[5~");
+    let marker = "── end of the model's view ──";
+    let grid = run.wait_screen("the settled paged-up view", |grid| {
+        first_output_number(grid) == Some(36) && grid.rows.iter().any(|row| row.contains(marker))
+    });
+    let settled = first_output_number(&grid).expect("the settled first output number");
+    // The marker row breaks the output-number/top-row one-to-one. Aim
+    // the wheel at the view's fixed interior, not a grid-derived row;
+    // page replies cannot change which surface owns this coordinate.
+    // Three steps move nine displayed rows, eight of them numbered output
+    // rows because the first step passes the end marker.
+    run.write(WHEEL_DOWN);
+    run.write(WHEEL_DOWN);
+    run.write(WHEEL_DOWN);
+    let grid = run.wait_screen("the wheeled view", |grid| {
+        first_output_number(grid) == Some(settled + 8)
+    });
+    assert_eq!(
+        first_output_number(&grid),
+        Some(settled + 8),
+        "three wheel steps moved nine displayed rows past the end marker"
+    );
+    // Esc returns to the opened call with its row still focused: the
+    // conversation's scroll is exactly where the wheel found it.
+    run.write(b"\x1b[27u");
+    let grid = run.wait_screen("the opened call after Esc", |grid| {
+        grid.rows.iter().any(|row| row.contains("more lines"))
+    });
+    assert_eq!(
+        grid.rows[usize::from(top_y)],
+        top_marker,
+        "the wheel over the view left the conversation's scroll"
+    );
+    run.write(b"\x03\x03\r");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
 /// A page server with one 200 answer of `content_type` and `body`.
 fn page(content_type: &str, body: &str) -> ProviderServer {
     ProviderServer::start([Response {

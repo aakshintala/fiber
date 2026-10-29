@@ -2578,3 +2578,274 @@ fn shot(app: &crate::app::App) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over the conversation column the view takes.
+fn wheel(col: u16, row: u16, down: bool) -> crate::keys::Mouse {
+    crate::keys::Mouse {
+        kind: if down {
+            crate::keys::MouseKind::WheelDown
+        } else {
+            crate::keys::MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The wheel over the rewind view moves the rewind list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_rewind_moves_the_list_not_the_conversation() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    app.set_size(80, 24);
+    // Scroll first, while the wheel still reaches the conversation: the
+    // view covers it once open.
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    let lines = open(&mut app, &clock);
+    // A third turn past the fixture's two, so three steps down from the
+    // resting row stay off the tail instead of clamping.
+    let mut history = segment_a();
+    history.extend([
+        history_line(
+            SESSION,
+            "turn_started",
+            7,
+            Some("t_3"),
+            None,
+            message_input("third"),
+        ),
+        history_line(SESSION, "step_started", 8, Some("t_3"), None, json!({})),
+        history_line(
+            SESSION,
+            "turn_completed",
+            9,
+            Some("t_3"),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]);
+    // Past turns for a window with room: seventeen more turns keep rows
+    // below the resting row, so three steps down stay off the tail.
+    for (n, at) in (4..=20).zip((10..).step_by(3)) {
+        history.extend([
+            history_line(
+                SESSION,
+                "turn_started",
+                at,
+                Some(format!("t_{n}").as_str()),
+                None,
+                message_input(format!("turn {n}").as_str()),
+            ),
+            history_line(
+                SESSION,
+                "step_started",
+                at + 1,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({}),
+            ),
+            history_line(
+                SESSION,
+                "turn_completed",
+                at + 2,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({"outcome": "completed"}),
+            ),
+        ]);
+    }
+    accept(&mut app, &lines[0]["id"], history);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    // Two steps off the resting row: the window moves under a selection
+    // that stays on screen.
+    app.on_key(crate::keys::Key::Up, clock.now());
+    app.on_key(crate::keys::Key::Up, clock.now());
+    let frame = app.session_view_screen(80).expect("the view is open");
+    let before = frame.list.selected();
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        before,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel that carries focus offscreen moves the selection and follows
+/// it to the new row's rewind target, never the conversation
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_carrying_focus_offscreen_follows_the_new_target() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    let lines = open(&mut app, &clock);
+    let mut history = segment_a();
+    history.extend([
+        history_line(
+            SESSION,
+            "turn_started",
+            7,
+            Some("t_3"),
+            None,
+            message_input("third"),
+        ),
+        history_line(SESSION, "step_started", 8, Some("t_3"), None, json!({})),
+        history_line(
+            SESSION,
+            "turn_completed",
+            9,
+            Some("t_3"),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]);
+    for (n, at) in (4..=20).zip((10..).step_by(3)) {
+        history.extend([
+            history_line(
+                SESSION,
+                "turn_started",
+                at,
+                Some(format!("t_{n}").as_str()),
+                None,
+                message_input(format!("turn {n}").as_str()),
+            ),
+            history_line(
+                SESSION,
+                "step_started",
+                at + 1,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({}),
+            ),
+            history_line(
+                SESSION,
+                "turn_completed",
+                at + 2,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({"outcome": "completed"}),
+            ),
+        ]);
+    }
+    accept(&mut app, &lines[0]["id"], history);
+    let top = app.top();
+    for _ in 0..40 {
+        app.on_key(crate::keys::Key::Up, clock.now());
+    }
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.selected(), 0, "many Ups reach the first row");
+    assert_eq!(frame.list.top(), 0);
+    let before = point(&app);
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.top(), 3, "one step down moves three rows");
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "the focus follows into the window"
+    );
+    assert_ne!(
+        point(&app),
+        before,
+        "the rewind target follows the selection"
+    );
+    assert_eq!(
+        point(&app),
+        app.rewind.turn_bounds(3).first().cloned(),
+        "the target is the new row's first boundary"
+    );
+}
+
+/// A wheel-down that clamps the selection into the window also moves the
+/// detail's point: the lines under the rows name the new row's turn, never
+/// the conversation (`docs/tui.md:576`).
+#[test]
+fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    app.set_size(80, 24);
+    let lines = open(&mut app, &clock);
+    let mut history = calls_segment();
+    for (n, at) in (2..=20).zip((12..).step_by(3)) {
+        history.extend([
+            history_line(
+                SESSION,
+                "turn_started",
+                at,
+                Some(format!("t_{n}").as_str()),
+                None,
+                message_input(format!("turn {n}").as_str()),
+            ),
+            history_line(
+                SESSION,
+                "step_started",
+                at + 1,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({}),
+            ),
+            history_line(
+                SESSION,
+                "turn_completed",
+                at + 2,
+                Some(format!("t_{n}").as_str()),
+                None,
+                json!({"outcome": "completed"}),
+            ),
+        ]);
+    }
+    accept(&mut app, &lines[0]["id"], history);
+    for _ in 0..40 {
+        app.on_key(crate::keys::Key::Up, clock.now());
+    }
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.selected(), 0, "many Ups reach the first row");
+    // The cursor sits on the first turn's start, past its writing call:
+    // everything after it lists.
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: /w/a.rs",
+            "Calls that may have changed files: shell",
+            "None of it is undone.",
+            "Jobs that stop: none",
+        ]
+    );
+    let top = app.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.top(), 3, "one step down moves three rows");
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "the clamped selection follows into the window"
+    );
+    // The new row's turn wrote nothing: without the follow the detail
+    // would still name the first turn's files.
+    assert_eq!(
+        below(&app),
+        [
+            "Files written since the point: none",
+            "Calls that may have changed files: none",
+            "None of it is undone.",
+            "Jobs that stop: none",
+        ]
+    );
+}

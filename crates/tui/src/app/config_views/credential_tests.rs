@@ -182,3 +182,31 @@ fn credentials_80x24() {
     );
     insta::assert_snapshot!(lines.join("\n"));
 }
+
+/// The wheel shifts the visible labels three a step, keeping a visible
+/// selection where it was, and never chooses (`docs/tui.md`, "Swapped
+/// views"; see #3578).
+#[test]
+fn wheel_shifts_three_labels_and_never_chooses() {
+    let many = CredentialLabels {
+        provider: "fake".to_owned(),
+        credentials: (0..30).map(|n| format!("label-{n:02}")).collect(),
+        credential: None,
+    };
+    let mut picker = Picker::open("q".to_owned());
+    picker.answered("q", many, 24);
+    for _ in 0..10 {
+        assert_eq!(picker.key(&Key::Down, 24), Pick::Stay);
+    }
+    assert_eq!(
+        (picker.frame().list.top(), picker.frame().list.selected()),
+        (0, 10)
+    );
+    assert_eq!(picker.wheel(false, 24), Pick::Stay);
+    assert_eq!(picker.frame().list.top(), 3);
+    assert_eq!(
+        picker.frame().list.selected(),
+        10,
+        "a visible selection stays"
+    );
+}

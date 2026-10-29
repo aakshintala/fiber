@@ -57,6 +57,11 @@ fn selected(screen: &KeysScreen, keys: &Keyset) -> usize {
     screen.frame(keys, 24).list.selected()
 }
 
+/// The first visible row over `keys`.
+fn top(screen: &KeysScreen, keys: &Keyset) -> usize {
+    screen.frame(keys, 24).list.top()
+}
+
 /// Selects row `at`.
 fn select(screen: &mut KeysScreen, at: usize) {
     let outcome = screen.click(Spot::Row(at), 24);
@@ -527,5 +532,62 @@ fn a_row_click_selects_while_browsing_only() {
     assert_eq!(
         footer(&screen, &keys),
         "Press the key for Start a new session · Esc cancel"
+    );
+}
+
+/// The wheel shifts the visible rows three a step while browsing,
+/// keeping a still-visible selection where it was and clearing the
+/// transient message as a stroke does.
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection_while_browsing() {
+    let keys = keys();
+    let mut screen = keys_screen();
+    screen.failed("boom".to_owned());
+    assert_eq!(below(&screen, &keys), ["Not saved: boom"]);
+    select(&mut screen, 5);
+    assert!(matches!(screen.wheel(false, &keys, 24), Outcome::Nothing));
+    assert_eq!(top(&screen, &keys), 3);
+    assert_eq!(selected(&screen, &keys), 5);
+    assert!(below(&screen, &keys).is_empty());
+    assert!(matches!(screen.wheel(true, &keys, 24), Outcome::Nothing));
+    assert_eq!(top(&screen, &keys), 0);
+    assert_eq!(selected(&screen, &keys), 5);
+}
+
+/// The wheel in a capture is swallowed, never a captured key: the
+/// capture waits on.
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_in_a_capture_waits_on() {
+    let keys = keys();
+    let mut screen = keys_screen();
+    select(&mut screen, 5);
+    press(&mut screen, &keys, &["enter"]);
+    let prompt = footer(&screen, &keys);
+    assert_eq!(prompt, "Press the key for Start a new session · Esc cancel");
+    assert!(matches!(screen.wheel(false, &keys, 24), Outcome::Nothing));
+    assert!(matches!(screen.wheel(true, &keys, 24), Outcome::Nothing));
+    assert_eq!(selected(&screen, &keys), 5);
+    assert_eq!(footer(&screen, &keys), prompt);
+}
+
+/// The wheel in a clash is swallowed: the clash prompt stands.
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_in_a_clash_keeps_the_prompt() {
+    let keys = keys();
+    let mut screen = keys_screen();
+    select(&mut screen, 11);
+    press(&mut screen, &keys, &["enter", "ctrl+o", "ctrl+r"]);
+    assert_eq!(
+        below(&screen, &keys),
+        ["Ctrl+O is bound to Open or close the ledgers"]
+    );
+    assert!(matches!(screen.wheel(false, &keys, 24), Outcome::Nothing));
+    assert!(matches!(screen.wheel(true, &keys, 24), Outcome::Nothing));
+    assert_eq!(
+        below(&screen, &keys),
+        ["Ctrl+O is bound to Open or close the ledgers"]
     );
 }

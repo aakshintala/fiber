@@ -546,6 +546,51 @@ impl App {
         Some(self.config_act(act))
     }
 
+    /// Shifts the open configuration view's window one wheel step through
+    /// its own entry point: an open edit field takes Up/Down without
+    /// scrolling, so the wheel is swallowed there and never retargets
+    /// the row the field edits. `None` with no view open. Never an
+    /// Up/Down step: the keys keep their own path.
+    pub(in crate::app) fn config_view_wheel(&mut self, up: bool) -> Option<Effect> {
+        self.config_views.open.as_ref()?;
+        let height = self.config_view_height();
+        if let Some(Open::Credential(picker)) = &mut self.config_views.open {
+            let pick = picker.wheel(up, height);
+            return Some(self.credential_pick(pick));
+        }
+        // `/doctor` shows a local snapshot through no seam, as its keys do.
+        if let Some(Open::Doctor(doctor)) = &mut self.config_views.open {
+            let act = doctor.wheel(up, height);
+            return Some(self.config_act(act));
+        }
+        let act = match self.config_views.seam.clone() {
+            Some(seam) => {
+                let Some(workspace) = self.view_workspace() else {
+                    return Some(Effect::None);
+                };
+                let ctx = self.config_ctx(seam.as_ref(), &workspace);
+                match &mut self.config_views.open {
+                    Some(Open::Settings(settings)) => settings.wheel(up, &ctx),
+                    Some(Open::Tools(tools)) => tools.wheel(up, &ctx),
+                    Some(Open::Skills(skills)) => skills.wheel(up, &ctx),
+                    Some(Open::Mcp(mcp)) => mcp.wheel(up, &ctx),
+                    Some(Open::Rules(rules)) => rules.wheel(up, &ctx),
+                    Some(Open::Login(login)) => login.wheel(up, &ctx),
+                    Some(Open::Logout(logout)) => logout.wheel(up, &ctx),
+                    // The early routes above keep `/doctor`, the picker
+                    // and the unavailable view out of the seam match:
+                    // named here for exhaustiveness. None of them
+                    // scrolls, so the wheel is swallowed.
+                    Some(Open::Doctor(..) | Open::Credential(_) | Open::Unavailable(..)) | None => {
+                        Act::Stay
+                    }
+                }
+            }
+            None => Act::Stay,
+        };
+        Some(self.config_act(act))
+    }
+
     /// Hands an editing key to the open view's field. `None` with no view
     /// open.
     pub(in crate::app) fn config_view_edit(&mut self, edit: &Edit) -> Option<Effect> {

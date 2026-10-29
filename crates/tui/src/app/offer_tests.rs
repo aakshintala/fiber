@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::app::testkit::{SESSION as S_A, now, sent, session_line};
 use crate::app::{App, Effect};
-use crate::keys::{Edit, Key};
+use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
@@ -44,12 +44,35 @@ fn offer(session: &str) -> Line {
     )
 }
 
+/// An offer `r_1` of ten MCP servers from `session`: tall enough that
+/// the wheel moves its window three rows a step.
+fn offer_many(session: &str) -> Line {
+    let items: Vec<Value> = (0..10)
+        .map(|n| {
+            json!({"kind": "mcp_server", "name": format!("m{n}"), "hash": "h", "required": false,
+                "summary": format!("MCP server: m{n}")})
+        })
+        .collect();
+    session_line(
+        session,
+        "repository_code_offered",
+        json!({"request_id": "r_1", "items": items}),
+        None,
+    )
+}
+
 /// An app attached to [`S_A`] with its offer open.
 fn offered() -> App {
     let mut app = attached();
     assert!(app.on_line(offer(S_A)).is_empty());
     assert!(app.offer_open());
     app
+}
+
+/// Feeds the offered repository code lines, opening the offer.
+fn offered_lines(app: &mut App) {
+    assert!(app.on_line(offer(S_A)).is_empty());
+    assert!(app.offer_open());
 }
 
 /// An approval request from [`S_A`].
@@ -633,4 +656,256 @@ fn going_home_drops_the_offer() {
     assert!(app.badge().is_none());
     press(&mut app, Key::AltA);
     assert!(!app.offer_open());
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over the conversation column the offer takes.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The text of the open offer's cursor row: the one its `▸` mark starts.
+fn cursor_text(app: &App) -> String {
+    let (rows, _) = app
+        .offer_rows(app.column_width())
+        .expect("the offer is open");
+    rows.iter()
+        .find_map(|row| {
+            let mut text = String::new();
+            for span in &row.line.spans {
+                text.push_str(span.content.as_ref());
+            }
+            text.strip_prefix("▸ ").map(str::to_owned)
+        })
+        .expect("a cursor row")
+}
+
+/// The wheel over the offer with no source open shifts its rows three,
+/// never the conversation under it (`docs/tui.md:576`, "Swapped views";
+/// see #3578). Two Downs put the cursor on the third item, so the
+/// window moves three rows under it while the choice stays.
+#[test]
+fn wheel_over_offer_moves_the_cursor_not_the_conversation() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    // Scroll first, while the wheel still reaches the conversation: the
+    // offer covers it once its rows draw.
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert!(app.on_line(offer_many(S_A)).is_empty());
+    assert!(app.offer_open());
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Down);
+    assert!(cursor_text(&app).contains("MCP server m2"));
+    let (_, offer_top) = app
+        .offer_rows(app.column_width())
+        .expect("the offer is open");
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let (_, moved) = app
+        .offer_rows(app.column_width())
+        .expect("the offer is open");
+    assert_eq!(
+        moved,
+        offer_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert!(
+        cursor_text(&app).contains("MCP server m2"),
+        "a cursor still on screen stays where it was"
+    );
+}
+
+/// Offer is drawn instead of Results when both are open, so wheel input
+/// reaches the offer cursor and leaves the hidden result window alone.
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_over_offer_wins_over_open_results() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    assert!(app.on_line(offer_many(S_A)).is_empty());
+    app.open_results();
+    assert!(app.offer_open());
+    assert!(app.results_open());
+    let (_, offer_top) = app.offer_rows(app.column_width()).expect("open offer");
+    let before = cursor_text(&app);
+    let results = app.find_results().map(|view| (view.selected, view.top));
+    let (width, height) = app.screen_size();
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buffer, None);
+    app.drawn(&targets);
+    let search = app.frames().slab_of(crate::app::Surface::Search);
+    let completion = app.frames().slab_of(crate::app::Surface::Completion);
+    let content_height = u16::try_from(app.conversation_area_height())
+        .unwrap_or(u16::MAX)
+        .min(height);
+    let (col, row) = (0..content_height)
+        .flat_map(|row| (0..width).map(move |col| (col, row)))
+        .find(|&(col, row)| {
+            !search.is_some_and(|slab| slab.contains(ratatui::layout::Position::new(col, row)))
+                && !completion
+                    .is_some_and(|slab| slab.contains(ratatui::layout::Position::new(col, row)))
+        })
+        .expect("an offer row outside the search slabs");
+
+    app.on_wheel(&wheel(col, row, true));
+
+    assert_eq!(
+        cursor_text(&app),
+        before,
+        "the visible offer cursor stays put"
+    );
+    assert_eq!(
+        app.offer_rows(app.column_width()).expect("open offer").1,
+        offer_top + 3,
+        "the offer owns the visible rows"
+    );
+    assert_eq!(
+        app.find_results().map(|view| (view.selected, view.top)),
+        results,
+        "the hidden results keep their prior selection and offset"
+    );
+}
+
+/// The wheel over the offer with no source open clamps a cursor that
+/// leaves the window to the nearest shown row, and never chooses: the
+/// cursor moves off the first item while no answer sends.
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_over_offer_clamps_a_leaving_cursor_without_choosing() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert!(app.on_line(offer_many(S_A)).is_empty());
+    assert!(app.offer_open());
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    assert!(cursor_text(&app).contains("MCP server m0"));
+    for _ in 0..3 {
+        assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    }
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert!(
+        !cursor_text(&app).contains("MCP server m0"),
+        "the first item left the window, so the cursor followed"
+    );
+}
+
+/// The wheel over the offer with its source open scrolls the source
+/// three rows, never the conversation under it (`docs/tui.md:576`, "Swapped
+/// views"; see #3578).
+#[test]
+fn wheel_over_offer_source_scrolls_the_source_not_the_conversation() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    // Scroll first, while the wheel still reaches the conversation: the
+    // offer covers it once its rows draw.
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.on_line(session_line(S_A, "repository_code_offered", json!({"request_id": "r_1", "items": [{"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "hook", "files": ["tools/db.sh", "tools/b.sh"]}]}), None));
+    assert!(app.offer_open());
+    let request = open_source(&mut app);
+    let text = (1..=30)
+        .map(|n| format!("line {n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": request["id"], "result": {"text": text}}),
+        None,
+    ));
+    assert!(app.offer.source_open());
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let (_, source_top) = app.offer_rows(app.column_width()).expect("source rows");
+    assert_eq!(source_top, 0);
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.offer_rows(app.column_width()).expect("source rows").1,
+        source_top + 3,
+        "one wheel step shifts the source three lines"
+    );
+}
+
+/// An app on home in `/w` at 160x40, attached, with a delegates panel.
+fn panel_app() -> App {
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_home(crate::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: vec!["delegates".to_owned()],
+        ..Default::default()
+    });
+    app.attach(contract::SessionId(S_A.to_owned()));
+    app.set_size(160, 40);
+    app
+}
+
+/// Folds Fiber delegates `j_1` to `j_<n>`.
+fn fold_delegates(app: &mut App, n: usize) {
+    for k in 1..=n {
+        let job = format!("j_{k}");
+        app.on_line(session_line(
+            S_A,
+            "job_started",
+            json!({"job_id": job, "description": format!("task {k}"), "output_path": "/tmp/out"}),
+            Some(&format!("a_{k}")),
+        ));
+        app.on_line(session_line(
+            S_A,
+            "delegate_started",
+            json!({"job_id": job, "delegate_session_id": format!("s_{job:0>16}"),
+                "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+            Some(&format!("a_{k}")),
+        ));
+    }
+}
+
+/// A wheel over the panel with the offer also open keeps the panel's
+/// existing behavior: the panel scrolls while the offer cursor and the
+/// conversation stay (`docs/tui.md:576`, "Swapped views").
+#[test]
+fn wheel_over_panel_with_offer_open_keeps_the_panel() {
+    let mut app = panel_app();
+    fold_delegates(&mut app, 5);
+    // Scroll first, while the wheel still reaches the conversation: the
+    // offer covers it once its rows draw. Column 40 clears the rail.
+    app.on_wheel(&wheel(40, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    offered_lines(&mut app);
+    assert!(app.offer_open());
+    let top = app.top();
+    let cursor = cursor_text(&app);
+    let panel_x = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.panel)
+        .map(|panel| panel.x.saturating_add(4))
+        .expect("the panel draws");
+    app.on_wheel(&wheel(panel_x, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(cursor_text(&app), cursor, "the wheel left the offer");
+    assert!(
+        app.panel_state().delegate_scroll() > 0,
+        "the panel scrolled instead"
+    );
 }

@@ -260,6 +260,13 @@ pub(super) fn draw_noted(
     targets: &mut Vec<Target>,
 ) -> u16 {
     let top = draw(panel, area, bottom, buf, targets);
+    // The panel's full drawn rectangle, edges included, under its
+    // existing surface: the wheel over it is the panel's and moves
+    // nothing, while Offer rows still drawn outside it keep the wheel.
+    app.frames().note(
+        crate::app::Surface::Panel,
+        Rect::new(area.x, top, area.width, bottom.saturating_sub(top)),
+    );
     // The draw's layout recomputed: `Layout::new` is pure in the panel
     // and the area, so the noted rows sit where the draw put them.
     let room = usize::from(area.height);

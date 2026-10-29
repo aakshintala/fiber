@@ -1674,3 +1674,149 @@ fn an_empty_chunk_breaks_the_wheel_run_but_wheel_downs_do_not() {
     assert_eq!(blocks(&sink.bytes()) - drawn, 2);
     assert_eq!(lp.app.top(), None);
 }
+
+/// A wheel over a call view with a missing page emits the `artifact_page`
+/// send through `on_mouse`, ahead of the selection (`docs/tui.md`,
+/// "Swapped views"; see #3578).
+#[test]
+fn wheel_over_a_call_view_with_a_missing_page_sends_through_on_mouse() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    // `hub_hello` brings the outbox link up, so the view's page asks go
+    // out instead of stalling for a connection.
+    assert!(
+        lp.app
+            .on_line(Line::Hub(contract::HubLine {
+                kind: "hub_hello".to_owned(),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                payload: serde_json::Map::new(),
+            }))
+            .is_empty()
+    );
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let text: String = (0..150).map(|i| format!("L{i:03}\n")).collect();
+    let size = text.len() as u64;
+    // Lines fold straight into the app: the loop harness only carries
+    // the app and the screen here, and the sends come back through the
+    // calls' own returns.
+    fn hub_line(kind: &str, action: Option<&str>, payload: serde_json::Value) -> Line {
+        Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|action| contract::ActionId(action.to_owned())),
+            seq: None,
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        })
+    }
+    let envelope = hub_line;
+    lp.app.on_line(envelope(
+        "turn_started",
+        None,
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    ));
+    lp.app.on_line(envelope(
+        "tool_call_requested",
+        Some("a_1"),
+        serde_json::json!({"name": "shell", "arguments": {"command": "cargo test -p log"}}),
+    ));
+    lp.app.on_line(envelope(
+        "tool_call_completed",
+        Some("a_1"),
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": "cut"}],
+            "details": {"command": "cargo test -p log", "exit_code": 0},
+            "artifact": "artifacts/a_1.txt", "kept": [[0, 5]]}),
+    ));
+    // A click on the more row opens the call's whole view, asking for
+    // its first page through the click's own return.
+    let id = crate::turn::target_id("a_1");
+    let request = match lp
+        .app
+        .on_click(crate::mouse::TargetId::Line(crate::app::Target::CallView(
+            id,
+        ))) {
+        crate::app::Effect::Send(lines) => {
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            serde_json::from_str::<serde_json::Value>(&lines[0]).unwrap_or_default()
+        }
+        crate::app::Effect::None
+        | crate::app::Effect::Quit
+        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::ListFiles
+        | crate::app::Effect::Search { .. }
+        | crate::app::Effect::Editor { .. }
+        | crate::app::Effect::Copy(_)
+        | crate::app::Effect::FindPause { .. }
+        | crate::app::Effect::OpenLink(_)
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. }
+        | crate::app::Effect::OpenFile(_) => {
+            panic!("opening asks for the first page")
+        }
+    };
+    assert_eq!(request["command"], serde_json::json!("artifact_page"));
+    // Answer the first page; the follow-up asks for the next offset.
+    let chunk: String = text.split_inclusive('\n').take(64).collect();
+    let lines: Vec<u64> = (0..64).map(|at| at * 5).collect();
+    let result = serde_json::json!({"text": chunk, "lines": lines, "size": size, "next": 320});
+    let out = lp.app.on_line(envelope(
+        "command_accepted",
+        None,
+        serde_json::json!({"command_id": request["id"], "result": result}),
+    ));
+    let second = out
+        .iter()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap_or_default())
+        .find(|line| line["args"]["offset"] == serde_json::json!(320))
+        .unwrap_or_else(|| panic!("the follow-up asks for 320: {out:?}"));
+    // The second page fails, leaving the view open with a missing page.
+    assert!(
+        lp.app
+            .on_line(envelope(
+                "command_rejected",
+                None,
+                serde_json::json!({"command_id": second["id"], "code": "io_failed",
+                "message": "page failed: io_failed"}),
+            ))
+            .is_empty()
+    );
+    assert!(lp.app.call_view_open(), "the view stays open");
+    // Scrolling the missing page into the window asks for it again,
+    // through `on_mouse` ahead of the selection.
+    let mut asked = false;
+    for _ in 0..30 {
+        let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let targets = crate::view::render(&lp.app, area, &mut buf, None);
+        let effect = lp.app.on_mouse(
+            &crate::keys::Mouse {
+                kind: crate::keys::MouseKind::WheelDown,
+                col: 10,
+                row: 5,
+            },
+            &targets,
+            &mut crate::mouse::Pointer::default(),
+            false,
+            lp.clock.now(),
+        );
+        if let crate::app::Effect::Send(lines) = effect {
+            for line in &lines {
+                let line: serde_json::Value = serde_json::from_str(line).unwrap_or_default();
+                if line["command"] == serde_json::json!("artifact_page")
+                    && line["args"]["offset"] == serde_json::json!(320)
+                {
+                    asked = true;
+                }
+            }
+        }
+        if asked {
+            break;
+        }
+    }
+    assert!(asked, "the wheel asks for the missing page");
+}

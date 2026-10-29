@@ -107,6 +107,16 @@ impl Picker {
         }
     }
 
+    /// Shifts the window one wheel step: three rows, keeping the
+    /// selection while it shows. Typing never filters, and the wheel
+    /// never chooses: a click still does that.
+    pub(crate) fn wheel(&mut self, up: bool, height: usize) -> Pick {
+        let count = self.answer().map_or(0, |answer| answer.credentials.len());
+        self.list
+            .wheel(up, count, rows_height(&self.frame(), height), 3);
+        Pick::Stay
+    }
+
     /// A row click chooses and saves; the header closes.
     pub(crate) fn click(&mut self, spot: Spot, height: usize) -> Pick {
         match spot {

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::super::{App, Effect, Target};
-use crate::keys::Key;
+use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::TargetId;
 use contract::SessionId;
@@ -2375,4 +2375,300 @@ fn highlight_second_cell_gap_marks_only_its_hit() {
         ],
         "a hit past the cell start keeps the leading plain part: {out:?}"
     );
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, over the
+/// call view's output rows.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The wheel over an open call view shifts its visible rows three per
+/// step, never the conversation under it (`docs/tui.md`, "Swapped
+/// views"; see #3578). The selection at the window's top row leaves the
+/// window, so it clamps to the nearest row still on screen.
+#[test]
+fn wheel_over_an_open_call_view_moves_visible_rows_not_the_conversation() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let text = (0..30)
+        .map(|i| format!("row{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        &text,
+        json!({"command": COMMAND, "exit_code": 0}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    // Leave the tail so three steps down move the selection instead of
+    // following at the end.
+    for _ in 0..5 {
+        app.on_key(Key::Up, now());
+    }
+    assert!(
+        !app.call_view().expect("open").follow,
+        "Up leaves follow mid-file"
+    );
+    let before = app.call_view().expect("open").list.selected();
+    let shown_top = app.call_view().expect("open").list.top();
+    // Plain output pages nothing: the wheel sends nothing back.
+    assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.call_view().expect("open").list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        app.call_view().expect("open").list.selected(),
+        shown_top + 3,
+        "the selection clamps to the nearest row still on screen"
+    );
+    assert_eq!(before, shown_top, "the selection started on the top row");
+}
+
+/// The wheel over an open call view keeps a selection that stays on
+/// screen: five Downs put it mid-window, so one step down moves the
+/// window three rows under it (`docs/tui.md`, "Swapped views"; see
+/// #3578).
+#[test]
+fn wheel_over_an_open_call_view_keeps_a_visible_selection() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let text = (0..30)
+        .map(|i| format!("row{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        &text,
+        json!({"command": COMMAND, "exit_code": 0}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..5 {
+        app.on_key(Key::Down, now());
+    }
+    let before = app.call_view().expect("open").list.selected();
+    let shown_top = app.call_view().expect("open").list.top();
+    assert_eq!(before, 5, "five Downs select the fifth row: {before}");
+    assert_eq!(shown_top, 0, "the window stays at the top: {shown_top}");
+    // Plain output pages nothing: the wheel sends nothing back.
+    assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.call_view().expect("open").list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        app.call_view().expect("open").list.selected(),
+        before,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over an open call view with the find bar open shifts the
+/// viewport instead of stepping matches, never the conversation under
+/// it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_a_call_view_with_find_open_scrolls_not_the_conversation() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_inline(&mut app, id);
+    let request = page_request(app.open_call_view(id));
+    let text = "aa\nbb\n".repeat(30);
+    assert!(
+        app.on_line(accepted(
+            &request,
+            &text,
+            (0..60).map(|at| at * 3).collect(),
+            None,
+            30,
+        ))
+        .is_empty()
+    );
+    type_query(&mut app, "aa");
+    let matches = app.call_view().expect("open").matches.clone();
+    assert_eq!(
+        matches.len(),
+        30,
+        "each of thirty pairs holds aa: {matches:?}"
+    );
+    assert_eq!(current_row(&app), Some(matches[0]));
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    let before = app.call_view().expect("open").list.top();
+    // Every page is loaded: the wheel sends nothing back. The view opens
+    // at its tail, so wheel-up has room to move exactly three rows.
+    assert_eq!(app.on_wheel(&wheel(10, 5, false)), Effect::None);
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.call_view().expect("open").list.top(),
+        before.saturating_sub(3),
+        "the output viewport moves exactly three rows"
+    );
+    assert_eq!(
+        current_row(&app),
+        Some(matches[0]),
+        "the find match selection stays unchanged"
+    );
+}
+
+/// The wheel over a call view with a missing page sends the
+/// `artifact_page` ask through the wheel's own return, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_a_call_view_with_a_missing_page_sends_artifact_page() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let sends = answer_page(&mut app, &first, &text, 0);
+    // The follow-up asks for the first page's announced next offset.
+    let next = page_next(&text, 0).expect("the first page names next");
+    let second = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(next))
+        .unwrap_or_else(|| panic!("the follow-up asks for {next}: {sends:?}"))
+        .clone();
+    // The second page fails, leaving the view open with a missing page.
+    assert!(app.on_line(rejected(&second, "io_failed")).is_empty());
+    // Scrolling the missing page into the window asks for it again.
+    let mut asked = None;
+    for _ in 0..30 {
+        let Effect::Send(lines) = app.on_wheel(&wheel(10, 5, true)) else {
+            continue;
+        };
+        for line in &lines {
+            let line: Value = serde_json::from_str(line).unwrap_or_default();
+            if line["command"] == json!("artifact_page") && line["args"]["offset"] == json!(320) {
+                asked = Some(line.clone());
+            }
+        }
+        if asked.is_some() {
+            break;
+        }
+    }
+    assert!(asked.is_some(), "the wheel asks for the missing page");
+}
+
+/// A wheel-up pauses following, a wheel-down before the tail stays
+/// unfollowed, and a wheel-down reaching the tail resumes it, never the
+/// conversation (`docs/tui.md:576`).
+#[test]
+fn wheel_up_pauses_and_down_resumes_follow_only_at_the_tail() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    assert!(app.call_view().expect("open").follow, "following starts on");
+    let top = app.top();
+    let _ = app.on_wheel(&wheel(10, 5, false));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert!(
+        !app.call_view().expect("open").follow,
+        "a wheel-up pauses following"
+    );
+    let _ = app.on_wheel(&wheel(10, 5, false));
+    let _ = app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert!(
+        !app.call_view().expect("open").follow,
+        "a wheel-down before the tail stays unfollowed"
+    );
+    for _ in 0..40 {
+        app.on_wheel(&wheel(10, 5, true));
+        if app.call_view().expect("open").follow {
+            break;
+        }
+    }
+    assert!(
+        app.call_view().expect("open").follow,
+        "a wheel-down reaching the tail resumes following"
+    );
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+}
+
+/// A wheel-down before the tail never refetches the fill, while one
+/// reaching the tail does when it is missing (`docs/tui.md:576`).
+#[test]
+fn wheel_down_refetches_a_missing_fill_only_at_the_tail() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    {
+        let view = app.call_view_mut().expect("open");
+        view.pager.fill_next = Some(99999);
+        view.pager.missing.insert(99999);
+    }
+    let sends = sent(app.on_wheel(&wheel(10, 5, true)));
+    assert!(
+        sends
+            .iter()
+            .any(|line| line["args"]["offset"] == json!(99999)),
+        "a wheel-down at the tail refetches the missing fill: {sends:?}"
+    );
+    {
+        let view = app.call_view_mut().expect("open");
+        view.pager.fill_next = Some(99999);
+        view.pager.missing.insert(99999);
+    }
+    app.on_wheel(&wheel(10, 5, false));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(
+        !app.call_view().expect("open").follow,
+        "wheel-ups leave the tail"
+    );
+    let sends = sent(app.on_wheel(&wheel(10, 5, true)));
+    assert!(
+        sends
+            .iter()
+            .all(|line| line["args"]["offset"] != json!(99999)),
+        "a wheel-down before the tail never refetches the fill: {sends:?}"
+    );
+    // The wire already holds the tail's request, which would absorb a
+    // mutant queue without a send: the pager state itself must not move.
+    {
+        let view = app.call_view().expect("open");
+        assert!(
+            view.pager.missing.contains(&99999),
+            "a wheel-down before the tail leaves the missing fill missing"
+        );
+        assert!(
+            view.pager.queued.is_empty(),
+            "a wheel-down before the tail queues nothing"
+        );
+    }
 }
