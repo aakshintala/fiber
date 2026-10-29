@@ -890,6 +890,6 @@ fn an_animated_replacement_records_frame_and_now() {
     let (shown, _, _) = draw_queue(&app, 80, 24);
     assert!(shown.contains("queued one"), "{shown}");
     // docs/tui.md:3121: every animated slot carries frame and now.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3121.
-    assert_eq!(fake.nows.borrow().clone(), vec![1_000]); // docs/tui.md:3121.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3044: one call on the miss; 3121: frame in input.
+    assert_eq!(fake.nows.borrow().clone(), vec![1_000]); // docs/tui.md:3044: one call on the miss; 3121: now in input.
 }

@@ -1246,7 +1246,7 @@ fn the_fold_matches_the_turn_cards_prompts_when_narrowed() {
         // The input carries the turn card's start, however narrow.
         // docs/tui.md:2872-2878: working_line draws the working line with started.
         let inputs = fake.inputs.borrow();
-        assert_eq!(inputs.len(), 1, "one folded input"); // docs/tui.md:2872-2878: one draw, one input.
+        assert_eq!(inputs.len(), 1, "one folded input"); // docs/tui.md:3044: one call on the miss; 2872-2878: working_line fields.
         assert_eq!(inputs[0].started, Some(WALL - 674_000));
         assert!(inputs[0].retry.is_none());
     }
@@ -1275,7 +1275,7 @@ fn the_fold_maps_the_retry_schedule() {
     assert!(shown.contains("custom"), "{shown}");
     let inputs = fake.inputs.borrow();
     // docs/tui.md:2872-2878: the retry input carries code, attempt and schedule.
-    assert_eq!(inputs.len(), 1, "one folded input"); // docs/tui.md:2872-2878.
+    assert_eq!(inputs.len(), 1, "one folded input"); // docs/tui.md:3044: one call on the miss.
     assert_eq!(inputs[0].started, Some(WALL));
     let retry = inputs[0].retry.as_ref().expect("a pending retry");
     assert!(matches!(retry.code, contract::ErrorCode::RateLimited));
@@ -1301,6 +1301,6 @@ fn an_animated_replacement_records_frame_and_now() {
     render(&app, area, &mut buf, None);
     assert!(text(&buf).contains("custom"), "{}", text(&buf));
     // docs/tui.md:3121: every animated slot carries frame and now.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3121.
-    assert_eq!(fake.nows.borrow().clone(), vec![WALL]); // docs/tui.md:3121.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3044: one call on the miss; 3121: frame in input.
+    assert_eq!(fake.nows.borrow().clone(), vec![WALL]); // docs/tui.md:3044: one call on the miss; 3121: now in input.
 }

@@ -221,7 +221,7 @@ fn changed_compatible_sets_and_configured_values_get_new_conflict_notices() {
             );
         }
         let notices = renderer.take_pending();
-        // docs/tui.md:2771: one command_conflict per slot and set of contenders until /reload.
+        // docs/tui.md:2757: one command_conflict per slot and set of contenders until /reload.
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].0, "command_conflict");
     }
@@ -244,7 +244,7 @@ fn changed_compatible_sets_and_configured_values_get_new_conflict_notices() {
             SlotSelection::Suppressed
         );
         let notices = composite.take_pending();
-        // docs/tui.md:2771: one command_conflict per slot and set of contenders until /reload.
+        // docs/tui.md:2757: one command_conflict per slot and set of contenders until /reload.
         assert_eq!(notices.len(), 1);
         assert!(notices[0].1.contains(value));
     }
@@ -397,7 +397,7 @@ fn compatible_first_selection_and_notice_cadence() {
         SlotSelection::Suppressed
     );
     let notices = renderer.take_pending();
-    // docs/tui.md:2771: one command_conflict per slot and set of contenders until /reload.
+    // docs/tui.md:2757: one command_conflict per slot and set of contenders until /reload.
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].0, "command_conflict");
     assert!(notices[0].1.contains("a, b"));
@@ -1667,7 +1667,7 @@ fn a_canonical_duplicate_keeps_the_first_registration() {
         ),
     );
     let (renderer, notices) = loader.load();
-    // docs/extensions.md:1529-1530 and docs/tui.md:3074-3076: the first registration wins; a later one is skipped with one notice.
+    // docs/extensions.md:1529-1530 and docs/tui.md:3060-3062: the first registration wins; a later one is skipped with one notice.
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].0, "extension_failed");
     assert!(notices[0].1.contains("twice"), "{notices:?}");
@@ -1694,7 +1694,7 @@ fn a_person_owned_binding_stays_dormant_with_one_notice() {
         Some("fiber.key('ctrl+q', { timeout = 100, run = function() return true end })"),
     );
     let (renderer, notices) = loader.load();
-    // docs/tui.md:3064-3066: a person-bound key stays theirs, with one notice naming the extension.
+    // docs/tui.md:3050-3052: a person-bound key stays theirs, with one notice naming the extension.
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].0, "extension_failed");
     assert!(notices[0].1.contains("extension a"), "{notices:?}");
@@ -1734,7 +1734,7 @@ fn two_extensions_binding_one_key_suppress_with_one_conflict() {
         );
     }
     let pending = renderer.take_pending();
-    // docs/tui.md:3058-3063: two extensions binding one key suppress, with one notice per slot and contenders.
+    // docs/tui.md:3044-3049: two extensions binding one key suppress, with one notice per slot and contenders.
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "command_conflict");
     assert!(pending[0].1.contains("extensions a, b"), "{pending:?}");
@@ -1779,7 +1779,7 @@ fn an_unparseable_key_setting_notices_with_the_full_setting() {
         Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
     );
     let (renderer, notices) = loader.load();
-    // docs/tui.md:3077-3078: an unparseable suffix or setting naming no contender selects none, with one notice naming the full setting.
+    // docs/tui.md:3063-3064: an unparseable suffix or setting naming no contender selects none, with one notice naming the full setting.
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].0, "command_conflict");
     assert_eq!(
@@ -1806,7 +1806,7 @@ fn a_key_setting_naming_no_registered_contender_selects_none() {
         Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
     );
     let (renderer, notices) = loader.load();
-    // docs/tui.md:3077-3078: an unparseable suffix or setting naming no contender selects none, with one notice naming the full setting.
+    // docs/tui.md:3063-3064: an unparseable suffix or setting naming no contender selects none, with one notice naming the full setting.
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].0, "command_conflict");
     assert_eq!(
@@ -1829,7 +1829,7 @@ fn a_key_setting_naming_a_non_contender_never_falls_back() {
         Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
     );
     let (renderer, notices) = loader.load();
-    // docs/tui.md:3077-3078, 3069: selects no winner with one notice; never falls back to the contender.
+    // docs/tui.md:3063-3064, 3069: selects no winner with one notice; never falls back to the contender.
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].0, "command_conflict");
     assert_eq!(
@@ -1939,7 +1939,7 @@ fn ctrl_c_cannot_be_bound_but_ctrl_shift_c_registers() {
         Some("fiber.key('Ctrl+C', { action = 'send' })"),
     );
     let (renderer, notices) = loader.load();
-    // docs/tui.md:3073-3076: plain ctrl+c never binds; Ctrl+C reads as ctrl+shift+c and stays bindable.
+    // docs/tui.md:3059-3062: plain ctrl+c never binds; Ctrl+C reads as ctrl+shift+c and stays bindable.
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].0, "extension_failed");
     assert!(notices[0].1.contains("ctrl+c"), "{notices:?}");
@@ -1968,7 +1968,7 @@ fn a_person_plus_two_extension_collision_suppresses() {
         );
     }
     let (renderer, notices) = loader.load();
-    // docs/tui.md:3064-3066: each dormant person-owned binding reports one notice.
+    // docs/tui.md:3050-3052: each dormant person-owned binding reports one notice.
     assert_eq!(notices.len(), 2, "{notices:?}");
     for notice in &notices {
         assert_eq!(notice.0, "extension_failed");
@@ -1978,7 +1978,7 @@ fn a_person_plus_two_extension_collision_suppresses() {
         SlotSelection::Suppressed
     );
     let pending = renderer.take_pending();
-    // docs/tui.md:3063: the conflict notice comes once per slot and set of contenders until /reload.
+    // docs/tui.md:3049: the conflict notice comes once per slot and set of contenders until /reload.
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "command_conflict");
     // The live person binding deactivates both contenders at dispatch,
@@ -2009,7 +2009,7 @@ fn key_selection_notices_repeat_only_after_reload() {
             SlotSelection::Suppressed
         );
     }
-    // docs/tui.md:3063: the conflict notice comes once per slot and set of contenders until /reload.
+    // docs/tui.md:3049: the conflict notice comes once per slot and set of contenders until /reload.
     assert_eq!(renderer.take_pending().len(), 1);
     assert!(renderer.take_pending().is_empty());
     // A reload rebuilds the composite, so the cadence starts over.
@@ -2018,7 +2018,7 @@ fn key_selection_notices_repeat_only_after_reload() {
         rebuilt.fills_for(&ctx(None), "key:ctrl+o"),
         SlotSelection::Suppressed
     );
-    // docs/tui.md:3063: the conflict notice comes once per slot and set of contenders until /reload.
+    // docs/tui.md:3049: the conflict notice comes once per slot and set of contenders until /reload.
     assert_eq!(rebuilt.take_pending().len(), 1);
 }
 
@@ -2040,7 +2040,7 @@ fn a_live_person_binding_deactivates_with_one_notice() {
         KeyOutcome::NotHandled
     );
     let pending = renderer.take_pending();
-    // docs/tui.md:3064-3066: a live person binding deactivates with one notice per key and extension until /reload.
+    // docs/tui.md:3050-3052: a live person binding deactivates with one notice per key and extension until /reload.
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "extension_failed");
     assert!(pending[0].1.contains("extension a"), "{pending:?}");
@@ -2086,7 +2086,7 @@ fn a_run_error_and_a_wrong_shape_fall_through_with_one_notice_each() {
         );
     }
     let pending = renderer.take_pending();
-    // docs/tui.md:3038-3041: one hook_failed notice for each extension and key slot until /reload.
+    // docs/tui.md:3024-3027: one hook_failed notice for each extension and key slot until /reload.
     assert_eq!(pending.len(), 2, "{pending:?}");
     for notice in &pending {
         assert_eq!(notice.0, "hook_failed");
@@ -2224,7 +2224,7 @@ fn a_run_timeout_switches_the_extension_off() {
         KeyOutcome::NotHandled
     );
     let pending = renderer.take_pending();
-    // docs/tui.md:3041-3043: a key timeout switches the extension off with one extension_failed notice.
+    // docs/tui.md:3027-3029: a key timeout switches the extension off with one extension_failed notice.
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].0, "extension_failed");
     assert!(pending[0].1.contains("slow"), "{pending:?}");
