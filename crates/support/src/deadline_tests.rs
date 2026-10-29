@@ -1,16 +1,19 @@
 //! Tests of [`Deadline`](super::Deadline) (`docs/testing.md`, "Waits and
-//! timeouts"): one deadline from the test's start, each wait taking only
-//! what remains of it. The arithmetic tests drive a fake clock that the
-//! code under test reads and never waits on; the receives wait on the wall
-//! clock with at most [`WAITS`](super::WAITS), and only at a zero or short
-//! bound, so no test can hang on them.
+//! timeouts"): the root deadline guards the test, and each wait gets its
+//! own bound made when it starts. The arithmetic tests drive a fake clock
+//! that the code under test reads and never waits on; the receives wait on
+//! the wall clock with at most [`WAIT`](super::WAIT), and only at a zero or
+//! short bound, so no test can hang on them.
 
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use crate::clock::Manual as FakeClock;
+use fakes::MUST_SUCCEED_WITHIN;
 
-use super::{BUDGET, CLEANUP, Deadline, WAITS};
+use crate::clock::{Clock, Manual as FakeClock};
+
+use super::{BUDGET, CLEANUP, Deadline, WAIT, WAITS};
 
 /// The span `after_ten_seconds_left_stays_within_its_span` asserts on: the
 /// must-succeed floor, with the base's one-second slack kept below.
@@ -26,18 +29,34 @@ fn fake_clock() -> &'static Arc<FakeClock> {
 fn left_is_zero_from_the_waits_on_and_never_renews() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
-    assert_eq!(deadline.left(), WAITS);
+    // A fresh root offers the full per-wait bound, not the whole guard.
+    assert_eq!(deadline.left(), WAIT);
+    // The guard still holds more than one wait: the per-wait bound caps.
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(Duration::from_secs(15));
-    assert_eq!(deadline.left(), Duration::from_secs(25));
+    clock.advance(Duration::from_secs(49));
+    assert_eq!(deadline.left(), WAIT);
+    // The guard holds exactly one wait: still the full bound.
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(Duration::from_secs(24) + Duration::from_millis(999));
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(deadline.left(), WAIT);
+    // The guard holds less than one wait: the guard caps from here on.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(deadline.left(), Duration::from_secs(39));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_secs(38) + Duration::from_millis(999));
     assert_eq!(deadline.left(), Duration::from_millis(1));
     #[allow(
         clippy::disallowed_methods,
@@ -67,7 +86,7 @@ fn no_time_left_gives_zero_and_never_renews() {
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(Duration::from_secs(40));
+    clock.advance(WAITS);
     assert_eq!(deadline.left(), Duration::ZERO);
     #[allow(
         clippy::disallowed_methods,
@@ -85,12 +104,12 @@ fn no_time_left_gives_zero_and_never_renews() {
 fn cleanup_keeps_its_reserve_after_the_waits_end() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
-    assert_eq!(deadline.cleanup(), Duration::from_secs(50));
+    assert_eq!(deadline.cleanup(), Duration::from_secs(100));
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(Duration::from_secs(40));
+    clock.advance(WAITS);
     assert_eq!(deadline.cleanup(), Duration::from_secs(10));
     #[allow(
         clippy::disallowed_methods,
@@ -186,9 +205,103 @@ fn recv_or_fail_names_the_wait_at_the_callers_line() {
 
 #[test]
 fn the_bounds_keep_their_order_and_fit_nextests_kill() {
-    assert!(WAITS < CLEANUP && CLEANUP < BUDGET);
-    assert!(BUDGET * 2 <= Duration::from_secs(120));
+    assert!(WAIT <= WAITS && WAITS < CLEANUP && CLEANUP < BUDGET);
+    assert!(BUDGET < Duration::from_secs(120));
+    assert!(WAIT * 2 <= Duration::from_secs(120));
     assert!(BUDGET.saturating_sub(CLEANUP) >= Duration::from_secs(10));
+}
+
+#[test]
+fn a_slow_first_wait_leaves_the_next_wait_its_full_bound() {
+    let clock = fake_clock();
+    let guard = Deadline::on(&**clock);
+    let first = guard.start_wait();
+    thread::scope(|scope| {
+        let (parked_tx, parked_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<Instant>();
+        scope.spawn(move || {
+            let until = clock
+                .now()
+                .checked_add(WAIT)
+                .expect("one wait fits the clock");
+            clock.wait_until(Some(until), &mut |_bound| {
+                let _sent = parked_tx.send(());
+                // Hang guard only: the test releases this after advancing.
+                let _arrived = Deadline::after(MUST_SUCCEED_WITHIN).recv(&release_rx);
+            });
+            let _sent = done_tx.send(clock.now());
+        });
+        // Hang guard only: the first wait parks before time may move.
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&parked_rx)
+            .expect("waited for the first wait to park");
+        // The first wait sits parked a full WAIT; only now may time move.
+        clock
+            .advance_when_parked_in(WAIT, MUST_SUCCEED_WITHIN)
+            .expect("waited for the park at now + WAIT");
+        let _sent = release_tx.send(());
+        let answered = Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&done_rx)
+            .expect("waited for the waiter to leave its park");
+        let origin = clock.origin().checked_add(WAIT).expect("one wait fits");
+        assert_eq!(answered, origin);
+        // The first wait spent its whole bound.
+        assert_eq!(first.left(), Duration::ZERO);
+        // The next wait still gets its full fresh bound, not the remainder.
+        assert_eq!(guard.left(), WAIT);
+        assert_eq!(guard.start_wait().left(), WAIT);
+    });
+}
+
+#[test]
+fn a_started_wait_does_not_refresh_per_receive() {
+    let clock = fake_clock();
+    let guard = Deadline::on(&**clock);
+    let drained = Duration::from_secs(10);
+    let (tx, rx) = mpsc::channel();
+    tx.send(1).unwrap();
+    tx.send(2).unwrap();
+    let wait = guard.start_wait();
+    assert_eq!(wait.recv(&rx), Ok(1));
+    thread::scope(|scope| {
+        let (parked_tx, parked_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        scope.spawn(move || {
+            let until = clock
+                .now()
+                .checked_add(drained)
+                .expect("the drain fits the clock");
+            clock.wait_until(Some(until), &mut |_bound| {
+                let _sent = parked_tx.send(());
+                // Hang guard only: the test releases this after advancing.
+                let _arrived = Deadline::after(MUST_SUCCEED_WITHIN).recv(&release_rx);
+            });
+            let _sent = done_tx.send(());
+        });
+        // Hang guard only: the waiter parks before time may move.
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&parked_rx)
+            .expect("waited for the waiter to park");
+        // Mid-drain time moves; only now may the bound shrink.
+        clock
+            .advance_when_parked_in(drained, MUST_SUCCEED_WITHIN)
+            .expect("waited for the park at now + the drain");
+        let _sent = release_tx.send(());
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&done_rx)
+            .expect("waited for the waiter to leave its park");
+    });
+    // The started wait's bound fell by the advanced span: no receive
+    // renewed it. The root still offers a fresh bound.
+    assert_eq!(
+        wait.left(),
+        WAIT.checked_sub(drained)
+            .expect("the drain is shorter than a wait")
+    );
+    assert_eq!(guard.left(), WAIT);
+    assert_eq!(wait.recv(&rx), Ok(2));
 }
 
 #[test]
