@@ -60,6 +60,10 @@
 //!   it probes ancestry itself with `git merge-base --is-ancestor`, but
 //!   only for each title's latest closed event's non-null commit; without
 //!   it every fix probes unknown
+//! - `fixture-starts`: every `mcp_fixture()` use and jig executable spawn
+//!   matches a named warmed, read, or later site, and every warmed row
+//!   still proves its helper call before the fixture execution
+//!   (`docs/testing/fakes.md`, "Jigs")
 //! - `flake-classify --flaky-dir DIR --event NAME --tested-commit SHA
 //!   [--base SHA] [--head SHA] [--compare-files FILE] [--pr-files FILE]`:
 //!   reads the `flaky-tests-<runner>.txt` files under DIR and prints one
@@ -83,6 +87,7 @@
 mod bench;
 mod ci_needs;
 mod docs;
+mod fixture_starts;
 mod flake_report;
 mod logo;
 mod models_dev;
@@ -313,6 +318,11 @@ fn run(args: &[String]) -> Result<bool, String> {
                 must_succeed::ALLOWANCES,
             ),
             "ok",
+        ),
+        "fixture-starts" => report(
+            "fixture-starts",
+            &fixture_starts::fixture_starts(&rust_files(&workspace_members()?)?),
+            "every fixture start is a named warmed, read, or later site",
         ),
         "site" => site::run(rest),
         "compiled-in" => {

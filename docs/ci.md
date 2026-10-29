@@ -212,6 +212,11 @@ On Linux x86_64 alone:
   anywhere or any file outside the crate, every include argument is a
   string literal, and no crate reads a repository file at run time but a
   package reader reading a first-party package ("Selection")
+- every `mcp_fixture()` use and jig executable spawn is a named warmed,
+  read, or later site, and every warmed row still proves its helper call
+  before the fixture execution (`cargo xtask fixture-starts`,
+  `docs/testing/fakes.md`, "Jigs"), so a new fixture start cannot enter
+  without an explicit site row
 - no crate but `picture` and `main` has `image` or `fast_image_resize` in its
   normal dependency tree (`cargo xtask image-isolation`), so the session
   process links no image code
