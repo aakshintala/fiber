@@ -358,12 +358,17 @@ fn check_entries(
 /// A layer's configured commands with each entry's flags.
 type HashMapFlags = std::collections::HashMap<String, Vec<String>>;
 
-/// The configured `shell.read_only` commands in `root`: absent means no
-/// keys. Present means an object mapping command paths to entry objects
-/// with string-array flags; anything else is malformed.
+/// The configured `shell.read_only` commands in `root`, read as the
+/// nested objects dotted paths name: absent `shell` or `read_only` means
+/// no keys. Present means an object mapping command paths to entry
+/// objects with string-array flags; anything else is malformed.
 fn existing_keys(root: &Value) -> Result<(BTreeSet<String>, HashMapFlags), ReadOnlyEntryProblem> {
     let map = root.as_object().ok_or(ReadOnlyEntryProblem::Malformed)?;
-    let Some(node) = map.get("shell.read_only") else {
+    let Some(shell) = map.get("shell") else {
+        return Ok((BTreeSet::new(), HashMapFlags::new()));
+    };
+    let shell = shell.as_object().ok_or(ReadOnlyEntryProblem::Malformed)?;
+    let Some(node) = shell.get("read_only") else {
         return Ok((BTreeSet::new(), HashMapFlags::new()));
     };
     let entries = node.as_object().ok_or(ReadOnlyEntryProblem::Malformed)?;
@@ -441,8 +446,17 @@ fn with_notes_and_entries(
         reviewer.insert("context".to_owned(), Value::String(text.to_owned()));
     }
     if !entries.is_empty() {
-        let table = map
-            .entry("shell.read_only")
+        let shell = map
+            .entry("shell")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| ConfigError::WrongType {
+                source_name: file.display().to_string(),
+                key: "shell".into(),
+                expected: "an object".into(),
+            })?;
+        let table = shell
+            .entry("read_only")
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
             .ok_or_else(|| ConfigError::WrongType {

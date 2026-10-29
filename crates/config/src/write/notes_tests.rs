@@ -747,7 +747,7 @@ fn entries_merge_beside_the_notes_and_keep_every_other_key() {
             );
             setup.write(
                 &setup.project_file(),
-                r#"{"reviewer": {"context": "old project"}, "shell.read_only": {"acme-cli query": {"flags": ["--json"]}}}"#,
+                r#"{"reviewer": {"context": "old project"}, "shell": {"read_only": {"acme-cli query": {"flags": ["--json"]}}}}"#,
             );
             let read = setup.read();
             let saved = setup
@@ -765,7 +765,7 @@ fn entries_merge_beside_the_notes_and_keep_every_other_key() {
             assert_eq!(global["reviewer"]["context"], json!("new global"));
             assert_eq!(global["reviewer"]["tone"], json!("dry"));
             assert_eq!(
-                global["shell.read_only"]["acme-cli show"]["flags"],
+                global["shell"]["read_only"]["acme-cli show"]["flags"],
                 json!(["--json"])
             );
             // An absent or empty entry list changes no configured entry.
@@ -773,11 +773,11 @@ fn entries_merge_beside_the_notes_and_keep_every_other_key() {
                 serde_json::from_slice(&setup.bytes(&setup.project_file()).unwrap()).unwrap();
             assert_eq!(project["reviewer"]["context"], json!("old project"));
             assert_eq!(
-                project["shell.read_only"]["acme-cli query"]["flags"],
+                project["shell"]["read_only"]["acme-cli query"]["flags"],
                 json!(["--json"])
             );
             assert_eq!(
-                project["shell.read_only"]["acme-cli push"]["flags"],
+                project["shell"]["read_only"]["acme-cli push"]["flags"],
                 json!([])
             );
         },
@@ -791,7 +791,7 @@ fn an_entries_only_save_adds_no_empty_context_field() {
         Deadline::after(Duration::from_secs(10)),
         || {
             let setup = Setup::new();
-            setup.write(&setup.global(), r#"{"shell.read_only": {}}"#);
+            setup.write(&setup.global(), r#"{"shell": {"read_only": {}}}"#);
             let read = setup.read();
             assert_eq!(read.global.text, "");
             let saved = setup
@@ -807,7 +807,7 @@ fn an_entries_only_save_adds_no_empty_context_field() {
                 serde_json::from_slice(&setup.bytes(&setup.global()).unwrap()).unwrap();
             assert!(global.get("reviewer").is_none(), "no empty context field");
             assert_eq!(
-                global["shell.read_only"]["acme-cli query"]["flags"],
+                global["shell"]["read_only"]["acme-cli query"]["flags"],
                 json!(["--json"])
             );
         },
@@ -871,7 +871,7 @@ fn overlapping_entries_fail_against_either_layer_a_sibling_or_a_flip() {
             let cases: Vec<OverlapCase> = vec![
                 // Ancestor then descendant within reach of the union.
                 (
-                    Some(r#"{"shell.read_only": {"acme-cli": {"flags": []}}}"#),
+                    Some(r#"{"shell": {"read_only": {"acme-cli": {"flags": []}}}}"#),
                     None,
                     vec![("acme-cli query", vec!["--json"])],
                     vec![],
@@ -880,7 +880,7 @@ fn overlapping_entries_fail_against_either_layer_a_sibling_or_a_flip() {
                 ),
                 // Descendant configured, ancestor kept.
                 (
-                    Some(r#"{"shell.read_only": {"acme-cli query": {"flags": ["--json"]}}}"#),
+                    Some(r#"{"shell": {"read_only": {"acme-cli query": {"flags": ["--json"]}}}}"#),
                     None,
                     vec![("acme-cli", vec![])],
                     vec![],
@@ -890,7 +890,7 @@ fn overlapping_entries_fail_against_either_layer_a_sibling_or_a_flip() {
                 // Overlap with the project layer, which sends nothing.
                 (
                     None,
-                    Some(r#"{"shell.read_only": {"acme-cli": {"flags": []}}}"#),
+                    Some(r#"{"shell": {"read_only": {"acme-cli": {"flags": []}}}}"#),
                     vec![("acme-cli query", vec!["--json"])],
                     vec![],
                     "acme-cli query",
@@ -898,7 +898,7 @@ fn overlapping_entries_fail_against_either_layer_a_sibling_or_a_flip() {
                 ),
                 // A layer flip: the sibling run keeps the other side.
                 (
-                    Some(r#"{"shell.read_only": {"acme-cli": {"flags": []}}}"#),
+                    Some(r#"{"shell": {"read_only": {"acme-cli": {"flags": []}}}}"#),
                     None,
                     vec![],
                     vec![("acme-cli query", vec!["--json"])],
@@ -962,7 +962,7 @@ fn overlapping_entries_fail_against_either_layer_a_sibling_or_a_flip() {
             let setup = Setup::new();
             setup.write(
                 &setup.global(),
-                r#"{"shell.read_only": {"acme-cli query2": {"flags": []}}}"#,
+                r#"{"shell": {"read_only": {"acme-cli query2": {"flags": []}}}}"#,
             );
             let read = setup.read();
             let saved = setup
@@ -1022,10 +1022,11 @@ fn a_malformed_layer_fails_an_entry_merge_with_neither_file_written() {
         Deadline::after(Duration::from_secs(10)),
         || {
             for malformed in [
-                r#"{"shell.read_only": []}"#,
-                r#"{"shell.read_only": {"acme-cli query": ["--json"]}}"#,
-                r#"{"shell.read_only": {"acme-cli query": {"flags": "--json"}}}"#,
-                r#"{"shell.read_only": {"acme-cli query": {}}}"#,
+                r#"{"shell": {"read_only": []}}"#,
+                r#"{"shell": {"read_only": {"acme-cli query": ["--json"]}}}"#,
+                r#"{"shell": {"read_only": {"acme-cli query": {"flags": "--json"}}}}"#,
+                r#"{"shell": {"read_only": {"acme-cli query": {}}}}"#,
+                r#"{"shell": "entries"}"#,
             ] {
                 // Malformed in the sent layer.
                 let setup = Setup::new();
@@ -1072,6 +1073,37 @@ fn a_malformed_layer_fails_an_entry_merge_with_neither_file_written() {
                 };
                 refused(error, &setup.global(), "acme-cli query", before, &setup);
             }
+        },
+    );
+}
+
+#[test]
+fn a_flat_shell_key_is_not_a_configured_entry() {
+    fakes::within(
+        "flat shell key save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"shell.read_only": {"acme-cli query": {"flags": ["--json"]}}}"#,
+            );
+            let read = setup.read();
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Written(_)));
+            let global: Value =
+                serde_json::from_slice(&setup.bytes(&setup.global()).unwrap()).unwrap();
+            assert_eq!(
+                global["shell"]["read_only"]["acme-cli query"]["flags"],
+                json!(["--json"])
+            );
         },
     );
 }

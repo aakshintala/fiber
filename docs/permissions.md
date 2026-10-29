@@ -429,6 +429,9 @@ proposed.
 A command the built-in list already holds is never proposed. A built-in
 entry wins over a configured one of the same name.
 
+Only a command Fiber has no rule for is proposed; a command Fiber already
+classifies keeps its rule.
+
 An entry always names a subcommand path, and is not proposed when any call
 it would cover was denied, blocked or escalated.
 

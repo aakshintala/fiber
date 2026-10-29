@@ -672,8 +672,11 @@ fn outcome_for(candidate: Candidacy, summary: ReadOnlySummary, count: u32) -> Re
 }
 
 /// The classifier's subject and prefix for `raw`, once per distinct
-/// command string: only a read-only verdict counts. A typed error, an
-/// executes verdict or a missing subject closes the subject.
+/// command string: every verdict counts, not only a read-only one. A
+/// command the classifier executes owns no rule for it, which is exactly
+/// the candidate pool (C19); the built-in and configured checks below keep
+/// only commands nothing owns. A typed error or a missing subject closes
+/// the subject.
 fn subject_prefix(
     shell: &dyn Tool,
     classified: &mut HashMap<String, Option<(String, String)>>,
@@ -685,7 +688,6 @@ fn subject_prefix(
         let verdict = shell
             .effects(&arguments)
             .ok()
-            .filter(|effects| effects.declared.effects == [contract::shapes::Effect::Reads])
             .and_then(|effects| Some((effects.subject?, effects.prefix?)));
         classified.insert(raw.to_owned(), verdict);
     }
@@ -795,13 +797,21 @@ fn configured_sets(home: &Path, dir: &Path) -> Option<Vec<String>> {
     Some(keys)
 }
 
-/// The configured command paths in `bytes`: `None` for anything but an
-/// object root with an object `shell.read_only` of entry objects with
-/// string-array flags. Every configured key suppresses, whether or not
-/// the shared validator would refuse it.
+/// The configured command paths in `bytes`, read as the nested objects
+/// dotted paths name: `None` for anything but an object root with an
+/// object `shell`, holding an object `read_only` of entry objects with
+/// string-array flags. A missing `shell` or `read_only` covers nothing,
+/// like the save's own key read. Every configured key suppresses,
+/// whether or not the shared validator would refuse it.
 fn configured_keys(bytes: &[u8]) -> Option<Vec<String>> {
     let root: Value = serde_json::from_slice(bytes).ok()?;
-    let entries = root.as_object()?.get("shell.read_only")?.as_object()?;
+    let Some(shell) = root.as_object()?.get("shell") else {
+        return Some(Vec::new());
+    };
+    let Some(entries) = shell.as_object()?.get("read_only") else {
+        return Some(Vec::new());
+    };
+    let entries = entries.as_object()?;
     let mut keys = Vec::new();
     for (command, value) in entries {
         let flags = value.get("flags")?.as_array()?;

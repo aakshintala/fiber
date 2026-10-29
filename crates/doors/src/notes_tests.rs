@@ -1218,7 +1218,10 @@ fn builtin_held_and_configured_subjects_stay_silent() {
     // An already-configured ancestor covers the candidate silently.
     let project = config::ProjectKey::new(key.clone()).unwrap();
     let file = config::project_config_file(&home, &project);
-    write_file(&file, r#"{"shell.read_only": {"acme-cli": {"flags": []}}}"#);
+    write_file(
+        &file,
+        r#"{"shell": {"read_only": {"acme-cli": {"flags": []}}}}"#,
+    );
     let shell = StubShell::new(
         "shell",
         &[
@@ -1751,7 +1754,20 @@ fn missing_config_covers_nothing_while_malformed_config_fails_closed() {
     // A present-but-malformed layer fails the whole gather closed.
     write_file(
         &config::global_config_file(&home),
-        r#"{"shell.read_only": []}"#,
+        r#"{"shell": {"read_only": []}}"#,
+    );
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert!(found.is_empty());
+    // A non-object shell value fails closed the same way.
+    write_file(
+        &config::global_config_file(&home),
+        r#"{"shell": "entries"}"#,
     );
     let found = allows_items(&gather(
         &home,
@@ -1880,4 +1896,223 @@ fn tallies_cap_at_sixty_four_sorted_by_count_then_subject() {
     assert_eq!(found[0].0, "capcmd-64 query --json");
     assert_eq!(found[0].1, 6);
     assert_eq!(found[63].0, "capcmd-62 query --json");
+}
+
+/// A shell that executes every tabled command, naming the subject and
+/// prefix the built-in classifier reports for commands it owns no rule
+/// for (C19): `executes` with both halves, never `reads`.
+struct ExecutesShell {
+    table: Mutex<std::collections::HashMap<String, (String, String)>>,
+}
+
+impl ExecutesShell {
+    fn new(table: &[(&str, &str, &str)]) -> Self {
+        Self {
+            table: Mutex::new(
+                table
+                    .iter()
+                    .map(|(command, subject, prefix)| {
+                        (
+                            command.to_string(),
+                            (subject.to_string(), prefix.to_string()),
+                        )
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl Tool for ExecutesShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "an executing stub shell".to_owned(),
+            input_schema: serde_json::Value::Object(serde_json::Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Effects, EffectsError> {
+        let command = arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .expect("a command string");
+        match self
+            .table
+            .lock()
+            .expect("the table lock")
+            .get(command)
+            .cloned()
+        {
+            Some((subject, prefix)) => Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Executes],
+                    reversible: false,
+                    paths: None,
+                    confined: false,
+                },
+                subject: Some(subject),
+                prefix: Some(prefix),
+                always_reviewed: false,
+                hosts: None,
+            }),
+            None => Err(EffectsError::Arguments("unclassifiable".to_owned())),
+        }
+    }
+
+    fn run(
+        &self,
+        _arguments: &serde_json::Map<String, serde_json::Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        panic!("the stub never runs");
+    }
+}
+
+#[test]
+fn an_executes_verdict_with_no_builtin_rule_still_proposes() {
+    let root = fakes::TempDir::new("doors-notes-c19-query");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    let shell = ExecutesShell::new(&[(
+        "acme-cli query --json",
+        "acme-cli query --json",
+        "acme-cli query",
+    )]);
+    let dir = session_dir(&home, &key, "s_live");
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert_eq!(
+        found,
+        [(
+            "acme-cli query --json".to_owned(),
+            5,
+            5,
+            "5 reviewer allows for acme-cli query --json".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn builtin_classified_commands_stay_silent_under_c19() {
+    let root = fakes::TempDir::new("doors-notes-c19-builtin");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "ls --json",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "git push",
+                "reviewer",
+                false,
+                11
+            ),
+        ),
+    );
+    let shell = ExecutesShell::new(&[
+        ("ls --json", "ls --json", "ls"),
+        ("git push", "git push", "git push"),
+    ]);
+    let dir = session_dir(&home, &key, "s_live");
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_layer_file_without_entries_still_proposes() {
+    let root = fakes::TempDir::new("doors-notes-no-entries-key");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    write_file(
+        &config::global_config_file(&home),
+        r#"{"reviewer": {"context": "Notes."}}"#,
+    );
+    let shell = ExecutesShell::new(&[(
+        "acme-cli query --json",
+        "acme-cli query --json",
+        "acme-cli query",
+    )]);
+    let dir = session_dir(&home, &key, "s_live");
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "acme-cli query --json");
+    // A flat `shell.read_only` key is not configuration: the loader
+    // ignores it, so it covers nothing either.
+    write_file(
+        &config::global_config_file(&home),
+        r#"{"reviewer": {"context": "Notes."}, "shell.read_only": {"other-cli run": {"flags": []}}}"#,
+    );
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "acme-cli query --json");
 }
