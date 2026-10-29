@@ -663,6 +663,268 @@ fn job_id(text: &str) -> String {
         .to_owned()
 }
 
+/// The nested-budget child's provider route trace: at most 8 entries of at
+/// most 256 bytes each, mirrored in the stderr snapshot's trace section
+/// (likewise the latest 8 lines, overflow markers included). The responder
+/// records only route fields (session versus reviewer, the `Started
+/// delegate` and `scan deep` markers, the stage before and after, and the
+/// selected branch), never request bodies, so the timeout dump keeps the
+/// route visible under the output cap.
+const NESTED_TRACE_CAP: usize = 8;
+const NESTED_ENTRY_CAP: usize = 256;
+/// A compact summary of a socket line seen while waiting for the child jobs
+/// wait: only the kind and the routing field, never the whole body, so the
+/// failure dump names the wait's progress without reprinting large
+/// `session_status` lines. Kept as a ring of at most 8 summaries.
+const CHILD_WAIT_SUMMARY_CAP: usize = 8;
+const CHILD_WAIT_SUMMARY_LEN: usize = 128;
+
+/// Truncates `entry` to at most `cap` bytes on a character boundary,
+/// marking the cut so a longer route still reads as truncated.
+fn truncate_bounded(mut entry: String, cap: usize) -> String {
+    if entry.len() <= cap {
+        return entry;
+    }
+    const MARK: &str = "...[truncated]";
+    let mut end = cap.saturating_sub(MARK.len()).min(entry.len());
+    while !entry.is_char_boundary(end) {
+        end -= 1;
+    }
+    entry.truncate(end);
+    entry.push_str(MARK);
+    entry
+}
+
+/// Appends one trace line (and its overflow marker, when `dropped`) to
+/// `snapshot`, then drops the oldest `nested route:` lines past the cap, so
+/// the snapshot's trace section holds the latest 8 lines including markers.
+/// Other stderr text is left alone; entries are already byte-capped.
+fn append_nested_route_to_snapshot(snapshot: &mut String, entry: &str, dropped: bool) {
+    snapshot.push_str("nested route: ");
+    snapshot.push_str(entry);
+    snapshot.push('\n');
+    if dropped {
+        snapshot.push_str("nested route: ...[truncated]\n");
+    }
+    let trace_lines = snapshot
+        .lines()
+        .filter(|line| line.starts_with("nested route: "))
+        .count();
+    if trace_lines <= NESTED_TRACE_CAP {
+        return;
+    }
+    let mut skip = trace_lines - NESTED_TRACE_CAP;
+    let mut kept = String::with_capacity(snapshot.len());
+    for piece in snapshot.split_inclusive('\n') {
+        let line = piece.strip_suffix('\n').unwrap_or(piece);
+        if line.starts_with("nested route: ") && skip > 0 {
+            skip -= 1;
+            continue;
+        }
+        kept.push_str(piece);
+    }
+    *snapshot = kept;
+}
+
+/// Records one responder route in `trace` (dropping the oldest past the
+/// cap) and in the stderr snapshot's bounded trace section, so a missing
+/// child jobs wait still shows which branch answered each request.
+/// The sink links the responder to the running session's snapshot once the
+/// session starts; routes recorded before the link stay in `trace`.
+fn record_nested_route(
+    trace: &Mutex<Vec<String>>,
+    sink: &Mutex<Option<Arc<Mutex<String>>>>,
+    entry: String,
+) {
+    let entry = truncate_bounded(entry, NESTED_ENTRY_CAP);
+    let mut trace = trace.lock().unwrap();
+    let dropped = trace.len() >= NESTED_TRACE_CAP;
+    if dropped {
+        trace.remove(0);
+    }
+    trace.push(entry.clone());
+    if let Some(snapshot) = sink.lock().unwrap().as_ref() {
+        let mut snapshot = snapshot.lock().unwrap();
+        append_nested_route_to_snapshot(&mut snapshot, &entry, dropped);
+    }
+}
+
+/// One-line summary of a line seen while waiting for the child jobs wait.
+fn child_wait_summary(line: &Value) -> String {
+    let kind = line
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let payload = line.get("payload");
+    let detail = match kind {
+        "tool_call_requested" | "tool_call_started" | "tool_call_completed" => payload
+            .and_then(|payload| payload.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_owned(),
+        "session_status" => {
+            let state = payload
+                .and_then(|payload| payload.get("state"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let step = payload
+                .and_then(|payload| payload.get("step"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    payload
+                        .and_then(|payload| payload.get("tool"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("-");
+            format!("{state}/{step}")
+        }
+        "delegate_started" => "started".to_owned(),
+        "fiber_exited" => payload
+            .and_then(|payload| payload.get("exit_code"))
+            .map(|code| code.to_string())
+            .unwrap_or("?".to_owned()),
+        _ => payload
+            .and_then(|payload| payload.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_owned(),
+    };
+    truncate_bounded(format!("{kind} {detail}"), CHILD_WAIT_SUMMARY_LEN)
+}
+
+/// Pushes one summary onto the bounded ring, dropping the oldest past the cap.
+fn push_child_wait_summary(summaries: &mut Vec<String>, line: &Value) {
+    if summaries.len() >= CHILD_WAIT_SUMMARY_CAP {
+        summaries.remove(0);
+    }
+    summaries.push(child_wait_summary(line));
+}
+
+#[test]
+fn nested_route_trace_keeps_only_route_fields_within_bounds() {
+    let trace = Mutex::new(Vec::new());
+    let snapshot = Arc::new(Mutex::new(String::new()));
+    let sink: Mutex<Option<Arc<Mutex<String>>>> = Mutex::new(Some(Arc::clone(&snapshot)));
+    for n in 0..NESTED_TRACE_CAP {
+        record_nested_route(
+            &trace,
+            &sink,
+            format!(
+                "session=1 started=0 deep=0 stage={n}->{} branch=c_spawn",
+                n + 1
+            ),
+        );
+    }
+    // At the cap nothing drops: the first route is still kept in the trace
+    // and in the snapshot, and nothing is marked.
+    assert!(
+        trace
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.contains("stage=0->1 branch=c_spawn"))
+    );
+    assert!(!snapshot.lock().unwrap().contains("...[truncated]"));
+    assert!(
+        snapshot
+            .lock()
+            .unwrap()
+            .contains("nested route: session=1 started=0 deep=0 stage=0->1 branch=c_spawn")
+    );
+    record_nested_route(
+        &trace,
+        &sink,
+        "session=1 started=1 deep=0 stage=0->1 branch=c_wait".to_owned(),
+    );
+    // Past the cap the oldest drops, the latest stays, and the cut is marked.
+    let kept = trace.lock().unwrap().clone();
+    assert!(kept.iter().any(|entry| entry.contains("branch=c_wait")));
+    assert!(
+        !kept
+            .iter()
+            .any(|entry| entry.contains("stage=0->1 branch=c_spawn"))
+    );
+    assert!(
+        snapshot
+            .lock()
+            .unwrap()
+            .contains("nested route: ...[truncated]")
+    );
+    // The snapshot's trace section stays bounded too: the latest route is
+    // visible while the oldest route has scrolled out, markers included.
+    let dump = snapshot.lock().unwrap().clone();
+    assert!(dump.contains("branch=c_wait"), "{dump}");
+    assert!(!dump.contains("stage=0->1 branch=c_spawn"), "{dump}");
+    for entry in &kept {
+        assert!(entry.len() <= NESTED_ENTRY_CAP, "{entry}");
+    }
+}
+
+#[test]
+fn nested_route_trace_truncates_a_long_entry_and_marks_it() {
+    let short = truncate_bounded("a".repeat(NESTED_ENTRY_CAP - 1), NESTED_ENTRY_CAP);
+    assert_eq!(short.len(), NESTED_ENTRY_CAP - 1);
+    assert!(!short.contains("...[truncated]"));
+    let exact = truncate_bounded("a".repeat(NESTED_ENTRY_CAP), NESTED_ENTRY_CAP);
+    assert_eq!(exact.len(), NESTED_ENTRY_CAP);
+    assert!(!exact.contains("...[truncated]"));
+    let long = truncate_bounded("a".repeat(NESTED_ENTRY_CAP + 1), NESTED_ENTRY_CAP);
+    assert_eq!(long.len(), NESTED_ENTRY_CAP);
+    assert!(long.contains("...[truncated]"));
+    // The cut lands on a character boundary: a multi-byte run truncates
+    // without splitting a character.
+    let wide = truncate_bounded("é".repeat(NESTED_ENTRY_CAP), NESTED_ENTRY_CAP);
+    assert!(wide.len() <= NESTED_ENTRY_CAP);
+    assert!(wide.contains("...[truncated]"));
+}
+
+#[test]
+fn child_wait_summaries_stay_compact_and_bounded() {
+    let requested = json!({"kind": "tool_call_requested", "payload": {"name": "jobs"}});
+    assert_eq!(child_wait_summary(&requested), "tool_call_requested jobs");
+    let status = json!({"kind": "session_status", "payload": {"state": "streaming", "step": "delegate_spawn"}});
+    assert_eq!(
+        child_wait_summary(&status),
+        "session_status streaming/delegate_spawn"
+    );
+    let started = json!({"kind": "delegate_started", "payload": {}});
+    assert_eq!(child_wait_summary(&started), "delegate_started started");
+    // A large session_status body compacts to one short line.
+    let big = json!({"kind": "session_status", "payload": {"state": "streaming", "step": "x".repeat(500).as_str(), "extra": "y".repeat(500).as_str()}});
+    let summary = child_wait_summary(&big);
+    assert!(summary.len() <= CHILD_WAIT_SUMMARY_LEN, "{summary}");
+    assert!(
+        summary.starts_with("session_status streaming/"),
+        "{summary}"
+    );
+    // Distinct names make eviction visible: each summary names its line.
+    let mut ring: Vec<String> = Vec::new();
+    for n in 0..CHILD_WAIT_SUMMARY_CAP {
+        let line = json!({"kind": "tool_call_requested", "payload": {"name": format!("job{n}")}});
+        push_child_wait_summary(&mut ring, &line);
+    }
+    // Before overflow the earliest summary is still present.
+    assert!(ring.iter().any(|entry| entry == "tool_call_requested job0"));
+    let other = json!({"kind": "fiber_exited", "payload": {"exit_code": 143}});
+    push_child_wait_summary(&mut ring, &other);
+    // Past the cap the latest summary stays while the stalest drops.
+    assert_eq!(ring.last().unwrap(), "fiber_exited 143");
+    assert!(!ring.iter().any(|entry| entry == "tool_call_requested job0"));
+    assert!(ring.iter().any(|entry| entry == "tool_call_requested job1"));
+    assert!(
+        ring.iter()
+            .all(|entry| entry.len() <= CHILD_WAIT_SUMMARY_LEN)
+    );
+}
+
+#[test]
+fn child_wait_summary_without_a_sink_still_keeps_the_trace() {
+    let trace = Mutex::new(Vec::new());
+    let sink: Mutex<Option<Arc<Mutex<String>>>> = Mutex::new(None);
+    record_nested_route(&trace, &sink, "session=0 branch=c_allow".to_owned());
+    assert_eq!(trace.lock().unwrap().len(), 1);
+}
+
 /// Answers the parent's requests by their content: `first` answers the
 /// first session request, `reviewer` every reviewer request, `after` the
 /// request carrying the spawn receipt (built with its job id), and `rest`
@@ -2947,19 +3209,45 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     // the server rebuilds the wait call from the receipt it sees. Held
     // until the root parks in the wait: the grandchild's reply then lands
     // while both ancestors wait, whatever the scheduling.
+    let nested_trace: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let nested_sink: Arc<Mutex<Option<Arc<Mutex<String>>>>> = Arc::new(Mutex::new(None));
     let child = ProviderServer::start_responding({
         let stage = std::sync::atomic::AtomicUsize::new(0);
+        let nested_trace = Arc::clone(&nested_trace);
+        let nested_sink = Arc::clone(&nested_sink);
         move |request: &Request| {
             let text = String::from_utf8_lossy(&request.body);
             // Session requests declare tools; reviewer requests carry the
             // call in history but declare none.
-            if !text.contains(r#""tools":[{"#) {
+            let session = text.contains(r#""tools":[{"#);
+            let started = text.contains("Started delegate");
+            let deep = text.contains("scan deep");
+            // The route records which branch answers each request; the
+            // answers below are unchanged.
+            let route = |before: usize, after: usize, branch: &str| {
+                record_nested_route(
+                    &nested_trace,
+                    &nested_sink,
+                    format!(
+                        "session={} started={} deep={} stage={before}->{after} branch={branch}",
+                        u8::from(session),
+                        u8::from(started),
+                        u8::from(deep),
+                    ),
+                );
+            };
+            if !session {
+                let at = stage.load(std::sync::atomic::Ordering::SeqCst);
+                route(at, at, "c_allow");
                 return cstream(&[ctext_id("c_allow", "allow"), cusage_id("c_allow", 0.0)]);
             }
             // The receipt names the delegate the wait then names; it
             // carries the spawn call too, so it comes before the prompt.
-            if text.contains("Started delegate") {
-                return match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            if started {
+                let before = stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let branch = if before == 0 { "c_wait" } else { "c_done" };
+                route(before, before + 1, branch);
+                return match before {
                     0 => cstream(&[
                         ccall_id(
                             "c_wait",
@@ -2972,12 +3260,16 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
                 };
             }
             // The grandchild's reply costs past the budget on its own.
-            if text.contains("scan deep") {
+            if deep {
+                let at = stage.load(std::sync::atomic::Ordering::SeqCst);
+                route(at, at, "g_cost");
                 return cstream(&[
                     ctext_id("g_cost", "deep scan done"),
                     cusage_id("g_cost", 100.0),
                 ]);
             }
+            let at = stage.load(std::sync::atomic::Ordering::SeqCst);
+            route(at, at, "c_spawn");
             cstream(&[
                 ccall_id(
                     "c_spawn",
@@ -3006,6 +3298,14 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         &id,
         &["--model", "pa/m", "--prompt", "scan the tree"],
     );
+    // Link the responder's route trace to the session's stderr snapshot:
+    // routes recorded from here append to the dump the waits read. Routes
+    // recorded before the link stay in the trace, so replay them once.
+    *nested_sink.lock().unwrap() = Some(Arc::clone(&running.stderr_snapshot));
+    for entry in nested_trace.lock().unwrap().iter() {
+        let mut snapshot = running.stderr_snapshot.lock().unwrap();
+        append_nested_route_to_snapshot(&mut snapshot, entry, false);
+    }
     let mut parked = running.wait_line("the root parked in jobs wait", |line| {
         line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
     });
@@ -3046,10 +3346,37 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .as_str()
         .unwrap()
         .to_owned();
-    let child_wait = support::until(&child_socket, "the child jobs wait is requested", |line| {
-        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
-    });
-    let child_wait_action = child_wait.last().unwrap()["action_id"].clone();
+    // The failure dump shows compact summaries, not whole lines: the full
+    // session_status bodies would push the live trace and log tail past the
+    // output cap. The wait still reads every line through `Socket::next`
+    // under the test's deadline and returns them all on success.
+    let child_diag_dir = sessions_in(&setup.home(), &setup.workspace()).join(&live_child);
+    child_socket.set_diag(support::Diag::new(
+        Arc::clone(&running.stderr_snapshot),
+        child_diag_dir.clone(),
+    ));
+    let child_close_diag = support::Diag::new(Arc::clone(&running.stderr_snapshot), child_diag_dir);
+    let child_wait_what = "the child jobs wait is requested";
+    let mut child_wait: Vec<Value> = Vec::new();
+    let mut child_wait_summaries: Vec<String> = Vec::new();
+    let child_wait_action = loop {
+        let got: Vec<Value> = child_wait_summaries
+            .iter()
+            .map(|summary| json!(summary))
+            .collect();
+        match child_socket.next(child_wait_what, &got) {
+            Some(line) => {
+                let done =
+                    line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs";
+                push_child_wait_summary(&mut child_wait_summaries, &line);
+                child_wait.push(line);
+                if done {
+                    break child_wait.last().unwrap()["action_id"].clone();
+                }
+            }
+            None => panic!("{}", child_close_diag.report_closed(child_wait_what, &got)),
+        }
+    };
     observed_child.extend(child_wait);
     observed_child.extend(support::until(
         &child_socket,
