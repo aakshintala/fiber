@@ -328,3 +328,99 @@ fn a_flat_reply_replacement_drops_every_style() {
         }
     }
 }
+
+fn count_and_draw(text: &str, width: u16) -> (Vec<crate::turn::Row>, Vec<crate::turn::Row>) {
+    let reply = Reply::new(text.to_owned(), 17);
+    let mut shown = crate::rows::Rows::default();
+    reply.rows(width, &mut shown);
+    let shown = shown.into_parts().0;
+    let mut counted = crate::rows::Rows::count_only();
+    reply.count_rows(width, &mut counted);
+    let counted = counted.into_parts().0;
+    (shown, counted)
+}
+
+#[test]
+fn count_only_matches_each_markdown_row_kind_and_copy_target() {
+    let samples = [
+        "plain paragraph with a very long word abcdefghijklmnopqrstuvwxyz\nnext line",
+        "## heading\n\n- first item\n- second item",
+        "> quoted text with words that wrap at narrow widths",
+        "```\n\twide界 code\n\nlast\n```",
+        "```rust\nfn main() { println!(\"ok\"); }\n```",
+        "```diff\n+added\n-removed\n```",
+        "```md\n**marked**\n```",
+        "| name | value |\n|---|---:|\n| alpha | 123 |",
+        "| emoji | value |\n|---|---|\n| ❤️ | exact |",
+        "| a | b | c | d | e | f |\n|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 |",
+        "```rust\nlet emoji = \"👩‍💻\";\n```",
+        "**e**\u{301} and \u{1}",
+        "---\n\ntext  \nnext",
+        "a ❤️ and 👩‍💻 plus e\u{301}",
+        "\n\nempty blocks\n",
+    ];
+    for text in samples {
+        for width in [1, 2, 5, 10, 20, 40, 80] {
+            let (shown, counted) = count_and_draw(text, width);
+            assert_eq!(counted.len(), shown.len(), "{text:?} at {width}");
+            let shown_targets: Vec<_> = shown.iter().map(|row| row.1).collect();
+            let count_targets: Vec<_> = counted.iter().map(|row| row.1).collect();
+            assert_eq!(count_targets, shown_targets, "targets: {text:?} at {width}");
+        }
+    }
+}
+
+#[test]
+fn fitting_ascii_count_does_not_render_and_count_cache_is_shared_by_key() {
+    let reply = Reply::new("ordinary fitting paragraph".to_owned(), 1);
+    let clone = reply.clone();
+    crate::work::take();
+    let mut rows = crate::rows::Rows::count_only();
+    reply.count_rows(40, &mut rows);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(crate::work::take().reply_renders, 0);
+    let first = reply.count_cached_at(40).expect("count was cached");
+    let same = clone.count_cached_at(40).expect("clone shares count slot");
+    assert!(std::sync::Arc::ptr_eq(&first, &same));
+    let mut rows = crate::rows::Rows::count_only();
+    clone.count_rows(39, &mut rows);
+    let changed_width = clone.count_cached_at(39).expect("new width cached");
+    assert!(!std::sync::Arc::ptr_eq(&first, &changed_width));
+    assert!(reply.count_cached_at(40).is_none());
+}
+
+#[test]
+fn an_over_width_count_falls_back_to_the_drawn_rows() {
+    let reply = Reply::new("界".to_owned(), 1);
+    let mut shown = crate::rows::Rows::default();
+    reply.rows(1, &mut shown);
+    let shown = shown.into_parts().0;
+    crate::work::take();
+    let mut counted = crate::rows::Rows::count_only();
+    reply.count_rows(1, &mut counted);
+    assert_eq!(counted.into_parts().0, shown);
+    assert_eq!(crate::work::take().reply_renders, 1);
+}
+
+#[test]
+fn count_cache_text_changes_detach_only_the_changed_reply() {
+    let reply = Reply::new("before".to_owned(), 1);
+    let mut rows = crate::rows::Rows::count_only();
+    reply.count_rows(40, &mut rows);
+    let original = reply.count_cached_at(40).expect("count was cached");
+    let mut clone = reply.clone();
+    clone.push(" after");
+    assert!(clone.count_cached_at(40).is_none());
+    assert!(std::sync::Arc::ptr_eq(
+        &original,
+        &reply
+            .count_cached_at(40)
+            .expect("unchanged clone keeps cache")
+    ));
+    let mut rows = crate::rows::Rows::count_only();
+    clone.count_rows(40, &mut rows);
+    let pushed = clone.count_cached_at(40).expect("pushed text counted");
+    assert!(!std::sync::Arc::ptr_eq(&original, &pushed));
+    clone.set("set text".to_owned());
+    assert!(clone.count_cached_at(40).is_none());
+}

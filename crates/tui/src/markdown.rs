@@ -19,7 +19,7 @@ use crate::highlight;
 use crate::rows::{Join, RowText};
 use crate::surface::{self, edge_row};
 use crate::theme::{Role, style};
-use wrap::{Cell, link_cols, spans_of, wrap, wrap_joined_indices};
+use wrap::{Cell, link_cols, spans_of, visit_wrap_ranges, wrap, wrap_joined_indices};
 
 /// A reply rendered at one width.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -30,6 +30,14 @@ pub(crate) struct Rendered {
     pub(crate) targets: Vec<CopyTarget>,
     /// What each line adds to its logical line, one per line.
     pub(crate) text: Vec<RowText>,
+}
+
+/// The row and code-target positions without materialized styled lines.
+#[derive(Debug, Clone)]
+pub(crate) struct Counted {
+    pub(crate) rows: usize,
+    pub(crate) targets: Vec<usize>,
+    pub(crate) over_width: bool,
 }
 
 /// A code block's click-to-copy target.
@@ -81,6 +89,10 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
         table: None,
         separator: None,
         track: text::Track::default(),
+        count_only: false,
+        counted_rows: 0,
+        count_targets: Vec::new(),
+        over_width: false,
     };
     let options = Options::ENABLE_TABLES.union(Options::ENABLE_STRIKETHROUGH);
     for event in Parser::new_ext(text, options) {
@@ -89,6 +101,42 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
     let mut out = writer.out;
     out.text = writer.track.finish();
     out
+}
+
+/// Counts the rows at `width` without constructing their styled lines.
+pub(crate) fn render_count(text: &str, width: u16) -> Counted {
+    let mut writer = Writer {
+        width,
+        out: Rendered::default(),
+        inline: Vec::new(),
+        link_stack: Vec::new(),
+        inline_links: Vec::new(),
+        heading: false,
+        strong: 0,
+        emphasis: 0,
+        strike: 0,
+        link: 0,
+        quote: 0,
+        lists: Vec::new(),
+        marker: None,
+        code: None,
+        table: None,
+        separator: None,
+        track: text::Track::default(),
+        count_only: true,
+        counted_rows: 0,
+        count_targets: Vec::new(),
+        over_width: false,
+    };
+    let options = Options::ENABLE_TABLES.union(Options::ENABLE_STRIKETHROUGH);
+    for event in Parser::new_ext(text, options) {
+        writer.event(event);
+    }
+    Counted {
+        rows: writer.counted_rows,
+        targets: writer.count_targets,
+        over_width: writer.over_width,
+    }
 }
 
 /// One open list: its next number, when ordered, and its item's marker
@@ -126,6 +174,10 @@ struct Writer {
     separator: Option<usize>,
     /// What each line adds to its logical line.
     track: text::Track,
+    count_only: bool,
+    counted_rows: usize,
+    count_targets: Vec<usize>,
+    over_width: bool,
 }
 
 impl Writer {
@@ -262,8 +314,14 @@ impl Writer {
             }
             TagEnd::Table => {
                 if let Some(table) = self.table.take() {
-                    for (line, links) in table.layout(usize::from(self.inner_width())) {
-                        self.put_row(line, Join::Break, 0, 0, false, links);
+                    if self.count_only {
+                        let (rows, over_width) = table.count_rows(usize::from(self.inner_width()));
+                        self.counted_rows = self.counted_rows.saturating_add(rows);
+                        self.over_width |= over_width;
+                    } else {
+                        for (line, links) in table.layout(usize::from(self.inner_width())) {
+                            self.put_row(line, Join::Break, 0, 0, false, links);
+                        }
                     }
                 }
             }
@@ -325,12 +383,24 @@ impl Writer {
     /// A blank line before a block, unless one is there already, the block
     /// is the first, or it sits inside a list.
     fn block(&mut self) {
-        let len = self.out.lines.len();
+        let len = self.line_count();
         if len > 0 && self.lists.is_empty() && self.separator != Some(len) {
-            self.track
-                .row(Join::Break, self.quote_width(), 0, false, Vec::new());
-            self.out.lines.push(Line::from(self.quote_prefix()));
-            self.separator = Some(self.out.lines.len());
+            if self.count_only {
+                self.counted_rows = self.counted_rows.saturating_add(1);
+            } else {
+                self.track
+                    .row(Join::Break, self.quote_width(), 0, false, Vec::new());
+                self.out.lines.push(Line::from(self.quote_prefix()));
+            }
+            self.separator = Some(len.saturating_add(1));
+        }
+    }
+
+    fn line_count(&self) -> usize {
+        if self.count_only {
+            self.counted_rows
+        } else {
+            self.out.lines.len()
         }
     }
 
@@ -371,6 +441,10 @@ impl Writer {
         decoration: bool,
         links: Vec<(Range<u16>, String)>,
     ) {
+        if self.count_only {
+            self.counted_rows = self.counted_rows.saturating_add(1);
+            return;
+        }
         let bars = self.quote_width();
         let skip = bars.saturating_add(gutter);
         let links = links
@@ -419,6 +493,10 @@ impl Writer {
         }
         let cells = std::mem::take(&mut self.inline);
         let links = std::mem::take(&mut self.inline_links);
+        if self.count_only {
+            self.count_flush(cells);
+            return;
+        }
         let (first, rest) = self.prefixes();
         let bars = self.quote_width();
         let hang = u16::try_from(rest.iter().map(Span::width).sum::<usize>()).unwrap_or(u16::MAX);
@@ -441,6 +519,57 @@ impl Writer {
             spans.extend(spans_of(&row));
             self.out.lines.push(Line::from(spans));
         }
+    }
+
+    fn count_flush(&mut self, cells: Vec<Cell>) {
+        let (first, rest) = self.prefixes();
+        let first_parts: Vec<String> = first.iter().map(|span| span.content.to_string()).collect();
+        let rest_parts: Vec<String> = rest.iter().map(|span| span.content.to_string()).collect();
+        let widths: Vec<usize> = cells
+            .iter()
+            .map(|(ch, _)| crate::text::char_width(*ch))
+            .collect();
+        let first_width: usize = first.iter().map(Span::width).sum();
+        let rest_width: usize = rest.iter().map(Span::width).sum();
+        let first_room = usize::from(self.width).saturating_sub(first_width).max(1);
+        let rest_room = usize::from(self.width).saturating_sub(rest_width).max(1);
+        let mut at = 0usize;
+        visit_wrap_ranges(
+            &cells,
+            &widths,
+            first_room,
+            rest_room,
+            true,
+            |range, _join| {
+                let mut parts = if at == 0 {
+                    first_parts.clone()
+                } else {
+                    rest_parts.clone()
+                };
+                if let Some(row) = cells.get(range) {
+                    for run in row.chunk_by(|a, b| a.1 == b.1) {
+                        parts.push(run.iter().map(|(ch, _)| *ch).collect());
+                    }
+                }
+                self.count_row(parts);
+                at = at.saturating_add(1);
+            },
+        );
+        if at == 0 {
+            self.count_row(first_parts);
+        }
+    }
+
+    fn count_row(&mut self, parts: Vec<String>) {
+        let joined = parts.concat();
+        let joined_width = crate::text::width(&joined);
+        let (span_width, pad_width) = crate::rows::row_widths(parts.iter().map(String::as_str));
+        if self.inner_width() > 0
+            && joined_width.max(span_width).max(pad_width) > usize::from(self.width)
+        {
+            self.over_width = true;
+        }
+        self.counted_rows = self.counted_rows.saturating_add(1);
     }
 
     /// A code block: the edge rows, the header row with its label and
@@ -467,13 +596,21 @@ impl Writer {
         };
         // One reserved column past the bars and the gutter is not text.
         let side = u16::from(boxed);
-        if let Some(cols) = copy_cols(inner) {
-            let bars = self.quote_width();
-            self.out.targets.push(CopyTarget {
-                line: self.out.lines.len().saturating_add(1),
-                cols: cols.start.saturating_add(bars)..cols.end.saturating_add(bars),
-                code: code.to_owned(),
-            });
+        if copy_cols(inner).is_some() {
+            if self.count_only {
+                self.count_targets.push(self.counted_rows.saturating_add(1));
+            } else if let Some(cols) = copy_cols(inner) {
+                let bars = self.quote_width();
+                self.out.targets.push(CopyTarget {
+                    line: self.out.lines.len().saturating_add(1),
+                    cols: cols.start.saturating_add(bars)..cols.end.saturating_add(bars),
+                    code: code.to_owned(),
+                });
+            }
+        }
+        if self.count_only {
+            self.count_code_block(info, code);
+            return;
         }
         self.put(edge_row(width, Role::Code, true), true);
         self.put(sided(header(label, content), boxed), true);
@@ -531,6 +668,104 @@ impl Writer {
             }
         }
         self.put(edge_row(width, Role::Code, false), true);
+    }
+
+    fn count_code_block(&mut self, info: &str, code: &str) {
+        let inner = self.inner_width();
+        let width = usize::from(inner);
+        let label = info
+            .split(|ch: char| ch.is_whitespace() || ch == ',')
+            .next()
+            .unwrap_or_default();
+        let boxed = surface::box_fit(inner);
+        let content = if boxed {
+            width.saturating_sub(2)
+        } else {
+            width
+        };
+        let quote = "│ ".repeat(self.quote);
+        self.count_row(vec![quote.clone(), "─".repeat(usize::from(inner))]);
+
+        let copy = if content >= COPY.len() { COPY } else { "" };
+        let room = content.saturating_sub(COPY.len().saturating_add(2));
+        let shown = crate::text::cut(label, room, "…");
+        let lead = if content > COPY.len() { " " } else { "" };
+        let pad = content.saturating_sub(
+            crate::text::width(lead)
+                .saturating_add(crate::text::width(&shown))
+                .saturating_add(copy.len()),
+        );
+        let mut header = vec![quote.clone()];
+        if boxed {
+            header.push("│".into());
+        }
+        header.extend([lead.into(), shown, " ".repeat(pad), copy.into()]);
+        if boxed {
+            header.push("│".into());
+        }
+        self.count_row(header);
+
+        let code = code.strip_suffix('\n').unwrap_or(code);
+        let digits = code.split('\n').count().to_string().len().max(NUMBER_WIDTH);
+        let gutter = digits.saturating_add(2);
+        let room = content.saturating_sub(gutter).max(1);
+        if !info.trim().is_empty() && !code.is_ascii() {
+            self.over_width = true;
+        }
+        for (at, source) in code.split('\n').enumerate() {
+            let number = format!("{:>digits$}  ", at.saturating_add(1));
+            let mut cells = Vec::new();
+            for ch in source.chars() {
+                if ch == '\t' {
+                    let stop = TAB.saturating_sub(cells.len() % TAB);
+                    cells.extend(std::iter::repeat_n((' ', tinted(Role::CodeText)), stop));
+                } else {
+                    cells.push((ch, tinted(Role::CodeText)));
+                }
+            }
+            let widths: Vec<usize> = cells
+                .iter()
+                .map(|(ch, _)| crate::text::char_width(*ch))
+                .collect();
+            let mut emitted = 0usize;
+            visit_wrap_ranges(&cells, &widths, room, room, false, |range, _join| {
+                let text: String = cells
+                    .get(range)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(ch, _)| *ch)
+                    .collect();
+                let prefix = if emitted == 0 {
+                    number.clone()
+                } else {
+                    " ".repeat(gutter)
+                };
+                let text_width = Span::raw(text.as_str()).width();
+                let pad = content.saturating_sub(gutter.saturating_add(text_width));
+                let mut parts = vec![quote.clone()];
+                if boxed {
+                    parts.push("│".into());
+                }
+                parts.extend([prefix, text, " ".repeat(pad)]);
+                if boxed {
+                    parts.push("│".into());
+                }
+                self.count_row(parts);
+                emitted = emitted.saturating_add(1);
+            });
+            if emitted == 0 {
+                let mut parts = vec![quote.clone()];
+                if boxed {
+                    parts.push("│".into());
+                }
+                parts.extend([number, " ".repeat(content.saturating_sub(gutter))]);
+                if boxed {
+                    parts.push("│".into());
+                }
+                self.count_row(parts);
+            }
+        }
+        self.count_row(vec![quote, "─".repeat(width)]);
     }
 }
 

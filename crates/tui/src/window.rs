@@ -256,6 +256,8 @@ pub(crate) type AnimMark = (usize, crate::ext::anim::AnimKey);
 pub(crate) enum Draw {
     /// As shown: a closed section draws its own line only.
     Shown,
+    /// Count built-in Markdown rows without constructing them.
+    Count,
     /// Every collapsible body draws, open or not.
     AllOpen,
 }
@@ -644,7 +646,7 @@ impl Pages {
         // is closed and never folds another line, so whether its last
         // piece drew is final here.
         let before_drew = before.turns.last().map(|card| {
-            let mut scratch = Rows::default();
+            let mut scratch = Rows::count_only();
             card.rows(
                 self.wrap_width(),
                 &self.zone,
@@ -655,7 +657,7 @@ impl Pages {
             .last
         });
         let next_drew = next.turns.first().map(|card| {
-            let mut scratch = Rows::default();
+            let mut scratch = Rows::count_only();
             card.rows(
                 self.wrap_width(),
                 &self.zone,
@@ -709,7 +711,7 @@ impl Pages {
             return;
         }
         let drew = self.open.turns.first().map(|card| {
-            let mut scratch = Rows::default();
+            let mut scratch = Rows::count_only();
             card.rows(
                 self.wrap_width(),
                 &self.zone,
@@ -1848,6 +1850,7 @@ impl Pages {
         };
         let mut out = match mode {
             Draw::Shown => Rows::default(),
+            Draw::Count => Rows::count_only(),
             Draw::AllOpen => Rows::all_open(),
         }
         .with_seam(seam);
@@ -1967,7 +1970,7 @@ impl Pages {
         // so no session-size-dependent walk hides here.
         let (page_table, sources) = classify(part);
         crate::work::add(|work| work.search_order_pages += sources);
-        let ((lines, _, focus, _), sources) = self.draw_sourced(at, part, Draw::Shown);
+        let ((lines, _, focus, _), sources) = self.draw_sourced(at, part, Draw::Count);
         let width = self.width;
         let open = at == self.residency.len();
         let mut wrapped = HashMap::new();
