@@ -7,12 +7,13 @@
 //! command or reads a file.
 
 use std::cell::Cell;
+use std::path::Path;
 
-use contract::notes::{Evidence, ProposeNotesArgs, Proposed, Topic};
+use contract::notes::{AllowsTally, Evidence, ProposeNotesArgs, Proposed, Topic};
 use contract::shapes::Failure;
 
 use crate::configure::{
-    ConfigureError, FileOutcome, FileSaved, NotesSaved, NotesWrite, ReviewerNotes,
+    ConfigureError, FileOutcome, FileSaved, NotesSaved, NotesWrite, ReadOnlyEntry, ReviewerNotes,
 };
 use crate::keys::Key;
 use lines::{Flow, Run, Struck, is_struck};
@@ -92,6 +93,8 @@ struct Prepared {
     project: String,
     global_rows: Vec<DiffRow>,
     project_rows: Vec<DiffRow>,
+    global_entries: Vec<ReadOnlyEntry>,
+    project_entries: Vec<ReadOnlyEntry>,
 }
 
 /// One layer of the final screen.
@@ -104,6 +107,14 @@ pub(crate) struct LayerDiff<'a> {
     pub(crate) rows: &'a [DiffRow],
 }
 
+/// One layer's proposed read-only entries on the final screen.
+pub(crate) struct ConfigSection<'a> {
+    /// The layer's file, which holds the entries.
+    pub(crate) file: &'a Path,
+    /// The kept entries, in row order; empty when none is proposed.
+    pub(crate) entries: &'a [ReadOnlyEntry],
+}
+
 /// The setup's state.
 pub(crate) struct Setup {
     notes: ReviewerNotes,
@@ -113,6 +124,10 @@ pub(crate) struct Setup {
     screen: Screen,
     /// A dim row under the question or the diff.
     error: Option<String>,
+    /// Why the read-only proposal never arrived, shown on the diff: the
+    /// topic has no question to reopen, so a refusal skips to the diff
+    /// without the proposal instead.
+    proposal_notice: Option<String>,
     /// Earlier bullets struck, which later runs and the save keep.
     struck: Struck,
     prepared: Option<Prepared>,
@@ -138,6 +153,7 @@ impl Setup {
             topic: FIRST,
             screen: Screen::Question,
             error: None,
+            proposal_notice: None,
             struck: Vec::new(),
             prepared: None,
             scroll: 0,
@@ -183,6 +199,21 @@ impl Setup {
         self.error.as_deref()
     }
 
+    /// Why the read-only proposal never arrived, shown on the lines and
+    /// the diff, when there is one.
+    pub(crate) fn proposal_notice(&self) -> Option<&str> {
+        self.proposal_notice.as_deref()
+    }
+
+    /// The withheld reviewer-allow tallies no proposal cites, in evidence
+    /// order, for the dim evidence-context rows.
+    pub(crate) fn evidence_context(&self) -> Vec<AllowsTally> {
+        self.here()
+            .and_then(|state| state.run.as_ref())
+            .map(|run| run.context().to_vec())
+            .unwrap_or_default()
+    }
+
     /// The evidence texts the topic's lines cite, in the order given.
     pub(crate) fn evidence(&self) -> &[String] {
         self.here()
@@ -195,6 +226,23 @@ impl Setup {
         self.here()
             .and_then(|state| state.run.as_ref())
             .map_or_else(Vec::new, |run| run.rows(self.topic, &self.struck))
+    }
+
+    /// The diff screen's proposed config sections, global first.
+    pub(crate) fn config_sections(&self) -> Vec<ConfigSection<'_>> {
+        let Some(prepared) = self.prepared.as_ref() else {
+            return Vec::new();
+        };
+        vec![
+            ConfigSection {
+                file: &self.notes.global.file,
+                entries: &prepared.global_entries,
+            },
+            ConfigSection {
+                file: &self.notes.project.file,
+                entries: &prepared.project_entries,
+            },
+        ]
     }
 
     /// The diff screen's layers, global first.
@@ -270,7 +318,20 @@ impl Setup {
             Screen::Question => self.question_key(key),
             Screen::Waiting => {
                 if *key == Key::Esc {
-                    self.screen = Screen::Question;
+                    if self.topic == Topic::ReadOnlyCommands {
+                        // The model-free topic asks no question: Esc
+                        // forgets the wait and reopens the previous
+                        // topic's lines.
+                        if let Some(previous) = place(self.topic)
+                            .checked_sub(1)
+                            .and_then(|at| Topic::ALL.get(at))
+                        {
+                            self.topic = *previous;
+                        }
+                        self.screen = Screen::Lines;
+                    } else {
+                        self.screen = Screen::Question;
+                    }
                     Act::Abandon
                 } else {
                     Act::None
@@ -359,8 +420,12 @@ impl Setup {
     }
 
     /// The topic's bullets from both layers, global first: each once, and
-    /// none that every layer holding it has struck.
+    /// none that every layer holding it has struck. The read-only topic
+    /// keeps no notes bullets, so its earlier lines stay empty.
     fn earlier(&self) -> Vec<String> {
+        if self.topic == Topic::ReadOnlyCommands {
+            return Vec::new();
+        }
         let mut lines: Vec<String> = Vec::new();
         for (_, text) in self.earlier_items() {
             let live = [NotesLayer::Global, NotesLayer::PerProject]
@@ -380,8 +445,12 @@ impl Setup {
             .any(|(t, bullets)| t == topic && bullets.iter().any(|b| b == text))
     }
 
-    /// The topic's bullets in each layer, global first.
+    /// The topic's bullets in each layer, global first. The read-only
+    /// topic keeps no notes bullets, so its items stay empty.
     fn earlier_items(&self) -> Vec<(NotesLayer, String)> {
+        if self.topic == Topic::ReadOnlyCommands {
+            return Vec::new();
+        }
         let mut items = Vec::new();
         for layer in [NotesLayer::Global, NotesLayer::PerProject] {
             for (topic, bullets) in owned(self.text_of(layer)) {
@@ -405,10 +474,22 @@ impl Setup {
         match run.key(key, self.topic, &mut self.struck) {
             Flow::Stay => {}
             Flow::Back => {
-                if let Some(state) = self.here_mut() {
-                    state.run = None;
+                if self.topic == Topic::ReadOnlyCommands {
+                    // The model-free topic asks no question: back goes
+                    // to the previous topic's lines, keeping its run.
+                    if let Some(previous) = place(self.topic)
+                        .checked_sub(1)
+                        .and_then(|at| Topic::ALL.get(at))
+                    {
+                        self.topic = *previous;
+                    }
+                    self.screen = Screen::Lines;
+                } else {
+                    if let Some(state) = self.here_mut() {
+                        state.run = None;
+                    }
+                    self.screen = Screen::Question;
                 }
-                self.screen = Screen::Question;
             }
             Flow::Next => return self.next_topic(),
         }
@@ -435,16 +516,21 @@ impl Setup {
     // ----------------------------------------------------- the diff, save
 
     /// The text a layer is saved as: what was read with the person's
-    /// decisions applied.
+    /// decisions applied. Read-only rows never enter the notes: their
+    /// entries live in configuration, so both loops skip the topic.
     fn after(&self, layer: NotesLayer) -> String {
         let struck: Vec<(Topic, String)> = self
             .struck
             .iter()
             .filter(|(l, _, _)| *l == layer)
+            .filter(|(_, topic, _)| *topic != Topic::ReadOnlyCommands)
             .map(|(_, topic, text)| (*topic, text.clone()))
             .collect();
         let mut added: Vec<(Topic, String)> = Vec::new();
         for (state, topic) in self.topics.iter().zip(Topic::ALL) {
+            if topic == Topic::ReadOnlyCommands {
+                continue;
+            }
             if let Some(run) = state.run.as_ref() {
                 added.extend(run.kept(layer).map(|text| (topic, text.to_owned())));
             }
@@ -452,17 +538,49 @@ impl Setup {
         merge(self.text_of(layer), &struck, &added)
     }
 
+    /// The kept entry rows parsed per layer, global first. Unparseable
+    /// rows are left out here; `save` refuses them with the diff error.
+    fn parsed_entries(&self) -> (Vec<ReadOnlyEntry>, Vec<ReadOnlyEntry>) {
+        let mut global = Vec::new();
+        let mut project = Vec::new();
+        for (state, topic) in self.topics.iter().zip(Topic::ALL) {
+            if topic != Topic::ReadOnlyCommands {
+                continue;
+            }
+            let Some(run) = state.run.as_ref() else {
+                continue;
+            };
+            for layer in [NotesLayer::Global, NotesLayer::PerProject] {
+                let entries = match layer {
+                    NotesLayer::Global => &mut global,
+                    NotesLayer::PerProject => &mut project,
+                };
+                for text in run.kept(layer) {
+                    if let Some((command, flags)) = contract::notes::parse_read_only_entry(text) {
+                        entries.push(ReadOnlyEntry { command, flags });
+                    }
+                }
+            }
+        }
+        (global, project)
+    }
+
     fn show_diff(&mut self) {
         let global = self.after(NotesLayer::Global);
         let project = self.after(NotesLayer::PerProject);
+        let (global_entries, project_entries) = self.parsed_entries();
         self.prepared = Some(Prepared {
             global_rows: diff(&self.notes.global.text, &global),
             project_rows: diff(&self.notes.project.text, &project),
             global,
             project,
+            global_entries,
+            project_entries,
         });
         self.screen = Screen::Diff;
         self.scroll = 0;
+        // A transient error clears; the proposal notice survives the
+        // diff and the reread with it.
         self.error = None;
     }
 
@@ -486,28 +604,65 @@ impl Setup {
         Act::None
     }
 
-    /// The layers whose text changed, each with the version read; nothing to
-    /// send is a close with the nothing-changed line.
+    /// The layers whose text changed, each with the version read, plus the
+    /// kept read-only entries parsed per layer; nothing to send is a close
+    /// with the nothing-changed line. A row that parses to no entry, or a
+    /// command confirmed twice in one layer, refuses the save with the
+    /// diff error instead; overlap stays the authoritative save's refusal.
     fn save(&mut self) -> Act {
         self.error = None;
+        let mut global_entries = Vec::new();
+        let mut project_entries = Vec::new();
+        for (state, topic) in self.topics.iter().zip(Topic::ALL) {
+            if topic != Topic::ReadOnlyCommands {
+                continue;
+            }
+            let Some(run) = state.run.as_ref() else {
+                continue;
+            };
+            for layer in [NotesLayer::Global, NotesLayer::PerProject] {
+                let entries = match layer {
+                    NotesLayer::Global => &mut global_entries,
+                    NotesLayer::PerProject => &mut project_entries,
+                };
+                for text in run.kept(layer) {
+                    let Some((command, flags)) = contract::notes::parse_read_only_entry(text)
+                    else {
+                        self.error = Some(format!("{text} is not a read-only entry"));
+                        return Act::None;
+                    };
+                    if entries
+                        .iter()
+                        .any(|entry: &ReadOnlyEntry| entry.command == command)
+                    {
+                        self.error = Some(format!("{command} is confirmed twice in one layer"));
+                        return Act::None;
+                    }
+                    entries.push(ReadOnlyEntry { command, flags });
+                }
+            }
+        }
         let Some(prepared) = self.prepared.as_ref() else {
             return Act::None;
         };
-        let write = |after: &str, before: &str, version: &str| {
-            (after != before).then(|| NotesWrite {
+        let write = |after: &str, before: &str, version: &str, entries: Vec<ReadOnlyEntry>| {
+            (after != before || !entries.is_empty()).then(|| NotesWrite {
                 version: version.to_string(),
                 text: after.to_string(),
+                read_only: entries,
             })
         };
         let global = write(
             &prepared.global,
             &self.notes.global.text,
             &self.notes.global.version,
+            global_entries,
         );
         let project = write(
             &prepared.project,
             &self.notes.project.text,
             &self.notes.project.version,
+            project_entries,
         );
         if global.is_none() && project.is_none() {
             return Act::Unchanged;
@@ -552,8 +707,17 @@ impl Setup {
     }
 
     /// The request failed or was refused: back to the question with the
-    /// answer kept and `message` under it.
+    /// answer kept and `message` under it. The read-only topic asks no
+    /// question, so its refusal keeps earlier decisions, shows why on the
+    /// diff, and goes on without the proposal instead.
     pub(crate) fn refused(&mut self, message: &str) {
+        if self.topic == Topic::ReadOnlyCommands
+            && matches!(self.screen, Screen::Waiting | Screen::Question)
+        {
+            self.show_diff();
+            self.proposal_notice = Some(message.to_string());
+            return;
+        }
         if matches!(self.screen, Screen::Waiting | Screen::Question) {
             self.screen = Screen::Question;
             self.error = Some(message.to_string());
@@ -561,8 +725,15 @@ impl Setup {
     }
 
     /// The waiting request's answer may never come: reopen the question.
+    /// The read-only topic asks none, so its loss shows why on the diff.
     pub(crate) fn lost(&mut self) {
         if self.screen == Screen::Waiting {
+            if self.topic == Topic::ReadOnlyCommands {
+                self.show_diff();
+                self.proposal_notice =
+                    Some("The session restarted before its proposal arrived.".to_string());
+                return;
+            }
             self.refused("The session restarted. Enter proposes again.");
         }
     }

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use contract::notes::{Evidence, EvidenceKind, Proposed, Topic};
+use contract::notes::{AllowsTally, Evidence, EvidenceKind, Proposed, Topic};
 
 use super::template::{NotesLayer, Source, clean_line, default_layer};
 use crate::keys::Key;
@@ -86,6 +86,9 @@ pub(super) enum Flow {
 /// One request's lines: the earlier lines, then the proposals.
 pub(super) struct Run {
     evidence: Vec<String>,
+    /// The reviewer-allow tallies no proposal cites, in evidence order:
+    /// the withheld subjects the lines screen shows as dim context.
+    context: Vec<AllowsTally>,
     items: Vec<Item>,
     focus: usize,
     edit: Option<String>,
@@ -122,7 +125,16 @@ impl Run {
                 state: LineState::Open,
             }));
         }
-        let evidence = evidence
+        let context: Vec<AllowsTally> = evidence
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| !cited.contains(at))
+            .filter_map(|(_, item)| match item {
+                Evidence::Allows(tally) => Some(tally.clone()),
+                Evidence::Files { .. } | Evidence::Answer { .. } | Evidence::Session(_) => None,
+            })
+            .collect();
+        let evidence: Vec<String> = evidence
             .iter()
             .enumerate()
             .filter(|(at, _)| cited.contains(at))
@@ -134,6 +146,7 @@ impl Run {
             .unwrap_or(0);
         Self {
             evidence,
+            context,
             items,
             focus,
             edit: None,
@@ -143,6 +156,11 @@ impl Run {
     /// The evidence texts the lines cite, in the order given.
     pub(super) fn evidence(&self) -> &[String] {
         &self.evidence
+    }
+
+    /// The reviewer-allow tallies no proposal cites, in evidence order.
+    pub(super) fn context(&self) -> &[AllowsTally] {
+        &self.context
     }
 
     /// The lines, earlier ones first.

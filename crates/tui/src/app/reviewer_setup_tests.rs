@@ -608,6 +608,7 @@ fn the_save_sends_only_the_changed_layer_with_the_version_read() {
         Some(NotesWrite {
             version: "project-v1".to_owned(),
             text: "### Source control\n- github.com/acme/* are ours\n".to_owned(),
+            read_only: Vec::new(),
         })
     );
     assert_eq!(screen(&app), Screen::Saved);
@@ -1631,4 +1632,289 @@ fn an_escalation_notice_waits_behind_the_approval_panel() {
     assert!(app.top_surfaces().contains(&Surface::ReviewerSetup));
     press(&mut app, Key::Esc);
     assert!(app.reviewer_setup().is_none());
+}
+
+// ------------------------------------------------- the read-only topic
+
+fn allows_evidence() -> Value {
+    json!([{"kind": "allows", "subject": "acme-cli query --json", "count": 5,
+        "here": 5, "text": "5 reviewer allows for acme-cli query --json"}])
+}
+
+fn entry_proposed() -> Value {
+    json!([{"text": "shell.read_only.\"acme-cli query\".flags = [\"--json\"]", "cites": [0]}])
+}
+
+/// Walks the five notes topics with no lines; the fifth Enter auto-sends
+/// the sixth topic's propose line, which the test answers or rejects.
+fn to_read_only_wait(app: &mut App) -> Value {
+    for _ in 0..5 {
+        ask(app, nothing());
+        let effect = press(app, Key::Enter);
+        if screen(app) == Screen::Waiting {
+            let lines = sent(effect);
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            return lines[0].clone();
+        }
+    }
+    panic!("the sixth topic never proposed itself");
+}
+
+#[test]
+fn read_only_sixth_propose_carries_no_answer_or_earlier() {
+    let (mut app, _) = app();
+    start(&mut app);
+    let line = to_read_only_wait(&mut app);
+    assert_eq!(line["command"], "propose_notes");
+    assert_eq!(line["args"]["topic"], "read_only_commands");
+    assert!(line["args"].get("answer").is_none_or(Value::is_null));
+    assert!(line["args"].get("earlier").is_none_or(Value::is_null));
+    assert!(app.outbox.pending.contains_key(&id_of(&line)));
+    assert_eq!(screen(&app), Screen::Waiting);
+    assert_eq!(topic(&app), Topic::ReadOnlyCommands);
+}
+
+#[test]
+fn read_only_answer_through_the_seam_reaches_the_lines_screen() {
+    let (mut app, _) = app();
+    start(&mut app);
+    let line = to_read_only_wait(&mut app);
+    app.on_line(accepted(
+        &id_of(&line),
+        proposals(allows_evidence(), entry_proposed()),
+    ));
+    assert_eq!(screen(&app), Screen::Lines);
+    assert_eq!(topic(&app), Topic::ReadOnlyCommands);
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn read_only_confirmed_entry_saves_notes_and_per_layer_entries() {
+    let (mut app, fake) = app();
+    set_saved(&fake, saved_both());
+    start(&mut app);
+    ask(&mut app, one_line());
+    assert_eq!(screen(&app), Screen::Lines);
+    press(&mut app, Key::Enter);
+    for _ in 0..4 {
+        ask(&mut app, nothing());
+        press(&mut app, Key::Enter);
+    }
+    // The fifth Enter auto-proposed the sixth topic.
+    assert_eq!(screen(&app), Screen::Waiting);
+    let pending: Vec<String> = app.outbox.pending.keys().cloned().collect();
+    assert_eq!(pending.len(), 1);
+    app.on_line(accepted(
+        &pending[0],
+        proposals(allows_evidence(), entry_proposed()),
+    ));
+    assert_eq!(screen(&app), Screen::Lines);
+    press(&mut app, Key::Enter);
+    assert_eq!(screen(&app), Screen::Diff);
+    press(&mut app, Key::Enter);
+    assert_eq!(screen(&app), Screen::Saved);
+    let made = fake.notes_saves();
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0].0, PathBuf::from("/w"));
+    assert_eq!(made[0].1, None);
+    let project = made[0].2.clone().expect("a project write");
+    assert!(
+        project.text.contains("github.com/acme/* are ours"),
+        "{}",
+        project.text
+    );
+    assert_eq!(project.read_only.len(), 1);
+    assert_eq!(project.read_only[0].command, "acme-cli query");
+    assert_eq!(project.read_only[0].flags, vec!["--json".to_string()]);
+    assert_eq!(screen(&app), Screen::Saved);
+}
+
+#[test]
+fn read_only_rejection_continues_to_the_diff_with_the_notice() {
+    let (mut app, _) = app();
+    start(&mut app);
+    ask(&mut app, one_line());
+    press(&mut app, Key::Enter);
+    let line = to_read_only_wait_from_second_topic(&mut app);
+    app.on_line(rejected(&id_of(&line), "busy", "The hub is busy."));
+    assert_eq!(screen(&app), Screen::Diff);
+    assert_eq!(topic(&app), Topic::ReadOnlyCommands);
+    assert!(app.outbox.pending.is_empty());
+    let shown = on_screen(&mut app);
+    assert!(
+        shown.contains("Read-only commands: not proposed: The hub is busy."),
+        "{shown}"
+    );
+    // The first topic's kept line survived the skip.
+    assert!(shown.contains("github.com/acme/* are ours"), "{shown}");
+}
+
+/// Walks topics 2-5 with no lines after the caller handled topic 1;
+/// returns the auto-sent sixth propose line.
+fn to_read_only_wait_from_second_topic(app: &mut App) -> Value {
+    for _ in 0..4 {
+        ask(app, nothing());
+        let effect = press(app, Key::Enter);
+        if screen(app) == Screen::Waiting {
+            let lines = sent(effect);
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            return lines[0].clone();
+        }
+    }
+    panic!("the sixth topic never proposed itself");
+}
+
+#[test]
+fn read_only_busy_rejection_reaches_the_diff_not_the_question_guard() {
+    let (mut app, _) = app();
+    start(&mut app);
+    ask(&mut app, one_line());
+    press(&mut app, Key::Enter);
+    let line = to_read_only_wait_from_second_topic(&mut app);
+    // A turn starts while the model-free request is pending: Enter on a
+    // question would be guarded, but the auto-propose already left.
+    turn_starts(&mut app);
+    app.on_line(rejected(&id_of(&line), "busy", "A turn is running."));
+    assert_eq!(screen(&app), Screen::Diff);
+    assert_eq!(topic(&app), Topic::ReadOnlyCommands);
+    assert!(app.outbox.pending.is_empty());
+    let shown = on_screen(&mut app);
+    assert!(
+        shown.contains("Read-only commands: not proposed: A turn is running."),
+        "{shown}"
+    );
+    assert!(!shown.contains("Propose again when it ends"), "{shown}");
+}
+
+#[test]
+fn read_only_lost_request_continues_to_the_diff_with_the_notice() {
+    for kind in ["stream_reopened", "stream_closed", "session_left"] {
+        let (mut app, _) = app();
+        start(&mut app);
+        ask(&mut app, one_line());
+        press(&mut app, Key::Enter);
+        let line = to_read_only_wait_from_second_topic(&mut app);
+        app.on_line(hub(kind, SESSION));
+        assert_eq!(screen(&app), Screen::Diff, "{kind}");
+        let shown = on_screen(&mut app);
+        // The notice row wraps on narrow screens: both halves show.
+        assert!(
+            shown.contains("Read-only commands: not proposed: The session restarted before its"),
+            "{kind}: {shown}"
+        );
+        assert!(shown.contains("proposal arrived."), "{kind}: {shown}");
+        // The late answer is dropped: nothing is pending.
+        app.on_line(accepted(
+            &id_of(&line),
+            proposals(allows_evidence(), entry_proposed()),
+        ));
+        assert_eq!(screen(&app), Screen::Diff, "{kind}: late answer dropped");
+        assert!(app.outbox.pending.is_empty());
+    }
+}
+
+#[test]
+fn read_only_duplicate_rows_save_nothing() {
+    let (mut app, fake) = app();
+    set_saved(&fake, saved_both());
+    start(&mut app);
+    let line = to_read_only_wait(&mut app);
+    let duplicated = json!([
+        {"text": "shell.read_only.\"acme-cli query\".flags = [\"--json\"]", "cites": [0]},
+        {"text": "shell.read_only.\"acme-cli query\".flags = [\"--yaml\"]", "cites": [0]},
+    ]);
+    app.on_line(accepted(
+        &id_of(&line),
+        proposals(allows_evidence(), duplicated),
+    ));
+    assert_eq!(screen(&app), Screen::Lines);
+    press(&mut app, Key::Enter);
+    press(&mut app, Key::Enter);
+    assert_eq!(screen(&app), Screen::Diff);
+    assert_eq!(press(&mut app, Key::Enter), Effect::None);
+    assert_eq!(screen(&app), Screen::Diff);
+    assert!(fake.notes_saves().is_empty(), "no local save is sent");
+}
+
+#[test]
+fn read_only_notice_survives_show_diff_and_stale_reread() {
+    let (mut app, fake) = app();
+    set_saved(&fake, Ok(NotesSaved::Stale));
+    start(&mut app);
+    ask(&mut app, one_line());
+    press(&mut app, Key::Enter);
+    let line = to_read_only_wait_from_second_topic(&mut app);
+    app.on_line(rejected(&id_of(&line), "busy", "The hub is busy."));
+    assert_eq!(screen(&app), Screen::Diff);
+    let shown = on_screen(&mut app);
+    assert!(
+        shown.contains("Read-only commands: not proposed: The hub is busy."),
+        "{shown}"
+    );
+    set_notes(&fake, notes("", ""));
+    press(&mut app, Key::Enter);
+    assert_eq!(screen(&app), Screen::Diff);
+    let shown = on_screen(&mut app);
+    assert!(
+        shown.contains("Read-only commands: not proposed: The hub is busy."),
+        "notice survives reread: {shown}"
+    );
+}
+
+#[test]
+fn read_only_stale_reread_keeps_entries_then_saves() {
+    let (mut app, fake) = app();
+    set_saved(&fake, Ok(NotesSaved::Stale));
+    start(&mut app);
+    let line = to_read_only_wait(&mut app);
+    app.on_line(accepted(
+        &id_of(&line),
+        proposals(allows_evidence(), entry_proposed()),
+    ));
+    press(&mut app, Key::Enter);
+    press(&mut app, Key::Enter);
+    assert_eq!(screen(&app), Screen::Diff);
+    set_notes(&fake, notes("", ""));
+    set_saved(&fake, saved_both());
+    press(&mut app, Key::Enter);
+    assert_eq!(screen(&app), Screen::Saved);
+    let made = fake.notes_saves();
+    // The stale attempt and the real save are both recorded; the retry
+    // carries the kept entries.
+    assert_eq!(made.len(), 2);
+    let project = made[1].2.clone().expect("a project write");
+    assert_eq!(project.read_only.len(), 1);
+    assert_eq!(project.read_only[0].command, "acme-cli query");
+    assert_eq!(screen(&app), Screen::Saved);
+}
+
+#[test]
+fn read_only_config_invalid_save_refusal_names_the_entry_on_the_diff() {
+    let (mut app, fake) = app();
+    set_saved(
+        &fake,
+        Err(ConfigureError {
+            code: contract::ErrorCode::ConfigInvalid,
+            message: "shell.read_only.\"acme-cli query\": write-flagged".to_owned(),
+        }),
+    );
+    start(&mut app);
+    let line = to_read_only_wait(&mut app);
+    app.on_line(accepted(
+        &id_of(&line),
+        proposals(allows_evidence(), entry_proposed()),
+    ));
+    press(&mut app, Key::Enter);
+    press(&mut app, Key::Enter);
+    assert_eq!(screen(&app), Screen::Diff);
+    assert_eq!(press(&mut app, Key::Enter), Effect::None);
+    assert_eq!(screen(&app), Screen::Diff);
+    let shown = on_screen(&mut app);
+    assert!(
+        shown.contains("shell.read_only.\"acme-cli query\""),
+        "{shown}"
+    );
+    // The entry decision survives the refusal.
+    let rows = app.reviewer_setup().expect("open").line_rows();
+    assert_eq!(rows.len(), 1);
 }

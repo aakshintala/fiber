@@ -1,9 +1,8 @@
 ---
 source: crates/tui/src/view/reviewer_setup_tests.rs
+assertion_line: 512
 expression: "checked(flipped(), \"flipped\", 1)"
 ---
-
-
 
 
 
@@ -17,18 +16,20 @@ expression: "checked(flipped(), \"flipped\", 1)"
 
             Reviewer setup                                                    ✕
 
-            Topic 4 of 6 · Routine actions
-            What routine actions, such as squash-merging your own pull requests
-            once CI passes, should the reviewer allow?
-            14 escalations answered allow for `gh pr merge … --squash`
-⋮           › [global]       squash-merging my own pull requests once CI passes           ⋮
+            Topic 6 of 6 · Read-only commands
+            An entry is trusted: a command on it that writes after all writes
+            without review.
+            5 reviewer allows for acme-cli query --json
+            › [global]       shell.read_only."acme-cli query".flags =
+                             ["--json"]
 ⋮           was per-project · Tab flipped it                                              ⋮
-⋮                                                                                         ⋮
+⋮           kubectl -n x get pods · 5 · words after the command: an entry would           ⋮
+⋮           cover other subcommands                                                       ⋮
+            acme-cli --json · 3 · one word: an entry names a subcommand
+
             Tab flip layer · Enter confirm · e edit · x strike · Esc back
 
           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
 
 
 

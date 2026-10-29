@@ -718,13 +718,28 @@ impl Configure for Remote {
     ) -> Result<NotesSaved, ConfigureError> {
         let mut args = Map::from_iter([("workspace".into(), json!(self.workspace(workspace)?))]);
         // A layer not sent is absent, never null: the hub refuses an
-        // explicit null, as it does on every other operation.
+        // explicit null, as it does on every other operation. Entries
+        // travel as an optional per-layer object mapping each command to
+        // its flags, omitted when the layer confirms none.
         for (name, sent) in [("global", global), ("project", project)] {
             if let Some(write) = sent {
-                drop(args.insert(
-                    name.into(),
-                    json!({"version":write.version,"text":write.text}),
-                ));
+                let mut layer = Map::from_iter([
+                    ("version".into(), json!(write.version)),
+                    ("text".into(), json!(write.text)),
+                ]);
+                if !write.read_only.is_empty() {
+                    layer.insert(
+                        "read_only".into(),
+                        Value::Object(
+                            write
+                                .read_only
+                                .iter()
+                                .map(|entry| (entry.command.clone(), json!(entry.flags)))
+                                .collect(),
+                        ),
+                    );
+                }
+                drop(args.insert(name.into(), Value::Object(layer)));
             }
         }
         self.call(

@@ -273,10 +273,40 @@ fn struck() -> Fixture {
     fx
 }
 
+/// Topic 6 with one kept entry row and two withheld tallies, the entry
+/// flipped to global: the risk caption, entry rows and evidence context
+/// in one frame.
 fn flipped() -> Fixture {
-    let mut fx = first();
+    let mut fx = Fixture::new("", "", 120, 40);
+    for _ in 0..4 {
+        fx.skip();
+    }
+    fx.ask(json!([]), json!([]));
+    let Effect::Send(lines) = fx.press(Key::Enter) else {
+        panic!("leaving the last notes topic proposes read-only");
+    };
+    let sent: Value = serde_json::from_str(&lines[0]).expect("a json line");
+    fx.accept(&sent, allows_context(), entry_json());
     fx.press(Key::Tab);
+    assert_eq!(fx.setup().screen(), Screen::Lines);
     fx
+}
+
+/// One eligible tally with two withheld ones, in evidence order: the
+/// loop's ack carries each withheld reason as the tally text.
+fn allows_context() -> Value {
+    json!([
+        {"kind": "allows", "subject": "acme-cli query --json", "count": 5, "here": 5,
+            "text": "5 reviewer allows for acme-cli query --json"},
+        {"kind": "allows", "subject": "kubectl -n x get pods", "count": 5, "here": 5,
+            "text": "words after the command: an entry would cover other subcommands"},
+        {"kind": "allows", "subject": "acme-cli --json", "count": 3, "here": 3,
+            "text": "one word: an entry names a subcommand"},
+    ])
+}
+
+fn entry_json() -> Value {
+    json!([{"text": "shell.read_only.\"acme-cli query\".flags = [\"--json\"]", "cites": [0]}])
 }
 
 /// The diff of the reviewed frame: the old line struck, the labs line and
@@ -300,8 +330,26 @@ fn diff() -> Fixture {
     fx.skip_to(Topic::RoutineActions);
     fx.ask(session_evidence(), cite_first(SQUASH));
     fx.press(Key::Enter);
-    fx.skip_to_diff();
+    // The read-only wait answers with one eligible tally: its kept entry
+    // proposes a config section on the diff.
+    fx.skip_to(Topic::Never);
+    fx.ask(json!([]), json!([]));
+    let Effect::Send(lines) = fx.press(Key::Enter) else {
+        panic!("leaving the last notes topic proposes read-only");
+    };
+    let sent: Value = serde_json::from_str(&lines[0]).expect("a json line");
+    fx.accept(&sent, allows_entry(), entry_json());
+    fx.press(Key::Enter);
+    assert_eq!(fx.setup().screen(), Screen::Diff);
     fx
+}
+
+/// One eligible tally: the loop's ack keeps its count text.
+fn allows_entry() -> Value {
+    json!([
+        {"kind": "allows", "subject": "acme-cli query --json", "count": 5, "here": 5,
+            "text": "5 reviewer allows for acme-cli query --json"},
+    ])
 }
 
 impl Fixture {
@@ -360,7 +408,17 @@ fn saved() -> Fixture {
         cite_first(LABS),
     );
     fx.press(Key::Enter);
-    fx.skip_to_diff();
+    // Topics 2-4 leave nothing; the read-only wait answers with one
+    // eligible tally whose kept entry saves with the notes.
+    fx.skip_to(Topic::Never);
+    fx.ask(json!([]), json!([]));
+    let Effect::Send(lines) = fx.press(Key::Enter) else {
+        panic!("leaving the last notes topic proposes read-only");
+    };
+    let sent: Value = serde_json::from_str(&lines[0]).expect("a json line");
+    fx.accept(&sent, allows_entry(), entry_json());
+    fx.press(Key::Enter);
+    assert_eq!(fx.setup().screen(), Screen::Diff);
     fx.press(Key::Enter);
     assert_eq!(fx.setup().screen(), Screen::Saved);
     fx
@@ -1193,5 +1251,207 @@ fn clip_cuts_a_last_row_wider_than_the_panel_to_the_width_with_the_ellipsis() {
     assert_eq!(
         pieces(&rows[0].spans),
         [("ab", Style::new()), ("cde…", dimmed())]
+    );
+}
+
+// ------------------------------------------------- the read-only topic
+
+use crate::reviewer_setup::{Act, Setup};
+use contract::notes::{AllowsTally, Evidence, Proposed};
+
+/// Drives a fresh setup through five empty notes topics to the
+/// auto-proposed read-only wait.
+fn read_only_waiting() -> Setup {
+    let mut setup = Setup::open(notes("", ""));
+    for _ in 0..5 {
+        let Act::Propose(_) = setup.key(&Key::Enter) else {
+            panic!("each notes topic proposes");
+        };
+        setup.proposed(&[], &[], None);
+        setup.key(&Key::Enter);
+    }
+    assert_eq!(setup.screen(), Screen::Waiting);
+    setup
+}
+
+fn eligible_tally() -> Evidence {
+    Evidence::Allows(
+        AllowsTally::new(
+            "acme-cli query".into(),
+            "acme-cli query --json".into(),
+            5,
+            5,
+        )
+        .expect("a valid tally"),
+    )
+}
+
+fn withheld_tally(subject: &str, count: u32, reason: &str) -> Evidence {
+    Evidence::Allows(
+        AllowsTally::from_wire(subject.into(), count, count, reason.into()).expect("a valid tally"),
+    )
+}
+
+fn entry_proposal(cites: &[usize]) -> Proposed {
+    Proposed::new(
+        "shell.read_only.\"acme-cli query\".flags = [\"--json\"]".into(),
+        cites.to_vec(),
+    )
+    .expect("a cited entry")
+}
+
+/// The lines overlay's text with wrapped rows rejoined: wrapping breaks
+/// at spaces, so one space per break recovers each row's sentence.
+fn lines_text(setup: &Setup) -> String {
+    super::frame(setup, overlay::question_inner(150), 40)
+        .body
+        .iter()
+        .map(|row| {
+            row.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn read_only_lines_show_the_risk_caption_not_a_question() {
+    let mut setup = read_only_waiting();
+    setup.proposed(&[eligible_tally()], &[entry_proposal(&[0])], None);
+    let text = lines_text(&setup).replace('\n', " ");
+    assert!(
+        text.contains(
+            "An entry is trusted: a command on it that writes after all writes without review."
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Which accounts"), "{text}");
+}
+
+#[test]
+fn read_only_struck_entry_says_it_will_not_be_saved() {
+    let mut setup = read_only_waiting();
+    setup.proposed(
+        &[eligible_tally(), eligible_tally()],
+        &[entry_proposal(&[0]), entry_proposal(&[1])],
+        None,
+    );
+    setup.key(&Key::Char('x'));
+    setup.key(&Key::Up);
+    let text = lines_text(&setup).replace('\n', " ");
+    assert!(text.contains("struck — will not be saved"), "{text}");
+    assert!(!text.contains("kept out of the notes"), "{text}");
+}
+
+#[test]
+fn read_only_context_rows_name_every_withheld_subject() {
+    let mut setup = read_only_waiting();
+    setup.proposed(
+        &[
+            withheld_tally("solo --json", 5, "one word: an entry names a subcommand"),
+            withheld_tally(
+                "t b c",
+                5,
+                "words after the command: an entry would cover other subcommands",
+            ),
+            withheld_tally(
+                "keep me --json",
+                5,
+                "not proposed: a call it would cover was denied, blocked or escalated",
+            ),
+            withheld_tally(
+                "g log --exec=ls",
+                5,
+                "takes a value: an entry can't limit it",
+            ),
+            withheld_tally(
+                "p/q --json",
+                5,
+                "a path, not a command name: an entry names a command",
+            ),
+        ],
+        &[],
+        None,
+    );
+    let text = lines_text(&setup).replace('\n', " ");
+    for row in [
+        "solo --json · 5 · one word: an entry names a subcommand",
+        "t b c · 5 · words after the command: an entry would cover other subcommands",
+        "keep me --json · 5 · not proposed: a call it would cover was denied, blocked or escalated",
+        "g log --exec=ls · 5 · takes a value: an entry can't limit it",
+        "p/q --json · 5 · a path, not a command name: an entry names a command",
+    ] {
+        assert!(text.contains(row), "{text}");
+    }
+}
+
+#[test]
+fn read_only_failed_proposal_shows_exactly_one_notice_row_on_the_diff() {
+    let mut setup = read_only_waiting();
+    setup.refused("the hub is busy");
+    assert_eq!(setup.screen(), Screen::Diff);
+    let framed = super::frame(&setup, overlay::question_inner(150), 40);
+    let text: String = framed
+        .body
+        .iter()
+        .flat_map(|row| row.spans.iter().map(|span| span.content.clone()))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace('\n', " ");
+    let notice = "Read-only commands: not proposed: the hub is busy";
+    assert_eq!(text.matches(notice).count(), 1, "{text}");
+}
+
+#[test]
+fn read_only_lost_proposal_shows_the_restart_notice_on_the_diff() {
+    let mut setup = read_only_waiting();
+    setup.lost();
+    assert_eq!(setup.screen(), Screen::Diff);
+    let framed = super::frame(&setup, overlay::question_inner(150), 40);
+    let text: String = framed
+        .body
+        .iter()
+        .flat_map(|row| row.spans.iter().map(|span| span.content.clone()))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace('\n', " ");
+    assert!(
+        text.contains(
+            "Read-only commands: not proposed: The session restarted before its proposal arrived."
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn read_only_refusal_errors_display_on_lines() {
+    let mut setup = read_only_waiting();
+    setup.proposed(&[eligible_tally()], &[entry_proposal(&[0])], None);
+    setup.saved(Err(crate::configure::ConfigureError {
+        code: contract::ErrorCode::ConfigInvalid,
+        message: "shell.read_only.\"acme-cli query\": write-flagged".to_owned(),
+    }));
+    assert_eq!(setup.screen(), Screen::Lines);
+    let text = lines_text(&setup);
+    assert!(
+        text.contains("shell.read_only.\"acme-cli query\": write-flagged"),
+        "{text}"
+    );
+}
+
+#[test]
+fn read_only_diff_shows_the_config_section_with_its_file_and_entry() {
+    let mut fx = diff();
+    let screen = fx.screen();
+    assert!(
+        screen.contains("shell.read_only · ~/.fiber/projects/fiber/config.json"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("shell.read_only.\"acme-cli query\".flags = [\"--json\"]"),
+        "{screen}"
     );
 }

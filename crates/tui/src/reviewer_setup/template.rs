@@ -119,7 +119,10 @@ fn bullet_text(line: &str) -> Option<&str> {
 
 fn heading_topic(line: &str) -> Option<Topic> {
     let body = split_ending(line).0;
-    Topic::ALL.into_iter().find(|topic| topic.heading() == body)
+    Topic::ALL
+        .into_iter()
+        .filter(|topic| *topic != Topic::ReadOnlyCommands)
+        .find(|topic| topic.heading() == body)
 }
 
 /// A heading and the run of bullet lines directly after it: the lines the
@@ -157,6 +160,9 @@ pub(crate) fn owned(text: &str) -> Vec<(Topic, Vec<String>)> {
     let blocks = blocks(&lines);
     let mut found = Vec::new();
     for topic in Topic::ALL {
+        if topic == Topic::ReadOnlyCommands {
+            continue;
+        }
         let mut own = blocks.iter().filter(|b| b.topic == topic).peekable();
         if own.peek().is_none() {
             continue;
@@ -231,6 +237,9 @@ pub(crate) fn merge(text: &str, struck: &[(Topic, String)], added: &[(Topic, Str
     let mut dropped: BTreeSet<usize> = BTreeSet::new();
     let mut inserts: BTreeMap<usize, (&str, Vec<&str>)> = BTreeMap::new();
     for topic in Topic::ALL {
+        if topic == Topic::ReadOnlyCommands {
+            continue;
+        }
         let new: Vec<&str> = fresh
             .iter()
             .filter(|(t, _)| *t == topic)
@@ -278,6 +287,9 @@ pub(crate) fn merge(text: &str, struck: &[(Topic, String)], added: &[(Topic, Str
         }
     }
     for topic in Topic::ALL {
+        if topic == Topic::ReadOnlyCommands {
+            continue;
+        }
         if blocks.iter().any(|b| b.topic == topic) {
             continue;
         }
