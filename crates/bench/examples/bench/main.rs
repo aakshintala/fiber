@@ -204,6 +204,7 @@ fn timing_names() -> Vec<&'static str> {
         .chain(listing::SAMPLED.iter())
         .chain(attach::SAMPLED.iter())
         .chain(wheel::SAMPLED.iter())
+        .chain(&sandbox::WORKLOADS)
         .filter(|workload| workload.timing)
         .map(|workload| workload.name)
         .collect()
@@ -248,6 +249,7 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
         .chain(&resume::WORKLOADS)
         .chain(&session_list::WORKLOADS)
         .chain(paging)
+        .chain(&sandbox::WORKLOADS)
         .map(|workload| {
             let count = if workload.timing { timing_runs } else { runs };
             (workload, count, count)
