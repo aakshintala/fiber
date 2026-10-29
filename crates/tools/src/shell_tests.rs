@@ -173,6 +173,11 @@ fn nullable_optional_arguments_parse_as_absent() {
         let parsed = parse(&args, dir.path(), 600_000).unwrap();
         assert_eq!(parsed.unconfined, expected, "unconfined: {given}");
     }
+    // `unconfined` combines with any mode: the mode checks are unchanged.
+    let combined = fakes::tool_args(json!({"command": "ls", "monitor": true, "unconfined": true}));
+    let parsed = parse(&combined, dir.path(), 600_000).unwrap();
+    assert_eq!(parsed.mode, Mode::Monitor);
+    assert!(parsed.unconfined);
 }
 
 #[test]
