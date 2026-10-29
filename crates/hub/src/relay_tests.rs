@@ -3680,6 +3680,82 @@ fn a_spawn_failure_answers_the_written_command() {
     assert_eq!(order.session_for("c_unspawned"), None);
 }
 
+/// `docs/invocation.md:1147-1148`, "What the hub speaks": `attach_inner`'s
+/// pending-command write classifies its failure once. A write that accepted
+/// nothing stays unsent (`Queued`, attach goes stale for a resume and
+/// retry); a write that accepted bytes may have reached the session
+/// (`Partial`, answered `indeterminate`, never resumed).
+#[test]
+fn an_attach_write_failure_is_queued_when_nothing_landed_and_partial_once_bytes_did() {
+    use std::sync::{Arc, Mutex};
+    const SID: &str = "s_0123456789abcdef";
+
+    fn never_spawns(
+        task: Box<dyn FnOnce() + Send>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        drop(task);
+        panic!("a failed command write returns before establishing");
+    }
+
+    for (tag, stale) in [(0, true), (1, false)] {
+        let held = fakes::TempDir::new("awf");
+        let hub = Arc::new(hub(&held));
+        let relays = Arc::new(Mutex::new(Relays::default()));
+        let order = crate::connection::lock(&relays).order.clone();
+        let id = format!("c_attach_{tag}");
+        order.enqueue(SID, &id);
+        let (writer, _peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(writer));
+        let (session, _session_peer) = UnixStream::pair().unwrap();
+        let command = json!({"id": id, "command": "reply", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut bytes = serde_json::to_vec(&command).unwrap();
+        bytes.push(b'\n');
+        // The zero cap accepts nothing; any smaller cut accepts bytes the
+        // session may have read.
+        let take = if stale { 0 } else { bytes.len() - 1 };
+        crate::connection::lock(&relays).before_command_write = Some(Box::new(move |cap, _| {
+            *cap = Some(take);
+        }));
+        let outcome = attach_inner_with_spawner(
+            SID,
+            session,
+            &hub,
+            &writer,
+            &relays,
+            None,
+            Some((contract::CommandId(id.clone()), bytes, command)),
+            false,
+            None,
+            false,
+            never_spawns,
+        );
+        if stale {
+            assert!(
+                matches!(outcome, AttachOutcome::Stale),
+                "a zero-byte attach write goes stale for a resume and retry"
+            );
+            assert_eq!(
+                order.state(&id),
+                Some(CommandState::Queued),
+                "nothing accepted stays unsent"
+            );
+        } else {
+            assert!(
+                matches!(outcome, AttachOutcome::Indeterminate),
+                "an attach write that accepted bytes is answered, never resumed"
+            );
+            assert_eq!(
+                order.state(&id),
+                Some(CommandState::Partial),
+                "accepted bytes may have reached the session"
+            );
+        }
+    }
+}
+
 /// The command writer counts accepted bytes before a write or flush
 /// failure. A whole write succeeds; a cut reports its accepted count; a
 /// zero cap accepts nothing; a failed flush reports the whole line.
