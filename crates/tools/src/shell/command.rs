@@ -195,6 +195,52 @@ fn execute_inner(
     ps: &Path,
     install: fn(&mut super::sandbox::Prepared) -> Result<(), i32>,
 ) -> Result<Ran, std::io::Error> {
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = (install, sandbox_settings, sandbox_workspace);
+    // On macOS the policy applies through the `sandbox-exec` wrapper spawn,
+    // with no `pre_exec`: only `install` needs explicit consumption.
+    #[cfg(target_os = "macos")]
+    let _ = install;
+    // A setup failure aborts spawn before it starts: the shell maps the
+    // marker to a sandbox-apply failure, so the call never runs unconfined.
+    // A disabled sandbox skips the policy and runs as before; an enabled
+    // one that cannot apply fails instead of falling back to unconfined.
+    // The confined launch below owns the whole macOS spawn, so a test can
+    // drive the same helper with an intentionally invalid profile.
+    #[cfg(target_os = "macos")]
+    if sandbox_settings.enabled {
+        match super::sandbox::check_available(sandbox_settings, sandbox_workspace) {
+            Err(unavailable) => {
+                return Err(std::io::Error::other(SandboxApply {
+                    cause: unavailable.to_string(),
+                }));
+            }
+            Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
+                Ok(prepared) => {
+                    return execute_confined(
+                        program,
+                        command,
+                        workdir,
+                        timeout,
+                        clock,
+                        cancel,
+                        emit,
+                        policy,
+                        jobs,
+                        spill,
+                        matches,
+                        alive,
+                        ps,
+                        &prepared.profile,
+                        &prepared.bindings,
+                    );
+                }
+                Err(cause) => {
+                    return Err(std::io::Error::other(SandboxApply { cause }));
+                }
+            },
+        }
+    }
     let tty = policy == MovePolicy::Terminal;
     let mut cmd = Command::new(program);
     cmd.arg("-c").arg(command).current_dir(workdir);
@@ -226,12 +272,6 @@ fn execute_inner(
     if let Some(path) = matches {
         cmd.env(crate::search::matches::MATCHES_ENV, path);
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = (install, sandbox_settings, sandbox_workspace);
-    // A setup failure aborts spawn before it starts: the shell maps the
-    // marker to a sandbox-apply failure, so the call never runs unconfined.
-    // A disabled sandbox skips the policy and runs as before; an enabled
-    // one that cannot apply fails instead of falling back to unconfined.
     #[cfg(target_os = "linux")]
     let prepared = if sandbox_settings.enabled {
         match super::sandbox::check_available(sandbox_settings, sandbox_workspace) {
@@ -388,6 +428,249 @@ fn execute_inner(
             cap: OUTPUT_CAP,
             spill,
         }))),
+    }
+}
+
+/// Runs one confined call on macOS: the shell spawns wrapped through
+/// `sandbox-exec` with the prepared profile and bindings, its reader strips
+/// the confinement marker, and the drive hands off only after the marker.
+/// The same helper serves production and the rejected-profile test, which
+/// drives it with an intentionally invalid profile: the wrapper then exits
+/// without a marker, nothing runs, and the call fails closed with the
+/// wrapper's diagnostic. A spawn that never starts fails the same way.
+#[cfg(target_os = "macos")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "spawn, the deadline, the move policy, the spill, the sandbox profile and the injected probe are one call"
+)]
+pub(crate) fn execute_confined(
+    program: &Path,
+    command: &str,
+    workdir: &Path,
+    timeout: Duration,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
+    spill: Option<SpillConfig>,
+    matches: Option<&Path>,
+    alive: fn(u32) -> bool,
+    ps: &Path,
+    profile: &str,
+    bindings: &[(String, String)],
+) -> Result<Ran, std::io::Error> {
+    // The token is minted per call; the wrapper prints its marker before
+    // the user program runs, so the marker's bytes precede any user byte
+    // on the pipe and the exit status stays the command's.
+    let token = super::sandbox::marker_token();
+    let wrapped = super::sandbox::wrap_command(command, &token);
+    let watch = Arc::new(super::sandbox::MarkerWatch::new(&token));
+    let tty = policy == MovePolicy::Terminal;
+    // The profile and every dynamic path travel as `-p` and `-D`
+    // arguments: no path text is interpolated into the profile source.
+    let mut cmd = Command::new(super::sandbox::SANDBOX_EXEC);
+    cmd.arg("-p").arg(profile);
+    for (name, value) in bindings {
+        cmd.arg("-D").arg(format!("{name}={value}"));
+    }
+    cmd.arg("--")
+        .arg(program)
+        .arg("-c")
+        .arg(&wrapped)
+        .current_dir(workdir);
+    let mut input = None;
+    let mut errors = None;
+    let read: Box<dyn Read + Send> = if tty {
+        let terminal = tty::open()?;
+        cmd.stdin(Stdio::from(terminal.secondary.try_clone()?))
+            .stdout(Stdio::from(terminal.secondary.try_clone()?))
+            .stderr(Stdio::from(terminal.secondary));
+        input = Some(terminal.input);
+        Box::new(terminal.reader)
+    } else {
+        let (read, write) = std::io::pipe()?;
+        // A monitor's standard error is its own pipe, kept from its lines.
+        let write_err = if policy == MovePolicy::Monitor {
+            let (read_err, write_err) = std::io::pipe()?;
+            errors = Some(read_err);
+            write_err
+        } else {
+            write.try_clone()?
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::from(write))
+            .stderr(Stdio::from(write_err));
+        Box::new(read)
+    };
+    // The reader runs through the strip adapter fed by the call's marker
+    // watch: exactly the first marker line is suppressed, and user output
+    // stays byte-identical past it.
+    let read: Box<dyn Read + Send> =
+        Box::new(super::sandbox::StripMarker::new(read, Arc::clone(&watch)));
+    scrub_env(&mut cmd);
+    if let Some(path) = matches {
+        cmd.env(crate::search::matches::MATCHES_ENV, path);
+    }
+    support::group::detach(&mut cmd, tty);
+    let (child, listing) = match support::group::spawn(&mut cmd) {
+        Ok(started) => started,
+        Err(error) => {
+            drop(cmd);
+            return Err(std::io::Error::other(SandboxApply {
+                cause: format!("sandbox-exec could not start: {error}"),
+            }));
+        }
+    };
+    // The parent drops every write end, or every secondary, so EOF arrives
+    // when the last holder exits.
+    drop(cmd);
+
+    let pgid = child.id();
+    let shared = Arc::new(Shared::default());
+    {
+        let mut inner = lock(&shared.inner);
+        inner.input = input;
+        if errors.is_some() {
+            inner.lines = Some(Vec::new());
+            inner.errors = Some(Errors::default());
+        }
+        // Only a foreground call, a shell without jobs, or a resumed one
+        // spills: a move on the first pass keeps today's buffer
+        // (`docs/tools.md`, "Result and output").
+        if matches!(policy, MovePolicy::Foreground | MovePolicy::Stay) {
+            inner.spill_config = spill.clone();
+        }
+    }
+    let reader = Arc::clone(&shared);
+    thread::spawn(move || read_output(read, &reader));
+    if let Some(read_err) = errors {
+        let reader = Arc::clone(&shared);
+        thread::spawn(move || read_errors(read_err, &reader));
+    }
+    let waiter = Arc::clone(&shared);
+    thread::spawn(move || wait_child(child, &waiter));
+
+    // The clock watches the command. The call's cancel watches a bridge, so
+    // dropping the bridge after a move stops that cancel reaching the job.
+    let bridge = CancelBridge::arm(&shared);
+    clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
+    cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
+
+    // Registered before the drive loop parks and held until it returns, so
+    // `background` finds the call for as long as it waits in the foreground.
+    let registered = jobs
+        .filter(|_| policy == MovePolicy::Foreground)
+        .map(|jobs| {
+            MoveAsk::register(
+                jobs,
+                Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)),
+            )
+        });
+    let start = clock.now();
+    let mut progress = Run {
+        ask: registered.as_ref().map(|(ask, _)| Arc::clone(ask)),
+        phase: Phase::Running,
+        stop: None,
+        sent_signal: false,
+        seen_empty: false,
+        stream_carry: Vec::new(),
+        timeout_at: start.checked_add(timeout),
+        move_at: match policy {
+            MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
+            MovePolicy::Stay
+            | MovePolicy::Background
+            | MovePolicy::Terminal
+            | MovePolicy::Monitor => None,
+        },
+        members: None,
+        pgid,
+        listing: Some(Box::new(listing)),
+        shared,
+        job: None,
+        feed: None,
+    };
+    let ended = drive_confined(
+        &mut progress,
+        policy,
+        clock,
+        cancel,
+        emit,
+        alive,
+        ps,
+        Some(&watch),
+    );
+    // A call that left the foreground wait is no longer counted, whether it
+    // finished or moved: `background` must not find it during the open.
+    if let Some((ask, _)) = &registered {
+        ask.end();
+    }
+    // A call whose wrapper never showed its marker fails closed instead of
+    // ending normally: nothing proved the sandbox applied, so no end —
+    // finished or moved — may carry the call's output as confined.
+    if !watch.observed() {
+        let status = lock(&progress.shared.inner).status;
+        drop(bridge);
+        return Err(std::io::Error::other(SandboxApply {
+            cause: super::sandbox::apply_cause(&watch, status),
+        }));
+    }
+    match ended {
+        LoopEnd::Finished(finished) => {
+            drop(bridge);
+            Ok(Ran::Finished(finished))
+        }
+        LoopEnd::Move(reason) => Ok(Ran::Moved(Box::new(Moved {
+            reason,
+            bridge: Some(bridge),
+            progress,
+            cap: OUTPUT_CAP,
+            spill,
+        }))),
+    }
+}
+
+/// Drives a macOS call, gating every handoff on the confinement marker:
+/// no `MovePolicy` — Foreground's move-after threshold nor immediate
+/// Background, Terminal or Monitor handoff — moves a confined call before
+/// its marker is observed. Marker observed resumes normal move-policy
+/// behavior; the post-drive check fails the unobserved remainder closed.
+/// Unconfined calls drive exactly once, as before.
+#[cfg(target_os = "macos")]
+fn drive_confined(
+    progress: &mut Run,
+    policy: MovePolicy,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    alive: fn(u32) -> bool,
+    ps: &Path,
+    watch: Option<&super::sandbox::MarkerWatch>,
+) -> LoopEnd {
+    loop {
+        match pump_inner(progress, policy, clock, cancel, emit, alive, ps) {
+            LoopEnd::Finished(finished) => return LoopEnd::Finished(finished),
+            LoopEnd::Move(reason) => {
+                let gated = watch.is_some_and(|watch| !watch.observed());
+                if !gated {
+                    return LoopEnd::Move(reason);
+                }
+                // Park until the reader, the waiter, the clock or a cancel
+                // wakes the loop: the move-after threshold cannot fire while
+                // the gate holds, and the call's deadline still bounds the
+                // wait. No new timer: the existing deadline applies.
+                let seen = lock(&progress.shared.inner).seq;
+                super::drive::park(
+                    clock,
+                    &progress.shared,
+                    cancel,
+                    progress.timeout_at,
+                    true,
+                    true,
+                    seen,
+                );
+            }
+        }
     }
 }
 

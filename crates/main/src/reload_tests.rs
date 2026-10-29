@@ -191,6 +191,9 @@ impl Fixture {
         let declared = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
         let declared_now = declared.clone();
         let empty = empty_servers(&rig, &parts.prompt.clock);
+        // The startup latch mirrors the startup notice: the sandbox starts
+        // off here, so the first reload that breaks it reports once.
+        let sandbox_notice_reported = sandbox_notice_reported(&parts.sources, &parts.sandbox);
         let state = Arc::new(State {
             sources: parts.sources,
             template: parts.prompt,
@@ -228,6 +231,7 @@ impl Fixture {
             names: Mutex::new(Vec::new()),
             shell_read_only: parts.shell_read_only.clone(),
             sandbox: parts.sandbox.clone(),
+            sandbox_notice_reported,
             servers: Arc::new(empty.servers),
             artifacts: rig.workspace.join("artifacts"),
             images: Arc::new(DummyImages),
@@ -1440,6 +1444,10 @@ fn assemble(base: &State, started: mcp::Started) -> State {
         names: Mutex::new(Vec::new()),
         shell_read_only: base.shell_read_only.clone(),
         sandbox: base.sandbox.clone(),
+        sandbox_notice_reported: std::sync::atomic::AtomicBool::new(
+            base.sandbox_notice_reported
+                .load(std::sync::atomic::Ordering::SeqCst),
+        ),
         servers: Arc::new(started.servers),
         artifacts: base.artifacts.clone(),
         images: Arc::clone(&base.images),
@@ -2825,6 +2833,78 @@ fn install_replaces_the_shared_sandbox_settings() {
     );
     (prepared.installed)();
     assert!(fixture.state.sandbox.lock().unwrap().enabled);
+}
+
+#[test]
+fn a_reload_that_newly_breaks_the_sandbox_reports_once() {
+    fn sandbox_unavailable(prepared: &r#loop::ReloadPrepared) -> Vec<String> {
+        prepared
+            .notices
+            .iter()
+            .filter(|notice| notice.message.starts_with("sandbox unavailable"))
+            .map(|notice| notice.message.clone())
+            .collect()
+    }
+    let fixture = Fixture::new();
+    // The rig home sits under the temp directory, which is a writable
+    // root: point the sandbox's fiber home at the real home, as production
+    // does, so only the workspace deny trips the overlap rule.
+    let home_base = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    fixture.state.sandbox.lock().unwrap().fiber_home = home_base.join(format!(
+        "fiber-reload-sandbox-overlap-{}",
+        std::process::id()
+    ));
+    assert!(
+        !fixture.state.sandbox.lock().unwrap().enabled,
+        "the sandbox starts off"
+    );
+    // A deny inside the workspace disables the sandbox for the session, on
+    // every platform: overlap trips the shared rule, and elsewhere the
+    // platform reports unavailable.
+    let denied = fixture.rig.workspace.join("secret");
+    std::fs::write(&denied, "shh").unwrap();
+    let broken = |enabled: bool| {
+        json!({"model": "scripted/s.json", "sandbox": {
+            "enabled": enabled,
+            "deny_read": [denied.to_string_lossy()],
+        }})
+    };
+    fixture.rig.write_global(&broken(true));
+    let prepared = fixture.prepare();
+    let notices = sandbox_unavailable(&prepared);
+    assert_eq!(
+        notices.len(),
+        1,
+        "the first newly-unavailable reload reports once: {notices:?}"
+    );
+    assert!(
+        notices[0].contains(&*denied.to_string_lossy()),
+        "the notice names the path: {}",
+        notices[0]
+    );
+    (prepared.installed)();
+    // The settings still apply: only the duplicate notice is latched.
+    assert!(fixture.state.sandbox.lock().unwrap().enabled);
+    let again = fixture.prepare();
+    assert!(
+        sandbox_unavailable(&again).is_empty(),
+        "a second broken reload reports nothing"
+    );
+    (again.installed)();
+    // Toggling off and on again reports nothing either: the latch covers
+    // the session, not the configuration.
+    fixture.rig.write_global(&broken(false));
+    (fixture.prepare().installed)();
+    fixture.rig.write_global(&broken(true));
+    let toggled = fixture.prepare();
+    assert!(
+        sandbox_unavailable(&toggled).is_empty(),
+        "an off/on toggle reports nothing"
+    );
+    (toggled.installed)();
 }
 
 #[test]
