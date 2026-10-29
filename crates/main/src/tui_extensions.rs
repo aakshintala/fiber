@@ -953,6 +953,7 @@ fn session_value(card: &tui::ext::SessionCard<'_>) -> Value {
         "thinking",
         card.thinking.map(|thinking| json!(thinking)),
     );
+    out.insert("thinking_now".to_owned(), json!(card.thinking_now));
     insert_present(
         &mut out,
         "context",

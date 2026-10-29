@@ -2313,6 +2313,7 @@ fn session_card<'a>(
         branch,
         model,
         thinking: Some("high"),
+        thinking_now: false,
         context: Some(tui::ext::SessionContext {
             tokens: 268000,
             window: 1000000,
@@ -2662,6 +2663,28 @@ fn a_session_card_renderer_reads_a_costless_status_spend() {
     };
     // docs/tui.md:2923: a costless status spend still carries tokens.
     assert_eq!(lines[0][0].text, "nil:100:1.5"); // docs/tui.md:2923.
+}
+
+/// `session_value` carries whether the model is thinking now, always
+/// present and never null, so a replacement sees what the built-in
+/// draws (`docs/tui.md`, `card:session`).
+#[test]
+fn session_value_emits_thinking_now() {
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(Some(4.12));
+    let mut card = session_card(
+        Some("/w"),
+        Some(tui::ext::BranchName::Named("main")),
+        Some("m"),
+        Some(tui::ext::Spend::Status(&spend)),
+        None,
+        None,
+        &tools_down,
+    );
+    card.thinking_now = true;
+    assert_eq!(session_value(&card)["thinking_now"], json!(true));
+    card.thinking_now = false;
+    assert_eq!(session_value(&card)["thinking_now"], json!(false));
 }
 
 #[test]

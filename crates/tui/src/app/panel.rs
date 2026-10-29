@@ -89,6 +89,24 @@ pub(crate) struct Widget {
     pub(crate) lines: Vec<String>,
 }
 
+/// Whether the running model call is streaming thinking. Only a
+/// streamed `reasoning_delta` sets `Thinking`; the first text delta,
+/// the first `tool_call_arguments_delta`, or the call's end latches
+/// `Closed` for the rest of that call, and the next call starts back at
+/// `Idle` (`docs/tui.md`, "The panel").
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum ThinkingState {
+    /// No call is streaming thinking.
+    #[default]
+    Idle,
+    /// The running call is streaming thinking: the Session card draws
+    /// its dim `∴` after the thinking level.
+    Thinking,
+    /// This call stopped thinking: later reasoning deltas stay ignored
+    /// until the next call starts.
+    Closed,
+}
+
 /// The attached session's folded panel data.
 #[derive(Debug, Default)]
 pub(crate) struct PanelState {
@@ -98,6 +116,7 @@ pub(crate) struct PanelState {
     status: Option<SessionStatus>,
     model: Option<String>,
     thinking: Option<String>,
+    thinking_state: ThinkingState,
     /// The credential label the latest `preamble_built` or
     /// `model_changed` names: `None` before either, `Some(None)` when
     /// the provider takes no credential.
@@ -178,9 +197,32 @@ impl PanelState {
             "turn_completed" => {
                 self.turns = self.turns.saturating_add(1);
                 self.started_at = None;
+                // A settled turn ends any thinking it streamed: a
+                // thinking-only turn never draws a stale `∴`.
+                self.thinking_state = ThinkingState::Closed;
             }
             "assistant_message_started" => {
                 self.started_at = Some(envelope.ts);
+                // Every model call opens here, so the new call starts
+                // with no thinking streamed yet.
+                self.thinking_state = ThinkingState::Idle;
+            }
+            // Only streamed thinking sets the flag: a bare start marker
+            // also fires for replies with no streamed thought, and an
+            // ephemeral delta can pass unseen, in which case no glyph is
+            // promised (`docs/architecture.md`, "Streaming").
+            "reasoning_delta" => {
+                if self.thinking_state != ThinkingState::Closed {
+                    self.thinking_state = ThinkingState::Thinking;
+                }
+            }
+            // The first text, the first tool call the model starts
+            // emitting, or the call's end stops the thinking, whichever
+            // comes first; later deltas of this call stay ignored.
+            "assistant_message_delta"
+            | "tool_call_arguments_delta"
+            | "assistant_message_completed" => {
+                self.thinking_state = ThinkingState::Closed;
             }
             "usage_recorded" => {
                 if let Some(usage) = super::read!(envelope, UsageRecorded)
@@ -313,6 +355,14 @@ impl PanelState {
     /// names.
     pub(crate) fn thinking(&self) -> Option<&str> {
         self.thinking.as_deref()
+    }
+
+    /// Whether the running model call is streaming thinking now,
+    /// whatever level the latest preamble names: the Session card draws
+    /// its `∴` only when a level and this flag meet
+    /// (`docs/tui.md`, "The panel").
+    pub(crate) fn thinking_now(&self) -> bool {
+        self.thinking_state == ThinkingState::Thinking
     }
 
     /// The credential label the latest `preamble_built` or
@@ -474,6 +524,8 @@ impl PanelState {
         self.due = true;
         self.quota.attached();
         self.workspace = None;
+        // A new attachment has no running call, so no streamed thinking.
+        self.thinking_state = ThinkingState::Idle;
     }
 
     /// The branch the last query answered, if any.
