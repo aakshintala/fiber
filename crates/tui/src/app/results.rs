@@ -111,6 +111,25 @@ impl App {
         self.find.hide_results();
     }
 
+    /// Shifts the open results one wheel step: three displayed rows draw
+    /// one entry card, so the window moves one entry, keeping the
+    /// selected entry while it shows. `None` while the view is closed.
+    /// Never an Up/Down step: the keys keep their own path.
+    pub(in crate::app) fn results_wheel(&mut self, up: bool) -> Option<Effect> {
+        if !self.results_open() {
+            return None;
+        }
+        let height = self.results_height();
+        let len = self.find.flat().len();
+        if let Some(results) = self.find.results_mut() {
+            let (selected, top) =
+                crate::swapped::wheel_window(up, results.selected, results.top, len, height, 1);
+            results.selected = selected;
+            results.top = top;
+        }
+        Some(Effect::None)
+    }
+
     /// A key for the open results view, before the search bar in
     /// [`App::route_key`], so Enter jumps instead of stepping and ↑/↓ move
     /// the selection instead of the current match (`docs/tui.md`,

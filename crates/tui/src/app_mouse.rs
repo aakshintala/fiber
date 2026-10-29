@@ -16,9 +16,9 @@ impl App {
     /// Handles one mouse report against the last frame's `targets`:
     /// every left press clears "Copied" and ends a finished attention
     /// title, then the press feeds the drag, the wheel, the selection
-    /// and the pointer in order; a click's effect wins over the
-    /// selection's (`docs/tui.md`, "Mouse and hover", "Getting the
-    /// person's attention").
+    /// and the pointer in order; a click's effect wins, then the wheel's,
+    /// then the selection's (`docs/tui.md`, "Mouse and hover", "Getting
+    /// the person's attention").
     pub(crate) fn on_mouse(
         &mut self,
         mouse: &Mouse,
@@ -39,15 +39,17 @@ impl App {
             }
         }
         self.on_drag(mouse);
-        self.on_wheel(mouse);
+        let wheel = self.on_wheel(mouse);
         let selected = self.on_select(mouse, targets);
         let clicked = pointer.on_mouse(mouse, targets, hover);
-        // A click's effect, else the selection's.
+        // A click's effect wins, then the wheel's, then the selection's.
         let effect = clicked.map_or(Effect::None, |target| self.on_click(target));
-        if effect == Effect::None {
-            selected
-        } else {
+        if effect != Effect::None {
             effect
+        } else if wheel != Effect::None {
+            wheel
+        } else {
+            selected
         }
     }
 
@@ -224,18 +226,21 @@ impl App {
     }
 
     /// The mouse wheel scrolls what it is over (`docs/tui.md`, "Turns",
-    /// "The panel", "The rail", "Layout"): over the panel it scrolls only
-    /// the panel, or over the Delegates card only that card; over the rail,
-    /// only the rail; over the conversation's visible rows it scrolls the
-    /// conversation by [`WHEEL_ROWS`] rows, but only while a session is on
-    /// screen and no swapped view covers the conversation. Over the header
-    /// or below the conversation it scrolls the conversation not at all.
-    pub(crate) fn on_wheel(&mut self, mouse: &Mouse) {
+    /// "The panel", "The rail", "Layout", "Swapped views"): over the panel
+    /// it scrolls only the panel, or over the Delegates card only that
+    /// card; over the rail, only the rail; over a swapped view's rows it
+    /// shifts that view's visible rows three a step, never the hidden
+    /// conversation under it. Over the conversation's visible rows with
+    /// no view over them it scrolls the conversation by [`WHEEL_ROWS`]
+    /// rows, but only while a session is on screen. Over the header or
+    /// below the conversation it scrolls not at all. The one send a
+    /// paged view asks for comes back for the loop to send.
+    pub(crate) fn on_wheel(&mut self, mouse: &Mouse) -> Effect {
         let up = match mouse.kind {
             MouseKind::WheelUp => true,
             MouseKind::WheelDown => false,
             MouseKind::Press(_) | MouseKind::Release | MouseKind::Motion | MouseKind::Drag(_) => {
-                return;
+                return Effect::None;
             }
         };
         let at = Position::new(mouse.col, mouse.row);
@@ -245,19 +250,19 @@ impl App {
         // conversation, home and the rail.
         if order.contains(&Surface::Report) {
             self.scroll_report_rows(!up, WHEEL_ROWS);
-            return;
+            return Effect::None;
         }
         // The reviewer setup takes the wheel and does nothing with it: the
         // conversation under the panel stays where it is.
         if order.contains(&Surface::ReviewerSetup) {
-            return;
+            return Effect::None;
         }
         // The hooks offer consumes the wheel while it is on top: its
         // names query draws no frame, so the frame-only guard below
         // would let the wheel reach the home list, the panel or the
         // rail.
         if self.top_surface() == Surface::HooksOffer {
-            return;
+            return Effect::None;
         }
         // The quit, hooks offer and clear questions and the notice
         // overlay have nothing to scroll, and their frames cover the
@@ -272,7 +277,7 @@ impl App {
         .into_iter()
         .any(|frame| order.contains(&frame) && crate::view::frame_of(self, frame).contains(at))
         {
-            return;
+            return Effect::None;
         }
         if self
             .chrome()
@@ -281,8 +286,10 @@ impl App {
             .is_some_and(|panel| panel.contains(at))
         {
             self.wheel_panel(mouse.row, up);
+        } else if let Some(effect) = self.wheel_swapped(up, at) {
+            return effect;
         } else if self.session().is_some()
-            && !covered(&[Surface::Keymap, Surface::Offer, Surface::Results])
+            && !covered(&[Surface::Keymap])
             && self.over_conversation(at)
         {
             self.scroll_conversation(up);
@@ -297,37 +304,142 @@ impl App {
         if over_rail {
             self.scroll_rail(up);
         }
+        Effect::None
+    }
+
+    /// Routes a wheel to the top surface actually drawn at `at`: a swapped
+    /// view's rows shift that view's visible rows three a step, Search
+    /// and Completion swallow only inside their drawn slabs, the approval
+    /// panel swallows inside its drawn rectangle, and Results and Offer
+    /// take the wheel on their drawn rows. The wheel never reaches a
+    /// surface not drawn at that cell, and never the hidden conversation
+    /// under a covering view (`docs/tui.md`, "Swapped views"). `None`
+    /// when no swapped, item, Offer or Results surface covers `at`, so
+    /// the existing chain continues; `Some(Effect::None)` when the top
+    /// drawn surface deliberately swallows the wheel.
+    fn wheel_swapped(&mut self, up: bool, at: Position) -> Option<Effect> {
+        // The rail keeps its owner ahead of every swapped route.
+        if self
+            .chrome()
+            .regions()
+            .rail
+            .is_some_and(|rail| rail.contains(at))
+        {
+            return None;
+        }
+        // The approval panel owns its full drawn rectangle: the wheel
+        // over it changes no choice and reaches neither the Offer rows
+        // below it nor the conversation.
+        if self
+            .frames()
+            .slab_of(Surface::Panel)
+            .is_some_and(|slab| slab.contains(at))
+        {
+            return Some(Effect::None);
+        }
+        // Search and Completion draw after swapped views, so their slabs
+        // own the wheel before anything underneath them.
+        if self
+            .frames()
+            .slab_of(Surface::Search)
+            .is_some_and(|slab| slab.contains(at))
+            || self
+                .frames()
+                .slab_of(Surface::Completion)
+                .is_some_and(|slab| slab.contains(at))
+        {
+            return Some(Effect::None);
+        }
+        // The key map replaces the swapped view over the full content
+        // area and swallows there: the whole area on home, the
+        // conversation column attached. Its noted slab lies inside the
+        // conversation it is drawn in, so testing the slab adds only
+        // equivalent mutants on equality (removed).
+        if self.keymap_top().is_some() {
+            // Each arm swallows alike, so no compound condition remains
+            // to mutate: on home the whole screen is the map's, attached
+            // its conversation column is (removed: the `home ||`
+            // disjunction's arms share one outcome).
+            if self.home.is_some() {
+                return Some(Effect::None);
+            }
+            if self.over_conversation(at) {
+                return Some(Effect::None);
+            }
+            return None;
+        }
+        // Attached, a swapped view takes the conversation area; on home
+        // it takes the whole screen. Home is set with no session, even
+        // while a covering surface makes `on_home` false.
+        let home = self.home.is_some() && self.session().is_none();
+        let panel_covers_home = home && self.frames().slab_of(Surface::Panel).is_some();
+        let over_swapped = if panel_covers_home {
+            self.over_conversation(at)
+        } else {
+            home || self.over_conversation(at)
+        };
+        if self.swapped_view_open() && over_swapped {
+            // The notice overlay's slab wins over the `/keys` screen:
+            // the wheel over it is swallowed, never the list under it.
+            if self.keys_screen_open()
+                && let Some(slab) = self.frames().slab_of(Surface::Notice)
+                && slab.contains(at)
+            {
+                return Some(Effect::None);
+            }
+            let effect = if self.model_picker_open() {
+                self.model_picker_wheel(up)
+            } else if self.config_view_open() {
+                self.config_view_wheel(up)?
+            } else if self.keys_screen_open() {
+                self.keys_screen_wheel(up)
+            } else if self.session_view_open() {
+                self.session_view_wheel(up)?
+            } else {
+                return None;
+            };
+            self.settle();
+            return Some(effect);
+        }
+        // The item view lies below swapped views in the draw stack. Its
+        // non-scrolling header swallows the wheel; a Fiber transcript
+        // scrolls only over its body. Other item states swallow it too.
+        if self.item_open() {
+            if !self.over_conversation(at) {
+                return None;
+            }
+            let content_top = self.chrome().layout().map_or(0, |layout| layout.column.y);
+            let header_rows =
+                crate::view::item::ITEM_HEADER_ROWS.min(self.conversation_area_height());
+            if usize::from(at.y.saturating_sub(content_top)) < header_rows {
+                return Some(Effect::None);
+            }
+            if self.item_transcript() {
+                self.scroll_conversation(up);
+            }
+            return Some(Effect::None);
+        }
+        // Offer is drawn before Results and therefore owns the wheel
+        // when both states are open; otherwise Results takes its rows.
+        if self.offer_open() && self.over_conversation(at) {
+            return self.offer_wheel(up);
+        }
+        if self.results_open() && self.over_conversation(at) {
+            return self.results_wheel(up);
+        }
+        None
     }
 
     /// Whether `at` is over the conversation's visible rows: the
     /// conversation column's columns, from its top for the conversation's
     /// height, the same rows the draw keeps for the conversation
-    /// (`view.rs`, `render`).
+    /// (`view.rs`, `render`). An attached item's header rows count: the
+    /// wheel over them is the item's, never the conversation's.
     fn over_conversation(&self, at: Position) -> bool {
-        let height = self.conversation_height();
+        let height = self.conversation_area_height();
         let (left, width, top) = match self.chrome().layout() {
-            Some(layout) => {
-                // The item view's header takes the conversation's top
-                // rows, so the wheel over it scrolls nothing.
-                let item = if self.item_open() {
-                    u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX)
-                } else {
-                    0
-                };
-                (
-                    layout.column.x,
-                    layout.column.width,
-                    layout.column.y.saturating_add(item),
-                )
-            }
-            None => {
-                let item = if self.item_open() {
-                    u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX)
-                } else {
-                    0
-                };
-                (0, self.screen.width(), item)
-            }
+            Some(layout) => (layout.column.x, layout.column.width, layout.column.y),
+            None => (0, self.screen.width(), 0),
         };
         let in_column = usize::from(at.x) >= usize::from(left)
             && usize::from(at.x).saturating_sub(usize::from(left)) < usize::from(width);

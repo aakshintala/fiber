@@ -414,6 +414,28 @@ impl App {
         Some(Effect::None)
     }
 
+    /// Shifts the open rewind view's list one wheel step: three rows,
+    /// clamped at either end, keeping the cursor while it shows. A
+    /// moved cursor follows the content rows as the keys do. Never an
+    /// Up/Down step: the keys keep their own path.
+    pub(in crate::app) fn rewind_wheel(&mut self, up: bool) -> Effect {
+        let Some((rows, height)) = self.rewind_metrics() else {
+            return Effect::None;
+        };
+        let (before, after) = match self.rewind_list_mut() {
+            Some(list) => {
+                let before = list.selected();
+                list.wheel(up, rows, height, 3);
+                (before, list.selected())
+            }
+            None => return Effect::None,
+        };
+        if after != before {
+            self.rewind.follow_selection(after);
+        }
+        Effect::None
+    }
+
     /// Handles the open rewind view's clicks: closing, selecting,
     /// toggling the checkbox, and sending from the Rewind row.
     pub(in crate::app) fn rewind_click(&mut self, spot: Spot) -> Effect {

@@ -7,10 +7,13 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use std::path::PathBuf;
 
-use super::{body, id_spans, model_fit, page_step, window};
+use super::{
+    body, display_rows, focus_window_top, id_spans, keep_focus_visible_top, model_fit, page_step,
+    picker_wheel_window, window,
+};
 use crate::app::{App, Effect};
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry, Price};
-use crate::keys::{Edit, Key};
+use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
 use crate::theme::Role;
@@ -932,6 +935,90 @@ fn a_session_only_model_takes_three_rows_in_the_window() {
     assert_eq!(window(&view, 6), (0, 2));
 }
 
+/// The wheel moves the picker top by three body rows (`docs/tui.md:576`).
+#[test]
+fn wheel_moves_the_picker_top_by_three_body_rows() {
+    let mut app = attached(100, 18);
+    let mut catalogue = catalogue();
+    catalogue.models = (0..20)
+        .map(|at| ModelEntry {
+            reference: format!("acme/m{at}"),
+            provider: "acme".to_owned(),
+            id: format!("m{at}"),
+            levels: vec!["low".to_owned()],
+            default_level: Some("low".to_owned()),
+            configured: None,
+            roles: Vec::new(),
+            name: None,
+            price: None,
+        })
+        .collect();
+    app.on_models(Ok(catalogue.clone()));
+    open(&mut app);
+    assert_eq!(app.model_picker_view().unwrap().top, 0);
+
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelDown,
+        col: 50,
+        row: 8,
+    });
+
+    assert_eq!(app.model_picker_view().unwrap().top, 3);
+
+    // The renderer and top clamp keep the first row of a focused
+    // multi-row model visible when it touches either viewport edge.
+    let mut view = app.model_picker_view().unwrap();
+    let height = u16::try_from(app.conversation_area_height())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(1);
+    let fit = model_fit(&view, height);
+    assert!(fit > 0);
+    let display = display_rows(&view, false);
+    let first = view.sections[0].models.first().expect("first model").at;
+    let first_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(first))
+        .expect("first model row");
+    view.focused = Some(first);
+    view.top = first_row;
+    assert_eq!(keep_focus_visible_top(&view, height), first_row);
+
+    let last = view.sections[0].models.last().expect("last model").at;
+    let last_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(last))
+        .expect("last model row");
+    view.focused = Some(last);
+    view.top = last_row + 1 - fit;
+    assert_eq!(keep_focus_visible_top(&view, height), view.top);
+
+    // With more body rows, navigation and a catalogue refresh retain a
+    // still-valid wheel top; changing the query resets to the focus window.
+    app.set_size(100, 24);
+    assert_eq!(
+        app.on_key(Key::Down, fakes::clock::FakeClock::new().now()),
+        Effect::None
+    );
+    assert_eq!(app.model_picker_view().unwrap().top, 3);
+    app.on_models(Ok(catalogue));
+    assert_eq!(app.model_picker_view().unwrap().top, 3);
+    assert_eq!(
+        app.on_key(Key::Char('m'), fakes::clock::FakeClock::new().now()),
+        Effect::None
+    );
+    let view = app.model_picker_view().unwrap();
+    let height = u16::try_from(app.conversation_area_height())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(1);
+    assert_eq!(
+        view.top,
+        focus_window_top(&view, height),
+        "filter changes restore the focus-derived window"
+    );
+}
+
 #[test]
 fn a_refreshing_empty_filter_reserves_its_status_and_message_rows() {
     let mut app = choosing(160, 48);
@@ -1341,6 +1428,45 @@ fn count_rows_scroll_with_their_sections_window() {
     assert_eq!(body(&view, 160, 48).len(), 2 + 15);
 }
 
+/// Wheel offsets count headings and blank rows as displayed rows (`docs/tui.md:576`).
+#[test]
+fn wheel_offsets_count_headings_and_blank_rows_as_displayed_rows() {
+    let mut app = choosing_left_out(160, 18);
+    let view = app.model_picker_view().expect("open");
+    let height = u16::try_from(app.conversation_area_height())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(1);
+    let display = display_rows(&view, false);
+    assert!(
+        display.rows[1]
+            .row
+            .spans
+            .iter()
+            .any(|span| span.content.contains("api_key"))
+    );
+    // The wheel advances three displayed rows per step (`docs/tui.md:576`);
+    // headings, counts and models all count as displayed rows here.
+    let (top, _) = picker_wheel_window(&view, false, height);
+    assert_eq!(
+        top, 3,
+        "heading, count and model rows each consume an offset"
+    );
+    app.model_picker_wheel(false);
+    assert_eq!(app.model_picker_view().unwrap().top, top);
+}
+
+#[test]
+fn a_wheel_with_no_focus_keeps_focus_absent() {
+    let mut app = attached(80, 18);
+    app.on_models(Ok(Catalogue::default()));
+    open(&mut app);
+    assert_eq!(app.model_picker_view().unwrap().focused, None);
+    app.model_picker_wheel(false);
+    let view = app.model_picker_view().expect("picker stays open");
+    assert_eq!(view.focused, None);
+    assert_eq!(view.top, 0);
+}
+
 #[test]
 fn an_all_left_out_section_stays_visible_in_a_short_viewport() {
     // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
@@ -1614,4 +1740,207 @@ fn chips_need_a_spaceless_middle() {
     assert!(!super::is_chip("high"));
     assert!(!super::is_chip("["));
     assert!(!super::is_chip("]"));
+}
+
+/// A headed model never trims with its heading, while a headed count does
+/// (`docs/tui.md:576`).
+#[test]
+fn trim_count_only_for_headed_counts() {
+    let app = choosing(160, 48);
+    let view = app.model_picker_view().expect("open");
+    let display = display_rows(&view, false);
+    let mut headings = 0;
+    for row in &display.rows {
+        let is_heading = row.focus.is_none()
+            && row.row.spans.first().is_some_and(|span| {
+                span.content.as_ref() == "acme" || span.content.as_ref() == "zeta"
+            });
+        if is_heading {
+            headings += 1;
+            assert!(
+                !row.trim_count,
+                "a headed model never trims with its heading"
+            );
+        }
+    }
+    assert!(headings > 0, "the catalogue has provider headings");
+    let app = choosing_left_out(160, 48);
+    let view = app.model_picker_view().expect("open");
+    let display = display_rows(&view, false);
+    assert!(
+        display.rows.iter().any(|row| row.trim_count),
+        "a headed count trims"
+    );
+}
+
+/// A far focus resets to a nonzero window offset (`docs/tui.md:576`).
+#[test]
+fn focus_window_top_is_nonzero_for_a_far_focus() {
+    let mut app = choosing(160, 10);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..40 {
+        app.on_key(Key::Down, now);
+    }
+    let view = app.model_picker_view().expect("open");
+    assert!(view.focused.is_some(), "a far focus is set");
+    let top = focus_window_top(&view, 10);
+    assert_ne!(top, 0, "a far focus resets past the start");
+}
+
+/// An up wheel that lands the focus exactly on the new exclusive bottom
+/// keeps it offscreen and clamps to the nearest visible row, never the
+/// row at the edge (`docs/tui.md:576`).
+#[test]
+fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
+    let mut app = attached(160, 11);
+    let mut catalogue = catalogue();
+    catalogue.models = (0..20)
+        .map(|at| ModelEntry {
+            reference: format!("acme/m{at}"),
+            provider: "acme".to_owned(),
+            id: format!("m{at}"),
+            levels: vec!["low".to_owned()],
+            default_level: Some("low".to_owned()),
+            configured: None,
+            roles: Vec::new(),
+            name: None,
+            price: None,
+        })
+        .collect();
+    app.on_models(Ok(catalogue));
+    open(&mut app);
+    let height = 11u16;
+    let view = app.model_picker_view().expect("open");
+    let fit = model_fit(&view, height);
+    assert_eq!(fit, 3, "height 11 fits exactly three body rows");
+    let display = display_rows(&view, false);
+    let focusables: Vec<usize> = display
+        .rows
+        .iter()
+        .enumerate()
+        .filter_map(|(at, row)| row.focus.map(|_| at))
+        .collect();
+    // Focus a row with room above it, then park the window far below so
+    // the focus sits above: one up step lands it exactly on the new end.
+    let target = focusables[2];
+    assert!(target >= 3, "the focused row has room above it");
+    let mut view = app.model_picker_view().expect("open");
+    view.focused = display.rows[target].focus;
+    view.top = display.rows.len();
+    let effective = keep_focus_visible_top(&view, height);
+    assert_eq!(effective, target, "an above focus pulls the window to it");
+    let (top, focus) = picker_wheel_window(&view, true, height);
+    assert_eq!(top, target.saturating_sub(3), "one step up moves three");
+    let end = top.saturating_add(fit);
+    let current = display
+        .rows
+        .iter()
+        .position(|row| row.focus == view.focused);
+    assert_eq!(current, Some(end), "the focus sits exactly on the new end");
+    let nearest = focus.expect("an offscreen focus clamps to a visible row");
+    assert_ne!(
+        nearest,
+        view.focused.expect("focused"),
+        "the edge row stays outside"
+    );
+    let nearest_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(nearest))
+        .expect("nearest is displayed");
+    assert!(
+        nearest_row >= top && nearest_row < end,
+        "the clamp lands inside the new window"
+    );
+    // A focus strictly below the new end also clamps inside, never to the
+    // row past the edge.
+    let mut below = app.model_picker_view().expect("open");
+    let last = *focusables.last().expect("a last focusable row");
+    below.focused = display.rows[last].focus;
+    below.top = 0;
+    let _effective = keep_focus_visible_top(&below, height);
+    let (top, focus) = picker_wheel_window(&below, true, height);
+    let end = top.saturating_add(fit);
+    let current = display
+        .rows
+        .iter()
+        .position(|row| row.focus == below.focused);
+    assert!(
+        current.is_some_and(|row| row > end),
+        "the focus sits strictly below the new end"
+    );
+    let nearest = focus.expect("a below focus clamps to a visible row");
+    let nearest_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(nearest))
+        .expect("nearest is displayed");
+    assert!(
+        nearest_row >= top && nearest_row < end,
+        "the below clamp lands inside the new window"
+    );
+}
+
+/// An up wheel that resets the window to the start while the focus sits
+/// just past the new end clamps to the nearest visible row: row zero can
+/// never stand in for the focus, since only an exact focus match counts
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
+    let mut app = attached(160, 11);
+    let mut catalogue = catalogue();
+    catalogue.models = (0..20)
+        .map(|at| ModelEntry {
+            reference: format!("acme/m{at}"),
+            provider: "acme".to_owned(),
+            id: format!("m{at}"),
+            levels: vec!["low".to_owned()],
+            default_level: Some("low".to_owned()),
+            configured: None,
+            roles: Vec::new(),
+            name: None,
+            price: None,
+        })
+        .collect();
+    app.on_models(Ok(catalogue));
+    open(&mut app);
+    let height = 11u16;
+    let view = app.model_picker_view().expect("open");
+    let fit = model_fit(&view, height);
+    assert_eq!(fit, 3, "height 11 fits exactly three body rows");
+    let display = display_rows(&view, false);
+    let focusables: Vec<usize> = display
+        .rows
+        .iter()
+        .enumerate()
+        .filter_map(|(at, row)| row.focus.map(|_| at))
+        .collect();
+    // Focus display row 5 with the stored window at 3: the focus-derived
+    // start stays 3, so one up step resets the window to zero with the
+    // focus just past its end. Rows 0 and 2 are blanks no model focuses.
+    let target = focusables[2];
+    assert_eq!(target, 5, "the third focusable row sits at display row 5");
+    let mut view = app.model_picker_view().expect("open");
+    view.focused = display.rows[target].focus;
+    view.top = 3;
+    let effective = keep_focus_visible_top(&view, height);
+    assert_eq!(effective, 3, "the stored window already shows the focus");
+    let (top, focus) = picker_wheel_window(&view, true, height);
+    assert_eq!(top, 0, "one step up resets the window to zero");
+    let end = top.saturating_add(fit);
+    // Row zero never matches the focus, so it must not count as found:
+    // the clamp is the nearest visible focusable row, row 1.
+    assert_eq!(
+        focus, display.rows[1].focus,
+        "the clamp passes row zero for the nearest visible row"
+    );
+    let nearest_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == focus)
+        .expect("nearest is displayed");
+    assert!(
+        nearest_row >= top && nearest_row < end,
+        "the clamp lands inside the new window"
+    );
 }

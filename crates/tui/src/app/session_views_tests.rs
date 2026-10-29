@@ -5,11 +5,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::panel::Spot as PanelSpot;
-use crate::app::testkit::{SESSION, attached, now, sent, session_line, session_line_in_turn};
+use crate::app::testkit::{
+    SESSION, attached, long_turns, now, sent, session_line, session_line_in_turn,
+};
 use crate::app::{App, Effect, SessionView};
 use crate::changed_files_view::{diff_command, ranked};
 use crate::home::Launch;
-use crate::keys::{Edit, Key};
+use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot as ViewSpot;
@@ -1677,4 +1679,558 @@ fn a_matching_hooks_rejection_drops_the_query_and_a_mismatched_one_keeps_it() {
     let shown = screen(&app, 80, 24).0;
     assert!(shown.contains("ext"), "{shown}");
     assert!(shown.contains("before_tool"), "{shown}");
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over the conversation column the views take.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The wheel over the usage view shifts its visible rows three, never
+/// the conversation under it (`docs/tui.md`, "Swapped views"; see
+/// #3578). The selection sits mid-window after three Downs, so the
+/// window moves under it.
+#[test]
+fn wheel_over_usage_scrolls_the_list_not_the_conversation() {
+    let mut app = attached(80, 24);
+    long_turns(&mut app, &mut 0, 24);
+    for at in 0..30 {
+        app.on_line(usage_line(
+            SESSION,
+            &format!("g{at}"),
+            &format!("model/{at:02}"),
+            None,
+        ));
+    }
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_usage(&mut app);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let frame = app.session_view_screen(0).expect("usage frame");
+    assert!(frame.rows.len() >= 4, "the list fits three steps");
+    assert_eq!(frame.list.selected(), 3);
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(0).expect("usage frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over the quota view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_quota_scrolls_the_list_not_the_conversation() {
+    let mut app = attached(80, 24);
+    long_turns(&mut app, &mut 0, 24);
+    // Scroll first, while the wheel still reaches the conversation: the
+    // slash opens the view, which covers it.
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.outbox.link = crate::app::Link::Up;
+    let lines = sent(slash_quota(&mut app));
+    let id = lines[0]["id"].as_str().unwrap_or_default();
+    let windows = |prefix: &str| {
+        (1..=14)
+            .map(|at| json!({"name": format!("{prefix}{at}"), "percent_used": 10.0 * (at % 9) as f64}))
+            .collect::<Vec<_>>()
+    };
+    app.on_line(session_line(
+        SESSION,
+        "command_accepted",
+        json!({"command_id": id, "result": {"quota": [
+            {"provider": "codex", "credential": "default", "windows": windows("w")},
+            {"provider": "other", "credential": "c", "windows": windows("v")},
+        ], "notice_at": 80.0}}),
+        Some("a_1"),
+    ));
+    assert_eq!(app.open_session_view(SessionView::Quota), Effect::None);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let frame = app.session_view_screen(80).expect("quota frame");
+    assert!(frame.rows.len() >= 4, "the list fits three steps");
+    assert_eq!(frame.list.selected(), 3);
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(80).expect("quota frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over the context view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_context_scrolls_the_list_not_the_conversation() {
+    // A short screen: the fixed context rows outnumber the shown rows,
+    // so the window has room to move three.
+    let mut app = attached(80, 16);
+    long_turns(&mut app, &mut 0, 16);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    app.on_line(context_request_started());
+    app.on_line(context_usage(None));
+    for at in 0..5 {
+        for line in context_tool(&format!("read-{at}"), "12345") {
+            app.on_line(line);
+        }
+    }
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_context(&mut app);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let frame = app.session_view_screen(0).expect("context frame");
+    assert!(frame.rows.len() >= 4, "the list fits three steps");
+    assert_eq!(frame.list.selected(), 3);
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(0).expect("context frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over the status view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_status_scrolls_the_list_not_the_conversation() {
+    // A short screen: the fixed status rows outnumber the shown rows,
+    // so the window has room to move three.
+    let mut app = attached(80, 12);
+    long_turns(&mut app, &mut 0, 12);
+    app.on_line(session_line(
+        SESSION,
+        "session_status",
+        json!({
+            "name": "other", "workspace": "/w", "project": "-w", "state": "streaming",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2}, "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+        Some("a_1"),
+    ));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert_eq!(app.open_session_view(SessionView::Status), Effect::None);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let frame = app.session_view_screen(0).expect("status frame");
+    assert!(frame.rows.len() >= 4, "the list fits three steps");
+    assert_eq!(frame.list.selected(), 3);
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(0).expect("status frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over the changed-files view scrolls the file list, never
+/// the conversation under it (`docs/tui.md`, "Swapped views"; see
+/// #3578).
+#[test]
+fn wheel_over_files_scrolls_the_list_not_the_conversation() {
+    let mut app = files_attached(160, 40);
+    long_turns(&mut app, &mut 0, 24);
+    many_changes(&mut app, 40);
+    // Column 30 clears the rail at this width; the view region is the
+    // conversation column.
+    app.on_wheel(&wheel(30, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_files_from_totals(&mut app, 160, 40);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let frame = app.session_view_screen(0).expect("changed-files frame");
+    assert!(frame.rows.len() >= 4, "the list fits three steps");
+    assert_eq!(frame.list.selected(), 3);
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(30, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(0).expect("changed-files frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over an open diff scrolls the diff, never the conversation
+/// under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_files_diff_scrolls_the_diff_not_the_conversation() {
+    let mut app = files_attached(120, 35);
+    long_turns(&mut app, &mut 0, 24);
+    many_changes(&mut app, 2);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_files_from_totals(&mut app, 120, 35);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    let request = command(app.on_key(Key::Enter, now()));
+    assert_eq!(request["args"]["command"], diff_command("src/file-1.rs"));
+    let text = (1..=60)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        &text,
+    ));
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let frame = app.session_view_screen(0).expect("diff frame");
+    assert!(frame.rows.len() >= 4, "the diff fits three steps");
+    assert_eq!(frame.list.selected(), 3);
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(0).expect("diff frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// An attached app with release notes holding `bullets` bullets under
+/// version 9.9.9.
+fn notes_attached(bullets: &[&str]) -> App {
+    let mut notes = String::from("## 9.9.9\n");
+    for bullet in bullets {
+        notes.push_str(bullet);
+        notes.push('\n');
+    }
+    // The launch owns the only 'static store here: leaking keeps the
+    // reference the view reads.
+    let notes: &'static str = Box::leak(notes.into_boxed_str());
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        version: "9.9.9".to_owned(),
+        release_notes: notes,
+        panel_cards: vec!["session".to_owned()],
+        ..Default::default()
+    });
+    app.attach(SessionId(SESSION.to_owned()));
+    app.set_size(80, 24);
+    app
+}
+
+/// The wheel over the release-notes view scrolls the view's list, never
+/// the conversation under it (`docs/tui.md`, "Swapped views"; see
+/// #3578).
+#[test]
+fn wheel_over_release_notes_scrolls_the_list_not_the_conversation() {
+    let mut app = notes_attached(&[
+        "- one",
+        "- two",
+        "- three",
+        "- four",
+        "- five",
+        "- six",
+        "- seven",
+        "- eight",
+        "- nine",
+        "- ten",
+        "- eleven",
+        "- twelve",
+        "- thirteen",
+        "- fourteen",
+        "- fifteen",
+        "- sixteen",
+        "- seventeen",
+        "- eighteen",
+        "- nineteen",
+        "- twenty",
+        "- twenty-one",
+        "- twenty-two",
+        "- twenty-three",
+        "- twenty-four",
+        "- twenty-five",
+        "- twenty-six",
+        "- twenty-seven",
+        "- twenty-eight",
+        "- twenty-nine",
+        "- thirty",
+        "- thirty-one",
+        "- thirty-two",
+    ]);
+    long_turns(&mut app, &mut 0, 24);
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert_eq!(
+        app.open_session_view(SessionView::ReleaseNotes),
+        Effect::None
+    );
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let frame = app.session_view_screen(80).expect("notes frame");
+    assert!(frame.rows.len() >= 4, "the list fits three steps");
+    assert_eq!(frame.list.selected(), 3);
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(80).expect("notes frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        frame.list.selected(),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over the delegates view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_delegates_scrolls_the_list_not_the_conversation() {
+    let mut app = attached(80, 24);
+    long_turns(&mut app, &mut 0, 24);
+    for n in 1..=26 {
+        start_delegate(&mut app, &format!("j_{n}"), "s_dddddddddddddddd");
+    }
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_delegates(&mut app);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    assert_eq!(selected(&app), 3);
+    let shown_top = app.session_view_screen(0).expect("a list frame").list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.session_view_screen(0).expect("a list frame").list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        selected(&app),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over the jobs view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_jobs_scrolls_the_list_not_the_conversation() {
+    let mut app = attached(80, 24);
+    long_turns(&mut app, &mut 0, 24);
+    for n in 1..=26 {
+        start_job(&mut app, &format!("j_{n}"));
+    }
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_jobs(&mut app);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    assert_eq!(selected(&app), 3);
+    let shown_top = app.session_view_screen(0).expect("a list frame").list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.session_view_screen(0).expect("a list frame").list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        selected(&app),
+        3,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over the all-delegates view scrolls the view's list, never
+/// the conversation under it (`docs/tui.md`, "Swapped views"; see
+/// #3578).
+#[test]
+fn wheel_over_all_delegates_scrolls_the_list_not_the_conversation() {
+    let mut app = attached(80, 24);
+    long_turns(&mut app, &mut 0, 24);
+    for n in 1..=26 {
+        start_delegate(&mut app, &format!("j_{n}"), "s_dddddddddddddddd");
+    }
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_all_delegates(&mut app);
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let before = selected(&app);
+    assert_eq!(before, 3);
+    let frame = app.session_view_screen(0).expect("delegates frame");
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(0).expect("delegates frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        selected(&app),
+        before,
+        "a selection still on screen stays where it was"
+    );
+}
+
+/// The wheel over the hooks view scrolls the view's list, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_hooks_scrolls_the_list_not_the_conversation() {
+    let mut app = attached(80, 24);
+    long_turns(&mut app, &mut 0, 24);
+    // Scroll first, while the wheel still reaches the conversation: the
+    // view covers it once open.
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    app.outbox.link = crate::app::Link::Up;
+    let query = open_hooks(&mut app);
+    let id = query["id"].as_str().unwrap_or_else(|| panic!("a query id"));
+    app.on_line(accepted_hooks(
+        id,
+        json!([
+            {"kind": "hook", "extension": "a", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "hook", "extension": "b", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "hook", "extension": "c", "point": "after_tool", "on_failure": "non-blocking"},
+            {"kind": "watcher", "extension": "d", "kinds": ["turn_completed"]},
+            {"kind": "watcher", "extension": "e", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "f", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "hook", "extension": "g", "point": "after_tool", "on_failure": "non-blocking"},
+            {"kind": "watcher", "extension": "h", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "i", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "watcher", "extension": "j", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "k", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "watcher", "extension": "l", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "m", "point": "after_tool", "on_failure": "non-blocking"},
+            {"kind": "watcher", "extension": "n", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "o", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "watcher", "extension": "p", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "q", "point": "after_tool", "on_failure": "non-blocking"},
+            {"kind": "watcher", "extension": "r", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "s", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "watcher", "extension": "t", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "u", "point": "after_tool", "on_failure": "non-blocking"},
+            {"kind": "watcher", "extension": "v", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "w", "point": "before_tool", "on_failure": "blocking"},
+            {"kind": "watcher", "extension": "x", "kinds": ["turn_completed"]},
+            {"kind": "hook", "extension": "y", "point": "after_tool", "on_failure": "non-blocking"},
+            {"kind": "watcher", "extension": "z", "kinds": ["turn_completed"]},
+        ]),
+    ));
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    for _ in 0..3 {
+        app.on_key(Key::Down, now());
+    }
+    let before = selected(&app);
+    assert_eq!(before, 3);
+    let frame = app.session_view_screen(0).expect("hooks frame");
+    assert!(frame.rows.len() >= before + 4, "the list fits three steps");
+    let shown_top = frame.list.top();
+    app.on_wheel(&wheel(10, 5, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    let frame = app.session_view_screen(0).expect("hooks frame");
+    assert_eq!(
+        frame.list.top(),
+        shown_top + 3,
+        "one wheel step shifts the visible rows three"
+    );
+    assert_eq!(
+        selected(&app),
+        before,
+        "a selection still on screen stays where it was"
+    );
 }

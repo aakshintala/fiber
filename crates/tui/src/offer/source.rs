@@ -173,6 +173,17 @@ impl Source {
         rows
     }
 
+    /// Shifts the source rows three lines for a wheel step, clamped at
+    /// either end. Never a file step: ← and → keep their own path.
+    pub(crate) fn wheel(&mut self, up: bool, total: usize, height: usize) {
+        let end = total.saturating_sub(height);
+        self.top = if up {
+            self.top.saturating_sub(3)
+        } else {
+            self.top.saturating_add(3).min(end)
+        };
+    }
+
     pub(crate) fn top(&self) -> usize {
         self.top
     }

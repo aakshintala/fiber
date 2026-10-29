@@ -41,6 +41,15 @@ impl Doctor {
         Act::Stay
     }
 
+    /// Shifts the window one wheel step: three rows, keeping the
+    /// selection while it shows, through no seam or workspace.
+    pub(crate) fn wheel(&mut self, up: bool, height: usize) -> Act {
+        let frame = self.frame();
+        let shown = crate::swapped::rows_height(&frame, height);
+        self.list.wheel(up, frame.rows.len(), shown, 3);
+        Act::Stay
+    }
+
     /// The view's frame: the title and the command that opened it, one
     /// plain row per snapshot line, no lines below, no field, and no
     /// footer keys, like the status view. Each row's target comes from

@@ -69,12 +69,6 @@ impl Surface {
     /// draws a frame of its own over the screen is in the set; the
     /// panel, the offer and the other surfaces never take the click's
     /// place.
-    // debt: explicit set stays; widen the matches! if the surveyor rules Panel/Offer in, never delete the gate while note calls decide coverage.
-    // Equivalent to `true` while every note site stays within the closing
-    // set: `slab_of(top)?` in `outside_press` already refuses every
-    // excluded surface, so no consumer sees `true` differ. If an excluded
-    // surface ever notes a slab, remove this exemption and test the gate.
-    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn closes_on_outside_click(self) -> bool {
         matches!(
             self,

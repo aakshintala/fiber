@@ -10,9 +10,11 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::app::App;
+use crate::format;
 use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
 use crate::theme::Role;
+use crate::view::overlay;
 
 /// The columns a list with a gutter keeps before each row's text.
 pub(crate) const GUTTER: usize = 2;
@@ -173,6 +175,18 @@ impl List {
         self.selected != before
     }
 
+    /// Shifts the window one wheel step over `rows` rows shown `height`
+    /// at a time: up to `step` rows toward the top or the end, clamped
+    /// at either end. The selection stays where it is while it shows,
+    /// else moves to the nearest shown row. An empty or short list, or
+    /// a zero-height window, does not move; a blurred selection stays
+    /// blurred. `key` keeps the keyboard's semantics.
+    pub(crate) fn wheel(&mut self, up: bool, rows: usize, height: usize, step: usize) {
+        let (selected, top) = wheel_window(up, self.selected, self.top, rows, height, step);
+        self.selected = selected;
+        self.top = top;
+    }
+
     /// Selects row `at`, clamped to the last of `rows`, and scrolls so it
     /// shows in `height` rows. An empty list or area selects nothing.
     pub(crate) fn select(&mut self, at: usize, rows: usize, height: usize) {
@@ -195,6 +209,111 @@ impl List {
     pub(crate) fn top(&self) -> usize {
         self.top
     }
+}
+
+/// Shifts a viewport one wheel step: the window over `rows` rows shown
+/// `height` at a time moves up to `step` rows toward the top or the end,
+/// clamped at either end, and the selection stays while it shows, else
+/// moves to the nearest shown row. Returns the selection and the first
+/// row shown. An empty or short list, or a zero-height window, keeps
+/// both; a selection past the last row stays past it. Views whose
+/// selection is not a [`List`] share this window.
+pub(crate) fn wheel_window(
+    up: bool,
+    selected: usize,
+    top: usize,
+    rows: usize,
+    height: usize,
+    step: usize,
+) -> (usize, usize) {
+    if rows == 0 || height == 0 {
+        return (selected, top);
+    }
+    let end = rows.saturating_sub(height);
+    let top = top.min(end);
+    let next = if up {
+        top.saturating_sub(step)
+    } else {
+        top.saturating_add(step).min(end)
+    };
+    // Clamp into the new window; the equality case needs no branch since
+    // it already sits on the window's edge (removed: `<` vs `<=` here is
+    // equivalent).
+    let selected = if selected < rows {
+        selected.clamp(next, next.saturating_add(height).saturating_sub(1))
+    } else {
+        selected
+    };
+    (selected, next)
+}
+
+/// How many body rows a login/logout-style provider list holds at `width`
+/// wide: one per item, then what the last action said with its blank row,
+/// at least three so the window never clips them. Both views share this
+/// count, so a wrapped status line shifts both windows alike.
+pub(crate) fn body_len(items: usize, said: &[String], width: usize) -> usize {
+    let mut rows = items;
+    if !said.is_empty() {
+        let width = u16::try_from(width).unwrap_or(u16::MAX);
+        let overlay = overlay::width(u16::MAX, 96, width);
+        let inner = overlay::inner(overlay);
+        rows = rows.saturating_add(1);
+        for line in said {
+            rows = rows.saturating_add(format::wrap(line, usize::from(inner)).len());
+        }
+    }
+    rows.max(3)
+}
+
+/// Shifts a viewport three rows per wheel step and keeps its selection
+/// on a focusable target when possible. A target that leaves the window
+/// moves to the nearest shown target; with no targets, selection stays
+/// unchanged. `rows` includes non-target rows such as headings and gaps.
+pub(crate) fn wheel_targets_window(
+    up: bool,
+    selected: usize,
+    top: usize,
+    rows: usize,
+    height: usize,
+    targets: &[usize],
+) -> (usize, usize) {
+    if height == 0 {
+        return (selected, top);
+    }
+    let end = rows.saturating_sub(height);
+    // The stored top goes stale when keyboard navigation moves focus
+    // outside its window: `draw` shows the focus-adjusted start, so the
+    // wheel steps from what is visible, not the stored row.
+    let low = selected.saturating_add(1).saturating_sub(height);
+    let current = top.clamp(low, selected).min(end);
+    let next = if up {
+        current.saturating_sub(3)
+    } else {
+        current.saturating_add(3).min(end)
+    };
+    // The direction re-tests the exclusive bottom, not the top: with the
+    // outside check guaranteeing one side holds, `selected < next` inside
+    // would leave an equivalent mutant on equality (removed).
+    let selected =
+        if !targets.is_empty() && (selected < next || selected >= next.saturating_add(height)) {
+            if selected >= next.saturating_add(height) {
+                targets
+                    .iter()
+                    .copied()
+                    .rev()
+                    .find(|at| *at < next.saturating_add(height))
+                    .unwrap_or(selected)
+            } else {
+                targets
+                    .iter()
+                    .copied()
+                    .find(|at| *at >= next)
+                    .unwrap_or(selected)
+            }
+        } else {
+            selected
+        };
+    (selected, next)
 }
 
 /// One frame of a view, as the app builds it.

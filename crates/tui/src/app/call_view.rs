@@ -550,6 +550,50 @@ impl App {
         self.settle();
     }
 
+    /// Shifts the open view's window one wheel step: three displayed
+    /// output rows, clamped at either end, keeping the scrolled-to row
+    /// while it shows, else moving it to the nearest shown row. A step
+    /// up pauses following; a step down resumes it only when the last
+    /// output row shows, whatever row is selected. Newly shown artifact
+    /// rows queue their pages through the existing pager, then the pump
+    /// sends. Never an Up/Down step: the keys keep their own path.
+    pub(in crate::app) fn call_view_wheel(&mut self, up: bool) -> Effect {
+        let height = self.conversation_height();
+        {
+            let Some(view) = self.call_view_mut() else {
+                return Effect::None;
+            };
+            let rows = view.rows();
+            let len = rows.len();
+            let shown = shown_height(height, view.below_len());
+            view.list.wheel(up, len, shown, 3);
+            let (top, _) = window(&rows, &view.list, view.below_len(), height);
+            // The viewport decides following, not the selection: a step
+            // up always pauses, and a step down resumes only with the
+            // last row on screen.
+            view.follow = !up && (rows.is_empty() || top.saturating_add(shown) >= len);
+            // Scrolling a missing page into the window asks again, as
+            // does scrolling down to the end it stalls.
+            for row in rows.iter().skip(top).take(shown) {
+                if let Source::Page { offset, .. } = row.source
+                    && view.pager.missing.remove(&offset)
+                {
+                    view.queue(offset);
+                }
+            }
+            let at_bottom = !rows.is_empty() && top.saturating_add(shown) >= rows.len();
+            if !up
+                && at_bottom
+                && let Some(next) = view.pager.fill_next
+                && view.pager.missing.remove(&next)
+            {
+                view.queue(next);
+            }
+        }
+        self.settle();
+        self.call_view_pump_effect()
+    }
+
     /// Scrolls the open view by one row or one page, retrying visible
     /// missing pages and dropping pages past the held window, then
     /// pumps the fetch queue.
