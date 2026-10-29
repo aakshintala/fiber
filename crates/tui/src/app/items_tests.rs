@@ -2041,7 +2041,7 @@ fn wheel_over_the_fiber_transcript_scrolls_it_not_the_parent() {
     app.jump(1);
     let item = app.screen.top().expect("the transcript starts scrolled");
     let parent = app.attached_screen().top();
-    app.on_wheel(&wheel(20, 4, true));
+    app.on_wheel(&wheel(20, 5, true));
     assert_eq!(
         app.screen.top(),
         Some(item + 3),
@@ -2054,12 +2054,11 @@ fn wheel_over_the_fiber_transcript_scrolls_it_not_the_parent() {
     );
 }
 
-/// The wheel over the item's header rows is the item's, never the
-/// conversation's: the header is drawn content, so a transcript
-/// scrolls three rows there while the stashed parent stays put
-/// (`docs/tui.md`, "Swapped views"; see #3578).
+/// The item's non-scrolling header swallows the wheel; it reaches neither
+/// the transcript body nor the stashed parent (`docs/tui.md`, "Swapped
+/// views"; see #3578).
 #[test]
-fn wheel_over_the_transcript_header_scrolls_it_not_the_parent() {
+fn wheel_over_the_transcript_header_moves_nothing() {
     let mut app = home();
     opened(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE_A);
@@ -2076,13 +2075,58 @@ fn wheel_over_the_transcript_header_scrolls_it_not_the_parent() {
     app.on_wheel(&wheel(20, 2, true));
     assert_eq!(
         app.screen.top(),
-        Some(item + 3),
-        "the header rows count as the item's drawn content"
+        Some(item),
+        "the item header has no rows to scroll"
     );
     assert_eq!(
         app.attached_screen().top(),
         parent,
         "the wheel left the stashed parent"
+    );
+}
+
+/// The item owns its final drawn row, but the row immediately below the
+/// content rectangle is not part of the item and cannot reach the hidden
+/// parent.
+#[test]
+fn wheel_at_the_item_content_edge_stops_at_its_last_row() {
+    let mut app = home();
+    app.set_size(80, 24);
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let _ = open(&mut app, "j_1");
+    tall_transcript(&mut app);
+    app.jump(1);
+    let layout = app.chrome().layout().expect("the attached layout");
+    let x = layout.column.x.saturating_add(layout.column.width / 2);
+    let last_y = layout
+        .column
+        .y
+        .saturating_add(u16::try_from(app.conversation_area_height()).unwrap_or(u16::MAX))
+        .saturating_sub(1);
+    let below_y = last_y.saturating_add(1);
+    let item = app.screen.top().expect("the transcript starts scrolled");
+    let parent = app.attached_screen().top();
+
+    app.on_wheel(&wheel(x, last_y, true));
+    assert_eq!(
+        app.screen.top(),
+        Some(item + 3),
+        "the final drawn item row belongs to the item"
+    );
+    assert_eq!(app.attached_screen().top(), parent);
+    let after = app.screen.top();
+
+    app.on_wheel(&wheel(x, below_y, true));
+    assert_eq!(
+        app.screen.top(),
+        after,
+        "the row immediately below the item's drawn content does not scroll it"
+    );
+    assert_eq!(
+        app.attached_screen().top(),
+        parent,
+        "the row below the item does not reach the hidden parent"
     );
 }
 
@@ -2135,7 +2179,7 @@ fn wheel_over_the_fiber_transcript_wins_over_offer_and_results() {
     });
     assert!(offer.is_some(), "the offer shows rows");
     let results = app.find_results().map(|view| (view.selected, view.top));
-    app.on_wheel(&wheel(20, 4, true));
+    app.on_wheel(&wheel(20, 5, true));
     assert_eq!(
         app.screen.top(),
         Some(item + 3),
@@ -2168,4 +2212,97 @@ fn wheel_over_the_fiber_transcript_wins_over_offer_and_results() {
         results,
         "the wheel left the results"
     );
+}
+
+/// A swapped picker is drawn above the attached item and owns its wheel:
+/// the picker moves three displayed rows while the item stays put.
+#[test]
+fn wheel_over_the_model_picker_above_an_item_moves_the_picker() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let _ = open(&mut app, "j_1");
+    assert!(app.item_transcript());
+    tall_transcript(&mut app);
+    app.jump(1);
+    let item = app.screen.top().expect("the transcript starts scrolled");
+    app.on_models(Ok(crate::catalogue::Catalogue {
+        installable: Vec::new(),
+        models: (0..30)
+            .map(|at| {
+                let id = format!("m{at:02}");
+                crate::catalogue::ModelEntry {
+                    reference: format!("acme/{id}"),
+                    provider: "acme".to_owned(),
+                    id,
+                    levels: Vec::new(),
+                    default_level: None,
+                    configured: None,
+                    roles: Vec::new(),
+                    name: None,
+                    price: None,
+                }
+            })
+            .collect(),
+        notices: Vec::new(),
+        lists: Vec::new(),
+        left_out: Vec::new(),
+    }));
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    let picker = app.model_picker_view().expect("the picker is open");
+    assert_eq!(picker.top, 0);
+
+    app.on_wheel(&wheel(20, 4, true));
+
+    assert_eq!(
+        app.model_picker_view().expect("the picker stays open").top,
+        3,
+        "the top-drawn picker owns a three-row wheel step"
+    );
+    assert_eq!(
+        app.screen.top(),
+        Some(item),
+        "the wheel left the attached item untouched"
+    );
+}
+
+/// A drawn Search or Completion slab above an item swallows wheel input
+/// before it can reach the item transcript.
+#[test]
+fn wheel_inside_search_and_completion_slabs_over_an_item_moves_nothing() {
+    for surface in [crate::app::Surface::Search, crate::app::Surface::Completion] {
+        let mut app = home();
+        opened(&mut app);
+        start_delegate(&mut app, "j_1", DELEGATE_A);
+        let _ = open(&mut app, "j_1");
+        tall_transcript(&mut app);
+        app.jump(1);
+        let item = app.screen.top().expect("the transcript starts scrolled");
+        match surface {
+            crate::app::Surface::Search => {
+                app.open_search();
+            }
+            crate::app::Surface::Completion => {
+                app.on_key(Key::Char('/'), fakes::clock::FakeClock::new().now());
+            }
+            _ => unreachable!(),
+        }
+        let (width, height) = app.screen_size();
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buffer, None);
+        app.drawn(&targets);
+        let slab = app
+            .frames()
+            .slab_of(surface)
+            .expect("the search surface is drawn");
+        assert!(!slab.is_empty(), "{surface:?} draws a slab");
+
+        assert_eq!(app.on_wheel(&wheel(slab.x, slab.y, true)), Effect::None);
+        assert_eq!(
+            app.screen.top(),
+            Some(item),
+            "{surface:?} owns the wheel above the item"
+        );
+    }
 }

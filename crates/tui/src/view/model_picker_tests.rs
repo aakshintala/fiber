@@ -7,10 +7,13 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use std::path::PathBuf;
 
-use super::{body, id_spans, model_fit, page_step, window};
+use super::{
+    body, display_rows, focus_window_top, id_spans, keep_focus_visible_top, model_fit, page_step,
+    picker_wheel_window, window,
+};
 use crate::app::{App, Effect};
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry, Price};
-use crate::keys::{Edit, Key};
+use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
 use crate::theme::Role;
@@ -933,6 +936,89 @@ fn a_session_only_model_takes_three_rows_in_the_window() {
 }
 
 #[test]
+fn wheel_moves_the_picker_top_by_three_body_rows() {
+    let mut app = attached(100, 18);
+    let mut catalogue = catalogue();
+    catalogue.models = (0..20)
+        .map(|at| ModelEntry {
+            reference: format!("acme/m{at}"),
+            provider: "acme".to_owned(),
+            id: format!("m{at}"),
+            levels: vec!["low".to_owned()],
+            default_level: Some("low".to_owned()),
+            configured: None,
+            roles: Vec::new(),
+            name: None,
+            price: None,
+        })
+        .collect();
+    app.on_models(Ok(catalogue.clone()));
+    open(&mut app);
+    assert_eq!(app.model_picker_view().unwrap().top, 0);
+
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelDown,
+        col: 50,
+        row: 8,
+    });
+
+    assert_eq!(app.model_picker_view().unwrap().top, 3);
+
+    // The renderer and top clamp keep the first row of a focused
+    // multi-row model visible when it touches either viewport edge.
+    let mut view = app.model_picker_view().unwrap();
+    let height = u16::try_from(app.conversation_area_height())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(1);
+    let fit = model_fit(&view, height);
+    assert!(fit > 0);
+    let display = display_rows(&view, false);
+    let first = view.sections[0].models.first().expect("first model").at;
+    let first_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(first))
+        .expect("first model row");
+    view.focused = Some(first);
+    view.top = first_row;
+    assert_eq!(keep_focus_visible_top(&view, height), first_row);
+
+    let last = view.sections[0].models.last().expect("last model").at;
+    let last_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(last))
+        .expect("last model row");
+    view.focused = Some(last);
+    view.top = last_row + 1 - fit;
+    assert_eq!(keep_focus_visible_top(&view, height), view.top);
+
+    // With more body rows, navigation and a catalogue refresh retain a
+    // still-valid wheel top; changing the query resets to the focus window.
+    app.set_size(100, 24);
+    assert_eq!(
+        app.on_key(Key::Down, fakes::clock::FakeClock::new().now()),
+        Effect::None
+    );
+    assert_eq!(app.model_picker_view().unwrap().top, 3);
+    app.on_models(Ok(catalogue));
+    assert_eq!(app.model_picker_view().unwrap().top, 3);
+    assert_eq!(
+        app.on_key(Key::Char('m'), fakes::clock::FakeClock::new().now()),
+        Effect::None
+    );
+    let view = app.model_picker_view().unwrap();
+    let height = u16::try_from(app.conversation_area_height())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(1);
+    assert_eq!(
+        view.top,
+        focus_window_top(&view, height),
+        "filter changes restore the focus-derived window"
+    );
+}
+
+#[test]
 fn a_refreshing_empty_filter_reserves_its_status_and_message_rows() {
     let mut app = choosing(160, 48);
     let now = fakes::clock::FakeClock::new().now();
@@ -1339,6 +1425,42 @@ fn count_rows_scroll_with_their_sections_window() {
     // Headings, counts, model rows and blanks sum exactly: 6 + 1 + 5
     // + 1 + 2, past the filter and the buttons.
     assert_eq!(body(&view, 160, 48).len(), 2 + 15);
+}
+
+#[test]
+fn wheel_offsets_count_headings_and_blank_rows_as_displayed_rows() {
+    let mut app = choosing_left_out(160, 18);
+    let view = app.model_picker_view().expect("open");
+    let height = u16::try_from(app.conversation_area_height())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(1);
+    let display = display_rows(&view, false);
+    assert!(
+        display.rows[1]
+            .row
+            .spans
+            .iter()
+            .any(|span| span.content.contains("api_key"))
+    );
+    let (top, _) = picker_wheel_window(&view, false, height);
+    assert_eq!(
+        top, 3,
+        "heading, count and model rows each consume an offset"
+    );
+    app.model_picker_wheel(false);
+    assert_eq!(app.model_picker_view().unwrap().top, top);
+}
+
+#[test]
+fn a_wheel_with_no_focus_keeps_focus_absent() {
+    let mut app = attached(80, 18);
+    app.on_models(Ok(Catalogue::default()));
+    open(&mut app);
+    assert_eq!(app.model_picker_view().unwrap().focused, None);
+    app.model_picker_wheel(false);
+    let view = app.model_picker_view().expect("picker stays open");
+    assert_eq!(view.focused, None);
+    assert_eq!(view.top, 0);
 }
 
 #[test]

@@ -726,6 +726,57 @@ fn wheel_over_offer_moves_the_cursor_not_the_conversation() {
     );
 }
 
+/// Offer is drawn instead of Results when both are open, so wheel input
+/// reaches the offer cursor and leaves the hidden result window alone.
+#[test]
+fn wheel_over_offer_wins_over_open_results() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    assert!(app.on_line(offer_many(S_A)).is_empty());
+    app.open_results();
+    assert!(app.offer_open());
+    assert!(app.results_open());
+    let (_, offer_top) = app.offer_rows(app.column_width()).expect("open offer");
+    let before = cursor_text(&app);
+    let results = app.find_results().map(|view| (view.selected, view.top));
+    let (width, height) = app.screen_size();
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buffer, None);
+    app.drawn(&targets);
+    let search = app.frames().slab_of(crate::app::Surface::Search);
+    let completion = app.frames().slab_of(crate::app::Surface::Completion);
+    let content_height = u16::try_from(app.conversation_area_height())
+        .unwrap_or(u16::MAX)
+        .min(height);
+    let (col, row) = (0..content_height)
+        .flat_map(|row| (0..width).map(move |col| (col, row)))
+        .find(|&(col, row)| {
+            !search.is_some_and(|slab| slab.contains(ratatui::layout::Position::new(col, row)))
+                && !completion
+                    .is_some_and(|slab| slab.contains(ratatui::layout::Position::new(col, row)))
+        })
+        .expect("an offer row outside the search slabs");
+
+    app.on_wheel(&wheel(col, row, true));
+
+    assert_eq!(
+        cursor_text(&app),
+        before,
+        "the visible offer cursor stays put"
+    );
+    assert_eq!(
+        app.offer_rows(app.column_width()).expect("open offer").1,
+        offer_top + 3,
+        "the offer owns the visible rows"
+    );
+    assert_eq!(
+        app.find_results().map(|view| (view.selected, view.top)),
+        results,
+        "the hidden results keep their prior selection and offset"
+    );
+}
+
 /// The wheel over the offer with no source open clamps a cursor that
 /// leaves the window to the nearest shown row, and never chooses: the
 /// cursor moves off the first item while no answer sends.

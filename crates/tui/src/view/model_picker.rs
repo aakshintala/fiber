@@ -565,17 +565,28 @@ pub(crate) fn page_step(view: &PickerView, height: u16) -> usize {
     step.max(1)
 }
 
+/// One scrollable body row and the selectable row, if this row is its
+/// first display row. A short viewport trims a count with its heading.
+struct DisplayRow {
+    row: Row,
+    focus: Option<usize>,
+    trim_count: bool,
+}
+
+/// The flattened list body, focusable starts and each item's display
+/// offset. Headings, blanks and nonfocusable counts all take offsets.
+struct DisplayRows {
+    rows: Vec<DisplayRow>,
+    item_starts: Vec<usize>,
+}
+
 /// The spans' width in columns.
 fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|span| cells(&span.content)).sum()
 }
 
-/// The overlay body for `view`: the filter, the buttons, the windowed
-/// sections, and the status lines. Exactly one row is barred while a
-/// model shows; none with only a message.
-/// One left-out count row, hung under its heading like a model's
-/// second row: four columns in, then the text dim. No targets, never
-/// barred: focus skips it and clicks ignore it.
+/// One left-out count row, hung under its heading like a model's second
+/// row. It has no bar or targets: focus skips it and clicks ignore it.
 fn count_row(row: &LeftOutRow) -> Row {
     Row {
         spans: vec![
@@ -588,15 +599,222 @@ fn count_row(row: &LeftOutRow) -> Row {
     }
 }
 
+/// Every rendered list row in order, with selectable starts mapped back
+/// to their layout rows. A count row and its provider heading are both
+/// marked for the existing short-viewport trim.
+fn display_rows(view: &PickerView, priced: bool) -> DisplayRows {
+    let items = items(view);
+    let mut rows = Vec::new();
+    let mut item_starts = Vec::new();
+    let mut before: Option<&str> = None;
+    let mut first = true;
+    for (at, item) in items.iter().enumerate() {
+        let provider = item.provider();
+        let headed = before.is_none_or(|previous| previous != provider);
+        item_starts.push(rows.len());
+        let trim_count = headed && matches!(item, Item::Count(_));
+        if headed {
+            if !first {
+                rows.push(DisplayRow {
+                    row: Row {
+                        spans: Vec::new(),
+                        right: Vec::new(),
+                        targets: Vec::new(),
+                        barred: false,
+                    },
+                    focus: None,
+                    trim_count,
+                });
+            }
+            let state = match item {
+                Item::Model(flat) => flat.state,
+                Item::Count(count) => count.state,
+            };
+            rows.push(DisplayRow {
+                row: heading_row(provider, state, &view.spinner),
+                focus: None,
+                trim_count,
+            });
+            before = Some(provider);
+            first = false;
+        }
+        match item {
+            Item::Count(count) => rows.push(DisplayRow {
+                row: count_row(count.row),
+                focus: None,
+                trim_count: true,
+            }),
+            Item::Model(flat) => {
+                let focused = Some(flat.row.at) == view.focused;
+                if flat.row.mark.is_some() {
+                    rows.push(DisplayRow {
+                        row: scope_row(flat.row, focused, priced),
+                        focus: Some(flat.row.at),
+                        trim_count: false,
+                    });
+                    rows.push(DisplayRow {
+                        row: scope_second_row(flat.row),
+                        focus: None,
+                        trim_count: false,
+                    });
+                } else {
+                    rows.push(DisplayRow {
+                        row: model_first_row(flat.row, focused, priced),
+                        focus: Some(flat.row.at),
+                        trim_count: false,
+                    });
+                    rows.push(DisplayRow {
+                        row: model_second_row(flat.row, focused),
+                        focus: None,
+                        trim_count: false,
+                    });
+                    if flat.row.session_only {
+                        rows.push(DisplayRow {
+                            row: session_row(flat.row),
+                            focus: None,
+                            trim_count: false,
+                        });
+                    }
+                }
+            }
+        }
+        debug_assert!(at < items.len());
+    }
+    for (at, install) in view.installs.iter().enumerate() {
+        if at == 0 && !rows.is_empty() {
+            rows.push(DisplayRow {
+                row: Row {
+                    spans: Vec::new(),
+                    right: Vec::new(),
+                    targets: Vec::new(),
+                    barred: false,
+                },
+                focus: None,
+                trim_count: false,
+            });
+        }
+        item_starts.push(rows.len());
+        rows.push(DisplayRow {
+            row: install_row(install, Some(install.at) == view.focused, &view.spinner),
+            focus: Some(install.at),
+            trim_count: false,
+        });
+        rows.extend(error_row(install).into_iter().map(|row| DisplayRow {
+            row,
+            focus: None,
+            trim_count: false,
+        }));
+    }
+    DisplayRows { rows, item_starts }
+}
+
+/// The focus-derived list start, using the same item window as the
+/// keyboard page step but returning a displayed body-row offset.
+pub(crate) fn focus_window_top(view: &PickerView, height: u16) -> usize {
+    let fit = model_fit(view, height);
+    let (start, _) = window(view, fit);
+    display_rows(view, false)
+        .item_starts
+        .get(start)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// The stored top clamped to the current list and moved only enough to
+/// keep the focused row's first display row visible.
+pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
+    let display = display_rows(view, false);
+    let fit = model_fit(view, height).max(usize::from(view.focused.is_some()));
+    let max = display.rows.len().saturating_sub(fit);
+    let mut top = view.top.min(max);
+    if fit == 0 {
+        return top;
+    }
+    let Some(focused) = view
+        .focused
+        .and_then(|at| display.rows.iter().position(|row| row.focus == Some(at)))
+    else {
+        return top;
+    };
+    if focused < top {
+        top = focused;
+    } else if focused >= top.saturating_add(fit) {
+        top = focused.saturating_add(1).saturating_sub(fit);
+    }
+    top.min(max)
+}
+
+/// The next body-row top and the nearest visible selectable layout row,
+/// if wheel movement carries the current focus offscreen.
+pub(crate) fn picker_wheel_window(
+    view: &PickerView,
+    up: bool,
+    height: u16,
+) -> (usize, Option<usize>) {
+    let display = display_rows(view, false);
+    let fit = model_fit(view, height).max(usize::from(view.focused.is_some()));
+    let max = display.rows.len().saturating_sub(fit);
+    let effective = keep_focus_visible_top(view, height);
+    let top = if up {
+        effective.saturating_sub(3)
+    } else {
+        effective.saturating_add(3).min(max)
+    };
+    let end = top.saturating_add(fit);
+    let Some(focused) = view.focused else {
+        return (top, None);
+    };
+    let current = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(focused));
+    if current.is_some_and(|row| row >= top && row < end) {
+        return (top, None);
+    }
+    let nearest = display
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(row, entry)| *row >= top && *row < end && entry.focus.is_some())
+        .min_by_key(|(row, _)| {
+            let distance = current.map_or(0, |old| old.abs_diff(*row));
+            let tie = if up { usize::MAX - *row } else { *row };
+            (distance, tie)
+        })
+        .and_then(|(_, entry)| entry.focus);
+    (top, nearest)
+}
+
 fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     let priced = overlay::inner(overlay::width(PREFER, PREFER, width)) >= PRICE_MIN_INNER;
-    // The filter row is first in every mode.
-    let mut rows = vec![filter_row(view)];
-    let items = items(view);
     let fit = model_fit(view, height);
-    let (start, end) = window(view, fit);
-    // The content's natural width sets the refresh click's columns: the
-    // overlay cuts both alike on a narrower screen.
+    let visible = fit.max(usize::from(view.focused.is_some()));
+    let display = display_rows(view, priced);
+    let top = keep_focus_visible_top(view, height).min(display.rows.len());
+    let mut list: Vec<Row> = display
+        .rows
+        .into_iter()
+        .skip(top)
+        .take(visible)
+        .filter_map(|row| {
+            if fit < 2 && row.trim_count {
+                None
+            } else {
+                Some(row.row)
+            }
+        })
+        .collect();
+    list.extend(outcome_rows(&view.outcomes));
+    if view.no_match {
+        list.push(dim_row("No models match".to_owned()));
+    }
+    for status in &view.status {
+        list.push(dim_row(status.clone()));
+    }
+
+    // The filter and button rows stay fixed; only the provider/list rows
+    // above are windowed. Width is measured from the rows actually shown.
+    let mut rows = vec![filter_row(view)];
     let mut content: usize = 0;
     let mut widen = |row: &Row| {
         let mut wide = spans_width(&row.spans);
@@ -610,97 +828,9 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     }
     let footer = overlay::legend(&view.footer);
     widen(&footer);
-    let mut sections = Vec::new();
-    let mut first = true;
-    // A window starting inside a provider continues it with no
-    // heading; any other provider change opens one. On a short overlay
-    // the focused model's heading would push its first row out of the
-    // frame, so that heading alone is omitted: the focused row stays on
-    // screen, and nothing else is trimmed. A first count row with fewer
-    // than two body rows is omitted with its heading together: a
-    // nonfocusable count never shows without the provider that names
-    // it, while two rows keep both.
-    let trim_heading = fit < 2
-        && items.get(start).is_some_and(
-            |item| matches!(item, Item::Model(flat) if Some(flat.row.at) == view.focused),
-        );
-    let trim_count = fit < 2
-        && items
-            .get(start)
-            .is_some_and(|item| matches!(item, Item::Count(_)));
-    let mut before = start
-        .checked_sub(1)
-        .and_then(|at| items.get(at))
-        .map(|item| item.provider());
-    for (n, at) in (start..end).enumerate() {
-        if n == 0 && trim_count {
-            continue;
-        }
-        let Some(item) = items.get(at) else {
-            if let Some(install) = view.installs.get(at.saturating_sub(items.len())) {
-                // The first not-installed row in the window sits below a
-                // blank row when anything precedes it there.
-                if n > 0 && at == items.len() {
-                    sections.push(Row {
-                        spans: Vec::new(),
-                        right: Vec::new(),
-                        targets: Vec::new(),
-                        barred: false,
-                    });
-                }
-                let focused = Some(install.at) == view.focused;
-                sections.push(install_row(install, focused, &view.spinner));
-                sections.extend(error_row(install));
-            }
-            continue;
-        };
-        let (provider, state) = match item {
-            Item::Model(flat) => (flat.provider, flat.state),
-            Item::Count(count) => (count.provider, count.state),
-        };
-        let headed = before.is_none_or(|before| before != provider);
-        before = Some(provider);
-        if headed && !(n == 0 && trim_heading) {
-            if !first {
-                sections.push(Row {
-                    spans: Vec::new(),
-                    right: Vec::new(),
-                    targets: Vec::new(),
-                    barred: false,
-                });
-            }
-            sections.push(heading_row(provider, state, &view.spinner));
-            first = false;
-        }
-        match item {
-            Item::Count(count) => sections.push(count_row(count.row)),
-            Item::Model(flat) => {
-                let focused = Some(flat.row.at) == view.focused;
-                if flat.row.mark.is_some() {
-                    sections.push(scope_row(flat.row, focused, priced));
-                    sections.push(scope_second_row(flat.row));
-                } else {
-                    sections.push(model_first_row(flat.row, focused, priced));
-                    sections.push(model_second_row(flat.row, focused));
-                    if flat.row.session_only {
-                        sections.push(session_row(flat.row));
-                    }
-                }
-            }
-        }
+    for row in &list {
+        widen(row);
     }
-    sections.extend(outcome_rows(&view.outcomes));
-    if view.no_match {
-        sections.push(dim_row("No models match".to_owned()));
-    }
-    for status in &view.status {
-        sections.push(dim_row(status.clone()));
-    }
-    for section in &sections {
-        widen(section);
-    }
-    // The buttons row plugs the measured width: the refresh text rides
-    // at the content's right end.
     let buttons = buttons_row(view, None);
     widen(&buttons);
     let inner = overlay::inner(overlay::width(
@@ -709,8 +839,6 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
         width,
     )) as usize;
     let refresh = cells("⟳ refresh all");
-    // The checklist draws no refresh button, so it takes no column for
-    // one either.
     let refresh_at = if view.refresh {
         inner
             .checked_sub(refresh)
@@ -719,7 +847,7 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
         None
     };
     rows.push(buttons_row(view, refresh_at));
-    rows.extend(sections);
+    rows.extend(list);
     rows
 }
 

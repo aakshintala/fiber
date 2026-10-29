@@ -337,6 +337,19 @@ impl App {
         {
             return Some(Effect::None);
         }
+        // Search and Completion draw after swapped views, so their slabs
+        // own the wheel before anything underneath them.
+        if self
+            .frames()
+            .slab_of(Surface::Search)
+            .is_some_and(|slab| slab.contains(at))
+            || self
+                .frames()
+                .slab_of(Surface::Completion)
+                .is_some_and(|slab| slab.contains(at))
+        {
+            return Some(Effect::None);
+        }
         // The key map replaces the swapped view over the full content
         // area and swallows there: its noted slab where drawn, the whole
         // area on home, the conversation column attached.
@@ -351,39 +364,17 @@ impl App {
             }
             return None;
         }
-        // An item view takes the whole item-drawn content, its header
-        // rows included. A Fiber delegate's swapped-in transcript
-        // scrolls its shown screen three rows; a live `tty`, a finished
-        // `tty`, a non-`tty` job and a foreign-harness delegate show the
-        // parent's screen, so the wheel is swallowed and the parent
-        // stays where it is.
-        if self.item_open() {
-            if !self.over_conversation(at) {
-                return None;
-            }
-            if self.item_transcript() {
-                self.scroll_conversation(up);
-            }
-            return Some(Effect::None);
-        }
-        // Search and Completion own only their drawn slabs: the wheel
-        // over one is swallowed, whatever lies under it.
-        if self
-            .frames()
-            .slab_of(Surface::Search)
-            .is_some_and(|slab| slab.contains(at))
-            || self
-                .frames()
-                .slab_of(Surface::Completion)
-                .is_some_and(|slab| slab.contains(at))
-        {
-            return Some(Effect::None);
-        }
         // Attached, a swapped view takes the conversation area; on home
         // it takes the whole screen. Home is set with no session, even
         // while a covering surface makes `on_home` false.
         let home = self.home.is_some() && self.session().is_none();
-        if self.swapped_view_open() && (home || self.over_conversation(at)) {
+        let panel_covers_home = home && self.frames().slab_of(Surface::Panel).is_some();
+        let over_swapped = if panel_covers_home {
+            self.over_conversation(at)
+        } else {
+            home || self.over_conversation(at)
+        };
+        if self.swapped_view_open() && over_swapped {
             // The notice overlay's slab wins over the `/keys` screen:
             // the wheel over it is swallowed, never the list under it.
             if self.keys_screen_open()
@@ -393,17 +384,7 @@ impl App {
                 return Some(Effect::None);
             }
             let effect = if self.model_picker_open() {
-                // The picker keeps its key path until its viewport state
-                // lands: three Up/Down equivalents with one pump.
-                let key = if up { Key::Up } else { Key::Down };
-                let mut send = None;
-                for _ in 0..WHEEL_ROWS {
-                    let effect = self.model_picker_key(&key).unwrap_or(Effect::None);
-                    if send.is_none() && matches!(effect, Effect::Send(_)) {
-                        send = Some(effect);
-                    }
-                }
-                send.unwrap_or(Effect::None)
+                self.model_picker_wheel(up)
             } else if self.config_view_open() {
                 self.config_view_wheel(up)?
             } else if self.keys_screen_open() {
@@ -416,15 +397,31 @@ impl App {
             self.settle();
             return Some(effect);
         }
-        // Outside those slabs, Results takes the wheel where it is
-        // drawn; with no Results underneath the chain below decides.
-        if self.results_open() && self.over_conversation(at) {
-            return self.results_wheel(up);
+        // The item view lies below swapped views in the draw stack. Its
+        // non-scrolling header swallows the wheel; a Fiber transcript
+        // scrolls only over its body. Other item states swallow it too.
+        if self.item_open() {
+            if !self.over_conversation(at) {
+                return None;
+            }
+            let content_top = self.chrome().layout().map_or(0, |layout| layout.column.y);
+            let header_rows =
+                crate::view::item::ITEM_HEADER_ROWS.min(self.conversation_area_height());
+            if usize::from(at.y.saturating_sub(content_top)) < header_rows {
+                return Some(Effect::None);
+            }
+            if self.item_transcript() {
+                self.scroll_conversation(up);
+            }
+            return Some(Effect::None);
         }
-        // Offer rows still drawn outside the approval panel's rectangle
-        // scroll; the panel's own rectangle swallowed above.
+        // Offer is drawn before Results and therefore owns the wheel
+        // when both states are open; otherwise Results takes its rows.
         if self.offer_open() && self.over_conversation(at) {
             return self.offer_wheel(up);
+        }
+        if self.results_open() && self.over_conversation(at) {
+            return self.results_wheel(up);
         }
         None
     }
@@ -435,7 +432,7 @@ impl App {
     /// (`view.rs`, `render`). An attached item's header rows count: the
     /// wheel over them is the item's, never the conversation's.
     fn over_conversation(&self, at: Position) -> bool {
-        let height = self.conversation_height();
+        let height = self.conversation_area_height();
         let (left, width, top) = match self.chrome().layout() {
             Some(layout) => (layout.column.x, layout.column.width, layout.column.y),
             None => (0, self.screen.width(), 0),

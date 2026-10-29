@@ -775,10 +775,9 @@ fn the_wheel_over_the_transcript_scrolls_it() {
         row: header,
     });
     assert!(app.top().is_some());
-    // Over the header the wheel is the item's too: the header rows count
-    // as the item's drawn content, so a header-row wheel scrolls the
-    // transcript instead of leaving a following view alone
-    // (`docs/tui.md`, "Swapped views"; see #3578).
+    // Over the header the wheel is still the item's, but that region has
+    // no scrollable rows and swallows the wheel (`docs/tui.md`,
+    // "Swapped views"; see #3578).
     app.on_key(Key::End, clock.now());
     assert_eq!(app.top(), None);
     // The header's first drawn row: the conversation column's top-left
@@ -789,7 +788,11 @@ fn the_wheel_over_the_transcript_scrolls_it() {
         col: column.x,
         row: column.y,
     });
-    assert!(app.top().is_some(), "a header-row wheel scrolls the item");
+    assert_eq!(
+        app.top(),
+        None,
+        "the non-scrolling header swallows the wheel"
+    );
 }
 
 #[test]

@@ -90,6 +90,21 @@ fn wheel_clamps_a_leaving_focus_to_the_window() {
     );
 }
 
+/// Ordinary arrow keys still move one target after wheel movement, and
+/// the wheeled top survives while both targets remain visible.
+#[test]
+fn keyboard_navigation_after_wheel_keeps_its_one_target_step() {
+    let fake = fake_with(many_targets());
+    let context = ctx_h(&fake, 24);
+    let mut logout = Logout::open(&context);
+    logout.wheel(false, &context);
+    assert_eq!((logout.top, logout.selected), (3, 3));
+    logout.key(&Key::Down, &context);
+    assert_eq!((logout.top, logout.selected), (3, 4));
+    logout.key(&Key::Up, &context);
+    assert_eq!((logout.top, logout.selected), (3, 3));
+}
+
 /// The wheel up from the top row moves nothing, and the confirm takes
 /// no wheel: Enter asks, and the wheel over it changes nothing.
 #[test]

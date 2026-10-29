@@ -2498,9 +2498,7 @@ fn wheel_over_an_open_call_view_keeps_a_visible_selection() {
 
 /// The wheel over an open call view with the find bar open shifts the
 /// viewport instead of stepping matches, never the conversation under
-/// it (`docs/tui.md`, "Swapped views"; see #3578). The short list has
-/// no room to move, so the window, the selection and the current match
-/// all stay where they were.
+/// it (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_a_call_view_with_find_open_scrolls_not_the_conversation() {
     let mut app = attached(80, 24);
@@ -2510,12 +2508,12 @@ fn wheel_over_a_call_view_with_find_open_scrolls_not_the_conversation() {
     assert!(app.top().is_some(), "setup scrolled the conversation up");
     open_inline(&mut app, id);
     let request = page_request(app.open_call_view(id));
-    let text = "aa\nbb\n".repeat(5);
+    let text = "aa\nbb\n".repeat(30);
     assert!(
         app.on_line(accepted(
             &request,
             &text,
-            (0..10).map(|at| at * 3).collect(),
+            (0..60).map(|at| at * 3).collect(),
             None,
             30,
         ))
@@ -2523,23 +2521,28 @@ fn wheel_over_a_call_view_with_find_open_scrolls_not_the_conversation() {
     );
     type_query(&mut app, "aa");
     let matches = app.call_view().expect("open").matches.clone();
-    assert_eq!(matches.len(), 5, "five rows hold aa: {matches:?}");
+    assert_eq!(
+        matches.len(),
+        30,
+        "each of thirty pairs holds aa: {matches:?}"
+    );
     assert_eq!(current_row(&app), Some(matches[0]));
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
-    let before = app.call_view().expect("open").list.selected();
-    // Every page is loaded: the wheel sends nothing back.
-    assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    let before = app.call_view().expect("open").list.top();
+    // Every page is loaded: the wheel sends nothing back. The view opens
+    // at its tail, so wheel-up has room to move exactly three rows.
+    assert_eq!(app.on_wheel(&wheel(10, 5, false)), Effect::None);
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(
+        app.call_view().expect("open").list.top(),
+        before.saturating_sub(3),
+        "the output viewport moves exactly three rows"
+    );
     assert_eq!(
         current_row(&app),
         Some(matches[0]),
-        "the wheel shifts the viewport instead of stepping matches"
-    );
-    assert_eq!(
-        app.call_view().expect("open").list.selected(),
-        before,
-        "a selection still on screen stays where it was"
+        "the find match selection stays unchanged"
     );
 }
 

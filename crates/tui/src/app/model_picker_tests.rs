@@ -765,15 +765,14 @@ fn page_keys_move_by_a_page_clamped() {
     let mut app = home();
     app.on_models(Ok(thirty()));
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
-    // Home's 24 rows hold 16 body rows past the chrome, filter and
-    // buttons. The window slides to hold what fits, so a page moves
-    // six, then seven as the window grows.
+    // The picker draws below its one-row swapped-view header. Page steps
+    // use that exact body height, so each page moves six models here.
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m06"));
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m12"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("acme/m05"));
+    assert_eq!(selected(&app).as_deref(), Some("acme/m06"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m00"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
@@ -4653,14 +4652,23 @@ fn wheel_inside_the_picker_slab_moves_the_picker_not_the_conversation() {
         .slab_of(crate::app::Surface::Picker)
         .expect("the picker notes a slab");
     let top = app.top();
+    let picker_top = app.model_picker_view().unwrap().top;
     assert!(top.is_some(), "opening keeps the scrolled conversation");
     assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
     app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(app.model_picker_view().unwrap().top, picker_top + 3);
     assert_eq!(
         selected(&app).as_deref(),
-        Some("acme/m3"),
-        "one wheel step is three Down keys through the picker"
+        Some("acme/m2"),
+        "focus clamps to the nearest visible model after the viewport moves"
+    );
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, false));
+    assert_eq!(app.model_picker_view().unwrap().top, picker_top);
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("acme/m2"),
+        "focus stays when scrolling back makes its row visible"
     );
 }
 
@@ -4681,22 +4689,21 @@ fn wheel_outside_the_picker_slab_moves_the_picker_not_the_conversation() {
         .slab_of(crate::app::Surface::Picker)
         .expect("the picker notes a slab");
     let top = app.top();
+    let picker_top = app.model_picker_view().unwrap().top;
     assert!(top.is_some(), "opening keeps the scrolled conversation");
     assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
-    // Below the slab, centered: still the picker's view area, above the
-    // input box. The slab spans the width, so no point beside it clears
-    // it on this screen.
+    // The top swapped-view header sits outside the picker panel slab but
+    // remains in the replacement area, so it still routes to the picker.
     let col = 40;
-    let row = slab.y + slab.height + 1;
-    assert!(
-        (row as usize) < app.conversation_height(),
-        "the point sits in the view area"
-    );
+    let row = 0;
+    assert!((row as usize) < app.conversation_height());
+    assert!(!slab.contains(ratatui::layout::Position { x: col, y: row }));
     app.on_wheel(&wheel(col, row, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(app.model_picker_view().unwrap().top, picker_top + 3);
     assert_eq!(
         selected(&app).as_deref(),
-        Some("acme/m3"),
-        "one wheel step is three Down keys through the picker"
+        Some("acme/m2"),
+        "focus clamps to the nearest visible model after the viewport moves"
     );
 }
