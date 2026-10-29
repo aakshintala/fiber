@@ -2,18 +2,46 @@
 //! `uniq` is not listed: its second operand is an output file. `sed` has
 //! its own print-only grammar in `super::sed`.
 
+/// How a flag takes its value, if it does. One mode per flag: the modes
+/// below nest (`digits_only` requires `inline_only`, which requires a
+/// value), so separate booleans could contradict each other.
+pub(super) enum ValueMode {
+    /// The flag takes no value, as in `--stat`.
+    None,
+    /// The value rides the next word or after `=`, as in `-n 10`.
+    Separate,
+    /// The value rides only after `=`: a bare word with this spelling
+    /// refuses instead of consuming the next word, as with
+    /// `--diff-filter`.
+    Inline,
+    /// The value rides only after `=` and holds only ASCII digits, as in
+    /// `--unified=5`.
+    InlineDigits,
+}
+
 /// A flag that keeps its command read-only.
 pub(super) struct Flag {
     /// The flag as an exact word, such as `-n` or `--stat`.
     pub(super) spelling: &'static str,
+    /// How the flag takes its value, if it does.
+    pub(super) mode: ValueMode,
+}
+
+impl Flag {
     /// Whether the next word, or the text after `=`, is this flag's value.
-    pub(super) takes_value: bool,
-    /// Whether the value rides only after `=`: a bare word with this
-    /// spelling refuses instead of consuming the next word, as with
-    /// `--diff-filter`.
-    pub(super) inline_only: bool,
-    /// Whether the `=` value holds only ASCII digits, as in `--unified=5`.
-    pub(super) digits_only: bool,
+    pub(super) fn takes_value(&self) -> bool {
+        !matches!(self.mode, ValueMode::None)
+    }
+
+    /// Whether the value rides only after `=`.
+    pub(super) fn inline_only(&self) -> bool {
+        matches!(self.mode, ValueMode::Inline | ValueMode::InlineDigits)
+    }
+
+    /// Whether the `=` value holds only ASCII digits.
+    pub(super) fn digits_only(&self) -> bool {
+        matches!(self.mode, ValueMode::InlineDigits)
+    }
 }
 
 /// One command on the built-in list.
@@ -42,18 +70,14 @@ pub(super) struct Command {
 const fn flag(spelling: &'static str) -> Flag {
     Flag {
         spelling,
-        takes_value: false,
-        inline_only: false,
-        digits_only: false,
+        mode: ValueMode::None,
     }
 }
 
 const fn value(spelling: &'static str) -> Flag {
     Flag {
         spelling,
-        takes_value: true,
-        inline_only: false,
-        digits_only: false,
+        mode: ValueMode::Separate,
     }
 }
 
@@ -63,9 +87,7 @@ const fn value(spelling: &'static str) -> Flag {
 const fn inline_value(spelling: &'static str) -> Flag {
     Flag {
         spelling,
-        takes_value: true,
-        inline_only: true,
-        digits_only: false,
+        mode: ValueMode::Inline,
     }
 }
 
@@ -74,9 +96,7 @@ const fn inline_value(spelling: &'static str) -> Flag {
 const fn inline_digits(spelling: &'static str) -> Flag {
     Flag {
         spelling,
-        takes_value: true,
-        inline_only: true,
-        digits_only: true,
+        mode: ValueMode::InlineDigits,
     }
 }
 

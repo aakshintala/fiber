@@ -426,10 +426,22 @@ fn stage_outcome(
         (path_tail(&files, dirs), None)
     } else {
         match entry::find(words, configured) {
-            Found::Builtin(entry) => (
-                builtin_outcome(words, entry, dirs, Some((&simple.tokens, 0))),
-                Some(entry),
-            ),
+            Found::Builtin(entry) => {
+                // Leading outer redirects prepend their spellings to the
+                // tokens, so the words start past them: a substitution in
+                // `>/dev/null git diff $(...)..HEAD` still lines up with
+                // its own token. A redirect's extra word stays out of line
+                // by construction, so it still executes.
+                let base = simple
+                    .tokens
+                    .iter()
+                    .position(|token| simple.words.first().is_some_and(|word| *token == word.raw))
+                    .unwrap_or(0);
+                (
+                    builtin_outcome(words, entry, dirs, Some((&simple.tokens, base))),
+                    Some(entry),
+                )
+            }
             Found::Configured(flags, consumed) => {
                 // A configured entry never takes a substituted word: its
                 // operands declare paths, and a substitution is never one.
@@ -523,7 +535,7 @@ fn repo_selects_host(words: &[Word], gh_entry: Option<&Command>) -> bool {
                 else {
                     continue;
                 };
-                if !flag.takes_value {
+                if !flag.takes_value() {
                     continue;
                 }
                 let Some(value) = rest.next() else {
@@ -936,10 +948,11 @@ fn rev_ok(rev: &str) -> bool {
 /// `--` where the entry says so, any other `-` word an operand for `echo`,
 /// the first operand the pattern for `grep` and `rg`. The entry's path
 /// words never reach the walk: `git status -s` walks from `-s`. `aligned`
-/// holds the stage's tokens with the walked words' base index, so a
-/// substituted word reads only in its own operand slot: a redirect's extra
-/// word never lines up with the tokens there. No walk runs for it: `None`
-/// always executes on a substituted word.
+/// holds the stage's tokens with the walked words' base index, past any
+/// leading redirect spellings, so a substituted word reads only in its own
+/// operand slot: a redirect's extra word never lines up with the tokens
+/// there. No walk runs for it: `None` always executes on a substituted
+/// word.
 fn builtin_outcome(
     words: &[Word],
     entry: &Command,

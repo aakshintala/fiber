@@ -12,7 +12,8 @@
 //! Allowed named kinds: program, command, command_name, variable_assignment,
 //! variable_name, list, pipeline, redirected_statement, file_redirect,
 //! file_descriptor, word, number, string, string_content, raw_string,
-//! concatenation. Allowed tokens: `;`, `&&`, `||`, `|`, `|&` (refused, but
+//! concatenation, command_substitution. Allowed tokens: `;`, `&&`, `||`,
+//! `|`, `|&` (refused, but
 //! recognised), `=`, `>`, `>&`, `<`. A `|&` pipe, `&`, a newline between
 //! statements, or any other token or kind, refuses the stage or the call.
 

@@ -395,6 +395,10 @@ fn git_merge_base_substitution_reads() {
         "git diff $(git merge-base a b) $(git merge-base c d)",
         "git diff $(git merge-base HEAD~0 a)..HEAD",
         "git log -p $(git merge-base a b)",
+        // A leading discard redirect stays read-only: the redirect drops
+        // out before the flag walk, and the substitution still lines up
+        // with its own token.
+        ">/dev/null git diff $(git merge-base a b)..HEAD",
     ] {
         assert_reads(command);
     }
@@ -429,6 +433,11 @@ fn git_merge_base_substitution_refusals_execute() {
         "git diff $(git merge-base -- a b)",
         "git diff -- $(git merge-base a b)",
         "git diff $(git merge-base a b c)",
+        "git diff $(git merge-base HEAD~ a)..HEAD",
+        "git diff $(git merge-base HEAD~x a)..HEAD",
+        "git diff $(git merge-base a:b c)..HEAD",
+        "git diff \"x\"$(git merge-base a b)..HEAD",
+        "git diff 'x'$(git merge-base a b)..HEAD",
         "git diff $(git merge-base a b)..HEAD~1",
         "git diff $(git merge-base a b)....HEAD",
         "git diff $(git merge-base a b)..",
@@ -448,6 +457,21 @@ fn git_merge_base_substitution_refusals_execute() {
     let entries = [configured("git stash show", &[])];
     assert_configured_reads("git stash show x", &entries, &["/work/x"]);
     assert_configured_closed("git stash show $(git merge-base a b)", &entries);
+}
+
+#[test]
+fn a_substituted_executes_names_no_subject() {
+    // A substituted call that executes names no subject: no allow rule can
+    // match a reviewed call whose words arrive only when it runs.
+    assert_closed("cat $(echo x)");
+    assert!(classified("cat $(echo x)").subject.is_none());
+}
+
+#[test]
+fn plain_concatenated_operands_stay_unmarked() {
+    // `syntax.rs` cooks a concatenation with no substitution unmarked, so
+    // an ordinary concatenated operand still reads on a non-git command.
+    assert_reads("echo a\"b\"c");
 }
 
 #[test]
@@ -705,6 +729,7 @@ fn gh_jq_programs_read_unless_they_name_the_environment_or_input() {
     // matched case-sensitively, makes the call `executes`.
     for (command, paths) in [
         ("gh pr view 3 --json body --jq .body", vec!["/work/3"]),
+        ("gh pr view 3 --json body --jq=.body", vec!["/work/3"]),
         ("gh pr diff --patch --jq .", vec!["/work"]),
         ("gh pr view 3 --json body --jq Env", vec!["/work/3"]),
         ("gh pr view 3 --json body --jq INPUT", vec!["/work/3"]),
@@ -975,11 +1000,11 @@ fn every_listed_command_with_a_plain_operand_reads() {
 /// all-digit value rides `=5`, any other value rides the next word, and a
 /// plain flag stands alone.
 fn inline_value_line(name: &str, flag: &Flag) -> String {
-    if flag.digits_only {
+    if flag.digits_only() {
         format!("{name} {}=5", flag.spelling)
-    } else if flag.inline_only {
+    } else if flag.inline_only() {
         format!("{name} {}=v", flag.spelling)
-    } else if flag.takes_value {
+    } else if flag.takes_value() {
         format!("{name} {} v", flag.spelling)
     } else {
         format!("{name} {}", flag.spelling)

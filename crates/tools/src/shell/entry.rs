@@ -192,18 +192,18 @@ pub(super) fn accept_flag(
             .flags
             .iter()
             .any(|flag| {
-                flag.takes_value
+                flag.takes_value()
                     && flag.spelling == name
-                    && (!flag.digits_only || digits_value(cooked))
+                    && (!flag.digits_only() || digits_value(cooked))
                     && (flag.spelling != "--jq" || jq_program_ok(inline))
             })
             .then_some(());
     }
     if let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == cooked) {
-        if flag.inline_only {
+        if flag.inline_only() {
             return None;
         }
-        if flag.takes_value {
+        if flag.takes_value() {
             // A value-taking flag never consumes a substituted word: the
             // substitution would hide the next path, as in
             // `git log -n $(…) .env`.
@@ -282,7 +282,7 @@ fn short_cluster(entry: &Command, cooked: &str) -> bool {
 /// The letter of a value-less short flag: `-n` gives `n`, `--long` and
 /// `-n <value>` give none.
 fn short_letter(flag: &Flag) -> Option<char> {
-    if flag.takes_value {
+    if flag.takes_value() {
         return None;
     }
     let rest = flag.spelling.strip_prefix('-')?;
