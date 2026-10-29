@@ -1820,3 +1820,146 @@ fn seam_prune_confirm_without_expect_removes_the_current_selection() {
     assert_eq!(outcome.total, 1);
     assert!(outcome.failures.is_empty());
 }
+
+#[test]
+fn save_reviewer_notes_round_trips_entries_in_both_layers() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let notes = result(&seam, "reviewer_notes", json!({"workspace":workspace}));
+    let global = notes["global"]["version"].as_str().unwrap().to_owned();
+    let project = notes["project"]["version"].as_str().unwrap().to_owned();
+    let workspace_save = workspace.clone();
+    let (seam, saved) = fakes::within(
+        "round-trip entries save",
+        Deadline::after(std::time::Duration::from_secs(10)),
+        move || {
+            let saved = result(
+                &seam,
+                "save_reviewer_notes",
+                json!({"workspace":workspace_save,"global":{"version":global,"text":"new global","read_only":{"acme-cli query":["--json"]}},"project":{"version":project,"text":"new project","read_only":{"other-cli run":[]}}}),
+            );
+            (seam, saved)
+        },
+    );
+    assert_eq!(
+        saved,
+        json!({"saved":"written","files":[{"file":dirs.home().join("config.json"),"saved":true},{"file":dirs.project_file(&workspace),"saved":true}]})
+    );
+    let global_text = fs::read_to_string(dirs.home().join("config.json")).unwrap();
+    assert!(global_text.contains("new global"), "{global_text}");
+    assert!(global_text.contains(r#""acme-cli query""#), "{global_text}");
+    assert!(global_text.contains("--json"), "{global_text}");
+    let project_text = fs::read_to_string(dirs.project_file(&workspace)).unwrap();
+    assert!(project_text.contains("new project"), "{project_text}");
+    assert!(
+        project_text.contains(r#""other-cli run""#),
+        "{project_text}"
+    );
+    // The same entries with current versions converge to saved, not stale.
+    let notes = result(&seam, "reviewer_notes", json!({"workspace":workspace}));
+    let global = notes["global"]["version"].as_str().unwrap().to_owned();
+    let project = notes["project"]["version"].as_str().unwrap().to_owned();
+    let workspace_save = workspace.clone();
+    let (seam, saved) = fakes::within(
+        "round-trip entries converge",
+        Deadline::after(std::time::Duration::from_secs(10)),
+        move || {
+            let saved = result(
+                &seam,
+                "save_reviewer_notes",
+                json!({"workspace":workspace_save,"global":{"version":global,"text":"new global","read_only":{"acme-cli query":["--json"]}},"project":{"version":project,"text":"new project","read_only":{"other-cli run":[]}}}),
+            );
+            (seam, saved)
+        },
+    );
+    assert_eq!(
+        saved,
+        json!({"saved":"written","files":[{"file":dirs.home().join("config.json"),"saved":true},{"file":dirs.project_file(&workspace),"saved":true}]})
+    );
+    drop(seam);
+}
+
+#[test]
+fn save_reviewer_notes_refuses_misshapen_entry_layers() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"reviewer": {"context": "old global"}}"#,
+    );
+    let notes = result(&seam, "reviewer_notes", json!({"workspace":workspace}));
+    let version = notes["global"]["version"].as_str().unwrap().to_owned();
+    let before = fs::read(dirs.home().join("config.json")).unwrap();
+    for bad in [
+        json!("entries"),
+        json!(["acme-cli query"]),
+        Value::Null,
+        json!({"acme-cli query": "--json"}),
+        json!({"acme-cli query": [7]}),
+        json!({"acme-cli query": [null]}),
+        json!({"acme-cli query": ["--json", 7]}),
+    ] {
+        let args = json!({"workspace":workspace,"global":{"version":version,"text":"new","read_only":bad}});
+        assert_eq!(
+            call(&seam, "save_reviewer_notes", args.clone())
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidArguments,
+            "{args}"
+        );
+        assert_eq!(
+            fs::read(dirs.home().join("config.json")).unwrap(),
+            before,
+            "{args}"
+        );
+    }
+}
+
+#[test]
+fn save_reviewer_notes_names_the_entry_it_refuses() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"reviewer": {"context": "old global"}}"#,
+    );
+    write(
+        &dirs.project_file(&workspace),
+        r#"{"reviewer": {"context": "old project"}}"#,
+    );
+    let notes = result(&seam, "reviewer_notes", json!({"workspace":workspace}));
+    let global = notes["global"]["version"].as_str().unwrap().to_owned();
+    let project = notes["project"]["version"].as_str().unwrap().to_owned();
+    let before = (
+        fs::read(dirs.home().join("config.json")).unwrap(),
+        fs::read(dirs.project_file(&workspace)).unwrap(),
+    );
+    for (entry, named) in [
+        (
+            json!({"acme-cli": ["--json"]}),
+            r#"shell.read_only."acme-cli""#,
+        ),
+        (
+            json!({"acme-cli query": ["--format=json"]}),
+            r#"shell.read_only."acme-cli query""#,
+        ),
+    ] {
+        let args = json!({"workspace":workspace,"global":{"version":global,"text":"new global","read_only":entry},"project":{"version":project,"text":"new project"}});
+        let error = call(&seam, "save_reviewer_notes", args.clone()).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ConfigInvalid, "{args}");
+        assert!(error.message.contains(named), "{error:?}");
+        assert_eq!(
+            fs::read(dirs.home().join("config.json")).unwrap(),
+            before.0,
+            "{args}"
+        );
+        assert_eq!(
+            fs::read(dirs.project_file(&workspace)).unwrap(),
+            before.1,
+            "{args}"
+        );
+    }
+}

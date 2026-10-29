@@ -52,6 +52,7 @@ pub use isolation::{
     adopt_delegate_worktree, create_delegate_worktree, end_delegate_worktree, isolate, recreate,
     share, try_hold_removal,
 };
+pub use notes::{ReadOnlyOutcome, ReadOnlySummary};
 pub use session::{Declare, McpLogin, Replacement, ServersRefresh, Session};
 pub use session_error::SessionError;
 pub use sessions::SessionSockets;

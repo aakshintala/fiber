@@ -35,7 +35,9 @@ use contract::extension::Drive;
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, Failure, Origin, Process, Sender, Tokens, Usage};
+use contract::shapes::{
+    ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender, Tokens, Usage,
+};
 use contract::tool::{
     Bound, Cancel, Effects, EffectsError, Output, SpillFile, Spilled, Tool, Unsaved,
 };
@@ -6254,6 +6256,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                             );
                         }
                         contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Allows(_)
                         | contract::notes::Evidence::Answer { .. } => {
                             panic!("the remote item arrives first")
                         }
@@ -6266,6 +6269,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                             );
                         }
                         contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Allows(_)
                         | contract::notes::Evidence::Answer { .. } => {
                             panic!("the CI item arrives second")
                         }
@@ -6277,6 +6281,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                             assert_eq!(tally.here(), 1);
                         }
                         contract::notes::Evidence::Files { .. }
+                        | contract::notes::Evidence::Allows(_)
                         | contract::notes::Evidence::Answer { .. } => {
                             panic!("session evidence arrives as a session item")
                         }
@@ -6313,6 +6318,60 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
             }
             let accepted = response(&client, "c_1");
             assert_eq!(kind(&accepted), "command_accepted");
+            // The read-only topic gathers the same files and session
+            // items: no shell is wired here, so no allow tally joins them.
+            send(
+                &client,
+                r#"{"id":"c_2","command":"propose_notes","args":{"topic":"read_only_commands"}}"#,
+            );
+            match Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("propose_notes is delivered")
+            {
+                Delivery::ProposeNotes(ask, ack) => {
+                    assert_eq!(
+                        ask.args.topic,
+                        contract::notes::Topic::ReadOnlyCommands
+                    );
+                    assert_eq!(ask.evidence.len(), 3);
+                    for item in &ask.evidence {
+                        assert!(
+                            !matches!(item, contract::notes::Evidence::Allows(_)),
+                            "no shell is wired, so no allow tally is gathered"
+                        );
+                    }
+                    ack.0(Ok(None));
+                }
+                Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Name(..)
+                | Delivery::AddDirectory(..)
+                | Delivery::Handoff(..)
+                | Delivery::Credential(..)
+                | Delivery::Reload(..)
+                | Delivery::McpReconnect(..)
+                | Delivery::Reply(..)
+                | Delivery::Rewind(..)
+                | Delivery::ChangeWorkspace(..)
+                | Delivery::Close(_)
+                | Delivery::Job(_)
+                | Delivery::JobLine(_)
+                | Delivery::Interaction(_)
+                | Delivery::Resolved(..)
+                | Delivery::ExtensionExec(_)
+                | Delivery::Message(..)
+                | Delivery::InnerCall(_)
+                | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionJob(..)
+                | Delivery::ExtensionUsage(_)
+        | Delivery::DelegateUsage { .. }
+                | Delivery::Model(..)
+                | Delivery::Shell(..)
+                | Delivery::Cancelled => panic!("propose_notes arrives as itself"),
+            }
+            let accepted = response(&client, "c_2");
+            assert_eq!(kind(&accepted), "command_accepted");
             Ok(())
         })
         .unwrap();
@@ -6340,6 +6399,337 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
         })
         .unwrap();
     bare.close();
+}
+
+/// One `session_started` line recording `workspace`.
+fn ro_started(workspace: &Path) -> String {
+    let mut line = serde_json::json!({"kind": "session_started",
+        "payload": {"workspace": workspace.to_str().unwrap()}})
+    .to_string();
+    line.push('\n');
+    line
+}
+
+/// One envelope line for `kind` holding `action_id` and `payload`.
+fn ro_line(kind: &str, action: &str, seq: u64, payload: &serde_json::Value) -> String {
+    let mut line = serde_json::json!({"kind": kind, "session_id": "s_seed00000001",
+        "ts": seq, "schema_version": 1, "seq": seq, "payload": payload,
+        "action_id": action})
+    .to_string();
+    line.push('\n');
+    line
+}
+
+/// A shell `tool_call_requested` running `command`.
+fn ro_requested(action: &str, seq: u64, command: &str) -> String {
+    ro_line(
+        "tool_call_requested",
+        action,
+        seq,
+        &serde_json::json!({"name": "shell",
+            "arguments": {"command": command, "workdir": "/w"}}),
+    )
+}
+
+/// A review `permission_requested` carrying `subject` with no escalation.
+fn ro_review_request(action: &str, seq: u64, id: &str, subject: &str) -> String {
+    ro_line(
+        "permission_requested",
+        action,
+        seq,
+        &serde_json::json!({"request_id": id, "step": "review",
+            "rule": {"subject": subject, "prefix": subject}}),
+    )
+}
+
+/// A `permission_resolved` line with `decision` from the reviewer.
+fn ro_review_resolved(action: &str, seq: u64, id: &str, decision: &str) -> String {
+    ro_line(
+        "permission_resolved",
+        action,
+        seq,
+        &serde_json::json!({"request_id": id, "decision": decision,
+            "decided_by": "reviewer"}),
+    )
+}
+
+/// Seeds this session's log under `home` with `body` after its start line.
+fn ro_seed(home: &Path, workspace: &Path, body: &str) {
+    let seed = home
+        .join("projects")
+        .join("p")
+        .join("sessions")
+        .join("s_seed00000001");
+    fs::create_dir_all(&seed).unwrap();
+    let mut log = ro_started(workspace);
+    log.push_str(body);
+    fs::write(seed.join("events.jsonl"), log).unwrap();
+}
+
+/// Wires `shell` and asks for read-only notes, returning the gathered
+/// evidence after accepting the ask.
+/// A shell classifying one command as read-only: `effects` answers the
+/// declared read with its subject and prefix, and `run` never fires.
+struct ReadOnlyStub {
+    table: std::collections::HashMap<String, (String, String)>,
+}
+
+impl ReadOnlyStub {
+    fn new(table: &[(&str, &str, &str)]) -> Self {
+        Self {
+            table: table
+                .iter()
+                .map(|(command, subject, prefix)| {
+                    (
+                        command.to_string(),
+                        (subject.to_string(), prefix.to_string()),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Tool for ReadOnlyStub {
+    fn definition(&self) -> ToolDefinition {
+        shell_definition()
+    }
+
+    fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        let command = arguments
+            .get("command")
+            .and_then(Value::as_str)
+            .expect("a command string");
+        match self.table.get(command) {
+            Some((subject, prefix)) => Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Reads],
+                    reversible: true,
+                    paths: None,
+                    confined: false,
+                },
+                subject: Some(subject.clone()),
+                prefix: Some(prefix.clone()),
+                always_reviewed: false,
+                hosts: None,
+            }),
+            None => Err(EffectsError::Arguments("unclassifiable".to_owned())),
+        }
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        panic!("the stub never runs");
+    }
+}
+
+/// A git workspace with one CI file: two file-evidence items join every
+/// gather under it, so the allow tally is the only moving item.
+fn ro_workspace() -> Temp {
+    let work = Temp::new();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&work.0)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git(&["init", "--quiet"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://user:token@github.com/acme/fiber.git",
+    ]);
+    fs::write(work.0.join(".gitlab-ci.yml"), "job:\n  script: make lint\n").unwrap();
+    work
+}
+
+fn ro_evidence(socket: &Path, inbox: &Receiver<Delivery>) -> Vec<contract::notes::Evidence> {
+    let client = Client::connect(socket).unwrap();
+    subscribe(&client, "c_sub", "full");
+    send(
+        &client,
+        r#"{"id":"c_1","command":"propose_notes","args":{"topic":"read_only_commands"}}"#,
+    );
+    let evidence = match Deadline::after(DEADLINE)
+        .recv(inbox)
+        .expect("propose_notes is delivered")
+    {
+        Delivery::ProposeNotes(ask, ack) => {
+            assert_eq!(ask.args.topic, contract::notes::Topic::ReadOnlyCommands);
+            let evidence = ask.evidence.clone();
+            ack.0(Ok(None));
+            evidence
+        }
+        Delivery::Prompt(..)
+        | Delivery::Steer(..)
+        | Delivery::SteerDrop(..)
+        | Delivery::Message(..)
+        | Delivery::Model(..)
+        | Delivery::Credential(..)
+        | Delivery::Reload(_)
+        | Delivery::McpReconnect(..)
+        | Delivery::Name(..)
+        | Delivery::AddDirectory(..)
+        | Delivery::Rewind(..)
+        | Delivery::ChangeWorkspace(..)
+        | Delivery::Handoff(..)
+        | Delivery::Reply(..)
+        | Delivery::Close(_)
+        | Delivery::Job(_)
+        | Delivery::JobLine(_)
+        | Delivery::ExtensionExec(_)
+        | Delivery::ExtensionJob(..)
+        | Delivery::Interaction(_)
+        | Delivery::Resolved(..)
+        | Delivery::InnerCall(_)
+        | Delivery::ExtensionLog(_)
+        | Delivery::ExtensionUsage(_)
+        | Delivery::DelegateUsage { .. }
+        | Delivery::Cancelled
+        | Delivery::Shell(..) => panic!("propose_notes arrives as itself"),
+    };
+    let accepted = response(&client, "c_1");
+    assert_eq!(kind(&accepted), "command_accepted");
+    evidence
+}
+
+#[test]
+fn propose_notes_with_malformed_configured_entries_excludes_allows() {
+    let opened = Opened::open(vec![]);
+    let work = ro_workspace();
+    let workspace = work.0.clone();
+    // A malformed configured entry cannot validate, so every shell
+    // allowance is withheld even though the shell is wired.
+    fs::write(
+        opened.home.join("config.json"),
+        r#"{"shell.read_only": []}"#,
+    )
+    .unwrap();
+    let mut body = String::new();
+    body.push_str(&ro_requested("a1", 1, "ping 1.2.3.4"));
+    body.push_str(&ro_review_request("a1", 2, "r1", "ping 1.2.3.4"));
+    body.push_str(&ro_review_resolved("a1", 3, "r1", "allow"));
+    ro_seed(&opened.home, &workspace, &body);
+    opened.session.shell(Arc::new(ReadOnlyStub::new(&[(
+        "ping 1.2.3.4",
+        "ping 1.2.3.4",
+        "ping",
+    )])));
+    opened.session.notes_workspace(workspace);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let evidence = ro_evidence(&socket, &inbox);
+            assert_eq!(evidence.len(), 2);
+            for item in &evidence {
+                assert!(
+                    !matches!(item, contract::notes::Evidence::Allows(_)),
+                    "a malformed configured layer withholds every allowance"
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn propose_notes_with_a_deny_excludes_the_covered_allow() {
+    let opened = Opened::open(vec![]);
+    let work = ro_workspace();
+    let workspace = work.0.clone();
+    // One allowance for `ping` and one deny covering the same command:
+    // the deny disqualifies the tally, so no allow evidence joins.
+    let mut body = String::new();
+    body.push_str(&ro_requested("a1", 1, "ping 1.2.3.4"));
+    body.push_str(&ro_review_request("a1", 2, "r1", "ping 1.2.3.4"));
+    body.push_str(&ro_review_resolved("a1", 3, "r1", "allow"));
+    body.push_str(&ro_requested("a2", 4, "ping 1.2.3.4"));
+    body.push_str(&ro_review_request("a2", 5, "r2", "ping 1.2.3.4"));
+    body.push_str(&ro_review_resolved("a2", 6, "r2", "deny"));
+    ro_seed(&opened.home, &workspace, &body);
+    opened.session.shell(Arc::new(ReadOnlyStub::new(&[(
+        "ping 1.2.3.4",
+        "ping 1.2.3.4",
+        "ping",
+    )])));
+    opened.session.notes_workspace(workspace);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let evidence = ro_evidence(&socket, &inbox);
+            assert_eq!(evidence.len(), 2);
+            for item in &evidence {
+                assert!(
+                    !matches!(item, contract::notes::Evidence::Allows(_)),
+                    "a deny covering the command disqualifies its allowance"
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn propose_notes_with_five_allows_includes_the_allowance() {
+    let opened = Opened::open(vec![]);
+    let work = ro_workspace();
+    let workspace = work.0.clone();
+    // Five reviewed allows of the same command gather one tally whose
+    // echo the reviewer answers.
+    let mut body = String::new();
+    for (index, seq) in [1u64, 4, 7, 10, 13].iter().enumerate() {
+        let action = format!("a{}", index + 1);
+        let request = format!("r{}", index + 1);
+        body.push_str(&ro_requested(&action, *seq, "ping 1.2.3.4"));
+        body.push_str(&ro_review_request(
+            &action,
+            seq + 1,
+            &request,
+            "ping 1.2.3.4",
+        ));
+        body.push_str(&ro_review_resolved(&action, seq + 2, &request, "allow"));
+    }
+    ro_seed(&opened.home, &workspace, &body);
+    opened.session.shell(Arc::new(ReadOnlyStub::new(&[(
+        "ping 1.2.3.4",
+        "ping 1.2.3.4",
+        "ping",
+    )])));
+    opened.session.notes_workspace(workspace);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let evidence = ro_evidence(&socket, &inbox);
+            assert_eq!(evidence.len(), 3);
+            let tally = evidence
+                .iter()
+                .find_map(|item| match item {
+                    contract::notes::Evidence::Allows(tally) => Some(tally),
+                    contract::notes::Evidence::Files { .. }
+                    | contract::notes::Evidence::Answer { .. }
+                    | contract::notes::Evidence::Session(_) => None,
+                })
+                .expect("five allows gather one tally");
+            assert_eq!(tally.subject(), "ping 1.2.3.4");
+            assert_eq!(tally.count(), 5);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
 }
 
 #[test]

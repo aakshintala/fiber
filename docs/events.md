@@ -1437,7 +1437,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `offered_file` | `text` (string), the file's full UTF-8 text |
 | `import` | `imported` (object with `mcp_servers`, `skills`, `commands` and `instructions`, arrays of the names the import copied) and `left_behind` (array with one object per item not copied: `item` and `reason` strings) (`docs/configuration.md`, "Importing") |
 | `shell` | with `send` false, `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command`; with `send` true, `result` is absent |
-| `propose_notes` | `evidence` (array: `kind`, `text`, and on `session` `prefix`, `count`, `here`), `proposed` (array: `text`, `cites`), `error` (`error`, optional) |
+| `propose_notes` | `evidence` (array: `kind`, `text`, and on `session` `prefix`, `count`, `here`, and on `allows` `subject`, `count`, `here`), `proposed` (array: `text`, `cites`), `error` (`error`, optional) |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
 | `pairing_code` | `code` (string), a new single-use pairing code, over the hub (`docs/invocation.md`, "Remote clients") |
 | `pair` | `device` (string), the paired device's name, and `token` (string), its device token, over the hub's port (`docs/invocation.md`, "Remote clients") |

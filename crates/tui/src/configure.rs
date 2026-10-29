@@ -296,13 +296,26 @@ pub struct ReviewerNotes {
     pub project: NotesFile,
 }
 
-/// One sent notes layer: the version its read saw, and the text to store.
+/// One read-only command entry a kept proposal row confirms: the entry
+/// the person's configuration gains, as `contract` renders it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadOnlyEntry {
+    /// The command path, command plus subcommand words.
+    pub command: String,
+    /// The entry's flag names.
+    pub flags: Vec<String>,
+}
+
+/// One sent notes layer: the version its read saw, the text to store,
+/// and the read-only entries to merge into its `shell.read_only`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotesWrite {
     /// The version [`Configure::reviewer_notes`] read.
     pub version: String,
     /// The `reviewer.context` to store.
     pub text: String,
+    /// The read-only entries to merge: empty sends none.
+    pub read_only: Vec<ReadOnlyEntry>,
 }
 
 /// What a notes save did.

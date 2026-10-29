@@ -8,10 +8,15 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use contract::inbox::{Ack, Delivery};
-use contract::notes::{Evidence, NotesAsk, ProposeNotesArgs, SessionTally, strip_userinfo};
+use contract::notes::{Evidence, NotesAsk, ProposeNotesArgs, SessionTally, Topic, strip_userinfo};
+use contract::tool::Tool;
 use contract::{CommandId, ErrorCode};
 
 use crate::client::Conn;
+
+mod read_only;
+
+pub use read_only::{ReadOnlyOutcome, ReadOnlySummary};
 
 /// The command, for the answer when no workspace is wired.
 const COMMAND: &str = "propose_notes";
@@ -43,12 +48,14 @@ pub(crate) fn run(conn: &mut Conn, id: CommandId, args: ProposeNotesArgs) {
     let gate = Arc::clone(&conn.gate);
     let home = gate.home.clone();
     let dir = gate.dir.clone();
+    let shell = gate.driver_shell();
     let (tx, rx) = mpsc::channel::<(ProposeNotesArgs, Ack)>();
     let spawned = thread::Builder::new()
         .name("notes".to_owned())
         .spawn(move || {
             if let Ok((args, ack)) = rx.recv() {
-                let evidence = gather(&home, &dir, &workspace);
+                let shell = shell.as_deref();
+                let evidence = gather(&home, &dir, &workspace, args.topic, shell);
                 gate.deliver(Delivery::ProposeNotes(NotesAsk { args, evidence }, ack));
             }
         });
@@ -70,11 +77,25 @@ pub(crate) fn run(conn: &mut Conn, id: CommandId, args: ProposeNotesArgs) {
 }
 
 /// Gathers `propose_notes` evidence for one topic: the project's files,
-/// then the session counts. The loop appends the person's answer last.
-/// Every gather reads afresh; nothing is cached across topics.
-pub(crate) fn gather(home: &Path, dir: &Path, workspace: &Path) -> Vec<Evidence> {
+/// then the session counts, then — only for the read-only topic with a
+/// shell wired — the reviewer-allow tallies for read-only shell subjects.
+/// The loop appends the person's answer last. Every gather reads afresh;
+/// nothing is cached across topics. It never writes, never locks and
+/// never fails: an unreadable log or workspace gives what was read before
+/// the failure, and a missing shell, a non-shell gate or an unreadable
+/// configuration gives no allow tallies.
+pub(crate) fn gather(
+    home: &Path,
+    dir: &Path,
+    workspace: &Path,
+    topic: Topic,
+    shell: Option<&dyn Tool>,
+) -> Vec<Evidence> {
     let mut evidence = files_evidence(workspace);
     evidence.extend(session_evidence(home, dir, workspace));
+    if topic == Topic::ReadOnlyCommands {
+        evidence.extend(read_only::allows_evidence(home, dir, workspace, shell));
+    }
     evidence
 }
 

@@ -82,41 +82,49 @@ A failed binary-level test retries once. The binary-level tests are the test
 binaries in `crates/main/tests/`; no other test retries, including the unit
 tests in `crates/main/src/`. A pass on retry does not block the
 merge, unless the pull request added or changed that test, in which case
-the test job fails (`docs/ci.md`). CI opens a flake issue naming the test and its first failure, or
-comments on the open one. The issue's title is `Flaky test: ` followed by
-the test as nextest prints it. Each body the report writes (the issue, a
+the test job fails (`docs/ci.md`). Flakes are tracked per test file. CI opens one flake issue for the file,
+naming the test and its failure, or comments on the file's open issue. The
+issue's title is `Flaky tests: ` followed by the test file's binary as
+nextest prints it before the test's name, such as `main::hub_exit_window`. Each body the report writes (the issue, a
 sighting comment, a pull request comment) names the tested commit on its own
 line: `tested <sha> = main <base> + head <head>` on a pull request run, where
 the merge commit's parents are main and the pull request head, and
 `tested <sha>` on a push run. The shas are full, so the
 `git merge-base --is-ancestor` check below takes them as written. The first
 failure's text is kept to 6000 characters; longer text is cut and `...` is
-appended. Within one report job a test title files or comments once; a repeat
+appended. Within one report job a file's title files or comments once; a repeat
 is skipped, and a repeated title takes its runner and detail from its first
 occurrence in file-name byte order. On a pull request run the report reads
 the failing file from the panic path: when main changed that file since
 the run's tested base it files nothing and notes the stale base in the
 summary, and when the pull request itself changed that file it comments on
 the pull request instead of filing. A failure with no panic path, or any
-failure on a push run, files as usual. A flake issue closes when the test
-is rewritten to be deterministic, never by rerunning. A failure on a
+failure on a push run, files as usual. A flake issue closes when the cause its tests share is fixed, never by
+rerunning. A failure on a
 commit that does not contain the fix (`git merge-base --is-ancestor <fix> <commit>` is false) neither
 reopens the closed issue nor counts against the fix.
 
-A test has one flake issue for its whole life. When no issue with its title
+A test file has one flake issue for its whole life. When no issue with its title
 is open, the report looks for a closed one. A failure on a commit that
 contains that issue's fix reopens it, with the sighting as a comment, and
 puts `needs-triage` back on it: the fix did not hold, so its root cause was
 wrong. The fix is the most recent `closed` event's `commit_id`: the commit
 that closed the issue. An issue whose latest close has a null `commit_id`
 closed without a pull request or commit, and reopens on any failure. Where
-a test has several closed issues, the most recently closed is the one: the
+a file has several closed issues, the most recently closed is the one: the
 greatest close time wins, and on a tie the higher issue number. Where the
 issue has several `closed` events, the latest wins the same way: the
-greatest `created_at`, and on a tie the greater event `id`. Only a test with
+greatest `created_at`, and on a tie the greater event `id`. Only a file with
 no flake issue at all gets a new one. The decision emits exactly one action
 per unique title, whatever the runner lists repeat; the unit tests assert
 that contract.
+
+A sighting outside CI, such as in a local gate, is a comment on the same
+file's issue with its command and output; a file with no issue gets one.
+The issue is worked as one ticket: its pull request names the cause the
+file's flaky tests share, such as a fixture, a wait helper or a timing
+pattern, and fixes that, not one test at a time. It shows the whole file
+passing under repeated runs under load.
 
 Crate-level and cross-crate tests never retry: they are deterministic, so a
 failure there is signal.

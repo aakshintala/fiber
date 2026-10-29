@@ -17,7 +17,7 @@ expression: "checked(rerun(), \"rerun\", 1)"
 
                Reviewer setup                                              ✕
 
-               Topic 1 of 5 · Source control
+               Topic 1 of 6 · Source control
                Earlier lines
                ✓ [global] my account amogh-dev is mine
                ✓ [per-project] github.com/acme/* are ours
