@@ -589,28 +589,38 @@ fn a_process_package_matching_the_provider_short_name_runs_without_a_session() {
         hello["payload"].get("session_id").is_none(),
         "the call hello omits the session id: {hello}"
     );
+    let cwd = std::env::current_dir().expect("a working directory");
     assert_eq!(
         hello["payload"]["workspace"],
-        json!(
-            std::env::current_dir()
-                .expect("a working directory")
-                .to_str()
-                .expect("a UTF-8 directory")
-        ),
+        json!(cwd.to_str().expect("a UTF-8 directory")),
         "the hello workspace is the CLI working directory"
     );
     let slug = config::dir_name("fiber.test/proc");
-    for dir in ["machine", "project"] {
-        assert_eq!(
-            hello["payload"]["data_dirs"][dir],
-            json!(
-                config::extension_data_dir(&home, &slug)
-                    .to_str()
-                    .expect("a UTF-8 data dir")
-            ),
-            "the hello carries the real {dir} data dir"
-        );
-    }
+    assert_eq!(
+        hello["payload"]["data_dirs"]["machine"],
+        json!(
+            config::extension_data_dir(&home, &slug)
+                .to_str()
+                .expect("a UTF-8 data dir")
+        ),
+        "the hello carries the real machine data dir"
+    );
+    // The project directory is keyed by the CLI working directory, not
+    // the machine directory: identical paths would prove nothing is
+    // keyed (`docs/extensions.md:211`, "With reason `call`").
+    let project =
+        config::ProjectKey::new(log::project_key(&cwd.canonicalize().unwrap_or(cwd.clone())))
+            .expect("the CLI working directory keys a project");
+    let project_dir = config::project_data_dir(&home, &project, &slug);
+    assert_eq!(
+        hello["payload"]["data_dirs"]["project"],
+        json!(project_dir.to_str().expect("a UTF-8 data dir")),
+        "the hello carries the real project data dir"
+    );
+    assert_ne!(
+        hello["payload"]["data_dirs"]["project"], hello["payload"]["data_dirs"]["machine"],
+        "the project data dir is keyed by the CLI working directory"
+    );
     assert_eq!(hello["payload"]["state"], json!({}));
 }
 

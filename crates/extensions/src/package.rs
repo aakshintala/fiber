@@ -221,6 +221,37 @@ impl Package {
     /// default, with no Config to read a configured allowance from.
     pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_millis(5000);
 
+    /// The CLI context a sessionless start without a host bundle runs
+    /// under: Fiber home from the environment and the CLI's working
+    /// directory, each falling back to the package directory when it
+    /// resolves to nothing. The credential precheck passes no host
+    /// bundle but still starts under the CLI, never under the package.
+    fn cli_context(dir: &std::path::Path) -> (PathBuf, PathBuf) {
+        let home = config::fiber_home_from_env().unwrap_or_else(|_| dir.to_path_buf());
+        let workspace = std::env::current_dir().unwrap_or_else(|_| dir.to_path_buf());
+        (home, workspace)
+    }
+
+    /// The sessionless project key: the workspace's identity with
+    /// symlinks resolved, as `log::project_key` derives it for
+    /// sessions, so the project data directory is the real per-project
+    /// path. A workspace that keys to no valid project fails the start
+    /// instead of writing another project's data.
+    fn sessionless_project(
+        name: &str,
+        workspace: &std::path::Path,
+    ) -> Result<config::ProjectKey, (contract::ErrorCode, String)> {
+        let identity = workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        config::ProjectKey::new(log::project_key(&identity)).map_err(|source| {
+            (
+                contract::ErrorCode::InvalidArguments,
+                format!("{name}: cannot key its project data: {source:?}"),
+            )
+        })
+    }
+
     /// Starts a process package in `Sessionless` mode and returns only
     /// its provider/function declarations, for the credential precheck:
     /// a manifest without a process section declares nothing and starts
@@ -292,84 +323,92 @@ impl Package {
             )
         })?;
         let slug = config::dir_name(&manifest.name);
-        let (runtime, context, state, drive, clock, deadline, services) = match mode {
-            ProcessProviderMode::Session(session) => {
-                let host = host.ok_or_else(|| {
+        // The mode decides the runtime, context, state, driver, clock
+        // and deadline; one initializer below builds the host services
+        // from them, so the session requirement and the sessionless
+        // restrictions read in one place.
+        let (runtime, context, state, drive, clock, deadline, browser, host_script, session) =
+            match mode {
+                ProcessProviderMode::Session(session) => {
+                    let host = host.ok_or_else(|| {
+                        (
+                            contract::ErrorCode::InvalidArguments,
+                            "a session process start needs its host bundle".to_owned(),
+                        )
+                    })?;
+                    let deadline = session.clock.now() + session.startup_timeout;
                     (
-                        contract::ErrorCode::InvalidArguments,
-                        "a session process start needs its host bundle".to_owned(),
+                        session.runtime,
+                        session.context,
+                        session.state,
+                        session.drive,
+                        session.clock,
+                        deadline,
+                        host.browser,
+                        host.host_script,
+                        host.session,
                     )
-                })?;
-                let deadline = session.clock.now() + session.startup_timeout;
-                let services = super::process::context::NativeHostServices {
-                    runtime: session.runtime.clone(),
-                    state: Arc::clone(&session.state),
-                    clock: Arc::clone(&session.clock),
-                    browser: host.browser,
-                    model: Mutex::new(None),
-                    delegate: Mutex::new(None),
-                    tool_runner: Mutex::new(None),
-                    secrets: manifest.secrets.clone(),
-                    host_script: host.host_script,
-                    session: Mutex::new(host.session),
-                };
-                (
-                    session.runtime,
-                    session.context,
-                    session.state,
-                    session.drive,
-                    session.clock,
-                    deadline,
-                    services,
-                )
-            }
-            ProcessProviderMode::Sessionless => {
-                let clock: Arc<dyn contract::clock::Clock> = Arc::clone(&options.clock);
-                let (home, workspace) = host
-                    .as_ref()
-                    .map(|host| (host.home.clone(), host.cwd.clone()))
-                    .unwrap_or_else(|| (options.dir.clone(), options.dir.clone()));
-                let state = super::host::state::StateRegistry::standalone().store(&manifest.name);
-                let data_dirs = contract::events::ExtensionDataDirs {
-                    machine: config::extension_data_dir(&home, &slug)
-                        .display()
-                        .to_string(),
-                    project: config::extension_data_dir(&home, &slug)
-                        .display()
-                        .to_string(),
-                };
-                let context = super::process::context::ProcessContext {
-                    session_id: None,
-                    reason: contract::events::ExtensionReason::Call,
-                    workspace,
-                    data_dirs,
-                    state: serde_json::Map::new(),
-                    extension: manifest.name.clone(),
-                    home: home.clone(),
-                };
-                let deadline = clock.now() + Self::DEFAULT_STARTUP_TIMEOUT;
-                let runtime = Runtime::new(clock.clone());
-                let browser: Arc<dyn crate::oauth::Browser> = host
-                    .as_ref()
-                    .map(|host| Arc::clone(&host.browser))
-                    .unwrap_or_else(|| Arc::new(crate::oauth::SystemBrowser::default()));
-                let host_script = host.as_ref().and_then(|host| host.host_script.clone());
-                let services = super::process::context::NativeHostServices {
-                    runtime: runtime.clone(),
-                    state: Arc::clone(&state),
-                    clock: Arc::clone(&clock),
-                    browser,
-                    model: Mutex::new(None),
-                    delegate: Mutex::new(None),
-                    tool_runner: Mutex::new(None),
-                    secrets: manifest.secrets.clone(),
-                    host_script,
-                    session: Mutex::new(None),
-                };
-                (runtime, context, state, None, clock, deadline, services)
-            }
-        };
-        let services = Arc::new(services);
+                }
+                ProcessProviderMode::Sessionless => {
+                    let clock: Arc<dyn contract::clock::Clock> = Arc::clone(&options.clock);
+                    // The Call-case passes the resolved CLI context; the
+                    // credential precheck passes no host bundle but still
+                    // runs under the CLI, never under the package.
+                    let (home, workspace) = match host.as_ref() {
+                        Some(host) => (host.home.clone(), host.cwd.clone()),
+                        None => Self::cli_context(&options.dir),
+                    };
+                    let project = Self::sessionless_project(&manifest.name, &workspace)?;
+                    let state =
+                        super::host::state::StateRegistry::standalone().store(&manifest.name);
+                    let data_dirs = contract::events::ExtensionDataDirs {
+                        machine: config::extension_data_dir(&home, &slug)
+                            .display()
+                            .to_string(),
+                        project: config::project_data_dir(&home, &project, &slug)
+                            .display()
+                            .to_string(),
+                    };
+                    let context = super::process::context::ProcessContext {
+                        run: super::process::context::ProcessRun::Call,
+                        workspace,
+                        data_dirs,
+                        state: serde_json::Map::new(),
+                        extension: manifest.name.clone(),
+                        home: home.clone(),
+                    };
+                    let deadline = clock.now() + Self::DEFAULT_STARTUP_TIMEOUT;
+                    let runtime = Runtime::new(clock.clone());
+                    let browser: Arc<dyn crate::oauth::Browser> = host
+                        .as_ref()
+                        .map(|host| Arc::clone(&host.browser))
+                        .unwrap_or_else(|| Arc::new(crate::oauth::SystemBrowser::default()));
+                    let host_script = host.as_ref().and_then(|host| host.host_script.clone());
+                    (
+                        runtime,
+                        context,
+                        state,
+                        None,
+                        clock,
+                        deadline,
+                        browser,
+                        host_script,
+                        None,
+                    )
+                }
+            };
+        let services = Arc::new(super::process::context::NativeHostServices {
+            runtime: runtime.clone(),
+            state: Arc::clone(&state),
+            clock: Arc::clone(&clock),
+            browser,
+            model: Mutex::new(None),
+            delegate: Mutex::new(None),
+            tool_runner: Mutex::new(None),
+            secrets: manifest.secrets.clone(),
+            host_script,
+            session: Mutex::new(session),
+        });
         let loaded = Self::load_with_runtime(
             PackageOptions {
                 dir: options.dir.clone(),
@@ -453,15 +492,12 @@ impl Package {
                 ),
             ));
         };
-        let mut guard = SessionlessGuard::new(extension);
-        let Some(owner) = package.extension().cloned() else {
-            return Err((
-                contract::ErrorCode::ExtensionFailed,
-                format!("{}: its process has no owner", manifest.name),
-            ));
-        };
+        // The package already holds this owner: awaiting on the same
+        // handle needs no relookup, and a failed start still reaps the
+        // child through the guard.
+        let mut guard = SessionlessGuard::new(Arc::clone(&extension));
         if let Err((code, message)) =
-            owner.await_ready(Some(deadline), &support::cancel::Token::new())
+            extension.await_ready(Some(deadline), &support::cancel::Token::new())
         {
             drop(guard);
             return Err((code, format!("{}: {message}", manifest.name)));
