@@ -288,6 +288,7 @@ const GIT_BLAME: &[Flag] = &[
 ];
 
 const GH_PR_VIEW: &[Flag] = &[
+    value("--jq"),
     value("--json"),
     flag("--comments"),
     value("--repo"),
@@ -295,6 +296,7 @@ const GH_PR_VIEW: &[Flag] = &[
 ];
 
 const GH_PR_LIST: &[Flag] = &[
+    value("--jq"),
     value("--state"),
     value("-s"),
     value("--author"),
@@ -314,6 +316,7 @@ const GH_PR_LIST: &[Flag] = &[
 ];
 
 const GH_PR_DIFF: &[Flag] = &[
+    value("--jq"),
     value("--color"),
     flag("--name-only"),
     flag("--patch"),
@@ -322,6 +325,7 @@ const GH_PR_DIFF: &[Flag] = &[
 ];
 
 const GH_PR_CHECKS: &[Flag] = &[
+    value("--jq"),
     flag("--watch"),
     flag("--required"),
     flag("--fail-fast"),
@@ -332,6 +336,7 @@ const GH_PR_CHECKS: &[Flag] = &[
 ];
 
 const GH_ISSUE_LIST: &[Flag] = &[
+    value("--jq"),
     value("--state"),
     value("-s"),
     value("--assignee"),
@@ -348,9 +353,10 @@ const GH_ISSUE_LIST: &[Flag] = &[
     value("-R"),
 ];
 
-const GH_REPO_VIEW: &[Flag] = &[value("--json")];
+const GH_REPO_VIEW: &[Flag] = &[value("--jq"), value("--json")];
 
 const GH_RUN_LIST: &[Flag] = &[
+    value("--jq"),
     value("--branch"),
     value("-b"),
     value("--status"),
@@ -372,6 +378,7 @@ const GH_RUN_LIST: &[Flag] = &[
 ];
 
 const GH_RUN_VIEW: &[Flag] = &[
+    value("--jq"),
     flag("--log"),
     flag("--log-failed"),
     flag("--exit-status"),

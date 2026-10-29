@@ -187,6 +187,7 @@ pub(super) fn accept_flag(
     cooked: &str,
 ) -> Option<()> {
     if let Some(name) = long_value_name(cooked) {
+        let inline = cooked.split_once('=').map_or("", |(_, value)| value);
         return entry
             .flags
             .iter()
@@ -194,6 +195,7 @@ pub(super) fn accept_flag(
                 flag.takes_value
                     && flag.spelling == name
                     && (!flag.digits_only || digits_value(cooked))
+                    && (flag.spelling != "--jq" || jq_program_ok(inline))
             })
             .then_some(());
     }
@@ -202,7 +204,12 @@ pub(super) fn accept_flag(
             return None;
         }
         if flag.takes_value {
-            words.next()?;
+            let Some(value) = words.next() else {
+                return None;
+            };
+            if flag.spelling == "--jq" && !jq_program_ok(&value.cooked) {
+                return None;
+            }
         }
         return Some(());
     }
@@ -229,6 +236,15 @@ fn digits_value(cooked: &str) -> bool {
     cooked.split_once('=').is_some_and(|(_, value)| {
         !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
     })
+}
+
+/// Whether a `--jq` program keeps the call read-only: it holds none of
+/// `env`, `ENV` or `input` as a substring, matched case-sensitively, so
+/// `$ENV`, `env.X` and `input_filename` all refuse. gh evaluates `--jq`
+/// in-process with the process environment loaded, which would print the
+/// environment into the result: the same leak the `/proc/` rule blocks.
+fn jq_program_ok(program: &str) -> bool {
+    !program.contains("env") && !program.contains("ENV") && !program.contains("input")
 }
 
 /// `--name=value`, and only that form. A short flag does not take `=`.

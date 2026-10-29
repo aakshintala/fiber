@@ -624,6 +624,33 @@ fn gh_read_only_forms_read() {
 }
 
 #[test]
+fn gh_jq_programs_read_unless_they_name_the_environment_or_input() {
+    // `docs/tools.md`, "Shell", "Effects": `--jq` joins each listed `gh`
+    // read, and a program holding `env`, `ENV` or `input` as a substring,
+    // matched case-sensitively, makes the call `executes`.
+    for (command, paths) in [
+        ("gh pr view 3 --json body --jq .body", vec!["/work/3"]),
+        ("gh pr diff --patch --jq .", vec!["/work"]),
+        ("gh pr view 3 --json body --jq Env", vec!["/work/3"]),
+        ("gh pr view 3 --json body --jq INPUT", vec!["/work/3"]),
+        // A repo-like program is `--jq`'s value, never a named owner.
+        ("gh pr view --jq owner/repo", vec!["/work"]),
+    ] {
+        assert_network(command, &[], &paths);
+    }
+    for command in [
+        "gh pr view 3 --json body --jq 'env.GH_TOKEN'",
+        "gh pr view 3 --json body --jq '$ENV'",
+        "gh pr view 3 --json body --jq '\"env\"'",
+        "gh pr view 3 --json body --jq inputs",
+        "gh pr view 3 --json body --jq=env.x",
+        "gh pr view 3 --json body --jq $(git merge-base a b)",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
 fn gh_host_overrides_execute() {
     // Any host override leaves the default endpoint, so the call is
     // reviewed: an assignment prefix naming a host variable, and the
