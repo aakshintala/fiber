@@ -137,7 +137,7 @@ impl Unavailable {
 /// ruleset rides `Some` until `install` takes it; the seccomp program is
 /// only borrowed, never moved or freed, in the child.
 #[cfg(target_os = "linux")]
-pub(crate) struct Prepared {
+pub struct Prepared {
     /// The Landlock ruleset with every grant added, ready to restrict.
     /// Taken by `install`, which consumes it through `restrict_self`.
     ruleset: Option<landlock::RulesetCreated>,
@@ -390,7 +390,7 @@ fn unresolvable(configured: &Path) -> Unavailable {
 /// Prepares the Landlock grants and the seccomp program. A setup error
 /// aborts spawn; the call fails and never runs unconfined.
 #[cfg(target_os = "linux")]
-pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
+pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
     use landlock::{Access as _, Compatible as _, RulesetAttr as _, RulesetCreatedAttr as _};
     check_available(settings, workspace).map_err(|unavailable| unavailable.to_string())?;
     let selected = landlock::ABI::V2;
@@ -498,7 +498,7 @@ pub(crate) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// the profile source, the command text, or a shell fragment.
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
-pub(crate) struct Prepared {
+pub struct Prepared {
     /// The inline Seatbelt source, with fixed parameter names only.
     pub(crate) profile: String,
     /// The `(name, path)` bindings passed as `-Dname=path` argv entries.
@@ -510,7 +510,7 @@ pub(crate) struct Prepared {
 #[cfg(target_os = "macos")]
 // mutants run on Linux, where it is not compiled.
 #[cfg_attr(false, mutants::skip)]
-pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
+pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
     check_available(settings, workspace).map_err(|unavailable| unavailable.to_string())?;
     build_profile(settings, workspace)
 }

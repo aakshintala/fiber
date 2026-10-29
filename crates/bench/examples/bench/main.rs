@@ -31,6 +31,7 @@ mod paging;
 mod pty;
 mod resume;
 mod run;
+mod sandbox;
 mod screen;
 mod session_list;
 #[cfg(test)]
