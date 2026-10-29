@@ -220,6 +220,16 @@ fn unset_message(
     message
 }
 
+/// One model left out because its placeholder has no value: its id and
+/// its display name, when the provider data names one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnconfiguredModel {
+    /// The model's id, as the vendor spells it.
+    pub id: String,
+    /// Its display name, when the provider data names one.
+    pub name: Option<String>,
+}
+
 /// The models of one provider left out because one placeholder has no
 /// value: `fiber models` prints one notice for them all
 /// (`docs/model-routing.md`, "A per-account host").
@@ -235,8 +245,8 @@ pub struct Unconfigured {
     pub(super) variable: Option<String>,
     /// Whether `fiber login <provider>` asks for the setting.
     pub(super) login: bool,
-    /// The ids of the models left out, in model order.
-    pub(super) models: Vec<String>,
+    /// The models left out, in model order.
+    pub(super) models: Vec<UnconfiguredModel>,
 }
 
 impl Unconfigured {
@@ -245,13 +255,23 @@ impl Unconfigured {
         &self.provider
     }
 
+    /// The extension that registered the provider, as it is registered.
+    pub fn extension(&self) -> &str {
+        &self.extension
+    }
+
     /// The placeholder with no value.
     pub fn setting(&self) -> &str {
         &self.setting
     }
 
-    /// The ids of every model left out for this setting, in model order.
-    pub fn models(&self) -> &[String] {
+    /// Whether `fiber login <provider>` asks for the setting.
+    pub fn login(&self) -> bool {
+        self.login
+    }
+
+    /// Every model left out for this setting, in model order.
+    pub fn models(&self) -> &[UnconfiguredModel] {
         &self.models
     }
 
@@ -263,7 +283,7 @@ impl Unconfigured {
         let count = self
             .models
             .iter()
-            .filter(|id| listed(&format!("{}/{id}", self.provider)))
+            .filter(|model| listed(&format!("{}/{}", self.provider, model.id)))
             .count();
         if count == 0 {
             return None;

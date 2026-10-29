@@ -74,6 +74,58 @@ impl Setup {
     fn write_config(&self, value: &Value) {
         std::fs::write(self.home().join("config.json"), value.to_string()).unwrap();
     }
+
+    /// Installs a data-only extension `extension` registering provider
+    /// `name` with two models on `{setting}` (one named) and that one
+    /// placeholder declared, the `install_data` layout with separate
+    /// extension and provider names. `credential` is merged into the
+    /// provider data, so a `credential_label` reads a login the
+    /// `fiber login` command cannot ask for.
+    fn install_placeholder_data(
+        &self,
+        extension: &str,
+        name: &str,
+        setting: &str,
+        credential: Value,
+    ) {
+        let template = format!("https://{{{setting}}}/v1");
+        let models = json!([
+            {"id": "m1", "protocol": "openai-responses",
+             "base_url": template, "context_window": 1000,
+             "name": "Acme One"},
+            {"id": "m2", "protocol": "openai-responses",
+             "base_url": template, "context_window": 1000},
+        ]);
+        let mut data = json!({"name": name, "models": models});
+        data["placeholders"] =
+            Value::Object([(setting.to_owned(), json!({}))].into_iter().collect());
+        for (key, value) in credential.as_object().cloned().unwrap_or_default() {
+            data[key] = value;
+        }
+        install_extension(
+            &self.home(),
+            &format!("extensions/{}", config::dir_name(extension)),
+            json!({
+                "name": extension,
+                "version": "v1.0.0",
+                "fiber": "0.1.0",
+                "api": extensions::API,
+            }),
+            &[(name, data)],
+        );
+    }
+
+    /// Writes `value` for `setting` to the extension's global
+    /// configuration file.
+    fn write_setting(&self, extension: &str, setting: &str, value: &str) {
+        let dir = self.home().join("config");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{}.json", config::dir_name(extension))),
+            json!({setting: value}).to_string(),
+        )
+        .unwrap();
+    }
 }
 
 /// A fixed `now` for the list-time tests: far past the epoch, so a
@@ -912,4 +964,129 @@ fn two_picker_reads_share_one_cancel() {
         dated,
         "no refresh rewrote the cache"
     );
+}
+
+/// A placeholder with no value leaves one group and no notice: the
+/// models stay out of the list, and the group carries their names, the
+/// raw extension, and the file built from it.
+#[test]
+fn a_placeholder_with_no_value_leaves_a_group_and_no_notice() {
+    let setup = Setup::new("fiber-model-list-left-out");
+    setup.install_placeholder_data("acme-ext", "acme", "workspace", json!({}));
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+    assert!(
+        catalogue.notices.is_empty(),
+        "no Missing notice at launch: {:?}",
+        catalogue.notices
+    );
+    assert_eq!(catalogue.left_out.len(), 1, "{:?}", catalogue.left_out);
+    let group = &catalogue.left_out[0];
+    assert_eq!(group.provider, "acme");
+    assert_eq!(group.extension, "acme-ext");
+    assert_eq!(group.file, "config/acme-ext.json");
+    assert_eq!(group.setting, "workspace");
+    assert!(group.login);
+    assert_eq!(
+        group
+            .models
+            .iter()
+            .map(|model| (model.id.as_str(), model.name.as_deref()))
+            .collect::<Vec<_>>(),
+        [("m1", Some("Acme One")), ("m2", None)]
+    );
+}
+
+/// A first-party extension's group carries its full name while its file
+/// is the short directory name: no path is derived from the provider.
+#[test]
+fn a_first_party_group_carries_its_full_name_and_short_file() {
+    let setup = Setup::new("fiber-model-list-first-party");
+    setup.install_placeholder_data(
+        "github.com/aakshintala/fiber/providers/opencode",
+        "opencode",
+        "workspace",
+        json!({"credential_label": {"names": "profile", "default": "the environment"}}),
+    );
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+    assert!(
+        catalogue.notices.is_empty(),
+        "no Missing notice at launch: {:?}",
+        catalogue.notices
+    );
+    assert_eq!(catalogue.left_out.len(), 1, "{:?}", catalogue.left_out);
+    let group = &catalogue.left_out[0];
+    assert_eq!(group.provider, "opencode");
+    assert_eq!(
+        group.extension,
+        "github.com/aakshintala/fiber/providers/opencode"
+    );
+    assert_eq!(group.file, "config/opencode.json");
+    assert_eq!(group.setting, "workspace");
+    assert!(!group.login, "a credential label reads no stored login");
+    assert_eq!(
+        group
+            .models
+            .iter()
+            .map(|model| (model.id.as_str(), model.name.as_deref()))
+            .collect::<Vec<_>>(),
+        [("m1", Some("Acme One")), ("m2", None)]
+    );
+}
+
+/// A value that is not a host still reads its per-model notice at
+/// launch, and leaves no group.
+#[test]
+fn a_value_that_is_not_a_host_keeps_its_notice_and_leaves_no_group() {
+    let setup = Setup::new("fiber-model-list-not-host");
+    setup.install_placeholder_data("acme-ext", "acme", "workspace", json!({}));
+    setup.write_setting("acme-ext", "workspace", "x/y");
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+    assert!(
+        catalogue.left_out.is_empty(),
+        "a not-a-host value groups nothing: {:?}",
+        catalogue.left_out
+    );
+    assert_eq!(catalogue.notices.len(), 2, "{:?}", catalogue.notices);
+    for (notice, id) in catalogue.notices.iter().zip(["acme/m1", "acme/m2"]) {
+        assert!(notice.message.contains(id), "{:?}", catalogue.notices);
+        assert!(
+            notice.message.contains("is not a host"),
+            "{:?}",
+            catalogue.notices
+        );
+        assert_eq!(notice.code, contract::ErrorCode::ModelUnconfigured);
+    }
 }

@@ -387,9 +387,11 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
 fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
     let setup = Setup::new();
     // A provider whose model's `base_url` names the `workspace`
-    // placeholder, which declares no environment variable and has no
-    // setting, so the terminal's own read leaves the model out with a
-    // `model_unconfigured` notice naming the model and the setting.
+    // placeholder, which declares no environment variable and whose
+    // setting value is not a host, so the terminal's own read leaves
+    // the model out with a per-model `model_unconfigured` notice
+    // naming the model and the setting: the positive control for the
+    // valueless placeholder's launch silence.
     let source = setup.root.path().join("src");
     support::write_json(
         &source.join("extension.json"),
@@ -419,6 +421,12 @@ fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
         &setup.home().join("config.json"),
         &json!({"model": "fake/alpha", "hub": {"idle_exit_ms": 200}}),
     );
+    // The setting value is not a host, so the fill leaves the model
+    // out per model rather than grouping it.
+    support::write_json(
+        &setup.home().join("config/fake.json"),
+        &json!({"workspace": "x/y"}),
+    );
     let mut run = Run::spawn(
         &setup,
         120,
@@ -433,11 +441,12 @@ fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
     // the background catalogue read answers.
     run.ready();
     // The band shows the notice's code beside its message. The wait
-    // names the code and the message's start, which survives the
-    // 120-column truncation; notices fade after 10 seconds, so the
-    // wait catches the row rather than sleeping past it.
+    // names the code and the model, which survive the 120-column
+    // truncation that cuts the message's tail; notices fade after 10
+    // seconds, so the wait catches the row rather than sleeping past
+    // it.
     let screen = run.wait_screen("the model_unconfigured notice", |screen| {
-        shows(screen, "model_unconfigured") && shows(screen, "needs the setting `workspace`")
+        shows(screen, "model_unconfigured") && shows(screen, "fake/alpha")
     });
     assert!(
         shows(&screen, "model_unconfigured · The model `fake/alpha`"),
@@ -452,6 +461,25 @@ fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
         "no model_invalid row carries it: {:?}",
         screen.rows
     );
+    // Ctrl+L opens the picker: the open wait names the picker frame,
+    // so a stall says whether the picker never opened.
+    run.write(b"\x0c");
+    run.wait_screen("the open picker", |screen| shows(screen, "Type to search"));
+    // The empty catalogue proves the read answered with nothing
+    // listed and nothing grouped: the value stayed per-model instead
+    // of becoming a count row.
+    run.wait_screen("the answered empty catalogue", |screen| {
+        shows(screen, "No models. Install")
+    });
+    let counted = run.screen().rows.clone();
+    assert!(
+        counted.iter().all(|row| !row.contains("models need")),
+        "no count row groups the not-a-host model: {counted:?}"
+    );
+    // Esc closes the picker at once with no query typed, and the quit
+    // goes out at home.
+    run.write(b"\x1b[27u");
+    run.wait_screen("home again", |screen| !shows(screen, "Type to search"));
     run.write(b"\x03\x03");
     run.wait_screen("the restored terminal", |screen| {
         !screen.alternate_screen && !screen.hide_cursor
