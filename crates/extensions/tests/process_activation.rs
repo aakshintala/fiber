@@ -350,7 +350,7 @@ fn registry_plan(hello: &Path, tool_answer: &Path, hook_answer: &Path) -> Value 
         plan.push(action.clone());
     }
     plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
-    plan.push(json!({"read_until": {"path": "kind", "equals": "command_accepted"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
     plan.push(json!({"loop": serve}));
     Value::Array(plan)
 }
@@ -638,7 +638,7 @@ fn services_plan(markers: &Path) -> Value {
         plan.push(action.clone());
     }
     plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
-    plan.push(json!({"read_until": {"path": "kind", "equals": "command_accepted"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
     plan.push(json!({"loop": serve}));
     Value::Array(plan)
 }
@@ -751,7 +751,7 @@ fn events_plan(marker: &Path) -> Value {
         plan.push(action.clone());
     }
     plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
-    plan.push(json!({"read_until": {"path": "kind", "equals": "command_accepted"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
     plan.push(json!({"loop": serve}));
     Value::Array(plan)
 }

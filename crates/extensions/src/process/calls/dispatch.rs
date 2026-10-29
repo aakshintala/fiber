@@ -41,12 +41,12 @@ impl ProcessExtension {
                 request_id,
             } => self.handle_call(id, call, args, request_id),
             transport::ParsedLine::Ready { id } => {
+                self.answer_accepted(&id, None);
                 self.shared
                     .ready
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 lifecycle::note_ready(&self.shared);
                 self.shared.ready_park.bump();
-                self.answer_accepted(&id, None);
             }
             transport::ParsedLine::Reply {
                 id,

@@ -481,7 +481,7 @@ fn process_peer_plan(provider: &str, hello: &std::path::Path) -> Value {
         {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": [provider, {"models": {"timeout": 60000, "run": true}}]}}},
         {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
         {"send": {"id": "ready", "command": "ready"}},
-        {"read_until": {"path": "payload.command_id", "equals": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}},
         {"loop": [
             {"read": {"as": "incoming"}},
             {"if": {"path": "incoming.kind", "equals": "extension_request", "then": [
