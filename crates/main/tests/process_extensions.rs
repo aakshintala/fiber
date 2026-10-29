@@ -876,9 +876,13 @@ fn process_watcher_receives_original_session_envelopes() {
 
 /// Configures one fixture MCP server `fx` in `dir` behind a held startup:
 /// setup creates the `release` FIFO before either owner starts; the
-/// wrapper records its pid and `mcp-held`, blocks reading the FIFO, then
-/// execs the real fixture server once the test releases it.
-fn configure_held_fx(setup: &Setup, dir: &Path) -> (PathBuf, PathBuf) {
+/// wrapper records its pid, then blocks reading the FIFO, then execs the
+/// real fixture server once the test releases it. The wrapper's read-only
+/// open waits for the test's writer, and the test's write-only open waits
+/// for the wrapper's reader, so the kernel holds the release until the
+/// wrapper has arrived at its blocking read: completion of the release
+/// proves the hold was established, with no signal file in between.
+fn configure_held_fx(setup: &Setup, dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let release = dir.join("release");
     assert!(
@@ -890,12 +894,9 @@ fn configure_held_fx(setup: &Setup, dir: &Path) -> (PathBuf, PathBuf) {
         "the release FIFO is created before session startup"
     );
     let wrapper = dir.join("fx-wrapper.sh");
-    // The read-write open establishes the hold before the signal: the
-    // wrapper is already parked in its blocking read when the test sees
-    // `mcp-held`, so the release cannot slip past the hold.
     std::fs::write(
         &wrapper,
-        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf '%s\\n' \"$$\" > \"$dir/mcp-pid\"\nexec 3<> \"$dir/release\"\nprintf held > \"$dir/mcp-held\"\nread _ <&3\nexec 3<&-\nexec /bin/bash \"$fixture\" \"$dir\"\n",
+        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf '%s\\n' \"$$\" > \"$dir/mcp-pid\"\nread _ < \"$dir/release\"\nexec /bin/bash \"$fixture\" \"$dir\"\n",
     )
     .unwrap();
     let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
@@ -910,7 +911,7 @@ fn configure_held_fx(setup: &Setup, dir: &Path) -> (PathBuf, PathBuf) {
             }}}
         }),
     );
-    (dir.join("mcp-held"), dir.join("mcp-pid"))
+    dir.join("mcp-pid")
 }
 
 /// A required process spawn failure joins the pending MCP start before it
@@ -918,15 +919,16 @@ fn configure_held_fx(setup: &Setup, dir: &Path) -> (PathBuf, PathBuf) {
 /// session fails at once on the missing program, and the test only then
 /// releases the hold — so the join the drop performs returns the started
 /// servers instead of abandoning them, and the failed session stops every
-/// one. No sleeps: the hold file signals, the release FIFO unblocks, and
-/// the deadline bounds every wait.
+/// one. No sleeps: the release write blocks until the wrapper's
+/// read-only open arrives, so its completion proves the hold was
+/// established, and the deadline bounds every wait.
 #[test]
 fn required_process_spawn_failure_joins_then_stops_held_mcp() {
     let setup = Setup::new();
     let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
     let provider = calling(&[]);
     setup.provider(&provider);
-    let (held, pid_file) = configure_held_fx(&setup, &setup.workspace().join("fx"));
+    let pid_file = configure_held_fx(&setup, &setup.workspace().join("fx"));
     process_with(
         &setup,
         "broken",
@@ -945,14 +947,30 @@ fn required_process_spawn_failure_joins_then_stops_held_mcp() {
     let watchdog = Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    // Signal: the MCP server reached its hold in startup.
-    fakes::wait_until(
-        "the MCP server to reach its hold",
-        setup.deadline,
-        move || held.is_file(),
-    );
+    // The wrapper records its pid before it blocks, so this wait proves
+    // the wrapper started; the release write below blocks in its
+    // write-only open until the wrapper's read-only open arrives, so its
+    // completion proves the hold was established before the release.
+    let pid_seen = pid_file.clone();
+    fakes::wait_until("the wrapper to start", setup.deadline, move || {
+        pid_seen.is_file()
+    });
     // Release the hold so the joined start returns its servers.
-    std::fs::write(pid_file.parent().unwrap().join("release"), "go\n").unwrap();
+    let release = pid_file.parent().unwrap().join("release");
+    let (wrote, wrote_rx) = mpsc::channel();
+    thread::spawn(move || {
+        std::fs::write(&release, "go\n").unwrap();
+        wrote.send(()).unwrap();
+    });
+    match setup.deadline.recv(&wrote_rx) {
+        Ok(()) => {}
+        Err(_) => support::expired(
+            setup.deadline,
+            group,
+            &finished,
+            "the wrapper to take the release",
+        ),
+    }
     let output = match setup.deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(setup.deadline, group, &finished, "`fiber ask` to exit"),
