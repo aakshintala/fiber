@@ -3654,6 +3654,7 @@ fn body_len_counts_wrapped_status_and_short_draw_clips() {
 /// The wheel clamps a focus that leaves the window to the nearest
 /// shown target row: from the first target, one step down moves the
 /// window three rows and the focus to its first shown row.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_clamps_a_leaving_focus_to_the_window() {
     let fake = fake_with(many_targets());
@@ -3686,6 +3687,7 @@ fn keyboard_navigation_after_wheel_keeps_its_one_target_step() {
 /// The wheel up from the top row moves nothing, and a panel step takes
 /// no wheel: Enter opens the panel, and the wheel over it changes
 /// nothing.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_up_at_the_top_and_over_a_panel_step_moves_nothing() {
     let fake = fake_with(many_targets());

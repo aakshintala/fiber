@@ -78,6 +78,7 @@ fn wheel_keeps_a_visible_focus_and_shifts_the_window_three() {
 /// The wheel clamps a focus that leaves the window to the nearest
 /// shown target row: from the top row, one step down moves the window
 /// three rows and the focus to its first row.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_clamps_a_leaving_focus_to_the_window() {
     let fake = fake_with(many_targets());

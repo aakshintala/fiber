@@ -352,9 +352,11 @@ impl App {
         }
         // The key map replaces the swapped view over the full content
         // area and swallows there: its noted slab where drawn, the whole
-        // area on home, the conversation column attached.
+        // area on home, the conversation column attached. A home session
+        // still swallows outside: continuing would reach no conversation
+        // and no home list, so the session check is dead (removed).
         if self.keymap_top().is_some() {
-            let home = self.home.is_some() && self.session().is_none();
+            let home = self.home.is_some();
             let in_slab = self
                 .frames()
                 .slab_of(Surface::Keymap)

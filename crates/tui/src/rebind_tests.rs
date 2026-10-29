@@ -538,6 +538,7 @@ fn a_row_click_selects_while_browsing_only() {
 /// The wheel shifts the visible rows three a step while browsing,
 /// keeping a still-visible selection where it was and clearing the
 /// transient message as a stroke does.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_shifts_three_rows_and_keeps_a_visible_selection_while_browsing() {
     let keys = keys();
@@ -556,6 +557,7 @@ fn wheel_shifts_three_rows_and_keeps_a_visible_selection_while_browsing() {
 
 /// The wheel in a capture is swallowed, never a captured key: the
 /// capture waits on.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_in_a_capture_waits_on() {
     let keys = keys();
@@ -571,6 +573,7 @@ fn wheel_in_a_capture_waits_on() {
 }
 
 /// The wheel in a clash is swallowed: the clash prompt stands.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_in_a_clash_keeps_the_prompt() {
     let keys = keys();

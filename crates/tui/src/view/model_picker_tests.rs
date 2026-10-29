@@ -935,6 +935,7 @@ fn a_session_only_model_takes_three_rows_in_the_window() {
     assert_eq!(window(&view, 6), (0, 2));
 }
 
+/// The wheel moves the picker top by three body rows (`docs/tui.md:576`).
 #[test]
 fn wheel_moves_the_picker_top_by_three_body_rows() {
     let mut app = attached(100, 18);
@@ -1427,6 +1428,7 @@ fn count_rows_scroll_with_their_sections_window() {
     assert_eq!(body(&view, 160, 48).len(), 2 + 15);
 }
 
+/// Wheel offsets count headings and blank rows as displayed rows (`docs/tui.md:576`).
 #[test]
 fn wheel_offsets_count_headings_and_blank_rows_as_displayed_rows() {
     let mut app = choosing_left_out(160, 18);

@@ -1904,7 +1904,7 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
 }
 
 /// The wheel over a live tty item is swallowed: neither the tty's rows
-/// nor the parent move (`docs/tui.md`, "Swapped views"; see #3578).
+/// nor the parent move (`docs/tui.md:576`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_a_live_tty_item_moves_nothing() {
     let mut app = home();
@@ -1926,7 +1926,7 @@ fn wheel_over_a_live_tty_item_moves_nothing() {
 }
 
 /// The wheel over a finished tty item is swallowed: neither the tty's
-/// rows nor the parent move (`docs/tui.md`, "Swapped views"; see #3578).
+/// rows nor the parent move (`docs/tui.md:576`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_a_finished_tty_item_moves_nothing() {
     let mut app = home();
@@ -1949,7 +1949,7 @@ fn wheel_over_a_finished_tty_item_moves_nothing() {
 }
 
 /// The wheel over a finished non-tty job item is swallowed: neither the
-/// job's rows nor the parent move (`docs/tui.md`, "Swapped views";
+/// job's rows nor the parent move (`docs/tui.md:576`, "Swapped views";
 /// see #3578).
 #[test]
 fn wheel_over_a_finished_job_item_moves_nothing() {
@@ -1972,7 +1972,7 @@ fn wheel_over_a_finished_job_item_moves_nothing() {
 }
 
 /// The wheel over another harness's delegate item is swallowed: neither
-/// the item's rows nor the parent move (`docs/tui.md`, "Swapped views";
+/// the item's rows nor the parent move (`docs/tui.md:576`, "Swapped views";
 /// see #3578).
 #[test]
 fn wheel_over_a_foreign_delegate_item_moves_nothing() {
@@ -2024,7 +2024,7 @@ fn tall_transcript(app: &mut App) {
 }
 
 /// The wheel over the fiber delegate's transcript scrolls it three rows,
-/// leaving the stashed parent (`docs/tui.md`, "Swapped views"; see
+/// leaving the stashed parent (`docs/tui.md:576`, "Swapped views"; see
 /// #3578).
 #[test]
 fn wheel_over_the_fiber_transcript_scrolls_it_not_the_parent() {
@@ -2055,7 +2055,7 @@ fn wheel_over_the_fiber_transcript_scrolls_it_not_the_parent() {
 }
 
 /// The item's non-scrolling header swallows the wheel; it reaches neither
-/// the transcript body nor the stashed parent (`docs/tui.md`, "Swapped
+/// the transcript body nor the stashed parent (`docs/tui.md:576`, "Swapped
 /// views"; see #3578).
 #[test]
 fn wheel_over_the_transcript_header_moves_nothing() {
@@ -2088,6 +2088,7 @@ fn wheel_over_the_transcript_header_moves_nothing() {
 /// The item owns its final drawn row, but the row immediately below the
 /// content rectangle is not part of the item and cannot reach the hidden
 /// parent.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_at_the_item_content_edge_stops_at_its_last_row() {
     let mut app = home();
@@ -2133,7 +2134,7 @@ fn wheel_at_the_item_content_edge_stops_at_its_last_row() {
 /// The wheel over a fiber transcript overlapping Offer and Results goes
 /// to the top-drawn item view only: the transcript scrolls three rows
 /// while the stashed parent, the offer and the results stay put
-/// (`docs/tui.md`, "Swapped views"; see #3578).
+/// (`docs/tui.md:576`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_the_fiber_transcript_wins_over_offer_and_results() {
     let mut app = home();
@@ -2216,6 +2217,7 @@ fn wheel_over_the_fiber_transcript_wins_over_offer_and_results() {
 
 /// A swapped picker is drawn above the attached item and owns its wheel:
 /// the picker moves three displayed rows while the item stays put.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_over_the_model_picker_above_an_item_moves_the_picker() {
     let mut app = home();
@@ -2268,6 +2270,7 @@ fn wheel_over_the_model_picker_above_an_item_moves_the_picker() {
 
 /// A drawn Search or Completion slab above an item swallows wheel input
 /// before it can reach the item transcript.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_inside_search_and_completion_slabs_over_an_item_moves_nothing() {
     for surface in [crate::app::Surface::Search, crate::app::Surface::Completion] {

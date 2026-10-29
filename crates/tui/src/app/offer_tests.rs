@@ -689,7 +689,7 @@ fn cursor_text(app: &App) -> String {
 }
 
 /// The wheel over the offer with no source open shifts its rows three,
-/// never the conversation under it (`docs/tui.md`, "Swapped views";
+/// never the conversation under it (`docs/tui.md:576`, "Swapped views";
 /// see #3578). Two Downs put the cursor on the third item, so the
 /// window moves three rows under it while the choice stays.
 #[test]
@@ -728,6 +728,7 @@ fn wheel_over_offer_moves_the_cursor_not_the_conversation() {
 
 /// Offer is drawn instead of Results when both are open, so wheel input
 /// reaches the offer cursor and leaves the hidden result window alone.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_over_offer_wins_over_open_results() {
     let mut app = attached();
@@ -780,6 +781,7 @@ fn wheel_over_offer_wins_over_open_results() {
 /// The wheel over the offer with no source open clamps a cursor that
 /// leaves the window to the nearest shown row, and never chooses: the
 /// cursor moves off the first item while no answer sends.
+/// (`docs/tui.md:576`).
 #[test]
 fn wheel_over_offer_clamps_a_leaving_cursor_without_choosing() {
     let mut app = attached();
@@ -802,7 +804,7 @@ fn wheel_over_offer_clamps_a_leaving_cursor_without_choosing() {
 }
 
 /// The wheel over the offer with its source open scrolls the source
-/// three rows, never the conversation under it (`docs/tui.md`, "Swapped
+/// three rows, never the conversation under it (`docs/tui.md:576`, "Swapped
 /// views"; see #3578).
 #[test]
 fn wheel_over_offer_source_scrolls_the_source_not_the_conversation() {
@@ -880,7 +882,7 @@ fn fold_delegates(app: &mut App, n: usize) {
 
 /// A wheel over the panel with the offer also open keeps the panel's
 /// existing behavior: the panel scrolls while the offer cursor and the
-/// conversation stay (`docs/tui.md`, "Swapped views").
+/// conversation stay (`docs/tui.md:576`, "Swapped views").
 #[test]
 fn wheel_over_panel_with_offer_open_keeps_the_panel() {
     let mut app = panel_app();
