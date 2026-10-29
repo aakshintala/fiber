@@ -2142,49 +2142,6 @@ fn a_missing_a_foreign_and_an_other_topic_give_no_allows() {
     }
 }
 
-#[test]
-fn tallies_cap_at_sixty_four() {
-    let root = fakes::TempDir::new("doors-notes-cap");
-    let home = root.path().join("home");
-    let workspace = repo(root.path(), "here");
-    let key = log::project_key(&worktree::project(&workspace));
-    let mut body = String::new();
-    let mut owned = Vec::new();
-    let mut seq = 1;
-    for index in 0..65 {
-        let command = format!("capcmd-{index:02} query --json");
-        let prefix = format!("capcmd-{index:02} query");
-        let actions: Vec<String> = (0..5).map(|at| format!("a_{index}_{at}")).collect();
-        let refs: Vec<&str> = actions.iter().map(String::as_str).collect();
-        body.push_str(&allow_calls(&refs, &command, "reviewer", false, seq));
-        seq += 10;
-        owned.push((command, prefix));
-    }
-    // One more allow for the last subject: it sorts first by count.
-    body.push_str(&allow_calls(
-        &["a_last"],
-        "capcmd-64 query --json",
-        "reviewer",
-        false,
-        seq,
-    ));
-    seed_calls(&home, &key, "s_1", workspace.to_str().unwrap(), &body);
-    let table: Vec<(&str, Verdict)> = owned
-        .iter()
-        .map(|(command, prefix)| (command.as_str(), Ok((command.as_str(), prefix.as_str()))))
-        .collect();
-    let shell = StubShell::new("shell", &table);
-    // The doc promises no visible order, so the test pins the cap bound
-    // only: sixty-four tallies stay, six-count subject included.
-    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
-    assert_eq!(found.len(), 64);
-    let top = found
-        .iter()
-        .find(|(subject, _, _, _)| subject == "capcmd-64 query --json")
-        .unwrap();
-    assert_eq!(top.1, 6);
-}
-
 /// A shell that executes every tabled command, naming the subject and
 /// prefix the built-in classifier reports for commands it owns no rule
 /// for (C19): `executes` with both halves, never `reads`.

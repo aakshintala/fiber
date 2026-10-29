@@ -211,6 +211,9 @@ fn opening_shows_topic_one_with_both_layers_read() {
 
 #[test]
 fn the_topics_run_in_the_order_the_contract_gives_to_the_diff() {
+    // The proposal order is the bullets' order (docs/permissions.md,
+    // "Setting up the notes": "It proposes lines, one topic at a time, in
+    // the order of the bullets above").
     let mut setup = Setup::open(notes("", ""));
     let mut seen = Vec::new();
     for topic in Topic::ALL {
