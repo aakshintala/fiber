@@ -241,6 +241,20 @@ fn note_swapped(app: &App, slab: Option<Rect>) {
     app.frames().note(surface, slab);
 }
 
+/// The logo image's 32-by-4 cells, while home's image form draws, else
+/// none: the event loop positions the image write here (`docs/tui.md`,
+/// "The logo").
+pub(crate) fn logo_rect(app: &App, area: Rect) -> Option<Rect> {
+    if app.chrome().floor_line().is_some() {
+        return None;
+    }
+    if app.swapped_view_open() && app.on_home() {
+        return None;
+    }
+    let screen = app.home_screen()?;
+    home::logo_rect(app, &screen, area)
+}
+
 /// Draws `app` into `area` of `buf`, from the bottom up: the narrow
 /// layout's status rows on the last rows, then the input box with a
 /// completion panel above it, or the approval panel in their place, then

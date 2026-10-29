@@ -29,6 +29,7 @@ use signal_hook::iterator::Signals;
 
 use crate::app::{App, Effect};
 use crate::catalogue;
+use crate::graphics::logo;
 use crate::home::Launch;
 use crate::keys::{Event, MouseKind, Parser, Reply};
 use crate::link::{Feed, Line};
@@ -154,6 +155,7 @@ pub(crate) fn run_with(
     let (look, notice) = Look::new(std::mem::take(&mut launch.theme), &|name| {
         std::env::var(name).ok()
     });
+    app.set_logo_depth(look.depth());
     screen.set_look(look);
     if let Some(notice) = notice {
         app.push_notice("config_invalid", notice);
@@ -213,8 +215,11 @@ pub(crate) fn run_with(
         app.start_model_pick();
     }
     // One cell's pixels, for the placeholder grid, from the tty the
-    // first frame already sized (`docs/tui.md`, "Images").
+    // first frame already sized (`docs/tui.md`, "Images"). The measured
+    // cell rides beside it for the logo's Sixel gate, never the
+    // fallback (`docs/tui.md`, "The logo").
     app.set_cell(term::cell(term::pixels(&tty), (width, height)));
+    app.set_measured_cell(term::measured_cell(term::pixels(&tty), (width, height)));
     app.set_size(width, height);
     let retry = Retry::new(&clock);
     let open = crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
@@ -286,6 +291,7 @@ pub(crate) fn run_with(
         app,
         parser: Parser::default(),
         screen,
+        logo: logo::Emit::default(),
         hub: Connection::new(Arc::clone(&retry)),
         kitty_writer: None,
         tty_lock: Arc::new(TtyLock::new()),
@@ -408,6 +414,9 @@ struct Loop<B: Backend> {
     app: App,
     parser: Parser,
     screen: Screen<B>,
+    /// The logo's emission: once per theme per home visit
+    /// (`docs/tui.md`, "The logo").
+    logo: logo::Emit,
     /// The hub connection: the stream, the held inputs and the hub
     /// thread's permit, reached only through its interface.
     hub: Connection,
@@ -604,11 +613,28 @@ impl<B: Backend> Loop<B> {
                     Effect::None
                 }
                 Event::Reply(Reply::Graphics { id, ok }) => {
-                    self.graphics(id, ok);
+                    if id == logo::ID {
+                        // The logo's own transmit: a rejection leaves the
+                        // pixel logo with no notice and no retry, touching
+                        // no image state (`docs/tui.md`, "The logo").
+                        if !ok {
+                            self.app.set_logo_rejected();
+                        }
+                    } else {
+                        self.graphics(id, ok);
+                    }
                     Effect::None
                 }
-                Event::Reply(Reply::Version(_)) => Effect::None,
-                Event::Reply(Reply::DeviceAttributes { sixel: _ }) => Effect::None,
+                Event::Reply(Reply::Version(text)) => {
+                    self.version(text);
+                    Effect::None
+                }
+                Event::Reply(Reply::DeviceAttributes { sixel }) => {
+                    if sixel {
+                        self.app.set_sixel();
+                    }
+                    Effect::None
+                }
                 Event::Focus(_) => Effect::None,
             };
             match effect {
@@ -835,6 +861,10 @@ impl<B: Backend> Loop<B> {
                 if let Ok((width, height)) = term::size(&self.tty) {
                     self.app
                         .set_cell(term::cell(term::pixels(&self.tty), (width, height)));
+                    self.app.set_measured_cell(term::measured_cell(
+                        term::pixels(&self.tty),
+                        (width, height),
+                    ));
                     self.app.set_size(width, height);
                     let lock = Arc::clone(&self.tty_lock);
                     let _guard = lock.loop_write();
@@ -949,6 +979,12 @@ impl<B: Backend> Loop<B> {
         // The display fetches the frame drew go out after it, with the
         // kitty bytes their answers queued (`docs/tui.md`, "Images").
         self.drain_display();
+        // The logo's image follows the drawn frame: its bytes position
+        // at the drawn rect, or a lost rect repaints and redraws at once
+        // (`docs/tui.md`, "The logo").
+        if let Some(code) = self.logo_step() {
+            return Some(code);
+        }
         self.app.sweep_notices(self.clock.now());
         // The open's `full` raise goes out after the first frame draws,
         // so no `full` line is written before it.
@@ -1193,6 +1229,136 @@ impl<B: Backend> Loop<B> {
         if !ok {
             self.app.fail_display_image(id);
         }
+    }
+
+    /// An XTVERSION reply: an iTerm2-family version names iTerm2's
+    /// image protocol, so the logo may draw as an image
+    /// (`docs/tui.md`, "The logo"). Any other text changes nothing.
+    fn version(&mut self, text: String) {
+        if text.starts_with("iTerm2 ") || text.starts_with("WezTerm ") {
+            self.app.set_iterm();
+        }
+    }
+
+    /// Decides this frame's logo emission for the drawn home: the
+    /// protocol from the drawn form, the rect, the tint, and whether
+    /// the frame wrote.
+    fn logo_after(&mut self, repainted: bool) -> (logo::Protocol, logo::After) {
+        let rect = crate::view::logo_rect(&self.app, self.screen.area());
+        let shown = self.app.home_screen().map(|screen| screen.logo);
+        let protocol = match shown {
+            Some(logo::Shown::Kitty) => logo::Protocol::Kitty,
+            Some(logo::Shown::Blank) => {
+                let sixel = if self.app.sixel() {
+                    self.app.measured_cell().filter(|cell| logo::cell_ok(*cell))
+                } else {
+                    None
+                };
+                logo::select(false, self.app.iterm(), sixel)
+            }
+            _ => logo::Protocol::None,
+        };
+        let tint = self
+            .screen
+            .logo_tint()
+            .map(|(tint, (red, green, blue))| (tint, [red, green, blue]));
+        let touched = self.screen.take_touched();
+        let after = self
+            .logo
+            .after_frame(protocol, rect, touched, repainted, tint);
+        (protocol, after)
+    }
+
+    /// The logo's image after the drawn frame: its transmit or
+    /// positioned write goes out for the drawn rect, or a lost rect
+    /// repaints and the current screen redraws at once. Returns the
+    /// quit code when a tty write fails (`docs/tui.md`, "The logo").
+    fn logo_step(&mut self) -> Option<i32> {
+        let (protocol, after) = self.logo_after(false);
+        if after.repaint {
+            let lock = Arc::clone(&self.tty_lock);
+            let _guard = lock.loop_write();
+            if self.screen.repaint().is_err() {
+                return Some(1);
+            }
+            if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
+                return Some(1);
+            }
+            let (protocol, after) = self.logo_after(true);
+            return self.logo_write(protocol, after);
+        }
+        self.logo_write(protocol, after)
+    }
+
+    /// Writes one logo emission: the kitty transmit beside its place
+    /// bytes through the chunk writer, else the positioned write
+    /// straight to the tty.
+    fn logo_write(&mut self, protocol: logo::Protocol, after: logo::After) -> Option<i32> {
+        if after.bytes.is_empty() {
+            return None;
+        }
+        if protocol == logo::Protocol::Kitty {
+            let (tint, _) = self.screen.logo_tint()?;
+            if !self.ensure_kitty_writer() {
+                return None;
+            }
+            let chunks = Self::kitty_logo_chunks(&logo::kitty(&tint));
+            let place = after.bytes;
+            let Some(writer) = &self.kitty_writer else {
+                return None;
+            };
+            if !writer.push(Item::Image {
+                id: logo::ID,
+                chunks,
+                place,
+            }) {
+                return None;
+            }
+            return None;
+        }
+        let lock = Arc::clone(&self.tty_lock);
+        let _guard = lock.loop_write();
+        if self.tty.write_all(&after.bytes).is_err() {
+            return Some(1);
+        }
+        None
+    }
+
+    /// Splits the logo's base64 payload into kitty transmit chunks: the
+    /// first names the RGBA raster under the logo's id, the rest
+    /// continue it, `m=1` on all but the last, so the writer thread
+    /// sends each chunk between loop writes without splitting an
+    /// escape (`docs/tui.md`, "Images", "The logo").
+    fn kitty_logo_chunks(payload: &[u8]) -> Vec<Vec<u8>> {
+        const CHUNK: usize = 4096;
+        let mut out = Vec::new();
+        let mut pieces = payload.chunks(CHUNK).peekable();
+        if pieces.peek().is_none() {
+            return out;
+        }
+        let mut first = true;
+        while let Some(piece) = pieces.next() {
+            let more = u8::from(pieces.peek().is_some());
+            let mut chunk = Vec::new();
+            if first {
+                chunk.extend_from_slice(
+                    format!(
+                        "\x1b_Ga=t,f=32,s={},v={},i={},q=2,m={more};",
+                        logo::WIDTH,
+                        logo::HEIGHT,
+                        logo::ID
+                    )
+                    .as_bytes(),
+                );
+                first = false;
+            } else {
+                chunk.extend_from_slice(format!("\x1b_Gm={more};").as_bytes());
+            }
+            chunk.extend_from_slice(piece);
+            chunk.extend_from_slice(b"\x1b\\");
+            out.push(chunk);
+        }
+        out
     }
 
     /// Kitty's flags reply: the first pushes the flags the bindings need
@@ -1450,6 +1616,7 @@ impl<B: Backend> Loop<B> {
             return;
         };
         let (look, notice) = Look::new(setting, &|name| (self.var)(name));
+        self.app.set_logo_depth(look.depth());
         self.screen.set_look(look);
         if let Some(notice) = notice {
             self.app.push_notice("config_invalid", notice);

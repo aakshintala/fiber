@@ -1,0 +1,110 @@
+//! Tests for the logo's Sixel encoder: exact bytes from the format
+//! the encoder implements (P2 set, six-row bands, RLE over 3, 3-3-2),
+//! and the palette and blend properties review checks.
+
+use super::encode;
+
+/// Two red columns over six rows: one band, one register, no RLE.
+#[test]
+fn one_band_one_register_encodes_exactly() {
+    let rgba = [[255, 0, 0, 255]].repeat(2 * 6).concat();
+    assert_eq!(
+        encode(2, 6, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;2;6#0;2;100;0;0#0~~$-\x1b\\".as_slice()
+    );
+}
+
+/// A run over 3 packs into `!count char`; exactly 3 stays literal.
+#[test]
+fn runs_over_three_pack_the_rest_stays_literal() {
+    let rgba = [[255, 0, 0, 255]].repeat(8 * 6).concat();
+    assert_eq!(
+        encode(8, 6, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;8;6#0;2;100;0;0#0!8~$-\x1b\\".as_slice()
+    );
+    let rgba = [[255, 0, 0, 255]].repeat(3 * 6).concat();
+    assert_eq!(
+        encode(3, 6, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;3;6#0;2;100;0;0#0~~~$-\x1b\\".as_slice()
+    );
+    let rgba = [[255, 0, 0, 255]].repeat(4 * 6).concat();
+    assert_eq!(
+        encode(4, 6, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;4;6#0;2;100;0;0#0!4~$-\x1b\\".as_slice()
+    );
+}
+
+/// Two registers: each color's raster follows its selector, `$`
+/// returns the carriage between them, `-` ends the band.
+#[test]
+fn two_registers_switch_selectors_inside_the_band() {
+    let mut rgba = Vec::new();
+    for _ in 0..6 {
+        rgba.extend_from_slice(&[255, 0, 0, 255].repeat(3));
+        rgba.extend_from_slice(&[0, 0, 255, 255].repeat(3));
+    }
+    assert_eq!(
+        encode(6, 6, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;6;6#0;2;100;0;0#1;2;0;0;100#0~~~???$#1???~~~$-\x1b\\".as_slice()
+    );
+}
+
+/// Rows past six open a second band after `-`.
+#[test]
+fn seven_rows_open_a_second_band() {
+    let rgba = [[255, 0, 0, 255]].repeat(7).concat();
+    assert_eq!(
+        encode(1, 7, &rgba, [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;1;7#0;2;100;0;0#0~$-#0@$-\x1b\\".as_slice()
+    );
+}
+
+/// Alpha under 32 reads as the background; 32 and up blends.
+#[test]
+fn alpha_under_32_is_unset_at_32_it_blends() {
+    assert_eq!(
+        encode(1, 1, &[255, 0, 0, 31], [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;1;1#0;2;0;0;0#0@$-\x1b\\".as_slice()
+    );
+    assert_eq!(
+        encode(1, 1, &[255, 0, 0, 32], [0, 0, 0]),
+        b"\x1bP0;1q\"1;1;1;1#0;2;14;0;0#0@$-\x1b\\".as_slice()
+    );
+}
+
+/// A transparent pixel takes the background exactly, which the
+/// palette then names.
+#[test]
+fn the_background_fills_transparent_pixels() {
+    assert_eq!(
+        encode(1, 1, &[255, 0, 0, 0], [255, 255, 255]),
+        b"\x1bP0;1q\"1;1;1;1#0;2;100;100;100#0@$-\x1b\\".as_slice()
+    );
+}
+
+/// Half alpha blends each channel toward the background.
+#[test]
+fn half_alpha_blends_toward_the_background() {
+    // (200 * 128 + 10 * 127) / 255 = 105, (100 * 128 + 20 * 127) /
+    // 255 = 60, (50 * 128 + 30 * 127) / 255 = 40.
+    assert_eq!(
+        encode(1, 1, &[200, 100, 50, 128], [10, 20, 30]),
+        b"\x1bP0;1q\"1;1;1;1#0;2;43;14;0#0@$-\x1b\\".as_slice()
+    );
+}
+
+/// 300 distinct colors still fit the 256 registers 3-3-2 allows.
+#[test]
+fn the_palette_never_passes_256_registers() {
+    let mut rgba = Vec::new();
+    for at in 0..300u16 {
+        let bucket = u8::try_from(at % 256).unwrap_or(u8::MAX);
+        let red = (bucket >> 5) * 36;
+        let green = ((bucket >> 2) & 0x07) * 36;
+        let blue = (bucket & 0x03) * 85;
+        rgba.extend_from_slice(&[red, green, blue, 255]);
+    }
+    let sixel = encode(300, 1, &rgba, [0, 0, 0]);
+    let text = String::from_utf8(sixel).expect("sixel is ASCII");
+    assert_eq!(text.matches(";2;").count(), 256);
+}

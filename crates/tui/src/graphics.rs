@@ -6,6 +6,8 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 pub(crate) mod logo;
+mod png;
+mod sixel;
 
 /// The placeholder's base character: the terminal shows the image where
 /// these cells are (`docs/tui.md`, "Images").

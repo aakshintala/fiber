@@ -174,6 +174,7 @@ impl<B: Backend> Loop<B> {
             app,
             parser: crate::keys::Parser::default(),
             screen,
+            logo: crate::graphics::logo::Emit::default(),
             hub: Connection::new(crate::retry::Retry::new(&clock)),
             kitty_writer: None,
             tty_lock: Arc::new(super::kitty_writer::TtyLock::new()),

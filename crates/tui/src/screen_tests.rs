@@ -119,6 +119,7 @@ fn the_tty_sized_backend_passes_every_call_but_the_size_through() {
         size: ratatui::layout::Size::new(40, 10),
         open: false,
         emit: Calls::emit,
+        touched: false,
     };
     let cell = ratatui::buffer::Cell::default();
     let ok = |result: Result<(), std::io::Error>| {

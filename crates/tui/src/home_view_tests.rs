@@ -6,6 +6,7 @@ use crate::app::{App, Effect, QUIT_HINT};
 use crate::home::{Launch, Spot};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::look::Depth;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -4039,4 +4040,145 @@ fn a_home_range_bound_notice_stays_inert_without_notice() {
     // already showing (`docs/tui.md`, "How a TUI extension runs": a
     // range-bound half stays inert without notice).
     assert_eq!(app.notices().len(), 1);
+}
+
+// Where the terminal speaks kitty's graphics, placeholders draw in
+// the logo's 32-by-4 cells; the pixel logo's cells stay identical.
+#[test]
+fn home_logo_kitty_80x24() {
+    let mut app = home(80, 24);
+    app.set_graphics();
+    insta::assert_snapshot!(screen(&app, 80, 24));
+}
+
+// Where the terminal speaks iTerm2's protocol, blank cells draw under
+// the positioned image; beside them the dim version stays.
+#[test]
+fn home_logo_blank_80x24() {
+    let mut app = home(80, 24);
+    app.set_iterm();
+    insta::assert_snapshot!(screen(&app, 80, 24));
+}
+
+/// Whether any cell holds a kitty placeholder.
+fn has_placeholder(buf: &Buffer) -> bool {
+    // A kitty placeholder starts at the private-use base.
+    buf.content
+        .iter()
+        .any(|cell| cell.symbol().starts_with('\u{10EEEE}'))
+}
+
+// Flat drops every style: the pixel logo draws, never an image.
+#[test]
+fn home_logo_flat_draws_pixels() {
+    let mut app = home(80, 24);
+    app.set_graphics();
+    app.set_flat(true);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    render(&app, Rect::new(0, 0, 80, 24), &mut buf, None);
+    assert!(!has_placeholder(&buf), "flat draws no placeholders");
+    assert_eq!(buf[(35, 1)].symbol(), "0");
+    assert!(
+        buf.content
+            .iter()
+            .take(80 * 4)
+            .any(|cell| cell.symbol() != " "),
+        "the pixel logo draws"
+    );
+}
+
+// Without colour the pixel logo stays, even where a protocol replied.
+#[test]
+fn home_logo_no_colour_draws_pixels() {
+    let mut app = home(80, 24);
+    app.set_graphics();
+    app.set_iterm();
+    app.set_logo_depth(Depth::NoColour);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    render(&app, Rect::new(0, 0, 80, 24), &mut buf, None);
+    assert!(!has_placeholder(&buf), "no colour draws no placeholders");
+    assert_eq!(buf[(35, 1)].symbol(), "0");
+}
+
+// A too-narrow screen keeps the one-row logo, never an image.
+#[test]
+fn home_logo_narrow_draws_one_row() {
+    let mut app = home(31, 24);
+    app.set_graphics();
+    let area = Rect::new(0, 0, 31, 24);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    assert!(
+        !has_placeholder(&buf),
+        "a narrow screen draws no placeholders"
+    );
+    assert!(
+        text(&buf).contains("⌇ fiber"),
+        "a narrow screen keeps the one-row logo"
+    );
+}
+
+// A rejected kitty transmit leaves the pixel logo with no notice.
+#[test]
+fn home_logo_rejected_draws_pixels() {
+    let mut app = home(80, 24);
+    app.set_graphics();
+    app.set_logo_rejected();
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    render(&app, Rect::new(0, 0, 80, 24), &mut buf, None);
+    assert!(
+        !has_placeholder(&buf),
+        "a rejected logo draws no placeholders"
+    );
+    assert_eq!(buf[(35, 1)].symbol(), "0");
+}
+
+// A Sixel reply without a measured, in-bound cell keeps pixels.
+#[test]
+fn home_logo_cell_blocked_draws_pixels() {
+    let mut app = home(80, 24);
+    app.set_measured_cell(None);
+    app.set_sixel();
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    render(&app, Rect::new(0, 0, 80, 24), &mut buf, None);
+    assert!(
+        !has_placeholder(&buf),
+        "an unmeasured cell draws no placeholders"
+    );
+    let mut app = home(80, 24);
+    app.set_measured_cell(Some((65, 128)));
+    app.set_sixel();
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+    render(&app, Rect::new(0, 0, 80, 24), &mut buf, None);
+    assert!(
+        !has_placeholder(&buf),
+        "an out-of-bound cell draws no placeholders"
+    );
+}
+
+// The logo rect is the image's 32-by-4 cells while the image form
+// draws, else none.
+#[test]
+fn home_logo_rect_values() {
+    let mut app = home(80, 24);
+    app.set_graphics();
+    assert_eq!(
+        crate::view::logo_rect(&app, Rect::new(0, 0, 80, 24)),
+        Some(Rect::new(0, 0, 32, 4))
+    );
+    assert_eq!(crate::view::logo_rect(&app, Rect::new(0, 0, 31, 24)), None);
+    let plain = home(80, 24);
+    assert_eq!(
+        crate::view::logo_rect(&plain, Rect::new(0, 0, 80, 24)),
+        None
+    );
+    let mut flat = home(80, 24);
+    flat.set_graphics();
+    flat.set_flat(true);
+    assert_eq!(crate::view::logo_rect(&flat, Rect::new(0, 0, 80, 24)), None);
+    // A swapped view takes home's place: no emission under it.
+    let mut keys = home(80, 24);
+    keys.set_graphics();
+    keys.open_keys();
+    assert_eq!(crate::view::logo_rect(&keys, Rect::new(0, 0, 80, 24)), None);
 }
