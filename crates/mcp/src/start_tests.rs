@@ -593,15 +593,6 @@ fn servers_stop_at_once() {
             }
         })
         .collect();
-    // Warm the checked-in fixture past its first-exec stall before the
-    // start keeps its own deadline: a `fail-start` directory makes the
-    // fixture exit 1 before reading anything, so the warm-up never
-    // blocks on input.
-    let fixture = fakes::mcp_fixture();
-    let warm_dir = fakes::TempDir::new("fiber-mcp-warm");
-    std::fs::write(warm_dir.path().join("fail-start"), "").expect("warm-up dir");
-    let warm_arg = warm_dir.path().display().to_string();
-    fakes::warm_up(&fixture, &[warm_arg.as_str()], 1);
     let clock = setups[0].clock();
     let workspace = setups[0].workspace();
     let artifacts = setups[0].artifacts();
@@ -2196,6 +2187,45 @@ fn a_second_restart_mid_start_coalesces_on_the_first_attempt() {
 }
 
 // Reload, round 23: the resources marker follows every set.
+
+#[test]
+fn every_start_helper_warms_the_fixture_before_its_deadline() {
+    // The first exec of a freshly linked binary can stall for seconds on
+    // macOS, so every helper that starts the fixture warms it through the
+    // shared once-per-process warm before any deadline-bound receive.
+    // This pins only the changed helper: it fails when the `warm_up` call
+    // is removed or when a helper stops warming first.
+    let source =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/test_support.rs"))
+            .expect("test_support.rs");
+    let warmer = source.find("fn warm_once").expect("warm_once");
+    let warmed = source.find("impl Setup").expect("impl Setup");
+    let warm_up = source.find("fakes::warm_up").expect("warm_up");
+    assert!(warmer < warm_up, "warm_once runs fakes::warm_up");
+    assert!(warm_up < warmed, "warm_once runs fakes::warm_up");
+    // Each helper's own wait: `start_expect` funnels through
+    // `start_result`, so its warm must precede that call.
+    for (helper, wait) in [
+        ("start_with_images_within", "Deadline::after"),
+        ("start_expect", "Self::start_result"),
+        ("start_result", "Deadline::after"),
+    ] {
+        let defined = source
+            .find(&format!("fn {helper}"))
+            .unwrap_or_else(|| panic!("{helper}"));
+        let warm = source
+            .match_indices("warm_once(&fakes")
+            .map(|(at, _)| at)
+            .find(|&at| at > defined)
+            .unwrap_or_else(|| panic!("{helper} warms"));
+        let deadline = source
+            .match_indices(wait)
+            .map(|(at, _)| at)
+            .find(|&at| at > defined)
+            .unwrap_or_else(|| panic!("{helper} waits"));
+        assert!(warm < deadline, "{helper} warms before its deadline");
+    }
+}
 
 #[test]
 fn set_resources_declared_aligns_the_marker_both_ways() {
