@@ -230,7 +230,9 @@ pub(crate) fn reach(
 /// Starts `next` after `from`'s old process exits: the retry both
 /// old-exit callbacks (the relay-end `follow` and the feed's `on_rewound`)
 /// share, so the two paths reach one decision point. The move-time
-/// `reach` stays the initial attempt.
+/// `reach` stays the initial attempt. The callback that loses the claim
+/// attaches to the winner's child when it runs, and starts nothing when
+/// the claimed attempt failed.
 pub(crate) fn retry_after_exit(
     hub: &Arc<Hub>,
     from: &SessionId,
@@ -239,7 +241,8 @@ pub(crate) fn retry_after_exit(
     #[cfg(test)]
     crate::connection::probe_retry_contention(hub, &guard_for(hub, next));
     if !hub.claim_retry(next) {
-        return None;
+        let socket = hub.home.join("run").join(&next.0);
+        return UnixStream::connect(&socket).ok();
     }
     reach(hub, from, next).ok()
 }
@@ -248,23 +251,26 @@ pub(crate) fn retry_after_exit(
 /// the level it held on `old`: connects to the new session, starting or
 /// resuming it, and sends the kept subscription under a hub-minted id
 /// whose acknowledgement the relay thread drops, as a reconnect does. A
-/// connection with no kept level, one already holding the level on the
-/// new session, or a log that continues nowhere, changes nothing. When
-/// the client already relayed the new session, still unsubscribed -- its
-/// command for it landed while the old relay waited for EOF -- the level
-/// is transferred onto that relay instead of starting a second one.
+/// connection with no kept level still retries the recorded child once,
+/// attaching nothing: the retry is not conditional on the level, so it
+/// runs even when the feed never observes the old process exit. One
+/// already holding the level on the new session, or a log that continues
+/// nowhere, changes nothing. When the client already relayed the new
+/// session, still unsubscribed -- its command for it landed while the old
+/// relay waited for EOF -- the level is transferred onto that relay
+/// instead of starting a second one.
 pub(crate) fn follow(
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<crate::relay::Relays>>,
     old: &str,
 ) {
-    let replay = lock(relays).subscription(old);
-    let Some(replay) = replay else {
-        return;
-    };
     let from = SessionId(old.to_owned());
     let Some(next) = continued(&hub.home, &from) else {
+        return;
+    };
+    let Some(replay) = lock(relays).subscription(old) else {
+        drop(retry_after_exit(hub, &from, &next));
         return;
     };
     // The new session opens once: the sweep never opens it while this

@@ -974,11 +974,18 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
         assert_eq!(refused["kind"], "command_rejected", "{refused}");
         assert_eq!(refused["payload"]["command_id"], "c_new1", "{refused}");
         assert_eq!(refused["payload"]["code"], "session_not_found", "{refused}");
-        // The old socket closes: the redirect follows nothing, so no
-        // second start runs. A later command for the old session is
-        // answered, proving the relay thread ended and its `follow` ran.
+        // The old socket closes: the redirect retries the recorded
+        // child once through the kept level, and the retry fails like the
+        // initial attempt. The retry runs on the relay thread after the
+        // session thread ends, so the wait below ends only after
+        // `follow` ran instead of asserting a count the thread may not
+        // have reached yet.
         drop(release_tx);
         old_session.join().unwrap();
+        let waited = starter.clone();
+        crate::testkit::await_true("the relay's follow retries the child once", move || {
+            waited.rewound().len() == 2
+        });
         client.send(&json!({
             "id": "c_old2", "session_id": old, "command": "tools", "args": {},
         }));
@@ -986,14 +993,14 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
         assert_eq!(answered["payload"]["command_id"], "c_old2", "{answered}");
         assert_eq!(
             starter.rewound().len(),
-            1,
-            "the relay's follow started nothing"
+            2,
+            "the relay's follow retries the child once"
         );
     }
 }
 
 #[test]
-fn a_refused_rewind_drops_only_the_old_sessions_kept_level() {
+fn a_refused_rewind_keeps_the_old_sessions_kept_level_for_the_retry() {
     let temp = Temp::new();
     let workspace = temp.workspace();
     let starter = FakeStarter::exit_with(
@@ -1015,7 +1022,8 @@ fn a_refused_rewind_drops_only_the_old_sessions_kept_level() {
         Arc::new(Mutex::new(crate::relay::Relays::default()));
     let epoch = lock(&relays).mint();
     // The connection holds a kept level for the rewound session and for
-    // an untouched one: the refusal must drop only the rewound one.
+    // an untouched one: the refusal must drop neither, so the redirect
+    // retries through the rewound one.
     let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
         .as_object()
         .unwrap()
@@ -1024,7 +1032,7 @@ fn a_refused_rewind_drops_only_the_old_sessions_kept_level() {
         .as_object()
         .unwrap()
         .clone();
-    lock(&relays).subscribed.push((old.clone(), level));
+    lock(&relays).subscribed.push((old.clone(), level.clone()));
     lock(&relays)
         .subscribed
         .push((other.clone(), other_level.clone()));
@@ -1092,14 +1100,19 @@ fn a_refused_rewind_drops_only_the_old_sessions_kept_level() {
         Deadline::after(DEADLINE).recv(&done).is_ok(),
         "the relay ends after its session socket closes"
     );
-    // The refusal dropped the rewound session's kept level and kept the
-    // untouched one, so the redirect follows nothing and starts nothing
-    // more: both sides of the kept-level check.
-    assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
+    // The refusal keeps the rewound session's kept level and the
+    // untouched one, so the redirect retries once through the kept level:
+    // both sides of the kept-level check, plus the retry.
+    assert_eq!(
+        starter.rewound().len(),
+        2,
+        "the relay's follow retries the child once"
+    );
     let held = lock(&relays);
-    assert!(
-        held.subscription(&old).is_none(),
-        "the refused rewind keeps no subscription for the old session"
+    assert_eq!(
+        held.subscription(&old),
+        Some(level),
+        "the refused rewind keeps the old session's level"
     );
     assert_eq!(
         held.subscription(&other),
@@ -1384,7 +1397,7 @@ fn follow_ignores_a_log_that_continues_nowhere() {
 }
 
 #[test]
-fn follow_without_a_kept_level_starts_nothing() {
+fn follow_without_a_kept_level_starts_the_child_but_attaches_nothing() {
     let temp = Temp::new();
     let workspace = temp.workspace();
     let starter = FakeStarter::bind_and_hold(&temp.dir);
@@ -1402,8 +1415,14 @@ fn follow_without_a_kept_level_starts_nothing() {
         Arc::new(Mutex::new(crate::relay::Relays::default()));
     let (write, _) = UnixStream::pair().unwrap();
     follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
-    assert!(starter.rewound().is_empty(), "no level to keep");
-    assert!(starter.resumed().is_empty(), "no level to keep");
+    // The retry is not conditional on the level: the child starts, but no
+    // relay is published without one to attach.
+    assert_eq!(starter.rewound().len(), 1, "the child still starts");
+    assert!(starter.resumed().is_empty(), "a continued log starts");
+    assert!(
+        lock(&relays).entries.is_empty(),
+        "nothing to attach without a level"
+    );
 }
 
 #[test]
