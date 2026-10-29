@@ -10,10 +10,14 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::{FileOutcome, NotesSaved, NotesWrite, same_directory, save_reviewer_notes};
+use super::{
+    FileOutcome, NotesSaved, NotesWrite, ReadOnlyEntryProblem, ReadOnlyFlags, overlaps,
+    read_only_keys, same_directory, save_reviewer_notes, unread_keys, validate_read_only_entry,
+    with_notes_and_entries,
+};
 use crate::home::ProjectKey;
 use crate::reviewer_notes;
-use crate::write::atomic::{Stage, fail_nth};
+use crate::write::atomic::{Stage, fail_nth, reset_write_count, write_count};
 use fakes::Deadline;
 
 /// Fiber home in a temporary directory, removed on drop.
@@ -59,22 +63,40 @@ impl Setup {
         reviewer_notes(&self.home, &Self::project()).unwrap()
     }
 
+    fn entry(command: &str, flags: &[&str]) -> ReadOnlyFlags {
+        ReadOnlyFlags {
+            command: command.to_owned(),
+            flags: flags.iter().map(|flag| flag.to_string()).collect(),
+        }
+    }
+
     fn save(
         &self,
         global: Option<(&str, &str)>,
         project_layer: Option<(&str, &str)>,
     ) -> Result<NotesSaved, crate::ConfigError> {
-        let write = |sent: Option<(&str, &str)>| {
+        self.save_entries(global, project_layer, Vec::new(), Vec::new())
+    }
+
+    fn save_entries(
+        &self,
+        global: Option<(&str, &str)>,
+        project_layer: Option<(&str, &str)>,
+        global_entries: Vec<ReadOnlyFlags>,
+        project_entries: Vec<ReadOnlyFlags>,
+    ) -> Result<NotesSaved, crate::ConfigError> {
+        let write = |sent: Option<(&str, &str)>, read_only: Vec<ReadOnlyFlags>| {
             sent.map(|(version, text)| NotesWrite {
                 version: version.to_owned(),
                 text: text.to_owned(),
+                read_only,
             })
         };
         save_reviewer_notes(
             &self.home,
             &Self::project(),
-            write(global),
-            write(project_layer),
+            write(global, global_entries),
+            write(project_layer, project_entries),
         )
     }
 
@@ -588,6 +610,56 @@ fn same_directory_with_a_missing_project_directory_is_false() {
 }
 
 #[test]
+fn overlaps_accepts_a_strict_descendant_when_only_the_first_side_holds() {
+    assert!(overlaps("acme-cli query extra", "acme-cli query"));
+    assert!(overlaps("acme-cli query", "acme-cli query extra"));
+}
+
+#[test]
+fn unread_keys_treats_only_not_found_as_an_empty_layer() {
+    fakes::within(
+        "unread read-only keys",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            assert!(matches!(unread_keys(&setup.global()), Ok(keys) if keys.is_empty()));
+            fs::create_dir_all(setup.global()).unwrap();
+            assert!(matches!(
+                unread_keys(&setup.global()),
+                Err(ReadOnlyEntryProblem::Malformed)
+            ));
+        },
+    );
+}
+
+#[test]
+fn read_only_keys_returns_the_exact_union_of_both_layers() {
+    fakes::within(
+        "read-only key union",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(&setup.global(), r#"{"shell":{"read_only":{"acme-cli query":{"flags":[]},"git status":{"flags":["--short"]}}}}"#);
+            setup.write(
+                &setup.project_file(),
+                r#"{"shell":{"read_only":{"cargo test":{"flags":[]}}}}"#,
+            );
+            let mut keys = read_only_keys(&setup.home, &Setup::project()).unwrap();
+            keys.sort();
+            assert_eq!(keys, ["acme-cli query", "cargo test", "git status"]);
+        },
+    );
+}
+
+#[test]
+fn existing_reviewer_context_is_cleared_even_when_new_text_is_empty() {
+    let root = serde_json::json!({"reviewer": {"context": "old", "tone": "dry"}});
+    let merged = with_notes_and_entries(Path::new("config.json"), root, "", &[]).unwrap();
+    assert_eq!(merged["reviewer"]["context"], "");
+    assert_eq!(merged["reviewer"]["tone"], "dry");
+}
+
+#[test]
 fn same_directory_with_a_project_parent_under_a_file_is_an_io_error() {
     fakes::within(
         "project parent under a file",
@@ -602,6 +674,560 @@ fn same_directory_with_a_project_parent_under_a_file_is_an_io_error() {
                 matches!(result, Err(crate::ConfigError::Io { .. })),
                 "got {result:?}"
             );
+        },
+    );
+}
+
+// ------------------------------------------------------- read-only entries
+
+/// One overlap case: the global and project files, the kept entries per
+/// layer, the refused entry, and whether it was kept in the project layer.
+type OverlapCase<'a> = (
+    Option<&'a str>,
+    Option<&'a str>,
+    Vec<(&'a str, Vec<&'a str>)>,
+    Vec<(&'a str, Vec<&'a str>)>,
+    &'a str,
+    bool,
+);
+
+/// The refusal for an entry names it and writes neither file.
+fn refused(
+    error: crate::ConfigError,
+    file: &Path,
+    command: &str,
+    before: (Option<Vec<u8>>, Option<Vec<u8>>),
+    setup: &Setup,
+) {
+    let crate::ConfigError::WrongType {
+        key, source_name, ..
+    } = &error
+    else {
+        panic!("an entry refusal is WrongType: {error:?}");
+    };
+    assert_eq!(key, &format!("shell.read_only.\"{command}\""));
+    assert!(
+        source_name.contains(&file.display().to_string()),
+        "{source_name} names the layer"
+    );
+    assert_eq!(
+        error.code(),
+        contract::ErrorCode::ConfigInvalid,
+        "a refusal reports config_invalid"
+    );
+    assert_eq!(
+        setup.bytes(&setup.global()),
+        before.0,
+        "neither file changes"
+    );
+    assert_eq!(
+        setup.bytes(&setup.project_file()),
+        before.1,
+        "neither file changes"
+    );
+}
+
+#[test]
+fn the_entry_validator_rejects_each_bad_shape() {
+    let flags = |flags: &[&str]| {
+        flags
+            .iter()
+            .map(|flag| flag.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert!(matches!(
+        validate_read_only_entry("", &[]),
+        Err(ReadOnlyEntryProblem::Empty)
+    ));
+    assert!(matches!(
+        validate_read_only_entry("ls", &[]),
+        Err(ReadOnlyEntryProblem::Builtin)
+    ));
+    assert!(matches!(
+        validate_read_only_entry("git status extra", &[]),
+        Err(ReadOnlyEntryProblem::Builtin)
+    ));
+    assert!(matches!(
+        validate_read_only_entry("/bin/ls", &[]),
+        Err(ReadOnlyEntryProblem::Builtin)
+    ));
+    assert!(validate_read_only_entry("gist query", &[]).is_ok());
+    assert!(validate_read_only_entry("acme-cli query", &flags(&["--json"])).is_ok());
+    assert!(matches!(
+        validate_read_only_entry("acme-cli query", &flags(&["--output"])),
+        Err(ReadOnlyEntryProblem::UnsafeFlag)
+    ));
+    assert!(matches!(
+        validate_read_only_entry("acme-cli query", &flags(&["--output=out.txt"])),
+        Err(ReadOnlyEntryProblem::UnsafeFlag)
+    ));
+    // The ruling's words are literal: "-oevil" is not "-o".
+    assert!(validate_read_only_entry("acme-cli query", &flags(&["-oevil"])).is_ok());
+    assert!(matches!(
+        validate_read_only_entry("./scripts/q", &flags(&["--json"])),
+        Err(ReadOnlyEntryProblem::SlashPath)
+    ));
+    assert!(matches!(
+        validate_read_only_entry("acme-cli sub/path", &flags(&["--json"])),
+        Err(ReadOnlyEntryProblem::SlashPath)
+    ));
+    assert!(matches!(
+        validate_read_only_entry("acme-cli", &flags(&["--json"])),
+        Err(ReadOnlyEntryProblem::OneWord)
+    ));
+    assert!(matches!(
+        validate_read_only_entry("acme-cli query", &flags(&["--exec=ls"])),
+        Err(ReadOnlyEntryProblem::ValuedFlag)
+    ));
+    assert!(matches!(
+        validate_read_only_entry("acme-cli query", &flags(&["--exec="])),
+        Err(ReadOnlyEntryProblem::ValuedFlag)
+    ));
+}
+
+#[test]
+fn entries_merge_beside_the_notes_and_keep_every_other_key() {
+    fakes::within(
+        "entry merge save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"model": "a/b", "reviewer": {"context": "old global", "tone": "dry"}}"#,
+            );
+            setup.write(
+                &setup.project_file(),
+                r#"{"reviewer": {"context": "old project"}, "shell": {"read_only": {"acme-cli query": {"flags": ["--json"]}}}}"#,
+            );
+            let read = setup.read();
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "new global")),
+                    Some((&read.project.version, "old project")),
+                    vec![Setup::entry("acme-cli show", &["--json"])],
+                    vec![Setup::entry("acme-cli push", &[])],
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Written(_)));
+            let global: Value =
+                serde_json::from_slice(&setup.bytes(&setup.global()).unwrap()).unwrap();
+            assert_eq!(global["model"], json!("a/b"));
+            assert_eq!(global["reviewer"]["context"], json!("new global"));
+            assert_eq!(global["reviewer"]["tone"], json!("dry"));
+            assert_eq!(
+                global["shell"]["read_only"]["acme-cli show"]["flags"],
+                json!(["--json"])
+            );
+            // An absent or empty entry list changes no configured entry.
+            let project: Value =
+                serde_json::from_slice(&setup.bytes(&setup.project_file()).unwrap()).unwrap();
+            assert_eq!(project["reviewer"]["context"], json!("old project"));
+            assert_eq!(
+                project["shell"]["read_only"]["acme-cli query"]["flags"],
+                json!(["--json"])
+            );
+            assert_eq!(
+                project["shell"]["read_only"]["acme-cli push"]["flags"],
+                json!([])
+            );
+        },
+    );
+}
+
+#[test]
+fn an_entries_only_save_adds_no_empty_context_field() {
+    fakes::within(
+        "entries-only save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(&setup.global(), r#"{"shell": {"read_only": {}}}"#);
+            let read = setup.read();
+            assert_eq!(read.global.text, "");
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Written(_)));
+            let global: Value =
+                serde_json::from_slice(&setup.bytes(&setup.global()).unwrap()).unwrap();
+            assert!(global.get("reviewer").is_none(), "no empty context field");
+            assert_eq!(
+                global["shell"]["read_only"]["acme-cli query"]["flags"],
+                json!(["--json"])
+            );
+        },
+    );
+}
+
+#[test]
+fn bad_entries_fail_naming_the_entry_with_neither_file_changed() {
+    fakes::within(
+        "bad entry save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            for (command, flags) in [
+                ("acme-cli query", vec!["--output"]),
+                ("ls", vec!["--json"]),
+                ("git status", vec![]),
+                ("/bin/ls", vec![]),
+                ("acme-cli query", vec!["--exec=ls"]),
+                ("acme-cli query", vec!["--exec="]),
+                ("", vec!["--json"]),
+                ("acme-cli", vec!["--json"]),
+                ("./scripts/q", vec!["--json"]),
+                ("acme-cli sub/path", vec![]),
+            ] {
+                let setup = Setup::new();
+                setup.write(
+                    &setup.global(),
+                    r#"{"reviewer": {"context": "old global"}}"#,
+                );
+                setup.write(
+                    &setup.project_file(),
+                    r#"{"reviewer": {"context": "old project"}}"#,
+                );
+                let before = (
+                    setup.bytes(&setup.global()),
+                    setup.bytes(&setup.project_file()),
+                );
+                let read = setup.read();
+                let result = setup.save_entries(
+                    Some((&read.global.version, "new global")),
+                    Some((&read.project.version, "new project")),
+                    vec![Setup::entry(command, &flags)],
+                    Vec::new(),
+                );
+                let Err(error) = result else {
+                    panic!("{command} is refused");
+                };
+                refused(error, &setup.global(), command, before, &setup);
+            }
+        },
+    );
+}
+
+#[test]
+fn overlapping_entries_fail_against_either_layer_a_sibling_or_a_flip() {
+    fakes::within(
+        "overlapping entry save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            // Every kept entry must fail.
+            let cases: Vec<OverlapCase> = vec![
+                // Ancestor then descendant within reach of the union.
+                (
+                    Some(r#"{"shell": {"read_only": {"acme-cli": {"flags": []}}}}"#),
+                    None,
+                    vec![("acme-cli query", vec!["--json"])],
+                    vec![],
+                    "acme-cli query",
+                    false,
+                ),
+                // Descendant configured, ancestor kept.
+                (
+                    Some(r#"{"shell": {"read_only": {"acme-cli query": {"flags": ["--json"]}}}}"#),
+                    None,
+                    vec![("acme-cli", vec![])],
+                    vec![],
+                    "acme-cli",
+                    false,
+                ),
+                // Overlap with the project layer, which sends nothing.
+                (
+                    None,
+                    Some(r#"{"shell": {"read_only": {"acme-cli": {"flags": []}}}}"#),
+                    vec![("acme-cli query", vec!["--json"])],
+                    vec![],
+                    "acme-cli query",
+                    false,
+                ),
+                // A layer flip: the sibling run keeps the other side.
+                (
+                    Some(r#"{"shell": {"read_only": {"acme-cli": {"flags": []}}}}"#),
+                    None,
+                    vec![],
+                    vec![("acme-cli query", vec!["--json"])],
+                    "acme-cli query",
+                    true,
+                ),
+                // Siblings in one layer overlap each other.
+                (
+                    None,
+                    None,
+                    vec![("acme-cli query", vec!["--json"]), ("acme-cli", vec![])],
+                    vec![],
+                    "acme-cli",
+                    false,
+                ),
+                // Siblings across layers overlap each other.
+                (
+                    None,
+                    None,
+                    vec![("acme-cli query", vec!["--json"])],
+                    vec![("acme-cli", vec![])],
+                    "acme-cli",
+                    true,
+                ),
+            ];
+            for (global, project, global_kept, project_kept, named, in_project) in cases {
+                let setup = Setup::new();
+                if let Some(text) = global {
+                    setup.write(&setup.global(), text);
+                }
+                if let Some(text) = project {
+                    setup.write(&setup.project_file(), text);
+                }
+                let before = (
+                    setup.bytes(&setup.global()),
+                    setup.bytes(&setup.project_file()),
+                );
+                let read = setup.read();
+                let kept = |kept: Vec<(&str, Vec<&str>)>| {
+                    kept.into_iter()
+                        .map(|(command, flags)| Setup::entry(command, &flags))
+                        .collect()
+                };
+                let result = setup.save_entries(
+                    Some((&read.global.version, "")),
+                    Some((&read.project.version, "")),
+                    kept(global_kept),
+                    kept(project_kept),
+                );
+                let Err(error) = result else {
+                    panic!("{named} overlaps and is refused");
+                };
+                let file = if in_project {
+                    setup.project_file()
+                } else {
+                    setup.global()
+                };
+                refused(error, &file, named, before, &setup);
+            }
+            // A word boundary is not an overlap: "query2" is another word.
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"shell": {"read_only": {"acme-cli query2": {"flags": []}}}}"#,
+            );
+            let read = setup.read();
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Written(_)));
+        },
+    );
+}
+
+#[test]
+fn duplicate_commands_in_one_layer_fail_before_any_write() {
+    fakes::within(
+        "duplicate entry save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"reviewer": {"context": "old global"}}"#,
+            );
+            setup.write(
+                &setup.project_file(),
+                r#"{"reviewer": {"context": "old project"}}"#,
+            );
+            let before = (
+                setup.bytes(&setup.global()),
+                setup.bytes(&setup.project_file()),
+            );
+            let read = setup.read();
+            let result = setup.save_entries(
+                Some((&read.global.version, "new global")),
+                Some((&read.project.version, "new project")),
+                vec![
+                    Setup::entry("acme-cli query", &["--json"]),
+                    Setup::entry("acme-cli query", &[]),
+                ],
+                Vec::new(),
+            );
+            let Err(error) = result else {
+                panic!("a repeated command is refused");
+            };
+            refused(error, &setup.global(), "acme-cli query", before, &setup);
+        },
+    );
+}
+
+#[test]
+fn a_malformed_layer_fails_an_entry_merge_with_neither_file_written() {
+    fakes::within(
+        "malformed entry save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            for malformed in [
+                r#"{"shell": {"read_only": []}}"#,
+                r#"{"shell": {"read_only": {"acme-cli query": ["--json"]}}}"#,
+                r#"{"shell": {"read_only": {"acme-cli query": {"flags": "--json"}}}}"#,
+                r#"{"shell": {"read_only": {"acme-cli query": {}}}}"#,
+                r#"{"shell": "entries"}"#,
+            ] {
+                // Malformed in the sent layer.
+                let setup = Setup::new();
+                setup.write(&setup.global(), malformed);
+                setup.write(
+                    &setup.project_file(),
+                    r#"{"reviewer": {"context": "old project"}}"#,
+                );
+                let before = (
+                    setup.bytes(&setup.global()),
+                    setup.bytes(&setup.project_file()),
+                );
+                let read = setup.read();
+                let result = setup.save_entries(
+                    Some((&read.global.version, "")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                );
+                let Err(error) = result else {
+                    panic!("{malformed} is refused");
+                };
+                refused(error, &setup.global(), "acme-cli query", before, &setup);
+                // Malformed in the layer that sends nothing.
+                let setup = Setup::new();
+                setup.write(
+                    &setup.global(),
+                    r#"{"reviewer": {"context": "old global"}}"#,
+                );
+                setup.write(&setup.project_file(), malformed);
+                let before = (
+                    setup.bytes(&setup.global()),
+                    setup.bytes(&setup.project_file()),
+                );
+                let read = setup.read();
+                let result = setup.save_entries(
+                    Some((&read.global.version, "")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                );
+                let Err(error) = result else {
+                    panic!("{malformed} in the other layer is refused");
+                };
+                refused(error, &setup.global(), "acme-cli query", before, &setup);
+            }
+        },
+    );
+}
+
+#[test]
+fn a_flat_shell_key_is_not_a_configured_entry() {
+    fakes::within(
+        "flat shell key save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"shell.read_only": {"acme-cli query": {"flags": ["--json"]}}}"#,
+            );
+            let read = setup.read();
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Written(_)));
+            let global: Value =
+                serde_json::from_slice(&setup.bytes(&setup.global()).unwrap()).unwrap();
+            assert_eq!(
+                global["shell"]["read_only"]["acme-cli query"]["flags"],
+                json!(["--json"])
+            );
+        },
+    );
+}
+
+#[test]
+fn a_stale_version_with_entries_writes_nothing() {
+    fakes::within(
+        "stale entry save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"reviewer": {"context": "old global"}}"#,
+            );
+            setup.write(
+                &setup.project_file(),
+                r#"{"reviewer": {"context": "old project"}}"#,
+            );
+            let read = setup.read();
+            setup.write(&setup.global(), r#"{"reviewer": {"context": "changed"}}"#);
+            let before = (
+                setup.bytes(&setup.global()),
+                setup.bytes(&setup.project_file()),
+            );
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "new global")),
+                    Some((&read.project.version, "new project")),
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Stale));
+            assert_eq!(setup.bytes(&setup.global()), before.0);
+            assert_eq!(setup.bytes(&setup.project_file()), before.1);
+        },
+    );
+}
+
+#[test]
+fn already_present_entries_converge_to_saved_without_rewriting() {
+    fakes::within(
+        "converging entry save",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"reviewer": {"context": "old global"}}"#,
+            );
+            let read = setup.read();
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "old global")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Written(_)));
+            let read = setup.read();
+            reset_write_count();
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "old global")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Written(_)));
+            assert_eq!(write_count(), 0, "a converged save rewrites nothing");
         },
     );
 }

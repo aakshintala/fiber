@@ -512,6 +512,7 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
     let write = crate::configure::NotesWrite {
         version: "v1".into(),
         text: "new global".into(),
+        read_only: Vec::new(),
     };
     let saved = hub
         .call(
@@ -540,6 +541,7 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
                     Some(crate::configure::NotesWrite {
                         version: "old".into(),
                         text: "new project".into(),
+                        read_only: Vec::new(),
                     }),
                 )
             },
@@ -585,6 +587,41 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
         .unwrap(),
         "skill\n"
     );
+}
+
+#[test]
+fn save_reviewer_notes_encodes_entries_as_an_optional_object() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let w = Path::new("/remote/ws");
+    // A populated layer carries its entries as a command-to-flags
+    // object; a layer with none omits read_only, and an absent layer is
+    // omitted, never null.
+    let populated = || crate::configure::NotesWrite {
+        version: "v1".into(),
+        text: "notes".into(),
+        read_only: vec![
+            crate::configure::ReadOnlyEntry {
+                command: "acme-cli query".into(),
+                flags: vec!["--json".into()],
+            },
+            crate::configure::ReadOnlyEntry {
+                command: "acme-cli push".into(),
+                flags: Vec::new(),
+            },
+        ],
+    };
+    let empty = || crate::configure::NotesWrite {
+        version: "v1".into(),
+        text: "notes".into(),
+        read_only: Vec::new(),
+    };
+    hub.call(
+        "save_reviewer_notes",
+        json!({"workspace":w,"global":{"version":"v1","text":"notes","read_only":{"acme-cli query":["--json"],"acme-cli push":[]}},"project":{"version":"v1","text":"notes"}}),
+        json!({"saved":"stale"}),
+        move |r| r.save_reviewer_notes(w, Some(populated()), Some(empty())),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -1996,6 +2033,7 @@ fn the_fake_answers_notes_and_records_each_save() {
     let write = Some(NotesWrite {
         version: "absent".into(),
         text: "global notes".into(),
+        read_only: Vec::new(),
     });
     assert_eq!(
         fake.save_reviewer_notes(w, write.clone(), None).unwrap(),

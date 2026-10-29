@@ -1734,8 +1734,9 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
   panel's legend says. The ✕ and a press outside the panel, which is Esc,
   are its mouse targets, and the mouse wheel does nothing while it is open.
-  Enter on a diff that would change neither layer closes the setup with one
-  notice, `notes_unchanged`, and writes no file.
+  Enter on a diff that would change neither layer's file, notes or read-only
+  entries closes the setup with one notice, `notes_unchanged`, and writes no
+  file.
   The notice that names the command, shown the first time in a session the
   reviewer blocks a call while both layers of the notes are empty, closes on
   any key, and that key goes nowhere else.
@@ -2934,6 +2935,7 @@ five-file cut does, and the replacement inherits the cap.
 | `branch` | The branch from `git status`; absent when unknown |
 | `model` | The model |
 | `thinking` | The thinking level |
+| `thinking_now` | Whether the model is thinking now |
 | `context` | `tokens`, `window` and `trigger_at` |
 | `spend` | `cost` with `tokens` (`input`, `output`, `cache_read`, `cache_write`) and `subscription_cost`; when the session reports none, the attached spend falls back to `cost` alone; absent when there is no spend at all |
 | `budget` | The spend budget; absent when unset |

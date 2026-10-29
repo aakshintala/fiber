@@ -120,9 +120,9 @@ pub use catalogue::{
 pub use configure::{
     BrowserLogin, Configure, ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, KeyEdit,
     Layer, LoginKind, LoginNeed, LoginShow, LoginTarget, LogoutRow, NotesFile, NotesSaved,
-    NotesWrite, ProviderInstall, ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesScope,
-    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
-    ToolLists, ToolSwitches, WriteScope,
+    NotesWrite, ProviderInstall, ReadOnlyEntry, ReviewerModels, ReviewerNotes, Revoked, RuleRow,
+    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 pub use contract::feedback::{FeedbackDone, WriteFeedback};
 

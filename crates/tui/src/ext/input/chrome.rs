@@ -135,6 +135,8 @@ pub struct SessionCard<'a> {
     pub model: Option<&'a str>,
     /// The thinking level the latest preamble names.
     pub thinking: Option<&'a str>,
+    /// Whether the model is thinking now.
+    pub thinking_now: bool,
     /// The latest request's context; none until a window and a fill.
     pub context: Option<SessionContext>,
     /// The spend: the status spend whole, or the attached fallback.
@@ -420,6 +422,7 @@ impl SessionCard<'_> {
         }
         self.model.hash(&mut key);
         self.thinking.hash(&mut key);
+        self.thinking_now.hash(&mut key);
         self.context.is_some().hash(&mut key);
         if let Some(context) = &self.context {
             context.tokens.hash(&mut key);

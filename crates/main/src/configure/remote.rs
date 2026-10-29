@@ -96,21 +96,49 @@ impl<'a> Args<'a> {
 }
 
 /// One sent notes layer from the request: absent reads as not sent, and
-/// a present layer names exactly its `version` with its `text`. A layer of
-/// the wrong shape, with an extra key, or missing its version is not a
-/// save at all.
+/// a present layer names exactly its `version` with its `text` plus its
+/// optional `read_only` entries. A layer of the wrong shape, with an
+/// extra key, or missing its version is not a save at all.
 fn layer_write(args: &Map<String, Value>, name: &str) -> Result<Option<tui::NotesWrite>, Failure> {
     match args.get(name) {
         None => Ok(None),
         Some(value) => {
             let layer = value.as_object().ok_or_else(invalid)?;
-            Args(layer).shape(&["version", "text"], &[])?;
+            Args(layer).shape(&["version", "text"], &["read_only"])?;
             let string = |key: &str| layer.get(key).and_then(Value::as_str).ok_or_else(invalid);
             Ok(Some(tui::NotesWrite {
                 version: string("version")?.to_owned(),
                 text: string("text")?.to_owned(),
+                read_only: read_only_entries(layer)?,
             }))
         }
+    }
+}
+
+/// One layer's optional read-only entries: absent means no entry changes.
+/// A present value maps each command path to its flags array; anything
+/// else — the wrong shape, the wrong types or an explicit null — is no
+/// save at all. Entry semantics stay with the configuration save.
+fn read_only_entries(layer: &Map<String, Value>) -> Result<Vec<tui::ReadOnlyEntry>, Failure> {
+    match layer.get("read_only") {
+        None => Ok(Vec::new()),
+        Some(value) => value
+            .as_object()
+            .ok_or_else(invalid)?
+            .iter()
+            .map(|(command, flags)| {
+                let flags = flags
+                    .as_array()
+                    .ok_or_else(invalid)?
+                    .iter()
+                    .map(|flag| flag.as_str().ok_or_else(invalid).map(str::to_owned))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(tui::ReadOnlyEntry {
+                    command: command.clone(),
+                    flags,
+                })
+            })
+            .collect(),
     }
 }
 

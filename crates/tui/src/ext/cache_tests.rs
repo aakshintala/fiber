@@ -928,6 +928,7 @@ fn session_card<'a>(
         branch: Some(BranchName::Named("main")),
         model,
         thinking: Some("high"),
+        thinking_now: false,
         context: Some(SessionContext {
             tokens: 268000,
             window: 1000000,
@@ -1150,6 +1151,20 @@ fn each_chrome_slot_caches_by_input_and_width() {
         // (`docs/tui.md`, "How a TUI extension runs").
         assert_eq!(calls.get(), before + 3, "{slot} keys the input");
     }
+}
+
+/// The session card's key covers the thinking flag: the same card with
+/// the flag flipped misses, so a shown and a hidden `∴` never share one
+/// cache entry (`docs/tui.md`, "How a TUI extension runs").
+#[test]
+fn the_session_card_key_covers_thinking_now() {
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(Some(4.12));
+    let mut card = session_card(Some("m"), Some(Spend::Status(&spend)), &tools_down, None);
+    card.thinking_now = false;
+    let calm = card.key("card:session");
+    card.thinking_now = true;
+    assert_ne!(calm, card.key("card:session"), "flipped flag misses");
 }
 
 #[test]

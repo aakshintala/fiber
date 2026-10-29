@@ -1690,3 +1690,168 @@ fn the_quota_spot_opens_the_view_and_fetches() {
     assert_eq!(lines[0]["args"], json!({"fetch": true}));
     assert!(app.session_view_open());
 }
+
+/// Folds one envelope of the attached session.
+fn fold(app: &mut App, kind: &str, payload: serde_json::Value) {
+    app.on_line(session_line(SESSION, kind, payload));
+}
+
+/// A call's opening markers: a new message starts the call with no
+/// thinking streamed yet.
+fn start_call(app: &mut App) {
+    fold(app, "assistant_message_started", json!({}));
+}
+
+/// Streamed thought of the running call.
+fn stream_thinking(app: &mut App) {
+    fold(app, "reasoning_started", json!({}));
+    fold(app, "reasoning_delta", json!({"text": "hmm"}));
+}
+
+/// Start markers and an empty completion never set the flag: only
+/// streamed thinking proves the model is thinking now (`docs/tui.md`,
+/// "The panel").
+#[test]
+fn markers_without_streamed_thought_leave_thinking_idle() {
+    let mut app = attached();
+    assert!(!app.panel_state().thinking_now());
+    start_call(&mut app);
+    assert!(!app.panel_state().thinking_now());
+    fold(&mut app, "reasoning_started", json!({}));
+    assert!(!app.panel_state().thinking_now());
+    fold(&mut app, "reasoning_completed", json!({"text": ""}));
+    assert!(!app.panel_state().thinking_now());
+}
+
+/// A streamed thinking delta sets the flag.
+#[test]
+fn streamed_thinking_sets_thinking_now() {
+    let mut app = attached();
+    start_call(&mut app);
+    assert!(!app.panel_state().thinking_now());
+    fold(&mut app, "reasoning_delta", json!({"text": "hmm"}));
+    assert!(app.panel_state().thinking_now());
+}
+
+/// The first text delta clears the flag.
+#[test]
+fn first_text_delta_clears_thinking_now() {
+    let mut app = attached();
+    start_call(&mut app);
+    stream_thinking(&mut app);
+    assert!(app.panel_state().thinking_now());
+    fold(&mut app, "assistant_message_delta", json!({"text": "done"}));
+    assert!(!app.panel_state().thinking_now());
+}
+
+/// The first tool call the model starts emitting clears the flag: the
+/// arguments delta, not the completed or running call.
+#[test]
+fn first_tool_arguments_delta_clears_thinking_now() {
+    let mut app = attached();
+    start_call(&mut app);
+    stream_thinking(&mut app);
+    assert!(app.panel_state().thinking_now());
+    fold(
+        &mut app,
+        "tool_call_arguments_delta",
+        json!({"index": 0, "text": "{"}),
+    );
+    assert!(!app.panel_state().thinking_now());
+}
+
+/// A failed call clears the flag before its retry streams: no stale
+/// `∴` survives the failure.
+#[test]
+fn a_failed_call_clears_thinking_now_before_its_retry() {
+    let mut app = attached();
+    start_call(&mut app);
+    stream_thinking(&mut app);
+    assert!(app.panel_state().thinking_now());
+    fold(
+        &mut app,
+        "assistant_message_completed",
+        json!({"outcome": "failed"}),
+    );
+    assert!(!app.panel_state().thinking_now());
+    // The retry is a new call: its thinking sets the flag again.
+    start_call(&mut app);
+    assert!(!app.panel_state().thinking_now());
+    fold(&mut app, "reasoning_delta", json!({"text": "retrying"}));
+    assert!(app.panel_state().thinking_now());
+}
+
+/// A completed call clears the flag too.
+#[test]
+fn a_completed_call_clears_thinking_now() {
+    let mut app = attached();
+    start_call(&mut app);
+    stream_thinking(&mut app);
+    assert!(app.panel_state().thinking_now());
+    fold(
+        &mut app,
+        "assistant_message_completed",
+        json!({"outcome": "completed"}),
+    );
+    assert!(!app.panel_state().thinking_now());
+}
+
+/// A thinking-only turn settles cleared at the turn's end, even though
+/// it never produced text, tools, or a message.
+#[test]
+fn turn_settle_clears_a_thinking_only_turn() {
+    let mut app = attached();
+    start_call(&mut app);
+    fold(&mut app, "reasoning_delta", json!({"text": "hmm"}));
+    assert!(app.panel_state().thinking_now());
+    fold(&mut app, "turn_completed", json!({"outcome": "completed"}));
+    assert!(!app.panel_state().thinking_now());
+}
+
+/// After the first clear, later reasoning of the same call stays
+/// ignored; the next call's start reopens the flag.
+#[test]
+fn later_thought_after_a_clear_stays_shut_for_that_call() {
+    let mut app = attached();
+    start_call(&mut app);
+    stream_thinking(&mut app);
+    fold(&mut app, "assistant_message_delta", json!({"text": "done"}));
+    assert!(!app.panel_state().thinking_now());
+    fold(&mut app, "reasoning_started", json!({}));
+    fold(&mut app, "reasoning_delta", json!({"text": "afterthought"}));
+    assert!(!app.panel_state().thinking_now());
+    start_call(&mut app);
+    fold(&mut app, "reasoning_delta", json!({"text": "next call"}));
+    assert!(app.panel_state().thinking_now());
+}
+
+/// The flag is the lifecycle, not the level: streamed thinking with no
+/// preamble reports thinking, while the card draws no glyph without a
+/// level to hang it on.
+#[test]
+fn thinking_now_without_a_level_reports_thinking() {
+    let mut app = attached();
+    assert_eq!(app.panel_state().thinking(), None);
+    start_call(&mut app);
+    fold(&mut app, "reasoning_delta", json!({"text": "hmm"}));
+    assert!(app.panel_state().thinking_now());
+    assert_eq!(app.panel_state().thinking(), None);
+}
+
+/// A session switch and a reset both clear the flag: the new session
+/// has no running call.
+#[test]
+fn switch_and_reset_clear_thinking_now() {
+    let mut app = attached();
+    start_call(&mut app);
+    stream_thinking(&mut app);
+    assert!(app.panel_state().thinking_now());
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    assert!(!app.panel_state().thinking_now());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    start_call(&mut app);
+    stream_thinking(&mut app);
+    assert!(app.panel_state().thinking_now());
+    app.panel_state.reset();
+    assert!(!app.panel_state().thinking_now());
+}
