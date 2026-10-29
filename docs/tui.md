@@ -623,112 +623,115 @@ a click on it returns too. The views are:
   finished row opens its replay. The top row is `Delegates` with
   `/delegates` dim; there is no heading row and no count. With no
   delegates the view says "No delegates".
-- **The model picker:** models by provider with roles marked, a chip for each
-  thinking level the model supports, each model's input and output prices,
-  and what a switch to it costs to rebuild the prompt cache. Choosing a model
-  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. On a remote terminal it lists the hub's catalogue, the models the hub's machine can reach (`docs/invocation.md`, "What the hub speaks", `models`), and a session started from it runs on the hub. Ctrl+S
-  marks the choice as this session only, and then nothing is saved. A choice
-  sent while a turn runs says it applies when the turn ends: the chips hold
-  the old model and level until the session accepts it, and the choice
-  applies at the turn's end. The notice appears when the choice is sent; if
-  the session rejects the choice, the rejection's notice replaces it. When
-  `scoped_models` is set, the picker shows only those models, with a "show
-  all" toggle on Tab. A provider hidden by `scoped_models` has no section and no count row, and does not by itself make the picker show "No models match". Typing filters the list on every letter: each
-  space-separated word of the query must match, in order but not
-  necessarily next to each other and ignoring case, the model's provider,
-  id or display name. A left-out count row matches the same way, against
-  each left-out model's provider, id or display name, and shows only the
-  matched count; no row shows when none matches. The filter keeps the
-  list's order and only drops rows. Backspace removes a letter; Esc clears the query first and closes
-  the picker on the next press. Enter with nothing focused does nothing and
-  leaves the picker open; it installs only a row ↓ or a click has focused.
-  Ctrl+L opens it, as `/model` does. It draws from the cached
-  model lists at once and refreshes stale ones in the background; its refresh
-  button refreshes every list (`docs/model-routing.md`, "Model discovery").
 
-  Under the view's top row the picker is an overlay ("Look", "Overlays").
-  Its first row is the filter: "Type to search" dim until something is
-  typed, then "›" dim and the query bold, with a dim block cursor either
-  way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
-  under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
-  while every model shows, and "⟳ refresh all" dim at the right end. Each
-  provider is a section, a blank row between them: the provider's name dim,
-  then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
-  `attention` while its list refreshes. In the choosing picker, a provider
-  with models left out for a placeholder with no value shows one count row
-  after its heading and before its models, indented four columns and
-  uniformly dim: "2 models need workspace: run `fiber login acme`", or "1
-  model needs api_key: set it in `config/acme-ext.json`" naming the supplied
-  file when the provider's data declares a `credential_label`. The row never
-  focuses and takes no clicks; it shows under "show all" too, and never in
-  `/thinking` or `/scoped-models`. Under `scoped_models` with "show all"
-  off, a provider with no scoped installed model shows no section and no
-  count row. Each model takes two rows. The first
-  is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
-  "● current" bold in `accent` on the session's model, "· scoped" dim on a
-  scoped model while every model shows, then its input and output prices per
-  million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
-  and nothing for a model whose provider data names no cost. A model priced
-  by request size shows the prices of the tier the session's last call falls
-  in, with the tier's threshold ("$6.00 in · $30.00 out /M · tier 200k+";
-  `docs/model-routing.md`, "Cost"), and its base prices before the session's
-  first call. On a screen too narrow for 60 columns inside the picker, the
-  prices are left out. Once the session has made a call, the switch cost is
-  dim at the right end: the prompt-cache rebuild a switch to that model costs
-  at its rebuild price ("switch ~84k tokens · $0.31", "switch ~250k · $1.88"
-  at a tier's price, "switch ~58k tokens" for a model with no price, "—" for
-  the current model). On home and before the session's first call, no row
-  shows a switch cost. The second,
-  indented four columns, is "thinking" dim and the model's levels, or "fixed
-  thinking" dim for a model with none. On the focused model the levels are in
-  `attention`, its saved level bold, and the chosen chip bold in brackets
-  ("[high]"); elsewhere they are dim. ← and → move between the focused
-  model's chips. A model chosen for this session only gets a third row,
-  "ⓢ this session only · nothing saved" dim. While a query is typed, the
-  characters of each id it matched are underlined and bold; a query that
-  matches no model, no count row and no not-installed row shows one
-  line, "No models match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
-  Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+#### The model picker
 
-  Below the last provider section, after a blank row, the choosing picker
-  lists each first-party provider no installed extension declares, one row
-  each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
-  `accent`, " · not installed" dim. The scripted provider is never listed
-  (`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
-  `/scoped-models` list none. Typing filters these rows by provider name as it
-  filters models, and a query that matches no model, no count row and no not-installed row
-  still shows the one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
-  walk the models and then these rows; no row is focused until ↓ or a click
-  puts it there, so Enter with no row focused does what it does with none
-  listed (a query that hides every model focuses nothing). The focused row
-  reads as a focused model does, with "› " in its gutter, bold, on the bar.
-  Enter, or a click on the name, installs the provider as `fiber extension
-  install <name>` does, asking nothing more: choosing the row is the approval.
-  While it installs the row reads " ⟳ installing" and the spinner in
-  `attention`; choosing another row does nothing until it ends, and closing the
-  picker does not stop it. A failed install keeps the row, still marked not
-  installed, and adds a row under it, indented four columns, "✗ " and the
-  error in `error`, its first line cut at 80 columns; choosing the row again
-  tries again. A successful install drops the row, asks one model refresh so
-  the provider's models list, and draws under the list, until the picker closes
-  and indented four columns: "✓ " in `success` and "installed <name>", the
-  lines of the install summary dim ("What an install shows",
-  `docs/extensions.md`), and, for a provider whose key is missing, "<name>
-  needs a credential: run `fiber login <name>`" dim, or, for a key that could
-  not be read, "✗ <name>'s credential could not be read: <error>" in `error`.
-  An install that ends while the picker is closed asks the refresh and, if it
-  failed, shows the notice "Installing <name> failed: <error>"; if it
-  succeeded, each credential line above is a notice instead
-  (`credential_missing`, `credential_failed`). On a remote terminal the install
-  runs on the hub (`docs/invocation.md`, `configure`, `install_provider`) and
-  the list is the hub's; with the hub not connected the row fails with "The hub
-  is not connected."; and the install holds the terminal's one hub connection
-  until it ends, up to 1,800 s for each install step (`docs/extensions.md`,
-  "Installing"), so other hub commands wait behind it; while it runs on a
-  remote terminal, `/settings` and the other config views are refused with "a
-  provider is installing; try again when it finishes" (a local terminal gets
-  no such refusal), and on either terminal Esc closes the picker with the
-  install still running.
+Models by provider with roles marked, a chip for each
+thinking level the model supports, each model's input and output prices,
+and what a switch to it costs to rebuild the prompt cache. Choosing a model
+saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. On a remote terminal it lists the hub's catalogue, the models the hub's machine can reach (`docs/invocation.md`, "What the hub speaks", `models`), and a session started from it runs on the hub. Ctrl+S
+marks the choice as this session only, and then nothing is saved. A choice
+sent while a turn runs says it applies when the turn ends: the chips hold
+the old model and level until the session accepts it, and the choice
+applies at the turn's end. The notice appears when the choice is sent; if
+the session rejects the choice, the rejection's notice replaces it. When
+`scoped_models` is set, the picker shows only those models, with a "show
+all" toggle on Tab. A provider hidden by `scoped_models` has no section and no count row, and does not by itself make the picker show "No models match". Typing filters the list on every letter: each
+space-separated word of the query must match, in order but not
+necessarily next to each other and ignoring case, the model's provider,
+id or display name. A left-out count row matches the same way, against
+each left-out model's provider, id or display name, and shows only the
+matched count; no row shows when none matches. The filter keeps the
+list's order and only drops rows. Backspace removes a letter; Esc clears the query first and closes
+the picker on the next press. Enter with nothing focused does nothing and
+leaves the picker open; it installs only a row ↓ or a click has focused.
+Ctrl+L opens it, as `/model` does. It draws from the cached
+model lists at once and refreshes stale ones in the background; its refresh
+button refreshes every list (`docs/model-routing.md`, "Model discovery").
+
+Under the view's top row the picker is an overlay ("Look", "Overlays").
+Its first row is the filter: "Type to search" dim until something is
+typed, then "›" dim and the query bold, with a dim block cursor either
+way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
+under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
+while every model shows, and "⟳ refresh all" dim at the right end. Each
+provider is a section, a blank row between them: the provider's name dim,
+then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
+`attention` while its list refreshes. In the choosing picker, a provider
+with models left out for a placeholder with no value shows one count row
+after its heading and before its models, indented four columns and
+uniformly dim: "2 models need workspace: run `fiber login acme`", or "1
+model needs api_key: set it in `config/acme-ext.json`" naming the supplied
+file when the provider's data declares a `credential_label`. The row never
+focuses and takes no clicks; it shows under "show all" too, and never in
+`/thinking` or `/scoped-models`. Under `scoped_models` with "show all"
+off, a provider with no scoped installed model shows no section and no
+count row. Each model takes two rows. The first
+is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
+"● current" bold in `accent` on the session's model, "· scoped" dim on a
+scoped model while every model shows, then its input and output prices per
+million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
+and nothing for a model whose provider data names no cost. A model priced
+by request size shows the prices of the tier the session's last call falls
+in, with the tier's threshold ("$6.00 in · $30.00 out /M · tier 200k+";
+`docs/model-routing.md`, "Cost"), and its base prices before the session's
+first call. On a screen too narrow for 60 columns inside the picker, the
+prices are left out. Once the session has made a call, the switch cost is
+dim at the right end: the prompt-cache rebuild a switch to that model costs
+at its rebuild price ("switch ~84k tokens · $0.31", "switch ~250k · $1.88"
+at a tier's price, "switch ~58k tokens" for a model with no price, "—" for
+the current model). On home and before the session's first call, no row
+shows a switch cost. The second,
+indented four columns, is "thinking" dim and the model's levels, or "fixed
+thinking" dim for a model with none. On the focused model the levels are in
+`attention`, its saved level bold, and the chosen chip bold in brackets
+("[high]"); elsewhere they are dim. ← and → move between the focused
+model's chips. A model chosen for this session only gets a third row,
+"ⓢ this session only · nothing saved" dim. While a query is typed, the
+characters of each id it matched are underlined and bold; a query that
+matches no model, no count row and no not-installed row shows one
+line, "No models match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+
+Below the last provider section, after a blank row, the choosing picker
+lists each first-party provider no installed extension declares, one row
+each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
+`accent`, " · not installed" dim. The scripted provider is never listed
+(`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
+`/scoped-models` list none. Typing filters these rows by provider name as it
+filters models, and a query that matches no model, no count row and no not-installed row
+still shows the one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
+walk the models and then these rows; no row is focused until ↓ or a click
+puts it there, so Enter with no row focused does what it does with none
+listed (a query that hides every model focuses nothing). The focused row
+reads as a focused model does, with "› " in its gutter, bold, on the bar.
+Enter, or a click on the name, installs the provider as `fiber extension
+install <name>` does, asking nothing more: choosing the row is the approval.
+While it installs the row reads " ⟳ installing" and the spinner in
+`attention`; choosing another row does nothing until it ends, and closing the
+picker does not stop it. A failed install keeps the row, still marked not
+installed, and adds a row under it, indented four columns, "✗ " and the
+error in `error`, its first line cut at 80 columns; choosing the row again
+tries again. A successful install drops the row, asks one model refresh so
+the provider's models list, and draws under the list, until the picker closes
+and indented four columns: "✓ " in `success` and "installed <name>", the
+lines of the install summary dim ("What an install shows",
+`docs/extensions.md`), and, for a provider whose key is missing, "<name>
+needs a credential: run `fiber login <name>`" dim, or, for a key that could
+not be read, "✗ <name>'s credential could not be read: <error>" in `error`.
+An install that ends while the picker is closed asks the refresh and, if it
+failed, shows the notice "Installing <name> failed: <error>"; if it
+succeeded, each credential line above is a notice instead
+(`credential_missing`, `credential_failed`). On a remote terminal the install
+runs on the hub (`docs/invocation.md`, `configure`, `install_provider`) and
+the list is the hub's; with the hub not connected the row fails with "The hub
+is not connected."; and the install holds the terminal's one hub connection
+until it ends, up to 1,800 s for each install step (`docs/extensions.md`,
+"Installing"), so other hub commands wait behind it; while it runs on a
+remote terminal, `/settings` and the other config views are refused with "a
+provider is installing; try again when it finishes" (a local terminal gets
+no such refusal), and on either terminal Esc closes the picker with the
+install still running.
 - The credential picker, `/credential`: the header reads "Credentials" bold,
   "  /credential" dim and "Esc returns" dim, right-aligned. The provider's
   labels follow the header in the answer's order,
