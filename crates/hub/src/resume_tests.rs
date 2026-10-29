@@ -3749,6 +3749,7 @@ fn a_cut_command_write_is_indeterminate_on_first_attach() {
         .filter(|(id, _)| id.0 == OTHER)
         .count();
     assert_eq!(resumed, 1, "the cut command is attached once");
+    // docs/invocation.md:728 promises a command is delivered once.
     assert!(
         !received(&starter)
             .iter()
@@ -3876,6 +3877,13 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
         "The connection to the session failed while the command was being sent; the command may have run.",
         "{line}"
     );
+    // Wait for the drain to finish (its entry leaves), so the queue check
+    // and the no-more check below observe the hub done answering: a
+    // second answer would already be buffered.
+    crate::testkit::await_true("the relay to leave", {
+        let relays = Arc::clone(&relays);
+        move || crate::connection::lock(&relays).entries.is_empty()
+    });
     assert_eq!(order.session_for("c_2"), None, "the answer left the queue");
     // Two lines arrived on the session, the subscribe and the torn
     // fragment: the bytes arrived once and were never delivered again.
@@ -3886,8 +3894,8 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
         2,
         "the cut bytes arrive once and are never delivered again"
     );
-    // Exactly one answer for the cut command: the queue is drained and
-    // the session's bytes are counted above, so a second answer would
-    // already be buffered; a non-blocking read finds nothing more.
+    // Exactly one answer for the cut command: the relay left above, so
+    // the drain answered once and a second answer would already be
+    // buffered; a non-blocking read finds nothing more.
     client.assert_no_more("the cut command");
 }

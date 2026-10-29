@@ -472,6 +472,10 @@ pub(crate) fn drain(
             .map(|(id, _)| (session.to_owned(), id.clone()))
             .collect();
         if present && !client_gone {
+            // Drop before answering, so the client's answer implies the
+            // queue already cleared: `refuse` writes first and drops
+            // after, which races the test's immediate queue check.
+            order.drop_ids(&ids);
             for (id, _) in partial {
                 refuse(
                     writer,
@@ -483,6 +487,10 @@ pub(crate) fn drain(
                     PARTIAL_WRITE_MAY_HAVE_RUN,
                 );
             }
+            // The refusal above answers first and drops the queue after,
+            // so an explicit drop keeps the id from lingering when the
+            // answer already left.
+            order.drop_ids(&ids);
         } else {
             order.drop_ids(&ids);
         }
