@@ -1684,10 +1684,13 @@ impl App {
     /// in its place, the steering queue, the banner, the badge and the
     /// hint, and the narrow layout's rows under the conversation. None on
     /// a screen too short for them.
-    pub(crate) fn conversation_height(&self) -> usize {
+    pub(crate) fn conversation_area_height(&self) -> usize {
         let below = self.below_rows();
-        let height =
-            usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below));
+        usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below))
+    }
+
+    pub(crate) fn conversation_height(&self) -> usize {
+        let height = self.conversation_area_height();
         // The item view's header takes the conversation's top rows.
         if self.item_open() {
             height.saturating_sub(crate::view::item::ITEM_HEADER_ROWS)
@@ -1708,7 +1711,9 @@ impl App {
             || crate::surface::edged(self.input_height(), room),
             |panel| crate::view::request::height(&panel, self.column_width(), room),
         );
-        let under = input + self.steering_below() + usize::from(self.working_row_shown());
+        let under = input
+            + crate::view::steering_queue::count(self, self.column_width())
+            + crate::view::working_line::count(self, self.column_width());
         // The notice rows draw above the working line, so their room is
         // what is left above it; the badge and hint draw above them. The
         // count runs through the same seam the draw will, so hidden

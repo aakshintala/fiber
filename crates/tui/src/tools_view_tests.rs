@@ -881,3 +881,40 @@ fn tools_80x24() {
     // the prototype's (Ruling 17), which the docs leave open.
     insta::assert_snapshot!("tools_80x24", text.join("\n"));
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was (`docs/tui.md:576`, "Swapped views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
+    let (fake, mut tools) = tall();
+    tools.click(Spot::Row(10), &ctx(&fake, None));
+    assert_eq!((selected(&tools), tools.list.top()), (10, 0));
+    assert!(matches!(tools.wheel(false, &ctx(&fake, None)), Act::Stay));
+    assert_eq!((selected(&tools), tools.list.top()), (10, 3));
+}
+
+/// A wheel that moves clears what was said, while a clamped wheel keeps it
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_move_clears_and_clamp_preserves_what_was_said() {
+    let (fake, mut tools) = tall();
+    tools.click(Spot::Row(10), &ctx(&fake, None));
+    tools.said = vec!["noted".to_owned()];
+    assert!(matches!(tools.wheel(false, &ctx(&fake, None)), Act::Stay));
+    assert_eq!((selected(&tools), tools.list.top()), (10, 3));
+    assert!(tools.said.is_empty(), "a moving wheel clears the message");
+    assert!(matches!(tools.wheel(true, &ctx(&fake, None)), Act::Stay));
+    let (kept_selected, kept_top) = (selected(&tools), tools.list.top());
+    tools.said = vec!["held".to_owned()];
+    assert!(matches!(tools.wheel(true, &ctx(&fake, None)), Act::Stay));
+    assert_eq!(
+        (selected(&tools), tools.list.top()),
+        (kept_selected, kept_top),
+        "a clamped wheel moves nothing"
+    );
+    assert_eq!(
+        tools.said,
+        ["held"],
+        "a clamped wheel preserves the message"
+    );
+}

@@ -1,11 +1,12 @@
 # The OS sandbox
 
-This page defines the Linux policy for #3027's first behavior slice, and
-what it costs a session. The issue delivers the policy in implementation
-parts; this page records only the Linux behavior this slice ships. The policy
-is settled by [permissions: an opt-in OS sandbox, and whether its commands
-skip the reviewer](https://github.com/aakshintala/fiber/issues/3027); that
-ticket's resolution holds the rationale and the rejected alternatives.
+This page defines the OS sandbox policy, and what it costs a session. The
+issue delivers the policy in implementation parts; this page records the
+Linux behavior #3027's first behavior slice ships and the macOS behavior
+#3630 adds. The policy is settled by [permissions: an opt-in OS sandbox,
+and whether its commands skip the
+reviewer](https://github.com/aakshintala/fiber/issues/3027); that ticket's
+resolution holds the rationale and the rejected alternatives.
 
 Vocabulary is `GLOSSARY.md`: sandbox names the feature, confined names a
 call that ran inside it, and nothing else. The rule that judges calls is
@@ -37,9 +38,11 @@ the person's `sandbox.deny_read` paths.
 
 - Write outside the workspace and temp: not directly, not through a
   grandchild, not through `python -c`, not through a symlink that leads out.
-- Open any socket: no internet, DNS, localhost TCP or Unix sockets. This
-  blocks the hub, session socket, `docker.sock` and ssh-agent. There is no
-  `sandbox.allow_unix_sockets` key in this slice; all sockets are denied.
+- Open any socket: no internet, DNS, localhost TCP or Unix sockets, on
+  Linux by the seccomp filter and on macOS by the Seatbelt policy's deny by
+  default. This blocks the hub, session socket, `docker.sock` and
+  ssh-agent. There is no setting that grants a socket; a command that
+  needs one runs unconfined and is reviewed.
 - Ask the sandbox to protect `.git/config`, hooks, a worktree's `.git` file
   or `.fiber/` on Linux. This slice does not claim that protection; slice 4
   owns it. A confined call in this slice can write those paths when they sit
@@ -86,10 +89,40 @@ full access beneath each granted write root, and read and write on granted
 files; the seccomp filter fails `socket()` with `AF_UNIX`, `AF_INET` or
 `AF_INET6`, and `io_uring_setup`, with `EPERM`.
 
+## On macOS
+
+The policy is Seatbelt, applied by spawning through `/usr/bin/sandbox-exec`
+(hardcoded, never `$PATH`) with an inline `-p` profile and `-D` bindings.
+The profile denies by default. It grants writes to the canonicalized
+workspace, the system temp directory (which reads `$TMPDIR`), `/tmp`, and
+`allow_write`; reads stay wide except Fiber home's `credentials/` and
+`deny_read`. Every dynamic path travels only as a separately supplied
+`-DNAME=<path>` binding, referenced through its fixed parameter name; no
+path text is interpolated into the profile source.
+
+Commits keep working on main checkouts and on worktrees: the worktree's own
+git directory stays writable, as do the shared `objects/`, `refs/` and
+`logs/` directories. Deny wins over those grants, so `.git/config`,
+`.git/hooks/`, a worktree's `.git` pointer file, `.fiber/`, and the shared
+hooks and config stay unwritable. Unix sockets have no Seatbelt operation
+of their own; the default deny covers their creation, and explicit denies
+name the refusal for IP, DNS and launchd. One file-ioctl allow preserves
+the inherited pty, so `stty` on the shell's own terminal keeps working while
+`ps` and `pgrep` stay unavailable.
+
+The wrapped shell prints a fixed-prefix marker line before it runs the user
+program; the reader strips exactly that first line, so user output is
+byte-identical past it. A rejection by `sandbox-exec` means no marker, so
+the call fails closed with the wrapper's diagnostic instead of ending
+normally, and no move hands the call to a job before the marker is
+observed. Availability needs only the `sandbox-exec` binary plus the same
+overlap and resolution rules as Linux.
+
 ## When the sandbox is unavailable
 
 Failure goes toward review. When the sandbox cannot be applied — no
-Landlock, an old kernel below ABI 2, a non-Linux build — the event omits
+Landlock, an old kernel below ABI 2, a missing `/usr/bin/sandbox-exec` on
+macOS, or an unsupported platform — the event omits
 `confined`, calls are reviewed as today and the session says so once. A call
 declared `confined` never runs unconfined: if applying the sandbox fails at
 spawn, the call fails. The event wording is the surveyor's ruling:

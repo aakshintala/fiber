@@ -89,6 +89,9 @@ pub(crate) struct Open {
     /// The filter query: what typing narrowed the list to. Empty at
     /// every open; Space counts as a typed query on the checklist too.
     pub(crate) query: String,
+    /// The first displayed body row in the scrollable list, counting
+    /// headings, blanks, models, installs and nonfocusable count rows.
+    pub(crate) top: usize,
 }
 
 /// What the picker's overlay draws from.
@@ -130,6 +133,8 @@ pub(crate) struct PickerView {
     pub(crate) spinner: String,
     /// The focused model row's layout index, else the first shown row.
     pub(crate) focused: Option<usize>,
+    /// The first displayed body row in the scrollable list.
+    pub(crate) top: usize,
     /// One row per not-installed provider the picker lists, in order.
     pub(crate) installs: Vec<InstallRow>,
     /// What landed installs show under the list.
@@ -550,8 +555,10 @@ impl ModelPicker {
             toggled,
             show_all: false,
             target,
-            // Every open starts with an empty query.
+            // Every open starts with an empty query and its focus-derived
+            // viewport.
             query: String::new(),
+            top: 0,
         };
         let rows = self.shown(&open);
         open.selected = self.selected_for(on_screen, &rows);
@@ -1224,6 +1231,7 @@ impl ModelPicker {
             // The checklist draws no refresh button and no refresh
             // click target.
             refresh: open.mode != Mode::Scope,
+            top: open.top,
         })
     }
 

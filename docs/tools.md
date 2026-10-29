@@ -25,8 +25,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   standing allows, and still meets the credential deny and the standing deny
   and ask rules (`docs/permissions.md`, "The order a call is judged in"). Any
   tool may set it, an extension's included; it only makes the call stricter.
-  A shell call that ran inside the Linux sandbox carries `confined`
-  (`docs/permissions.md`, "Confinement"); the log records it
+  A shell call that ran inside the OS sandbox on Linux or macOS carries
+  `confined` (`docs/permissions.md`, "Confinement"); the log records it
   (`docs/events.md`, "Declared effects"). Calls remain reviewed.
 - The effects function may also return the network hosts the call contacts
   (`hosts`). A list, even an empty one, says the call contacts those hosts and
@@ -522,8 +522,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `timeout_ms` (optional; for a monitor, its deadline);
   `run_in_background` (optional); `tty` (optional); `monitor` (optional;
   starts a monitor, "Background jobs"). Fiber never reruns a failed
-  confined call outside its sandbox. Each call starts fresh: a `cd` does
-  not carry over to the next call.
+  confined call outside its sandbox. On macOS the confined shell prints a
+  start marker before the user program runs; the call fails instead of
+  ending normally when the marker never arrives. Each call starts fresh: a
+  `cd` does not carry over to the next call.
 - Its optional arguments are typed nullable and listed in `required`. The
   `minimum` limits put its schema outside the strict subset, so it is sent
   with `strict: false`.
@@ -656,9 +658,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   configuration adds ("Search", "Other command-line tools"). If every
   command is on the list, the call declares `reads`, reversible, with the
   paths the command names, resolved against `workdir`. Otherwise it
-  declares `executes`, with no paths. A call that ran inside the Linux
-  sandbox carries `confined` (`docs/permissions.md`, "Confinement"); calls
-  remain reviewed.
+  declares `executes`, with no paths. A call that ran inside the OS
+  sandbox on Linux or macOS carries `confined`
+  (`docs/permissions.md`, "Confinement"); calls remain reviewed.
 - The recogniser accepts only a listed set of syntax: simple commands,
   pipelines, lists joined by `&&`, `||` and `;`, quoted and unquoted words,
   variable assignments before a command, and the redirects below. Any

@@ -320,6 +320,10 @@ pub(crate) struct Login {
     /// The focused row, an index into `items`: a target whenever one
     /// exists, else 0. Headings, the gap and the note never take it.
     selected: usize,
+    /// The first body row shown: the wheel moves it three rows a step,
+    /// and the keys move it only as far as needed to keep the focus
+    /// shown.
+    top: usize,
     mode: Mode,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
@@ -348,6 +352,7 @@ impl Login {
             targets,
             items,
             selected: 0,
+            top: 0,
             mode: Mode::Rows,
             said,
         };
@@ -543,7 +548,17 @@ impl Login {
             .spans
             .push(Span::raw(" ".repeat(wide.saturating_sub(have))));
         let shown = shown_body_rows(usize::from(area.height));
-        let start = window_start(self.selected, shown, body.len());
+        // The window starts at the wheel's top row, moved only as far
+        // as needed to keep the focus shown: the keys never re-derive
+        // the window from the focus, so a wheeled position survives
+        // them, and a shorter body clamps it back into range.
+        let start = if body.is_empty() || shown == 0 {
+            0
+        } else {
+            let end = body.len().saturating_sub(shown);
+            let low = self.selected.saturating_add(1).saturating_sub(shown);
+            self.top.clamp(low, self.selected).min(end)
+        };
         let end = start.saturating_add(shown).min(body.len());
         let kept: Vec<(overlay::Row, Join)> = body
             .into_iter()
@@ -666,6 +681,34 @@ impl Login {
             }
         }
         Act::Stay
+    }
+
+    /// Shifts the provider list's window one wheel step: three body
+    /// rows, clamped at either end, keeping the focus while it shows,
+    /// else moving it to the nearest shown target row. Steps and detail
+    /// views take no wheel: they do not scroll, so the wheel is
+    /// swallowed there.
+    pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        if !matches!(self.mode, Mode::Rows) {
+            return Act::Stay;
+        }
+        let shown = shown_body_rows(ctx.height);
+        let targets = self.target_rows();
+        (self.selected, self.top) = crate::swapped::wheel_targets_window(
+            up,
+            self.selected,
+            self.top,
+            self.body_len(ctx.width),
+            shown,
+            &targets,
+        );
+        Act::Stay
+    }
+
+    /// How many body rows the provider list holds at `width` wide, shared
+    /// with `/logout` so both windows shift alike.
+    fn body_len(&self, width: usize) -> usize {
+        crate::swapped::body_len(self.items.len(), &self.said, width)
     }
 
     /// Opens the selected row: a key or secret row opens the panel, a

@@ -106,7 +106,7 @@ pub struct Shell {
         reason = "the shared handle spells its contents; main's settings::ShellReadOnly names the same type"
     )]
     read_only: Arc<Mutex<Vec<(String, Vec<String>)>>>,
-    /// The person's Linux sandbox settings, shared with every clone:
+    /// The person's OS sandbox settings, shared with every clone:
     /// replacing the contents changes the next [`Tool::effects`] answer and
     /// the next spawn's confinement. The lock is taken in `effects` and
     /// before spawn only; a poisoned lock keeps its contents.

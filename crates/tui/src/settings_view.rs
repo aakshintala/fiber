@@ -397,6 +397,43 @@ impl Settings {
         }
     }
 
+    /// Shifts the window one wheel step. The rows move three, clamping
+    /// the selection off the header row as the keys do; the theme
+    /// choices move three through their own list with the same live
+    /// preview. The edit field takes Up/Down without scrolling, so the
+    /// wheel is swallowed there and never retargets the key it edits.
+    pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        let shown = self.shown(ctx);
+        match &mut self.mode {
+            Mode::Rows => {
+                let before = self.list.selected();
+                self.list.wheel(up, self.list_len(), shown, 3);
+                // The header takes no selection.
+                let at = self.list.selected().max(1);
+                if at != self.list.selected() {
+                    self.list.select(at, self.list_len(), shown);
+                }
+                if self.list.selected() != before {
+                    self.said.clear();
+                }
+                Act::Stay
+            }
+            Mode::Choices { names, list, .. } => {
+                let before = list.selected();
+                list.wheel(up, names.len(), shown, 3);
+                if list.selected() != before
+                    && let Some(name) = names.get(list.selected()).cloned()
+                {
+                    return Act::Theme(ctx.seam.theme(ctx.workspace, &name));
+                }
+                Act::Stay
+            }
+            // The field takes Up/Down without scrolling the rows: the
+            // wheel is swallowed, so clamping cannot retarget the key.
+            Mode::Field(_) => Act::Stay,
+        }
+    }
+
     /// A key over the rows: move, open the field or the theme choices,
     /// open the selected row's file, or close.
     fn rows_key(&mut self, key: &Key, ctx: &Ctx<'_>, shown: usize) -> Act {

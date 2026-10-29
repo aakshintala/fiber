@@ -1258,8 +1258,8 @@ fn the_model_shell_marks_confined_when_on_and_available() {
         map
     };
     let effects = shell.1.effects(&args).unwrap();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert!(effects.declared.confined);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     assert!(!effects.declared.confined);
 }

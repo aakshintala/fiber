@@ -15,7 +15,7 @@ use crate::Configure;
 use crate::configure::{LoginKind, LoginTarget};
 use crate::configure_fake::Fake;
 use crate::home::Launch;
-use crate::keys::{Edit, Key};
+use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::mouse::TargetId;
 
 /// The injected clock's now.
@@ -631,4 +631,38 @@ fn the_key_never_reaches_the_apps_debug_through_the_reviewer_flow() {
     );
     let debug = format!("{:?}", app.login_view());
     assert!(!debug.contains("sk-a"), "{debug}");
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over the conversation column the login view takes.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The wheel over the login view's open key panel is swallowed: a step
+/// that does not scroll takes no wheel, and the hidden conversation
+/// keeps its scroll (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_the_open_key_panel_is_swallowed() {
+    let mut app = attached(Some(seam()));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    slash_login(&mut app);
+    app.on_key(Key::Down, now());
+    app.on_key(Key::Enter, now());
+    assert!(app.config_view_open());
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    assert_eq!(app.on_wheel(&wheel(10, 5, false)), Effect::None);
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert!(app.config_view_open(), "the panel stays open");
 }

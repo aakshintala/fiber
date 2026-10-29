@@ -743,3 +743,71 @@ fn rules_80x24() {
     let rules = open(&fake);
     insta::assert_snapshot!("rules_80x24", drawn(&rules, 80, 24));
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was (`docs/tui.md:576`, "Swapped views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
+    let global: Vec<RuleRow> = (0..30)
+        .map(|n| {
+            row(
+                n + 1,
+                contract::rules::RuleDecision::Allow,
+                "shell",
+                "npm test",
+                None,
+                None,
+            )
+        })
+        .collect();
+    let fake = fake(global, Ok(Vec::new()));
+    let context = ctx(&fake);
+    let mut rules = Rules::open(&context);
+    for _ in 0..10 {
+        rules.key(&Key::Down, &context);
+    }
+    let (top, selected) = (rules.list.top(), rules.list.selected());
+    assert!(matches!(rules.wheel(false, &context), Act::Stay));
+    assert_eq!(rules.list.top(), top + 3);
+    assert_eq!(rules.list.selected(), selected, "a visible selection stays");
+}
+
+/// A wheel that moves clears what was said, while a clamped wheel keeps it
+/// (`docs/tui.md:576`).
+#[test]
+fn wheel_move_clears_and_clamp_preserves_what_was_said() {
+    let global: Vec<RuleRow> = (0..30)
+        .map(|n| {
+            row(
+                n + 1,
+                contract::rules::RuleDecision::Allow,
+                "shell",
+                "npm test",
+                None,
+                None,
+            )
+        })
+        .collect();
+    let fake = fake(global, Ok(Vec::new()));
+    let context = ctx(&fake);
+    let mut rules = Rules::open(&context);
+    rules.said = vec!["noted".to_owned()];
+    let top = rules.list.top();
+    assert!(matches!(rules.wheel(false, &context), Act::Stay));
+    assert_eq!(rules.list.top(), top + 3, "the wheel moves three rows");
+    assert!(rules.said.is_empty(), "a moving wheel clears the message");
+    assert!(matches!(rules.wheel(true, &context), Act::Stay));
+    let (clamped_top, clamped_selected) = (rules.list.top(), rules.list.selected());
+    rules.said = vec!["held".to_owned()];
+    assert!(matches!(rules.wheel(true, &context), Act::Stay));
+    assert_eq!(
+        (rules.list.top(), rules.list.selected()),
+        (clamped_top, clamped_selected),
+        "a clamped wheel moves nothing"
+    );
+    assert_eq!(
+        rules.said,
+        ["held"],
+        "a clamped wheel preserves the message"
+    );
+}

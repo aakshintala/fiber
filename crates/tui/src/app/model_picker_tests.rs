@@ -7,6 +7,8 @@ use crate::catalogue::{Catalogue, ModelEntry};
 use crate::home::Launch;
 use contract::ErrorCode;
 use contract::events::Notice;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use std::path::PathBuf;
 
 /// An app on home at 80x24.
@@ -138,7 +140,7 @@ use std::time::Instant;
 use contract::clock::Clock;
 use serde_json::json;
 
-use crate::keys::{Edit, Key};
+use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::stroke::Stroke;
 
 /// The injected clock's now.
@@ -763,15 +765,14 @@ fn page_keys_move_by_a_page_clamped() {
     let mut app = home();
     app.on_models(Ok(thirty()));
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
-    // Home's 24 rows hold 16 body rows past the chrome, filter and
-    // buttons. The window slides to hold what fits, so a page moves
-    // six, then seven as the window grows.
+    // The picker draws below its one-row swapped-view header. Page steps
+    // use that exact body height, so each page moves six models here.
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m06"));
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m12"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("acme/m05"));
+    assert_eq!(selected(&app).as_deref(), Some("acme/m06"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m00"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
@@ -4591,4 +4592,299 @@ fn on_models_arrival_clears_models_loading() {
     );
     app.on_models(Err("gone".to_owned()));
     assert!(!has_code(&app, "models_loading"));
+}
+
+/// A catalogue with five models, so three steps fit without clamping.
+fn five() -> Catalogue {
+    let mut catalogue = three();
+    for reference in ["acme/m3", "acme/m4"] {
+        let (provider, id) = reference.split_once('/').unwrap();
+        catalogue.models.push(ModelEntry {
+            reference: reference.to_owned(),
+            provider: provider.to_owned(),
+            id: id.to_owned(),
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+            name: None,
+            price: None,
+        });
+    }
+    catalogue
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, over the
+/// picker's view area.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// Renders `app` at its size so slabs are noted for the wheel points.
+fn rendered(app: &App) {
+    let (width, height) = app.screen_size();
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let _ = crate::view::render(app, area, &mut buf, None);
+}
+
+/// The wheel inside the picker slab moves the picker, never the
+/// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_inside_the_picker_slab_moves_the_picker_not_the_conversation() {
+    let mut app = attached();
+    app.on_models(Ok(five()));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(app.model_picker_open());
+    rendered(&app);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+    let top = app.top();
+    let picker_top = app.model_picker_view().unwrap().top;
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(app.model_picker_view().unwrap().top, picker_top + 3);
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("acme/m2"),
+        "focus clamps to the nearest visible model after the viewport moves"
+    );
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, false));
+    assert_eq!(app.model_picker_view().unwrap().top, picker_top);
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("acme/m2"),
+        "focus stays when scrolling back makes its row visible"
+    );
+}
+
+/// The wheel outside the picker slab but over its view area moves the
+/// picker too, never the conversation under it (`docs/tui.md`, "Swapped
+/// views"; see #3578).
+#[test]
+fn wheel_outside_the_picker_slab_moves_the_picker_not_the_conversation() {
+    let mut app = attached();
+    app.on_models(Ok(five()));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(app.model_picker_open());
+    rendered(&app);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+    let top = app.top();
+    let picker_top = app.model_picker_view().unwrap().top;
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    // The top swapped-view header sits outside the picker panel slab but
+    // remains in the replacement area, so it still routes to the picker.
+    let col = 40;
+    let row = 0;
+    assert!((row as usize) < app.conversation_height());
+    assert!(!slab.contains(ratatui::layout::Position { x: col, y: row }));
+    app.on_wheel(&wheel(col, row, true));
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert_eq!(app.model_picker_view().unwrap().top, picker_top + 3);
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("acme/m2"),
+        "focus clamps to the nearest visible model after the viewport moves"
+    );
+}
+
+/// A Backspace with an empty query keeps the wheel position, while one
+/// that shortens the query resets to the focus window, both with rendered
+/// rows (`docs/tui.md:576`).
+#[test]
+fn backspace_empty_keeps_and_shortening_resets_the_window() {
+    let (mut app, _) = choosing_app();
+    app.on_models(Ok(five()));
+    open(&mut app);
+    rendered(&app);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
+    let moved = app.model_picker_view().unwrap().top;
+    assert_ne!(moved, 0, "the wheel moves the picker top");
+    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    assert_eq!(
+        app.model_picker_view().unwrap().top,
+        moved,
+        "an empty Backspace keeps the wheel position"
+    );
+    type_letter(&mut app, 'm');
+    assert_eq!(app.model_picker.query(), "m");
+    rendered(&app);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
+    let moved = app.model_picker_view().unwrap().top;
+    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    assert_eq!(app.model_picker.query(), "");
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(
+        view.top,
+        crate::view::model_picker::focus_window_top(&view, app.screen_size().1),
+        "shortening resets to the focus window"
+    );
+    let _ = (moved, slab);
+}
+
+/// Tab with nothing to show keeps the wheel position with rendered rows
+/// (`docs/tui.md:576`).
+#[test]
+fn tab_with_nothing_to_show_keeps_the_window() {
+    let (mut app, _) = choosing_app();
+    app.on_models(Ok(five()));
+    open(&mut app);
+    rendered(&app);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+    app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
+    let moved = app.model_picker_view().unwrap().top;
+    assert_ne!(moved, 0, "the wheel moves the picker top");
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    assert_eq!(
+        app.model_picker_view().unwrap().top,
+        moved,
+        "a no-op Tab keeps the wheel position"
+    );
+}
+
+/// The picker on home-with-a-session sizes from the conversation, like
+/// attached, not from the screen like home, with rendered rows
+/// (`docs/tui.md:576`).
+#[test]
+fn picker_on_home_with_a_session_sizes_from_the_conversation() {
+    use std::path::PathBuf;
+    let mut home_only = home();
+    home_only.on_models(Ok(five()));
+    assert_eq!(home_only.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(home_only.model_picker_open());
+    let home_height = home_only.model_picker_area_height();
+    let mut attached_home = attached();
+    attached_home.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        ..Default::default()
+    });
+    attached_home.on_models(Ok(five()));
+    assert_eq!(attached_home.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(attached_home.model_picker_open());
+    let session_height = attached_home.model_picker_area_height();
+    let mut plain = attached();
+    plain.on_models(Ok(five()));
+    assert_eq!(plain.on_key(Key::CtrlL, now()), Effect::None);
+    let plain_height = plain.model_picker_area_height();
+    assert_eq!(
+        session_height, plain_height,
+        "home-with-session sizes like attached"
+    );
+    assert_ne!(
+        session_height, home_height,
+        "home-with-session never sizes from the screen"
+    );
+}
+
+/// A wheel outside the conversation with a swapped view open on
+/// home-with-a-session reaches neither the picker nor the conversation,
+/// while on home alone the swapped view owns it (`docs/tui.md:576`).
+#[test]
+fn wheel_outside_with_swapped_open_home_session_vs_home() {
+    use std::path::PathBuf;
+    // Home-with-a-session: the swapped view owns only the visible content
+    // outside a covering panel, so a wheel on the input line moves neither.
+    let mut both = attached();
+    both.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        ..Default::default()
+    });
+    both.on_models(Ok(five()));
+    assert_eq!(both.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(both.model_picker_open());
+    rendered(&both);
+    let picker_top = both.model_picker_view().unwrap().top;
+    let top = both.top();
+    both.on_wheel(&wheel(10, 23, true));
+    assert_eq!(
+        both.model_picker_view().unwrap().top,
+        picker_top,
+        "outside owns neither"
+    );
+    assert_eq!(both.top(), top, "the wheel left the conversation");
+    // Home alone: the swapped view takes the whole screen, so the same
+    // outside wheel moves the picker (with enough models to scroll).
+    let mut alone = home();
+    let mut many = five();
+    for at in 5..20 {
+        many.models.push(crate::catalogue::ModelEntry {
+            reference: format!("acme/m{at}"),
+            provider: "acme".to_owned(),
+            id: format!("m{at}"),
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+            name: None,
+            price: None,
+        });
+    }
+    alone.on_models(Ok(many));
+    assert_eq!(alone.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(alone.model_picker_open());
+    rendered(&alone);
+    let picker_top = alone.model_picker_view().unwrap().top;
+    alone.on_wheel(&wheel(10, 23, true));
+    assert_eq!(
+        alone.model_picker_view().unwrap().top,
+        picker_top + 3,
+        "on home the swapped view owns the outside wheel"
+    );
 }

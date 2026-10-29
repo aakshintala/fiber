@@ -115,6 +115,18 @@ impl Mcp {
         Act::Stay
     }
 
+    /// Shifts the window one wheel step: three rows, keeping the
+    /// selection while it shows.
+    pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        let shown = self.shown(ctx);
+        let before = (self.list.top(), self.list.selected());
+        self.list.wheel(up, self.len(), shown, 3);
+        if (self.list.top(), self.list.selected()) != before {
+            self.said.clear();
+        }
+        Act::Stay
+    }
+
     /// A click: the ✕ closes, a row is selected.
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {

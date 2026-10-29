@@ -989,3 +989,99 @@ fn ctrl_g_uses_key_ownership_even_for_default_rows() {
         }
     }
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was; over the edit field it is swallowed, so the
+/// wheel cannot retarget the key being edited (`docs/tui.md:576`, "Swapped
+/// views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_holds_over_the_field() {
+    let fake = Fake::new(
+        (0..30)
+            .map(|n| {
+                row(
+                    &format!("s.key-{n:02}"),
+                    value("\"x\""),
+                    "default",
+                    WriteScope::Any { repo: false },
+                )
+            })
+            .collect(),
+    );
+    let context = ctx(&fake);
+    let mut settings = Settings::open(&context);
+    settings.list.select(10, settings.list_len(), 20);
+    assert_eq!((settings.list.top(), settings.list.selected()), (0, 10));
+    assert!(matches!(settings.wheel(false, &context), Act::Stay));
+    assert_eq!(settings.list.top(), 3);
+    assert_eq!(settings.list.selected(), 10, "a visible selection stays");
+    // Enter opens the edit field on a plain row; the wheel holds there.
+    assert!(matches!(settings.key(&Key::Enter, &context), Act::Stay));
+    assert!(matches!(settings.wheel(false, &context), Act::Stay));
+    assert_eq!((settings.list.top(), settings.list.selected()), (3, 10));
+}
+
+/// A wheel on the header steps off it, and a moving wheel clears what was
+/// said while a clamped wheel keeps it (`docs/tui.md:576`).
+#[test]
+fn wheel_header_steps_off_and_message_lifecycle() {
+    let fake = Fake::new(
+        (0..30)
+            .map(|n| {
+                row(
+                    &format!("s.key-{n:02}"),
+                    value("\"x\""),
+                    "default",
+                    WriteScope::Any { repo: false },
+                )
+            })
+            .collect(),
+    );
+    let context = ctx(&fake);
+    let mut settings = Settings::open(&context);
+    settings.list.select(0, settings.list_len(), 20);
+    settings.said = vec!["noted".to_owned()];
+    assert!(matches!(settings.wheel(true, &context), Act::Stay));
+    assert_eq!(settings.list.selected(), 1, "the header takes no selection");
+    assert!(
+        settings.said.is_empty(),
+        "leaving the header clears the message"
+    );
+    settings.said = vec!["held".to_owned()];
+    let (top, selected) = (settings.list.top(), settings.list.selected());
+    assert!(matches!(settings.wheel(true, &context), Act::Stay));
+    assert_eq!(
+        (settings.list.top(), settings.list.selected()),
+        (top, selected),
+        "a clamped wheel moves nothing"
+    );
+    assert_eq!(
+        settings.said,
+        ["held"],
+        "a clamped wheel preserves the message"
+    );
+}
+
+/// A wheel over short theme choices cannot move, so it stays without
+/// choosing (`docs/tui.md:576`).
+#[test]
+fn wheel_over_short_choices_stays_without_choosing() {
+    let fake = themed();
+    let mut settings = at(&fake, "tui.theme");
+    press(&mut settings, &fake, &[Key::Enter]);
+    let context = ctx(&fake);
+    let before = match &settings.mode {
+        super::Mode::Choices { list, .. } => list.selected(),
+        super::Mode::Rows | super::Mode::Field(_) => panic!("no choices"),
+    };
+    assert!(matches!(settings.wheel(false, &context), Act::Stay));
+    let after = match &settings.mode {
+        super::Mode::Choices { list, .. } => list.selected(),
+        super::Mode::Rows | super::Mode::Field(_) => panic!("no choices"),
+    };
+    assert_eq!(
+        after, before,
+        "a clamped choices wheel stays without choosing"
+    );
+    assert!(matches!(settings.wheel(true, &context), Act::Stay));
+}

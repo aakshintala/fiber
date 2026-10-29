@@ -19,17 +19,21 @@ use cache::Cache;
 pub(crate) mod input;
 
 pub use input::{
-    AnswerDisposition, Answers, CallState, CardPrompt, ErrorLine, GroupLine, HandoffBand, Input,
-    LedgerResult, LedgerRow, Notice, Prompt, PromptImage, ReplyText, RowError, Steer, ThinkingLine,
+    AnswerDisposition, Answers, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles,
+    Delegate, DelegatesCard, ErrorLine, GroupLine, HandoffBand, Input, Job, JobsCard, LedgerResult,
+    LedgerRow, Notice, Prompt, PromptImage, QueuedImage, Quota, ReplyText, RowError, SessionCard,
+    SessionContext, Spend, StatusRows, Steer, SteeringMessage, SteeringQueue, ThinkingLine,
     TurnAnswerPart, TurnAnswers, TurnAside, TurnBand, TurnBandState, TurnCall, TurnCallResult,
     TurnCard, TurnCardState, TurnEnded, TurnEntry, TurnError, TurnFailed, TurnGroup,
-    TurnGroupState, TurnOrphan, TurnSection, TurnSizes, TurnStreaming, TurnThought,
+    TurnGroupState, TurnOrphan, TurnSection, TurnSizes, TurnStreaming, TurnThought, WidgetCard,
+    WorkingLine, WorkingRetry,
 };
 pub(crate) mod spans;
 
 /// The seam bound to one page's rows: the installed renderer, the
-/// page's cache, the page, and whether the screen reader drops every
-/// style from the returned spans.
+/// page's cache, the page, whether the screen reader drops every style
+/// from the returned spans, and the frame wall time an animated call
+/// carries beside its frame.
 #[derive(Debug, Clone)]
 pub(crate) struct Bound {
     /// The installed renderer's slot on this thread, if any.
@@ -43,6 +47,21 @@ pub(crate) struct Bound {
     pub(crate) ctx: SessionCtx,
     /// The screen reader drops every style from the returned spans.
     pub(crate) flat: bool,
+    /// The frame's wall time in Unix milliseconds; none where the loop
+    /// never set one, so no animated call runs there.
+    pub(crate) now: Option<u64>,
+}
+
+/// How a chrome slot draws: counting reserves rows without painting
+/// them, and painting draws them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlotDraw {
+    /// Count the replacement lines through the closed path, even in an
+    /// open frame: no animation state and no mark.
+    Count,
+    /// Paint the replacement lines through the open path, promoting a
+    /// stored count result at the same width.
+    Paint,
 }
 
 /// The renderer seam's shared state: what every page's rows draw
@@ -57,6 +76,9 @@ pub(crate) struct Ext {
     pub(crate) cache: Arc<Cache>,
     /// The screen reader drops every style from the returned spans.
     pub(crate) flat: bool,
+    /// The frame's wall time in Unix milliseconds, set once per input
+    /// and before the first frame; binds copy it onto the bound seam.
+    pub(crate) wall_ms: Option<u64>,
 }
 
 impl Ext {
@@ -68,6 +90,7 @@ impl Ext {
             page,
             ctx,
             flat: self.flat,
+            now: self.wall_ms,
         }
     }
 }
@@ -245,9 +268,14 @@ pub trait Renderer: std::fmt::Debug {
     fn animate_interval(&self, _ctx: &SessionCtx, _slot: &str) -> Option<std::time::Duration> {
         None
     }
-    /// Lines for `slot` at frame `frame`, with whether the item keeps
-    /// animating. The default draws the still `render` and continues,
-    /// so a renderer without animation needs no new code.
+    /// Lines for `slot` at frame `frame` with the frame's wall time
+    /// `now`, and whether the item keeps animating. The default draws
+    /// the still `render` and continues, so a renderer without animation
+    /// needs no new code.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame and its wall time travel with the draw context"
+    )]
     fn render_animated(
         &self,
         ctx: &SessionCtx,
@@ -255,6 +283,7 @@ pub trait Renderer: std::fmt::Debug {
         input: &Input<'_>,
         width: u16,
         _frame: u64,
+        _now: u64,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> (Decision, bool) {
         (self.render(ctx, slot, input, width, builtin), true)
@@ -321,17 +350,25 @@ impl Bound {
             crate::view::notice_rows::builtin_spans(notice.code, notice.text, at as usize)
         };
         let fitted = match renderer.animate_interval(&self.ctx, "notice") {
-            Some(interval) => self.cache.lines_animated_notice(
-                id,
-                &extension,
-                half,
-                &input,
-                width,
-                interval,
-                |frame| {
-                    renderer.render_animated(&self.ctx, "notice", &input, width, frame, &builtin)
-                },
-            ),
+            Some(interval) => {
+                // Without the frame wall time there is no animated call:
+                // the slot draws its built-in, invoking and memoizing
+                // nothing.
+                let now = self.now?;
+                self.cache.lines_animated_notice(
+                    id,
+                    &extension,
+                    half,
+                    &input,
+                    width,
+                    interval,
+                    |frame| {
+                        renderer.render_animated(
+                            &self.ctx, "notice", &input, width, frame, now, &builtin,
+                        )
+                    },
+                )
+            }
             None => self.cache.lines(
                 self.page.clone(),
                 "notice",
@@ -340,6 +377,78 @@ impl Bound {
                 &input,
                 width,
                 || renderer.render(&self.ctx, "notice", &input, width, &builtin),
+            ),
+        };
+        for queued in renderer.take_pending() {
+            self.cache.queue_notice(queued);
+        }
+        fitted
+    }
+
+    /// The bound renderer's chrome `slot` lines for `mode`: `None`
+    /// without an installed renderer, without a winner, or when the item
+    /// falls back to built-in, so the caller draws its built-in rows.
+    /// `Count` enters the closed path even in an open frame, caching
+    /// frame 0 with no animation state or mark; `Paint` draws through
+    /// the open path, promoting a stored count result at the same width.
+    /// An animated slot without the frame wall time draws built-in,
+    /// invoking and memoizing nothing.
+    pub(crate) fn slot_lines(
+        &self,
+        mode: SlotDraw,
+        slot: &str,
+        input: &Input<'_>,
+        width: u16,
+        builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Option<Arc<Vec<spans::FittedLine>>> {
+        let renderer = self.handle.get()?;
+        let selected = renderer.fills_for(&self.ctx, slot);
+        for queued in renderer.take_pending() {
+            self.cache.queue_notice(queued);
+        }
+        let SlotSelection::Draw { extension } = selected else {
+            return None;
+        };
+        let half = renderer.half(&self.ctx, &extension);
+        let fitted = match renderer.animate_interval(&self.ctx, slot) {
+            Some(interval) => {
+                let now = self.now?;
+                match mode {
+                    SlotDraw::Count => self.cache.lines_animated_closed(
+                        self.page.clone(),
+                        slot,
+                        &extension,
+                        half,
+                        input,
+                        width,
+                        |frame| {
+                            renderer
+                                .render_animated(&self.ctx, slot, input, width, frame, now, builtin)
+                        },
+                    ),
+                    SlotDraw::Paint => self.cache.lines_animated_paint(
+                        self.page.clone(),
+                        slot,
+                        &extension,
+                        half,
+                        input,
+                        width,
+                        interval,
+                        |frame| {
+                            renderer
+                                .render_animated(&self.ctx, slot, input, width, frame, now, builtin)
+                        },
+                    ),
+                }
+            }
+            None => self.cache.lines(
+                self.page.clone(),
+                slot,
+                &extension,
+                half,
+                input,
+                width,
+                || renderer.render(&self.ctx, slot, input, width, builtin),
             ),
         };
         for queued in renderer.take_pending() {

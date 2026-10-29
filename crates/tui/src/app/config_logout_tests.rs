@@ -16,7 +16,7 @@ use crate::Configure;
 use crate::configure::{ConfigureError, LogoutRow};
 use crate::configure_fake::Fake;
 use crate::home::Launch;
-use crate::keys::Key;
+use crate::keys::{Key, Mouse, MouseKind};
 use crate::swapped::Spot;
 
 /// The injected clock's now.
@@ -623,4 +623,43 @@ fn a_tall_list_scrolls_its_window_with_focus() {
     assert!(!rows.iter().any(|row| row.contains("acme l16")), "{rows:?}");
     assert!(rows.iter().any(|row| row.contains("acme l17")), "{rows:?}");
     assert!(rows.iter().any(|row| row.contains("acme l29")), "{rows:?}");
+}
+
+/// A wheel report at (`col`, `row`): down steps toward the tail, up away
+/// from it, over the conversation column the logout view takes.
+fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+    Mouse {
+        kind: if down {
+            MouseKind::WheelDown
+        } else {
+            MouseKind::WheelUp
+        },
+        col,
+        row,
+    }
+}
+
+/// The wheel over the logout view's delete confirmation is swallowed: a
+/// step that does not scroll takes no wheel, and the hidden conversation
+/// keeps its scroll (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_over_the_delete_confirmation_is_swallowed() {
+    let seam = logout_seam(vec![stored("acme", "work", true, &[])]);
+    store_file(&seam, "credentials/acme/work");
+    let mut app = attached(Some(Arc::clone(&seam)));
+    app.on_wheel(&wheel(10, 5, false));
+    assert!(app.top().is_some(), "setup scrolled the conversation up");
+    open_logout(&mut app);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("Delete acme/work?")),
+        "{rows:?}"
+    );
+    let top = app.top();
+    assert!(top.is_some(), "opening keeps the scrolled conversation");
+    assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    assert_eq!(app.on_wheel(&wheel(10, 5, false)), Effect::None);
+    assert_eq!(app.top(), top, "the wheel left the conversation");
+    assert!(app.config_view_open(), "the confirmation stays open");
 }

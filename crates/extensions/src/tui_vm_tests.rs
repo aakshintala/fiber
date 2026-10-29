@@ -699,13 +699,18 @@ fn animated(render: &str) -> (Arc<FakeClock>, TuiVm) {
     ))
 }
 
-/// Calls `notice` as frame `frame`, the seam's animated path.
+/// The frame wall time the animated helpers send: a fixed Unix
+/// millisecond, so the tests pin the value Lua reads.
+const NOW_MS: u64 = 1_720_000_000_000;
+
+/// Calls `notice` as frame `frame` at [`NOW_MS`], the seam's animated path.
 fn call_frame(vm: &mut TuiVm, input: &Value, frame: u64) -> Result<RenderOut, Error> {
-    vm.call_animated("notice", Some("s1"), input, 80, frame, &none)
+    vm.call_animated("notice", Some("s1"), input, 80, frame, NOW_MS, &none)
 }
 
-/// Calls `notice` as frame `frame`, moving the clock by `by` from inside
-/// `builtin`: the render has started, and the clock moves only then.
+/// Calls `notice` as frame `frame` at [`NOW_MS`], moving the clock by
+/// `by` from inside `builtin`: the render has started, and the clock
+/// moves only then.
 fn call_frame_advancing(
     vm: &mut TuiVm,
     clock: &FakeClock,
@@ -720,7 +725,15 @@ fn call_frame_advancing(
         clock.advance(by);
         Vec::new()
     };
-    vm.call_animated("notice", Some("s1"), &json!({}), 80, frame, &advance)
+    vm.call_animated(
+        "notice",
+        Some("s1"),
+        &json!({}),
+        80,
+        frame,
+        NOW_MS,
+        &advance,
+    )
 }
 
 fn out_text(out: &RenderOut) -> String {
@@ -820,6 +833,24 @@ fn a_plain_call_sends_no_frame_key() {
     let (_, mut vm) = notice("return { { { text = tostring(input.frame) } } }");
     let lines = call(&mut vm, &json!({})).unwrap();
     assert_eq!(text(&lines), "nil");
+}
+
+#[test]
+fn an_animated_call_carries_frame_and_now() {
+    let (_, mut vm) = animated("return { { { text = input.frame .. ':' .. input.now } } }");
+    let out = vm
+        .call_animated("notice", Some("s1"), &json!({}), 80, 3, NOW_MS, &none)
+        .unwrap();
+    assert_eq!(out_text(&out), format!("3:{NOW_MS}"));
+    assert!(out.continues);
+}
+
+#[test]
+fn a_plain_call_sends_no_frame_and_no_now() {
+    let (_, mut vm) =
+        notice("return { { { text = tostring(input.frame) .. ':' .. tostring(input.now) } } }");
+    let lines = call(&mut vm, &json!({})).unwrap();
+    assert_eq!(text(&lines), "nil:nil");
 }
 
 #[test]

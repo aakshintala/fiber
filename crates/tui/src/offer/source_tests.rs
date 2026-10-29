@@ -193,3 +193,26 @@ fn every_other_key_is_swallowed_without_scrolling() {
         assert_eq!(source.top(), 0, "{key:?}");
     }
 }
+
+/// The wheel shifts the source rows three lines a step, clamped at
+/// either end (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_shifts_three_source_lines_and_clamps_at_both_ends() {
+    let mut source = Source::new(0);
+    source.wheel(false, 30, 10);
+    assert_eq!(source.top(), 3);
+    source.wheel(false, 30, 10);
+    assert_eq!(source.top(), 6);
+    source.wheel(true, 30, 10);
+    assert_eq!(source.top(), 3);
+    // Thirty rows in a ten-row window end at row 20; the top holds
+    // zero against further ups.
+    for _ in 0..10 {
+        source.wheel(false, 30, 10);
+    }
+    assert_eq!(source.top(), 20);
+    for _ in 0..10 {
+        source.wheel(true, 30, 10);
+    }
+    assert_eq!(source.top(), 0);
+}
