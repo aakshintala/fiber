@@ -216,8 +216,7 @@ calls at the operating-system level under Fiber's own policy: Landlock
 plus seccomp on Linux with no srt and no bubblewrap, Seatbelt through
 `sandbox-exec` on macOS, except a call the model marks `unconfined: true`,
 which runs outside the sandbox (`docs/sandbox.md`, "The rule"). The sandbox
-does not confine a person's own driver-shell commands. The policies are
-(`docs/sandbox.md`, "The rule").
+does not confine a person's own driver-shell commands.
 
 A shell call runs with the account's full rights when the sandbox is off.
 Everything on this page decides whether a call runs; when the sandbox is
