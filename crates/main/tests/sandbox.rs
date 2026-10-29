@@ -332,7 +332,16 @@ fn an_explicit_unconfined_retry_reads_the_denied_path() {
     // variable delta run while every other kind stays pinned in order. Every
     // delta carries its call's id between that call's start and end
     // (`docs/events.md`, "`tool_call_delta`"), so a duplicated or misplaced
-    // delta fails.
+    // delta fails. `assistant_message_delta` is ephemeral with a
+    // chunking-dependent count (`docs/events.md`,
+    // "`assistant_message_delta`": the payload is "the text added since the
+    // last delta" with no count promised; `docs/testing.md`, "Event
+    // streams": a test asserts a count only where a doc promises it), so the
+    // final reply's `assistant_message_started` to `text_completed` segment
+    // holds its variable delta run the same way. The reply's items follow
+    // its `assistant_message_started` in order and its
+    // `assistant_message_completed` closes it (`docs/events.md`,
+    // "`text_completed`"), so a duplicated or misplaced delta fails.
     let secret_started_at = lines
         .iter()
         .position(|line| line["kind"] == "tool_call_started" && line["action_id"] == secret_id)
@@ -383,6 +392,50 @@ fn an_explicit_unconfined_retry_reads_the_denied_path() {
             );
         }
     }
+    let final_started_at = lines
+        .iter()
+        .rposition(|line| line["kind"] == "assistant_message_started")
+        .expect("a final assistant_message_started line");
+    let final_completed_at = lines
+        .iter()
+        .rposition(|line| line["kind"] == "assistant_message_completed")
+        .expect("a final assistant_message_completed line");
+    let final_id = lines[final_started_at]["action_id"]
+        .as_str()
+        .expect("an id for the final reply")
+        .to_owned();
+    let message_deltas = lines
+        .iter()
+        .filter(|line| line["kind"] == "assistant_message_delta")
+        .count();
+    for (index, line) in lines.iter().enumerate() {
+        if line["kind"] != "assistant_message_delta" {
+            continue;
+        }
+        assert_eq!(
+            line["action_id"], final_id,
+            "every text delta belongs to the final reply"
+        );
+        assert!(
+            final_started_at < index && index < final_completed_at,
+            "the final reply's deltas stream while it runs"
+        );
+    }
+    let delta_text = lines
+        .iter()
+        .filter(|line| line["kind"] == "assistant_message_delta")
+        .filter_map(|line| line["payload"]["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    let completed_text = lines
+        .iter()
+        .find(|line| line["kind"] == "text_completed" && line["action_id"] == final_id)
+        .and_then(|line| line["payload"]["text"].as_str())
+        .unwrap_or_default();
+    assert_eq!(
+        delta_text, completed_text,
+        "the deltas add up to the completed text"
+    );
     let kinds = support::kinds(&lines);
     let mut expected: Vec<&str> = vec![
         "session_started",
@@ -414,8 +467,12 @@ fn an_explicit_unconfined_retry_reads_the_denied_path() {
         "tool_call_completed",
         "step_started",
         "assistant_message_started",
+    ]);
+    expected.extend(std::iter::repeat_n(
         "assistant_message_delta",
-        "assistant_message_delta",
+        message_deltas,
+    ));
+    expected.extend([
         "text_completed",
         "usage_recorded",
         "assistant_message_completed",
