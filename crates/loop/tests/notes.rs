@@ -370,7 +370,7 @@ fn read_only_notes_withhold_a_subcommand_holding_a_left_angle() {
     // Only the left side of the disjunction holds: the subcommand
     // holds `<` but not `>`.
     let ask = read_only_ask();
-    ambiguous_withheld(ask, "kubectl se<d x", "a subcommand holding `<`");
+    ambiguous_withheld(ask, "kubectl se<d", "a subcommand holding `<`");
 }
 
 #[test]
@@ -378,7 +378,7 @@ fn read_only_notes_withhold_a_subcommand_holding_a_right_angle() {
     // Only the right side of the disjunction holds: the subcommand
     // holds `>` but not `<`.
     let ask = read_only_ask();
-    ambiguous_withheld(ask, "kubectl se>d x", "a subcommand holding `>`");
+    ambiguous_withheld(ask, "kubectl se>d", "a subcommand holding `>`");
 }
 
 #[test]

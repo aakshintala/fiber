@@ -396,14 +396,7 @@ fn existing_keys(root: &Value) -> Result<HashMapFlags, ReadOnlyEntryProblem> {
 /// missing file covers nothing. Anything present but unreadable as a
 /// configured map is malformed.
 fn unread_keys(file: &Path) -> Result<HashMapFlags, ReadOnlyEntryProblem> {
-    let bytes = match read_bytes(file) {
-        Ok(bytes) => bytes,
-        Err(ConfigError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
-            return Ok(HashMapFlags::new());
-        }
-        Err(_) => return Err(ReadOnlyEntryProblem::Malformed),
-    };
-    let Some(bytes) = bytes else {
+    let Some(bytes) = read_bytes(file).map_err(|_| ReadOnlyEntryProblem::Malformed)? else {
         return Ok(HashMapFlags::new());
     };
     let root: Value =
