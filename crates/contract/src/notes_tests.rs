@@ -3,6 +3,9 @@ use serde_json::{from_value, json, to_value};
 
 #[test]
 fn topics_follow_the_notes_order_and_wire_contract() {
+    // The proposal order is the bullets' order (docs/permissions.md,
+    // "Setting up the notes": "It proposes lines, one topic at a time, in
+    // the order of the bullets above").
     let expected = [
         (
             "source_control",

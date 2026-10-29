@@ -1022,6 +1022,8 @@ fn gather_allows(home: &Path, key: &str, workspace: &Path, shell: &StubShell) ->
 
 #[test]
 fn five_reviewer_allows_propose_with_their_text_and_counts() {
+    // Five is the counting threshold (docs/permissions.md, "Setting up the
+    // notes": "A subject counts once it has at least 5 allows").
     let root = fakes::TempDir::new("doors-notes-query");
     let home = root.path().join("home");
     let workspace = repo(root.path(), "here");
@@ -1065,6 +1067,8 @@ fn five_reviewer_allows_propose_with_their_text_and_counts() {
 
 #[test]
 fn four_allows_stay_silent_while_five_count() {
+    // The five-allow minimum (docs/permissions.md, "Setting up the notes":
+    // "A subject counts once it has at least 5 allows").
     let root = fakes::TempDir::new("doors-notes-threshold");
     let home = root.path().join("home");
     let workspace = repo(root.path(), "here");
@@ -1337,7 +1341,7 @@ fn one_word_valued_and_slash_subjects_stay_counted() {
 }
 
 #[test]
-fn allowed_redirects_propose_stripped_while_other_redirects_drop() {
+fn allowed_redirects_keep_their_subject_while_other_redirects_drop() {
     let root = fakes::TempDir::new("doors-notes-redirect");
     let home = root.path().join("home");
     let workspace = repo(root.path(), "here");
@@ -1380,8 +1384,71 @@ fn allowed_redirects_propose_stripped_while_other_redirects_drop() {
     );
     let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].0, "acme-cli query --json");
-    assert_eq!(found[0].3, "5 reviewer allows for acme-cli query --json");
+    // The tally counts the exact classifier subject, redirect included;
+    // the loop strips the allowed redirect when it renders the entry.
+    assert_eq!(found[0].0, "acme-cli query --json >/dev/null");
+    assert_eq!(
+        found[0].3,
+        "5 reviewer allows for acme-cli query --json >/dev/null"
+    );
+}
+
+#[test]
+fn whitespace_variants_share_one_subject_tally() {
+    let root = fakes::TempDir::new("doors-notes-whitespace");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // Three allows with single spaces and two with doubled spaces: the
+    // classifier names one subject, so all five count together
+    // (docs/permissions.md, "Setting up the notes": "Subjects are
+    // counted by their exact text").
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["a_4", "a_5"],
+                "acme-cli  query  --json",
+                "reviewer",
+                false,
+                7
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "acme-cli  query  --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(
+        found,
+        [(
+            "acme-cli query --json".to_owned(),
+            5,
+            5,
+            "5 reviewer allows for acme-cli query --json".to_owned()
+        )]
+    );
 }
 
 #[test]
@@ -1599,18 +1666,21 @@ fn an_unparseable_deny_containing_the_command_withholds() {
 }
 
 #[test]
-fn pipeline_and_wrapper_denies_match_whole_word() {
-    let root = fakes::TempDir::new("doors-notes-contain");
+fn an_outside_classified_deny_spares_the_candidate() {
+    let root = fakes::TempDir::new("doors-notes-outside");
     let home = root.path().join("home");
     let workspace = repo(root.path(), "here");
     let key = log::project_key(&worktree::project(&workspace));
+    // A denied `echo` names the candidate words, but the entry would never
+    // cover an `echo` call: only the command path and flags disqualify
+    // (docs/permissions.md, "Setting up the notes").
     seed_calls(
         &home,
         &key,
         "s_1",
         workspace.to_str().unwrap(),
         &format!(
-            "{}{}{}",
+            "{}{}",
             allow_calls(
                 &["a_1", "a_2", "a_3", "a_4", "a_5"],
                 "acme-cli query --json",
@@ -1621,12 +1691,11 @@ fn pipeline_and_wrapper_denies_match_whole_word() {
             deny_call(
                 "a_6",
                 11,
-                "sudo acme-cli query --json",
+                "echo acme-cli query --json",
                 "reviewer",
                 None,
                 None
             ),
-            deny_call("a_7", 14, "other query --json", "reviewer", None, None),
         ),
     );
     let shell = StubShell::new(
@@ -1637,18 +1706,232 @@ fn pipeline_and_wrapper_denies_match_whole_word() {
                 Ok(("acme-cli query --json", "acme-cli query")),
             ),
             (
-                "sudo acme-cli query --json",
-                Ok(("sudo acme-cli query --json", "sudo acme-cli")),
+                "echo acme-cli query --json",
+                Ok(("echo acme-cli query --json", "echo acme-cli")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, "acme-cli query --json");
+    assert!(!found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn a_narrower_denied_command_withholds() {
+    let root = fakes::TempDir::new("doors-notes-narrower");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // The denied call runs under the candidate path with the same flags:
+    // the entry would cover it, so it withholds.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call(
+                "a_6",
+                11,
+                "acme-cli query status --json",
+                "reviewer",
+                None,
+                None
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
             ),
             (
-                "other query --json",
-                Ok(("other query --json", "other query")),
+                "acme-cli query status --json",
+                Ok(("acme-cli query status --json", "acme-cli query")),
             ),
         ],
     );
     let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
     assert_eq!(found.len(), 1);
     assert!(found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn a_flag_differing_deny_spares_the_candidate() {
+    let root = fakes::TempDir::new("doors-notes-flag-differ");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // Same command path, but the denied call's flag is not one the entry
+    // would hold: the entry would not cover it, so it spares.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call("a_6", 11, "acme-cli query --xml", "reviewer", None, None),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "acme-cli query --xml",
+                Ok(("acme-cli query --xml", "acme-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert!(!found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn pipeline_denies_withhold_while_longer_names_spare() {
+    let root = fakes::TempDir::new("doors-notes-contain");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // Neither deny classifies. The pipeline names the candidate command
+    // whole-word, so it withholds; the lookalike's longer name appears in
+    // neither deny, so it proposes untouched.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "my-acme-cli query --json",
+                "reviewer",
+                false,
+                11
+            ),
+            deny_call(
+                "a_6",
+                21,
+                "acme-cli query --json | grep x",
+                "reviewer",
+                None,
+                None
+            ),
+            deny_call(
+                "a_7",
+                24,
+                "((other-cli query --json",
+                "reviewer",
+                None,
+                None
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "my-acme-cli query --json",
+                Ok(("my-acme-cli query --json", "my-acme-cli query")),
+            ),
+            ("acme-cli query --json | grep x", Err("pipe")),
+            ("((other-cli query --json", Err("syntax")),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 2);
+    let denied = found
+        .iter()
+        .find(|(subject, _, _, _)| subject == "acme-cli query --json")
+        .unwrap();
+    assert!(denied.3.contains("not proposed"), "{}", denied.3);
+    let spared = found
+        .iter()
+        .find(|(subject, _, _, _)| subject == "my-acme-cli query --json")
+        .unwrap();
+    assert!(!spared.3.contains("not proposed"), "{}", spared.3);
+}
+
+#[test]
+fn a_longer_command_name_spares_in_unparseable_denies() {
+    let root = fakes::TempDir::new("doors-notes-longer");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // The unparseable deny names only `my-acme-cli`: the candidate name
+    // appears inside it, but never whole-word, so it spares.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call(
+                "a_6",
+                11,
+                "((my-acme-cli query --json",
+                "reviewer",
+                None,
+                None
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            ("((my-acme-cli query --json", Err("syntax")),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert!(!found[0].3.contains("not proposed"), "{}", found[0].3);
 }
 
 #[test]
@@ -1860,7 +2143,7 @@ fn a_missing_a_foreign_and_an_other_topic_give_no_allows() {
 }
 
 #[test]
-fn tallies_cap_at_sixty_four_sorted_by_count_then_subject() {
+fn tallies_cap_at_sixty_four() {
     let root = fakes::TempDir::new("doors-notes-cap");
     let home = root.path().join("home");
     let workspace = repo(root.path(), "here");
@@ -1891,11 +2174,15 @@ fn tallies_cap_at_sixty_four_sorted_by_count_then_subject() {
         .map(|(command, prefix)| (command.as_str(), Ok((command.as_str(), prefix.as_str()))))
         .collect();
     let shell = StubShell::new("shell", &table);
+    // The doc promises no visible order, so the test pins the cap bound
+    // only: sixty-four tallies stay, six-count subject included.
     let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
     assert_eq!(found.len(), 64);
-    assert_eq!(found[0].0, "capcmd-64 query --json");
-    assert_eq!(found[0].1, 6);
-    assert_eq!(found[63].0, "capcmd-62 query --json");
+    let top = found
+        .iter()
+        .find(|(subject, _, _, _)| subject == "capcmd-64 query --json")
+        .unwrap();
+    assert_eq!(top.1, 6);
 }
 
 /// A shell that executes every tabled command, naming the subject and

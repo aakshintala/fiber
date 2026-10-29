@@ -381,7 +381,7 @@ fn a_torn_tail_and_an_unreadable_line_keep_what_came_before() {
 }
 
 #[test]
-fn calls_read_in_session_id_then_log_order_across_projects() {
+fn calls_read_sessions_across_projects() {
     let home = fakes::TempDir::new("fiber-log-shell-order");
     seed(
         home.path(),
@@ -405,6 +405,8 @@ fn calls_read_in_session_id_then_log_order_across_projects() {
     );
     let found = calls(home.path());
     assert_eq!(found.len(), 2);
-    assert_eq!(found[0].project, "p");
-    assert_eq!(found[1].project, "q");
+    // The walk promises no session order, so the test pins membership.
+    let mut projects: Vec<&str> = found.iter().map(|call| call.project.as_str()).collect();
+    projects.sort();
+    assert_eq!(projects, ["p", "q"]);
 }

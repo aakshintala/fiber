@@ -795,8 +795,8 @@ mod entries;
 pub use atomic::{atomic_error, write_atomic};
 pub use entries::update_global_entries;
 pub use notes::{
-    FileOutcome, FileSaved, NotesSaved, NotesWrite, ReadOnlyEntryProblem, ReadOnlyFlags,
-    save_reviewer_notes, validate_read_only_entry, version,
+    FileOutcome, FileSaved, NotesSaved, NotesWrite, ReadOnlyEntryProblem, ReadOnlyFlags, overlaps,
+    read_only_keys, save_reviewer_notes, validate_read_only_entry, version,
 };
 
 #[cfg(test)]

@@ -110,8 +110,9 @@ fn builtin_held(command: &str) -> bool {
 }
 
 /// Whether two command paths overlap: they are equal, or one extends the
-/// other word for word.
-fn overlaps(first: &str, second: &str) -> bool {
+/// other word for word. Shared with the read-only gather, which suppresses
+/// a candidate under any configured key by this same predicate.
+pub fn overlaps(first: &str, second: &str) -> bool {
     first == second
         || first.starts_with(&format!("{second} "))
         || second.starts_with(&format!("{first} "))
@@ -313,36 +314,36 @@ fn check_entries(
     // Each layer's configured commands with their flags: sent layers from
     // their locked reads, the other layer read now. An entry identical to
     // what its own layer already holds converges instead of overlapping.
-    let mut layers: Vec<(PathBuf, BTreeSet<String>, HashMapFlags)> = Vec::new();
+    let mut layers: Vec<(PathBuf, HashMapFlags)> = Vec::new();
     for file in [global_file, project_file] {
         let pending_root = pending
             .iter()
             .find(|(pending_file, _, _, _)| pending_file == file)
             .map(|(_, _, _, root)| root);
-        let (keys, table) = match pending_root {
+        let table = match pending_root {
             Some(root) => existing_keys(root).map_err(|_| malformed())?,
             None => unread_keys(file).map_err(|_| malformed())?,
         };
-        layers.push((file.to_path_buf(), keys, table));
+        layers.push((file.to_path_buf(), table));
     }
-    let mut union = BTreeSet::new();
-    for (_, keys, _) in &layers {
-        union.extend(keys.iter().cloned());
-    }
-    // Every kept entry against the union and the run's earlier kept
-    // entries, global first: a layer flip or an in-run overlap refuses
-    // with the entry named, and an unchanged entry converges below.
+    // Every kept entry against both layers' keys and the run's earlier
+    // kept entries, global first: a layer flip or an in-run overlap
+    // refuses with the entry named, and an unchanged entry converges
+    // below.
     let mut kept: Vec<&ReadOnlyFlags> = Vec::new();
     for (file, sent, _, _) in pending {
         let same = layers
             .iter()
-            .find(|(layer, _, _)| layer == file)
-            .map(|(_, _, table)| table);
+            .find(|(layer, _)| layer == file)
+            .map(|(_, table)| table);
         for entry in &sent.read_only {
             let identical =
                 same.is_some_and(|table| table.get(&entry.command) == Some(&entry.flags));
             if !identical
-                && (union.iter().any(|key| overlaps(key, &entry.command))
+                && (layers
+                    .iter()
+                    .flat_map(|(_, table)| table.keys())
+                    .any(|key| overlaps(key, &entry.command))
                     || kept
                         .iter()
                         .any(|kept| overlaps(&kept.command, &entry.command)))
@@ -358,21 +359,20 @@ fn check_entries(
 /// A layer's configured commands with each entry's flags.
 type HashMapFlags = std::collections::HashMap<String, Vec<String>>;
 
-/// The configured `shell.read_only` commands in `root`, read as the
+/// The configured `shell.read_only` entries in `root`, read as the
 /// nested objects dotted paths name: absent `shell` or `read_only` means
-/// no keys. Present means an object mapping command paths to entry
+/// no entries. Present means an object mapping command paths to entry
 /// objects with string-array flags; anything else is malformed.
-fn existing_keys(root: &Value) -> Result<(BTreeSet<String>, HashMapFlags), ReadOnlyEntryProblem> {
+fn existing_keys(root: &Value) -> Result<HashMapFlags, ReadOnlyEntryProblem> {
     let map = root.as_object().ok_or(ReadOnlyEntryProblem::Malformed)?;
     let Some(shell) = map.get("shell") else {
-        return Ok((BTreeSet::new(), HashMapFlags::new()));
+        return Ok(HashMapFlags::new());
     };
     let shell = shell.as_object().ok_or(ReadOnlyEntryProblem::Malformed)?;
     let Some(node) = shell.get("read_only") else {
-        return Ok((BTreeSet::new(), HashMapFlags::new()));
+        return Ok(HashMapFlags::new());
     };
     let entries = node.as_object().ok_or(ReadOnlyEntryProblem::Malformed)?;
-    let mut keys = BTreeSet::new();
     let mut table = HashMapFlags::new();
     for (command, value) in entries {
         let flags = value
@@ -387,29 +387,44 @@ fn existing_keys(root: &Value) -> Result<(BTreeSet<String>, HashMapFlags), ReadO
                     .to_owned(),
             );
         }
-        keys.insert(command.clone());
         table.insert(command.clone(), taken);
     }
-    Ok((keys, table))
+    Ok(table)
 }
 
-/// The configured `shell.read_only` commands in `file`, read unlocked: a
+/// The configured `shell.read_only` entries in `file`, read unlocked: a
 /// missing file covers nothing. Anything present but unreadable as a
 /// configured map is malformed.
-fn unread_keys(file: &Path) -> Result<(BTreeSet<String>, HashMapFlags), ReadOnlyEntryProblem> {
+fn unread_keys(file: &Path) -> Result<HashMapFlags, ReadOnlyEntryProblem> {
     let bytes = match read_bytes(file) {
         Ok(bytes) => bytes,
         Err(ConfigError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
-            return Ok((BTreeSet::new(), HashMapFlags::new()));
+            return Ok(HashMapFlags::new());
         }
         Err(_) => return Err(ReadOnlyEntryProblem::Malformed),
     };
     let Some(bytes) = bytes else {
-        return Ok((BTreeSet::new(), HashMapFlags::new()));
+        return Ok(HashMapFlags::new());
     };
     let root: Value =
         serde_json::from_slice(&bytes).map_err(|_| ReadOnlyEntryProblem::Malformed)?;
     existing_keys(&root)
+}
+
+/// The configured `shell.read_only` command paths in both of the person's
+/// layers, global first: a missing file covers nothing, while a present
+/// file with no readable `shell.read_only` is malformed. The read-only
+/// gather reads its suppression keys through this, so only `config` reads
+/// configuration files (docs/architecture.md, "Boundaries between modules").
+pub fn read_only_keys(
+    home: &Path,
+    project: &ProjectKey,
+) -> Result<Vec<String>, ReadOnlyEntryProblem> {
+    let mut keys = Vec::new();
+    for file in [global_config_file(home), project_config_file(home, project)] {
+        keys.extend(unread_keys(&file)?.keys().cloned());
+    }
+    Ok(keys)
 }
 
 /// `root` with `reviewer.context` set to `text` and `entries` merged into
