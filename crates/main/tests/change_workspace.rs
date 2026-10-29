@@ -793,6 +793,12 @@ fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
     let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    // The hub-log watch registers before the move: the first reread
+    // after registration closes the lost-wakeup window, and each native
+    // file-change signal rereads, so neither the initial failure nor the
+    // retry is missed. The `start_in` subscription above stays on the old
+    // session, so the relay-end redirect can retry at its socket's end.
+    let watch = HubLogWatch::register(&setup.home().join("logs").join("hub.log")).unwrap();
     let client = hubbed.client();
     client.send(&change_workspace(
         "c_mv",
@@ -810,9 +816,21 @@ fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
         .as_str()
         .unwrap()
         .to_owned();
-    // Fix the package and approve its new content. The hub never retries
-    // a recorded child: rerun its recorded start directly, with the same
-    // id, and read its startup off its stdout.
+    // The old process's exit retries the recorded child once
+    // (`docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits), and the
+    // retry fails like the initial attempt: the second matching hub.log
+    // line is the retry's, and no `session_left` wait decides it.
+    watch
+        .wait_until(setup.deadline, "the retry's hub.log line", |text| {
+            text.lines()
+                .filter(|line| line.contains(&same_child) && line.contains("could not start"))
+                .count()
+                >= 2
+        })
+        .unwrap();
+    // Fix the package and approve its new content. The hub retries a
+    // recorded child once: rerun its recorded start directly, with the
+    // same id, and read its startup off its stdout.
     fs::write(layout.repo_b.join("pkg/init.lua"), "-- fixed\n").unwrap();
     approve(&setup, &layout.repo_b);
     hubbed.finish();

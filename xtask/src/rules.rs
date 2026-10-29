@@ -549,6 +549,8 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/hub/src/resume.rs", "fn find_log|root:home", "join:projects", "#1720"),
     source_allowance!("crates/hub/src/retire.rs", "fn held_by_exiting|root:hub.home", "join:run", "#2054"),
     source_allowance!("crates/hub/src/rewind.rs", "fn reach|root:hub.home", "join:run", "#1720"),
+    source_allowance!("crates/hub/src/rewind.rs", "fn reach_locked|root:hub.home", "join:run", "#3565"),
+    source_allowance!("crates/hub/src/rewind.rs", "fn retry_after_exit|root:hub.home", "join:run", "#3565"),
     source_allowance!("crates/hub/src/sessions_stop.rs", "fn list|root:hub.home", "join:run", "#2959"),
     source_allowance!("crates/hub/src/sessions_stop.rs", "fn connect_now|root:hub.home", "join:run", "#2959"),
     source_allowance!("crates/hub/src/sessions_stop.rs", "fn connect_session|root:hub.home", "join:run", "#2959"),

@@ -175,6 +175,11 @@ impl<B: Backend> Loop<B> {
             parser: crate::keys::Parser::default(),
             screen,
             hub: Connection::new(crate::retry::Retry::new(&clock)),
+            kitty_writer: None,
+            tty_lock: Arc::new(super::kitty_writer::TtyLock::new()),
+            kitty_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            handover_retained: Vec::new(),
+            pending_resume: false,
             tty,
             on_attach: Box::new(|_| {}),
             clock,
@@ -191,6 +196,17 @@ impl<B: Backend> Loop<B> {
             shape: crate::osc::Shape::default(),
             tick: crate::tick::TickThread::idle(),
         }
+    }
+}
+
+/// Sends a barrier to `lp`'s Kitty writer and waits for its ack, within
+/// the deadline: every delete pushed so far is on the wire when this
+/// returns. Tests only. With no writer nothing was ever handed off, so
+/// nothing is in flight and this is a no-op.
+#[track_caller]
+pub(super) fn flush_kitty<B: Backend>(lp: &Loop<B>) {
+    if let Some(writer) = lp.kitty_writer.as_ref() {
+        assert!(writer.barrier(), "the writer acks the barrier");
     }
 }
 
@@ -2517,7 +2533,8 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::Login { .. }
             | Input::Image { .. }
             | Input::Feedback(_)
-            | Input::Viewed { .. } => panic!("a pause sent something else"),
+            | Input::Viewed { .. }
+            | Input::KittyFailed => panic!("a pause sent something else"),
         }
     }
     generations.sort();
@@ -3116,6 +3133,7 @@ fn the_signal_thread_sends_each_taken_signal() {
         | Input::HooksOfferNames { .. }
         | Input::HooksInstalled { .. }
         | Input::Login { .. }
-        | Input::Tick => panic!("the signal thread sent something else"),
+        | Input::Tick
+        | Input::KittyFailed => panic!("the signal thread sent something else"),
     }
 }

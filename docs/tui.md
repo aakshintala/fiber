@@ -1706,9 +1706,7 @@ underlined. A focused link sits on the `surface_raised` tint, with "Enter opens
 link takes the `hover` tint.
 
 A copy, link or image command still running after 10 seconds is stopped;
-what it started keeps running. The image is sent to the terminal in one
-write; a very large one can hold the screen until the terminal has read
-it.
+what it started keeps running. Large images go to the terminal in chunks (Images).
 
 ## Keys
 
@@ -2539,6 +2537,18 @@ draw never waits on the child: conversion runs on a worker thread and each
 completion arrives as loop input. A completion from an earlier session's
 generation is dropped, and a forgotten image never transmits.
 
+An upload holds the loop for at most one chunk: a writer sends each
+image's chunks and then its placement while the loop reads input and
+draws. Frames go out between whole chunks, so a frame drawn while an image
+transmits shows that image's rows blank, at their size, until it lands.
+Images transmit and place in the order queued, and no other image command
+goes between one image's chunks except a delete, which goes at the next
+chunk boundary: an image it removes sends nothing more, and an unrelated
+upload it interrupts is sent again whole after it. Quitting while an image
+transmits sends the delete for that image at the next chunk boundary and
+nothing more of it. A failed write to the terminal is the terminal failing:
+every pending image is dropped and nothing more is written.
+
 - An image is at most 40% of the conversation's width and 12 rows tall,
   keeping its proportions. A click opens it in the system viewer, from a
   copy the terminal writes to `cache/images/` in Fiber home
@@ -2550,6 +2560,10 @@ generation is dropped, and a forgotten image never transmits.
   image placements before drawing the next session and does not write those
   placements again; images the next session presents are written for the new
   session.
+- Handing the terminal to another program, such as the editor, abandons an
+  image upload in progress at a chunk boundary, closing it first. On return,
+  the alternate screen has no images, so every image on screen is sent again
+  whole.
 - An image part in the log carries its width and height, so paging counts its
   rows without decoding it.
 

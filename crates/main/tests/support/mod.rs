@@ -343,6 +343,151 @@ impl Setup {
     }
 }
 
+/// A `hub.log` wait that wakes on a native file-change notification
+/// (Linux inotify, macOS kqueue, through `rustix`): registered before
+/// the event-producing command, it rereads the snapshot after
+/// registration and after each signal, so an append landing between
+/// registration and the first wait is never lost. It returns only after
+/// `ready` holds for a fresh reread, or the deadline expires: no polling
+/// interval or sleep is introduced.
+pub(crate) struct HubLogWatch {
+    log: PathBuf,
+    watch: PlatformWatch,
+}
+
+impl HubLogWatch {
+    /// Registers the native change watch on `log`: a reread after this
+    /// returns sees every line appended later.
+    pub(crate) fn register(log: &Path) -> io::Result<Self> {
+        Ok(Self {
+            log: log.to_path_buf(),
+            watch: PlatformWatch::register(log)?,
+        })
+    }
+
+    /// Blocks until `ready` holds for a reread of the log, or `deadline`
+    /// expires: each wake rereads, and expiry fails naming `what`.
+    pub(crate) fn wait_until(
+        &self,
+        deadline: Deadline,
+        what: &str,
+        ready: impl Fn(&str) -> bool,
+    ) -> io::Result<()> {
+        loop {
+            let text = fs::read_to_string(&self.log).unwrap_or_default();
+            if ready(&text) {
+                return Ok(());
+            }
+            let left = deadline.left();
+            if left.is_zero() {
+                return Err(timed_out(what));
+            }
+            self.watch.wait_once(left)?;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct PlatformWatch {
+    notify: rustix::fd::OwnedFd,
+}
+
+#[cfg(target_os = "linux")]
+impl PlatformWatch {
+    fn register(log: &Path) -> io::Result<Self> {
+        let notify = rustix::fs::inotify::init(
+            rustix::fs::inotify::CreateFlags::CLOEXEC | rustix::fs::inotify::CreateFlags::NONBLOCK,
+        )?;
+        rustix::fs::inotify::add_watch(&notify, log, rustix::fs::inotify::WatchFlags::MODIFY)?;
+        Ok(Self { notify })
+    }
+
+    fn wait_once(&self, timeout: Duration) -> io::Result<()> {
+        let mut fds = [rustix::event::PollFd::new(
+            &self.notify,
+            rustix::event::PollFlags::IN,
+        )];
+        let spec = rustix::event::Timespec {
+            tv_sec: timeout.as_secs().min(i64::MAX as u64).cast_signed(),
+            tv_nsec: timeout.subsec_nanos() as _,
+        };
+        // The park itself is the wait: a woken fd, a signal and an
+        // expired wait all end it, and the reread decides, so the count
+        // is unused.
+        #[allow(
+            clippy::let_underscore_must_use,
+            reason = "a woken fd and an expired wait both end the park: the count is unused"
+        )]
+        let _ = rustix::event::poll(&mut fds, Some(&spec));
+        // Drain the queued change reports so the next wait parks instead
+        // of spinning on a still-readable descriptor.
+        let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 512];
+        let mut reader = rustix::fs::inotify::Reader::new(&self.notify, &mut buf);
+        loop {
+            match reader.next() {
+                Ok(_) => {}
+                Err(error) if error == rustix::io::Errno::AGAIN => break,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct PlatformWatch {
+    queue: rustix::fd::OwnedFd,
+    file: rustix::fd::OwnedFd,
+}
+
+#[cfg(target_os = "macos")]
+impl PlatformWatch {
+    fn register(log: &Path) -> io::Result<Self> {
+        use rustix::event::kqueue::kqueue;
+        let file = rustix::fs::open(
+            log,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?;
+        let queue = kqueue()?;
+        // The first wait registers and parks atomically, so no change
+        // between registration and the first wait is lost.
+        Ok(Self { queue, file })
+    }
+
+    // Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+    #[cfg_attr(false, mutants::skip)]
+    #[allow(
+        unsafe_code,
+        reason = "kqueue waits for hub.log writes on macOS: the registered vnode fd is the watch's own open file, alive for every wait, and the event buffer is a stack array the kernel writes only within its length"
+    )]
+    fn wait_once(&self, timeout: Duration) -> io::Result<()> {
+        use rustix::event::kqueue::{Event, EventFilter, EventFlags, VnodeEvents, kevent};
+        let change = Event::new(
+            EventFilter::Vnode {
+                vnode: std::os::unix::io::AsRawFd::as_raw_fd(&self.file),
+                flags: VnodeEvents::WRITE,
+            },
+            EventFlags::ADD | EventFlags::CLEAR,
+            std::ptr::null_mut(),
+        );
+        let mut events = [std::mem::MaybeUninit::<Event>::uninit(); 1];
+        // SAFETY: `self.file` stays open for the watch's lifetime, so the
+        // registered vnode fd is valid for every wait; `events` is a stack
+        // array the kernel fills with at most one event, and the null
+        // udata is never dereferenced.
+        let _ = unsafe {
+            kevent(
+                &self.queue,
+                std::slice::from_ref(&change),
+                &mut events,
+                Some(timeout),
+            )
+        }?;
+        Ok(())
+    }
+}
+
 /// A finished `fiber` run whose stdout is one JSON line per line: every
 /// binary-level `ask` test reads the same shape, so the event kinds and
 /// the session id are shared here (`docs/testing.md`, "Levels").
