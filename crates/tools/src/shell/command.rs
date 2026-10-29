@@ -350,14 +350,8 @@ fn finish_spawned(
     // instead of ending normally: nothing proved the sandbox applied, so no
     // end — finished or moved — may carry the call's output as confined.
     #[cfg(target_os = "macos")]
-    if let Drive::Gated(watch) = &drive
-        && !watch.observed()
-    {
-        let status = lock(&progress.shared.inner).status;
-        drop(bridge);
-        return Err(std::io::Error::other(SandboxApply {
-            cause: super::sandbox::apply_cause(watch, status),
-        }));
+    if let Drive::Gated(watch) = &drive {
+        require_confined_marker(watch, &progress)?;
     }
     match ended {
         LoopEnd::Finished(finished) => {
@@ -372,6 +366,25 @@ fn finish_spawned(
             spill,
         }))),
     }
+}
+
+/// Fails closed if a macOS wrapper ended without proving that Seatbelt
+/// applied. Isolated from the shared pipeline so Linux mutation tests can
+/// exempt this macOS-only behavior without exempting shared execution.
+#[cfg(target_os = "macos")]
+// mutants run on Linux, where this helper is not compiled.
+#[cfg_attr(false, mutants::skip)]
+fn require_confined_marker(
+    watch: &super::sandbox::MarkerWatch,
+    progress: &Run,
+) -> Result<(), std::io::Error> {
+    if watch.observed() {
+        return Ok(());
+    }
+    let status = lock(&progress.shared.inner).status;
+    Err(std::io::Error::other(SandboxApply {
+        cause: super::sandbox::apply_cause(watch, status),
+    }))
 }
 
 #[allow(
