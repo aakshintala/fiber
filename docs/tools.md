@@ -524,8 +524,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   workspace; a relative path is resolved against the workspace);
   `timeout_ms` (optional; for a monitor, its deadline);
   `run_in_background` (optional); `tty` (optional); `monitor` (optional;
-  starts a monitor, "Background jobs"). Fiber never reruns a failed
-  confined call outside its sandbox. On macOS the confined shell prints a
+  starts a monitor, "Background jobs"); `unconfined` (optional; when true
+  the call leaves the OS sandbox and is reviewed exactly as with the
+  sandbox off). Fiber never reruns a failed confined call outside its
+  sandbox: the model retries explicitly with `unconfined: true` as a new
+  reviewed call. On macOS the confined shell prints a
   start marker before the user program runs; the call fails instead of
   ending normally when the marker never arrives. Each call starts fresh: a
   `cd` does not carry over to the next call.
@@ -663,7 +666,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   paths the command names, resolved against `workdir`. Otherwise it
   declares `executes`, with no paths. A call that ran inside the OS
   sandbox on Linux or macOS carries `confined`
-  (`docs/permissions.md`, "Confinement"); calls remain reviewed.
+  (`docs/permissions.md`, "Confinement"); a call with `unconfined: true`
+  leaves the sandbox and is reviewed exactly as with the sandbox off.
 - The recogniser accepts only a listed set of syntax: simple commands,
   pipelines, lists joined by `&&`, `||` and `;`, quoted and unquoted words,
   variable assignments before a command, and the redirects below. Any
