@@ -29,7 +29,7 @@ impl LuaProvider {
         if let Some(key) = key {
             arg.insert("key".into(), json!(key.expose()));
         }
-        let returned = self.call("cost", Value::Object(arg))?;
+        let returned = self.call("cost", Value::Object(arg), None)?;
         match returned {
             Value::Null => Ok(None),
             Value::Number(n) => match n.as_f64() {

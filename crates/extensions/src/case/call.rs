@@ -1,7 +1,7 @@
 //! Direct calls to a package's Lua provider (`docs/testing.md`, "Testing an extension").
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -42,6 +42,17 @@ pub fn run_call(case: CallCase, process_clock: Arc<dyn Clock>) -> Verdict {
         Ok(home) => home,
         Err(error) => return failure_verdict(vec![error.to_string()]),
     };
+    run_call_in(case, provider_name, process_clock, home)
+}
+
+/// Runs a validated provider call against `home`, the fiber home the
+/// public [`run_call`] resolved from the environment.
+fn run_call_in(
+    case: CallCase,
+    provider_name: String,
+    process_clock: Arc<dyn Clock>,
+    home: PathBuf,
+) -> Verdict {
     let installed = match crate::list(&home, process_clock.as_ref()) {
         Ok(listing) => listing.installed,
         Err(error) => return failure_verdict(vec![error.to_string()]),
@@ -56,23 +67,92 @@ pub fn run_call(case: CallCase, process_clock: Arc<dyn Clock>) -> Verdict {
     let host = crate::HostScript::new(case.host.http, case.host.exec, case.host.oauth);
     let case_clock = Manual::with_sleep(Sleep::Waits);
     let clock: Arc<dyn Clock> = case_clock.clone();
-    let extension = match provider_extension(
+    // A process package routes through the shared sessionless
+    // constructor; anything else falls through to the Lua-only lookup
+    // below, unchanged. The guard lives across the run below, so every
+    // return path reaps the sessionless child; `None` on the Lua path.
+    let (_sessionless_guard, provider) = match process_package_dir(
         &installed,
         &provider_name,
         &home,
-        &clock,
-        &host,
-        case.attended,
     ) {
-        Some(extension) => extension,
+        Some((dir, name)) => {
+            let cwd = match std::env::current_dir() {
+                Ok(cwd) => cwd,
+                Err(error) => {
+                    return failure_verdict(vec![format!(
+                        "call.case: no working directory: {error}"
+                    )]);
+                }
+            };
+            let started = match crate::package::Package::load_process_provider_with(
+                crate::package::PackageOptions {
+                    dir: dir.clone(),
+                    clock: Arc::clone(&clock),
+                },
+                crate::package::ProcessProviderMode::Sessionless,
+                Some(crate::package::ProcessProviderHost {
+                    home: home.clone(),
+                    cwd,
+                    browser: Arc::new(CaseBrowser(case.attended)) as Arc<dyn crate::Browser>,
+                    host_script: Some(Arc::clone(&host)),
+                    session: None,
+                }),
+            ) {
+                Ok(started) => started,
+                Err((code, message)) => {
+                    return failure_verdict(vec![format!(
+                        "call.provider `{provider_name}`: cannot start its process: {code:?}: {message}"
+                    )]);
+                }
+            };
+            let Some(owner) = started.package.extension().cloned() else {
+                return failure_verdict(vec![format!(
+                    "call.provider `{provider_name}`: its process has no owner"
+                )]);
+            };
+            let runs = owner.provider_runs(&provider_name);
+            let metadata = Arc::new(crate::LuaExtension::new(
+                name,
+                dir,
+                home.clone(),
+                Arc::clone(&clock),
+            ));
+            let mut provider = crate::LuaProvider::new(metadata, provider_name);
+            // `new` returns a unique handle. Bind the backend before
+            // publishing any clone to the call below.
+            let Some(handle) = Arc::get_mut(&mut provider) else {
+                return failure_verdict(vec![
+                    "call.provider: its process provider is already shared".to_owned(),
+                ]);
+            };
+            handle.process = Some(crate::lua_provider::ProcessProvider {
+                runtime: started.services.runtime.clone(),
+                runs: std::sync::Mutex::new(runs),
+                owner: Arc::clone(&owner),
+            });
+            (Some(crate::package::SessionlessGuard::new(owner)), provider)
+        }
         None => {
-            return failure_verdict(vec![format!(
-                "call.provider: no installed package registers provider `{}`",
-                provider_name
-            )]);
+            let extension = match provider_extension(
+                &installed,
+                &provider_name,
+                &home,
+                &clock,
+                &host,
+                case.attended,
+            ) {
+                Some(extension) => extension,
+                None => {
+                    return failure_verdict(vec![format!(
+                        "call.provider: no installed package registers provider `{}`",
+                        provider_name
+                    )]);
+                }
+            };
+            (None, crate::LuaProvider::new(extension, provider_name))
         }
     };
-    let provider = crate::LuaProvider::new(extension, provider_name);
     let mut pair = crate::CredentialPair::for_provider(&data, "default");
     let mut failures = Vec::new();
     let mut advances = Some(case.clock);
@@ -364,6 +444,40 @@ impl crate::Browser for CaseBrowser {
     fn attended(&self) -> bool {
         self.0
     }
+}
+
+/// The installed process package a call case loads, with the existing
+/// short-name-first/provider-registration precedence: the one whose
+/// short name is the provider when its manifest declares a process,
+/// else the one that registers the provider when its manifest declares
+/// one. A process manifest skips the `providers/<name>.lua` existence
+/// check, so both route through the process host rather than being
+/// wrapped as Lua. Anything else falls through to `provider_extension`.
+fn process_package_dir(
+    installed: &[crate::Installed],
+    provider: &str,
+    home: &Path,
+) -> Option<(PathBuf, String)> {
+    let dir_for = |package: &crate::Installed| {
+        config::extensions_dir(home).join(config::dir_name(&package.name))
+    };
+    if let Some(package) = installed
+        .iter()
+        .find(|package| config::short_name(&package.name) == provider)
+    {
+        let dir = dir_for(package);
+        let manifest = config::read_manifest(&dir).ok()?;
+        return manifest
+            .process
+            .is_some()
+            .then(|| (dir, package.name.clone()));
+    }
+    installed.iter().find_map(|package| {
+        let dir = dir_for(package);
+        let manifest = config::read_manifest(&dir).ok()?;
+        (manifest.process.is_some() && manifest.providers.contains_key(provider))
+            .then(|| (dir, package.name.clone()))
+    })
 }
 
 /// The installed package a call case loads: the one whose short name is

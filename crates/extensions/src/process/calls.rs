@@ -45,9 +45,45 @@ fn drive_error(message: &str) -> (contract::ErrorCode, String) {
     (contract::ErrorCode::InvalidArguments, message.to_owned())
 }
 
+/// The shared sessionless refusal: `<call>: not available here`, as
+/// `invalid_arguments` (`docs/extensions.md`, "Process extensions").
+pub(crate) fn not_available(call: &str) -> (contract::ErrorCode, String) {
+    (
+        contract::ErrorCode::InvalidArguments,
+        format!("{call}: not available here"),
+    )
+}
+
+/// Whether a run outside a session may make `call`: the Call-case set
+/// (`docs/extensions.md`, "Process extensions"). Everything else, from
+/// a state write to `host.config`, refuses with [`not_available`].
+pub(crate) fn sessionless_allowed(call: &str) -> bool {
+    matches!(
+        call,
+        "host.http"
+            | "host.exec"
+            | "host.oauth.callback"
+            | "host.oauth.open"
+            | "host.oauth.show"
+            | "host.oauth.pkce"
+            | "host.oauth.poll"
+            | "host.oauth.refresh"
+            | "host.secret"
+            | "host.data_dir"
+            | "host.log"
+            | "host.fs.read"
+            | "host.fs.list"
+            | "host.fs.stat"
+            | "host.sha256"
+            | "host.hmac_sha256"
+            | "state.get"
+    )
+}
+
 /// Routes one `call` with `args`: `fiber.*` registers, `host.drive`
 /// drives, and every other name dispatches as a host or state call. A
-/// misshapen `host.drive` refuses with the Lua call's sentence.
+/// misshapen `host.drive` refuses with the Lua call's sentence. The
+/// sessionless driver refusal lives in the caller, which knows the run.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn route_call(
     call: &str,

@@ -91,7 +91,7 @@ use log::Log;
 use r#loop::Loop;
 #[cfg(test)]
 use parts::parts_in;
-use parts::{Parts, choose_reviewer, parts_with, per_run, reviewer_model};
+use parts::{Parts, choose_reviewer, parts_with_session, per_run, reviewer_model};
 use routing::{Here, connect, connect_observed};
 use routing::{credential, lua_providers, scripted};
 
@@ -983,6 +983,20 @@ fn run_turn(
             // "When a session ends").
             let (failures, stopped) = current.get().drain_watchers(log, dir);
             for failure in failures {
+                writeln!(
+                    io::stderr(),
+                    "fiber: {} {} failed at session end: {}",
+                    failure.extension,
+                    failure.callback,
+                    failure.message
+                )
+                .unwrap_or(());
+            }
+            // Process extensions shut down after the watcher drain: their
+            // pending watcher replies wait out each manifest's finish
+            // allowance, and a failure prints under `fiber_exited` with
+            // the watcher failures, never as a notice.
+            for failure in current.get().finish_processes(&*cancel) {
                 writeln!(
                     io::stderr(),
                     "fiber: {} {} failed at session end: {}",

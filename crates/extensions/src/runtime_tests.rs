@@ -9,7 +9,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use contract::tool::Cancel;
@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use super::runtime::{FunctionRef, FunctionTarget, LuaBinding, LuaKind, ProcessInvoke, Runtime};
 use super::test_support::Home;
 use crate::Error;
+use crate::lua::CredentialFor;
 
 fn runtime() -> Runtime {
     Runtime::new(fakes::clock::FakeClock::new())
@@ -29,17 +30,23 @@ fn command(id: &str) -> CommandId {
 }
 
 fn handler(value: Value) -> ProcessInvoke {
-    Arc::new(move |_args: Value, _cancel: &dyn Cancel| Ok(Some(value.clone())))
+    Arc::new(
+        move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+            Ok(Some(value.clone()))
+        },
+    )
 }
 
 fn failing(message: &str) -> ProcessInvoke {
     let message = message.to_owned();
-    Arc::new(move |_args: Value, _cancel: &dyn Cancel| {
-        Err(Error::Lua {
-            extension: "fiber.test/proc".to_owned(),
-            message: message.clone(),
-        })
-    })
+    Arc::new(
+        move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+            Err(Error::Lua {
+                extension: "fiber.test/proc".to_owned(),
+                message: message.clone(),
+            })
+        },
+    )
 }
 
 /// Registers `fiber.test/proc` as a process owner with one `run` function
@@ -197,7 +204,7 @@ fn process_hook_dispatch_applies_decode() {
     let runtime = runtime();
     let made = process_run(&runtime, json!({"seen": true}));
     let (value, lines, changed) = runtime
-        .hook_with(&made, json!({}), |value| Ok((value, false)))
+        .hook_with(&made, json!({}), None, |value| Ok((value, false)))
         .unwrap();
     assert_eq!(value, json!({"seen": true}));
     assert!(lines.is_empty());
@@ -206,11 +213,13 @@ fn process_hook_dispatch_applies_decode() {
         "fiber.test/proc",
         command("c2"),
         "run".to_owned(),
-        FunctionTarget::Process(Arc::new(|_args: Value, _cancel: &dyn Cancel| Ok(None))),
+        FunctionTarget::Process(Arc::new(
+            |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None),
+        )),
     );
     assert!(
         runtime
-            .hook_with(&empty, json!({}), |value| Ok((value, false)))
+            .hook_with(&empty, json!({}), None, |value| Ok((value, false)))
             .is_err()
     );
 }
@@ -223,23 +232,28 @@ fn process_tool_run_returns_handler_value() {
     let made = process_run(&runtime, json!({"content": "hi"}));
     let cancel = support::cancel::Token::new();
     assert_eq!(
-        runtime.tool_run(&made, json!({}), &cancel).unwrap(),
+        runtime.tool_run(&made, json!({}), None, &cancel).unwrap(),
         Some(json!({"content": "hi"}))
     );
     let empty = runtime.register_function(
         "fiber.test/proc",
         command("c2"),
         "run".to_owned(),
-        FunctionTarget::Process(Arc::new(|_args: Value, _cancel: &dyn Cancel| Ok(None))),
+        FunctionTarget::Process(Arc::new(
+            |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None),
+        )),
     );
-    assert_eq!(runtime.tool_run(&empty, json!({}), &cancel).unwrap(), None);
+    assert_eq!(
+        runtime.tool_run(&empty, json!({}), None, &cancel).unwrap(),
+        None
+    );
     let failed = runtime.register_function(
         "fiber.test/proc",
         command("c3"),
         "run".to_owned(),
         FunctionTarget::Process(failing("boom")),
     );
-    assert!(runtime.tool_run(&failed, json!({}), &cancel).is_err());
+    assert!(runtime.tool_run(&failed, json!({}), None, &cancel).is_err());
 }
 
 /// A process tool asked with an inner-call runner still runs: the runner is
@@ -252,7 +266,7 @@ fn process_tool_run_asking_runs_without_runner() {
     let cancel = support::cancel::Token::new();
     assert_eq!(
         runtime
-            .tool_run_asking(&made, json!({}), &cancel, None)
+            .tool_run_asking(&made, json!({}), None, &cancel, None)
             .unwrap(),
         Some(json!({"content": "hi"}))
     );
@@ -274,7 +288,7 @@ fn process_computed_callbacks_resolve_by_key() {
         handler(json!({"effects": ["reads"], "reversible": true})),
     );
     assert_eq!(
-        runtime.tool_effects(&effects, json!({})).unwrap(),
+        runtime.tool_effects(&effects, json!({}), None).unwrap(),
         json!({"effects": ["reads"], "reversible": true})
     );
     let search = runtime.install_process_handler(
@@ -285,7 +299,7 @@ fn process_computed_callbacks_resolve_by_key() {
     );
     assert_eq!(
         runtime
-            .search_run(&search, json!({"query": "q"}), &cancel)
+            .search_run(&search, json!({"query": "q"}), None, &cancel)
             .unwrap(),
         Some(json!([{"title": "t", "url": "https://example.com", "snippet": "s"}]))
     );
@@ -303,15 +317,15 @@ fn stale_reference_fails_every_dispatch() {
     assert!(runtime.resolve(&old).is_err());
     assert!(
         runtime
-            .hook_with(&old, json!({}), |value| Ok((value, false)))
+            .hook_with(&old, json!({}), None, |value| Ok((value, false)))
             .is_err()
     );
-    assert!(runtime.tool_run(&old, json!({}), &cancel).is_err());
-    assert!(runtime.tool_effects(&old, json!({})).is_err());
-    assert!(runtime.search_run(&old, json!({}), &cancel).is_err());
-    assert!(runtime.drain_watcher(&old, json!({})).is_err());
+    assert!(runtime.tool_run(&old, json!({}), None, &cancel).is_err());
+    assert!(runtime.tool_effects(&old, json!({}), None).is_err());
+    assert!(runtime.search_run(&old, json!({}), None, &cancel).is_err());
+    assert!(runtime.drain_watcher(&old, json!({}), None).is_err());
     assert!(!runtime.is_watcher_busy(&old));
-    assert!(runtime.push_watcher(&old, json!({})).is_none());
+    assert!(runtime.push_watcher(&old, json!({}), None).is_none());
     assert!(runtime.queue_command(&old, command("q"), "go").is_err());
 }
 
@@ -344,7 +358,7 @@ fn lua_hook_dispatch_matches_direct_call() {
         .hook_with("turn_end", 0, json!({}), |value| Ok((value, false)))
         .unwrap();
     let routed = runtime
-        .hook_with(&made, json!({}), |value| Ok((value, false)))
+        .hook_with(&made, json!({}), None, |value| Ok((value, false)))
         .unwrap();
     assert_eq!(routed.0, direct.0);
     assert_eq!(routed.1, direct.1);
@@ -380,7 +394,7 @@ fn lua_tool_dispatch_matches_direct_call() {
         .tool_run("echo", json!({"text": "hi"}), &cancel)
         .unwrap();
     let routed = runtime
-        .tool_run(&made, json!({"text": "hi"}), &cancel)
+        .tool_run(&made, json!({"text": "hi"}), None, &cancel)
         .unwrap();
     assert_eq!(routed, direct);
 }
@@ -397,10 +411,12 @@ fn process_watcher_push_and_drain() {
     let ran = Arc::new(AtomicBool::new(false));
     let counting: ProcessInvoke = {
         let ran = Arc::clone(&ran);
-        Arc::new(move |_args: Value, _cancel: &dyn Cancel| {
-            ran.store(true, Ordering::SeqCst);
-            Ok(Some(json!({})))
-        })
+        Arc::new(
+            move |_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                ran.store(true, Ordering::SeqCst);
+                Ok(Some(json!({})))
+            },
+        )
     };
     let watcher = runtime.register_function(
         "fiber.test/proc",
@@ -409,13 +425,13 @@ fn process_watcher_push_and_drain() {
         FunctionTarget::Process(counting),
     );
     assert!(!runtime.is_watcher_busy(&watcher));
-    assert!(runtime.push_watcher(&watcher, json!({})).is_some());
+    assert!(runtime.push_watcher(&watcher, json!({}), None).is_some());
     assert!(
         ran.load(Ordering::SeqCst),
         "the queued offer runs the watcher"
     );
     ran.store(false, Ordering::SeqCst);
-    assert!(runtime.drain_watcher(&watcher, json!({})).is_ok());
+    assert!(runtime.drain_watcher(&watcher, json!({}), None).is_ok());
     assert!(ran.load(Ordering::SeqCst), "the drain runs the watcher");
 }
 
@@ -468,11 +484,129 @@ fn process_command_none_answer_completes() {
         "fiber.test/proc",
         command("c1"),
         "run",
-        Arc::new(|_args: Value, _cancel: &dyn Cancel| Ok(None)),
+        Arc::new(|_args: Value, _scope: Option<CredentialFor>, _cancel: &dyn Cancel| Ok(None)),
     );
     let queued = runtime.queue_command(&none, command("q"), "go").unwrap();
     queued.release();
     assert_eq!(queued.wait().unwrap(), Value::Null);
+}
+
+/// Every process dispatch carries its own invocation's scope to the
+/// handler: `Some` arrives as that same scope, and `None` arrives as
+/// none, never a stored or invented value. Dropping the scope would let
+/// one invocation refresh another's credential.
+#[test]
+fn process_dispatch_carries_the_invocation_scope() {
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let seen: Arc<Mutex<Vec<Option<CredentialFor>>>> = Arc::new(Mutex::new(Vec::new()));
+    let scoped = {
+        let seen = Arc::clone(&seen);
+        runtime.install_process_handler(
+            "fiber.test/proc",
+            command("c1"),
+            "run",
+            Arc::new(
+                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                    seen.lock().unwrap().push(scope);
+                    Ok(Some(json!(true)))
+                },
+            ),
+        )
+    };
+    let stored = CredentialFor::Stored(crate::CredentialPair {
+        credential: "testprov".to_owned(),
+        label: "test".to_owned(),
+    });
+    let cancel = fakes::CancelToken::new();
+    runtime
+        .tool_run(&scoped, json!({}), Some(stored.clone()), &cancel)
+        .unwrap();
+    runtime.tool_run(&scoped, json!({}), None, &cancel).unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(matches!(seen[0], Some(CredentialFor::Stored(_))));
+    assert!(seen[1].is_none());
+}
+
+/// Concurrent invocations never share scope: each handler observes
+/// exactly the scope its own caller passed, even when the calls overlap.
+#[test]
+fn concurrent_process_dispatches_keep_their_own_scope() {
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let scoped = {
+        let seen = Arc::clone(&seen);
+        runtime.install_process_handler(
+            "fiber.test/proc",
+            command("c1"),
+            "run",
+            Arc::new(
+                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                    let label = match &scope {
+                        Some(CredentialFor::Stored(pair)) => pair.label.clone(),
+                        Some(CredentialFor::Login(_)) => "login".to_owned(),
+                        None => "none".to_owned(),
+                    };
+                    seen.lock().unwrap().push(label);
+                    Ok(Some(json!(true)))
+                },
+            ),
+        )
+    };
+    let labels = ["a", "b", "c", "d"];
+    let workers: Vec<_> = labels
+        .iter()
+        .map(|label| {
+            let runtime = runtime.clone();
+            let scoped = scoped.clone();
+            let label = (*label).to_owned();
+            std::thread::spawn(move || {
+                let scope = CredentialFor::Stored(crate::CredentialPair {
+                    credential: "testprov".to_owned(),
+                    label: label.clone(),
+                });
+                let cancel = fakes::CancelToken::new();
+                runtime
+                    .tool_run(&scoped, json!({}), Some(scope), &cancel)
+                    .unwrap();
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    let mut seen = seen.lock().unwrap().clone();
+    seen.sort();
+    assert_eq!(seen, vec!["a", "b", "c", "d"]);
+}
+
+/// A held process command releases with no credential scope: commands
+/// run user code, never a provider's `credential()`.
+#[test]
+fn process_queued_command_releases_unscoped() {
+    let runtime = runtime();
+    runtime.register_owner("fiber.test/proc", None);
+    let seen: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+    let run = {
+        let seen = Arc::clone(&seen);
+        runtime.install_process_handler(
+            "fiber.test/proc",
+            command("c1"),
+            "run",
+            Arc::new(
+                move |_args: Value, scope: Option<CredentialFor>, _cancel: &dyn Cancel| {
+                    seen.lock().unwrap().push(scope.is_some());
+                    Ok(Some(json!(true)))
+                },
+            ),
+        )
+    };
+    let queued = runtime.queue_command(&run, command("q"), "go").unwrap();
+    queued.release();
+    assert_eq!(queued.wait().unwrap(), json!(true));
+    assert_eq!(*seen.lock().unwrap(), vec![false]);
 }
 
 /// Only its own command's hooks refuse the chain: outside any command both
@@ -594,7 +728,7 @@ fn dispatch_on_a_dropped_vm_fails() {
         made
     };
     let error = runtime
-        .hook_with(&made, json!({}), |value| Ok((value, false)))
+        .hook_with(&made, json!({}), None, |value| Ok((value, false)))
         .unwrap_err()
         .to_string();
     assert!(

@@ -28,6 +28,7 @@ use extensions::Browser as _;
 use serde_json::Value;
 
 /// What `main` starts: the specs and the skip notices for the log.
+#[derive(Default)]
 pub(crate) struct Specs {
     /// One per stdio server to start.
     pub specs: Vec<mcp::ServerSpec>,
@@ -204,6 +205,128 @@ pub(crate) struct SessionServers {
     pub later: repository_servers::Later,
 }
 
+/// MCP startup runs beside extension loading; this owner joins it when
+/// tools are composed, and joins then stops its servers if composition is
+/// abandoned. Its image driver is shared with MCP and the session tools.
+pub(crate) struct PendingMcp {
+    worker: Option<
+        std::thread::JoinHandle<Result<(repository_servers::Prepared, mcp::Started), Failure>>,
+    >,
+    started: Option<(repository_servers::Prepared, mcp::Started)>,
+    images: Arc<dyn contract::images::Images>,
+}
+
+impl PendingMcp {
+    fn join(&mut self) -> Result<(), Failure> {
+        let Some(worker) = self.worker.take() else {
+            return Err(crate::failed(
+                ErrorCode::IoFailed,
+                "MCP startup was already joined",
+            ));
+        };
+        let (prepared, started) = worker.join().map_err(|_| {
+            crate::failed(
+                ErrorCode::IoFailed,
+                "the MCP startup thread stopped unexpectedly",
+            )
+        })??;
+        if let Some(failure) = &started.required_failed {
+            let failure = Failure {
+                code: ErrorCode::McpRequiredServerFailed,
+                message: failure.error.message.clone(),
+                retry_after_ms: None,
+                provider: None,
+            };
+            started.servers.stop();
+            return Err(failure);
+        }
+        self.started = Some((prepared, started));
+        Ok(())
+    }
+
+    fn take_started(&mut self) -> Result<(repository_servers::Prepared, mcp::Started), Failure> {
+        self.started
+            .take()
+            .ok_or_else(|| crate::failed(ErrorCode::IoFailed, "MCP startup has not joined"))
+    }
+}
+
+impl Drop for PendingMcp {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take()
+            && let Ok(Ok((_, started))) = worker.join()
+        {
+            started.servers.stop();
+        }
+        if let Some((_, started)) = self.started.take() {
+            started.servers.stop();
+        }
+    }
+}
+
+/// Starts repository preparation and configured MCP servers in parallel
+/// with process extension loading. Required failures stop before this
+/// owner returns them; dropping an unfinished owner joins and reaps starts.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one pending session start carries MCP specs, repository scope, image driver and timing"
+)]
+pub(crate) fn start_session_tools(
+    home: &Path,
+    workspace: &Path,
+    artifacts: &Path,
+    clock: &Arc<dyn contract::clock::Clock>,
+    project: &config::ProjectKey,
+    specs: Result<(Vec<mcp::ServerSpec>, Vec<RepositorySpec>), Failure>,
+    skipped: Vec<r#loop::OfferKey>,
+    images: Arc<dyn contract::images::Images>,
+    timing: Option<contract::diag::Timing>,
+) -> Result<PendingMcp, Failure> {
+    let home = home.to_path_buf();
+    let workspace = workspace.to_path_buf();
+    let artifacts = artifacts.to_path_buf();
+    let project = project.clone();
+    let clock = Arc::clone(clock);
+    let worker_images = Arc::clone(&images);
+    let worker = std::thread::Builder::new()
+        .name("session MCP startup".to_owned())
+        .spawn(move || {
+            let (mut specs, repository) = specs?;
+            let prepared = repository_servers::prepare(
+                &home, &project, &workspace, &clock, &skipped, repository,
+            );
+            if let Some(failure) = &prepared.required_failed {
+                return Err(Failure {
+                    code: ErrorCode::McpRequiredServerFailed,
+                    message: failure.error.message.clone(),
+                    retry_after_ms: None,
+                    provider: None,
+                });
+            }
+            specs.extend(prepared.ready.iter().cloned());
+            let cache = config::mcp_cache_dir(&home);
+            let started = mcp::start_observed(
+                specs,
+                &workspace,
+                &artifacts,
+                worker_images,
+                &cache,
+                &clock,
+                env!("CARGO_PKG_VERSION"),
+                timing,
+            );
+            Ok((prepared, started))
+        })
+        .map_err(|error| {
+            crate::failed(ErrorCode::IoFailed, format!("MCP startup thread: {error}"))
+        })?;
+    Ok(PendingMcp {
+        worker: Some(worker),
+        started: None,
+        images,
+    })
+}
+
 /// The tools one session registers: the built-ins, every MCP server's
 /// tools after them, the extensions' `extension_tools` after those, and the
 /// driver shell, with the failures for the log and the running servers for
@@ -218,7 +341,7 @@ pub(crate) struct SessionServers {
     reason = "one session's tools needs home and the recorded executable alongside builtin's arguments"
 )]
 pub(crate) fn session_tools(
-    fiber: Result<PathBuf, String>,
+    fiber: PathBuf,
     home: &Path,
     workspace: &Path,
     artifacts: &Path,
@@ -226,9 +349,7 @@ pub(crate) fn session_tools(
     jobs: &Arc<jobs::Registry>,
     locks: &Arc<tools::PathLocks>,
     project: &config::ProjectKey,
-    specs: Vec<mcp::ServerSpec>,
-    repository: Vec<RepositorySpec>,
-    skipped: &[r#loop::OfferKey],
+    mut pending: PendingMcp,
     web_search: Option<(Arc<dyn Tool>, ToolInfo)>,
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
@@ -245,7 +366,8 @@ pub(crate) fn session_tools(
     ),
     Failure,
 > {
-    let fiber = fiber.map_err(|message| crate::failed(ErrorCode::IoFailed, message))?;
+    pending.join()?;
+    let images = Arc::clone(&pending.images);
     let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin_timed(
         fiber,
         home,
@@ -254,6 +376,7 @@ pub(crate) fn session_tools(
         clock,
         jobs,
         locks,
+        images,
         web_search,
         delegates,
         skills,
@@ -261,46 +384,9 @@ pub(crate) fn session_tools(
         shell_read_only,
         sandbox,
     )?;
-    // A repository server whose current content is approved starts with
-    // the session exactly as a person's server does; any other waits for
-    // the post-offer load. Every spec starts with the session, except a
-    // cached non-required one, which is declared from its cache and starts
-    // on its first call; a server that fails is left out and its failure
-    // is returned for the log, written after `fiber_started`. A
-    // `required` failure stops what started and fails the session before
-    // any line is written.
-    let prepared =
-        repository_servers::prepare(home, project, workspace, clock, skipped, repository);
-    if let Some(failure) = prepared.required_failed {
-        return Err(Failure {
-            code: ErrorCode::McpRequiredServerFailed,
-            message: failure.error.message.clone(),
-            retry_after_ms: None,
-            provider: None,
-        });
-    }
-    let mut specs = specs;
-    specs.extend(prepared.ready);
-    let cache = config::mcp_cache_dir(home);
-    let started = mcp::start_observed(
-        specs,
-        workspace,
-        artifacts,
-        std::sync::Arc::clone(&images),
-        &cache,
-        clock,
-        env!("CARGO_PKG_VERSION"),
-        timing,
-    );
-    if let Some(failure) = started.required_failed {
-        started.servers.stop();
-        return Err(Failure {
-            code: ErrorCode::McpRequiredServerFailed,
-            message: failure.error.message.clone(),
-            retry_after_ms: None,
-            provider: None,
-        });
-    }
+    let (prepared, started) = pending.take_started()?;
+    // The pending start settles repository approval and server startup
+    // before adding tools, preserving built-in, MCP, then extension order.
     tools.extend(started.tools);
     infos.extend(started.infos);
     let base_tools = tools.clone();
@@ -323,7 +409,7 @@ pub(crate) fn session_tools(
         workspace: workspace.to_path_buf(),
         artifacts: artifacts.to_path_buf(),
         images: Arc::clone(&images),
-        cache,
+        cache: config::mcp_cache_dir(home),
         clock: Arc::clone(clock),
         waiting: prepared.waiting.into_iter().map(|(spec, _)| spec).collect(),
         servers: Arc::clone(&servers),

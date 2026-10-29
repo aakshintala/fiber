@@ -17,6 +17,7 @@ pub(crate) use registry::*;
 pub(crate) mod calls;
 pub(crate) mod context;
 pub(crate) mod lifecycle;
+pub(crate) mod line;
 pub(crate) mod oauth;
 pub(crate) mod requests;
 #[cfg(test)]
@@ -33,7 +34,8 @@ pub(crate) mod transport;
 /// driver commands go through the `Drive` seam. Requests ride the shared
 /// request table: stream items ordered one at a time, tool calls
 /// concurrent, and one retirement seam for replies, deadlines and cancels.
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+/// The session activates the owner at load, so the dead_code allowance is
+/// gone: construction, pumping and shutdown are live paths.
 pub(crate) struct ProcessExtension {
     shared: Arc<Shared>,
 }
@@ -70,7 +72,6 @@ pub(crate) struct Launch {
 
 /// What the owner's threads share: the extension's identity, its runtime
 /// and registry, its request table and pipes, and what answers its calls.
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Shared {
     owner: String,
     runtime: Runtime,
@@ -79,7 +80,9 @@ pub(crate) struct Shared {
     /// The live child behind a lock, so the one restart swaps it while a
     /// pump holds only its own clone and never blocks a swap.
     transport: Mutex<Arc<transport::Transport>>,
-    drive: Option<Arc<dyn contract::extension::Drive>>,
+    /// What answers its driver commands, behind a lock so the session
+    /// installs the driver after spawn and before any dispatch reaches it.
+    drive: Mutex<Option<Arc<dyn contract::extension::Drive>>>,
     services: Arc<dyn context::ProcessHostServices>,
     pub(crate) oauth: oauth::FileCredential,
     pub(crate) state: Arc<crate::host::state::ExtensionState>,
@@ -145,7 +148,6 @@ pub(crate) enum Pumped {
     Closed(transport::CloseReason),
 }
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 impl ProcessExtension {
     /// Starts the launched program for its owner: the child runs in the
     /// launch's workspace, and `extension_hello` is the first complete
@@ -176,7 +178,7 @@ impl ProcessExtension {
                 registry,
                 table: Arc::new(requests::Table::new()),
                 transport: Mutex::new(Arc::new(transport)),
-                drive,
+                drive: Mutex::new(drive),
                 services,
                 oauth,
                 state,
@@ -203,11 +205,6 @@ impl ProcessExtension {
         Ok(extension)
     }
 
-    /// The extension's name.
-    pub(crate) fn owner(&self) -> &str {
-        &self.shared.owner
-    }
-
     /// Whether `ready` arrived: registrations stand only before it.
     pub(crate) fn is_ready(&self) -> bool {
         self.shared.ready.load(std::sync::atomic::Ordering::SeqCst)
@@ -222,6 +219,19 @@ impl ProcessExtension {
         cancel: &dyn contract::tool::Cancel,
     ) -> Result<(), (contract::ErrorCode, String)> {
         lifecycle::await_ready(&self.shared, &self.shared.ready, deadline, cancel)
+    }
+
+    /// Records the session's latest start reason in the hello context,
+    /// resent after a restart with the state as it stands in the session.
+    pub(crate) fn update_reason(&self, reason: contract::events::SessionReason) {
+        support::lock(&self.shared.context).set_reason(reason);
+    }
+
+    /// Installs the session's driver for ordinary driver commands: the
+    /// session calls this after spawn and before any dispatch reaches the
+    /// child, matching the Lua half's late driver installation.
+    pub(crate) fn set_drive(&self, drive: Arc<dyn contract::extension::Drive>) {
+        *support::lock(&self.shared.drive) = Some(drive);
     }
 
     /// Shuts the owner down: no new dispatches past this point, the
@@ -290,16 +300,22 @@ impl ProcessExtension {
         Ok(status)
     }
 
+    /// Marks the owner finishing for a sessionless reap: the precheck
+    /// and the Call-case kill their child at once instead of finishing
+    /// it gracefully.
+    pub(crate) fn begin_finish(&self) -> bool {
+        lifecycle::begin_finish(&self.shared)
+    }
+
     /// Retires the generation at the process seam: pending requests end
     /// stale, and the next request mints under a new generation. Reload
     /// uses this; death uses the lifecycle, which also counts the child.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn retire(&self) {
         self.shared.table.retire();
-    }
-
-    /// The request table, for attributing calls and retiring generations.
-    pub(crate) fn table(&self) -> &Arc<requests::Table> {
-        &self.shared.table
     }
 
     /// The shared owner, for tests that mint requests, send lines and
@@ -317,13 +333,75 @@ impl ProcessExtension {
     }
 
     /// The runtime, resolving generation-keyed references.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn runtime(&self) -> &Runtime {
         &self.shared.runtime
+    }
+
+    /// The provider's current handler references, by function: what a
+    /// restart's fresh registrations install under the bumped generation.
+    /// Empty when the provider registered nothing under this generation.
+    pub(crate) fn provider_runs(
+        &self,
+        provider: &str,
+    ) -> std::collections::BTreeMap<String, FunctionRef> {
+        support::lock(&self.shared.registry)
+            .providers()
+            .get(provider)
+            .map(|entry| entry.runs.clone())
+            .unwrap_or_default()
+    }
+
+    /// Ensures the child runs before a provider callback rebinds: a dead
+    /// child restarts here, so the rebind reads the new generation and
+    /// the dispatch carries a live registration id. The wait shares the
+    /// function's own declared timeout. An unregistered function binds
+    /// nothing: it returns without restarting, and the rebind below
+    /// reports it.
+    pub(crate) fn ensure_provider_running(
+        &self,
+        provider: &str,
+        function: &str,
+        caller: &dyn contract::tool::Cancel,
+    ) -> Result<(), Error> {
+        let timeout = support::lock(&self.shared.registry)
+            .providers()
+            .get(provider)
+            .and_then(|entry| entry.timeouts.get(function))
+            .cloned();
+        let Some(timeout) = timeout else {
+            return Ok(());
+        };
+        let clock = Arc::clone(&self.shared.clock);
+        let deadline = clock.now().checked_add(timeout);
+        if let Err((code, _message)) = lifecycle::ensure_running(&self.shared, deadline, caller) {
+            // A missed restart deadline fails as the callback's own
+            // timeout; cancellation and a gone owner stop it, as they do
+            // mid-request.
+            if code == contract::ErrorCode::Timeout {
+                return Err(Error::Timeout {
+                    extension: self.shared.owner.clone(),
+                    callback: format!("{provider}.{function}"),
+                    timeout_ms: timeout.as_millis().try_into().unwrap_or(u64::MAX),
+                });
+            }
+            return Err(Error::Stopped {
+                extension: self.shared.owner.clone(),
+            });
+        }
+        Ok(())
     }
 
     /// Dispatches the stream item behind `func`: hooks, watcher
     /// deliveries and commands, one at a time in arrival order. Resolves
     /// the reference first, so a stale generation never runs.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn dispatch_stream(
         &self,
         func: &FunctionRef,
@@ -355,6 +433,10 @@ impl ProcessExtension {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     fn dispatch_stream_after_admission(
         &self,
         func: &FunctionRef,
@@ -420,6 +502,10 @@ impl ProcessExtension {
     /// several can be outstanding and a long tool never holds up the
     /// stream. Resolves the reference first, so a stale generation never
     /// runs.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn dispatch_tool(
         &self,
         func: &FunctionRef,
@@ -446,6 +532,10 @@ impl ProcessExtension {
     /// `run_request` does: the stream gate first for stream items, then
     /// the line, then the reply, the deadline, the cancel or the hang
     /// guard, whichever is first.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     fn send_request(
         &self,
         dispatch: requests::Dispatch,
@@ -473,6 +563,33 @@ impl ProcessExtension {
         id: &contract::CommandId,
         result: Option<contract::events::CommandResult>,
     ) {
+        let live = self.transport();
+        self.answer_accepted_on(&live, id, result);
+    }
+
+    /// Answers on the transport that supplied the command. Reply settlement
+    /// uses this path to queue acceptance before making the result visible.
+    fn answer_accepted_on(
+        &self,
+        live: &transport::Transport,
+        id: &contract::CommandId,
+        result: Option<contract::events::CommandResult>,
+    ) {
+        let line = self.accepted_line(id, result, live.max_line());
+        // The writer only queues here; pipe I/O stays on its thread.
+        match live.send(line) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+
+    /// Builds the acceptance line, substituting a size rejection when the
+    /// accepted result would exceed the transport's framing cap.
+    fn accepted_line(
+        &self,
+        id: &contract::CommandId,
+        result: Option<contract::events::CommandResult>,
+        max_line: usize,
+    ) -> Vec<u8> {
         let payload = serde_json::to_value(&contract::events::CommandAccepted {
             command_id: id.clone(),
             result,
@@ -481,23 +598,38 @@ impl ProcessExtension {
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
         let line = envelope_line(&self.shared, "command_accepted", payload);
-        if line.len() > support::lock(&self.shared.transport).max_line() {
-            self.answer_rejected(
+        if line.len() > max_line {
+            return self.rejected_line(
                 id,
                 ErrorCode::TooLarge,
                 "the result does not fit the 64 MiB wire cap".to_owned(),
             );
-            return;
         }
-        // The child may be gone: its answer dies with it, and the
-        // table already settled what the answer would settle.
-        match support::lock(&self.shared.transport).send(line) {
-            Ok(()) | Err(_) => {}
-        }
+        line
     }
 
     /// Answers one command rejected with its code and message.
     fn answer_rejected(&self, id: &contract::CommandId, code: ErrorCode, message: String) {
+        let live = self.transport();
+        self.answer_rejected_on(&live, id, code, message);
+    }
+
+    /// Queues a rejection on the transport that supplied the command.
+    fn answer_rejected_on(
+        &self,
+        live: &transport::Transport,
+        id: &contract::CommandId,
+        code: ErrorCode,
+        message: String,
+    ) {
+        // The writer only queues here; pipe I/O stays on its thread.
+        match live.send(self.rejected_line(id, code, message)) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+
+    /// Builds a rejection line without touching the current transport.
+    fn rejected_line(&self, id: &contract::CommandId, code: ErrorCode, message: String) -> Vec<u8> {
         let payload = serde_json::to_value(&contract::events::CommandRejected {
             command_id: Some(id.clone()),
             code,
@@ -506,12 +638,7 @@ impl ProcessExtension {
         .ok()
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
-        let line = envelope_line(&self.shared, "command_rejected", payload);
-        // The child may be gone: its answer dies with it, and the
-        // table already settled what the answer would settle.
-        match support::lock(&self.shared.transport).send(line) {
-            Ok(()) | Err(_) => {}
-        }
+        envelope_line(&self.shared, "command_rejected", payload)
     }
 
     /// Rejects a call or reply naming a request that is no longer
@@ -534,7 +661,7 @@ impl ProcessExtension {
         command: String,
         args: serde_json::Map<String, Value>,
     ) {
-        let Some(driver) = self.shared.drive.clone() else {
+        let Some(driver) = support::lock(&self.shared.drive).clone() else {
             self.answer_rejected(
                 &id,
                 ErrorCode::Closing,
@@ -567,6 +694,10 @@ impl ProcessExtension {
     /// The returned family is the call's admission snapshot: a restart
     /// after the runtime check cannot turn an admitted call stale by
     /// replacing the registry before dispatch uses it.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     fn resolve_family(&self, func: &FunctionRef) -> Result<Option<Family>, Error> {
         let family = self.family_of(func);
         self.shared.runtime.resolve(func)?;
@@ -575,6 +706,10 @@ impl ProcessExtension {
 
     /// Which registered family `func` names, for dispatching it as a
     /// stream item, a tool or a nested function.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     fn family_of(&self, func: &FunctionRef) -> Option<Family> {
         let registry = support::lock(&self.shared.registry);
         for ((point, _), reference) in registry.hook_runs() {
@@ -660,25 +795,44 @@ pub(crate) fn hang_guard(
         .unwrap_or_else(|| Duration::from_secs(3600))
 }
 
-/// One wire line: the envelope around `payload`, with the session's id,
-/// the clock's wall time and the build's schema version.
+/// One wire line around `payload`, with the clock's wall time and the
+/// build's schema version. Every Fiber-to-child line travels this way. A
+/// run outside a session carries reason `call` and uses the sessionless
+/// line with no session id; every other run uses the session envelope.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn envelope_line(
     shared: &Shared,
     kind: &str,
     payload: serde_json::Map<String, Value>,
 ) -> Vec<u8> {
-    let envelope = contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: support::lock(&shared.context).session_id.clone(),
-        ts: contract::clock::wall_ms(shared.clock.wall()),
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload,
-    };
-    serde_json::to_vec(&envelope).unwrap_or_default()
+    // The run decides the line: a sessionless run never carries a
+    // session id, so no session line can leave without one.
+    let run = support::lock(&shared.context).run.clone();
+    match run {
+        context::ProcessRun::Call => line::ProcessCallLine {
+            kind: kind.to_owned(),
+            ts: contract::clock::wall_ms(shared.clock.wall()),
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload,
+        }
+        .to_vec(),
+        context::ProcessRun::Session { session_id, .. } => {
+            let envelope = contract::Envelope {
+                kind: kind.to_owned(),
+                session_id,
+                ts: contract::clock::wall_ms(shared.clock.wall()),
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: None,
+                payload,
+            };
+            serde_json::to_vec(&envelope).unwrap_or_default()
+        }
+    }
 }
 
 /// Answers a driven command accepted, on the pump's thread.

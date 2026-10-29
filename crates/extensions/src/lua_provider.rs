@@ -64,7 +64,10 @@ impl CredentialPair {
 
 /// One provider a Lua extension registered with `fiber.provider`.
 pub struct LuaProvider {
+    // For a process provider this supplies home, directory and clock only:
+    // no Lua provider file is loaded or called.
     extension: Arc<LuaExtension>,
+    pub(crate) process: Option<ProcessProvider>,
     name: String,
     models: Mutex<Option<Vec<ModelData>>>,
     /// One entry per stored credential and label, so a label switch gets
@@ -87,6 +90,25 @@ pub struct LuaProvider {
     /// A test's hold on a caller after it wakes and before it looks again.
     #[cfg(test)]
     woke: Mutex<Option<WokeHook>>,
+}
+
+/// The admitted process registration and the owner keeping its callbacks alive.
+pub(crate) struct ProcessProvider {
+    pub(crate) runtime: crate::runtime::Runtime,
+    /// The provider's handler references, refreshed from the owner
+    /// before every call, so a restart's re-registrations replace stale
+    /// generations instead of failing them.
+    pub(crate) runs: Mutex<BTreeMap<String, crate::runtime::FunctionRef>>,
+    pub(crate) owner: Arc<crate::process::ProcessExtension>,
+}
+
+impl ProcessProvider {
+    /// Refreshes the handler references from the owner's current
+    /// registrations: after a restart the fresh generation replaces the
+    /// stale one, and a dropped registration resolves no longer.
+    pub(crate) fn rebind_runs(&self, provider_name: &str) {
+        *lock(&self.runs) = self.owner.provider_runs(provider_name);
+    }
 }
 
 /// A test's hold on a woken caller: `arrived` fires after the wake, and the
@@ -212,6 +234,7 @@ impl LuaProvider {
         let quotas = quota::Quotas::new(extension.clock());
         Arc::new(Self {
             extension,
+            process: None,
             name: name.into(),
             models: Mutex::default(),
             token: Mutex::default(),
@@ -255,7 +278,10 @@ impl LuaProvider {
 
     /// The functions `fiber.provider` registered for this provider, sorted.
     pub fn functions(&self) -> Result<Vec<String>, Error> {
-        self.extension.provider_functions(&self.name)
+        match &self.process {
+            Some(process) => Ok(lock(&process.runs).keys().cloned().collect()),
+            None => self.extension.provider_functions(&self.name),
+        }
     }
 
     /// Whether `fiber.provider` registered `function` for this provider.
@@ -264,7 +290,8 @@ impl LuaProvider {
     }
 
     /// Signs this provider's requests: `None` when it registered neither
-    /// `credential` nor `sign`.
+    /// `credential` nor `sign`. A process provider signs through its own
+    /// dispatch, which carries the pair's scope to the refresh.
     pub fn signer(
         self: &Arc<Self>,
         pair: CredentialPair,
@@ -400,7 +427,7 @@ impl LuaProvider {
     /// carrying the argument's key is redacted: no failure text from
     /// `list_models` holds the key (`docs/errors.md`, "The shape").
     pub fn list_models(&self, arg: &ModelsArg) -> Result<(Vec<ModelData>, Value), Error> {
-        let returned = self.call("models", arg.to_value());
+        let returned = self.call("models", arg.to_value(), None);
         let redact = |message: &str| match &arg.key {
             Some(key) => redact_values(message, std::slice::from_ref(key)),
             None => message.to_owned(),
@@ -647,6 +674,18 @@ impl LuaProvider {
     /// empty table, and an empty table encoded as `[]`, mean no headers, as
     /// for `sign()`.
     fn fetch_token(&self, pair: &CredentialPair) -> Result<Token, Error> {
+        if self.process.is_some() {
+            // A process provider's `credential()` runs behind the
+            // session's runtime, carrying the pair as its scope: the
+            // refresh under it resolves this pair's file, never an
+            // identity inferred from the wire arguments.
+            let returned = self.call(
+                "credential",
+                json!({"label": pair.label, "credential": pair.credential}),
+                Some(crate::lua::CredentialFor::Stored(pair.clone())),
+            )?;
+            return self.check_token(&returned).map_err(Self::refresh_error);
+        }
         self.extension.ensure_provider(&self.name)?;
         let inner: Result<Token, Error> = (|| {
             let returned = self.extension.provider_credential(&self.name, pair)?;
@@ -713,7 +752,38 @@ impl LuaProvider {
         }
     }
 
-    pub(crate) fn call(&self, function: &'static str, arg: Value) -> Result<Value, Error> {
+    pub(crate) fn call(
+        &self,
+        function: &'static str,
+        arg: Value,
+        scope: Option<crate::lua::CredentialFor>,
+    ) -> Result<Value, Error> {
+        if let Some(process) = &self.process {
+            // A `credential()` call without the pair's scope fails
+            // closed: the registry never invents a pair from the wire
+            // arguments.
+            if function == "credential" && scope.is_none() {
+                return Err(self.bad_return(
+                    "credential",
+                    "process credential scope is unavailable".into(),
+                ));
+            }
+            let caller = support::cancel::Token::new();
+            // The child restarts before the old registration can be
+            // reused: ensure it runs, then rebind and re-resolve against
+            // the new registry before invoking.
+            process
+                .owner
+                .ensure_provider_running(&self.name, function, &caller)?;
+            process.rebind_runs(&self.name);
+            let Some(run) = lock(&process.runs).get(function).cloned() else {
+                return Err(self.bad_return(function, "function is not registered".into()));
+            };
+            return process
+                .runtime
+                .tool_run(&run, arg, scope, &caller)
+                .map(|value| value.unwrap_or(Value::Null));
+        }
         self.extension.provider_call(&self.name, function, arg)
     }
 
@@ -752,7 +822,7 @@ impl Signer for LuaProvider {
             "time": time,
         });
         let returned = self
-            .call("sign", arg)
+            .call("sign", arg, None)
             .map_err(|e| signing::Error::Failed(detail(&e)))?;
         let not_headers = || {
             signing::Error::NotHeaders(

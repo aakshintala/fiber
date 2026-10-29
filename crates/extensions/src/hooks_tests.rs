@@ -3912,10 +3912,10 @@ fn process_watcher_uses_the_session_clock() {
         "fiber.test/proc",
         ProcessCommandId("register-watch".to_owned()),
         "run",
-        Arc::new(|_args, _cancel| Ok(Some(json!(null)))),
+        Arc::new(|_args, _scope, _cancel| Ok(Some(json!(null)))),
     );
     let offered = runtime
-        .push_watcher(&watcher, json!({"kind": "notice"}))
+        .push_watcher(&watcher, json!({"kind": "notice"}), None)
         .expect("the registered process watcher answers");
     assert_eq!(offered.1, expected);
 }
@@ -3939,7 +3939,7 @@ fn process_check_hook_refuses_the_tool() {
     package.registry().unwrap().set_handler(
         &ProcessCommandId("c1".to_owned()),
         "run",
-        Arc::new(|_args, _cancel| Ok(Some(json!({"refuse": "process check refused"})))),
+        Arc::new(|_args, _scope, _cancel| Ok(Some(json!({"refuse": "process check refused"})))),
     );
     let mut chain = super::chain::Builder::default();
     assert!(session.admit_process(
@@ -4487,5 +4487,21 @@ fn start_provider_on_a_process_extension_starts_no_vm() {
     assert!(
         !process_lock(&session.provider_vms).contains_key("fiber.test/proc"),
         "a failed process provider start keeps no VM"
+    );
+}
+
+/// Recording reason `call` changes nothing: `call` never starts a
+/// session, so the set keeps its last true reason instead of
+/// recording a contradictory one.
+#[test]
+fn recording_call_reason_changes_nothing() {
+    use contract::events::ExtensionReason;
+    let session = SessionExtensions::default();
+    assert_eq!(session.latest_reason(), ExtensionReason::New);
+    session.record_start_reason(ExtensionReason::Call);
+    assert_eq!(
+        session.latest_reason(),
+        ExtensionReason::New,
+        "a call reason records nothing"
     );
 }
