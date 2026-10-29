@@ -555,6 +555,8 @@ fn execute_inner(
     clippy::too_many_arguments,
     reason = "spawn, the deadline, the move policy, the spill, the sandbox profile and the injected probe are one call"
 )]
+// mutants run on Linux, where this is not compiled.
+#[cfg_attr(false, mutants::skip)]
 pub(crate) fn execute_confined(
     program: &Path,
     command: &str,
@@ -649,6 +651,8 @@ pub(crate) fn execute_confined(
     clippy::too_many_arguments,
     reason = "the drive loop's inputs and the marker watch are one call"
 )]
+// mutants run on Linux, where this is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn drive_confined(
     progress: &mut Run,
     policy: MovePolicy,

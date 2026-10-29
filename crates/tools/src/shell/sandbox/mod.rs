@@ -801,6 +801,8 @@ pub(crate) struct MarkerWatch {
 #[cfg(target_os = "macos")]
 impl MarkerWatch {
     /// Watches for one call's marker line.
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn new(token: &str) -> Self {
         Self {
             expected: format!("{MARKER_PREFIX} {token}").into_bytes(),
@@ -813,11 +815,15 @@ impl MarkerWatch {
     /// Installs the drive loop's wake, called once when the marker is
     /// first observed. Installed by the spawn site after the shared state
     /// exists; without it the loop still wakes on later output or EOF.
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
         *support::lock(&self.wake) = Some(wake);
     }
 
     /// Whether the wrapper's first line was the marker.
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn observed(&self) -> bool {
         self.seen.load(Ordering::SeqCst)
     }
@@ -826,6 +832,8 @@ impl MarkerWatch {
     /// miss fails it closed. A pty translates the newline to
     /// carriage-return newline, so one trailing carriage return is not the
     /// user program's.
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn check(&self, mut line: &[u8]) -> bool {
         if let Some(stripped) = line.strip_suffix(b"\r") {
             line = stripped;
@@ -847,11 +855,15 @@ impl MarkerWatch {
 
     /// Records end-of-file without a marker: whatever the wrapper wrote is
     /// the diagnostic the fail-closed cause names.
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn miss(&self, bytes: &[u8]) {
         support::lock(&self.head).extend_from_slice(bytes);
     }
 
     /// The recorded first line or pre-EOF bytes, lossy and capped.
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn head_text(&self) -> String {
         let head = support::lock(&self.head);
         let mut text = String::from_utf8_lossy(&head).into_owned();
@@ -880,6 +892,8 @@ pub(crate) struct StripMarker<R> {
 #[cfg(target_os = "macos")]
 impl<R: std::io::Read> StripMarker<R> {
     /// Strips one call's marker line, reporting to `watch`.
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn new(inner: R, watch: Arc<MarkerWatch>) -> Self {
         Self {
             inner,
@@ -891,6 +905,8 @@ impl<R: std::io::Read> StripMarker<R> {
     }
 
     /// Drains the classified bytes into `buf`.
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     fn drain(&mut self, buf: &mut [u8]) -> usize {
         let count = self.pending.len().min(buf.len());
         if let (Some(front), Some(slot)) = (self.pending.get(..count), buf.get_mut(..count)) {
@@ -905,6 +921,8 @@ impl<R: std::io::Read> StripMarker<R> {
 
 #[cfg(target_os = "macos")]
 impl<R: std::io::Read> std::io::Read for StripMarker<R> {
+    // mutants run on Linux, where this is not compiled.
+    #[cfg_attr(false, mutants::skip)]
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut chunk = [0u8; 1024];
         loop {

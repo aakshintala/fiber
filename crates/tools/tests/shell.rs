@@ -3533,9 +3533,13 @@ fn macos_confined_shell_cannot_reach_sockets() {
     assert!(effects.declared.confined);
 
     let bound = confined.run(&format!(
-        "python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.bind('{}')\"",
+        "printf 'attempting bind\\n'; python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.bind('{}')\"",
         confined.workspace.join("x.sock").display()
     ));
+    assert!(
+        text(&bound).contains("attempting bind"),
+        "the confined command reached bind"
+    );
     assert!(bound.error.is_some(), "a unix bind fails");
     assert!(
         !confined.workspace.join("x.sock").exists(),
@@ -3546,9 +3550,13 @@ fn macos_confined_shell_cannot_reach_sockets() {
     let outside = confined.root.path().join("outside.sock");
     let _listener = UnixListener::bind(&outside).expect("the test binds its own socket");
     let connected = confined.run(&format!(
-        "python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('{}')\"",
+        "printf 'attempting outside connect\\n'; python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('{}')\"",
         outside.display()
     ));
+    assert!(
+        text(&connected).contains("attempting outside connect"),
+        "the confined command reached connect"
+    );
     assert!(connected.error.is_some(), "a unix connect fails");
 
     // Fiber's own `run/` sockets stay unreachable too: a listener under the
@@ -3558,9 +3566,13 @@ fn macos_confined_shell_cannot_reach_sockets() {
     let run_sock = run_dir.join("test.sock");
     let _run_listener = UnixListener::bind(&run_sock).expect("the test binds its own run socket");
     let run_connected = confined.run(&format!(
-        "python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('{}')\"",
+        "printf 'attempting run-socket connect\\n'; python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('{}')\"",
         run_sock.display()
     ));
+    assert!(
+        text(&run_connected).contains("attempting run-socket connect"),
+        "the confined command reached the run-socket connect"
+    );
     assert!(run_connected.error.is_some(), "a run-socket connect fails");
     assert!(
         !text(&run_connected).contains("FIBER_SANDBOX_CONFINED"),
@@ -3762,13 +3774,24 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
         .expect("the shell command classifies");
     assert!(effects.declared.confined);
 
-    // The held read blocks with no output and no deadline: the handoff the
-    // test waits for below can only come from the marker observation.
+    // The shell acknowledges after opening the FIFO, then blocks on its
+    // read. A read-write opener never blocks, so hold one before the child
+    // starts and use it to release the child after the acknowledgement.
     let hold = root.path().join("hold");
+    let ready = workspace.join("hold-ready");
     fakes::fifo(&hold);
+    let mut release = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&hold)
+        .unwrap();
     let running = start_confined(
         workspace,
-        &format!("read -r _ < {}", quote(&hold)),
+        &format!(
+            "exec 9< {} && : > {} && read -r _ <&9",
+            quote(&hold),
+            quote(&ready)
+        ),
         true,
         false,
         jobs.clone(),
@@ -3783,9 +3806,16 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
     };
     let job = started(&receipt);
     assert!(receipt.error.is_none(), "{}", text(&receipt));
-    // The held read still runs and the fake clock never moved: the handoff
-    // waited for the marker, not for output, the end, or a deadline
-    // (`docs/sandbox.md`, "On macOS": no move before the marker is observed).
+    let ready_for_wait = ready.clone();
+    fakes::wait_until(
+        "the confined child to acknowledge opening the held FIFO",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || ready_for_wait.exists(),
+    );
+    // The child acknowledged after opening the FIFO and is now blocked on
+    // its read. The fake clock never moved: the handoff waited for the
+    // marker, not for output, the end, or a deadline (`docs/sandbox.md`,
+    // "On macOS": no move before the marker is observed).
     assert_eq!(jobs.started(), vec![job.clone()]);
     assert_eq!(contract::clock::Clock::now(&*running.clock), running.start);
     assert!(
@@ -3793,13 +3823,7 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
         "the marker never reaches the caller"
     );
     // Release the held read and reap the job: the test leaves no detached
-    // call behind. Opening read-write never blocks, so a command that never
-    // reached its read still cannot hang the test here.
-    let mut release = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&hold)
-        .unwrap();
+    // call behind.
     writeln!(release, "go").unwrap();
     drop(release);
     let ended = jobs
