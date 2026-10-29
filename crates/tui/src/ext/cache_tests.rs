@@ -42,8 +42,11 @@ fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decisi
 }
 
 use crate::ext::{
-    AnswerDisposition, CallState, CardPrompt, Failure, Input, LedgerResult, LedgerRow, Prompt,
-    PromptImage, RawSpan, ReplyText, ThinkingLine, TurnCard, TurnCardState, TurnEnded,
+    AnswerDisposition, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles,
+    Delegate, DelegatesCard, Failure, Input, Job, JobsCard, LedgerResult, LedgerRow, Prompt,
+    PromptImage, Quota, RawSpan, ReplyText, SessionCard, SessionContext, Spend, StatusRows,
+    SteeringMessage, SteeringQueue, ThinkingLine, TurnCard, TurnCardState, TurnEnded, WidgetCard,
+    WorkingLine, WorkingRetry,
 };
 
 fn raw(text: &str) -> RawSpan {
@@ -863,6 +866,451 @@ fn notice_input(text: &'static str) -> Input<'static> {
         text,
         flat: false,
     })
+}
+
+fn working_line(started: Option<u64>, flat: bool) -> Input<'static> {
+    Input::WorkingLine(WorkingLine {
+        started,
+        retry: None,
+        flat,
+    })
+}
+
+fn working_retry() -> Input<'static> {
+    Input::WorkingLine(WorkingLine {
+        started: Some(7),
+        retry: Some(WorkingRetry {
+            code: contract::ErrorCode::RateLimited,
+            attempt: 2,
+            last_attempt: 4,
+            delay_ms: 4000,
+            ts: 9,
+        }),
+        flat: false,
+    })
+}
+
+fn steering_message(text: &'static str, selected: bool) -> SteeringMessage<'static> {
+    SteeringMessage {
+        text,
+        images: Vec::new(),
+        droppable: true,
+        selectable: true,
+        selected,
+    }
+}
+
+fn steering_queue(messages: Vec<SteeringMessage<'static>>, flat: bool) -> Input<'static> {
+    Input::SteeringQueue(SteeringQueue { messages, flat })
+}
+
+fn usage(cost: Option<f64>) -> contract::shapes::Usage {
+    contract::shapes::Usage {
+        tokens: contract::shapes::Tokens {
+            input: 1,
+            output: 2,
+            cache_read: 3,
+            cache_write: std::collections::BTreeMap::new(),
+        },
+        cost,
+        subscription_cost: 0.5,
+    }
+}
+
+fn session_card<'a>(
+    model: Option<&'a str>,
+    spend: Option<Spend<'a>>,
+    tools_down: &'a std::collections::BTreeSet<String>,
+    waiting: Option<usize>,
+) -> SessionCard<'a> {
+    SessionCard {
+        workspace: Some("~/work/fiber"),
+        branch: Some(BranchName::Named("main")),
+        model,
+        thinking: Some("high"),
+        context: Some(SessionContext {
+            tokens: 268000,
+            window: 1000000,
+            trigger_at: Some(400000),
+        }),
+        spend,
+        budget: Some(20.0),
+        speed: Some(64),
+        turns: 12,
+        tools_down,
+        waiting,
+        flat: false,
+    }
+}
+
+fn status_rows<'a>(
+    session: SessionCard<'a>,
+    files: &'a [ChangedFile<'a>],
+    waiting: Option<usize>,
+    quota: Option<Quota<'a>>,
+) -> Input<'a> {
+    Input::StatusRows(StatusRows {
+        cards: vec!["session".to_owned(), "changed_files".to_owned()],
+        session,
+        changed_files: ChangedFiles { files, flat: false },
+        delegates_running: 1,
+        jobs_running: 0,
+        widgets: Vec::new(),
+        waiting,
+        quota,
+        flat: false,
+    })
+}
+
+fn quota_info(provider: &str) -> contract::events::QuotaInfo {
+    contract::events::QuotaInfo {
+        provider: provider.to_owned(),
+        credential: "work".to_owned(),
+        windows: Some(vec![contract::events::QuotaWindow {
+            name: "weekly".to_owned(),
+            percent_used: Some(35.0),
+            reset: None,
+            resets_at: None,
+        }]),
+        credit: None,
+        unreachable: None,
+    }
+}
+
+fn delegate(
+    job_id: &'static str,
+    outcome: Option<contract::events::Outcome>,
+    ended: Option<u64>,
+) -> Delegate<'static> {
+    Delegate {
+        job_id,
+        description: "review the diff",
+        harness: "fiber",
+        model: "m",
+        calls: 14,
+        step: Some("read app.rs"),
+        started: Some(1720000000000),
+        outcome,
+        ended,
+    }
+}
+
+#[test]
+fn each_chrome_slot_caches_by_input_and_width() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(Some(4.12));
+    let files = [
+        ChangedFile {
+            path: "crates/tui/src/app.rs",
+            added: 38,
+            removed: 9,
+        },
+        ChangedFile {
+            path: "crates/tui/src/view.rs",
+            added: 1,
+            removed: 2,
+        },
+    ];
+    let jobs = [Job {
+        job_id: "7",
+        description: "bench",
+    }];
+    let lines: Vec<String> = vec!["one".to_owned()];
+    let cases: Vec<(&str, Input<'_>, Input<'_>)> = vec![
+        (
+            "working_line",
+            working_line(Some(1), false),
+            working_line(Some(2), false),
+        ),
+        (
+            "working_line",
+            working_line(Some(7), false),
+            working_retry(),
+        ),
+        (
+            "steering_queue",
+            steering_queue(vec![steering_message("fix the flake", false)], false),
+            steering_queue(vec![steering_message("fix the flake", true)], false),
+        ),
+        (
+            "status_rows",
+            status_rows(
+                session_card(Some("m"), Some(Spend::Status(&spend)), &tools_down, None),
+                &files,
+                None,
+                None,
+            ),
+            status_rows(
+                session_card(Some("m"), Some(Spend::Status(&spend)), &tools_down, None),
+                &files,
+                Some(2),
+                None,
+            ),
+        ),
+        (
+            "card:session",
+            Input::Card(Card::Session(session_card(
+                Some("m"),
+                Some(Spend::Status(&spend)),
+                &tools_down,
+                None,
+            ))),
+            Input::Card(Card::Session(session_card(
+                Some("n"),
+                Some(Spend::Status(&spend)),
+                &tools_down,
+                None,
+            ))),
+        ),
+        (
+            "card:changed_files",
+            Input::Card(Card::ChangedFiles(ChangedFiles {
+                files: &files,
+                flat: false,
+            })),
+            Input::Card(Card::ChangedFiles(ChangedFiles {
+                files: &files[1..],
+                flat: false,
+            })),
+        ),
+        (
+            "card:delegates",
+            Input::Card(Card::Delegates(DelegatesCard {
+                delegates: vec![delegate("3", None, None)],
+                flat: false,
+            })),
+            Input::Card(Card::Delegates(DelegatesCard {
+                delegates: vec![delegate(
+                    "3",
+                    Some(contract::events::Outcome::Completed),
+                    Some(1720000001000),
+                )],
+                flat: false,
+            })),
+        ),
+        (
+            "card:jobs",
+            Input::Card(Card::Jobs(JobsCard {
+                jobs: &jobs,
+                open: false,
+                flat: false,
+            })),
+            Input::Card(Card::Jobs(JobsCard {
+                jobs: &jobs,
+                open: true,
+                flat: false,
+            })),
+        ),
+        (
+            "card:e/w",
+            Input::Card(Card::Widget(WidgetCard {
+                extension: "e",
+                widget: "w",
+                lines: &lines,
+                open: false,
+                flat: false,
+            })),
+            Input::Card(Card::Widget(WidgetCard {
+                extension: "e",
+                widget: "w",
+                lines: &lines,
+                open: true,
+                flat: false,
+            })),
+        ),
+    ];
+    for (slot, first, second) in &cases {
+        let before = calls.get();
+        assert!(
+            draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
+            "{slot} draws"
+        );
+        assert!(
+            draw_counted(&cache, slot, first, 20, &calls, drawn("hi")).is_some(),
+            "{slot} hits"
+        );
+        // A renderer runs again only when its input or the width
+        // changes (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 1, "{slot} hits the cache");
+        assert!(
+            draw_counted(&cache, slot, first, 24, &calls, drawn("hi")).is_some(),
+            "{slot} draws at a new width"
+        );
+        // The width rides the entry key beside the input
+        // (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 2, "{slot} keys the width");
+        assert!(
+            draw_counted(&cache, slot, second, 20, &calls, drawn("hi")).is_some(),
+            "{slot} draws a new input"
+        );
+        // The key covers the slot and every field
+        // (`docs/tui.md`, "How a TUI extension runs").
+        assert_eq!(calls.get(), before + 3, "{slot} keys the input");
+    }
+}
+
+#[test]
+fn chrome_keys_cover_flat_order_slot_and_spend_shape() {
+    crate::work::take();
+    let cache = Cache::default();
+    let calls = Cell::new(0usize);
+    // Flat rides the key: the same working line draws again flat.
+    let before = calls.get();
+    assert!(
+        draw_counted(
+            &cache,
+            "working_line",
+            &working_line(Some(1), false),
+            20,
+            &calls,
+            drawn("hi")
+        )
+        .is_some()
+    );
+    assert!(
+        draw_counted(
+            &cache,
+            "working_line",
+            &working_line(Some(1), false),
+            20,
+            &calls,
+            drawn("hi")
+        )
+        .is_some()
+    );
+    assert_eq!(calls.get(), before + 1, "same input hits");
+    assert!(
+        draw_counted(
+            &cache,
+            "working_line",
+            &working_line(Some(1), true),
+            20,
+            &calls,
+            drawn("hi")
+        )
+        .is_some()
+    );
+    assert_eq!(calls.get(), before + 2, "flat misses");
+    // Nested order matters: the same messages newest-first miss.
+    let before = calls.get();
+    let oldest = steering_queue(
+        vec![
+            steering_message("one", false),
+            steering_message("two", false),
+        ],
+        false,
+    );
+    let newest = steering_queue(
+        vec![
+            steering_message("two", false),
+            steering_message("one", false),
+        ],
+        false,
+    );
+    assert!(draw_counted(&cache, "steering_queue", &oldest, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "steering_queue", &newest, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before + 2, "message order misses");
+    // Images ride the key: the same text with an image misses.
+    let before = calls.get();
+    let imaged = SteeringMessage {
+        text: "one",
+        images: vec![PromptImage {
+            path: "artifacts/a.png",
+            width: 8,
+            height: 8,
+        }],
+        droppable: true,
+        selectable: false,
+        selected: false,
+    };
+    let with_image = steering_queue(vec![imaged], false);
+    assert!(
+        draw_counted(
+            &cache,
+            "steering_queue",
+            &with_image,
+            20,
+            &calls,
+            drawn("hi")
+        )
+        .is_some()
+    );
+    assert_eq!(calls.get(), before + 1, "images miss");
+    // The slot rides the key: the same working line under another slot
+    // misses.
+    let before = calls.get();
+    let line = working_line(Some(1), false);
+    assert!(draw_counted(&cache, "working_line", &line, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before, "same slot hits");
+    assert!(draw_counted(&cache, "card:session", &line, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before + 1, "another slot misses");
+    // The two spend shapes key apart: the status spend whole against
+    // the attached fallback's cost alone.
+    let before = calls.get();
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(Some(4.12));
+    let whole = Input::Card(Card::Session(session_card(
+        Some("m"),
+        Some(Spend::Status(&spend)),
+        &tools_down,
+        None,
+    )));
+    let fallback = Input::Card(Card::Session(session_card(
+        Some("m"),
+        Some(Spend::Attached { cost: 4.12 }),
+        &tools_down,
+        None,
+    )));
+    assert!(draw_counted(&cache, "card:session", &whole, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "card:session", &fallback, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before + 2, "spend shapes miss");
+    // Quota presence keys, and its rows keep their order.
+    let before = calls.get();
+    let files: [ChangedFile<'_>; 0] = [];
+    let codex = [quota_info("codex")];
+    let both = [quota_info("codex"), quota_info("openrouter")];
+    let swapped = [quota_info("openrouter"), quota_info("codex")];
+    let bare = status_rows(
+        session_card(Some("m"), None, &tools_down, None),
+        &files,
+        None,
+        None,
+    );
+    let quoted = status_rows(
+        session_card(Some("m"), None, &tools_down, None),
+        &files,
+        None,
+        Some(Quota {
+            rows: &codex,
+            notice_at: 80.0,
+        }),
+    );
+    let ordered = status_rows(
+        session_card(Some("m"), None, &tools_down, None),
+        &files,
+        None,
+        Some(Quota {
+            rows: &both,
+            notice_at: 80.0,
+        }),
+    );
+    let reordered = status_rows(
+        session_card(Some("m"), None, &tools_down, None),
+        &files,
+        None,
+        Some(Quota {
+            rows: &swapped,
+            notice_at: 80.0,
+        }),
+    );
+    assert!(draw_counted(&cache, "status_rows", &bare, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "status_rows", &quoted, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "status_rows", &ordered, 20, &calls, drawn("hi")).is_some());
+    assert!(draw_counted(&cache, "status_rows", &reordered, 20, &calls, drawn("hi")).is_some());
+    assert_eq!(calls.get(), before + 4, "quota presence and order miss");
 }
 
 /// Draws `row` at `width`, counting renderer calls.

@@ -777,6 +777,10 @@ fn key_of(input: &Input<'_>, slot: &str) -> (u64, bool) {
         Input::HandoffBand(band) => (band.key(slot), band.flat),
         Input::ErrorLine(line) => (line.key(slot), line.flat),
         Input::Notice(notice) => (notice.key(slot), notice.flat),
+        Input::WorkingLine(line) => (line.key(slot), line.flat),
+        Input::SteeringQueue(queue) => (queue.key(slot), queue.flat),
+        Input::StatusRows(rows) => (rows.key(slot), rows.flat),
+        Input::Card(card) => (card.key(slot), card.flat()),
     }
 }
 
