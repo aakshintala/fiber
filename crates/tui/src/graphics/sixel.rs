@@ -71,7 +71,8 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
     }
     let rows = height as usize;
     let cols = width as usize;
-    for band in 0..rows.div_ceil(BAND_ROWS) {
+    let mut band = 0;
+    while band * BAND_ROWS < rows {
         for (seq, register) in registers.iter().enumerate() {
             out.extend_from_slice(format!("#{seq}").as_bytes());
             let mut run = (b'?', 0usize);
@@ -103,6 +104,7 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
             out.push(b'$');
         }
         out.push(b'-');
+        band += 1;
     }
     out.extend_from_slice(b"\x1b\\");
     out

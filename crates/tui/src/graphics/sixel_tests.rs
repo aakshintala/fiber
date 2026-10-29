@@ -128,12 +128,20 @@ fn two_columns_pin_the_band_walk_to_row_times_width() {
     );
 }
 
-/// Thirteen rows open three bands: the tail band holds one row.
+/// Thirteen rows open three bands: the tail band holds one row. The
+/// encode runs on a worker under the must-succeed bound, so a broken
+/// band step fails the test instead of hanging its runner.
 #[test]
 fn thirteen_rows_open_three_bands() {
+    use fakes::{Deadline, MUST_SUCCEED_WITHIN, within};
     let rgba = [[255, 0, 0, 255]].repeat(13).concat();
+    let encoded = within(
+        "the third band encodes",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || encode(1, 13, &rgba, [0, 0, 0]),
+    );
     assert_eq!(
-        encode(1, 13, &rgba, [0, 0, 0]),
+        encoded,
         b"\x1bP0;1q\"1;1;1;13#0;2;100;0;0#0~$-#0~$-#0@$-\x1b\\".as_slice()
     );
 }
