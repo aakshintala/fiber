@@ -1305,3 +1305,42 @@ fn a_failed_confined_setup_never_runs_unconfined() {
     assert_eq!(code(&output), Some(contract::ErrorCode::ToolError));
     assert!(!marker.is_file(), "no command runs after an apply failure");
 }
+
+#[test]
+fn builtin_read_only_names_cover_every_classifier_name() {
+    use super::read_only::{COMMANDS, EXACT};
+
+    let table = contract::notes::BUILTIN_READ_ONLY_NAMES;
+    let owned = |name: &str| {
+        assert!(table.contains(&name), "{name} left the contract data table");
+    };
+    for row in EXACT {
+        owned(&row.join(" "));
+    }
+    for command in COMMANDS {
+        owned(command.name);
+        let base = command.name.split(' ').next().expect("a named command");
+        owned(&format!("/bin/{base}"));
+        owned(&format!("/usr/bin/{base}"));
+    }
+    for base in ["cd", "env", "timeout", "xargs", "sed"] {
+        owned(base);
+        owned(&format!("/bin/{base}"));
+        owned(&format!("/usr/bin/{base}"));
+    }
+    for foreign in ["acme-cli", "acme-cli query"] {
+        assert!(
+            !table.contains(&foreign),
+            "{foreign} is not a built-in name"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_command_still_offers_its_subject_and_prefix() {
+    let dir = fakes::TempDir::new("fiber-shell-parity");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let query = effects(&shell, "acme-cli query --json");
+    assert_eq!(query.subject.as_deref(), Some("acme-cli query --json"));
+    assert_eq!(query.prefix.as_deref(), Some("acme-cli query"));
+}
