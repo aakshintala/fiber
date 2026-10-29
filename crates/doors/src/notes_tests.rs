@@ -11,11 +11,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::json;
 
 use super::*;
+use contract::emit::Emit;
 use contract::notes::Evidence;
+use contract::provider::ToolDefinition;
+use contract::shapes::{DeclaredEffects, Effect};
+use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 
 fn write_log(dir: &Path, bytes: &[u8]) {
     fs::create_dir_all(dir).unwrap();
@@ -111,6 +117,12 @@ fn session_items(evidence: &[Evidence]) -> Vec<(String, u32, u32, String)> {
                 tally.here(),
                 tally.text().to_owned(),
             )),
+            Evidence::Allows(tally) => Some((
+                tally.subject().to_owned(),
+                tally.count(),
+                tally.here(),
+                tally.text().to_owned(),
+            )),
             Evidence::Files { .. } | Evidence::Answer { .. } => None,
         })
         .collect()
@@ -140,7 +152,13 @@ fn counts_span_projects_with_here_only_for_this_one() {
         &["gh pr merge"],
     );
     let dir = session_dir(&home, &here_key, "s_live");
-    let found = session_items(&gather(&home, &dir, &here_repo));
+    let found = session_items(&gather(
+        &home,
+        &dir,
+        &here_repo,
+        Topic::RoutineActions,
+        None,
+    ));
     assert_eq!(
         found,
         [(
@@ -177,7 +195,7 @@ fn a_shared_slug_still_files_by_resolved_identity() {
         &["gh pr merge"],
     );
     let dir = session_dir(&home, &right, "s_live");
-    let found = session_items(&gather(&home, &dir, &inner));
+    let found = session_items(&gather(&home, &dir, &inner, Topic::RoutineActions, None));
     assert_eq!(
         found,
         [(
@@ -211,7 +229,13 @@ fn a_recorded_workspace_that_is_gone_counts_away() {
         &["gh pr merge"],
     );
     let dir = session_dir(&home, &here_key, "s_live");
-    let found = session_items(&gather(&home, &dir, &here_repo));
+    let found = session_items(&gather(
+        &home,
+        &dir,
+        &here_repo,
+        Topic::RoutineActions,
+        None,
+    ));
     assert_eq!(
         found,
         [(
@@ -237,7 +261,13 @@ fn one_escalation_reads_singular() {
         &["make lint"],
     );
     let dir = session_dir(&home, &here_key, "s_live");
-    let found = session_items(&gather(&home, &dir, &here_repo));
+    let found = session_items(&gather(
+        &home,
+        &dir,
+        &here_repo,
+        Topic::RoutineActions,
+        None,
+    ));
     assert_eq!(
         found,
         [(
@@ -271,7 +301,13 @@ fn session_items_sort_by_count_then_prefix() {
         &["x", "x", "x", "z", "z", "y"],
     );
     let dir = session_dir(&home, &here_key, "s_live");
-    let found = session_items(&gather(&home, &dir, &here_repo));
+    let found = session_items(&gather(
+        &home,
+        &dir,
+        &here_repo,
+        Topic::RoutineActions,
+        None,
+    ));
     let order: Vec<(&str, u32)> = found
         .iter()
         .map(|(prefix, count, _, _)| (prefix.as_str(), *count))
@@ -301,7 +337,13 @@ fn capped_home(root: &Path, count: usize) -> (PathBuf, PathBuf, PathBuf) {
 fn sixty_three_prefixes_are_all_kept() {
     let root = fakes::TempDir::new("doors-notes-cap63");
     let (home, workspace, dir) = capped_home(root.path(), 63);
-    let found = session_items(&gather(&home, &dir, &workspace));
+    let found = session_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::RoutineActions,
+        None,
+    ));
     assert_eq!(found.len(), 63);
     assert_eq!(found.first().unwrap().0, "p00");
     assert_eq!(found.last().unwrap().0, "p62");
@@ -311,7 +353,13 @@ fn sixty_three_prefixes_are_all_kept() {
 fn sixty_four_prefixes_are_all_kept() {
     let root = fakes::TempDir::new("doors-notes-cap64");
     let (home, workspace, dir) = capped_home(root.path(), 64);
-    let found = session_items(&gather(&home, &dir, &workspace));
+    let found = session_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::RoutineActions,
+        None,
+    ));
     assert_eq!(found.len(), 64);
     assert_eq!(found.first().unwrap().0, "p00");
     assert_eq!(found.last().unwrap().0, "p63");
@@ -321,7 +369,13 @@ fn sixty_four_prefixes_are_all_kept() {
 fn sixty_five_prefixes_trim_to_sixty_four_in_order() {
     let root = fakes::TempDir::new("doors-notes-cap65");
     let (home, workspace, dir) = capped_home(root.path(), 65);
-    let found = session_items(&gather(&home, &dir, &workspace));
+    let found = session_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::RoutineActions,
+        None,
+    ));
     assert_eq!(found.len(), 64);
     assert_eq!(found.first().unwrap().0, "p00");
     assert_eq!(found.last().unwrap().0, "p63");
@@ -337,7 +391,7 @@ fn files_text(evidence: &[Evidence]) -> Vec<String> {
         .iter()
         .filter_map(|item| match item {
             Evidence::Files { text } => Some(text.clone()),
-            Evidence::Session(_) | Evidence::Answer { .. } => None,
+            Evidence::Session(_) | Evidence::Allows(_) | Evidence::Answer { .. } => None,
         })
         .collect()
 }
@@ -736,4 +790,1622 @@ fn outside_git_ci_and_registry_show_with_no_remote_item() {
             "registry .npmrc: https://plain.example.com/".to_owned(),
         ]
     );
+}
+
+// --------------------------------------- read-only allow tallies
+
+/// One stubbed classification: the subject and prefix, or an arguments
+/// error for an unclassifiable command.
+type Verdict<'a> = Result<(&'a str, &'a str), &'a str>;
+
+/// The stub's owned table: each command with its subject and prefix, or
+/// its arguments error.
+type OwnedTable = std::collections::HashMap<String, Result<(String, String), String>>;
+
+/// A stub shell: each command returns its tabled subject and prefix, or
+/// an arguments error, counting every call to pin the per-gather cache.
+/// The arguments hold the command alone: no logged workdir ever travels.
+struct StubShell {
+    name: String,
+    table: Mutex<OwnedTable>,
+    calls: AtomicUsize,
+}
+
+impl StubShell {
+    fn new(name: &str, table: &[(&str, Verdict)]) -> Self {
+        Self {
+            name: name.to_owned(),
+            table: Mutex::new(
+                table
+                    .iter()
+                    .map(|(command, verdict)| {
+                        (
+                            command.to_string(),
+                            verdict
+                                .as_ref()
+                                .map(|(subject, prefix)| (subject.to_string(), prefix.to_string()))
+                                .map_err(|error| (*error).to_owned()),
+                        )
+                    })
+                    .collect(),
+            ),
+            calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Tool for StubShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.clone(),
+            description: "a stub shell".to_owned(),
+            input_schema: serde_json::Value::Object(serde_json::Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Effects, EffectsError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(
+            arguments.len(),
+            1,
+            "command-only classification: {arguments:?}"
+        );
+        let command = arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .expect("a command string");
+        match self
+            .table
+            .lock()
+            .expect("the table lock")
+            .get(command)
+            .cloned()
+        {
+            Some(Ok((subject, prefix))) => Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Reads],
+                    reversible: true,
+                    paths: None,
+                    confined: false,
+                },
+                subject: Some(subject),
+                prefix: Some(prefix),
+                always_reviewed: false,
+                hosts: None,
+            }),
+            Some(Err(_)) | None => Err(EffectsError::Arguments("unclassifiable".to_owned())),
+        }
+    }
+
+    fn run(
+        &self,
+        _arguments: &serde_json::Map<String, serde_json::Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        panic!("the stub never runs");
+    }
+}
+
+/// One log line with its action: the join key for one shell call.
+fn aline(kind: &str, action: &str, seq: u64, payload: &serde_json::Value) -> String {
+    json!({
+        "kind": kind,
+        "session_id": "s_1",
+        "action_id": action,
+        "ts": seq,
+        "schema_version": 1,
+        "seq": seq,
+        "payload": payload,
+    })
+    .to_string()
+        + "\n"
+}
+
+/// A session holding one shell-call script.
+fn seed_calls(home: &Path, key: &str, id: &str, workspace: &str, body: &str) {
+    write_log(
+        &session_dir(home, key, id),
+        format!("{}{}", started(workspace), body).as_bytes(),
+    );
+}
+
+/// Allowed shell calls: `reviewer` allows, with `ran_by` inner calls when
+/// marked.
+fn allow_calls(
+    actions: &[&str],
+    command: &str,
+    decided_by: &str,
+    ran_by: bool,
+    first_seq: u64,
+) -> String {
+    let mut body = String::new();
+    for (at, action) in actions.iter().enumerate() {
+        let seq = first_seq + u64::try_from(at).unwrap() * 2;
+        let mut requested = json!({"name": "shell", "arguments": {"command": command}});
+        if ran_by {
+            requested["ran_by"] = json!({"extension": "e", "command_id": "c_1"});
+        }
+        body.push_str(&aline("tool_call_requested", action, seq, &requested));
+        body.push_str(&aline(
+            "permission_resolved",
+            action,
+            seq + 1,
+            &json!({"decision": "allow", "decided_by": decided_by}),
+        ));
+    }
+    body
+}
+
+/// One denied shell call: `requested` ran, an optional request judged it,
+/// and the resolution denied it.
+fn deny_call(
+    action: &str,
+    seq: u64,
+    command: &str,
+    decided_by: &str,
+    rule_subject: Option<&str>,
+    reviewed: Option<&str>,
+) -> String {
+    let mut body = aline(
+        "tool_call_requested",
+        action,
+        seq,
+        &json!({"name": "shell", "arguments": {"command": command}}),
+    );
+    if rule_subject.is_some() {
+        let mut request = json!({"request_id": "r_1", "step": "review"});
+        if let Some(rule_subject) = rule_subject {
+            request["rule"] = json!({"subject": rule_subject, "prefix": rule_subject});
+        }
+        body.push_str(&aline("permission_requested", action, seq + 1, &request));
+    }
+    let mut resolved = json!({"decision": "deny", "decided_by": decided_by});
+    if rule_subject.is_some() {
+        resolved["request_id"] = json!("r_1");
+    }
+    if let Some(reviewed) = reviewed {
+        resolved["arguments"] = json!({"command": reviewed});
+    }
+    body.push_str(&aline("permission_resolved", action, seq + 2, &resolved));
+    body
+}
+
+/// One blocked shell call: the request escalated, answered allow.
+fn block_call(action: &str, seq: u64, command: &str, ran_by: bool) -> String {
+    let mut requested = json!({"name": "shell", "arguments": {"command": command}});
+    if ran_by {
+        requested["ran_by"] = json!({"extension": "e", "command_id": "c_1"});
+    }
+    aline("tool_call_requested", action, seq, &requested)
+        + &aline(
+            "permission_requested",
+            action,
+            seq + 1,
+            &json!({"request_id": "r_1", "step": "review",
+                "escalation": {"cause": "consecutive_blocks", "reason": "blocked"}}),
+        )
+        + &aline(
+            "permission_resolved",
+            action,
+            seq + 2,
+            &json!({"request_id": "r_1", "decision": "allow", "decided_by": "person"}),
+        )
+}
+
+/// The allow tallies in `evidence`, in gather order.
+fn allows_items(evidence: &[Evidence]) -> Vec<(String, u32, u32, String)> {
+    evidence
+        .iter()
+        .filter_map(|item| match item {
+            Evidence::Allows(tally) => Some((
+                tally.subject().to_owned(),
+                tally.count(),
+                tally.here(),
+                tally.text().to_owned(),
+            )),
+            Evidence::Session(_) | Evidence::Files { .. } | Evidence::Answer { .. } => None,
+        })
+        .collect()
+}
+
+/// Gathers the read-only topic with `shell`, through a workspace repo.
+fn gather_allows(home: &Path, key: &str, workspace: &Path, shell: &StubShell) -> Vec<Evidence> {
+    let dir = session_dir(home, key, "s_live");
+    gather(home, &dir, workspace, Topic::ReadOnlyCommands, Some(shell))
+}
+
+#[test]
+fn five_reviewer_allows_propose_with_their_text_and_counts() {
+    // Five is the counting threshold (docs/permissions.md, "Setting up the
+    // notes": "A subject counts once it has at least 5 allows").
+    let root = fakes::TempDir::new("doors-notes-query");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[(
+            "acme-cli query --json",
+            Ok(("acme-cli query --json", "acme-cli query")),
+        )],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(
+        found,
+        [(
+            "acme-cli query --json".to_owned(),
+            5,
+            5,
+            "5 reviewer allows for acme-cli query --json".to_owned()
+        )]
+    );
+    assert_eq!(
+        shell.calls.load(Ordering::Relaxed),
+        1,
+        "one classification per gather"
+    );
+}
+
+#[test]
+fn four_allows_stay_silent_while_five_count() {
+    // The five-allow minimum (docs/permissions.md, "Setting up the notes":
+    // "A subject counts once it has at least 5 allows").
+    let root = fakes::TempDir::new("doors-notes-threshold");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4"],
+                "kubectl -n x",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "acme-cli status",
+                "reviewer",
+                false,
+                9
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            ("kubectl -n x", Ok(("kubectl -n x", "kubectl -n"))),
+            (
+                "acme-cli status",
+                Ok(("acme-cli status", "acme-cli status")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(
+        found,
+        [(
+            "acme-cli status".to_owned(),
+            5,
+            5,
+            "5 reviewer allows for acme-cli status".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn a_deny_withholds_with_the_covered_reason_and_a_person_deny_too() {
+    let root = fakes::TempDir::new("doors-notes-deny");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call("a_6", 11, "acme-cli query --json", "reviewer", None, None),
+        ),
+    );
+    seed_calls(
+        &home,
+        &key,
+        "s_2",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "acme-cli show --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call(
+                "b_6",
+                11,
+                "acme-cli show --json",
+                "person",
+                Some("acme-cli show --json"),
+                None
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "acme-cli show --json",
+                Ok(("acme-cli show --json", "acme-cli show")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 2);
+    for (_, _, _, text) in &found {
+        assert!(
+            text.ends_with(
+                " (not proposed: a call it would cover was denied, blocked or escalated)"
+            ),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn builtin_held_and_configured_subjects_stay_silent() {
+    let root = fakes::TempDir::new("doors-notes-held");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "ls",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                11
+            ),
+        ),
+    );
+    // An already-configured ancestor covers the candidate silently.
+    let project = config::ProjectKey::new(key.clone()).unwrap();
+    let file = config::project_config_file(&home, &project);
+    write_file(
+        &file,
+        r#"{"shell": {"read_only": {"acme-cli": {"flags": []}}}}"#,
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            ("ls", Ok(("ls", "ls"))),
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+        ],
+    );
+    assert!(allows_items(&gather_allows(&home, &key, &workspace, &shell)).is_empty());
+}
+
+#[test]
+fn write_flagged_subjects_drop_while_literal_words_propose() {
+    let root = fakes::TempDir::new("doors-notes-write-flag");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --output=out",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "acme-cli query -oevil",
+                "reviewer",
+                false,
+                11
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --output=out",
+                Ok(("acme-cli query --output=out", "acme-cli query")),
+            ),
+            (
+                "acme-cli query -oevil",
+                Ok(("acme-cli query -oevil", "acme-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, "acme-cli query -oevil");
+}
+
+#[test]
+fn one_word_valued_and_slash_subjects_stay_counted() {
+    let root = fakes::TempDir::new("doors-notes-stays");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "gist /tmp",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "acme-cli query --exec=ls",
+                "reviewer",
+                false,
+                11
+            ),
+            allow_calls(
+                &["c_1", "c_2", "c_3", "c_4", "c_5"],
+                "acme-cli sub/path",
+                "reviewer",
+                false,
+                21
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            ("gist /tmp", Ok(("gist /tmp", "gist"))),
+            (
+                "acme-cli query --exec=ls",
+                Ok(("acme-cli query --exec=ls", "acme-cli query")),
+            ),
+            ("acme-cli sub/path", Ok(("acme-cli sub/path", "acme-cli"))),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 3);
+    for (_, _, _, text) in &found {
+        assert!(!text.contains("not proposed"), "{text}");
+    }
+}
+
+#[test]
+fn allowed_redirects_keep_their_subject_while_other_redirects_drop() {
+    let root = fakes::TempDir::new("doors-notes-redirect");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json >/dev/null",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "acme-cli query --json 2>out.txt",
+                "reviewer",
+                false,
+                11
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json >/dev/null",
+                Ok(("acme-cli query --json >/dev/null", "acme-cli query")),
+            ),
+            (
+                "acme-cli query --json 2>out.txt",
+                Ok(("acme-cli query --json 2>out.txt", "acme-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    // The tally counts the exact classifier subject, redirect included;
+    // the loop strips the allowed redirect when it renders the entry.
+    assert_eq!(found[0].0, "acme-cli query --json >/dev/null");
+    assert_eq!(
+        found[0].3,
+        "5 reviewer allows for acme-cli query --json >/dev/null"
+    );
+}
+
+#[test]
+fn whitespace_variants_share_one_subject_tally() {
+    let root = fakes::TempDir::new("doors-notes-whitespace");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // Three allows with single spaces and two with doubled spaces: the
+    // classifier names one subject, so all five count together
+    // (docs/permissions.md, "Setting up the notes": "Subjects are
+    // counted by their exact text").
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["a_4", "a_5"],
+                "acme-cli  query  --json",
+                "reviewer",
+                false,
+                7
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "acme-cli  query  --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(
+        found,
+        [(
+            "acme-cli query --json".to_owned(),
+            5,
+            5,
+            "5 reviewer allows for acme-cli query --json".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn an_unquoted_pipe_stays_silent() {
+    let root = fakes::TempDir::new("doors-notes-pipe");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli query | grep x",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    let shell = StubShell::new("shell", &[("acme-cli query | grep x", Err("pipe"))]);
+    assert!(allows_items(&gather_allows(&home, &key, &workspace, &shell)).is_empty());
+    assert_eq!(shell.calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn ran_by_allows_alone_propose_nothing_but_ran_by_denies_withhold() {
+    let root = fakes::TempDir::new("doors-notes-ran-by");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli show",
+                "reviewer",
+                true,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                11
+            ),
+        ),
+    );
+    seed_calls(
+        &home,
+        &key,
+        "s_2",
+        workspace.to_str().unwrap(),
+        &deny_call("c_1", 1, "acme-cli query --json", "reviewer", None, None),
+    );
+    // The ran_by deny below joins the same subject through the cache.
+    let shell = StubShell::new(
+        "shell",
+        &[
+            ("acme-cli show", Ok(("acme-cli show", "acme-cli show"))),
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert!(found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn only_reviewer_allows_not_denies_people_or_ran_by_calls_count() {
+    for kind in ["reviewer denies", "person allows", "ran_by allows"] {
+        let root = fakes::TempDir::new("doors-notes-allow-filters");
+        let home = root.path().join("home");
+        let workspace = repo(root.path(), "here");
+        let key = log::project_key(&worktree::project(&workspace));
+        let body = match kind {
+            "reviewer denies" => (0..5)
+                .map(|index| {
+                    deny_call(
+                        &format!("a_{index}"),
+                        u64::try_from(index).unwrap() * 3 + 1,
+                        "acme-cli query --json",
+                        "reviewer",
+                        None,
+                        None,
+                    )
+                })
+                .collect::<String>(),
+            "person allows" => allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "person",
+                false,
+                1,
+            ),
+            "ran_by allows" => allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                true,
+                1,
+            ),
+            _ => unreachable!(),
+        };
+        seed_calls(&home, &key, "s_1", workspace.to_str().unwrap(), &body);
+        let shell = StubShell::new(
+            "shell",
+            &[(
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            )],
+        );
+        let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+        assert!(found.is_empty(), "{kind} do not count: {found:?}");
+    }
+}
+
+#[test]
+fn a_reviewer_block_on_a_ran_by_call_withholds() {
+    let root = fakes::TempDir::new("doors-notes-block");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            block_call("a_6", 11, "acme-cli query --json", true),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[(
+            "acme-cli query --json",
+            Ok(("acme-cli query --json", "acme-cli query")),
+        )],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert!(found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn a_rule_subject_attributes_a_hook_rewritten_deny_and_spares_outsiders() {
+    let root = fakes::TempDir::new("doors-notes-rule");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // The judged subject covers the query candidate, not the outsider.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "other-cli query --json",
+                "reviewer",
+                false,
+                11
+            ),
+            deny_call(
+                "c_1",
+                21,
+                "acme-cli query --xml",
+                "reviewer",
+                Some("acme-cli query"),
+                Some("acme-cli query --json"),
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "other-cli query --json",
+                Ok(("other-cli query --json", "other-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 2);
+    let query = found
+        .iter()
+        .find(|(subject, _, _, _)| subject == "acme-cli query --json")
+        .unwrap();
+    assert!(query.3.contains("not proposed"), "{}", query.3);
+    let outsider = found
+        .iter()
+        .find(|(subject, _, _, _)| subject == "other-cli query --json")
+        .unwrap();
+    assert!(!outsider.3.contains("not proposed"), "{}", outsider.3);
+}
+
+#[test]
+fn an_unparseable_deny_containing_the_command_withholds() {
+    let root = fakes::TempDir::new("doors-notes-unparseable");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call("a_6", 11, "((acme-cli query --json", "reviewer", None, None),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            ("((acme-cli query --json", Err("syntax")),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert!(found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn an_outside_classified_deny_spares_the_candidate() {
+    let root = fakes::TempDir::new("doors-notes-outside");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // A denied `echo` names the candidate words, but the entry would never
+    // cover an `echo` call: only the command path and flags disqualify
+    // (docs/permissions.md, "Setting up the notes").
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call(
+                "a_6",
+                11,
+                "echo acme-cli query --json",
+                "reviewer",
+                None,
+                None
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "echo acme-cli query --json",
+                Ok(("echo acme-cli query --json", "echo acme-cli")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, "acme-cli query --json");
+    assert!(!found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn a_narrower_denied_command_withholds() {
+    let root = fakes::TempDir::new("doors-notes-narrower");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // The denied call runs under the candidate path with the same flags:
+    // the entry would cover it, so it withholds.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call(
+                "a_6",
+                11,
+                "acme-cli query status --json",
+                "reviewer",
+                None,
+                None
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "acme-cli query status --json",
+                Ok(("acme-cli query status --json", "acme-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert!(found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn a_flag_differing_deny_spares_the_candidate() {
+    let root = fakes::TempDir::new("doors-notes-flag-differ");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // Same command path, but the denied call's flag is not one the entry
+    // would hold: the entry would not cover it, so it spares.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call("a_6", 11, "acme-cli query --xml", "reviewer", None, None),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "acme-cli query --xml",
+                Ok(("acme-cli query --xml", "acme-cli query")),
+            ),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert!(!found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn pipeline_denies_withhold_while_longer_names_spare() {
+    let root = fakes::TempDir::new("doors-notes-contain");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // Neither deny classifies. The pipeline names the candidate command
+    // whole-word, so it withholds; the lookalike's longer name appears in
+    // neither deny, so it proposes untouched.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "my-acme-cli query --json",
+                "reviewer",
+                false,
+                11
+            ),
+            deny_call(
+                "a_6",
+                21,
+                "acme-cli query --json | grep x",
+                "reviewer",
+                None,
+                None
+            ),
+            deny_call(
+                "a_7",
+                24,
+                "((other-cli query --json",
+                "reviewer",
+                None,
+                None
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            (
+                "my-acme-cli query --json",
+                Ok(("my-acme-cli query --json", "my-acme-cli query")),
+            ),
+            ("acme-cli query --json | grep x", Err("pipe")),
+            ("((other-cli query --json", Err("syntax")),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 2);
+    let denied = found
+        .iter()
+        .find(|(subject, _, _, _)| subject == "acme-cli query --json")
+        .unwrap();
+    assert!(denied.3.contains("not proposed"), "{}", denied.3);
+    let spared = found
+        .iter()
+        .find(|(subject, _, _, _)| subject == "my-acme-cli query --json")
+        .unwrap();
+    assert!(!spared.3.contains("not proposed"), "{}", spared.3);
+}
+
+#[test]
+fn a_longer_command_name_spares_in_unparseable_denies() {
+    let root = fakes::TempDir::new("doors-notes-longer");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    // The unparseable deny names only `my-acme-cli`: the candidate name
+    // appears inside it, but never whole-word, so it spares.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "acme-cli query --json",
+                "reviewer",
+                false,
+                1
+            ),
+            deny_call(
+                "a_6",
+                11,
+                "((my-acme-cli query --json",
+                "reviewer",
+                None,
+                None
+            ),
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[
+            (
+                "acme-cli query --json",
+                Ok(("acme-cli query --json", "acme-cli query")),
+            ),
+            ("((my-acme-cli query --json", Err("syntax")),
+        ],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert!(!found[0].3.contains("not proposed"), "{}", found[0].3);
+}
+
+#[test]
+fn per_subject_here_counts_resolve_like_session_evidence() {
+    let root = fakes::TempDir::new("doors-notes-here");
+    let home = root.path().join("home");
+    let here_repo = repo(root.path(), "here");
+    let away_repo = repo(root.path(), "away");
+    let key = log::project_key(&worktree::project(&here_repo));
+    let here = here_repo.to_str().unwrap();
+    let away = away_repo.to_str().unwrap();
+    // Two allows recorded here, two recorded away, one with no recording.
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        here,
+        &allow_calls(
+            &["a_1", "a_2"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    seed_calls(
+        &home,
+        &key,
+        "s_2",
+        away,
+        &allow_calls(
+            &["a_3", "a_4"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    let mut log = json!({"kind": "session_started", "payload": {}}).to_string() + "\n";
+    log.push_str(&allow_calls(
+        &["a_5"],
+        "acme-cli query --json",
+        "reviewer",
+        false,
+        1,
+    ));
+    write_log(&session_dir(&home, &key, "s_3"), log.as_bytes());
+    let shell = StubShell::new(
+        "shell",
+        &[(
+            "acme-cli query --json",
+            Ok(("acme-cli query --json", "acme-cli query")),
+        )],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &here_repo, &shell));
+    assert_eq!(
+        found,
+        [(
+            "acme-cli query --json".to_owned(),
+            5,
+            3,
+            "5 reviewer allows for acme-cli query --json".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn missing_config_covers_nothing_while_malformed_config_fails_closed() {
+    let root = fakes::TempDir::new("doors-notes-config");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[(
+            "acme-cli query --json",
+            Ok(("acme-cli query --json", "acme-cli query")),
+        )],
+    );
+    // No config file at all: the candidate proposes.
+    let dir = session_dir(&home, &key, "s_live");
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert_eq!(found.len(), 1);
+    // A present-but-malformed layer fails the whole gather closed.
+    write_file(
+        &config::global_config_file(&home),
+        r#"{"shell": {"read_only": []}}"#,
+    );
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert!(found.is_empty());
+    // A non-object shell value fails closed the same way.
+    write_file(
+        &config::global_config_file(&home),
+        r#"{"shell": "entries"}"#,
+    );
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert!(found.is_empty());
+}
+
+#[test]
+fn userinfo_commands_propose_verbatim_for_the_loop_to_redact() {
+    let root = fakes::TempDir::new("doors-notes-userinfo");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli fetch https://user:token@host/x",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    let shell = StubShell::new(
+        "shell",
+        &[(
+            "acme-cli fetch https://user:token@host/x",
+            Ok(("acme-cli fetch https://user:token@host/x", "acme-cli fetch")),
+        )],
+    );
+    let found = allows_items(&gather_allows(&home, &key, &workspace, &shell));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, "acme-cli fetch https://user:token@host/x");
+}
+
+#[test]
+fn a_missing_a_foreign_and_an_other_topic_give_no_allows() {
+    let root = fakes::TempDir::new("doors-notes-absent");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    let dir = session_dir(&home, &key, "s_live");
+    let shell = StubShell::new(
+        "shell",
+        &[(
+            "acme-cli query --json",
+            Ok(("acme-cli query --json", "acme-cli query")),
+        )],
+    );
+    let foreign = StubShell::new(
+        "other",
+        &[(
+            "acme-cli query --json",
+            Ok(("acme-cli query --json", "acme-cli query")),
+        )],
+    );
+    for evidence in [
+        gather(&home, &dir, &workspace, Topic::ReadOnlyCommands, None),
+        gather(
+            &home,
+            &dir,
+            &workspace,
+            Topic::ReadOnlyCommands,
+            Some(&foreign),
+        ),
+        gather(&home, &dir, &workspace, Topic::RoutineActions, Some(&shell)),
+    ] {
+        assert!(allows_items(&evidence).is_empty());
+    }
+}
+
+/// A shell that executes every tabled command, naming the subject and
+/// prefix the built-in classifier reports for commands it owns no rule
+/// for (C19): `executes` with both halves, never `reads`.
+struct ExecutesShell {
+    table: Mutex<std::collections::HashMap<String, (String, String)>>,
+}
+
+impl ExecutesShell {
+    fn new(table: &[(&str, &str, &str)]) -> Self {
+        Self {
+            table: Mutex::new(
+                table
+                    .iter()
+                    .map(|(command, subject, prefix)| {
+                        (
+                            command.to_string(),
+                            (subject.to_string(), prefix.to_string()),
+                        )
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl Tool for ExecutesShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "an executing stub shell".to_owned(),
+            input_schema: serde_json::Value::Object(serde_json::Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Effects, EffectsError> {
+        let command = arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .expect("a command string");
+        match self
+            .table
+            .lock()
+            .expect("the table lock")
+            .get(command)
+            .cloned()
+        {
+            Some((subject, prefix)) => Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Executes],
+                    reversible: false,
+                    paths: None,
+                    confined: false,
+                },
+                subject: Some(subject),
+                prefix: Some(prefix),
+                always_reviewed: false,
+                hosts: None,
+            }),
+            None => Err(EffectsError::Arguments("unclassifiable".to_owned())),
+        }
+    }
+
+    fn run(
+        &self,
+        _arguments: &serde_json::Map<String, serde_json::Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        panic!("the stub never runs");
+    }
+}
+
+#[test]
+fn an_executes_verdict_with_no_builtin_rule_still_proposes() {
+    let root = fakes::TempDir::new("doors-notes-c19-query");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    let shell = ExecutesShell::new(&[(
+        "acme-cli query --json",
+        "acme-cli query --json",
+        "acme-cli query",
+    )]);
+    let dir = session_dir(&home, &key, "s_live");
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert_eq!(
+        found,
+        [(
+            "acme-cli query --json".to_owned(),
+            5,
+            5,
+            "5 reviewer allows for acme-cli query --json".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn builtin_classified_commands_stay_silent_under_c19() {
+    let root = fakes::TempDir::new("doors-notes-c19-builtin");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &format!(
+            "{}{}",
+            allow_calls(
+                &["a_1", "a_2", "a_3", "a_4", "a_5"],
+                "ls --json",
+                "reviewer",
+                false,
+                1
+            ),
+            allow_calls(
+                &["b_1", "b_2", "b_3", "b_4", "b_5"],
+                "git push",
+                "reviewer",
+                false,
+                11
+            ),
+        ),
+    );
+    let shell = ExecutesShell::new(&[
+        ("ls --json", "ls --json", "ls"),
+        ("git push", "git push", "git push"),
+    ]);
+    let dir = session_dir(&home, &key, "s_live");
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_layer_file_without_entries_still_proposes() {
+    let root = fakes::TempDir::new("doors-notes-no-entries-key");
+    let home = root.path().join("home");
+    let workspace = repo(root.path(), "here");
+    let key = log::project_key(&worktree::project(&workspace));
+    seed_calls(
+        &home,
+        &key,
+        "s_1",
+        workspace.to_str().unwrap(),
+        &allow_calls(
+            &["a_1", "a_2", "a_3", "a_4", "a_5"],
+            "acme-cli query --json",
+            "reviewer",
+            false,
+            1,
+        ),
+    );
+    write_file(
+        &config::global_config_file(&home),
+        r#"{"reviewer": {"context": "Notes."}}"#,
+    );
+    let shell = ExecutesShell::new(&[(
+        "acme-cli query --json",
+        "acme-cli query --json",
+        "acme-cli query",
+    )]);
+    let dir = session_dir(&home, &key, "s_live");
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "acme-cli query --json");
+    // A flat `shell.read_only` key is not configuration: the loader
+    // ignores it, so it covers nothing either.
+    write_file(
+        &config::global_config_file(&home),
+        r#"{"reviewer": {"context": "Notes."}, "shell.read_only": {"other-cli run": {"flags": []}}}"#,
+    );
+    let found = allows_items(&gather(
+        &home,
+        &dir,
+        &workspace,
+        Topic::ReadOnlyCommands,
+        Some(&shell),
+    ));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "acme-cli query --json");
 }

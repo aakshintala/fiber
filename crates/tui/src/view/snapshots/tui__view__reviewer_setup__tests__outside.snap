@@ -18,7 +18,7 @@ expression: "checked(outside(), \"outside\", 1)"
 
             Reviewer setup                                                   ✕
 
-            Topic 2 of 5 · Internal hosts
+            Topic 2 of 6 · Internal hosts
             Which internal hosts, registries and services count as inside?
             answer: only corp.example hosts and registries count as inside
 ⋮           › [global]       corp.example hosts and registries count as inside            ⋮

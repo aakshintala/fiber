@@ -1734,8 +1734,9 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
   panel's legend says. The ✕ and a press outside the panel, which is Esc,
   are its mouse targets, and the mouse wheel does nothing while it is open.
-  Enter on a diff that would change neither layer closes the setup with one
-  notice, `notes_unchanged`, and writes no file.
+  Enter on a diff that would change neither layer's file, notes or read-only
+  entries closes the setup with one notice, `notes_unchanged`, and writes no
+  file.
   The notice that names the command, shown the first time in a session the
   reviewer blocks a call while both layers of the notes are empty, closes on
   any key, and that key goes nowhere else.

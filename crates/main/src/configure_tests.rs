@@ -592,7 +592,7 @@ fn save_reviewer_notes_writes_current_layers_and_refuses_stale_ones() {
         "seam notes save",
         Deadline::after(Duration::from_secs(10)),
         || {
-            use tui::{Configure, FileOutcome, NotesSaved, NotesWrite};
+            use tui::{Configure, FileOutcome, NotesSaved, NotesWrite, ReadOnlyEntry};
             let dirs = Dirs::new();
             let workspace = dirs.workspace("one");
             write(
@@ -607,17 +607,22 @@ fn save_reviewer_notes_writes_current_layers_and_refuses_stale_ones() {
             let read = seam
                 .reviewer_notes(&workspace)
                 .unwrap_or_else(|e| panic!("read: {e}"));
-            let write = |version: &str, text: &str| {
+            let write = |version: &str, text: &str, entries: Vec<ReadOnlyEntry>| {
                 Some(NotesWrite {
                     version: version.to_owned(),
                     text: text.to_owned(),
+                    read_only: entries,
                 })
+            };
+            let entry = ReadOnlyEntry {
+                command: "acme-cli query".to_owned(),
+                flags: vec!["--json".to_owned()],
             };
             let saved = seam
                 .save_reviewer_notes(
                     &workspace,
-                    write(&read.global.version, "new global"),
-                    write(&read.project.version, "new project"),
+                    write(&read.global.version, "new global", vec![entry]),
+                    write(&read.project.version, "new project", Vec::new()),
                 )
                 .unwrap_or_else(|e| panic!("save: {e}"));
             let NotesSaved::Written(files) = saved else {
@@ -628,11 +633,11 @@ fn save_reviewer_notes_writes_current_layers_and_refuses_stale_ones() {
             assert_eq!(files[0].outcome, FileOutcome::Saved);
             assert_eq!(files[1].file, dirs.project_file(&workspace));
             assert_eq!(files[1].outcome, FileOutcome::Saved);
-            assert!(
-                fs::read_to_string(dirs.home().join("config.json"))
-                    .unwrap_or_else(|e| panic!("read: {e}"))
-                    .contains("new global")
-            );
+            let global_text = fs::read_to_string(dirs.home().join("config.json"))
+                .unwrap_or_else(|e| panic!("read: {e}"));
+            assert!(global_text.contains("new global"), "{global_text}");
+            assert!(global_text.contains(r#""acme-cli query""#), "{global_text}");
+            assert!(global_text.contains("--json"), "{global_text}");
             // The old global version no longer matches: nothing is written.
             let before = (
                 fs::read(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
@@ -641,8 +646,8 @@ fn save_reviewer_notes_writes_current_layers_and_refuses_stale_ones() {
             let saved = seam
                 .save_reviewer_notes(
                     &workspace,
-                    write(&read.global.version, "lost global"),
-                    write(&read.project.version, "lost project"),
+                    write(&read.global.version, "lost global", Vec::new()),
+                    write(&read.project.version, "lost project", Vec::new()),
                 )
                 .unwrap_or_else(|e| panic!("save: {e}"));
             assert_eq!(saved, NotesSaved::Stale);
