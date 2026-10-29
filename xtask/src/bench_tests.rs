@@ -3994,7 +3994,7 @@ fn three_sample_pr_files_gate_on_stored_evidence_not_sample_count() {
 
 #[test]
 fn both_attach_fixtures_gate_the_absolute_bound() {
-    // docs/performance.md:72,303-310: exactly 50 ms per fixture passes;
+    // docs/performance.md:72,324: exactly 50 ms per fixture passes;
     // over-50 cases live in the base-tolerance tests below.
     for (ten_head, one_head) in [
         ([50.0; 5], [31.0; 5]),
@@ -4025,10 +4025,10 @@ fn both_attach_fixtures_gate_the_absolute_bound() {
 
 #[test]
 fn attach_base_over_50_waives_the_absolute_bound_within_tolerance() {
-    // docs/performance.md, "When a budget is exceeded": a comparable base
-    // median already over 50 ms waives the flat bound; the fixture fails
-    // only past its tolerance-adjusted base, and the row still names the
-    // over-50 breach. `—` counts as 10 %.
+    // docs/performance.md:324,327: a comparable base median already over
+    // 50 ms waives the flat bound; the fixture fails only past its
+    // tolerance-adjusted base, and the row still names the over-50 breach.
+    // `—` counts as 10 %; each over-ceiling fixture produces one named failure.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         // Exactly 10 % over base passes the strict comparison on both
         // fixtures while naming each breach.
@@ -4088,8 +4088,9 @@ fn attach_base_over_50_waives_the_absolute_bound_within_tolerance() {
 
 #[test]
 fn attach_absolute_bound_holds_without_a_comparable_base_over_50() {
-    // docs/performance.md, "When a budget is exceeded": a base at or under
-    // 50 ms, or no usable base at all, keeps the flat 50 ms bound on its own.
+    // docs/performance.md:324,327: a base at or under 50 ms, or no usable
+    // base at all, keeps the flat 50 ms bound on its own; each over-ceiling
+    // fixture produces one named failure.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         // A base exactly at 50 ms is not over it: head 50.1 ms fails.
         let (h, b) = attach_pair(&[50.1; 5], &[50.1; 5], &[50.0; 5], &[50.0; 5], cpu);
@@ -4159,10 +4160,10 @@ fn attach_absolute_bound_holds_without_a_comparable_base_over_50() {
 
 #[test]
 fn attach_numeric_tolerance_over_50_base_judges_the_relative_leg() {
-    // docs/performance.md, "When a budget is exceeded": with a numeric
-    // tolerance and a base over 50 ms, the boundary is the
-    // tolerance-adjusted base. Base 60 ms at 25 % puts it at exactly
-    // 75 ms: the boundary passes while naming the breach, just above fails.
+    // docs/performance.md:324,327,328: with a numeric tolerance and a base
+    // over 50 ms, the boundary is the tolerance-adjusted base. Base 60 ms
+    // at 25 % puts it at exactly 75 ms: the boundary passes while naming
+    // the breach, just above fails; each over-ceiling fixture fails once.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         let doc = doc_with(
             "| 50 ms | 50 ms | 50 ms | — | — |",
