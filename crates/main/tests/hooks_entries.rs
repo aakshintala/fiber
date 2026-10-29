@@ -802,7 +802,6 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
             "fiber_started",
             "extensions_loaded",
             "notice",
-            "notice",
             "preamble_built",
             "opening_message",
             "extension_state_set",
@@ -828,26 +827,19 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
     );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
-    // Both bad entries left their notices and never ran; the good one ran.
+    // Both bad entries left one grouped notice and never ran; the good
+    // one ran.
     let notices = run.all("notice");
-    assert_eq!(notices.len(), 2, "{notices:?}");
-    for notice in &notices {
-        assert_eq!(notice["payload"]["code"], "extension_failed");
-        let message = notice["payload"]["message"].as_str().unwrap();
-        assert!(message.contains("command"), "{message}");
-    }
-    let messages: Vec<&str> = notices
-        .iter()
-        .map(|notice| notice["payload"]["message"].as_str().unwrap())
-        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "extension_failed");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
     assert!(
-        messages.iter().any(|m| m.contains("missing")),
-        "{messages:?}"
+        message.starts_with("2 `extension_failed` notices: "),
+        "{message}"
     );
-    assert!(
-        messages.iter().any(|m| m.contains("shapeless")),
-        "{messages:?}"
-    );
+    assert!(message.contains("command"), "{message}");
+    assert!(message.contains("missing"), "{message}");
+    assert!(message.contains("shapeless"), "{message}");
     assert_eq!(captured(&setup, "note.log").len(), 1);
 }
 

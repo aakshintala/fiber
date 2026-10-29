@@ -3484,3 +3484,85 @@ fn hooks_lists_registered_rows_and_names_its_empty_state() {
     });
     quit_live(run);
 }
+
+#[test]
+fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
+    // Two home skills, each shadowed by the same name in the person's
+    // `~/.agents/skills`: the first session stacks one grouped row, and
+    // a second session in the same terminal run stacks none (`#3679`,
+    // "The rule").
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider(&setup, &server);
+    for name in ["dup00", "dup01"] {
+        let body =
+            format!("---\nname: {name}\ndescription: {name} skill.\n---\n{name} does things.\n");
+        let winner = setup.home().join("skills").join(name);
+        fs::create_dir_all(&winner).unwrap();
+        fs::write(winner.join("SKILL.md"), &body).unwrap();
+        let loser = setup.root.path().join(".agents").join("skills").join(name);
+        fs::create_dir_all(&loser).unwrap();
+        fs::write(loser.join("SKILL.md"), &body).unwrap();
+    }
+
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    // Home starts no session: the first prompt opens the run's first
+    // session, whose opening stacks the grouped row.
+    run.write(b"say hi\r");
+    // One grouped row for the run's first session, directly above the
+    // input box.
+    let grid = run.wait_screen("the grouped shadow notice", |grid| {
+        grid.rows
+            .iter()
+            .any(|row| row.contains("2 skills are shadowed"))
+    });
+    assert_eq!(
+        grid.rows
+            .iter()
+            .filter(|row| row.contains("skills are shadowed"))
+            .count(),
+        1,
+        "one visible row"
+    );
+    let row = grid
+        .rows
+        .iter()
+        .position(|row| row.contains("2 skills are shadowed"))
+        .expect("the notice row");
+    // The notice sits under the composed content, above the input box:
+    // the input's `›` is the last such row on the grid.
+    let input = grid
+        .rows
+        .iter()
+        .rposition(|row| row.contains("›"))
+        .expect("the input row");
+    assert!(
+        row < input,
+        "the notice row {row} sits above the input row {input}"
+    );
+    // A new session in the same run opens beside the first: its
+    // identical opening notice shows no row again, since the run already
+    // showed it.
+    run.write(b"/new\r");
+    let dir = sessions(&setup);
+    fakes::wait_until("the second session", setup.deadline, move || {
+        fs::read_dir(&dir).is_ok_and(|entries| entries.count() == 2)
+    });
+    // The first session's row fades on its own; only then can absence
+    // prove the second session stacked nothing.
+    run.wait_screen("the first session's row fades", |grid| {
+        !grid.contents.contains("skills are shadowed")
+    });
+    run.write(b"say hi\r");
+    run.wait_screen("the second session's reply", |grid| {
+        grid.contents.contains("Hel")
+    });
+    let grid = run.wait_screen("a settled frame", |grid| grid.contents.contains("›"));
+    assert!(
+        !grid.contents.contains("skills are shadowed"),
+        "no repeat in a second session"
+    );
+    quit_live(run);
+}

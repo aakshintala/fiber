@@ -1924,6 +1924,17 @@ fn one_frames_queued_notices_group_by_code() {
 }
 
 #[test]
+fn a_notice_undrawn_at_a_session_switch_still_shows() {
+    // Notices belong to the terminal run, not the session: attaching
+    // another session keeps the undrawn row, which has had no display
+    // yet and so marks nothing seen.
+    let mut app = groups(1, 80, 24);
+    app.push_notice("skill_shadowed", "gone".to_owned());
+    app.attach(contract::SessionId("s_other".to_owned()));
+    assert_eq!(app.notices().len(), 1);
+}
+
+#[test]
 fn loaded_history_clears_its_loading_notice() {
     let (mut app, envelopes, _) = pending_copy();
     assert_eq!(app.notice(), Some("Loading history…"));
