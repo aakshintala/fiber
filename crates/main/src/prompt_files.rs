@@ -46,7 +46,7 @@ pub(crate) fn personal_source_check(
     fiber_home: PathBuf,
     agents_home: Option<PathBuf>,
     clock: Arc<dyn contract::clock::Clock>,
-) -> Arc<dyn config::PersonalSourceCheck> {
+) -> Arc<dyn contract::skills::PersonalSourceCheck> {
     Arc::new(move |dirs: &[PathBuf]| {
         r#loop::personal_source_paths(
             &fiber_home,

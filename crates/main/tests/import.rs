@@ -132,16 +132,24 @@ fn import_skips_skills_discovery_already_reads() {
     let run = import(&setup, &["import", "claude-code"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let agents_skill = setup.root.path().join(".agents/skills/review/SKILL.md");
-    assert_eq!(
-        run.stdout,
+    // docs/configuration.md promises the lines, not their order: the
+    // import prints one line per imported and left-behind skill, and the
+    // two left-behind lines may arrive in either order.
+    let mut got: Vec<String> = run.stdout.lines().map(str::to_owned).collect();
+    got.sort_unstable();
+    let mut expected = vec![
+        "imported skill lint".to_owned(),
         format!(
-            "imported skill lint\n\
-             left behind skills/mine/SKILL.md: already read from {}\n\
-             left behind skills/review/SKILL.md: already read from {}\n",
+            "left behind skills/mine/SKILL.md: already read from {}",
             agents_skill.display(),
+        ),
+        format!(
+            "left behind skills/review/SKILL.md: already read from {}",
             agents_skill.display(),
-        )
-    );
+        ),
+    ];
+    expected.sort_unstable();
+    assert_eq!(got, expected);
     // Nothing is written to `skills/` in Fiber home but the control skill.
     assert!(!setup.home().join("skills/review").exists());
     assert!(!setup.home().join("skills/mine").exists());

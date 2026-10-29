@@ -1449,7 +1449,7 @@ fn a_fiber_home_only_skill_does_not_divert() {
 }
 
 #[test]
-fn the_first_agents_directory_wins_a_shared_header_name() {
+fn a_shared_header_name_diverts_to_a_logged_path() {
     let tree = Tree::new();
     let first = skill(
         &tree.person().join(".agents/skills"),
@@ -1457,21 +1457,27 @@ fn the_first_agents_directory_wins_a_shared_header_name() {
         "review",
         "First.",
     );
-    skill(
+    let second = skill(
         &tree.person().join(".agents/skills"),
         "zzz",
         "review",
         "Second.",
     );
-    // Discovery keeps the first skill under each name in read order, and
-    // read order is byte order of the directory names.
+    // docs/system-prompt.md sets precedence between sources, not order
+    // within one source: either logged path counts, so the check passes
+    // whichever copy discovery would load.
     let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
     let got = already_read(
         &tree.home(),
         Some(&tree.person()),
         std::slice::from_ref(&checked),
     );
-    assert_eq!(got, BTreeMap::from([(checked, first)]));
+    assert_eq!(got.len(), 1, "one diverted entry: {got:?}");
+    let logged = got.get(&checked).expect("the checked dir diverts");
+    assert!(
+        logged == &first || logged == &second,
+        "the logged path is one discovery read: {got:?}",
+    );
 }
 
 #[test]

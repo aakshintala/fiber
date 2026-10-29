@@ -15,6 +15,8 @@ use contract::clock::Clock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use contract::skills::PersonalSourceCheck;
+
 use crate::error::ConfigError;
 use crate::home::{plain, read, read_bytes};
 use crate::keys;
@@ -85,27 +87,6 @@ impl ImportSource {
             Self::ClaudeCode => read_claude_servers(&source_home.join("settings.json"), budget),
             Self::Codex => read_codex_servers(&source_home.join("config.toml"), budget),
         }
-    }
-}
-
-/// Tells the import which source skill directories discovery would already
-/// load from another personal source (`docs/configuration.md`,
-/// "Importing"): the check maps each given source directory to the
-/// `SKILL.md` path discovery logged, and leaves the rest absent. `main`
-/// builds the real check over discovery's own code; the import never
-/// parses a header itself.
-pub trait PersonalSourceCheck: Send + Sync {
-    /// Maps each directory in `dirs` discovery would already read to the
-    /// `SKILL.md` path it logged; absent entries are not already read.
-    fn check(&self, dirs: &[PathBuf]) -> BTreeMap<PathBuf, PathBuf>;
-}
-
-impl<F> PersonalSourceCheck for F
-where
-    F: Fn(&[PathBuf]) -> BTreeMap<PathBuf, PathBuf> + Send + Sync,
-{
-    fn check(&self, dirs: &[PathBuf]) -> BTreeMap<PathBuf, PathBuf> {
-        self(dirs)
     }
 }
 

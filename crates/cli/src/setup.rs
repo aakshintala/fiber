@@ -193,7 +193,7 @@ pub(crate) fn completions_installed(home_env: &Path, shell: &str) -> bool {
 /// step, and exits non-zero naming the failed step.
 pub fn setup(
     flags: &SetupFlags,
-    check: &dyn config::PersonalSourceCheck,
+    check: &dyn contract::skills::PersonalSourceCheck,
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
     run: config::Runner<'_>,
@@ -211,7 +211,7 @@ fn run(
     home: &Path,
     workspace: &Path,
     flags: &SetupFlags,
-    check: &dyn config::PersonalSourceCheck,
+    check: &dyn contract::skills::PersonalSourceCheck,
     clock: &Arc<dyn Clock>,
     locks: &Arc<dyn PathLock>,
     run: config::Runner<'_>,
@@ -258,7 +258,7 @@ fn run_terminal(
     home: &Path,
     workspace: &Path,
     flags: &SetupFlags,
-    check: &dyn config::PersonalSourceCheck,
+    check: &dyn contract::skills::PersonalSourceCheck,
     clock: &Arc<dyn Clock>,
     locks: &Arc<dyn PathLock>,
     run: config::Runner<'_>,
@@ -377,7 +377,7 @@ fn step_providers(
 fn step_import(
     home: &Path,
     flags: &SetupFlags,
-    check: &dyn config::PersonalSourceCheck,
+    check: &dyn contract::skills::PersonalSourceCheck,
     clock: &Arc<dyn Clock>,
     stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,

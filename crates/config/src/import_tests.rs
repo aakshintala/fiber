@@ -588,7 +588,6 @@ fn an_already_read_skill_is_left_behind_with_its_logged_path() {
         "skills/review/SKILL.md",
         b"---\nname: review\ndescription: Reviews code.\n---\n\nBody.\n",
     );
-    reset_write_count();
     let report = import_source(
         &fixture.home(),
         &fixture.source(),
@@ -600,6 +599,8 @@ fn an_already_read_skill_is_left_behind_with_its_logged_path() {
     // docs/configuration.md, "Importing": discovery already reads the
     // skill from another personal source, so it is left behind with the
     // logged path, and nothing is written under `skills/` in Fiber home.
+    // The docs promise no write count, so this pins only the reason and
+    // the absence of the skill file.
     assert!(report.imported.skills.is_empty(), "{report:?}");
     assert_eq!(
         reasons(&report),
@@ -612,7 +613,6 @@ fn an_already_read_skill_is_left_behind_with_its_logged_path() {
         !fixture.home().join("skills/review/SKILL.md").exists(),
         "an already-read skill writes nothing"
     );
-    assert_eq!(write_count(), 1, "the receipt is the only write");
 }
 
 #[test]
@@ -679,11 +679,14 @@ fn already_read_skills_charge_nothing_to_the_read_budget() {
     // tenth 1 MiB skill still fits and lands, and every diverted skill
     // reports only its logged path.
     assert_eq!(report.imported.skills, vec!["kept".to_owned()]);
-    let left: Vec<(String, String)> = report
+    // docs/configuration.md does not promise left-behind order: compare
+    // the nine entries as a set while keeping every item and reason exact.
+    let mut left: Vec<(String, String)> = report
         .left_behind
         .iter()
         .map(|left| (left.item.clone(), left.reason.clone()))
         .collect();
+    left.sort_unstable();
     let mut expected = Vec::new();
     for index in 0..9 {
         expected.push((
@@ -691,5 +694,6 @@ fn already_read_skills_charge_nothing_to_the_read_budget() {
             format!("already read from /person/.agents/skills/skill-{index}/SKILL.md"),
         ));
     }
+    expected.sort_unstable();
     assert_eq!(left, expected);
 }

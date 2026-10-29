@@ -66,8 +66,8 @@ pub use home::{
     fiber_home_path_from_env,
 };
 pub use import::{
-    ImportReport, ImportSource, Imported, LeftBehind, PersonalSourceCheck, import_pending,
-    import_source, no_personal_sources, source_home,
+    ImportReport, ImportSource, Imported, LeftBehind, import_pending, import_source,
+    no_personal_sources, source_home,
 };
 pub use layout::project_servers_dir;
 pub use layout::{

@@ -16,7 +16,7 @@ use crate::{CliError, finish, write_line};
 /// secret values.
 pub fn import(
     source: ImportSource,
-    check: &dyn config::PersonalSourceCheck,
+    check: &dyn contract::skills::PersonalSourceCheck,
     clock: &dyn Clock,
 ) -> i32 {
     finish(run(source, check, clock))
@@ -27,7 +27,7 @@ pub fn import(
 /// left behind with reasons.
 fn run(
     source: ImportSource,
-    check: &dyn config::PersonalSourceCheck,
+    check: &dyn contract::skills::PersonalSourceCheck,
     clock: &dyn Clock,
 ) -> Result<(), CliError> {
     let home = config::fiber_home_from_env()?;

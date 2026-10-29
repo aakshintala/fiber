@@ -121,7 +121,7 @@ pub(crate) struct Gate {
     mcp_login: OnceLock<McpLogin>,
     /// The already-read check the `import` driver command consults, wired
     /// by the session process before the session runs.
-    pub(crate) personal_source_check: OnceLock<Arc<dyn config::PersonalSourceCheck>>,
+    pub(crate) personal_source_check: OnceLock<Arc<dyn contract::skills::PersonalSourceCheck>>,
     pub(crate) accepted: Accepted,
     /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
     /// each entry is one admitted command, a job's end or a hook's delivery,
@@ -470,7 +470,7 @@ impl Session {
 
     /// Wires the already-read check the `import` driver command consults
     /// before the session runs.
-    pub fn personal_source_check(&self, check: Arc<dyn config::PersonalSourceCheck>) {
+    pub fn personal_source_check(&self, check: Arc<dyn contract::skills::PersonalSourceCheck>) {
         let stored = self.gate.personal_source_check.set(check);
         debug_assert!(stored.is_ok(), "personal_source_check is wired once");
     }
@@ -908,7 +908,9 @@ impl Gate {
     }
 
     /// The installed already-read check, if one is wired.
-    pub(crate) fn personal_source_check(&self) -> Option<Arc<dyn config::PersonalSourceCheck>> {
+    pub(crate) fn personal_source_check(
+        &self,
+    ) -> Option<Arc<dyn contract::skills::PersonalSourceCheck>> {
         self.personal_source_check.get().cloned()
     }
 
