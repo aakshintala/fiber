@@ -513,6 +513,79 @@ fn failed_preamble_append_ends_after_the_reload_ack_is_accepted() {
 }
 
 #[test]
+fn a_reload_groups_the_prepared_notices_by_code() {
+    // One reload pass's prepared notices reach the log as one notice per
+    // code: the two `extension_shadowed` notices become one naming both
+    // installs, in complete event order.
+    let mut w = world();
+    w.looped = w.looped.reloader(Arc::new(|_| {
+        let mut ready = prepared();
+        ready.notices = vec![
+            contract::events::Notice {
+                code: ErrorCode::ExtensionShadowed,
+                message:
+                    "The repository's approved copy of `a` loads in place of the personal install."
+                        .into(),
+                extension: Some("a".into()),
+            },
+            contract::events::Notice {
+                code: ErrorCode::ExtensionShadowed,
+                message:
+                    "The repository's approved copy of `b` loads in place of the personal install."
+                        .into(),
+                extension: Some("b".into()),
+            },
+        ];
+        Ok(ready)
+    }));
+    let mut watcher = w.looped.log.watch();
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .is_ok()
+    );
+    // The notice is ephemeral, so the durable read skips it: the watcher
+    // sees the reload's own writes in order.
+    let streamed = fakes::within(
+        "the reload's lines",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let mut streamed = Vec::new();
+            while let Ok(Some(line)) = watcher.recv() {
+                let done = line.kind == "preamble_built";
+                streamed.push(line);
+                if done {
+                    break;
+                }
+            }
+            streamed
+        },
+    );
+    let seen: Vec<&str> = streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        seen,
+        ["reloaded", "extensions_loaded", "notice", "preamble_built"]
+    );
+    let notices: Vec<_> = streamed
+        .iter()
+        .filter(|line| line.kind == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].payload["code"], "extension_shadowed");
+    assert_eq!(notices[0].payload.get("extension"), None);
+    let message = notices[0].payload["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("2 extensions are shadowed: "),
+        "{message}"
+    );
+    assert!(message.contains("`a` loads in place"), "{message}");
+    assert!(message.contains("`b` loads in place"), "{message}");
+}
+
+#[test]
 fn a_preparer_cancel_rejects_without_applying() {
     // debt: Part 1 tests the cancellation rejection only; Part 2's shutdown
     // wiring must prove that cancelling the prepare wait ends the loop.

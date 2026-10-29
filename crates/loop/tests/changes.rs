@@ -267,6 +267,39 @@ fn a_new_instruction_file_is_created_at_the_next_turn_start() {
 }
 
 #[test]
+fn two_new_shadowed_skills_group_at_the_next_turn_start() {
+    // Two skills, each shadowed by the same name in the other repo place:
+    // the next turn-start check raises one grouped `skill_shadowed`
+    // notice naming both, before `skills_changed`.
+    let mut session = Session::new(vec![Scripted::text("One."), Scripted::text("Two.")], None);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    assert_eq!(kinds(&session.lines()), first_text_turn());
+    for name in ["alpha", "beta"] {
+        let body = format!("---\nname: {name}\ndescription: {name} skill.\n---\n{name} body.\n");
+        let winner = session.workspace.join(".fiber").join("skills").join(name);
+        std::fs::create_dir_all(&winner).unwrap();
+        std::fs::write(winner.join("SKILL.md"), &body).unwrap();
+        let loser = session.workspace.join(".agents").join("skills").join(name);
+        std::fs::create_dir_all(&loser).unwrap();
+        std::fs::write(loser.join("SKILL.md"), &body).unwrap();
+    }
+    session.inbox.send(delivery("again")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let mut expected = vec!["notice", "skills_changed"];
+    expected.extend(later_text_turn());
+    assert_eq!(kinds(&lines), expected);
+    let notices: Vec<_> = lines.iter().filter(|line| line.kind == "notice").collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].payload["code"], "skill_shadowed");
+    let message = notices[0].payload["message"].as_str().unwrap();
+    assert!(message.starts_with("2 skills are shadowed: "), "{message}");
+    assert!(message.contains("- Skill alpha at "), "{message}");
+    assert!(message.contains("- Skill beta at "), "{message}");
+}
+
+#[test]
 fn a_changed_file_sends_a_diff_then_a_deletion() {
     let old = (0..100).map(|n| format!("line {n}\n")).collect::<String>();
     let mut session = Session::new(

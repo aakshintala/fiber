@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
-use contract::events::{AskStep, Event, PermissionRequested, ToolCallCompleted, ToolCallRequested};
+use contract::events::{
+    AskStep, Event, PermissionRequested, ToolCallCompleted, ToolCallRequested, group_notices,
+    grouped_lead,
+};
 use contract::hook::{BeforeToolCall, BeforeToolOutcome, CheckOutcome, StateLine};
 use contract::tool::{Effects, Tool};
 use contract::{ErrorCode, TurnId};
@@ -204,7 +207,7 @@ impl Loop {
             };
             state = hooks.take_change_state();
             self.drain_state(&hooks, turn)?;
-            for notice in answer.notices {
+            for notice in group_notices(answer.notices, grouped_lead) {
                 self.write(&Event::Notice(notice), turn, None)?;
             }
             let (arguments, effects, rewritten) = match answer.outcome {
@@ -272,7 +275,7 @@ impl Loop {
                 })
             };
             self.drain_state(&hooks, turn)?;
-            for notice in check.notices {
+            for notice in group_notices(check.notices, grouped_lead) {
                 self.write(&Event::Notice(notice), turn, None)?;
             }
             match check.outcome {

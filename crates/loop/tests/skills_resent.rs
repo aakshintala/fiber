@@ -541,7 +541,8 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
         "{texts:?}"
     );
 
-    // Both gone: no line, two notices, and the handoff still completes.
+    // Both gone: no line, one grouped notice naming both skills, and the
+    // handoff still completes.
     let skill = Skill::named();
     *skill.after.lock().unwrap() = Some(Box::new(|_, file| {
         std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -565,13 +566,26 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
             SKILL2,
             STEP,
             HANDOFF_NOTE,
-            &["opening_message", "notice", "notice"],
+            &["opening_message", "notice"],
             REPLY,
             ENDED,
         ],
     );
     assert!(of_kind(&lines, "skills_resent").is_empty());
-    assert_eq!(resend_notices(&lines).len(), 2);
+    let resend = resend_notices(&lines);
+    assert_eq!(resend.len(), 1);
+    assert_eq!(resend[0].payload["code"], "invalid_arguments");
+    let message = resend[0].payload["message"].as_str().unwrap();
+    assert!(
+        message.starts_with(
+            "2 `invalid_arguments` notices: Skill alpha was not sent again after the handoff: "
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains("Skill beta was not sent again after the handoff: "),
+        "{message}"
+    );
     let done = of_kind(&lines, "handoff_completed");
     assert_eq!(done[0].payload["outcome"], "completed");
 }

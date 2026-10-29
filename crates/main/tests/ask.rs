@@ -2818,16 +2818,12 @@ fn twenty_five_shadowed_skills_raise_one_grouped_notice() {
     setup.provider(&server);
     for index in 0..25 {
         let name = format!("dup{index:02}");
-        let body = format!("---\nname: {name}\ndescription: {name} skill.\n---\n{name} does things.\n");
+        let body =
+            format!("---\nname: {name}\ndescription: {name} skill.\n---\n{name} does things.\n");
         let winner = setup.home().join("skills").join(&name);
         fs::create_dir_all(&winner).unwrap();
         fs::write(winner.join("SKILL.md"), &body).unwrap();
-        let loser = setup
-            .root
-            .path()
-            .join(".agents")
-            .join("skills")
-            .join(&name);
+        let loser = setup.root.path().join(".agents").join("skills").join(&name);
         fs::create_dir_all(&loser).unwrap();
         fs::write(loser.join("SKILL.md"), &body).unwrap();
     }
@@ -2835,6 +2831,9 @@ fn twenty_five_shadowed_skills_raise_one_grouped_notice() {
     let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(5, "notice");
+    assert_eq!(run.kinds(), expected);
     let notices: Vec<&Value> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
     assert_eq!(
         notices.len(),
