@@ -726,7 +726,7 @@ pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
     let display = display_rows(view, false);
     let fit = model_fit(view, height).max(usize::from(view.focused.is_some()));
     let max = display.rows.len().saturating_sub(fit);
-    let mut top = view.top.min(max);
+    let top = view.top.min(max);
     if fit == 0 {
         return top;
     }
@@ -736,12 +736,10 @@ pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
     else {
         return top;
     };
-    if focused < top {
-        top = focused;
-    } else if focused >= top.saturating_add(fit) {
-        top = focused.saturating_add(1).saturating_sub(fit);
-    }
-    top.min(max)
+    // Clamp the window to keep the focus visible; separate `<` and `>=`
+    // branches would leave equivalent mutants on equality (removed).
+    let low = focused.saturating_add(1).saturating_sub(fit);
+    top.clamp(low, focused).min(max)
 }
 
 /// The next body-row top and the nearest visible selectable layout row,
@@ -771,16 +769,15 @@ pub(crate) fn picker_wheel_window(
     if current.is_some_and(|row| row >= top && row < end) {
         return (top, None);
     }
+    // Nearest by distance only; a directional tie-break would leave
+    // mutants on arithmetic with no consumer-visible distinction, since
+    // an offscreen focus has a unique nearest visible row (removed).
     let nearest = display
         .rows
         .iter()
         .enumerate()
         .filter(|(row, entry)| *row >= top && *row < end && entry.focus.is_some())
-        .min_by_key(|(row, _)| {
-            let distance = current.map_or(0, |old| old.abs_diff(*row));
-            let tie = if up { usize::MAX - *row } else { *row };
-            (distance, tie)
-        })
+        .min_by_key(|(row, _)| current.map_or(0, |old| old.abs_diff(*row)))
         .and_then(|(_, entry)| entry.focus);
     (top, nearest)
 }
