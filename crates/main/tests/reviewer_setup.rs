@@ -418,7 +418,7 @@ fn seed_read_only_sessions(setup: &Setup, other: &Path) {
         (
             "s_block",
             seed_allows(&["f1", "f2", "f3", "f4", "f5"], "acme-cli fetch --json", 1)
-                + &seed_block("f6", 11, "acme-cli fetch --json --verbose"),
+                + &seed_block("f6", 11, "acme-cli fetch --json"),
         ),
         (
             "s_ls",
