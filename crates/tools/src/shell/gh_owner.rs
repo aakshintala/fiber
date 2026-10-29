@@ -125,7 +125,7 @@ fn observe_flag<'a>(
     let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == cooked) else {
         return;
     };
-    if !flag.takes_value {
+    if !flag.takes_value() {
         return;
     }
     let Some(value) = rest.next() else {
