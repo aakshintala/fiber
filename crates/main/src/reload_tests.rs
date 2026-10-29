@@ -368,6 +368,37 @@ fn with_servers_warms_the_fixture_before_its_setup() {
     assert!(warm < setup, "with_servers warms before its setup");
 }
 
+#[test]
+fn reload_routes_replacement_warms_the_fixture_before_its_setup() {
+    // The replacement test builds its fixture with `Fixture::new` and
+    // later starts the checked-in fixture through `FakeServer::entry` and
+    // `fixture.relaunch()`, so it warms once up front before any setup
+    // deadline starts. This pins only that caller: it fails when the warm
+    // call is removed or moves after the setup.
+    let source =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/reload_tests.rs"))
+            .expect("reload_tests.rs");
+    let test = source
+        .find("\nfn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {")
+        .expect("the replacement test");
+    let end = source
+        .match_indices("\nfn ")
+        .map(|(at, _)| at)
+        .find(|&at| at > test)
+        .expect("the test ends");
+    let warm = source
+        .match_indices("crate::test_support::warm_mcp_fixture_once();")
+        .map(|(at, _)| at)
+        .find(|&at| at > test && at < end)
+        .expect("the replacement test warms");
+    let setup = source
+        .match_indices("Fixture::new()")
+        .map(|(at, _)| at)
+        .find(|&at| at > test && at < end)
+        .expect("the replacement test builds its setup");
+    assert!(warm < setup, "the replacement test warms before its setup");
+}
+
 /// The text of a caught panic payload, or a fixed line when it is not a
 /// string: the wait's own message already names what expired, and the
 /// server dump below it shows what the fakes saw.
@@ -1674,6 +1705,9 @@ fn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {
     // preserved `/name` row through the replacement source: the row
     // keeps its metadata, but the fetch routes to the new slot, while
     // the old slot serves nothing again after the commit stops it.
+    // The fixture starts later through `FakeServer::entry` and
+    // `fixture.relaunch()`, so warm it once before the setup deadline.
+    crate::test_support::warm_mcp_fixture_once();
     let mut fixture = Fixture::new();
     let fx = FakeServer::new(&fixture.rig, "fx", &json!([{"name": "echo"}]));
     fx.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
