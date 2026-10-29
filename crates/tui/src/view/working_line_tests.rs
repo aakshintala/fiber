@@ -1234,6 +1234,55 @@ fn an_empty_replacement_hides_the_line() {
     assert_eq!(app.below_rows() + 1, plain.below_rows()); // docs/tui.md:2880.
 }
 
+/// A renderer that draws whatever the built-in working line draws, so
+/// the test observes the built-in text at the callback width.
+#[derive(Debug, Default)]
+struct BuiltinEcho {
+    /// How many times the slot drew.
+    calls: std::cell::Cell<usize>,
+}
+
+impl crate::ext::Renderer for BuiltinEcho {
+    fn name(&self) -> &str {
+        "builtin-test"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "working_line"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        width: u16,
+        builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        self.calls.set(self.calls.get() + 1);
+        crate::ext::Decision::Draw {
+            extension: self.name().into(),
+            lines: builtin(input, width),
+        }
+    }
+}
+
+#[test]
+fn a_replacement_sees_the_builtin_working_line_text() {
+    let (mut app, clock) = home_app(WALL - 674_000);
+    app.set_now(clock.origin(), WALL);
+    let fake = std::rc::Rc::new(BuiltinEcho::default());
+    app.install_renderer(fake.clone());
+    // The built-in working-line text draws through the replacement: a
+    // visible row, not an empty or default line
+    // (`docs/tui.md`, "What a renderer returns").
+    assert_eq!(super::count(&app, 80), 1);
+    let (shown, _) = draw_line(&app, 80, 1);
+    assert!(shown.contains("Working"), "{shown}");
+    // One call on the count's miss; the paint hits it.
+    assert_eq!(fake.calls.get(), 1);
+}
+
 #[test]
 fn the_fold_matches_the_turn_cards_prompts_when_narrowed() {
     for width in [80u16, 20] {
