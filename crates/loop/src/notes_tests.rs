@@ -3,7 +3,7 @@ use crate::inbox::{TurnInput, Waited};
 use crate::{Loop, Model};
 use contract::events::{CacheLifetime, CommandResult, Event};
 use contract::inbox::{Ack, Answer, Delivery};
-use contract::notes::{Evidence, NotesAsk, ProposeNotesArgs, SessionTally, Topic};
+use contract::notes::{AllowsTally, Evidence, NotesAsk, ProposeNotesArgs, SessionTally, Topic};
 use contract::provider::{Input, Provider};
 use contract::{ErrorCode, SessionId, TurnId};
 use fakes::{Deadline, Scripted, ScriptedProvider};
@@ -307,6 +307,85 @@ fn budget_boundary_stops_notes_without_a_request_or_usage() {
     }
 }
 
+fn read_only_ask() -> NotesAsk {
+    NotesAsk {
+        args: ProposeNotesArgs {
+            topic: Topic::ReadOnlyCommands,
+            answer: None,
+            earlier: Vec::new(),
+        },
+        evidence: Vec::new(),
+    }
+}
+
+fn read_only_tally(prefix: &str, subject: &str) -> Evidence {
+    Evidence::Allows(AllowsTally::new(prefix.to_owned(), subject.to_owned(), 5, 5).unwrap())
+}
+
+#[test]
+fn read_only_notes_ignore_a_spent_budget() {
+    let observed = Arc::new(ScriptedProvider::new([Scripted::text("unused")]));
+    let (mut looped, log, _home, _clock) = started(observed.clone());
+    looped.budget = Some(0.0);
+    let spent = crate::usage::recorded(
+        fakes::reply("").usage(),
+        Some(0.50),
+        "fake/model",
+        None,
+        false,
+    );
+    looped.ledger.record(&spent.line);
+    let before = log.count();
+    let mut ask = read_only_ask();
+    ask.evidence
+        .push(read_only_tally("acme-cli", "acme-cli query --json"));
+    let (ack, rx) = capture();
+    looped.take_notes(ask, ack).unwrap();
+    let Ok(Some(CommandResult::ProposeNotes {
+        proposed, error, ..
+    })) = received(&rx)
+    else {
+        panic!("missing result");
+    };
+    assert!(error.is_none());
+    assert_eq!(proposed.len(), 1);
+    assert_eq!(
+        proposed[0].text(),
+        "shell.read_only.\"acme-cli query\".flags = [\"--json\"]"
+    );
+    assert_eq!(proposed[0].cites(), [0]);
+    assert!(observed.requests().is_empty());
+    assert!(new_lines(&log, before).is_empty());
+}
+
+#[test]
+fn read_only_notes_withhold_a_prefix_that_breaks_mid_word() {
+    // "acme" does not end at a word boundary of the subject, so the
+    // remainder falls back to the whole subject: its second word withholds
+    // the group instead of rendering a wrong entry.
+    let (mut looped, _log, _home, _clock) = started(Arc::new(ScriptedProvider::new([])));
+    let mut ask = read_only_ask();
+    ask.evidence
+        .push(read_only_tally("acme", "acme-cli query --json"));
+    let (ack, rx) = capture();
+    looped.take_notes(ask, ack).unwrap();
+    let Ok(Some(CommandResult::ProposeNotes {
+        proposed, evidence, ..
+    })) = received(&rx)
+    else {
+        panic!("missing result");
+    };
+    assert!(proposed.is_empty());
+    assert_eq!(evidence.len(), 1);
+    let Evidence::Allows(tally) = &evidence[0] else {
+        panic!("an allow tally is kept");
+    };
+    assert_eq!(
+        tally.text(),
+        "words after the command: an entry would cover other subcommands"
+    );
+}
+
 #[test]
 fn drains_refuse_notes_while_busy_closing_settling_or_rewound() {
     for state in [
@@ -583,9 +662,32 @@ fn notes_number_each_kind_in_evidence_order_and_answer_last() {
 #[test]
 fn observed_notes_use_the_session_factory_and_each_topics_instructions() {
     for topic in Topic::ALL {
-        // The model-free topic sends no provider request; its branch is
-        // pinned beside the inbox test.
         if topic == Topic::ReadOnlyCommands {
+            // The model-free topic sends no provider request and writes
+            // no usage: its branch is pinned beside the inbox test.
+            let observed = Arc::new(ScriptedProvider::new([]));
+            let (mut looped, log, _home, _clock) = started(observed.clone());
+            let before = log.count();
+            let mut ask = ask(None);
+            ask.args.topic = topic;
+            ask.args.earlier = Vec::new();
+            let (ack, rx) = capture();
+            looped
+                .admit_idle(
+                    Delivery::ProposeNotes(ask, ack),
+                    &mut TurnInput::of(Vec::new()),
+                )
+                .unwrap();
+            let Ok(Some(CommandResult::ProposeNotes {
+                proposed, error, ..
+            })) = received(&rx)
+            else {
+                panic!("missing result");
+            };
+            assert!(proposed.is_empty());
+            assert!(error.is_none());
+            assert!(observed.requests().is_empty());
+            assert!(new_lines(&log, before).is_empty());
             continue;
         }
         let unused = Arc::new(ScriptedProvider::new([]));
