@@ -3716,7 +3716,8 @@ fn start_confined(
 
 /// An immediate Background move hands the confined call to a job: the
 /// receipt arrives within the deadline, and the job finishes with the
-/// user's output intact and no marker byte.
+/// user's output intact and no marker byte. The receipt follows the contract
+/// in `docs/tools.md`, "Background jobs".
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_confined_background_call_moves_only_after_its_marker() {
