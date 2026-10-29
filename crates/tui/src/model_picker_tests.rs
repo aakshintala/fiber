@@ -1818,6 +1818,7 @@ fn left_out_matching_is_per_field_not_a_substring() {
 
 #[test]
 fn a_login_group_counts_without_any_environment_clause() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let picker = open_left_out(
         Vec::new(),
         vec![left_out(
@@ -1842,6 +1843,7 @@ fn a_login_group_counts_without_any_environment_clause() {
 
 #[test]
 fn a_credential_label_group_names_the_supplied_file() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let picker = open_left_out(
         Vec::new(),
         vec![left_out(
@@ -1862,6 +1864,7 @@ fn a_credential_label_group_names_the_supplied_file() {
 
 #[test]
 fn a_first_party_group_names_the_short_file() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let picker = open_left_out(
         Vec::new(),
         vec![left_out(
@@ -1886,6 +1889,7 @@ fn a_first_party_group_names_the_short_file() {
 
 #[test]
 fn the_count_row_counts_only_the_models_the_query_keeps() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let mut picker = open_left_out(
         Vec::new(),
         vec![left_out(
@@ -1908,6 +1912,7 @@ fn the_count_row_counts_only_the_models_the_query_keeps() {
 
 #[test]
 fn a_display_name_only_query_keeps_its_count_row() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let mut picker = open_left_out(
         Vec::new(),
         vec![left_out(
@@ -1939,6 +1944,7 @@ fn a_display_name_only_query_keeps_its_count_row() {
 
 #[test]
 fn a_query_matching_nothing_shows_no_match_over_an_all_left_out_catalogue() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let mut picker = open_left_out(
         Vec::new(),
         vec![left_out(
@@ -1962,6 +1968,7 @@ fn a_query_matching_nothing_shows_no_match_over_an_all_left_out_catalogue() {
 
 #[test]
 fn an_all_left_out_catalogue_reads_zero_models_without_an_install_prompt() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let mut picker = open_left_out(
         Vec::new(),
         vec![left_out(
@@ -1999,6 +2006,7 @@ fn an_all_left_out_catalogue_reads_zero_models_without_an_install_prompt() {
 
 #[test]
 fn count_rows_show_in_the_choosing_picker_only() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let groups = || {
         vec![left_out(
             "acme",
@@ -2035,6 +2043,7 @@ fn count_rows_show_in_the_choosing_picker_only() {
 
 #[test]
 fn count_rows_follow_the_scope_unless_show_all() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let mut picker = open_left_out(
         vec![
             entry("acme/m1", &[], None, None),
@@ -2111,6 +2120,7 @@ fn count_rows_follow_the_scope_unless_show_all() {
 
 #[test]
 fn count_row_headings_stay_in_provider_order() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let picker = open_left_out(
         vec![
             entry("a/m1", &[], None, None),
@@ -2147,6 +2157,7 @@ fn count_row_headings_stay_in_provider_order() {
 
 #[test]
 fn count_rows_are_never_focused_or_chosen() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let mut picker = open_left_out(
         vec![
             entry("acme/m1", &[], None, None),
@@ -2206,6 +2217,7 @@ fn count_rows_are_never_focused_or_chosen() {
 
 #[test]
 fn left_out_statuses_keep_read_error_loading_and_refresh() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     // A read error wins over the group.
     let mut picker = open_left_out(
         Vec::new(),
@@ -2263,6 +2275,7 @@ fn left_out_statuses_keep_read_error_loading_and_refresh() {
 
 #[test]
 fn left_out_control_characters_show_as_spaces() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let picker = open_left_out(
         Vec::new(),
         vec![left_out(

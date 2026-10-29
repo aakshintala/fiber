@@ -1280,6 +1280,7 @@ fn choosing_left_out(width: u16, height: u16) -> App {
 
 #[test]
 fn count_rows_draw_dim_with_a_four_column_indent_and_no_targets() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let app = choosing_left_out(160, 48);
     let view = app.model_picker_view().expect("open");
     let body = body(&view, 160, 48);
@@ -1306,6 +1307,7 @@ fn count_rows_draw_dim_with_a_four_column_indent_and_no_targets() {
 
 #[test]
 fn count_rows_name_the_supplied_files() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let app = choosing_left_out(160, 48);
     let text = screen(&app, 160, 48);
     let (_, api) = find_row(&text, "api_key");
@@ -1324,6 +1326,7 @@ fn count_rows_name_the_supplied_files() {
 
 #[test]
 fn count_rows_scroll_with_their_sections_window() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let app = choosing_left_out(160, 48);
     let view = app.model_picker_view().expect("open");
     // Items in draw order: the `acme` count, its two models, the
@@ -1340,6 +1343,7 @@ fn count_rows_scroll_with_their_sections_window() {
 
 #[test]
 fn an_all_left_out_section_stays_visible_in_a_short_viewport() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let catalogue = Catalogue {
         left_out: vec![LeftOutGroup {
             provider: "opencode".to_owned(),
@@ -1390,6 +1394,7 @@ fn an_all_left_out_section_stays_visible_in_a_short_viewport() {
 
 #[test]
 fn paging_moves_across_count_rows_and_sections() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let mut app = choosing_left_out(160, 10);
     // Six windowed items, two of them count rows: four focusable stops
     // make the page step four, not six.
@@ -1423,6 +1428,7 @@ fn paging_moves_across_count_rows_and_sections() {
 
 #[test]
 fn page_keys_jump_over_count_rows() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let mut app = choosing_left_out(160, 48);
     let catalogue = left_out_catalogue();
     assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
@@ -1456,6 +1462,7 @@ fn page_keys_jump_over_count_rows() {
 
 #[test]
 fn a_first_count_row_needs_two_body_rows() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let catalogue = Catalogue {
         left_out: vec![LeftOutGroup {
             provider: "opencode".to_owned(),
@@ -1506,6 +1513,7 @@ fn a_first_count_row_needs_two_body_rows() {
 
 #[test]
 fn a_first_party_file_row_names_its_config_file() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
     let catalogue = Catalogue {
         models: Vec::new(),
         installable: Vec::new(),
@@ -1532,6 +1540,67 @@ fn a_first_party_file_row_names_its_config_file() {
         "{text}"
     );
     assert!(!text.contains("github.com"), "{text}");
+}
+
+#[test]
+fn a_filtered_count_row_renders_through_the_screen() {
+    // The filtered count shows only the matched count (`docs/tui.md:642-644`),
+    // one count row per group after its heading, before its models
+    // (`docs/tui.md:661-668`).
+    let mut app = choosing_left_out(160, 48);
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in ['m', '9'] {
+        assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
+    }
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.sections.len(), 1);
+    assert_eq!(view.sections[0].provider, "acme");
+    let text = screen(&app, 160, 48);
+    assert!(
+        text.contains("1 model needs api_key: set it in `config/acme-ext.json`"),
+        "{text}"
+    );
+    assert!(!text.contains("2 models need api_key"), "{text}");
+    assert!(!text.contains("needs workspace"), "{text}");
+}
+
+#[test]
+fn a_query_matching_no_count_row_renders_no_match_through_the_screen() {
+    // No row shows when none matches (`docs/tui.md:642-644`); a query
+    // matching no model, no count row and no not-installed row shows one
+    // "No models match" line and no provider sections
+    // (`docs/tui.md:691-693`), with the count row placed after its heading
+    // (`docs/tui.md:661-668`).
+    let catalogue = Catalogue {
+        left_out: vec![LeftOutGroup {
+            provider: "opencode".to_owned(),
+            extension: "github.com/aakshintala/fiber/providers/opencode".to_owned(),
+            file: "config/opencode.json".to_owned(),
+            setting: "workspace".to_owned(),
+            login: true,
+            models: vec![LeftOutModel {
+                id: "o1".to_owned(),
+                name: None,
+            }],
+        }],
+        ..Catalogue::default()
+    };
+    let mut app = attached(160, 48);
+    app.on_models(Ok(catalogue.clone()));
+    open(&mut app);
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(catalogue));
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in ['z', 'z', 'z'] {
+        assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
+    }
+    let view = app.model_picker_view().expect("open");
+    assert!(view.no_match);
+    assert!(view.sections.is_empty());
+    let text = screen(&app, 160, 48);
+    assert!(text.contains("No models match"), "{text}");
+    assert!(!text.contains("needs workspace"), "{text}");
+    assert!(!text.contains("opencode"), "{text}");
 }
 
 /// A chip is `[text]` with a non-empty spaceless middle: `[]`, open

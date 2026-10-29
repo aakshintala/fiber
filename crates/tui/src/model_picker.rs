@@ -154,11 +154,10 @@ pub(crate) struct LeftOutRow {
 }
 
 /// One left-out group the open picker counts: its provider and
-/// setting, its query-matched count, and its count row's text.
+/// setting, and its count row's text.
 pub(crate) struct ShownGroup {
     pub(crate) provider: String,
     pub(crate) setting: String,
-    pub(crate) count: usize,
     pub(crate) text: String,
 }
 
@@ -854,10 +853,9 @@ impl ModelPicker {
             .any(|group| self.group_visible(open, &group.provider))
     }
 
-    /// The left-out groups the open picker counts, with their
-    /// query-matched counts and row texts: the choosing picker only,
-    /// one entry per group the query keeps. The text names the
-    /// supplied file verbatim.
+    /// The left-out groups the open picker counts, with their row
+    /// texts: the choosing picker only, one entry per group the
+    /// query keeps. The text names the supplied file verbatim.
     pub(crate) fn shown_left_out(&self, open: &Open) -> Vec<ShownGroup> {
         self.catalogue
             .left_out
@@ -882,7 +880,6 @@ impl ModelPicker {
                 Some(ShownGroup {
                     provider: group.provider.clone(),
                     setting: group.setting.clone(),
-                    count,
                     text: left_out_text(
                         &controls_to_space(&group.provider),
                         &controls_to_space(&group.file),
@@ -1251,7 +1248,7 @@ impl ModelPicker {
         if !open.query.is_empty()
             && rows.is_empty()
             && installs.is_empty()
-            && left_out.iter().all(|group| group.count == 0)
+            && left_out.is_empty()
             && (!self.catalogue.models.is_empty() || self.has_visible_group(open))
         {
             layout.push(RowAt::NoMatch);
