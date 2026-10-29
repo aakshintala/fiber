@@ -1,7 +1,7 @@
 //! Loader and picker boundary tests (`docs/tui.md`, extension loading).
 use super::*;
 use fakes::clock::FakeClock;
-use tui::ext::{AnswerDisposition, LedgerResult, TurnCardState, TurnGroupState};
+use tui::ext::{AnswerDisposition, KeyOutcome, LedgerResult, TurnCardState, TurnGroupState};
 
 #[test]
 fn turn_card_message_entries_serialize_all_message_fields() {
@@ -1526,5 +1526,706 @@ fn a_sessionless_range_bound_renderer_stays_inert_without_notice() {
         SlotSelection::Absent
     );
     // (`docs/tui.md`, "How a TUI extension runs": a range-bound client half stays inert without notice until the session's first `extensions_loaded`.)
+    assert!(renderer.take_pending().is_empty());
+}
+
+/// A loader whose `keys` holds `entries`: the person's live ownership.
+fn keyed_loader(entries: &[(&str, Value)]) -> (fakes::TempDir, Loader) {
+    let (dir, loader) = fixture();
+    let mut keys = serde_json::Map::new();
+    for (id, value) in entries {
+        keys.insert((*id).to_owned(), value.clone());
+    }
+    std::fs::write(
+        loader.sources.home.join("config.json"),
+        json!({"keys": keys}).to_string(),
+    )
+    .unwrap();
+    (dir, loader)
+}
+
+/// A loader whose `tui.slots` holds `entries`, keyed as written.
+fn slotted_loader(entries: &[(&str, &str)]) -> (fakes::TempDir, Loader) {
+    let (dir, loader) = fixture();
+    let mut slots = serde_json::Map::new();
+    for (slot, winner) in entries {
+        slots.insert((*slot).to_owned(), Value::String((*winner).to_owned()));
+    }
+    std::fs::write(
+        loader.sources.home.join("config.json"),
+        json!({"tui": {"slots": slots}}).to_string(),
+    )
+    .unwrap();
+    (dir, loader)
+}
+
+#[test]
+fn malformed_key_registrations_become_extension_failed_load_notices() {
+    for (source, field) in [
+        (
+            "fiber.key(5, { timeout = 100, run = function() end })",
+            "key",
+        ),
+        ("fiber.key('ctrl+o', 'run')", "table"),
+        ("fiber.key('ctrl+o', {})", "run"),
+        (
+            "fiber.key('ctrl+o', { timeout = 100, run = function() end, action = 'send' })",
+            "run",
+        ),
+        ("fiber.key('ctrl+o', { run = function() end })", "timeout"),
+        (
+            "fiber.key('ctrl+o', { timeout = 0, run = function() end })",
+            "timeout",
+        ),
+        ("fiber.key('ctrl+o', { timeout = 100, run = 'yes' })", "run"),
+        (
+            "fiber.key('alt+h', { action = 'move_word', variant = 'left', timeout = 100 })",
+            "timeout",
+        ),
+        (
+            "fiber.key('ctrl+o', { timeout = 100, run = function() end, variant = 'left' })",
+            "variant",
+        ),
+        ("fiber.key('ctrl+o', { action = 5 })", "action"),
+        (
+            "fiber.key('ctrl+o', { action = 'no_such_action' })",
+            "no_such_action",
+        ),
+        (
+            "fiber.key('ctrl+q', { action = 'clear_then_quit' })",
+            "clear_then_quit",
+        ),
+        ("fiber.key('alt+h', { action = 'move_word' })", "variant"),
+        (
+            "fiber.key('alt+h', { action = 'move_word', variant = 'up' })",
+            "up",
+        ),
+        ("fiber.key('ctrl+c', { action = 'send' })", "ctrl+c"),
+        ("fiber.key('bogus', { action = 'send' })", "bogus"),
+        (
+            "fiber.key('ctrl+q', { timeout = 100, run = function() end })\n\
+             fiber.key('ctrl+q', { timeout = 100, run = function() end })",
+            "twice",
+        ),
+    ] {
+        let (_dir, loader) = fixture();
+        package(&loader, "a", None, Some(source));
+        let (renderer, notices) = loader.load();
+        // docs/extensions.md:1526: any other shape records one rejection, reported as one load notice.
+        assert_eq!(notices.len(), 1, "{source}: {notices:?}");
+        assert_eq!(notices[0].0, "extension_failed", "{source}: {notices:?}");
+        assert!(
+            notices[0].1.contains("extension a"),
+            "{source}: {notices:?}"
+        );
+        assert!(notices[0].1.contains(field), "{source}: {notices:?}");
+        // The duplicate keeps its first registration; every other shape
+        // holds no binding.
+        let drawn = (field == "twice").then_some("key:ctrl+q");
+        for slot in ["key:ctrl+o", "key:ctrl+q", "key:alt+h"] {
+            if Some(slot) == drawn {
+                assert_eq!(
+                    renderer.fills_for(&ctx(None), slot),
+                    SlotSelection::Draw {
+                        extension: "a".into()
+                    },
+                    "{source}"
+                );
+            } else {
+                assert_eq!(
+                    renderer.fills_for(&ctx(None), slot),
+                    SlotSelection::Absent,
+                    "{source}"
+                );
+            }
+        }
+        assert!(renderer.take_pending().is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn a_canonical_duplicate_keeps_the_first_registration() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some(
+            "fiber.key('ctrl+o', { action = 'send' })\n\
+             fiber.key('control+o', { action = 'go_home' })",
+        ),
+    );
+    let (renderer, notices) = loader.load();
+    // docs/extensions.md:1529-1530 and docs/tui.md:3060-3062: the first registration wins; a later one is skipped with one notice.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "extension_failed");
+    assert!(notices[0].1.contains("twice"), "{notices:?}");
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+o"),
+        SlotSelection::Draw {
+            extension: "a".into()
+        }
+    );
+    // The first registration's raw spelling and action win.
+    assert_eq!(
+        renderer.key_action(&ctx(None), "ctrl+o", false),
+        Some(("send".to_owned(), None))
+    );
+}
+
+#[test]
+fn a_person_owned_binding_stays_dormant_with_one_notice() {
+    let (_dir, loader) = keyed_loader(&[("send", json!("ctrl+q"))]);
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('ctrl+q', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    // docs/tui.md:3050-3052: a person-bound key stays theirs, with one notice naming the extension.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "extension_failed");
+    assert!(notices[0].1.contains("extension a"), "{notices:?}");
+    // Dormant but retained: selection still names the contender, while
+    // dispatch with a live person binding stays silent and skips it.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+q"),
+        SlotSelection::Draw {
+            extension: "a".into()
+        }
+    );
+    assert_eq!(renderer.key_action(&ctx(None), "ctrl+q", true), None);
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+q", true),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn two_extensions_binding_one_key_suppress_with_one_conflict() {
+    let (_dir, loader) = fixture();
+    for name in ["a", "b"] {
+        package(
+            &loader,
+            name,
+            None,
+            Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+        );
+    }
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    for _ in 0..2 {
+        assert_eq!(
+            renderer.fills_for(&ctx(None), "key:ctrl+o"),
+            SlotSelection::Suppressed
+        );
+    }
+    let pending = renderer.take_pending();
+    // docs/tui.md:3044-3049: two extensions binding one key suppress, with one notice per slot and contenders.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "command_conflict");
+    assert!(pending[0].1.contains("extensions a, b"), "{pending:?}");
+    // Neither contender runs while suppressed.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+o", false),
+        KeyOutcome::NotHandled
+    );
+    assert_eq!(renderer.key_action(&ctx(None), "ctrl+o", false), None);
+}
+
+#[test]
+fn a_configured_key_winner_selects_the_contender() {
+    let (_dir, loader) = slotted_loader(&[("key:control+o", "b")]);
+    for name in ["a", "b"] {
+        package(
+            &loader,
+            name,
+            None,
+            Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+        );
+    }
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // The suffix canonicalizes with the key parser: `control` reads as `ctrl`.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+o"),
+        SlotSelection::Draw {
+            extension: "b".into()
+        }
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn an_unparseable_key_setting_notices_with_the_full_setting() {
+    let (_dir, loader) = slotted_loader(&[("key:ctrl+", "a")]);
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    // docs/tui.md:3063-3064: an unparseable suffix or setting naming no contender selects none, with one notice naming the full setting.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "command_conflict");
+    assert_eq!(
+        notices[0].1,
+        "Invalid key binding setting: tui.slots.\"key:ctrl+\"; the key does not parse; no extension wins."
+    );
+    // The setting names nothing, so the lone contender still wins.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+o"),
+        SlotSelection::Draw {
+            extension: "a".into()
+        }
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn a_key_setting_naming_no_registered_contender_selects_none() {
+    let (_dir, loader) = slotted_loader(&[("key:ctrl+k", "a")]);
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    // docs/tui.md:3063-3064: an unparseable suffix or setting naming no contender selects none, with one notice naming the full setting.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "command_conflict");
+    assert_eq!(
+        notices[0].1,
+        "Invalid key binding setting: tui.slots.\"key:ctrl+k\"; no registered contender matches the selected extension; no extension wins."
+    );
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+k"),
+        SlotSelection::Absent
+    );
+}
+
+#[test]
+fn a_key_setting_naming_a_non_contender_never_falls_back() {
+    let (_dir, loader) = slotted_loader(&[("key:ctrl+o", "b")]);
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    // docs/tui.md:3063-3064, 3069: selects no winner with one notice; never falls back to the contender.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "command_conflict");
+    assert_eq!(
+        notices[0].1,
+        "Invalid key binding setting: tui.slots.\"key:ctrl+o\"; no registered contender matches the selected extension; no extension wins."
+    );
+    // One eligible contender, but the setting names another extension:
+    // no winner, and no second notice.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+o"),
+        SlotSelection::Suppressed
+    );
+    assert!(renderer.take_pending().is_empty());
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+o", false),
+        KeyOutcome::NotHandled
+    );
+}
+
+#[test]
+fn an_extension_replacing_a_default_wins_silently() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+o"),
+        SlotSelection::Draw {
+            extension: "a".into()
+        }
+    );
+    assert!(renderer.take_pending().is_empty());
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+o", false),
+        KeyOutcome::Handled
+    );
+}
+
+#[test]
+fn key_contenders_follow_session_compatibility() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "ranged",
+        Some(json!({"min":"v1.0.0"})),
+        Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+    );
+    package(
+        &loader,
+        "client",
+        None,
+        Some("fiber.key('ctrl+p', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // A client-only extension stays compatible before the first
+    // `extensions_loaded`, while a range-bound half stays inert.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+p"),
+        SlotSelection::Draw {
+            extension: "client".into()
+        }
+    );
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+o"),
+        SlotSelection::Absent
+    );
+    assert!(renderer.take_pending().is_empty());
+    let loaded = ctx(Some(vec![("ranged", "v1.0.0")]));
+    assert_eq!(
+        renderer.fills_for(&loaded, "key:ctrl+o"),
+        SlotSelection::Draw {
+            extension: "ranged".into()
+        }
+    );
+    let old = ctx(Some(vec![("ranged", "v0.1.0")]));
+    for _ in 0..2 {
+        assert_eq!(
+            renderer.fills_for(&old, "key:ctrl+o"),
+            SlotSelection::Absent
+        );
+    }
+    let pending = renderer.take_pending();
+    // docs/tui.md:2678: one extension_incompatible per extension and session-half version until /reload.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_incompatible");
+}
+
+#[test]
+fn ctrl_c_cannot_be_bound_but_ctrl_shift_c_registers() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('ctrl+c', { action = 'send' })"),
+    );
+    package(
+        &loader,
+        "b",
+        None,
+        Some("fiber.key('Ctrl+C', { action = 'send' })"),
+    );
+    let (renderer, notices) = loader.load();
+    // docs/tui.md:3059-3062: plain ctrl+c never binds; Ctrl+C reads as ctrl+shift+c and stays bindable.
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, "extension_failed");
+    assert!(notices[0].1.contains("ctrl+c"), "{notices:?}");
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+c"),
+        SlotSelection::Absent
+    );
+    // `Ctrl+C` parses as ctrl+shift+c, which stays bindable.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+shift+c"),
+        SlotSelection::Draw {
+            extension: "b".into()
+        }
+    );
+}
+
+#[test]
+fn a_person_plus_two_extension_collision_suppresses() {
+    let (_dir, loader) = keyed_loader(&[("line_break", json!("ctrl+k"))]);
+    for name in ["a", "b"] {
+        package(
+            &loader,
+            name,
+            None,
+            Some("fiber.key('ctrl+k', { timeout = 100, run = function() return true end })"),
+        );
+    }
+    let (renderer, notices) = loader.load();
+    // docs/tui.md:3050-3052: each dormant person-owned binding reports one notice.
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    for notice in &notices {
+        assert_eq!(notice.0, "extension_failed");
+    }
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+k"),
+        SlotSelection::Suppressed
+    );
+    let pending = renderer.take_pending();
+    // docs/tui.md:3049: the conflict notice comes once per slot and set of contenders until /reload.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "command_conflict");
+    // The live person binding deactivates both contenders at dispatch,
+    // with no new notice: load already reported each dormant binding.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+k", true),
+        KeyOutcome::NotHandled
+    );
+    assert_eq!(renderer.key_action(&ctx(None), "ctrl+k", true), None);
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn key_selection_notices_repeat_only_after_reload() {
+    let (_dir, loader) = fixture();
+    for name in ["a", "b"] {
+        package(
+            &loader,
+            name,
+            None,
+            Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+        );
+    }
+    let (renderer, _) = loader.load();
+    for _ in 0..2 {
+        assert_eq!(
+            renderer.fills_for(&ctx(None), "key:ctrl+o"),
+            SlotSelection::Suppressed
+        );
+    }
+    // docs/tui.md:3049: the conflict notice comes once per slot and set of contenders until /reload.
+    assert_eq!(renderer.take_pending().len(), 1);
+    assert!(renderer.take_pending().is_empty());
+    // A reload rebuilds the composite, so the cadence starts over.
+    let (rebuilt, _) = loader.load();
+    assert_eq!(
+        rebuilt.fills_for(&ctx(None), "key:ctrl+o"),
+        SlotSelection::Suppressed
+    );
+    // docs/tui.md:3049: the conflict notice comes once per slot and set of contenders until /reload.
+    assert_eq!(rebuilt.take_pending().len(), 1);
+}
+
+#[test]
+fn a_live_person_binding_deactivates_with_one_notice() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('ctrl+k', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // A `/keys` edit person-binds the key after load: the dormant binding
+    // skips with the load-time person notice, once per key and extension.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+k", true),
+        KeyOutcome::NotHandled
+    );
+    let pending = renderer.take_pending();
+    // docs/tui.md:3050-3052: a live person binding deactivates with one notice per key and extension until /reload.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_failed");
+    assert!(pending[0].1.contains("extension a"), "{pending:?}");
+    // Repeated strokes never repeat the notice.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+k", true),
+        KeyOutcome::NotHandled
+    );
+    assert_eq!(renderer.key_action(&ctx(None), "ctrl+k", true), None);
+    assert!(renderer.take_pending().is_empty());
+    // Removing the person binding hands the key back at once.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+k", false),
+        KeyOutcome::Handled
+    );
+}
+
+#[test]
+fn a_run_error_and_a_wrong_shape_fall_through_with_one_notice_each() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('ctrl+o', { timeout = 100, run = function() error('boom') end })"),
+    );
+    package(
+        &loader,
+        "b",
+        None,
+        Some("fiber.key('ctrl+p', { timeout = 100, run = function() return 5 end })"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    for _ in 0..2 {
+        assert_eq!(
+            renderer.run_key(&ctx(None), "ctrl+o", false),
+            KeyOutcome::NotHandled
+        );
+        assert_eq!(
+            renderer.run_key(&ctx(None), "ctrl+p", false),
+            KeyOutcome::NotHandled
+        );
+    }
+    let pending = renderer.take_pending();
+    // docs/tui.md:3024-3027: one hook_failed notice for each extension and key slot until /reload.
+    assert_eq!(pending.len(), 2, "{pending:?}");
+    for notice in &pending {
+        assert_eq!(notice.0, "hook_failed");
+    }
+    assert!(
+        pending
+            .iter()
+            .any(|notice| notice.1.contains("extension a"))
+    );
+    assert!(
+        pending
+            .iter()
+            .any(|notice| notice.1.contains("extension b"))
+    );
+    // A hook failure leaves the VM on and deduplicated: a later erroring
+    // call still falls through with no new notice.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+o", false),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+#[test]
+fn an_action_winner_resolves_without_calling_the_vm() {
+    let (_dir, loader) = fixture();
+    package(
+        &loader,
+        "a",
+        None,
+        Some("fiber.key('alt+h', { action = 'move_word', variant = 'left' })"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:alt+h"),
+        SlotSelection::Draw {
+            extension: "a".into()
+        }
+    );
+    assert_eq!(
+        renderer.key_action(&ctx(None), "alt+h", false),
+        Some(("move_word".to_owned(), Some("left".to_owned())))
+    );
+    // An action-only key never runs: no notice, no handling.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "alt+h", false),
+        KeyOutcome::NotHandled
+    );
+    assert!(renderer.take_pending().is_empty());
+}
+
+/// A clock that jumps 200 ms on every read: any callback spanning two
+/// reads outlasts a 100 ms deadline, pinning the timeout mapping with no
+/// host seam and no real-clock wait.
+struct JumpClock {
+    origin: std::time::Instant,
+    step: std::time::Duration,
+    calls: std::sync::atomic::AtomicU64,
+}
+
+impl JumpClock {
+    fn at(&self, n: u64) -> std::time::Instant {
+        let steps = u32::try_from(n).unwrap_or(u32::MAX);
+        self.origin
+            + self
+                .step
+                .checked_mul(steps)
+                .unwrap_or(std::time::Duration::MAX)
+    }
+}
+
+impl contract::clock::Clock for JumpClock {
+    fn now(&self) -> std::time::Instant {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.at(n)
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH
+    }
+
+    fn sleep(&self, d: std::time::Duration) {
+        let steps =
+            u64::try_from(d.as_millis().div_ceil(self.step.as_millis().max(1))).unwrap_or(u64::MAX);
+        self.calls
+            .fetch_add(steps, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<std::time::Duration>),
+    ) {
+        let now = self.at(self.calls.load(std::sync::atomic::Ordering::SeqCst));
+        match until {
+            Some(at) if at > now => wait(None),
+            _ => wait(Some(std::time::Duration::ZERO)),
+        }
+    }
+
+    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+}
+
+#[test]
+fn a_run_timeout_switches_the_extension_off() {
+    let dir = fakes::TempDir::new("fiber-tui-key-timeout");
+    let sources = config::Sources {
+        home: dir.path().join("home"),
+        workspace: dir.path().join("workspace"),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    };
+    std::fs::create_dir_all(&sources.home).unwrap();
+    std::fs::create_dir_all(&sources.workspace).unwrap();
+    let origin = FakeClock::new();
+    let clock = std::sync::Arc::new(JumpClock {
+        origin: origin.now(),
+        step: std::time::Duration::from_millis(200),
+        calls: std::sync::atomic::AtomicU64::new(0),
+    });
+    let loader = Loader::new(sources, clock.clone());
+    package(
+        &loader,
+        "slow",
+        None,
+        Some("fiber.key('ctrl+o', { timeout = 100, run = function() return true end })"),
+    );
+    let (renderer, notices) = loader.load();
+    assert!(notices.is_empty(), "{notices:?}");
+    // The handler spans two clock reads, so it is already past its
+    // 100 ms deadline when it returns: typed failure, switched off.
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+o", false),
+        KeyOutcome::NotHandled
+    );
+    let pending = renderer.take_pending();
+    // docs/tui.md:3027-3029: a key timeout switches the extension off with one extension_failed notice.
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].0, "extension_failed");
+    assert!(pending[0].1.contains("slow"), "{pending:?}");
+    // Off until reload: selection drops the VM, and a later call stays
+    // silent with no second notice.
+    assert_eq!(
+        renderer.fills_for(&ctx(None), "key:ctrl+o"),
+        SlotSelection::Absent
+    );
+    assert_eq!(
+        renderer.run_key(&ctx(None), "ctrl+o", false),
+        KeyOutcome::NotHandled
+    );
     assert!(renderer.take_pending().is_empty());
 }

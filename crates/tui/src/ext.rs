@@ -184,6 +184,18 @@ pub trait Load: Send + Sync {
     fn load(&self) -> (Rc<dyn Renderer>, Vec<(String, String)>);
 }
 
+/// Whether a whole-screen key binding handled its stroke: the single
+/// outcome type across the renderer boundary (`docs/tui.md`, "Input and
+/// focus"). A handled stroke runs nothing built in; any other value
+/// falls through unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyOutcome {
+    /// The binding handled the stroke: nothing built in runs for it.
+    Handled,
+    /// The binding did not handle the stroke: dispatch falls through.
+    NotHandled,
+}
+
 /// One extension's drawing of a slot: whether it fills a slot name, and
 /// the lines for one input. The terminal calls it on its own thread, and
 /// the renderer makes no host call.
@@ -246,6 +258,25 @@ pub trait Renderer: std::fmt::Debug {
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> (Decision, bool) {
         (self.render(ctx, slot, input, width, builtin), true)
+    }
+    /// The winning action binding for `key`, a canonical key name, as its
+    /// id and variant, for dispatch through the action's checked canonical
+    /// event: `None` with no eligible action binding. `person_bound`
+    /// names whether the live keyset holds the key for the person,
+    /// deactivating the binding for this stroke. The default binds no key.
+    fn key_action(
+        &self,
+        _ctx: &SessionCtx,
+        _key: &str,
+        _person_bound: bool,
+    ) -> Option<(String, Option<String>)> {
+        None
+    }
+    /// Whether the winning `run` binding for `key`, a canonical key name,
+    /// handled the stroke. `person_bound` deactivates the binding for
+    /// this stroke, as above. The default binds no key.
+    fn run_key(&self, _ctx: &SessionCtx, _key: &str, _person_bound: bool) -> KeyOutcome {
+        KeyOutcome::NotHandled
     }
 }
 
