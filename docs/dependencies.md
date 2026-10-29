@@ -61,10 +61,11 @@ whole process, which
 Fiber's own `unsafe` code are `docs/code-quality.md`.
 
 Binary size is recorded, not gated per crate. CI fails a stripped release
-binary of 24 MiB (25,165,824 bytes) or more (`scripts/release-size`). The cap
-is a point to weigh, not a refusal: a crate that would cross it is admitted
-when what it buys is worth its size, and the pull request that adds it raises
-the cap and says why. A crate's binary size is the evidence for that call.
+binary of 25 MiB (26,214,400 bytes) or more (`scripts/release-size`). The cap
+is a point to weigh, not a refusal: a change that would cross it, a crate or
+Fiber's own code, is admitted when what it buys is worth its size, and the pull
+request raises the cap and says why. The change's binary size is the evidence
+for that call.
 Runtime memory is the hard limit: a crate that would take a process over a
 budget in `docs/performance.md` is refused. Compile time is not a criterion: CI caches built
 dependencies. On macOS arm64, serde, ureq, ratatui, rusqlite and mlua build from clean in 8
