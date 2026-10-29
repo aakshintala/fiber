@@ -527,6 +527,41 @@ impl Table {
     }
 }
 
+/// Stops the dispatch: cancellation and a gone or finishing owner end
+/// the callback this way, before anything mints and mid-request alike.
+/// One constructor shares the owner's clone across every stop.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+fn stopped(shared: &Shared) -> Error {
+    Error::Stopped {
+        extension: shared.owner.clone(),
+    }
+}
+
+/// Fails the dispatch on its own timeout: a missed restart deadline
+/// and a missed reply alike read as the callback's timeout, never the
+/// restart's. One constructor shares the owner's clone and the
+/// timeout's narrowing across both.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+fn timed_out(shared: &Shared, key: &str, timeout: Duration) -> Error {
+    Error::Timeout {
+        extension: shared.owner.clone(),
+        callback: key.to_owned(),
+        timeout_ms: timeout.as_millis().try_into().unwrap_or(u64::MAX),
+    }
+}
+
+/// Refuses the dispatch before any line leaves: what never serialized
+/// or never fit the wire cap fails here, with the caller's words. One
+/// constructor shares the owner's and callback's clones across both.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+fn bad_request(shared: &Shared, key: &str, why: String) -> Error {
+    Error::BadReturn {
+        extension: shared.owner.clone(),
+        callback: key.to_owned(),
+        why,
+    }
+}
+
 /// Sends one request and waits for its answer: the stream gate first
 /// for stream items, then the line, then the reply, the deadline, the
 /// cancel or the hang guard, whichever is first. The request settles
@@ -551,15 +586,9 @@ pub(crate) fn run_request(
         // A missed restart deadline fails as the callback's own timeout;
         // cancellation and a gone owner stop it, as they do mid-request.
         if code == contract::ErrorCode::Timeout {
-            return Err(Error::Timeout {
-                extension: shared.owner.clone(),
-                callback: dispatch.key,
-                timeout_ms: dispatch.timeout.as_millis().try_into().unwrap_or(u64::MAX),
-            });
+            return Err(timed_out(shared, &dispatch.key, dispatch.timeout));
         }
-        return Err(Error::Stopped {
-            extension: shared.owner.clone(),
-        });
+        return Err(stopped(shared));
     }
     // Only the dispatcher that runs a provider's `credential()` sets a
     // scope: every other dispatch carries `None`, and a
@@ -577,9 +606,7 @@ pub(crate) fn run_request(
         let generation = shared.table.generation();
         if !shared.table.acquire_stream(&id, generation) {
             shared.table.cancel(&id);
-            return Err(Error::Stopped {
-                extension: shared.owner.clone(),
-            });
+            return Err(stopped(shared));
         }
     }
     shared.table.watch_caller(caller, &id);
@@ -589,10 +616,12 @@ pub(crate) fn run_request(
         key: dispatch.key.clone(),
         args: dispatch.args,
     })
-    .map_err(|error| Error::BadReturn {
-        extension: shared.owner.clone(),
-        callback: dispatch.key.clone(),
-        why: format!("the request never serialized: {error}"),
+    .map_err(|error| {
+        bad_request(
+            shared,
+            &dispatch.key,
+            format!("the request never serialized: {error}"),
+        )
     })?;
     let line = envelope_line(
         shared,
@@ -603,17 +632,15 @@ pub(crate) fn run_request(
         Ok(()) => {}
         Err(transport::SendError::TooLarge) => {
             shared.table.cancel(&id);
-            return Err(Error::BadReturn {
-                extension: shared.owner.clone(),
-                callback: dispatch.key.clone(),
-                why: "the request does not fit the 64 MiB wire cap".to_owned(),
-            });
+            return Err(bad_request(
+                shared,
+                &dispatch.key,
+                "the request does not fit the 64 MiB wire cap".to_owned(),
+            ));
         }
         Err(transport::SendError::Gone) => {
             shared.table.cancel(&id);
-            return Err(Error::Stopped {
-                extension: shared.owner.clone(),
-            });
+            return Err(stopped(shared));
         }
     }
     let hang = hang_guard(clock, deadline);
@@ -633,14 +660,8 @@ pub(crate) fn run_request(
                 key = dispatch.key
             ),
         }),
-        Outcome::TimedOut => Err(Error::Timeout {
-            extension: shared.owner.clone(),
-            callback: dispatch.key,
-            timeout_ms: dispatch.timeout.as_millis().try_into().unwrap_or(u64::MAX),
-        }),
-        Outcome::Cancelled => Err(Error::Stopped {
-            extension: shared.owner.clone(),
-        }),
+        Outcome::TimedOut => Err(timed_out(shared, &dispatch.key, dispatch.timeout)),
+        Outcome::Cancelled => Err(stopped(shared)),
     }
 }
 
