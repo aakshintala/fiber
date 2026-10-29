@@ -805,10 +805,12 @@ fn other_gh_forms_execute() {
     ] {
         assert_closed(command);
     }
-    // A configured `gh pr view` adds nothing: the built-in path owns the
-    // name. A configured `gh pr status` is honoured: no built-in owns it.
+    // A configured `gh pr view` merges its flags into the built-in entry:
+    // `--web` reads as a network call. A configured `gh pr status` is
+    // honoured: no built-in owns it.
     let view = [configured("gh pr view", &["--web"])];
-    assert_configured_closed("gh pr view 123 --web", &view);
+    assert_network("gh pr view 123 --web", &view, &["/work/123"]);
+    assert_configured_closed("gh pr view 123 --bogus", &view);
     // Only echo stages print statically-known words: a gh stage's output
     // leaves a later `xargs` reader unproven, so the call is reviewed.
     assert_closed("gh pr view 123 | xargs wc -l");
@@ -1517,17 +1519,148 @@ fn a_configured_name_matches_exactly() {
 }
 
 #[test]
-fn a_configured_builtin_basename_is_never_consulted() {
+fn a_configured_flag_on_a_built_in_command_reads() {
+    // The merge: the built-in's flags are kept and the configured ones are
+    // added. A flag on neither list still executes.
+    let entries = [configured("cat", &["--foo"])];
+    assert_configured_reads("cat --foo f", &entries, &["/work/f"]);
+    assert_configured_reads("cat -n f", &entries, &["/work/f"]);
+    assert_configured_closed("cat --bar f", &entries);
+    // Without the entry the configured-only flag executes.
+    assert_closed("cat --foo f");
+    // An empty configured flag list adds nothing.
+    assert_configured_closed("cat --foo f", &[configured("cat", &[])]);
+}
+
+#[test]
+fn a_configured_subcommand_flag_on_git_status_reads() {
+    // A configured subcommand path under a built-in with subcommand entries
+    // merges too: `git status` has a flag list.
+    let entries = [configured("git status", &["--long"])];
+    for command in ["git status --long", "git status -s"] {
+        let effects = classified_with(command, &entries);
+        assert_eq!(effects.declared.effects, vec![Effect::Reads], "{command}");
+        assert!(effects.declared.reversible, "{command}");
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // The bare exact form keeps precedence with no paths.
+    let bare = classified_with("git status", &entries);
+    assert_eq!(bare.declared.effects, vec![Effect::Reads]);
+    assert!(bare.declared.paths.is_none());
+    // A flag on neither list still executes.
+    assert_configured_closed("git status --bogus", &entries);
+    // Without the entry the configured-only flag executes.
+    assert_closed("git status --long");
+}
+
+#[test]
+fn a_configured_value_flag_on_a_built_in_never_takes_a_substitution() {
+    let entries = [configured("cat", &["--foo="])];
+    assert_configured_reads("cat --foo=bar f", &entries, &["/work/f"]);
+    assert_configured_reads("cat --foo bar f", &entries, &["/work/f"]);
+    assert_configured_closed("cat --foo", &entries);
+    assert_configured_closed("cat --foo $(echo bar) f", &entries);
+}
+
+#[test]
+fn a_path_qualified_grep_entry_adds_nothing_to_grep() {
+    // Exact key match only: `/usr/bin/grep` never merges into `grep`, so
+    // neither spelling reads with the configured-only flag.
+    let entries = [configured("/usr/bin/grep", &["-P"])];
+    assert_configured_closed("/usr/bin/grep -P x", &entries);
+    assert_configured_closed("grep -P x", &entries);
+    // A built-in flag still reads.
+    assert_configured_reads("grep -n pat file", &entries, &["/work/file"]);
+}
+
+#[test]
+fn a_flagless_built_in_takes_no_configured_flags() {
+    // Table entries with no flag list take nothing: the exact-form
+    // `git branch --show-current` and `pwd` merge no configured flags.
+    let branch = [configured("git branch --show-current", &["--foo"])];
+    assert_configured_closed("git branch --show-current --foo", &branch);
+    assert_reads("git branch --show-current x");
+    let pwd = [configured("pwd", &["--foo"])];
+    assert_configured_closed("pwd --foo", &pwd);
+    assert_reads("pwd");
+}
+
+#[test]
+fn a_configured_link_following_flag_stays_reviewed() {
+    // A recursive read that follows links is never read-only, even when the
+    // person lists the flag: the credential deny sees only the paths a call
+    // names, never a link below them.
     for (command, name, flags) in [
         ("grep -R x ws", "grep", &["-R"] as &[&str]),
-        ("/usr/bin/grep -R x ws", "/usr/bin/grep", &["-R"]),
-        ("/usr/bin/grep -r x ws", "/usr/bin/grep", &["-r"]),
         ("grep -R", "grep", &["-R"]),
+        (
+            "grep --dereference-recursive x ws",
+            "grep",
+            &["--dereference-recursive"],
+        ),
+        (
+            "grep --dereference-recursive=x ws",
+            "grep",
+            &["--dereference-recursive="],
+        ),
+        ("grep -Rn x ws", "grep", &["-Rn"]),
+        ("grep -nR x ws", "grep", &["-nR"]),
+        ("grep -Rr x ws", "grep", &["-Rr"]),
         ("rg -L x", "rg", &["-L"]),
-        ("./rg -L x", "./rg", &["-L"]),
+        ("rg --follow x", "rg", &["--follow"]),
+        ("rg -Ln x ws", "rg", &["-Ln"]),
         ("find -L x", "find", &["-L"]),
+        ("find -H x", "find", &["-H"]),
+        ("find -follow x", "find", &["-follow"]),
+        ("find -LH x", "find", &["-LH"]),
+        ("find -Lx x", "find", &["-Lx"]),
+        ("find -Hx x", "find", &["-Hx"]),
+        ("ls -L x", "ls", &["-L"]),
+        ("ls -lL x", "ls", &["-lL"]),
+    ] {
+        let entries = [configured(name, flags)];
+        assert_configured_closed(command, &entries);
+    }
+    // A bundled cluster without the link-following letter still reads under
+    // its listed spelling.
+    assert_configured_reads(
+        "grep -Pn x ws",
+        &[configured("grep", &["-Pn"])],
+        &["/work/ws"],
+    );
+    // A long option is never letter-matched: only the exact spellings above
+    // follow links, so a configured long spelling holding `R` still reads.
+    // The `||` guard pins this: `&&` would letter-match `-fooR` and execute.
+    assert_configured_reads(
+        "grep --fooR x ws",
+        &[configured("grep", &["--fooR"])],
+        &["/work/ws"],
+    );
+    // Near misses still read: the guard fires on the exact spelling or a
+    // cluster holding its letter, in flag position only.
+    for command in [
+        "grep -r x ws",
+        "grep -L x ws",
+        "rg -l x",
+        "find -name x",
+        "ls -l x",
+        "grep -- -R ws",
+        "ls -- -L x",
+    ] {
+        assert_reads(command);
+    }
+}
+
+#[test]
+fn a_path_qualified_or_owned_configured_name_is_never_consulted() {
+    // A plain built-in basename merges instead (the test above); what stays
+    // unconsulted is a path-qualified name, `sed` with its own grammar, a
+    // wrapper step, or a name the built-ins own some other way.
+    for (command, name, flags) in [
+        ("/usr/bin/grep -R x ws", "/usr/bin/grep", &["-R"] as &[&str]),
+        ("/usr/bin/grep -r x ws", "/usr/bin/grep", &["-r"]),
+        ("./rg -L x", "./rg", &["-L"]),
         ("/usr/bin/find -L x", "/usr/bin/find", &["-L"]),
-        ("cat --foo", "cat", &["--foo"]),
         ("/bin/cat --foo", "/bin/cat", &["--foo"]),
         ("git push", "/usr/bin/git push", &[]),
         ("sed -i 1p f", "sed", &["-i"]),

@@ -22,17 +22,24 @@ fn configured(name: &str, flags: &[&str]) -> (String, Vec<String>) {
     )
 }
 
-fn builtin_name(words: &[Word], configured: &[(String, Vec<String>)]) -> Option<&'static str> {
+fn builtin_found(
+    words: &[Word],
+    configured: &[(String, Vec<String>)],
+) -> Option<(&'static str, Vec<String>)> {
     match find(words, configured) {
-        Found::Builtin(entry) => Some(entry.name),
+        Found::Builtin(entry, flags) => Some((entry.name, flags.to_vec())),
         Found::Configured(_, _) => None,
         Found::None => None,
     }
 }
 
+fn builtin_name(words: &[Word], configured: &[(String, Vec<String>)]) -> Option<&'static str> {
+    builtin_found(words, configured).map(|(name, _)| name)
+}
+
 fn configured_flags(words: &[Word], configured: &[(String, Vec<String>)]) -> Option<Vec<String>> {
     match find(words, configured) {
-        Found::Builtin(_) => None,
+        Found::Builtin(..) => None,
         Found::Configured(flags, _) => Some(flags.to_vec()),
         Found::None => None,
     }
@@ -56,21 +63,90 @@ fn the_longest_built_in_path_wins() {
 }
 
 #[test]
-fn a_built_in_entry_beats_configuration_at_or_below_its_path() {
-    let longer = [configured("git status -s", &[])];
+fn a_same_named_configured_entry_merges_its_flags() {
+    // A configured entry whose name is the built-in entry's command path
+    // word for word adds its flags to the built-in's. The lookup reports
+    // both; the classifier walks them together.
     assert_eq!(
-        builtin_name(&ws(&["git", "status", "-s"]), &longer),
-        Some("git status")
+        builtin_found(
+            &ws(&["git", "status"]),
+            &[configured("git status", &["--json"])]
+        ),
+        Some(("git status", vec!["--json".to_owned()]))
     );
-    let same = [configured("git status", &["--json"])];
     assert_eq!(
-        builtin_name(&ws(&["git", "status"]), &same),
-        Some("git status")
+        builtin_found(&ws(&["grep", "-R", "x"]), &[configured("grep", &["-R"])]),
+        Some(("grep", vec!["-R".to_owned()]))
     );
-    let plain = [configured("grep", &["-R"])];
+    // The person's first same-named entry wins, as with configured-only
+    // matches.
     assert_eq!(
-        builtin_name(&ws(&["grep", "-R", "x"]), &plain),
-        Some("grep")
+        builtin_found(
+            &ws(&["git", "status"]),
+            &[
+                configured("git status", &["--a"]),
+                configured("git status", &["--b"])
+            ]
+        ),
+        Some(("git status", vec!["--a".to_owned()]))
+    );
+    // An empty configured flag list merges nothing.
+    assert_eq!(
+        builtin_found(&ws(&["cat", "--foo"]), &[configured("cat", &[])]),
+        Some(("cat", Vec::new()))
+    );
+    // With no same-named entry the built-in stands alone.
+    assert_eq!(
+        builtin_found(&ws(&["git", "status"]), &[configured("jq", &["-r"])]),
+        Some(("git status", Vec::new()))
+    );
+}
+
+#[test]
+fn only_an_exact_built_in_key_merges() {
+    // A longer configured path never merges into its shorter built-in.
+    assert_eq!(
+        builtin_found(
+            &ws(&["git", "status", "-s"]),
+            &[configured("git status -s", &[])]
+        ),
+        Some(("git status", Vec::new()))
+    );
+    // A shorter configured name never merges into a longer built-in path.
+    assert_eq!(
+        builtin_found(&ws(&["git", "status"]), &[configured("git", &["--x"])]),
+        Some(("git status", Vec::new()))
+    );
+    // A path-qualified name never merges into its basename's built-in and
+    // is never consulted.
+    let entries = [configured("/usr/bin/grep", &["-R"])];
+    assert_eq!(
+        configured_flags(&ws(&["/usr/bin/grep", "-R", "x"]), &entries),
+        None
+    );
+    assert!(matches!(
+        find(&ws(&["/usr/bin/grep", "-R", "x"]), &entries),
+        Found::None
+    ));
+    // An exact-form command with no table entry has nothing to merge into:
+    // `git stash list` still matches nothing, so the exact form keeps
+    // precedence and the longer call executes.
+    let stash = [configured("git stash list", &[])];
+    assert!(matches!(
+        find(&ws(&["git", "stash", "list"]), &stash),
+        Found::None
+    ));
+    // A table entry with no flag list takes no added flags.
+    assert_eq!(
+        builtin_found(
+            &ws(&["git", "branch", "--show-current"]),
+            &[configured("git branch --show-current", &["--foo"])]
+        ),
+        Some(("git branch --show-current", Vec::new()))
+    );
+    assert_eq!(
+        builtin_found(&ws(&["pwd", "--foo"]), &[configured("pwd", &["--foo"])]),
+        Some(("pwd", Vec::new()))
     );
 }
 

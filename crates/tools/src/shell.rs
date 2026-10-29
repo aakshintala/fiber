@@ -196,7 +196,9 @@ impl Shell {
     /// entries beside the built-in list (`docs/tools.md`, "Other
     /// command-line tools"). The handle is shared: a reload that replaces
     /// its contents reaches this shell and every clone of it. An entry
-    /// whose basename is built in is never consulted.
+    /// named exactly a built-in command adds its flags to the built-in's;
+    /// a path-qualified entry whose basename is built in, such as
+    /// `/usr/bin/grep`, is never consulted.
     #[allow(
         clippy::type_complexity,
         reason = "the shared handle spells its contents; main's settings::ShellReadOnly names the same type"
