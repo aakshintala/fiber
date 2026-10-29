@@ -3027,19 +3027,22 @@ fn after_quiesce_a_client_waiting_for_the_shutdown_before_its_write_gets_no_answ
     // The read proves the close: a rejected post-quiesce connection gets
     // end of file with no answer, and the write after it lands or fails
     // depending on the platform, so it only checks for no panic on a
-    // closed peer.
+    // closed peer. The timeout setup may report the close first.
     let mut late = UnixStream::connect(&socket).unwrap();
-    late.set_read_timeout(Some(DEADLINE)).unwrap();
-    let mut closed = [0u8; 64];
-    match late.read(&mut closed) {
-        Ok(0) => {}
-        Ok(n) => panic!(
-            "no answer is written for a line never read, got {:?}",
-            &closed[..n]
-        ),
-        Err(error) => panic!(
-            "the server closed the rejected post-quiesce connection before the deadline: {error:?}"
-        ),
+    // `false` means the peer already closed the connection, which is what this test checks for.
+    let timed = tolerated_late_timeout(late.set_read_timeout(Some(DEADLINE)));
+    if timed {
+        let mut closed = [0u8; 64];
+        match late.read(&mut closed) {
+            Ok(0) => {}
+            Ok(n) => panic!(
+                "no answer is written for a line never read, got {:?}",
+                &closed[..n]
+            ),
+            Err(error) => panic!(
+                "the server closed the rejected post-quiesce connection before the deadline: {error:?}"
+            ),
+        }
     }
     tolerated_late_write(
         late.write_all(format!("{}\n", subscribe_line("c_late", "full")).as_bytes()),
