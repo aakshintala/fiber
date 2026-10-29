@@ -61,9 +61,12 @@ impl ProcessExtension {
                         requests::Outcome::Answered(requests::Answer::Failure { code, message })
                     }
                 };
-                match self.shared.table.settle_with_before_wake(&request_id, outcome, || {
-                    self.answer_accepted_on(live, &id, None);
-                }) {
+                match self
+                    .shared
+                    .table
+                    .settle_with_before_wake(&request_id, outcome, || {
+                        self.answer_accepted_on(live, &id, None);
+                    }) {
                     requests::Settled::Completed => {}
                     requests::Settled::Stale => self.answer_stale(&id),
                 }

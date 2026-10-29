@@ -836,7 +836,10 @@ fn reply_ack_is_queued_before_settlement_releases_stream_waiters() {
     let visible_before_ack = fakes::Deadline::after(WITHIN)
         .recv(&before_ack_rx)
         .expect("the reply queue callback runs before settlement wakes its waiter");
-    assert!(!visible_before_ack, "the request is not settled before its ack is queued");
+    assert!(
+        !visible_before_ack,
+        "the request is not settled before its ack is queued"
+    );
     assert!(matches!(
         acquired_rx.try_recv(),
         Err(mpsc::TryRecvError::Empty)
@@ -850,9 +853,11 @@ fn reply_ack_is_queued_before_settlement_releases_stream_waiters() {
             .expect("the request settles after the ack is queued"),
         Settled::Completed
     );
-    assert!(fakes::Deadline::after(WITHIN)
-        .recv(&acquired_rx)
-        .expect("the next stream item starts after the ack is queued"));
+    assert!(
+        fakes::Deadline::after(WITHIN)
+            .recv(&acquired_rx)
+            .expect("the next stream item starts after the ack is queued")
+    );
 
     let mut stale_ack = false;
     assert_eq!(

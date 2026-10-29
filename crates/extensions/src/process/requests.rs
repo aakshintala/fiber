@@ -13,7 +13,8 @@
 //! generation cancels everything pending and bumps the generation, so no
 //! id resolves across generations and a late reply or call changes
 //! nothing. No registry, state or emitter lock is held over pipe I/O or
-//! callback waits; the table is a leaf lock.
+//! callback waits. A live reply queues its acceptance before publishing
+//! settlement, so teardown cannot overtake that line.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex};
@@ -369,11 +370,25 @@ impl Table {
         outcome: Outcome,
         before_wake: impl FnOnce(),
     ) -> Settled {
-        let settled = self.settle(id, outcome);
-        if settled == Settled::Completed {
+        let wait = {
+            let mut inner = support::lock(&self.inner);
+            let wait = match inner.pending.get(id) {
+                Some(pending) if !pending.done => Arc::clone(&pending.wait),
+                _ => return Settled::Stale,
+            };
             before_wake();
-        }
-        settled
+            if let Some(pending) = inner.pending.get_mut(id) {
+                pending.done = true;
+            }
+            if inner.stream_held.as_ref() == Some(id) {
+                inner.stream_held = None;
+            }
+            *support::lock(&wait.mutex) = Some(outcome);
+            wait
+        };
+        self.stream_gate.notify_all();
+        wait.changed.notify_all();
+        Settled::Completed
     }
 
     /// Cancels `id`: fires its cancel signal and completes it cancelled.
