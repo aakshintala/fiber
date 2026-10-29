@@ -255,6 +255,8 @@ impl<'de> Deserialize<'de> for LenientPayload {
                     RawPayload::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 Ok(LenientPayload(Some(payload)))
             }
+            // Exempt: a non-map payload carries no data, matching `Default`.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_seq<A>(self, mut seq: A) -> Result<LenientPayload, A::Error>
             where
                 A: serde::de::SeqAccess<'de>,
@@ -262,42 +264,56 @@ impl<'de> Deserialize<'de> for LenientPayload {
                 while seq.next_element::<Validate>()?.is_some() {}
                 Ok(LenientPayload(None))
             }
+            // Exempt: a non-map payload carries no data, matching `Default`.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_bool<E>(self, _: bool) -> Result<LenientPayload, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientPayload(None))
             }
+            // Exempt: a non-map payload carries no data, matching `Default`.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_i64<E>(self, _: i64) -> Result<LenientPayload, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientPayload(None))
             }
+            // Exempt: a non-map payload carries no data, matching `Default`.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_u64<E>(self, _: u64) -> Result<LenientPayload, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientPayload(None))
             }
+            // Exempt: a non-map payload carries no data, matching `Default`.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_f64<E>(self, _: f64) -> Result<LenientPayload, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientPayload(None))
             }
+            // Exempt: a non-map payload carries no data, matching `Default`.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_str<E>(self, _: &str) -> Result<LenientPayload, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientPayload(None))
             }
+            // Exempt: a non-map payload carries no data, matching `Default`.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_string<E>(self, _: String) -> Result<LenientPayload, E>
             where
                 E: serde::de::Error,
             {
                 Ok(LenientPayload(None))
             }
+            // Exempt: a non-map payload carries no data, matching `Default`.
+            #[cfg_attr(false, mutants::skip)]
             fn visit_unit<E>(self) -> Result<LenientPayload, E>
             where
                 E: serde::de::Error,

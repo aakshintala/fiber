@@ -667,3 +667,54 @@ fn count_and_draw_agree_at_markdown_table_and_code_boundaries() {
         }
     }
 }
+
+// (`docs/tui.md`, "History and paging": row counts are exact at each width.)
+fn assert_count_rows_match_drawn_rows(text: &str) {
+    for width in 0..=48 {
+        let reply = Reply::new(text.to_owned(), 17);
+        let rendered = reply.rendered(width);
+        let counted = reply.counted(width);
+        let drawn_needs_split = rendered
+            .lines
+            .iter()
+            .any(|line| crate::rows::fitted(line, width) > 1);
+        assert_eq!(
+            counted.rows,
+            rendered.lines.len(),
+            "logical rows at width {width}: {text:?}"
+        );
+        assert_eq!(
+            counted.over_width, drawn_needs_split,
+            "fallback at width {width}: {text:?}"
+        );
+
+        let mut drawn = crate::rows::Rows::default();
+        reply.rows(width, &mut drawn);
+        drawn.pad(0, 0, width);
+        let mut counted = crate::rows::Rows::count_only();
+        reply.count_rows(width, &mut counted);
+        counted.pad(0, 0, width);
+        assert_eq!(
+            counted.len(),
+            drawn.len(),
+            "padded rows at width {width}: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn row_chunk_counts_match_drawn_rows_at_fit_boundaries() {
+    assert_count_rows_match_drawn_rows("plain text with a word at the edge");
+}
+
+#[test]
+fn code_block_counts_match_drawn_rows_at_fit_boundaries() {
+    assert_count_rows_match_drawn_rows("```\nalpha beta gamma\n\nwide 界\nend\n```");
+}
+
+#[test]
+fn table_counts_match_drawn_rows_at_fit_boundaries() {
+    assert_count_rows_match_drawn_rows(
+        "| left | right |\n|---|---|\n| a longer cell | 123456789 |\n| x | 界 |",
+    );
+}
