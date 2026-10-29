@@ -294,6 +294,8 @@ fn configure_gated_fx(setup: &Setup, dir: &Path) {
     .unwrap();
     let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(mode | 0o111)).unwrap();
+    // A test-scale bound, well under the test's own deadline: a
+    // serialized start fails here instead of hanging to the deadline.
     let server = json!({
         "command": "/bin/bash",
         "args": [
@@ -301,7 +303,7 @@ fn configure_gated_fx(setup: &Setup, dir: &Path) {
             dir.display().to_string(),
             fakes::mcp_fixture().display().to_string(),
         ],
-        "startup_timeout_ms": 600000,
+        "startup_timeout_ms": 30000,
     });
     support::write_json(
         &setup.home().join("config.json"),
@@ -359,7 +361,28 @@ fn gated_plan(gate: &str, hello_marker: &str) -> Value {
     Value::Array(plan)
 }
 
-/// A silent child never readies: the startup deadline passes and the
+/// Installs a silent `fiber.test/<short>` and bounds its startup miss:
+/// the configured allowance is already past, so the session misses the
+/// child at once instead of waiting out the real startup deadline.
+fn silent_with_immediate_deadline(setup: &Setup, short: &str, extra: &Value) {
+    process_with(
+        setup,
+        short,
+        extra,
+        &json!([
+            {"read": {"as": "hello"}},
+            {"hold": {"release_on": "never"}},
+        ]),
+    );
+    let path = setup.home().join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("the provider wrote config"))
+            .expect("config is JSON");
+    config["extensions"][format!("fiber.test/{short}")] = json!({"startup_timeout_ms": 0});
+    support::write_json(&path, &config);
+}
+
+/// A silent child never readies: the immediate deadline passes and the
 /// session continues without it, with the miss noticed under the
 /// extension's name and its tool absent from the preamble.
 #[test]
@@ -367,11 +390,7 @@ fn optional_process_miss_leaves_a_notice_and_starts_without_it() {
     let setup = Setup::new();
     let server = calling(&[]);
     setup.provider(&server);
-    let plan = json!([
-        {"read": {"as": "hello"}},
-        {"hold": {"release_on": "never"}},
-    ]);
-    process_with(&setup, "silent", &json!({}), &plan);
+    silent_with_immediate_deadline(&setup, "silent", &json!({}));
     let run = ask(&setup, "say hi");
     let notices: Vec<&Value> = run
         .lines
@@ -518,6 +537,10 @@ fn process_resume_recomposes_under_the_resume_reason() {
         .lines()
         .map(|line| serde_json::from_str(line).expect("each hello is one JSON object"))
         .collect();
+    // docs/extensions.md:211 (`extension_hello` reasons) and :215 (every
+    // session starts its own process extensions at session start): the
+    // first run hellos once as `new`, the resume run hellos once as
+    // `resume`, each carrying the resumed session's id.
     assert_eq!(hellos.len(), 2, "one hello per run: {hellos:?}");
     assert_eq!(hellos[0]["payload"]["reason"], json!("new"));
     assert_eq!(hellos[1]["payload"]["reason"], json!("resume"));
@@ -553,6 +576,10 @@ fn process_hook_timeout_applies_on_failure_and_drops_the_late_reply() {
         .iter()
         .filter(|line| line["kind"] == "tool_call_completed")
         .collect();
+    // docs/extensions.md:209 (every request is answered once; a reply to
+    // a request that is no longer pending is rejected `stale_request` and
+    // changes nothing): the fixture's single call completes exactly once,
+    // and the late reply changes nothing.
     assert_eq!(completed.len(), 1, "the tool call completes: {completed:?}");
     assert_eq!(completed[0]["payload"]["status"], json!("completed"));
     let withheld = completed[0]["payload"]["content"].to_string();
@@ -589,6 +616,11 @@ fn process_death_restarts_once_then_leaves_the_tool_unavailable() {
         .iter()
         .filter(|line| line["kind"] == "tool_call_completed")
         .collect();
+    // docs/extensions.md:209 (tool calls are sent as they arrive, so
+    // several can be outstanding, and every request is answered): the
+    // fixture's three calls each complete once, the last one failing
+    // after the restart (docs/extensions.md:222, a twice-dead extension
+    // stays dead and its calls fail).
     assert_eq!(
         completed.len(),
         3,
@@ -605,7 +637,10 @@ fn process_death_restarts_once_then_leaves_the_tool_unavailable() {
         json!([{"type": "text", "text": "flaky-ok"}])
     );
     assert_eq!(completed[2]["payload"]["status"], json!("failed"));
-    // Exactly two generations spawned: one restart, never a third.
+    // Exactly two generations spawned: one restart, never a third
+    // (docs/extensions.md:211, the hello is sent again after a restart;
+    // :222, one that dies is restarted once, and a second death stays
+    // dead).
     let hellos = std::fs::read_to_string(&hello_marker).expect("the peer appends two hellos");
     assert_eq!(hellos.lines().count(), 2, "one restart, no third spawn");
     // The declarations the model saw never move across the deaths.
@@ -618,6 +653,9 @@ fn process_death_restarts_once_then_leaves_the_tool_unavailable() {
                 .and_then(|body| body.get("tools").cloned())
         })
         .collect();
+    // docs/extensions.md:222 (a dead extension's tools stay declared, so
+    // the prompt cache holds): the declarations never move across the
+    // deaths; three listings come from the fixture's three model steps.
     assert!(
         tool_lists.len() >= 3,
         "the model lists tools on every step: {}",
@@ -644,11 +682,7 @@ fn required_process_miss_fails_the_session_start() {
     let setup = Setup::new();
     let server = calling(&[]);
     setup.provider(&server);
-    let plan = json!([
-        {"read": {"as": "hello"}},
-        {"hold": {"release_on": "never"}},
-    ]);
-    process_with(&setup, "silent", &json!({"required": true}), &plan);
+    silent_with_immediate_deadline(&setup, "silent", &json!({"required": true}));
     let run = run_ask(&setup, "say hi");
     assert_ne!(run.code, Some(0), "the required miss fails the start");
     assert!(
@@ -710,16 +744,7 @@ fn required_process_failure_stops_pending_mcp() {
     let provider = calling(&[]);
     setup.provider(&provider);
     let (started, pid_file) = configure_plain_fx(&setup, &setup.workspace().join("fx"));
-    let process_plan = json!([
-        {"read": {"as": "hello"}},
-        {"hold": {"release_on": "never"}},
-    ]);
-    process_with(
-        &setup,
-        "required",
-        &json!({"required": true}),
-        &process_plan,
-    );
+    silent_with_immediate_deadline(&setup, "required", &json!({"required": true}));
 
     let run = run_ask(&setup, "say hi");
     assert_ne!(run.code, Some(0), "the required process miss fails start");
@@ -865,9 +890,12 @@ fn configure_held_fx(setup: &Setup, dir: &Path) -> (PathBuf, PathBuf) {
         "the release FIFO is created before session startup"
     );
     let wrapper = dir.join("fx-wrapper.sh");
+    // The read-write open establishes the hold before the signal: the
+    // wrapper is already parked in its blocking read when the test sees
+    // `mcp-held`, so the release cannot slip past the hold.
     std::fs::write(
         &wrapper,
-        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf '%s\\n' \"$$\" > \"$dir/mcp-pid\"\nprintf held > \"$dir/mcp-held\"\nread _ < \"$dir/release\"\nexec /bin/bash \"$fixture\" \"$dir\"\n",
+        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf '%s\\n' \"$$\" > \"$dir/mcp-pid\"\nexec 3<> \"$dir/release\"\nprintf held > \"$dir/mcp-held\"\nread _ <&3\nexec 3<&-\nexec /bin/bash \"$fixture\" \"$dir\"\n",
     )
     .unwrap();
     let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
