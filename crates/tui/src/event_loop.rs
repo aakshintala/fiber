@@ -1009,6 +1009,13 @@ impl<B: Backend> Loop<B> {
                 return;
             }
         }
+        // The first post-handover frame restarts the writer after its
+        // draw: the writer is still parked, so no barrier waits here, or
+        // the frame would never reach the resume. The push above already
+        // queued the deletes for the replay.
+        if self.pending_resume {
+            return;
+        }
         if !writer.barrier() {
             self.kitty_failed();
         }
@@ -1443,6 +1450,14 @@ impl<B: Backend> Loop<B> {
     /// the foreground program. The retained ids wait for `hand_over` to
     /// take after a successful resume.
     fn pause_kitty(&mut self) {
+        // Idempotent while Resume is pending: a second handover in the same
+        // batch skips a second writer Handover, reusing the retained id set
+        // until the first post-resume frame sends Resume. Without this the
+        // second pause would wait for an ack the parked writer holds until
+        // that Resume.
+        if self.pending_resume {
+            return;
+        }
         let Some(writer) = &self.kitty_writer else {
             return;
         };

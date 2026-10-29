@@ -596,6 +596,295 @@ fn kitty_event_loop_draws_at_chunk_boundary() {
     assert_eq!(lp.step(Input::KittyFailed, &rx), Some(1));
 }
 
+/// `kitty_failed` sets the flag and wakes an idle loop: with either half
+/// missing the terminal failure would never quit the loop.
+#[test]
+fn kitty_failed_flags_and_wakes() {
+    let (mut lp, _theirs, _tx, _rx) = opened();
+    let (tx, rx) = mpsc::channel();
+    lp.files_out = tx;
+    lp.kitty_failed();
+    assert!(lp.kitty_failed.load(Ordering::SeqCst));
+    match Deadline::after(DEADLINE).recv(&rx) {
+        Ok(Input::KittyFailed) => {}
+        Ok(_) => panic!("a failure wake, not KittyFailed"),
+        Err(err) => panic!("waited {DEADLINE:?} for the wake: {err}"),
+    }
+}
+
+/// `stop_kitty` takes the writer down: nothing outlives the loop.
+#[test]
+fn stop_kitty_joins_the_writer() {
+    let (mut lp, _theirs, _tx, _rx) = opened();
+    let (pipe_read, pipe_write) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let gate = Arc::new(super::kitty_writer::KittyChunkGate::new(false));
+    let (live_tx, _live_rx) = mpsc::channel();
+    let writer = super::kitty_writer::KittyWriter::spawn(
+        std::fs::File::from(std::os::fd::OwnedFd::from(pipe_write)),
+        Arc::clone(&gate),
+        Arc::clone(&lp.kitty_failed),
+        live_tx,
+        Arc::clone(&lp.tty_lock),
+    )
+    .expect("the writer starts");
+    lp.kitty_writer = Some(writer);
+    lp.stop_kitty();
+    assert!(lp.kitty_writer.is_none(), "the writer is taken down");
+    // The join closed the tty: EOF, not a leaked thread.
+    let read = std::fs::File::from(std::os::fd::OwnedFd::from(pipe_read));
+    let mut rest = Vec::new();
+    std::io::Read::read_to_end(&mut &read, &mut rest)
+        .unwrap_or_else(|err| panic!("tty eof: {err}"));
+    assert!(rest.is_empty());
+}
+
+/// `pause_kitty` retains the writer's ids for the post-resume replay: an
+/// empty handoff would drop the shown image without re-fetching it.
+#[test]
+fn pause_kitty_retains_handover_ids() {
+    use super::kitty_writer::{Item, KittyWriter};
+
+    let (mut lp, _theirs, _tx, _rx) = opened();
+    let gate = Arc::new(super::kitty_writer::KittyChunkGate::new(true));
+    let (pipe_read, pipe_write) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let (live_tx, _live_rx) = mpsc::channel();
+    lp.files_out = live_tx.clone();
+    let writer = KittyWriter::spawn(
+        std::fs::File::from(std::os::fd::OwnedFd::from(pipe_write)),
+        Arc::clone(&gate),
+        Arc::clone(&lp.kitty_failed),
+        live_tx,
+        Arc::clone(&lp.tty_lock),
+    )
+    .expect("the writer starts");
+    lp.kitty_writer = Some(writer);
+    // A partial upload behind the held gate, so the pause meets it at
+    // the next chunk boundary with a retained id.
+    let (upload, _) = kitty_image(5, 1, 10);
+    let head = match &upload {
+        Item::Image { chunks, .. } => chunks[0].len(),
+        Item::Delete(_) => panic!("an image, not a delete"),
+    };
+    lp.kitty_writer
+        .as_ref()
+        .expect("writer installed")
+        .push(upload);
+    let (_bytes, read) = recv_wire(&read_exact_bytes(
+        std::fs::File::from(std::os::fd::OwnedFd::from(pipe_read)),
+        head,
+    ));
+    // The send hook orders the release after the Handover the blocking
+    // pause cannot order, so the pause meets the partial upload at the
+    // boundary on every run.
+    let (sent, sent_rx) = mpsc::channel();
+    lp.kitty_writer
+        .as_ref()
+        .expect("writer installed")
+        .set_sent_hook(sent);
+    std::thread::scope(|scope| {
+        let pausing = scope.spawn(|| lp.pause_kitty());
+        match Deadline::after(DEADLINE).recv(&sent_rx) {
+            Ok(()) => {}
+            Err(err) => panic!("waited {DEADLINE:?} for the handover send: {err}"),
+        }
+        gate.release();
+        pausing.join().expect("pause joined");
+    });
+    assert_eq!(lp.handover_retained, vec![5]);
+    lp.stop_kitty();
+    drop(read);
+}
+
+/// A second handover in the same batch sends nothing: while Resume pends the
+/// writer is still parked, so a second pause would wait for an ack that only
+/// the post-frame Resume releases.
+#[test]
+fn pause_kitty_while_resume_pends_skips_a_second_handover() {
+    let (mut lp, _theirs, _tx, _rx) = opened();
+    let gate = Arc::new(super::kitty_writer::KittyChunkGate::new(false));
+    let (_pipe_read, pipe_write) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    let (live_tx, _live_rx) = mpsc::channel();
+    lp.files_out = live_tx.clone();
+    let writer = super::kitty_writer::KittyWriter::spawn(
+        std::fs::File::from(std::os::fd::OwnedFd::from(pipe_write)),
+        Arc::clone(&gate),
+        Arc::clone(&lp.kitty_failed),
+        live_tx,
+        Arc::clone(&lp.tty_lock),
+    )
+    .expect("the writer starts");
+    lp.kitty_writer = Some(writer);
+    // Park the writer holding nothing, as after a first handover.
+    let parked = lp
+        .kitty_writer
+        .as_ref()
+        .expect("writer installed")
+        .handover_send();
+    match Deadline::after(DEADLINE).recv(&parked) {
+        Ok(ids) => assert!(ids.is_empty()),
+        Err(err) => panic!("waited {DEADLINE:?} for the pause ack: {err}"),
+    }
+    lp.pending_resume = true;
+    lp.handover_retained = vec![5];
+    // The second pause returns at once without sending: without the early
+    // return it would block here until the Deadline instead.
+    let (done, finished) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            lp.pause_kitty();
+            done.send(()).unwrap_or(());
+        });
+        match Deadline::after(DEADLINE).recv(&finished) {
+            Ok(()) => {}
+            Err(err) => panic!("waited {DEADLINE:?} for the second pause: {err}"),
+        }
+    });
+    assert_eq!(lp.handover_retained, vec![5]);
+    assert!(!lp.kitty_failed.load(Ordering::SeqCst));
+    // The writer is still parked exactly once: one Resume releases it.
+    lp.kitty_writer
+        .as_ref()
+        .expect("writer installed")
+        .resume_after_handover();
+    super::tests::flush_kitty(&lp);
+    lp.stop_kitty();
+}
+
+/// The pre-draw delete drain never waits while a resume pends: the writer
+/// is still parked in its handover, so a barrier would hang the frame
+/// before it ever reaches the resume.
+#[test]
+fn drain_image_deletes_skips_the_barrier_while_resume_pends() {
+    use super::kitty_writer::{KittyChunkGate, KittyWriter};
+
+    let (mut lp, theirs, tx, rx) = inline_opened(image_session());
+    drop(tx);
+    // The attach's purge is stale: drop it before the test's own payload.
+    let _ = lp.app.take_image_out();
+    // A pipe tty with a held gate: the writer parks after the first chunk.
+    let (tty_read, tty_write) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    lp.tty = std::fs::File::from(std::os::fd::OwnedFd::from(tty_write));
+    let (live_tx, _live_rx) = mpsc::channel();
+    lp.files_out = live_tx.clone();
+    let gate = Arc::new(KittyChunkGate::new(true));
+    let writer = KittyWriter::spawn(
+        lp.tty
+            .try_clone()
+            .unwrap_or_else(|err| panic!("clone: {err}")),
+        Arc::clone(&gate),
+        Arc::clone(&lp.kitty_failed),
+        live_tx,
+        Arc::clone(&lp.tty_lock),
+    )
+    .expect("the writer starts");
+    lp.kitty_writer = Some(writer);
+    // The first frame draws the image and asks for its bytes; the
+    // answer's frame queues the transmit, whose first chunk lands
+    // despite the held gate.
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    let id = read_display_id(&theirs);
+    let (mut lp, rx) = stepped(lp, rx, display_answer(&id));
+    // The transmit started: its only chunk lands despite the held gate,
+    // which parks the writer before its place with the upload complete.
+    let (_first, first_read) = recv_wire(&read_until(
+        std::fs::File::from(std::os::fd::OwnedFd::from(tty_read)),
+        &["Ga=t,"],
+    ));
+    let paused = lp
+        .kitty_writer
+        .as_ref()
+        .expect("writer installed")
+        .handover_send();
+    gate.release();
+    let ids = match Deadline::after(DEADLINE).recv(&paused) {
+        Ok(ids) => ids,
+        Err(err) => panic!("waited {DEADLINE:?} for the pause ack: {err}"),
+    };
+    assert_eq!(ids, vec![1]);
+    // The single-chunk upload was already complete before its place, so no
+    // upload was open and no abort delete goes out: the ack alone proves
+    // the pause. (A partial upload's abort is covered in
+    // `handover_pauses_at_boundary_and_restarts_whole`.)
+    // The session changes: the shown image is forgotten, queuing its
+    // delete, and the resume still pends as after a handover.
+    lp.app.attach(contract::SessionId(OTHER.to_owned()));
+    for envelope in image_session() {
+        lp.app.on_line(Line::Session(envelope));
+    }
+    lp.pending_resume = true;
+    // The drain returns without waiting: the barrier it skips would hang
+    // on the parked writer past the deadline.
+    let (done, finished) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            lp.drain_image_deletes();
+            done.send(()).unwrap_or(());
+        });
+        match Deadline::after(DEADLINE).recv(&finished) {
+            Ok(()) => {}
+            Err(err) => panic!("waited {DEADLINE:?} for the delete drain: {err}"),
+        }
+    });
+    assert!(
+        lp.app.take_image_deletes().is_empty(),
+        "the pre-draw drain empties the queue"
+    );
+    // The queued delete reaches the wire after the resume: the skip is
+    // only the wait, never the push.
+    lp.kitty_writer
+        .as_ref()
+        .expect("writer installed")
+        .resume_after_handover();
+    super::tests::flush_kitty(&lp);
+    let deleted = crate::graphics::delete(1);
+    let (rest, _read) = recv_wire(&read_until(first_read, &["Ga=d,"]));
+    assert_eq!(rest, deleted);
+    lp.stop_kitty();
+    drop(rx);
+}
+
+/// With no writer and a resume pending, the delete drain still hands the
+/// deletes over: the barrier skip never drops the push.
+#[test]
+fn drain_image_deletes_with_pending_resume_and_no_writer_still_hands_over() {
+    let (lp, theirs, tx, rx) = inline_opened(image_session());
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    let id = read_display_id(&theirs);
+    let (mut lp, _rx) = stepped(lp, rx, display_answer(&id));
+    drop(tx);
+    // The flow's writer is done with: none exists when the drain runs.
+    if let Some(writer) = lp.kitty_writer.take() {
+        writer.stop_and_join();
+    }
+    // The session changes: the shown image is forgotten, queuing its delete.
+    lp.app.attach(contract::SessionId(OTHER.to_owned()));
+    for envelope in image_session() {
+        lp.app.on_line(Line::Session(envelope));
+    }
+    lp.pending_resume = true;
+    // A pipe tty for the fresh writer the drain spawns.
+    let (tty_read, tty_write) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    lp.tty = std::fs::File::from(std::os::fd::OwnedFd::from(tty_write));
+    lp.drain_image_deletes();
+    assert!(
+        lp.app.take_image_deletes().is_empty(),
+        "the drain empties the queue"
+    );
+    assert!(
+        lp.kitty_writer.is_some(),
+        "the drain hands over even with no writer"
+    );
+    super::tests::flush_kitty(&lp);
+    // The delete reaches the wire: the skip is only the wait, never the push.
+    let deleted = crate::graphics::delete(1);
+    let (bytes, _read) = recv_wire(&read_until(
+        std::fs::File::from(std::os::fd::OwnedFd::from(tty_read)),
+        &["Ga=d,"],
+    ));
+    assert_eq!(bytes, deleted);
+    lp.stop_kitty();
+}
+
 /// A loop at 60x12, attached to the session, with its lines folded and
 /// the hub connected: the loop, the hub's end, and the inputs' sender.
 fn opened() -> (

@@ -189,6 +189,10 @@ impl KittyChunkGate {
     }
 }
 
+/// The writer thread's stack, in bytes: the writer only formats escapes
+/// and polls, so 1 MiB holds it with room to spare.
+pub(crate) const KITTY_WRITER_STACK_SIZE: usize = 1 << 20;
+
 /// The Kitty writer: a thread sending image uploads in whole chunks. The
 /// loop pushes ordered items and deletes; the thread drops every pending
 /// payload and exits on a write failure, on Stop, or when every sender is
@@ -196,6 +200,13 @@ impl KittyChunkGate {
 pub(crate) struct KittyWriter {
     tx: Sender<Command>,
     handle: Option<std::thread::JoinHandle<()>>,
+    /// Test-only: signalled once after the next blocking-command send
+    /// (`pause_for_handover`'s Handover, `stop_and_join`'s Stop), so a test
+    /// can order a gate release after the send the blocking call cannot
+    /// order (`docs/testing/mutants.md`: no outside seam observes the send;
+    /// the gate is the race's pause point). Always `None` in production.
+    #[cfg(test)]
+    sent_hook: Mutex<Option<Sender<()>>>,
 }
 
 impl KittyWriter {
@@ -213,7 +224,7 @@ impl KittyWriter {
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::Builder::new()
             // A 1 MiB stack: the writer only formats escapes and polls.
-            .stack_size(1 << 20)
+            .stack_size(KITTY_WRITER_STACK_SIZE)
             .name("kitty-writer".to_owned())
             .spawn(move || {
                 command_loop(rx, tty, gate, failed, files_out, tty_lock);
@@ -222,6 +233,8 @@ impl KittyWriter {
         Some(Self {
             tx,
             handle: Some(handle),
+            #[cfg(test)]
+            sent_hook: Mutex::new(None),
         })
     }
 
@@ -271,10 +284,21 @@ impl KittyWriter {
         if self.tx.send(Command::Handover(ack)).is_err() {
             return None;
         }
+        #[cfg(test)]
+        if let Some(hook) = lock(&self.sent_hook).take() {
+            let _ = hook.send(()).ok();
+        }
         // No wall-clock bound: the ack waits for the current chunk and the
         // boundary abort delete, which wait as long as the blocking write
         // they replace.
         waited.recv().ok()
+    }
+
+    /// Arms the one-shot send signal the next blocking command emits (see
+    /// the `sent_hook` field): tests only.
+    #[cfg(test)]
+    pub(crate) fn set_sent_hook(&self, hook: Sender<()>) {
+        *lock(&self.sent_hook) = Some(hook);
     }
 
     /// Restarts the retained items at their first chunk after handover. A
@@ -298,6 +322,10 @@ impl KittyWriter {
     /// next boundary first.
     pub(crate) fn stop_and_join(mut self) {
         drop(self.tx.send(Command::Stop));
+        #[cfg(test)]
+        if let Some(hook) = lock(&self.sent_hook).take() {
+            let _ = hook.send(()).ok();
+        }
         if let Some(handle) = self.handle.take() {
             drop(handle.join());
         }
@@ -350,10 +378,12 @@ fn write_chunk(out: &mut (impl Write + AsFd), bytes: &[u8]) -> Result<(), ()> {
                 loop {
                     let mut ready = [PollFd::new(&*out, PollFlags::OUT)];
                     match poll(&mut ready, None) {
-                        Ok(_) if !ready[0].revents().is_empty() => break,
-                        // A spurious wakeup polls again: the write below
-                        // resumes at the same byte either way.
-                        Ok(_) => {}
+                        // No timeout, so `Ok` means the single polled tty
+                        // is ready: the return counts ready fds, and there
+                        // is only one. No `revents` test: an empty `Ok`
+                        // cannot happen without a timeout, so no test could
+                        // pin one.
+                        Ok(_) => break,
                         Err(rustix::io::Errno::INTR) => {}
                         Err(_) => return Err(()),
                     }
@@ -485,7 +515,12 @@ impl Runner {
         // The pause ack means the abort is on the wire and no upload is
         // open before the foreground program starts.
         if let Some(active) = self.current.take() {
-            if active.next > 0 && active.next < active.chunks.len() {
+            // `current` is set only immediately before the first chunk write
+            // and command handling resumes only after that write advances
+            // `next`, so a current item here always has `next > 0`; abort
+            // logic needs only `next < chunks.len()` to tell a partial
+            // upload from a completed one awaiting its place.
+            if active.next < active.chunks.len() {
                 let delete = crate::graphics::delete(active.id);
                 let _guard = self.tty_lock.writer_chunk();
                 if write_chunk(&mut self.tty, &delete).is_err() {
@@ -513,26 +548,22 @@ impl Runner {
         }
         // Commands that arrived with or during the pause wait in arrival
         // order: a second pause waits for after the resume, when its ack
-        // can close what is open then.
+        // can close what is open then. Every wait here receives: held
+        // commands stay held until Resume or Stop ends the pause.
         let mut held: Vec<Command> = Vec::new();
         loop {
-            let cmd = if held.is_empty() {
-                match self.rx.recv() {
-                    Ok(cmd) => cmd,
-                    // Every sender is gone: the loop is gone, so exit
-                    // silently without flagging it.
-                    Err(_) => return Parked::Gone,
-                }
-            } else {
-                held.remove(0)
-            };
-            match cmd {
-                Command::Resume => return Parked::Resume(held),
-                Command::Stop => return Parked::Stop,
-                queued @ (Command::Push(_)
-                | Command::Barrier(_)
-                | Command::Purge
-                | Command::Handover(_)) => held.push(queued),
+            match self.rx.recv() {
+                Ok(Command::Resume) => return Parked::Resume(held),
+                Ok(Command::Stop) => return Parked::Stop,
+                Ok(
+                    queued @ (Command::Push(_)
+                    | Command::Barrier(_)
+                    | Command::Purge
+                    | Command::Handover(_)),
+                ) => held.push(queued),
+                // Every sender is gone: the loop is gone, so exit
+                // silently without flagging it.
+                Err(_) => return Parked::Gone,
             }
         }
     }
@@ -623,8 +654,11 @@ fn command_loop(
             // delete at this boundary, as Purge does, then drops the
             // queued payloads, acknowledges pending barriers and exits. It
             // sends no later chunk or place.
+            // As in `Runner::handover`: a current item here always has
+            // `next > 0`, so only `next < chunks.len()` distinguishes a
+            // partial upload (mandatory abort delete) from a completed one
+            // awaiting its place (no abort).
             if let Some(active) = runner.current.take()
-                && active.next > 0
                 && active.next < active.chunks.len()
             {
                 let delete = crate::graphics::delete(active.id);
@@ -896,9 +930,13 @@ mod tests {
         // it goes back to the front and is sent again whole after it.
         let deleted = crate::graphics::delete(2);
         let rx = read_exact(read, deleted.len() + first_bytes.len());
-        let (rest, _read) = recv_bytes(&rx);
+        let (rest, read) = recv_bytes(&rx);
         assert_eq!(bytes, first_bytes[..head].to_vec());
         assert_eq!(rest, [deleted, first_bytes].concat());
+        // Nothing else was kept: stopping joins the thread, so EOF proves
+        // the total. A retain mutant resends the covered image after.
+        writer.stop_and_join();
+        assert!(read_rest(read).is_empty());
     }
 
     #[test]
@@ -920,8 +958,12 @@ mod tests {
         // only the delete follows the first chunk.
         let deleted = crate::graphics::delete(1);
         let rx = read_exact(read, deleted.len());
-        let (rest, _read) = recv_bytes(&rx);
+        let (rest, read) = recv_bytes(&rx);
         assert_eq!(rest, deleted);
+        // No replay follows: stopping joins the thread, so EOF proves the
+        // total. An inverted cover check resends the upload here.
+        writer.stop_and_join();
+        assert!(read_rest(read).is_empty());
     }
 
     #[test]
@@ -973,8 +1015,12 @@ mod tests {
         // reaches the wire, and nothing is resent.
         let deleted = crate::graphics::delete(1);
         let rx = read_exact(read, deleted.len());
-        let (rest, _read) = recv_bytes(&rx);
+        let (rest, read) = recv_bytes(&rx);
         assert_eq!(rest, deleted);
+        // No replay follows: stopping joins the thread, so EOF proves the
+        // total. A boundary mutant replays the completed upload here.
+        writer.stop_and_join();
+        assert!(read_rest(read).is_empty());
     }
 
     #[test]
@@ -1001,6 +1047,52 @@ mod tests {
             [bytes, rest].concat(),
             [only_bytes[..head].to_vec(), deleted, place].concat()
         );
+    }
+
+    #[test]
+    fn queued_deletes_with_several_ids_emit_in_order_and_drop_covered() {
+        let gate = Arc::new(KittyChunkGate::new(true));
+        let lock = Arc::new(TtyLock::new());
+        let (read, write) = pipe();
+        let (writer, _failed, _rx) = spawn_writer(write, &gate, &lock);
+        // Ids other than 0 or 1, so a constant-id mutant fails the exact
+        // bytes. Behind the held first chunk queue two images; deletes cover
+        // the partial upload and one queued image but not the other. Both
+        // deletes go out in push order at the boundary, each covered image
+        // sends nothing more, and the uncovered queued image still transmits
+        // whole after them.
+        let (seventh, seventh_bytes) = image(7, 1, 10);
+        let (ninth, ninth_bytes) = image(9, 0, 5);
+        let (eleventh, _) = image(11, 0, 5);
+        let head = first_chunk_len(&seventh);
+        assert!(writer.push(seventh));
+        let rx = read_exact(read, head);
+        let (bytes, read) = recv_bytes(&rx);
+        assert_eq!(bytes, seventh_bytes[..head].to_vec());
+        assert!(writer.push(ninth));
+        assert!(writer.push(eleventh));
+        assert!(writer.push(delete(7)));
+        assert!(writer.push(delete(11)));
+        gate.release();
+        // The barrier ack proves both deletes reached the wire.
+        flush(&writer);
+        let seventh_deleted = crate::graphics::delete(7);
+        let eleventh_deleted = crate::graphics::delete(11);
+        let rx = read_exact(
+            read,
+            seventh_deleted.len() + eleventh_deleted.len() + ninth_bytes.len(),
+        );
+        let (rest, read) = recv_bytes(&rx);
+        assert_eq!(
+            rest,
+            [seventh_deleted, eleventh_deleted, ninth_bytes].concat()
+        );
+        // Nothing else was kept: stopping joins the thread, so EOF proves
+        // the total. A retain mutant flipping `!=` to `==` drops the
+        // uncovered survivor instead of the covered images, so its replay
+        // never arrives here.
+        writer.stop_and_join();
+        assert!(read_rest(read).is_empty());
     }
 
     #[test]
@@ -1476,5 +1568,176 @@ mod tests {
             drop(_next);
             waiter.join().expect("the waiter joined");
         }
+    }
+
+    #[test]
+    fn kitty_writer_stack_is_one_mib() {
+        // The plan names the exact stack: a `<<` to `>>` mutant leaves 0.
+        assert_eq!(KITTY_WRITER_STACK_SIZE, 1_048_576);
+    }
+
+    /// Reads to end-of-file: only joined writers reach here, so the
+    /// thread's tty clone is gone and the read end sees EOF. A live
+    /// thread would hang this instead.
+    fn read_rest(read: File) -> Vec<u8> {
+        let mut rest = Vec::new();
+        std::io::Read::read_to_end(&mut &read, &mut rest)
+            .unwrap_or_else(|err| panic!("tty eof: {err}"));
+        rest
+    }
+
+    #[test]
+    fn pause_for_handover_returns_empty_when_nothing_is_held() {
+        let gate = Arc::new(KittyChunkGate::new(false));
+        let lock = Arc::new(TtyLock::new());
+        let (_read, write) = pipe();
+        let (writer, _failed, _rx) = spawn_writer(write, &gate, &lock);
+        // Nothing pushed: the pause acks at once with no ids. `None` and
+        // the wrong singletons fail this; the empty-vector mutant is
+        // killed by the retained-ids test below.
+        assert_eq!(writer.pause_for_handover(), Some(vec![]));
+        writer.resume_after_handover();
+        writer.stop_and_join();
+    }
+
+    #[test]
+    fn pause_for_handover_retains_queued_ids_in_order() {
+        let gate = Arc::new(KittyChunkGate::new(true));
+        let lock = Arc::new(TtyLock::new());
+        let (read, write) = pipe();
+        let (writer, _failed, _rx) = spawn_writer(write, &gate, &lock);
+        // Ids other than 0 or 1: a constant-ids mutant fails the exact
+        // vector, and `None` fails the `Some`.
+        let (seventh, seventh_bytes) = image(7, 1, 10);
+        let (ninth, ninth_bytes) = image(9, 0, 5);
+        let head = first_chunk_len(&seventh);
+        assert!(writer.push(seventh));
+        let rx = read_exact(read, head);
+        let (bytes, read) = recv_bytes(&rx);
+        assert_eq!(bytes, seventh_bytes[..head].to_vec());
+        // The second image queues behind the parked first: both are
+        // retained, in order. The send hook orders the release after the
+        // Handover the blocking pause cannot order, so the pause meets the
+        // partial upload at the boundary on every run.
+        assert!(writer.push(ninth));
+        let (sent, sent_rx) = std::sync::mpsc::channel();
+        writer.set_sent_hook(sent);
+        let ids = std::thread::scope(|scope| {
+            let paused = scope.spawn(|| writer.pause_for_handover());
+            match fakes::Deadline::after(DEADLINE).recv(&sent_rx) {
+                Ok(()) => {}
+                Err(error) => panic!("waited {DEADLINE:?} for the handover send: {error}"),
+            }
+            gate.release();
+            paused.join().expect("the pause joined")
+        });
+        assert_eq!(ids, Some(vec![7, 9]));
+        writer.resume_after_handover();
+        // The abort closes the partial upload, then both images go whole
+        // from their first chunks.
+        let aborted = crate::graphics::delete(7);
+        let rx = read_exact(
+            read,
+            aborted.len() + seventh_bytes.len() + ninth_bytes.len(),
+        );
+        let (rest, _read) = recv_bytes(&rx);
+        assert_eq!(rest, [aborted, seventh_bytes, ninth_bytes].concat());
+        writer.stop_and_join();
+    }
+
+    #[test]
+    fn handover_of_a_completed_upload_sends_no_abort() {
+        let gate = Arc::new(KittyChunkGate::new(true));
+        let lock = Arc::new(TtyLock::new());
+        let (read, write) = pipe();
+        let (writer, _failed, _rx) = spawn_writer(write, &gate, &lock);
+        // One chunk, parked before its place: `next == chunks.len()`, so
+        // no upload is open. A `<` to `<=` mutant emits a spurious abort
+        // delete here.
+        let (only, only_bytes) = image(5, 0, 5);
+        let head = first_chunk_len(&only);
+        assert!(writer.push(only));
+        let rx = read_exact(read, head);
+        let (bytes, read) = recv_bytes(&rx);
+        assert_eq!(bytes, only_bytes[..head].to_vec());
+        let paused = writer.handover_send();
+        gate.release();
+        let ids = match fakes::Deadline::after(DEADLINE).recv(&paused) {
+            Ok(ids) => ids,
+            Err(error) => panic!("waited {DEADLINE:?} for the pause ack: {error}"),
+        };
+        assert_eq!(ids, vec![5]);
+        writer.resume_after_handover();
+        // No abort: the retained image goes whole from its first chunk.
+        let rx = read_exact(read, only_bytes.len());
+        let (rest, _read) = recv_bytes(&rx);
+        assert_eq!(rest, only_bytes);
+        writer.stop_and_join();
+    }
+
+    #[test]
+    fn stop_after_a_completed_upload_sends_no_abort() {
+        let gate = Arc::new(KittyChunkGate::new(true));
+        let lock = Arc::new(TtyLock::new());
+        let (read, write) = pipe();
+        let (writer, _failed, _rx) = spawn_writer(write, &gate, &lock);
+        // Parked before the place: Stop drops the queue with no abort
+        // delete. A `<` to `<=` mutant writes one for the completed
+        // upload instead.
+        let (only, only_bytes) = image(5, 0, 5);
+        let head = first_chunk_len(&only);
+        assert!(writer.push(only));
+        let rx = read_exact(read, head);
+        let (bytes, read) = recv_bytes(&rx);
+        assert_eq!(bytes, only_bytes[..head].to_vec());
+        let ack = writer.barrier_send();
+        writer.stop_send();
+        gate.release();
+        match fakes::Deadline::after(DEADLINE).recv(&ack) {
+            Ok(()) => {}
+            Err(error) => panic!("waited {DEADLINE:?} for the barrier ack: {error}"),
+        }
+        writer.join();
+        // Nothing follows the first chunk: no abort, no place. The join
+        // closed the tty, so the read end sees EOF.
+        assert!(read_rest(read).is_empty());
+    }
+
+    #[test]
+    fn stop_and_join_aborts_and_joins() {
+        let gate = Arc::new(KittyChunkGate::new(true));
+        let lock = Arc::new(TtyLock::new());
+        let (read, write) = pipe();
+        let (writer, _failed, _rx) = spawn_writer(write, &gate, &lock);
+        // A partial upload behind the held gate: Stop's abort delete is
+        // the last thing the thread sends before it is joined. A
+        // `stop_and_join` to `()` mutant sends nothing and joins nothing.
+        let (first, first_bytes) = image(3, 1, 10);
+        let head = first_chunk_len(&first);
+        assert!(writer.push(first));
+        let rx = read_exact(read, head);
+        let (bytes, read) = recv_bytes(&rx);
+        assert_eq!(bytes, first_bytes[..head].to_vec());
+        // The send hook orders the release after the Stop the blocking
+        // join cannot order, so Stop meets the partial upload at the
+        // boundary on every run.
+        let (sent, sent_rx) = std::sync::mpsc::channel();
+        writer.set_sent_hook(sent);
+        std::thread::scope(|scope| {
+            let stopping = scope.spawn(|| writer.stop_and_join());
+            match fakes::Deadline::after(DEADLINE).recv(&sent_rx) {
+                Ok(()) => {}
+                Err(error) => panic!("waited {DEADLINE:?} for the stop send: {error}"),
+            }
+            gate.release();
+            stopping.join().expect("stop joined");
+        });
+        // Exactly the abort delete follows, then EOF: the thread was
+        // joined, so its tty clone is gone.
+        let aborted = crate::graphics::delete(3);
+        let rx = read_exact(read, aborted.len());
+        let (rest, read) = recv_bytes(&rx);
+        assert_eq!(rest, aborted);
+        assert!(read_rest(read).is_empty());
     }
 }
