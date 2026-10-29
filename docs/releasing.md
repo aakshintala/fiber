@@ -31,6 +31,8 @@ A nightly pre-release is built from main once a day, only when main changed
 since the last nightly, for example `0.0.N-nightly.YYYYMMDD`. A nightly is a
 pre-release of the next stable version: with `Cargo.toml` at `0.0.0`, the
 first nightly is `0.0.1-nightly.YYYYMMDD`, and SemVer sorts it below `0.0.1`.
+On one base version, two nightly tags sort by their `YYYYMMDD` identifier, so
+the later date sorts higher under SemVer.
 
 A stable release is cut when there is something worth installing, never on a
 schedule.

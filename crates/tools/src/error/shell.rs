@@ -25,15 +25,9 @@ pub(crate) enum ShellError {
     /// `monitor` is combined with `run_in_background` or `tty`.
     #[error("`monitor` cannot be combined with `run_in_background` or `tty`.")]
     MonitorAlone,
-    /// `timeout_ms` is given with `monitor`, which takes `deadline_ms`.
-    #[error("A monitor's limit is `deadline_ms`.")]
-    MonitorTimeout,
-    /// `deadline_ms` is given without `monitor`.
-    #[error("`deadline_ms` is a monitor's deadline; set `monitor: true` with it.")]
-    DeadlineWithoutMonitor,
-    /// `deadline_ms` is past the longest a monitor may run in this session.
+    /// `timeout_ms` is past the longest a monitor may run in this session.
     #[error(
-        "`deadline_ms` is more than {max_ms}, the longest a monitor may run here. Give {max_ms} or less."
+        "`timeout_ms` is more than {max_ms}, the longest a monitor may run here. Give {max_ms} or less."
     )]
     DeadlineTooLong {
         /// The longest deadline in this session, in milliseconds.
@@ -113,8 +107,6 @@ impl ShellError {
             Self::Arguments(error) => error.code(),
             Self::NotADirectory { .. }
             | Self::MonitorAlone
-            | Self::MonitorTimeout
-            | Self::DeadlineWithoutMonitor
             | Self::DeadlineTooLong { .. }
             | Self::NoJobs
             | Self::BareWait => ErrorCode::InvalidArguments,

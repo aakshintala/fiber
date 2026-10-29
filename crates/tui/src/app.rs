@@ -7,11 +7,12 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, CommandResult, Notice, SessionNamed, ShellCommand,
-    SteeringQueue, TurnStarted,
+    CommandAccepted, CommandRejected, CommandResult, Notice, SessionNamed, SessionStatus,
+    ShellCommand, SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
 use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
@@ -282,6 +283,8 @@ pub(crate) struct App {
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
+    /// Actual names learned from each session's latest status.
+    session_names: Arc<HashMap<SessionId, String>>,
     /// The `/` and `@` panels.
     completion: completion::Completion,
     /// Prompt recall and the Ctrl+R panel.
@@ -420,6 +423,7 @@ impl App {
             offer: crate::offer::Offer::default(),
             steering: Steering::default(),
             name: None,
+            session_names: Arc::new(HashMap::new()),
             completion: completion::Completion::default(),
             history: history::History::default(),
             copied: false,
@@ -678,6 +682,9 @@ impl App {
     /// Folds one line from the hub, returning command lines to send. An
     /// answer releases the line kept for resending as it folds.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
+        if let Line::Session(envelope) = &line {
+            self.observe_session_status(envelope);
+        }
         if self.pass_line(&line) {
             return Vec::new();
         }
@@ -700,6 +707,78 @@ impl App {
         self.settle();
         lines.extend(self.find_outgoing());
         lines
+    }
+
+    /// Whether `name` changes the visible label for `id`: a repeated
+    /// same-name status changes no rendered label, so the check only
+    /// skips a redundant copy-on-write update and label refresh.
+    // A same-name status redraws nothing: `Pages::set_session_labels`
+    // returns when the name maps are equal, so always refreshing would
+    // draw the same rows.
+    #[cfg_attr(false, mutants::skip)]
+    fn label_changed(names: &HashMap<SessionId, String>, id: &SessionId, name: &str) -> bool {
+        names.get(id).map(String::as_str) != Some(name)
+    }
+
+    fn observe_session_status(&mut self, envelope: &Envelope) {
+        if envelope.kind != "session_status" {
+            return;
+        }
+        let Some(status) = read!(envelope, SessionStatus) else {
+            return;
+        };
+        let name = (status.named && !status.name.is_empty()).then_some(status.name);
+        let names = Arc::make_mut(&mut self.session_names);
+        let changed = match name {
+            Some(name) => {
+                if Self::label_changed(names, &envelope.session_id, &name) {
+                    names.insert(envelope.session_id.clone(), name);
+                    true
+                } else {
+                    false
+                }
+            }
+            None => names.remove(&envelope.session_id).is_some(),
+        };
+        if changed {
+            self.refresh_session_labels();
+        }
+    }
+
+    fn session_labels(&mut self, rows: &[crate::home::Row]) {
+        let names = Arc::make_mut(&mut self.session_names);
+        for row in rows {
+            let Some(status) = &row.status else {
+                continue;
+            };
+            if status.named && !status.name.is_empty() {
+                names.insert(row.id.clone(), status.name.clone());
+            } else {
+                names.remove(&row.id);
+            }
+        }
+        self.refresh_session_labels();
+    }
+
+    fn refresh_session_labels(&mut self) {
+        self.screen
+            .pages_mut()
+            .set_session_labels(Arc::clone(&self.session_names));
+        if let Some(preview) = &mut self.preview {
+            preview
+                .pages
+                .set_session_labels(Arc::clone(&self.session_names));
+        }
+        if let Overlay::Folding { fold, .. } = &mut self.overlay {
+            fold.set_session_labels(Arc::clone(&self.session_names));
+        }
+        if let Some(open) = self.items.open.as_mut()
+            && let Some(stashed) = open.stashed.as_mut()
+        {
+            stashed
+                .pages_mut()
+                .set_session_labels(Arc::clone(&self.session_names));
+        }
     }
 
     /// Whether any full stream is still folding its opening pass.
@@ -1350,6 +1429,7 @@ impl App {
             self.notices
                 .push("connection_failed", "Connection lost.".to_owned());
         }
+        self.delete_command_link_lost();
         // A lost connection closes an open item view first, swapping the
         // screen back before anything clears it, and drops every wish:
         // the hub connection and its levels are gone.

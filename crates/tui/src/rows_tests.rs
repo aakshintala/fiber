@@ -331,7 +331,7 @@ fn push_fitted_keeps_the_animated_tag_on_its_row() {
     rows.push_fitted(&line, None);
 
     let (_, texts) = rows.into_parts();
-    // docs/tui.md:2968: a painted replacement row keeps its animation tag.
+    // docs/tui.md:3001: a painted replacement row keeps its animation tag.
     assert_eq!(texts.first().and_then(|text| text.anim.clone()), Some(key));
 }
 
@@ -840,6 +840,7 @@ fn pad_with_a_missing_text_row_leaves_the_rows() {
         scopes: Vec::new(),
         all_open: false,
         seam: None,
+        session_names: Default::default(),
     };
     out.pad(0, 1, 10);
     assert_eq!(out.rows.len(), 1);

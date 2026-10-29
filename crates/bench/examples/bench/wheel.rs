@@ -249,7 +249,7 @@ fn session_samples(
 
 /// The sessions directory of `home`'s workspace.
 fn sessions_dir(home: &Home) -> std::path::PathBuf {
-    log::sessions_dir(&home.home(), &doors::project(&home.workspace()))
+    log::sessions_dir(&home.home(), &worktree::project(&home.workspace()))
 }
 
 /// A new log for `id`, starting from the bench's own `SessionStarted`.

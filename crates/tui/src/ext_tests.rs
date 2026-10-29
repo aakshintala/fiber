@@ -1263,6 +1263,73 @@ fn each_entry_kind_changes_the_key() {
     }
 }
 
+#[test]
+fn a_message_entry_is_in_the_key_and_a_renamed_label_changes_it() {
+    use super::TurnEntry;
+    use std::borrow::Cow;
+    let message = |source: &'static str, label: &'static str| TurnCard {
+        prompts: Vec::new(),
+        entries: vec![TurnEntry::Message {
+            source,
+            label: Cow::Borrowed(label),
+            text: "please check",
+            images: vec![PromptImage {
+                path: "a.png",
+                width: 10,
+                height: 8,
+            }],
+            ts: 12,
+        }],
+        started: 1,
+        calls: 0,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: None,
+            subscription_cost: 0.0,
+        },
+        state: TurnCardState::Running,
+        flat: false,
+    };
+    let one = card_key(&message("session", "worker"));
+    // The current label is in the key: a rename re-renders the card.
+    assert_ne!(
+        one,
+        card_key(&message("session", "renamed")),
+        "a renamed label re-renders the card"
+    );
+    assert_ne!(one, card_key(&message("fiber", "Fiber")));
+    let mut swaps = [
+        message("session", "worker"),
+        message("session", "worker"),
+        message("session", "worker"),
+        message("session", "worker"),
+        message("session", "worker"),
+    ];
+    if let TurnEntry::Message { text, .. } = &mut swaps[0].entries[0] {
+        *text = "check instead";
+    }
+    if let TurnEntry::Message { images, .. } = &mut swaps[1].entries[0] {
+        images[0].path = "b.png";
+    }
+    if let TurnEntry::Message { images, .. } = &mut swaps[2].entries[0] {
+        images[0].width = 11;
+    }
+    if let TurnEntry::Message { ts, .. } = &mut swaps[3].entries[0] {
+        *ts = 13;
+    }
+    if let TurnEntry::Message { images, .. } = &mut swaps[4].entries[0] {
+        images.clear();
+    }
+    for (index, varied) in swaps.iter().enumerate() {
+        assert_ne!(one, card_key(varied), "varying field {index}");
+    }
+}
+
 fn card_group<'a, 'x>(card: &'a mut TurnCard<'x>) -> &'a mut super::TurnGroup<'x>
 where
     'x: 'a,
@@ -2120,7 +2187,7 @@ fn an_animated_renderer_draws_its_frame_and_reports_its_interval() {
         panic!("expected drawn lines, got {decision:?}");
     };
     assert_eq!(extension, "animated-test");
-    assert_eq!(fake.frames.borrow().clone(), vec![7]); // docs/tui.md:2963: the frame reaches the renderer in its input.
+    assert_eq!(fake.frames.borrow().clone(), vec![7]); // docs/tui.md:2996: the frame reaches the renderer in its input.
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0][0].text, "anim7-0");
     assert_eq!(lines[1][0].text, "anim7-1");
@@ -2142,5 +2209,5 @@ fn a_stopped_animated_renderer_draws_once() {
     };
     let (_, continues) = fake.render_animated(&ctx, "notice", &notice, 80, 2, &|_, _| Vec::new());
     assert!(!continues);
-    assert_eq!(fake.frames.borrow().clone(), vec![2]); // docs/tui.md:2963: the frame reaches the renderer in its input.
+    assert_eq!(fake.frames.borrow().clone(), vec![2]); // docs/tui.md:2996: the frame reaches the renderer in its input.
 }

@@ -18,6 +18,7 @@ use contract::events::{DirectoryAdded, Event, InstructionReason, InstructionSent
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::{Envelope, Seq, SessionId};
 use fakes::clock::FakeClock;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 use super::{State, apply, clean, unified_diff};
 use crate::opening;
@@ -82,7 +83,7 @@ fn readonly(path: &Path, yes: bool) {
 fn initial(home: &Path, workspace: &Path, clock: &Arc<FakeClock>) -> State {
     let prompt = inputs(home, clock);
     let collected = opening::collect(&prompt, workspace);
-    let mut state = State::initial(&collected.message, workspace, &prompt);
+    let mut state = State::initial(&collected.message, workspace, &prompt, &collected.pre_stats);
     apply(&mut state.had, &Event::OpeningMessage(collected.message));
     state
 }
@@ -110,7 +111,7 @@ fn initial_sectioned(
 ) -> State {
     let prompt = sectioned_inputs(home, clock, sections);
     let collected = opening::collect(&prompt, workspace);
-    let mut state = State::initial(&collected.message, workspace, &prompt);
+    let mut state = State::initial(&collected.message, workspace, &prompt, &collected.pre_stats);
     apply(&mut state.had, &Event::OpeningMessage(collected.message));
     state
 }
@@ -2295,10 +2296,10 @@ fn added_roots_send_their_instruction_file_only_when_a_call_touches_them() {
     let shared = canon(&shared);
     let fake = clock();
     let prompt = inputs(&home, &fake);
-    let message =
-        opening::collect_with_added(&prompt, &workspace, std::slice::from_ref(&shared)).message;
+    let collected = opening::collect_with_added(&prompt, &workspace, std::slice::from_ref(&shared));
+    let message = &collected.message;
     assert_eq!(message.added_directories, [shared.display().to_string()]);
-    let mut state = State::initial(&message, &workspace, &prompt);
+    let mut state = State::initial(message, &workspace, &prompt, &collected.pre_stats);
     // Untouched, the next turn start reads nothing from the added root.
     write(&shared.join("AGENTS.md"), "Shared rules.\n");
     let out = state.check(&*fake);
@@ -2406,4 +2407,288 @@ fn resumed_state_keeps_added_folders_across_a_handoff_opening() {
     );
     assert_eq!(out.files[0].reason, InstructionReason::Created);
     assert_eq!(out.files[0].sent, InstructionSent::Full);
+}
+
+#[test]
+fn a_raced_adopt_does_not_pin_the_torn_content() {
+    crate::read_stat::disarm();
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let file = canon(&workspace).join("AGENTS.md");
+    // Torn and final share size: the race hides in content, not size.
+    let torn = "torn1\n";
+    let final_text = "final\n";
+    assert_eq!(torn.len(), final_text.len(), "same-size rewrite");
+    write(&file, torn);
+    set_mtime(&file, 1_000);
+    let target = file.display().to_string();
+    // Pre-stat edge, read-return edge, held hook edge, post-stat edge:
+    // the worker reads the torn bytes and parks; the test rewrites to
+    // the final content before releasing it, so the post-stat is final.
+    let out = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            state.check(&*fake)
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the adopt reached its read edge");
+        write(&file, final_text);
+        set_mtime(&file, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked adopt ends")
+    });
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    assert_eq!(out.files[0].content.as_deref(), Some(torn));
+    for file in &out.files {
+        apply(&mut state.had, &Event::InstructionFile(file.clone()));
+    }
+    // The next check diffs the torn baseline against the final content.
+    let out = state.check(&*fake);
+    assert_eq!(
+        out.files.len(),
+        1,
+        "a mid-write adopt converges at the next check"
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].content.as_deref(), Some(final_text));
+}
+
+#[test]
+fn a_raced_call_completed_does_not_pin_the_torn_content() {
+    crate::read_stat::disarm();
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let file = workspace.join("AGENTS.md");
+    let old = "old12\n";
+    let torn = "torn1\n";
+    let final_text = "final\n";
+    assert_eq!(old.len(), torn.len(), "same-size rewrite");
+    assert_eq!(torn.len(), final_text.len(), "same-size rewrite");
+    write(&file, old);
+    set_mtime(&file, 500);
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    let file = workspace.join("AGENTS.md");
+    write(&file, torn);
+    set_mtime(&file, 1_000);
+    let target = file.display().to_string();
+    // Pre-stat edge, read-return edge, held hook edge, post-stat edge:
+    // the worker re-reads the torn bytes and parks; the test rewrites
+    // to the final content before releasing it.
+    let own = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            state.call_completed(&workspace, &declared(Some(&["AGENTS.md"])))
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the own edit reached its read edge");
+        write(&file, final_text);
+        set_mtime(&file, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked own edit ends")
+    });
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].content.as_deref(), Some(torn));
+    for line in &own {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    assert!(state.take_queued().is_empty());
+    // The next check diffs the torn baseline against the final content.
+    let out = state.check(&*fake);
+    assert_eq!(
+        out.files.len(),
+        1,
+        "a mid-write own edit converges at the next check"
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].content.as_deref(), Some(final_text));
+}
+
+#[test]
+fn a_raced_take_queued_does_not_pin_the_torn_content() {
+    crate::read_stat::disarm();
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    let file = workspace.join("sub/AGENTS.md");
+    let torn = "torn1\n";
+    let final_text = "final\n";
+    assert_eq!(torn.len(), final_text.len(), "same-size rewrite");
+    write(&file, torn);
+    set_mtime(&file, 1_000);
+    // Queue the subdirectory file without a hook: the adopt reads the
+    // torn content it finds.
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/notes.txt"])));
+    assert!(own.is_empty());
+    let target = file.display().to_string();
+    // Pre-stat edge, read-return edge, held hook edge, post-stat edge:
+    // the worker flush re-reads the torn bytes and parks; the test
+    // rewrites to the final content before releasing it.
+    let queued = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            state.take_queued()
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the flush reached its read edge");
+        write(&file, final_text);
+        set_mtime(&file, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked flush ends")
+    });
+    assert_eq!(queued.len(), 1);
+    let Event::InstructionFile(line) = &queued[0] else {
+        panic!("queued a subdirectory line");
+    };
+    assert_eq!(line.content.as_deref(), Some(torn));
+    apply(&mut state.had, &queued[0]);
+    // The next check diffs the torn baseline against the final content.
+    let out = state.check(&*fake);
+    assert_eq!(
+        out.files.len(),
+        1,
+        "a mid-write flush converges at the next check"
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].content.as_deref(), Some(final_text));
+}
+
+#[test]
+fn a_rewrite_between_the_pre_stat_and_the_read_is_reported_at_the_next_check() {
+    crate::read_stat::disarm();
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let file = canon(&workspace).join("AGENTS.md");
+    let torn = "torn1\n";
+    let final_text = "final\n";
+    assert_eq!(torn.len(), final_text.len(), "same-size rewrite");
+    write(&file, "pre\n");
+    set_mtime(&file, 1_000);
+    let target = file.display().to_string();
+    // Pre-stat edge, held hook edge, read-return edge: the worker stats
+    // the pre content and parks; the test writes the torn rewrite before
+    // releasing it, so the opening reads the torn content.
+    let fake = clock();
+    let prompt = inputs(&home, &fake);
+    let collected = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            opening::collect(&prompt, &workspace)
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the opening reached its stat edge");
+        write(&file, torn);
+        set_mtime(&file, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked opening ends")
+    });
+    assert!(
+        collected
+            .message
+            .instruction_files
+            .iter()
+            .any(|sent| { sent.path == target && sent.content == torn }),
+        "the opening read the torn content"
+    );
+    let mut state = State::initial(
+        &collected.message,
+        &workspace,
+        &prompt,
+        &collected.pre_stats,
+    );
+    apply(&mut state.had, &Event::OpeningMessage(collected.message));
+    // The write completes in place at the same size and final mtime.
+    write(&file, final_text);
+    set_mtime(&file, 2_000);
+    // The pre-read baseline misses the shortcut, so content decides.
+    let out = state.check(&*fake);
+    assert_eq!(
+        out.files.len(),
+        1,
+        "a stat-to-read change shows at the next check"
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].content.as_deref(), Some(final_text));
+}
+
+#[test]
+fn a_rewrite_between_the_section_pre_stat_and_read_is_reported_at_the_next_check() {
+    crate::read_stat::disarm();
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let workspace = canon(&workspace);
+    let section = workspace.join("section.txt");
+    let torn = "torn1\n";
+    let final_text = "final\n";
+    assert_eq!(torn.len(), final_text.len(), "same-size rewrite");
+    write(&section, "pre\n");
+    set_mtime(&section, 1_000);
+    let target = section.display().to_string();
+    // Pre-stat edge, held hook edge, read-return edge through the
+    // section-file baseline: the worker stats pre and parks; the test
+    // writes the torn rewrite before releasing it.
+    let fake = clock();
+    let sections = vec![("ext".to_owned(), vec![section.clone()], None)];
+    let prompt = sectioned_inputs(&home, &fake, sections);
+    let collected = std::thread::scope(|scope| {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let waiter = scope.spawn(|| {
+            crate::read_stat::arm(&target, entered_tx, release_rx);
+            opening::collect(&prompt, &workspace)
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the section opening reached its stat edge");
+        write(&section, torn);
+        set_mtime(&section, 2_000);
+        let _sent = release_tx.send(());
+        waiter.join().expect("the hooked section opening ends")
+    });
+    assert!(
+        collected.message.extension_sections.iter().any(|sent| {
+            sent.extension == "ext"
+                && sent
+                    .files
+                    .iter()
+                    .any(|sent| sent.path == target && sent.content == torn)
+        }),
+        "the opening read the torn section content"
+    );
+    let mut state = State::initial(
+        &collected.message,
+        &workspace,
+        &prompt,
+        &collected.pre_stats,
+    );
+    apply(&mut state.had, &Event::OpeningMessage(collected.message));
+    // The write completes in place at the same size and final mtime.
+    write(&section, final_text);
+    set_mtime(&section, 2_000);
+    // The pre-read baseline misses the shortcut, so content decides.
+    let out = state.check(&*fake);
+    assert_eq!(
+        out.files.len(),
+        1,
+        "a stat-to-read section change shows at the next check"
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].content.as_deref(), Some(final_text));
 }

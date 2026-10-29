@@ -44,6 +44,7 @@ mod read_only;
 mod classify;
 mod cwd;
 mod entry;
+mod gh_owner;
 mod git;
 mod matches;
 mod syntax;
@@ -61,7 +62,7 @@ mod run_effects_tests;
 /// The default when the model gives no `timeout_ms`: 10 minutes.
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 
-/// A monitor's deadline when the model gives no `deadline_ms`: 5 minutes
+/// A monitor's deadline when the model gives no `timeout_ms`: 5 minutes
 /// (`docs/tools.md`, "Background jobs").
 const DEFAULT_DEADLINE_MS: u64 = 300_000;
 
@@ -87,8 +88,8 @@ pub struct Shell {
     /// When set, a long command, `run_in_background`, or a shell that exits
     /// with members left becomes a job. Without it, nothing moves.
     jobs: Option<Arc<dyn Jobs>>,
-    /// The longest `deadline_ms` a monitor may have.
-    max_deadline_ms: u64,
+    /// The longest `timeout_ms` a monitor may have.
+    max_timeout_ms: u64,
     /// The session's `artifacts/`, when the call spills its output past
     /// 1 MiB into its artifact file (`docs/tools.md`, "Result and output").
     artifacts: Option<PathBuf>,
@@ -124,7 +125,7 @@ impl Shell {
             clock,
             search: None,
             jobs: None,
-            max_deadline_ms: MAX_DEADLINE_MS,
+            max_timeout_ms: MAX_DEADLINE_MS,
             artifacts: None,
             timing: None,
             read_only: Arc::new(Mutex::new(Vec::new())),
@@ -146,7 +147,7 @@ impl Shell {
     /// 10 minutes (`docs/tools.md`, "Background jobs").
     pub fn non_interactive(self) -> Self {
         Self {
-            max_deadline_ms: MAX_DEADLINE_NON_INTERACTIVE_MS,
+            max_timeout_ms: MAX_DEADLINE_NON_INTERACTIVE_MS,
             ..self
         }
     }
@@ -243,7 +244,8 @@ impl Tool for Shell {
             name: "shell".to_owned(),
             description: "Runs a command in a new process session. `command` is the command. \
                  `workdir` defaults to the workspace; a relative path is resolved against it. \
-                 `timeout_ms` defaults to 600000. Standard output and standard error are one stream, \
+                 `timeout_ms` defaults to 600000, or to 300000 for a monitor. A monitor's maximum is 1800000, \
+                 or 600000 in a non-interactive run. Standard output and standard error are one stream, \
                  except in a monitor, whose standard error goes to its own file."
                 .to_owned(),
             input_schema: json!({
@@ -260,7 +262,7 @@ impl Tool for Shell {
                     "timeout_ms": {
                         "type": ["integer", "null"],
                         "minimum": 0,
-                        "description": "How long the command may run, in milliseconds. The default is 600000."
+                        "description": "How long the command may run, in milliseconds. The default is 600000; for a monitor, the default is 300000 and the maximum is 1800000 (600000 in a non-interactive run)."
                     },
                     "run_in_background": {
                         "type": ["boolean", "null"],
@@ -273,14 +275,9 @@ impl Tool for Shell {
                     "monitor": {
                         "type": ["boolean", "null"],
                         "description": "Start the command as a monitor: a job whose standard output lines reach you in batches. Standard error goes to its own file."
-                    },
-                    "deadline_ms": {
-                        "type": ["integer", "null"],
-                        "minimum": 0,
-                        "description": "A monitor's deadline, in milliseconds. The default is 300000; the most is 1800000, or 600000 in a non-interactive run."
                     }
                 },
-                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "deadline_ms"],
+                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor"],
                 "additionalProperties": false
             }),
             deferred: false, hosted: None,
@@ -293,10 +290,10 @@ impl Tool for Shell {
     ) -> Result<Effects, contract::tool::EffectsError> {
         // A call `parse` rejects never runs. The closed default keeps a bad
         // `timeout_ms` or `workdir` off the read-only fast path.
-        let mut effects = match parse(arguments, &self.workspace, self.max_deadline_ms) {
+        let mut effects = match parse(arguments, &self.workspace, self.max_timeout_ms) {
             Ok(parsed) => {
                 let entries = support::lock(&self.read_only);
-                classify(&parsed.command, &parsed.workdir, &entries)
+                classify(&parsed.command, &self.workspace, &parsed.workdir, &entries)
             }
             Err(_) => classify::executes(None, None),
         };
@@ -341,7 +338,7 @@ impl Tool for Shell {
         let settings = self.selected();
         if let Err(unavailable) = sandbox::check_available(&settings, &self.workspace) {
             let cause = unavailable.to_string();
-            return match parse(arguments, &self.workspace, self.max_deadline_ms) {
+            return match parse(arguments, &self.workspace, self.max_timeout_ms) {
                 Ok(parsed) => {
                     let mut output = errored(ShellError::SandboxApply { cause });
                     output.details = Some(details(&parsed.command, None));
@@ -383,9 +380,9 @@ impl Tool for Shell {
     /// cloned under the lock and the lock released before classifying, so
     /// no filesystem read runs while it is held.
     fn review_note(&self, arguments: &Map<String, Value>) -> Option<String> {
-        let parsed = parse(arguments, &self.workspace, self.max_deadline_ms).ok()?;
+        let parsed = parse(arguments, &self.workspace, self.max_timeout_ms).ok()?;
         let entries = support::lock(&self.read_only).clone();
-        classify::not_shown_read_only(&parsed.command, &parsed.workdir, &entries)
+        classify::not_shown_read_only(&parsed.command, &self.workspace, &parsed.workdir, &entries)
     }
 }
 
@@ -403,7 +400,7 @@ impl Shell {
         if cancel.is_cancelled() {
             return cancelled_before();
         }
-        let parsed = match parse(arguments, &self.workspace, self.max_deadline_ms) {
+        let parsed = match parse(arguments, &self.workspace, self.max_timeout_ms) {
             Ok(parsed) => parsed,
             Err(error) => return errored(error),
         };
@@ -514,7 +511,6 @@ struct Args {
     command: String,
     workdir: Option<String>,
     timeout_ms: Option<u64>,
-    deadline_ms: Option<u64>,
     run_in_background: Option<bool>,
     tty: Option<bool>,
     monitor: Option<bool>,
@@ -562,7 +558,7 @@ impl Mode {
 pub(crate) struct Limit {
     /// Milliseconds.
     pub(crate) ms: u64,
-    /// The limit is a monitor's `deadline_ms`.
+    /// The limit is a monitor's `timeout_ms`.
     pub(crate) monitor: bool,
 }
 
@@ -589,13 +585,12 @@ impl Limit {
 fn parse(
     arguments: &Map<String, Value>,
     workspace: &Path,
-    max_deadline_ms: u64,
+    max_timeout_ms: u64,
 ) -> Result<Parsed, ShellError> {
     let args: Args = crate::tool_util::parsed(arguments)?;
     let command = args.command;
     let workdir = workdir(args.workdir.as_deref(), workspace)?;
     let given_timeout = args.timeout_ms;
-    let given_deadline = args.deadline_ms;
     let run_in_background = args.run_in_background.unwrap_or(false);
     let tty = args.tty.unwrap_or(false);
     let monitor = args.monitor.unwrap_or(false);
@@ -607,20 +602,14 @@ fn parse(
         (false, false, false) => Mode::Foreground,
     };
     let timeout_ms = if mode == Mode::Monitor {
-        if given_timeout.is_some() {
-            return Err(ShellError::MonitorTimeout);
-        }
-        let deadline = given_deadline.unwrap_or(DEFAULT_DEADLINE_MS);
-        if deadline > max_deadline_ms {
+        let timeout = given_timeout.unwrap_or(DEFAULT_DEADLINE_MS);
+        if timeout > max_timeout_ms {
             return Err(ShellError::DeadlineTooLong {
-                max_ms: max_deadline_ms,
+                max_ms: max_timeout_ms,
             });
         }
-        deadline
+        timeout
     } else {
-        if given_deadline.is_some() {
-            return Err(ShellError::DeadlineWithoutMonitor);
-        }
         given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS)
     };
     Ok(Parsed {
@@ -898,9 +887,9 @@ pub(crate) fn timeout_line(timeout_ms: u64) -> String {
 
 /// What a monitor stopped at its deadline says (`docs/tools.md`,
 /// "Background jobs").
-pub(crate) fn deadline_line(deadline_ms: u64) -> String {
+pub(crate) fn deadline_line(timeout_ms: u64) -> String {
     format!(
-        "The monitor's deadline of {deadline_ms} ms passed; start it again if you still need it."
+        "The monitor's deadline of {timeout_ms} ms passed; start it again if you still need it."
     )
 }
 

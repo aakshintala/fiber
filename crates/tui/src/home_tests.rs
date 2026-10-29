@@ -330,6 +330,26 @@ fn a_status_that_began_before_the_held_one_changes_nothing() {
 }
 
 #[test]
+fn an_equal_or_older_status_after_session_left_keeps_the_row_left() {
+    let mut sessions = Sessions::default();
+    let id = "s_aaaaaaaaaaaaaaaa";
+    let status = |since| {
+        from_status(&envelope(
+            id,
+            json!({"state": "idle", "started": 0, "calls": 0, "since" : since}),
+        ))
+    };
+    sessions.status(status(9));
+    sessions.left(&SessionId(id.to_owned()), Left::Exited);
+    sessions.status(status(9));
+    assert_eq!(shown(&sessions), ["○  fix the parser"]);
+    sessions.status(status(8));
+    assert_eq!(shown(&sessions), ["○  fix the parser"]);
+    sessions.status(status(10));
+    assert_eq!(shown(&sessions), ["✓  fix the parser"]);
+}
+
+#[test]
 fn a_status_in_the_same_millisecond_loses_to_a_held_waiting_one() {
     let mut sessions = Sessions::default();
     let id = "s_aaaaaaaaaaaaaaaa";

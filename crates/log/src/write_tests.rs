@@ -448,6 +448,7 @@ fn notice(message: &str) -> Event {
 fn status(name: &str) -> Event {
     Event::SessionStatus(SessionStatus {
         name: name.to_owned(),
+        named: false,
         workspace: "/w".into(),
         parent: None,
         model: "m".into(),
