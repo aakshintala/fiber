@@ -293,7 +293,8 @@ fn a_hooks_thread_that_cannot_start_posts_the_failure_as_the_result() {
             | Input::Login { .. }
             | Input::Install { .. }
             | Input::Tick
-            | Input::Signal(_) => unreachable!("the worker posts a hooks answer"),
+            | Input::Signal(_)
+            | Input::KittyFailed => unreachable!("the worker posts a hooks answer"),
         };
         assert_eq!(error.code, ErrorCode::IoFailed);
         assert_eq!(error.message, message);

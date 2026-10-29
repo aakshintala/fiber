@@ -7,12 +7,31 @@ use serde_json::{Value, json};
 
 use super::super::{App, Effect};
 use crate::app::Target;
+use crate::event_loop::kitty_writer::Item;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::mouse::{self, TargetId};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// The Kitty bytes `out` queues, in order: each image's transmit chunks
+/// then its place.
+fn kitty_bytes(out: &crate::image::Out) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for item in &out.items {
+        match item {
+            Item::Image { chunks, place, .. } => {
+                for chunk in chunks {
+                    bytes.extend_from_slice(chunk);
+                }
+                bytes.extend_from_slice(place);
+            }
+            Item::Delete(delete) => bytes.extend_from_slice(&delete.bytes),
+        }
+    }
+    bytes
+}
 
 /// An app attached to [`SESSION`] with the link up, 60 columns wide.
 fn app() -> App {
@@ -663,7 +682,16 @@ fn an_accepted_png_answer_transmits_and_places() {
     let id = asked(&mut app, 1);
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
     let out = app.take_image_out();
-    let kitty = String::from_utf8(out.kitty).expect("escapes are text");
+    // The answer queues its transmit before its place, so the writer sends
+    // the transmit first (`docs/tui.md`, "Images").
+    match &out.items[0] {
+        Item::Image { id, place, .. } => {
+            assert_eq!(*id, 1);
+            assert!(place.starts_with(b"\x1b_Ga=p,U=1,i=1,"));
+        }
+        Item::Delete(_) => panic!("the answer queues its transmit, not a delete"),
+    }
+    let kitty = String::from_utf8(kitty_bytes(&out)).expect("escapes are text");
     // The transmit posts the PNG bytes over the grid the answer sizes,
     // and the place binds the placeholders under the image's id: a
     // 56-column conversation holds 22 columns, and the height follows at
@@ -682,7 +710,7 @@ fn an_accepted_png_answer_transmits_and_places() {
     // writes no more Kitty bytes.
     app.images_drawn(&drawn(1));
     let out = app.take_image_out();
-    assert!(out.kitty.is_empty());
+    assert!(out.items.is_empty());
 }
 
 #[test]
@@ -692,17 +720,17 @@ fn a_second_answer_for_a_shown_image_posts_nothing() {
     let id = asked(&mut app, 1);
     let answer = accepted(&id, "QUJD", "image/png");
     assert!(app.image_answered(&id, Some(&answer)));
-    assert!(!app.take_image_out().kitty.is_empty());
+    assert!(!app.take_image_out().items.is_empty());
     // The duplicate answer draws nowhere.
     assert!(app.image_answered(&id, Some(&answer)));
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
     assert_eq!(app.notice(), None);
     // The terminal holds the image, and Fiber sends nothing again on a
     // scroll (`docs/tui.md`, "Images"): after the transmit, this redraw
     // writes no more Kitty bytes.
     app.images_drawn(&drawn(1));
     let out = app.take_image_out();
-    assert!(out.kitty.is_empty());
+    assert!(out.items.is_empty());
 }
 
 #[test]
@@ -734,7 +762,7 @@ fn a_display_answer_without_png_bytes_notices_and_keeps_the_line() {
             "{name}: one notice says why"
         );
         let out = app.take_image_out();
-        assert!(out.kitty.is_empty(), "{name}: nothing posts");
+        assert!(out.items.is_empty(), "{name}: nothing posts");
         // A failed image is not asked for again while its session's
         // layout lives.
         app.images_drawn(&drawn(1));
@@ -753,7 +781,7 @@ fn a_stale_generation_answer_posts_nothing() {
     let answer = accepted(&id, "QUJD", "image/png");
     app.images.generation = app.images.generation.saturating_add(1);
     assert!(app.image_answered(&id, Some(&answer)));
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
     assert_eq!(app.notice(), None);
 }
 
@@ -799,7 +827,7 @@ fn a_kitty_error_fails_only_its_image() {
     let shot = command_for(&out.display, "artifacts/shot.png");
     assert!(app.image_answered(&old, Some(&accepted(&old, "QUJD", "image/png"))));
     assert!(app.image_answered(&shot, Some(&accepted(&shot, "QUJD", "image/png"))));
-    let kitty = String::from_utf8(app.take_image_out().kitty).expect("escapes are text");
+    let kitty = String::from_utf8(kitty_bytes(&app.take_image_out())).expect("escapes are text");
     assert!(
         kitty.contains("Ga=t,f=100,i=1,"),
         "the first image transmits"
@@ -849,7 +877,7 @@ fn a_kitty_error_fails_only_its_image() {
     // on a scroll (`docs/tui.md`, "Images"): this redraw writes no more
     // Kitty bytes.
     app.images_drawn(&drawn(2));
-    assert!(app.take_image_out().kitty.is_empty(), "nothing retransmits");
+    assert!(app.take_image_out().items.is_empty(), "nothing retransmits");
 }
 
 #[test]
@@ -859,7 +887,7 @@ fn a_delayed_error_for_a_retired_id_spares_a_transmitted_new_session_image() {
     let old_id = image_id(&app, SESSION, "artifacts/shot.png");
     let id = asked(&mut app, old_id);
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
-    assert!(!app.take_image_out().kitty.is_empty());
+    assert!(!app.take_image_out().items.is_empty());
     // A fresh layout for the next session uses the app's same id source.
     app.attached_screen_mut().pages_mut().clear();
     app.attach(contract::SessionId(OTHER.to_owned()));
@@ -870,7 +898,7 @@ fn a_delayed_error_for_a_retired_id_spares_a_transmitted_new_session_image() {
     let next = command_for(&out.display, "artifacts/next.png");
     assert!(!next.is_empty(), "the new image asks");
     assert!(app.image_answered(&next, Some(&accepted(&next, "QUJD", "image/png"))));
-    let kitty = String::from_utf8(app.take_image_out().kitty).expect("escapes are text");
+    let kitty = String::from_utf8(kitty_bytes(&app.take_image_out())).expect("escapes are text");
     assert!(kitty.contains("Ga=t,"), "the new image transmits");
     assert!(kitty.contains("Ga=p,"), "the new image places");
     // Even after the new image transmitted, an old error names only the
@@ -986,7 +1014,7 @@ fn a_kitty_error_for_an_unknown_id_posts_nothing() {
     // No fetch is out: the error names no display image.
     app.fail_display_image(7);
     assert_eq!(app.notice(), None);
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
     // The drawn image still fetches: nothing failed.
     app.images_drawn(&drawn(1));
     assert!(!app.take_image_out().display.is_empty());
@@ -998,12 +1026,18 @@ fn forgetting_a_shown_image_deletes_it() {
     started_with_image(&mut app, "artifacts/shot.png");
     let id = asked(&mut app, 1);
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
-    assert!(!app.take_image_out().kitty.is_empty());
+    assert!(!app.take_image_out().items.is_empty());
     // Attaching a new session deletes the shown image before its id
     // returns, and drops the old fetch.
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbbbbbb".to_owned()));
-    assert_eq!(app.take_image_deletes(), crate::graphics::delete(1));
-    assert!(app.take_image_out().kitty.is_empty());
+    // The shown image's delete goes out before the next session draws,
+    // under its own id (`docs/tui.md`, "Images"): the session change
+    // deletes the previous session's placements.
+    let deletes = app.take_image_deletes();
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(deletes[0].id, 1);
+    assert_eq!(deletes[0].bytes, crate::graphics::delete(1));
+    assert!(app.take_image_out().items.is_empty());
 }
 
 #[test]
@@ -1014,7 +1048,81 @@ fn forgetting_without_a_shown_image_deletes_nothing() {
     // Asked but never shown: nothing reached the terminal.
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbbbbbb".to_owned()));
     assert!(app.take_image_deletes().is_empty());
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
+}
+
+#[test]
+fn forgetting_purges_queued_payloads_and_takes_no_new_ones() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+    // The session changes: the purge goes before any later item, and the
+    // forgotten transmit never leaves the queue.
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbbbbbb".to_owned()));
+    let out = app.take_image_out();
+    assert!(out.purge);
+    assert!(out.items.is_empty());
+    // The purge is one handoff: the next drain carries nothing.
+    let out = app.take_image_out();
+    assert!(!out.purge);
+    assert!(out.items.is_empty());
+}
+
+#[test]
+fn handover_keeps_retained_and_reasks_dropped() {
+    let mut app = inline_app();
+    ancestor_image(&mut app, "artifacts/old.png");
+    started_with_image(&mut app, "artifacts/shot.png");
+    app.images_drawn(&[drawn(1), drawn(2)].concat());
+    let out = app.take_image_out();
+    let old = command_for(&out.display, "artifacts/old.png");
+    let shot = command_for(&out.display, "artifacts/shot.png");
+    assert!(app.image_answered(&old, Some(&accepted(&old, "QUJD", "image/png"))));
+    assert!(app.image_answered(&shot, Some(&accepted(&shot, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+    // The writer still holds the ancestor's image: it stays shown and is
+    // sent again whole, while the dropped image goes back to asked with a
+    // fresh request, even though no frame drew it again (`docs/tui.md`,
+    // "Images"): handing the terminal over sends every on-screen image
+    // again whole.
+    let kept = image_id(&app, OTHER, "artifacts/old.png");
+    app.images_after_handover(vec![kept]);
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1);
+    let value: Value =
+        serde_json::from_str(&out.display[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": SESSION, "path": "artifacts/shot.png"}))
+    );
+    // A redraw still finds the retained image shown and asks nothing for
+    // it, while the re-asked image fetches once.
+    app.images_drawn(&drawn(kept));
+    assert!(app.take_image_out().display.is_empty());
+}
+
+#[test]
+fn handover_with_nothing_retained_reasks_every_shown_image() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+    // The writer holds nothing: the shown image goes back to asked with a
+    // fresh request (`docs/tui.md`, "Images"): handing the terminal over
+    // sends every on-screen image again whole.
+    app.images_after_handover(Vec::new());
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1);
+    let value: Value =
+        serde_json::from_str(&out.display[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(value.get("command"), Some(&json!("read_file")));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": SESSION, "path": "artifacts/shot.png"}))
+    );
 }
 
 #[test]
@@ -1151,7 +1259,7 @@ fn a_jpeg_answer_queues_a_conversion_not_a_transmit() {
     let bytes = base64::engine::general_purpose::STANDARD.encode(b"jpeg-bytes");
     assert!(app.image_answered(&id, Some(&accepted(&id, &bytes, "image/jpeg"))));
     // No transmit yet: the conversion worker runs first.
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
     assert_eq!(app.notice(), None);
     // The queue holds the answer's base64 until the child starts.
     assert_eq!(app.images.convert_queue.len(), 1);
@@ -1198,7 +1306,7 @@ fn one_conversion_runs_at_a_time_and_the_next_starts_when_one_ends() {
     // While the first child runs, the second waits.
     assert!(app.take_next_convert().is_none());
     app.image_converted(app.images.generation, 1, Ok("QUJD".to_owned()));
-    let kitty = String::from_utf8(app.take_image_out().kitty).expect("escapes are text");
+    let kitty = String::from_utf8(kitty_bytes(&app.take_image_out())).expect("escapes are text");
     assert!(
         kitty.contains("Ga=t,f=100,i=1,"),
         "the converted PNG transmits: {kitty:?}"
@@ -1207,7 +1315,7 @@ fn one_conversion_runs_at_a_time_and_the_next_starts_when_one_ends() {
     let convert = app.take_next_convert().expect("the second conversion");
     assert_eq!(convert.id, 2);
     app.image_converted(app.images.generation, 2, Ok("QUJD".to_owned()));
-    assert!(!app.take_image_out().kitty.is_empty());
+    assert!(!app.take_image_out().items.is_empty());
     assert!(!app.images.convert_busy);
 }
 
@@ -1227,7 +1335,7 @@ fn a_conversion_failure_fails_the_image_and_frees_the_slot() {
         app.notice(),
         Some("Could not show shot.jpg: the child refused.")
     );
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
     assert!(!app.images.convert_busy);
     assert!(app.images.convert_queue.is_empty());
     // A failed conversion is not asked for again while its session's
@@ -1253,7 +1361,7 @@ fn a_late_rejection_cannot_fail_a_converting_image() {
     );
     // The worker's completion still decides.
     app.image_converted(app.images.generation, 1, Ok("QUJD".to_owned()));
-    assert!(!app.take_image_out().kitty.is_empty());
+    assert!(!app.take_image_out().items.is_empty());
 }
 
 #[test]
@@ -1272,7 +1380,7 @@ fn a_session_change_drops_the_queue_but_keeps_the_slot_busy() {
     assert!(app.take_next_convert().is_none());
     app.image_converted(generation, 1, Ok("QUJD".to_owned()));
     assert!(!app.images.convert_busy);
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
     assert_eq!(app.notice(), None);
 }
 
@@ -1298,7 +1406,7 @@ fn a_completion_from_an_earlier_session_frees_the_slot_but_touches_nothing() {
     // stays converting-queued, and B's child starts next.
     app.image_converted(generation, 1, Ok("QUJD".to_owned()));
     assert!(!app.images.convert_busy);
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
     assert_eq!(app.notice(), None);
     assert!(
         app.images
@@ -1321,6 +1429,6 @@ fn a_completion_for_a_retired_generation_posts_nothing() {
     app.images.generation = generation.saturating_add(1);
     app.image_converted(generation, 1, Ok("QUJD".to_owned()));
     assert!(!app.images.convert_busy);
-    assert!(app.take_image_out().kitty.is_empty());
+    assert!(app.take_image_out().items.is_empty());
     assert_eq!(app.notice(), None);
 }
