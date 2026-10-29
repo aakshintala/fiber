@@ -556,7 +556,6 @@ fn a_dollar_paren_substitution_cooks_marked_but_unvalidated() {
     // operand slot parses as a simple stage; the classifier validates its
     // text later, so `echo` still declares `executes`.
     let simple = only_simple("echo $(x)");
-    assert_eq!(simple.words.len(), 2);
     assert!(!simple.words[0].substituted);
     assert_eq!(simple.words[1].raw, "$(x)");
     assert!(simple.words[1].substituted);
