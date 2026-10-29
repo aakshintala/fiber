@@ -3359,3 +3359,82 @@ fn a_spawn_failure_answers_the_written_command() {
     assert_eq!(answer["payload"]["command_id"], "c_unspawned");
     assert_eq!(order.session_for("c_unspawned"), None);
 }
+
+#[test]
+fn parse_typed_matches_last_wrong_typed_duplicates_and_escaped_optional_objects() {
+    use super::ack::Ack;
+
+    let accepted = |id: &str, last_seq: Option<u64>| {
+        Some(Ack {
+            id: id.to_owned(),
+            verdict: Verdict::Accepted,
+            rewound: None,
+            last_seq,
+        })
+    };
+    let rejected = |id: &str| {
+        Some(Ack {
+            id: id.to_owned(),
+            verdict: Verdict::Rejected,
+            rewound: None,
+            last_seq: None,
+        })
+    };
+    let parity = |line: &[u8], expected: Option<Ack>| {
+        assert_eq!(
+            super::ack::parse_typed(line),
+            expected,
+            "{}",
+            String::from_utf8_lossy(line)
+        );
+    };
+
+    // The last value wins even when the earlier duplicate has the wrong type.
+    parity(
+        br#"{"kind":7,"kind":"command_accepted","payload":{"command_id":"c"}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","kind":7,"payload":{"command_id":"c"}}"#,
+        None,
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":[],"payload":{"command_id":"c"}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c"},"payload":[]}"#,
+        None,
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":7,"command_id":"c"}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","command_id":7}}"#,
+        None,
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","result":7,"result":{"last_seq":41}}}"#,
+        accepted("c", Some(41)),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","result":{"last_seq":41},"result":7}}"#,
+        accepted("c", None),
+    );
+
+    // A malformed optional object's escaped key is still consumed, and
+    // the optional field remains absent exactly as in the old Value map.
+    parity(
+        br#"{"kind":"command_rejected","payload":{"command_id":"c","code":{"a\n":1}}}"#,
+        rejected("c"),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","result":{"new_session_id":{"a\n":1}}}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","result":{"last_seq":{"a\n":1}}}}"#,
+        accepted("c", None),
+    );
+}
