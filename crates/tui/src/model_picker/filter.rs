@@ -19,16 +19,31 @@ fn subseq(field: &str, word: &str) -> bool {
         .all(|wanted| chars.any(|got| folds(got, wanted)))
 }
 
+/// Whether one word matches a left-out model: an in-order,
+/// case-insensitive subsequence of the provider, the id, or the display
+/// name when one is named. A word never spans two fields.
+fn matches_field(provider: &str, id: &str, name: Option<&str>, word: &str) -> bool {
+    subseq(provider, word) || subseq(id, word) || name.is_some_and(|name| subseq(name, word))
+}
+
 /// Whether `entry` matches `query`: every space-separated word is an
 /// in-order, case-insensitive subsequence of the provider, the id, or
 /// the display name when one is named. A word never spans two fields.
 /// An empty or whitespace-only query matches everything.
 pub(crate) fn matches(entry: &ModelEntry, query: &str) -> bool {
-    query.split_whitespace().all(|word| {
-        subseq(&entry.provider, word)
-            || subseq(&entry.id, word)
-            || entry.name.as_ref().is_some_and(|name| subseq(name, word))
-    })
+    query
+        .split_whitespace()
+        .all(|word| matches_field(&entry.provider, &entry.id, entry.name.as_deref(), word))
+}
+
+/// Whether a left-out model matches `query` by the same word rule as
+/// [`matches`]: every space-separated word is an in-order,
+/// case-insensitive subsequence of its provider, id or display name.
+/// An empty or whitespace-only query matches.
+pub(crate) fn matches_left_out(provider: &str, id: &str, name: Option<&str>, query: &str) -> bool {
+    query
+        .split_whitespace()
+        .all(|word| matches_field(provider, id, name, word))
 }
 
 /// Whether `name` matches `query` by the same word rule as [`matches`]:

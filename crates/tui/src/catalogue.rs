@@ -99,6 +99,43 @@ pub struct Catalogue {
     /// Each first-party provider no installed extension declares, sorted by
     /// name (`docs/extensions.md`, "A fresh install").
     pub installable: Vec<String>,
+    /// One group per provider and setting whose placeholder has no
+    /// value, in provider then setting order: the models the terminal
+    /// counts in the picker instead of noticing at launch
+    /// (`docs/model-routing.md`, "A per-account host").
+    pub left_out: Vec<LeftOutGroup>,
+}
+
+/// One model left out for a placeholder with no value: its id and its
+/// display name, when its provider data names one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftOutModel {
+    /// The model's id, as the vendor spells it.
+    pub id: String,
+    /// Its display name, when the provider data names one.
+    pub name: Option<String>,
+}
+
+/// The models of one provider left out for one placeholder with no
+/// value, as the picker counts them (`docs/tui.md`, "The model picker").
+/// `file` is the declaring extension's global configuration file,
+/// relative to Fiber home, as read: `main` builds it and the terminal
+/// renders it verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftOutGroup {
+    /// The provider's name.
+    pub provider: String,
+    /// The extension that registered the provider, as it is registered.
+    pub extension: String,
+    /// The declaring extension's global configuration file, relative to
+    /// Fiber home.
+    pub file: String,
+    /// The placeholder with no value.
+    pub setting: String,
+    /// Whether `fiber login <provider>` asks for the setting.
+    pub login: bool,
+    /// The models left out, in model order.
+    pub models: Vec<LeftOutModel>,
 }
 
 /// How thorough a model-list read is.

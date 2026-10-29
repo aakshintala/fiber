@@ -7,6 +7,7 @@ fn w(cooked: &str) -> Word {
     Word {
         raw: cooked.to_owned(),
         cooked: cooked.to_owned(),
+        substituted: false,
     }
 }
 

@@ -39,6 +39,7 @@ impl super::Seam {
             "notices": catalogue.notices,
             "installable": catalogue.installable,
             "lists": catalogue.lists.iter().map(age).collect::<Vec<_>>(),
+            "left_out": catalogue.left_out.iter().map(left_out).collect::<Vec<_>>(),
         }))
     }
 }
@@ -92,6 +93,32 @@ fn age(age: &tui::ListAge) -> Value {
     ]);
     if let Some(updated_ms) = age.updated_ms {
         drop(value.insert("updated_ms".to_owned(), json!(updated_ms)));
+    }
+    Value::Object(value)
+}
+
+/// One group with no placeholder value: the raw extension name and the
+/// file as read ride the wire, with each model's display name only when
+/// the provider data names one.
+fn left_out(group: &tui::LeftOutGroup) -> Value {
+    Value::Object(Map::from_iter([
+        ("provider".to_owned(), json!(group.provider)),
+        ("extension".to_owned(), json!(group.extension)),
+        ("file".to_owned(), json!(group.file)),
+        ("setting".to_owned(), json!(group.setting)),
+        ("login".to_owned(), json!(group.login)),
+        (
+            "models".to_owned(),
+            Value::Array(group.models.iter().map(left_out_model).collect()),
+        ),
+    ]))
+}
+
+/// One left-out model: its id always, its name only when named.
+fn left_out_model(model: &tui::LeftOutModel) -> Value {
+    let mut value = Map::from_iter([("id".to_owned(), json!(model.id))]);
+    if let Some(name) = &model.name {
+        drop(value.insert("name".to_owned(), json!(name)));
     }
     Value::Object(value)
 }
