@@ -3071,25 +3071,22 @@ fn after_quiesce_a_late_connection_closed_before_its_timeout_accepts_invalid_inp
     drop(connected);
     // The probe read proves the session closed this connection before the
     // timeout below is set: end of file with no bytes is the missing answer.
-    // It runs on a thread so the wait below bounds it.
-    let mut late = UnixStream::connect(&socket).unwrap();
-    let mut probe = late.try_clone().unwrap();
-    let (closed, reached) = mpsc::channel();
-    let reader = thread::spawn(move || {
-        let mut empty = [0u8; 64];
-        closed.send(probe.read(&mut empty)).unwrap();
-    });
-    match Deadline::after(DEADLINE)
-        .recv(&reached)
-        .expect("the session closes a rejected post-quiesce connection")
-    {
-        Ok(0) => {}
-        Ok(n) => panic!("no answer is written for a line never read, got {n} bytes"),
-        Err(error) => panic!(
-            "the server closed the rejected post-quiesce connection before the deadline: {error:?}"
-        ),
-    }
-    reader.join().expect("the probe read returned");
+    let mut late = fakes::within(
+        "the session closes a rejected post-quiesce connection",
+        Deadline::after(DEADLINE),
+        move || {
+            let mut late = UnixStream::connect(&socket).unwrap();
+            let mut empty = [0u8; 64];
+            match late.read(&mut empty) {
+                Ok(0) => {}
+                Ok(n) => panic!("no answer is written for a line never read, got {n} bytes"),
+                Err(error) => panic!(
+                    "the server closed the rejected post-quiesce connection before the deadline: {error:?}"
+                ),
+            }
+            late
+        },
+    );
     // The peer is already closed here, so the timeout below either arms or
     // reports the closure instead of failing the test.
     tolerated_late_timeout(late.set_read_timeout(Some(DEADLINE)));
