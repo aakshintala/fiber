@@ -12,7 +12,7 @@ use crate::rows::Join;
 /// Exact character width for markdown cells without routing ordinary
 /// ASCII through the Unicode width tables.
 pub(super) fn char_width(ch: char) -> usize {
-    if ch == ' ' || ch.is_ascii_graphic() {
+    if ch.is_ascii() {
         1
     } else {
         crate::text::char_width(ch)
@@ -119,10 +119,13 @@ pub(super) fn visit_wrap_ranges(
             .fold(0usize, |sum, width| sum.saturating_add(*width));
         let room = if rows == 0 { first } else { rest };
         if words && start < end && used.saturating_add(piece_width) > room && piece_width <= rest {
-            while end > start && cells.get(end - 1).is_some_and(|(ch, _)| *ch == ' ') {
-                end -= 1;
-                used = used.saturating_sub(widths.get(end).copied().unwrap_or_default());
-            }
+            let trailing_space_start = cells
+                .get(start..end)
+                .unwrap_or_default()
+                .iter()
+                .rposition(|(ch, _)| *ch != ' ')
+                .map_or(start, |at| start.saturating_add(at).saturating_add(1));
+            end = trailing_space_start;
             visit(start..end, join);
             rows = rows.saturating_add(1);
             start = piece_start;

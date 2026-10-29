@@ -3554,6 +3554,7 @@ fn parse_typed_rejects_wrong_typed_payload_values_like_the_full_parse() {
         let line = format!("{{\"kind\":\"command_accepted\",\"payload\":{payload}}}");
         typed_none(line.as_bytes());
     }
+    typed_none(br#"{"kind":"command_accepted","payload":[1e999],"payload":{"command_id":"c"}}"#);
 }
 
 /// A failed `change_workspace` start keeps the old session's kept level:

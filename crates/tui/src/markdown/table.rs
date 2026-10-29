@@ -5,7 +5,7 @@
 use std::ops::Range;
 
 use pulldown_cmark::Alignment;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::wrap::{Cell, link_cols, spans_of, visit_wrap_ranges, wrap_joined_indices};
@@ -68,116 +68,44 @@ impl Table {
                 *column = (*column).max(cells_width(cell));
             }
         }
-        let numeric: Vec<bool> = (0..count)
-            .map(|at| {
-                let mut body = self
-                    .rows
-                    .iter()
-                    .skip(1)
-                    .filter_map(|row| row.get(at))
-                    .map(|(cell, _)| cell.iter().map(|(ch, _)| ch).collect::<String>())
-                    .filter(|text| !text.trim().is_empty())
-                    .peekable();
-                body.peek().is_some() && body.all(|text| is_number(&text))
-            })
-            .collect();
         shrink(&mut widths, width);
+        let table_width = widths
+            .iter()
+            .fold(0usize, |sum, column| sum.saturating_add(*column))
+            .saturating_add(count.saturating_sub(1).saturating_mul(GAP));
+        let mut over_width = width > 0 && table_width > width;
         let mut lines = 0usize;
-        let mut over_width = false;
-        for (at, row) in self.rows.iter().enumerate() {
-            let wrapped: Vec<Vec<(Range<usize>, usize)>> = widths
-                .iter()
-                .enumerate()
-                .map(|(column, width)| {
-                    let cell = row.get(column).map_or(&[][..], |(cell, _)| cell.as_slice());
-                    let cell_widths: Vec<usize> = cell
-                        .iter()
-                        .map(|(ch, _)| super::wrap::char_width(*ch))
-                        .collect();
-                    let mut pieces = Vec::new();
-                    visit_wrap_ranges(cell, &cell_widths, *width, *width, true, |range, _| {
-                        let cell_width = cell_widths
-                            .get(range.clone())
+        for row in &self.rows {
+            let mut height = 1usize;
+            for (column, column_width) in widths.iter().enumerate() {
+                let cell = row.get(column).map_or(&[][..], |(cell, _)| cell.as_slice());
+                let cell_widths: Vec<usize> = cell
+                    .iter()
+                    .map(|(ch, _)| super::wrap::char_width(*ch))
+                    .collect();
+                let mut cell_rows = 0usize;
+                visit_wrap_ranges(
+                    cell,
+                    &cell_widths,
+                    *column_width,
+                    *column_width,
+                    true,
+                    |range, _| {
+                        let piece_width = cell_widths
+                            .get(range)
                             .unwrap_or_default()
                             .iter()
                             .fold(0usize, |sum, width| sum.saturating_add(*width));
-                        pieces.push((range, cell_width));
-                    });
-                    pieces
-                })
-                .collect();
-            let height = wrapped
-                .iter()
-                .map(Vec::len)
-                .max()
-                .unwrap_or_default()
-                .max(1);
-            for line in 0..height {
-                let mut parts = Vec::new();
-                for (column, width) in widths.iter().enumerate() {
-                    if column > 0 {
-                        parts.push(" ".repeat(GAP));
-                    }
-                    let (piece, piece_width) = wrapped
-                        .get(column)
-                        .and_then(|rows| rows.get(line))
-                        .map(|(range, piece_width)| {
-                            let cell = row.get(column).map_or(&[][..], |(cell, _)| cell.as_slice());
-                            (cell.get(range.clone()).unwrap_or_default(), *piece_width)
-                        })
-                        .unwrap_or((&[][..], 0));
-                    let pad = width.saturating_sub(piece_width);
-                    let align = if numeric.get(column).copied().unwrap_or_default() {
-                        Alignment::Right
-                    } else {
-                        self.aligns.get(column).copied().unwrap_or(Alignment::None)
-                    };
-                    let before = match align {
-                        Alignment::Right => pad,
-                        Alignment::Center => pad / 2,
-                        Alignment::Left | Alignment::None => 0,
-                    };
-                    parts.push(" ".repeat(before));
-                    let cell_style = |style: Style| {
-                        if at == 0 {
-                            style.add_modifier(Modifier::BOLD)
-                        } else if numeric.get(column).copied().unwrap_or_default() {
-                            crate::theme::style(Role::Text)
-                        } else {
-                            style
-                        }
-                    };
-                    for run in piece.chunk_by(|a, b| cell_style(a.1) == cell_style(b.1)) {
-                        parts.push(run.iter().map(|(ch, _)| *ch).collect());
-                    }
-                    parts.push(" ".repeat(pad.saturating_sub(before)));
-                }
-                let joined = parts.concat();
-                let exact = super::exact_width(&joined);
-                let (span_width, pad_width) =
-                    crate::rows::row_widths(parts.iter().map(String::as_str));
-                if width > 0 && exact.max(span_width).max(pad_width) > width {
-                    over_width = true;
-                }
-                lines = lines.saturating_add(1);
+                        over_width |= width > 0 && piece_width > *column_width;
+                        cell_rows = cell_rows.saturating_add(1);
+                    },
+                );
+                height = height.max(cell_rows);
             }
-            if at == 0 {
-                let mut rule = Vec::new();
-                for (column, width) in widths.iter().enumerate() {
-                    if column > 0 {
-                        rule.push(" ".repeat(GAP));
-                    }
-                    rule.push("─".repeat(*width));
-                }
-                let joined = rule.concat();
-                let exact = super::exact_width(&joined);
-                let (span_width, pad_width) =
-                    crate::rows::row_widths(rule.iter().map(String::as_str));
-                if width > 0 && exact.max(span_width).max(pad_width) > width {
-                    over_width = true;
-                }
-                lines = lines.saturating_add(1);
-            }
+            lines = lines.saturating_add(height);
+        }
+        if !self.rows.is_empty() {
+            lines = lines.saturating_add(1);
         }
         (lines, over_width)
     }

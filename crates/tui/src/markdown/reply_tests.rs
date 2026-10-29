@@ -1,9 +1,25 @@
 //! Tests for a reply's shared render slot: clones share one slot until
 //! either changes its text.
 
+use super::super::wrap::visit_wrap_ranges;
 use super::Reply;
 
 const TABLE: &str = "| a | b |\n|---|---|\n| c | d |\n";
+
+#[test]
+fn wrapping_keeps_the_empty_row_before_a_word_that_fits_the_rest_width() {
+    use crate::rows::Join;
+    use ratatui::style::Style;
+
+    let cells: Vec<_> = "   abc".chars().map(|ch| (ch, Style::default())).collect();
+    let widths = vec![1; cells.len()];
+    let mut rows = Vec::new();
+    visit_wrap_ranges(&cells, &widths, 2, 5, true, |range, join| {
+        rows.push((range, join));
+    });
+
+    assert_eq!(rows, [(0..0, Join::Break), (3..6, Join::WrapSpace)]);
+}
 
 #[test]
 fn rendering_a_clone_fills_the_originals_slot() {
@@ -438,6 +454,7 @@ fn count_only_matches_each_markdown_row_kind_and_copy_target() {
         "12345",
         "        a word that must wrap after a spaces-only prefix",
         "- one\n  - nested item with a long unbroken sequence abcdefghijklmnopqrstuvwxyz\n  - sibling",
+        "- \n- item",
         "## heading\n\n- first item\n- second item",
         "> quoted text with words that wrap at narrow widths",
         "```\n\twide界 code\n\nlast\n```",
@@ -510,6 +527,85 @@ fn an_exact_width_count_does_not_render() {
     reply.count_rows(5, &mut rows);
     assert_eq!(rows.len(), 1);
     assert_eq!(crate::work::take().reply_renders, 0);
+}
+
+#[test]
+fn markdown_wrapping_keeps_word_moves_trailing_newlines_and_empty_input() {
+    use ratatui::style::Style;
+
+    let cells = |text: &str| {
+        text.chars()
+            .map(|ch| (ch, Style::default()))
+            .collect::<Vec<_>>()
+    };
+    let text = cells("ab  cd");
+    let rows = crate::markdown::wrap::wrap_joined_indices(&text, 5, 5, true);
+    assert_eq!(
+        rows.iter()
+            .map(|(row, _, _)| row.iter().map(|(ch, _)| *ch).collect::<String>())
+            .collect::<Vec<_>>(),
+        ["ab", "cd"]
+    );
+    assert_eq!(
+        rows.iter().map(|(_, join, _)| *join).collect::<Vec<_>>(),
+        [crate::rows::Join::Break, crate::rows::Join::WrapSpace]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|(_, _, indices)| indices.clone())
+            .collect::<Vec<_>>(),
+        [vec![0, 1], vec![4, 5]]
+    );
+
+    let trailing_newline = cells("x\n");
+    let rows = crate::markdown::wrap::wrap_joined_indices(&trailing_newline, 5, 5, false);
+    assert_eq!(
+        rows.len(),
+        1,
+        "a final newline closes the row; it adds no empty row"
+    );
+    assert_eq!(rows[0].2, [0]);
+    assert!(crate::markdown::wrap::wrap_joined_indices(&[], 5, 5, true).is_empty());
+}
+
+#[test]
+fn code_block_counts_keep_tab_width_and_language_fallback_boundaries() {
+    for text in ["```\na\tb\n```", "```\nabc\tdef\n```", "```\nrust\n```"] {
+        for width in [5, 8, 9, 10, 11, 15, 16, 17, 20] {
+            let (shown, counted) = count_and_draw(text, width);
+            assert_eq!(counted.len(), shown.len(), "{text:?} at {width}");
+        }
+    }
+
+    for (text, expected_over_width) in [
+        ("```rust\nx界\n```", true),
+        ("```\nx界\n```", false),
+        ("```   \nx界\n```", false),
+        ("```rust\nx\n```", false),
+    ] {
+        assert_eq!(
+            Reply::new(text.to_owned(), 1).counted(80).over_width,
+            expected_over_width,
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn a_table_count_distinguishes_exact_fit_from_overflow() {
+    let table = "| a | b |\n|---|---|\n| 1 | 2 |";
+    assert!(!Reply::new(table.to_owned(), 1).counted(5).over_width);
+    assert!(Reply::new(table.to_owned(), 1).counted(4).over_width);
+    for width in [4, 5, 6, 8] {
+        let (shown, counted) = count_and_draw(table, width);
+        assert_eq!(counted.len(), shown.len(), "table at {width}");
+    }
+
+    let wide_cell = Reply::new("| 界 | a |\n|---|---|\n| b | c |".to_owned(), 1);
+    assert!(
+        wide_cell.counted(5).over_width,
+        "a wide cell cannot fit a one-column minimum"
+    );
 }
 
 #[test]
