@@ -23,8 +23,9 @@ use crate::host::admission::CallbackContext;
 /// activates the owner at load, so the context is live from construction.
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessContext {
-    /// The session's id, as `extension_hello` carries it.
-    pub session_id: contract::SessionId,
+    /// The session's id, as `extension_hello` carries it: absent for a
+    /// run outside a session.
+    pub session_id: Option<contract::SessionId>,
     /// Why the session started, resent after a restart.
     pub reason: contract::events::ExtensionReason,
     /// The session's workspace, resolving relative paths.
@@ -42,10 +43,16 @@ pub(crate) struct ProcessContext {
 impl ProcessContext {
     /// The `extension_hello` payload: the session's identity, why it
     /// started, its workspace, the extension's data directories and its
-    /// folded state, with the state as it stands now.
+    /// folded state, with the state as it stands now. A call outside a
+    /// session carries reason `call` and omits the session's id; the
+    /// payload, not a mode flag, carries that reason.
     pub(crate) fn hello(&self) -> contract::events::ExtensionHello {
         contract::events::ExtensionHello {
-            session_id: self.session_id.clone(),
+            session_id: if self.reason == contract::events::ExtensionReason::Call {
+                None
+            } else {
+                self.session_id.clone()
+            },
             reason: self.reason,
             workspace: self.workspace.display().to_string(),
             data_dirs: self.data_dirs.clone(),

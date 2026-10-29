@@ -2479,3 +2479,32 @@ fn a_session_status_omits_supervised_when_false_and_round_trips_when_true() {
     assert!(present.supervised);
     assert_eq!(serde_json::to_value(&present).unwrap(), shown);
 }
+
+/// A `call` hello carries no `session_id` and reads back; any other
+/// reason without one is rejected (`docs/events.md`, `extension_hello`).
+#[test]
+fn a_call_hello_omits_session_id_and_other_reasons_require_it() {
+    let hello = ExtensionHello {
+        session_id: None,
+        reason: ExtensionReason::Call,
+        workspace: "/work".to_owned(),
+        data_dirs: ExtensionDataDirs {
+            machine: "/data".to_owned(),
+            project: "/data/project".to_owned(),
+        },
+        state: Default::default(),
+    };
+    let value = serde_json::to_value(&hello).unwrap();
+    assert_eq!(value.get("reason"), Some(&json!("call")));
+    assert!(
+        !value.as_object().unwrap().contains_key("session_id"),
+        "a call hello omits session_id: {value}"
+    );
+    assert_eq!(
+        serde_json::from_value::<ExtensionHello>(value).unwrap(),
+        hello
+    );
+    let mut resume = serde_json::to_value(&hello).unwrap();
+    resume["reason"] = json!("resume");
+    serde_json::from_value::<ExtensionHello>(resume).expect_err("resume needs session_id");
+}

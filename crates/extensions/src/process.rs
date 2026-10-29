@@ -17,6 +17,7 @@ pub(crate) use registry::*;
 pub(crate) mod calls;
 pub(crate) mod context;
 pub(crate) mod lifecycle;
+pub(crate) mod line;
 pub(crate) mod oauth;
 pub(crate) mod requests;
 #[cfg(test)]
@@ -299,6 +300,13 @@ impl ProcessExtension {
         Ok(status)
     }
 
+    /// Marks the owner finishing for a sessionless reap: the precheck
+    /// and the Call-case kill their child at once instead of finishing
+    /// it gracefully.
+    pub(crate) fn begin_finish(&self) -> bool {
+        lifecycle::begin_finish(&self.shared)
+    }
+
     /// Retires the generation at the process seam: pending requests end
     /// stale, and the next request mints under a new generation. Reload
     /// uses this; death uses the lifecycle, which also counts the child.
@@ -345,6 +353,46 @@ impl ProcessExtension {
             .get(provider)
             .map(|entry| entry.runs.clone())
             .unwrap_or_default()
+    }
+
+    /// Ensures the child runs before a provider callback rebinds: a dead
+    /// child restarts here, so the rebind reads the new generation and
+    /// the dispatch carries a live registration id. The wait shares the
+    /// function's own declared timeout. An unregistered function binds
+    /// nothing: it returns without restarting, and the rebind below
+    /// reports it.
+    pub(crate) fn ensure_provider_running(
+        &self,
+        provider: &str,
+        function: &str,
+        caller: &dyn contract::tool::Cancel,
+    ) -> Result<(), Error> {
+        let timeout = support::lock(&self.shared.registry)
+            .providers()
+            .get(provider)
+            .and_then(|entry| entry.timeouts.get(function))
+            .cloned();
+        let Some(timeout) = timeout else {
+            return Ok(());
+        };
+        let clock = Arc::clone(&self.shared.clock);
+        let deadline = clock.now().checked_add(timeout);
+        if let Err((code, _message)) = lifecycle::ensure_running(&self.shared, deadline, caller) {
+            // A missed restart deadline fails as the callback's own
+            // timeout; cancellation and a gone owner stop it, as they do
+            // mid-request.
+            if code == contract::ErrorCode::Timeout {
+                return Err(Error::Timeout {
+                    extension: self.shared.owner.clone(),
+                    callback: format!("{provider}.{function}"),
+                    timeout_ms: timeout.as_millis().try_into().unwrap_or(u64::MAX),
+                });
+            }
+            return Err(Error::Stopped {
+                extension: self.shared.owner.clone(),
+            });
+        }
+        Ok(())
     }
 
     /// Dispatches the stream item behind `func`: hooks, watcher
@@ -710,17 +758,56 @@ pub(crate) fn hang_guard(
         .unwrap_or_else(|| Duration::from_secs(3600))
 }
 
-/// One wire line: the envelope around `payload`, with the session's id,
-/// the clock's wall time and the build's schema version.
+/// One wire line around `payload`, with the clock's wall time and the
+/// build's schema version. Every Fiber-to-child line travels this way. A
+/// run outside a session carries reason `call` and uses the sessionless
+/// line with no session id; every other run uses the session envelope.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn envelope_line(
     shared: &Shared,
     kind: &str,
     payload: serde_json::Map<String, Value>,
 ) -> Vec<u8> {
+    let context = support::lock(&shared.context);
+    if context.reason == contract::events::ExtensionReason::Call {
+        let line = line::ProcessCallLine {
+            kind: kind.to_owned(),
+            ts: contract::clock::wall_ms(shared.clock.wall()),
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload,
+        };
+        return line.to_vec();
+    }
+    let Some(session_id) = context.session_id.clone() else {
+        // No session line leaves without an id: a sessionless context
+        // never reaches here, so this rejects instead of mislabeling.
+        let rejected = contract::events::CommandRejected {
+            command_id: None,
+            code: contract::ErrorCode::InvalidArguments,
+            message: "the session context carries no session id".to_owned(),
+        };
+        let payload = serde_json::to_value(rejected)
+            .ok()
+            .and_then(|payload| payload.as_object().cloned())
+            .unwrap_or_default();
+        return line::ProcessCallLine {
+            kind: "command_rejected".to_owned(),
+            ts: contract::clock::wall_ms(shared.clock.wall()),
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload,
+        }
+        .to_vec();
+    };
+    drop(context);
     let envelope = contract::Envelope {
         kind: kind.to_owned(),
-        session_id: support::lock(&shared.context).session_id.clone(),
+        session_id,
         ts: contract::clock::wall_ms(shared.clock.wall()),
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,

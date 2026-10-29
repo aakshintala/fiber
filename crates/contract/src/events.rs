@@ -10,7 +10,8 @@ mod host;
 mod offer;
 mod session;
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
 pub use action::{
@@ -124,13 +125,15 @@ impl Event {
 /// `extension_hello`: the first line Fiber sends a process extension, with
 /// the session's identity, why it started, its workspace, the extension's
 /// data directories and its folded state. Sent again after a restart, with
-/// the state as it stands in the session
+/// the state as it stands in the session. A provider call outside a
+/// session omits the session's id and carries reason `call`
 /// (`docs/events.md`, `extension_hello`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExtensionHello {
-    /// The session's id.
-    pub session_id: SessionId,
+    /// The session's id, absent for a call outside a session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
     /// Why the session started.
     pub reason: ExtensionReason,
     /// The workspace root.
@@ -139,6 +142,33 @@ pub struct ExtensionHello {
     pub data_dirs: ExtensionDataDirs,
     /// The extension's folded state, as `state.get` reads it.
     pub state: Map<String, Value>,
+}
+
+impl<'de> Deserialize<'de> for ExtensionHello {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Shadow {
+            session_id: Option<SessionId>,
+            reason: ExtensionReason,
+            workspace: String,
+            data_dirs: ExtensionDataDirs,
+            state: Map<String, Value>,
+        }
+        let shadow = Shadow::deserialize(deserializer)?;
+        if shadow.session_id.is_none() && shadow.reason != ExtensionReason::Call {
+            return Err(D::Error::custom(
+                "a non-call extension_hello needs session_id",
+            ));
+        }
+        Ok(Self {
+            session_id: shadow.session_id,
+            reason: shadow.reason,
+            workspace: shadow.workspace,
+            data_dirs: shadow.data_dirs,
+            state: shadow.state,
+        })
+    }
 }
 
 /// Why a session started, as `extension_hello` carries it: a closed set.
@@ -155,6 +185,8 @@ pub enum ExtensionReason {
     Rewind,
     /// A handoff.
     Handoff,
+    /// A provider call outside a session.
+    Call,
 }
 
 /// The paths `host.data_dir` returns, as `extension_hello` carries them.

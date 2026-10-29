@@ -1203,7 +1203,7 @@ impl SessionExtensions {
             }
         }
         let context = crate::process::context::ProcessContext {
-            session_id: start.session_id.clone(),
+            session_id: Some(start.session_id.clone()),
             reason: start.reason,
             workspace: start.workspace.clone(),
             data_dirs,
@@ -1211,42 +1211,47 @@ impl SessionExtensions {
             extension: name.clone(),
             home: home.to_path_buf(),
         };
-        let services = Arc::new(crate::process::context::NativeHostServices {
-            runtime: session.runtime.clone(),
-            state: Arc::clone(&store),
-            clock: Arc::clone(clock),
-            browser: Arc::clone(&session.browser) as Arc<dyn crate::oauth::Browser>,
-            model: Mutex::new(None),
-            delegate: Mutex::new(None),
-            tool_runner: Mutex::new(None),
-            secrets: manifest.secrets.clone(),
-            host_script: host.clone(),
-            session: Mutex::new(Some(crate::host::Session {
-                config: config.clone(),
-                repo_settings: manifest.repo_settings.clone(),
-                locks: Arc::clone(locks),
-            })),
-        });
-        let package = match crate::package::Package::load_process_with(
+        let allowance = config
+            .get(&format!("extensions.\"{}\".startup_timeout_ms", name), None)
+            .and_then(|(value, _)| value.as_u64())
+            .unwrap_or(5000);
+        let started_provider = match crate::package::Package::load_process_provider_with(
             crate::package::PackageOptions {
                 dir: dir.clone(),
                 clock: Arc::clone(clock),
             },
-            session.runtime.clone(),
-            context,
-            services.clone(),
-            store,
-            start.drive.clone(),
+            crate::package::ProcessProviderMode::Session(crate::package::ProcessProviderSession {
+                runtime: session.runtime.clone(),
+                context,
+                state: Arc::clone(&store),
+                drive: start.drive.clone(),
+                clock: Arc::clone(clock),
+                startup_timeout: Duration::from_millis(allowance),
+            }),
+            Some(crate::package::ProcessProviderHost {
+                home: home.to_path_buf(),
+                cwd: start.workspace.clone(),
+                browser: Arc::clone(&session.browser) as Arc<dyn crate::oauth::Browser>,
+                host_script: host.clone(),
+                session: Some(crate::host::Session {
+                    config: config.clone(),
+                    repo_settings: manifest.repo_settings.clone(),
+                    locks: Arc::clone(locks),
+                }),
+            }),
         ) {
-            Ok(package) => package,
+            Ok(started) => started,
             Err(error) => {
-                Self::process_failed(session, &name, &(error.code(), error.to_string()), required);
+                Self::process_failed(session, &name, &error, required);
                 return;
             }
         };
-        // One entry for the started package, kept below once the child
-        // is pumped and ready: a spawn failure surfaces as `Err` above,
-        // so only an owner reaches this entry.
+        let package = started_provider.package;
+        let services = started_provider.services;
+        // One entry for the started package: a start failure surfaces as
+        // `Err` above, so only an owner reaches this entry, and the
+        // shutdown below owns the child from here; `finish_processes`
+        // reaps it at the end.
         let entry = Started {
             name,
             version,
@@ -1270,62 +1275,6 @@ impl SessionExtensions {
         else {
             return;
         };
-        let pump = Arc::clone(&owner);
-        let pumped = std::thread::Builder::new()
-            .name(format!("process pump {}", entry.name))
-            .spawn(move || {
-                loop {
-                    let spawn = pump.transport().spawn_id();
-                    match pump.pump_once() {
-                        crate::process::Pumped::Handled => {}
-                        crate::process::Pumped::Closed(_) => {
-                            if !pump.wait_for_next_spawn(spawn) {
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-        if pumped.is_err() {
-            // The child runs with nobody pumping it: shut it down bounded
-            // and leave it out, as a wedged startup.
-            drop(owner.finish(Duration::ZERO, &support::cancel::Token::new()));
-            Self::process_failed(
-                session,
-                &entry.name,
-                &(
-                    ErrorCode::IoFailed,
-                    format!("{}: Fiber could not pump the process extension", entry.name),
-                ),
-                required,
-            );
-            return;
-        }
-        // The thread ends when the child closes; the shutdown below owns
-        // the child from here, and `finish_processes` reaps it at the end.
-        drop(pumped);
-        let allowance = config
-            .get(
-                &format!("extensions.\"{}\".startup_timeout_ms", entry.name),
-                None,
-            )
-            .and_then(|(value, _)| value.as_u64())
-            .unwrap_or(5000);
-        let deadline = clock.now() + Duration::from_millis(allowance);
-        if let Err(error) = owner.await_ready(Some(deadline), &support::cancel::Token::new()) {
-            // The wedged child may ignore end of input, so the shutdown
-            // escalates through TERM to KILL under the manifest's exit
-            // allowance; no descendant outlives the load.
-            drop(owner.finish(exit_timeout, &support::cancel::Token::new()));
-            // The deadline path already killed the child; reap it and join
-            // its threads, since the failed owner never reaches the
-            // session's finish list.
-            let live = owner.transport();
-            drop(live.wait_exit());
-            live.join();
-            Self::process_failed(session, &entry.name, &error, required);
-            return;
-        }
         session.processes.push(ProcessLive {
             name: entry.name.clone(),
             owner,

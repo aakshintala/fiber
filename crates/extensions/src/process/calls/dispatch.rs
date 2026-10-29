@@ -121,6 +121,15 @@ impl ProcessExtension {
             },
             None => self.call_context(),
         };
+        // A run outside a session carries reason `call`: the driver
+        // refuses without a session, and only the Call-case set runs.
+        if support::lock(&self.shared.context).reason == contract::events::ExtensionReason::Call
+            && call == "host.drive"
+        {
+            let (code, message) = calls::not_available(&call);
+            self.answer_rejected(&id, code, message);
+            return;
+        }
         match calls::route_call(&call, args) {
             Ok(calls::Route::Register { call, args }) => {
                 if !context.registration_allowed() {
@@ -181,6 +190,16 @@ impl ProcessExtension {
             None
         };
         if let Some((code, message)) = refusal {
+            self.answer_rejected(&id, code, message);
+            return;
+        }
+        // Outside a session only the Call-case set runs: a state write,
+        // a host.fs write or host.config rejects here, naming the call,
+        // before decoding touches it.
+        if support::lock(&self.shared.context).reason == contract::events::ExtensionReason::Call
+            && !calls::sessionless_allowed(call)
+        {
+            let (code, message) = calls::not_available(call);
             self.answer_rejected(&id, code, message);
             return;
         }

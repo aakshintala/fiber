@@ -1752,12 +1752,73 @@ impl Harness {
             .to_string(),
         )
         .unwrap();
-        Self::start_with_services_on_manifest(script, args, state, drive, dir, services, recorded)
+        Self::start_with_services_on_manifest(
+            script,
+            args,
+            state,
+            drive,
+            dir,
+            contract::events::ExtensionReason::New,
+            services,
+            recorded,
+        )
     }
 
     /// Starts as [`Harness::start`], with `extra` merged over the base
     /// manifest, so the registry admits provider registrations the base
     /// manifest forbids.
+    /// Starts as [`Harness::start_with_manifest_extra`], with reason
+    /// `call` and no session: the Call-case lines carry no session id.
+    fn start_call(script: &str, args: &[&str], extra: Value) -> Self {
+        let recorded = FakeServices::new();
+        Self::start_call_with_services(
+            script,
+            args,
+            extra,
+            {
+                let recorded = Arc::clone(&recorded);
+                move |_, _, _| -> Arc<dyn super::process::context::ProcessHostServices> { recorded }
+            },
+            recorded,
+        )
+    }
+
+    /// Starts as [`Harness::start_call`], answering host and state calls
+    /// through `services` instead of the recorder.
+    fn start_call_with_services(
+        script: &str,
+        args: &[&str],
+        extra: Value,
+        services: impl FnOnce(
+            Arc<super::host::state::ExtensionState>,
+            Arc<dyn contract::clock::Clock>,
+            Runtime,
+        ) -> Arc<dyn super::process::context::ProcessHostServices>,
+        recorded: Arc<FakeServices>,
+    ) -> Self {
+        let dir = fakes::TempDir::new("fiber-process-owner");
+        let mut manifest = json!({
+            "name": "fiber.test/proc",
+            "version": "v1.2.3",
+            "fiber": "0.1.0",
+            "api": 1,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            manifest[key] = value.clone();
+        }
+        std::fs::write(dir.path().join("extension.json"), manifest.to_string()).unwrap();
+        Self::start_with_services_on_manifest(
+            script,
+            args,
+            serde_json::Map::new(),
+            None,
+            dir,
+            contract::events::ExtensionReason::Call,
+            services,
+            recorded,
+        )
+    }
+
     fn start_with_manifest_extra(
         script: &str,
         args: &[&str],
@@ -1783,6 +1844,7 @@ impl Harness {
             state,
             drive,
             dir,
+            contract::events::ExtensionReason::New,
             {
                 let recorded = Arc::clone(&recorded);
                 move |_, _, _| -> Arc<dyn super::process::context::ProcessHostServices> { recorded }
@@ -1793,12 +1855,17 @@ impl Harness {
 
     /// Starts on the manifest in `dir`, sharing the rest of the launch
     /// with [`Harness::start_with_services`].
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the launch seam takes the launch"
+    )]
     fn start_with_services_on_manifest(
         script: &str,
         args: &[&str],
         state: serde_json::Map<String, Value>,
         drive: Option<Arc<dyn contract::extension::Drive>>,
         dir: fakes::TempDir,
+        reason: contract::events::ExtensionReason,
         services: impl FnOnce(
             Arc<super::host::state::ExtensionState>,
             Arc<dyn contract::clock::Clock>,
@@ -1815,8 +1882,8 @@ impl Harness {
             &manifest,
         )));
         let context = ProcessContext {
-            session_id: contract::SessionId("s_test".into()),
-            reason: contract::events::ExtensionReason::New,
+            session_id: Some(contract::SessionId("s_test".into())),
+            reason,
             workspace: dir.path().to_path_buf(),
             data_dirs: contract::events::ExtensionDataDirs {
                 machine: dir.path().join("machine").display().to_string(),
@@ -5656,6 +5723,217 @@ fn concurrent_credential_dispatches_keep_their_own_scope() {
     assert_eq!(owner.drain(), CloseReason::Eof);
 }
 
+/// Outside a session every Fiber-to-child line carries no session id:
+/// the hello, a request, its acknowledgment and a stale rejection all
+/// serialize without one, while the Call-case run stays out of every
+/// log, hub connection and session reader by construction.
+#[test]
+fn sessionless_lines_carry_no_session_id() {
+    let out = fakes::TempDir::new("fiber-process-sessionless-lines");
+    let script = &json!([
+        {"read": {"as": "hello"}},
+        {"write_file": {"path": {"$ref": "args.0"}, "value": {"hello": {"$ref": "hello"}}}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.tool", "args": ["t", {"description": "d", "input_schema": {"type": "object"}, "effects": {"effects": [], "reversible": true}, "timeout": 5000, "run": true}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg", "as": "accept"}},
+        {"write_file": {"path": {"$ref": "args.1"}, "value": {"accept": {"$ref": "accept"}}}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read_until": {"path": "payload.command_id", "equals": "ready"}},
+        {"write_file": {"path": {"$ref": "args.5"}, "value": true}},
+        {"read": {"as": "request"}},
+        {"write_file": {"path": {"$ref": "args.2"}, "value": {"request": {"$ref": "request"}}}},
+        {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "request.payload.request_id"}, "result": "done"}}},
+        {"read": {"as": "ack"}},
+        {"write_file": {"path": {"$ref": "args.3"}, "value": {"ack": {"$ref": "ack"}}}},
+        {"send": {"id": "p2", "command": "reply", "args": {"request_id": "request-unknown", "result": "late"}}},
+        {"read": {"as": "stale"}},
+        {"write_file": {"path": {"$ref": "args.4"}, "value": {"stale": {"$ref": "stale"}}}}
+    ])
+    .to_string();
+    let paths: Vec<String> = ["hello", "accept", "request", "ack", "stale", "marker"]
+        .iter()
+        .map(|name| {
+            out.path()
+                .join(format!("{name}.json"))
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    let arg_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let owner = Harness::start_call(script, &arg_refs, json!({}));
+    owner.pump();
+    owner.pump();
+    // The peer writes the marker only after reading the ready
+    // acknowledgment, so the dispatch below cannot slip a request in
+    // before it: thread spawn order alone does not order the lines.
+    let marker = paths[5].clone();
+    fakes::wait_until(
+        "the peer to read the ready acknowledgement",
+        fakes::Deadline::after(WITHIN),
+        move || std::path::Path::new(&marker).is_file(),
+    );
+    let tool = support::lock(&owner.registry).tools()["t"].run.clone();
+    let extension = Arc::clone(&owner.extension);
+    let worker = std::thread::spawn(move || {
+        let caller = support::cancel::Token::new();
+        extension.dispatch_tool(
+            &tool,
+            json!({"input": "a"}),
+            Duration::from_secs(60),
+            &caller,
+        )
+    });
+    owner.pump();
+    let answer = worker
+        .join()
+        .expect("the tool dispatch ends")
+        .expect("an answer");
+    assert_eq!(answer, Some(json!("done")));
+    assert_eq!(owner.drain(), CloseReason::Eof);
+    for (name, path) in ["hello", "accept", "request", "ack", "stale"]
+        .iter()
+        .zip(paths.iter())
+    {
+        let line: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap())
+            .unwrap_or_else(|_| panic!("{name} is JSON"));
+        let line = line.get(name).unwrap_or(&line);
+        assert!(
+            line.get("session_id").is_none(),
+            "{name} carries no session id: {line}"
+        );
+    }
+    let hello: Value = serde_json::from_str(&std::fs::read_to_string(&paths[0]).unwrap()).unwrap();
+    assert_eq!(hello["hello"]["payload"]["reason"], json!("call"));
+    let stale: Value = serde_json::from_str(&std::fs::read_to_string(&paths[4]).unwrap()).unwrap();
+    assert_eq!(stale["stale"]["kind"], json!("command_rejected"));
+    assert_eq!(stale["stale"]["payload"]["code"], json!("stale_request"));
+}
+
+/// The sessionless set names exactly the Call-case calls: reads,
+/// compute and refresh run, while writes, locks and the driver stay out.
+/// The refusal names the call, as `invalid_arguments`.
+#[test]
+fn sessionless_allowed_names_only_the_call_case_set() {
+    use super::process::calls::{not_available, sessionless_allowed};
+    use contract::ErrorCode::InvalidArguments;
+    for call in [
+        "host.http",
+        "host.exec",
+        "host.oauth.callback",
+        "host.oauth.open",
+        "host.oauth.show",
+        "host.oauth.pkce",
+        "host.oauth.poll",
+        "host.oauth.refresh",
+        "host.secret",
+        "host.data_dir",
+        "host.log",
+        "host.fs.read",
+        "host.fs.list",
+        "host.fs.stat",
+        "host.sha256",
+        "host.hmac_sha256",
+        "state.get",
+    ] {
+        assert!(sessionless_allowed(call), "{call} runs without a session");
+    }
+    for call in [
+        "host.tool",
+        "host.model",
+        "host.delegate",
+        "host.drive",
+        "host.ask",
+        "host.emit",
+        "host.status",
+        "host.widget",
+        "host.fs.write",
+        "host.fs.mkdir",
+        "host.fs.remove",
+        "host.fs.rename",
+        "host.config.get",
+        "host.config.set",
+        "state.keys",
+        "state.set",
+        "state.unset",
+    ] {
+        assert!(
+            !sessionless_allowed(call),
+            "{call} refuses without a session"
+        );
+    }
+    assert_eq!(
+        not_available("host.drive"),
+        (
+            InvalidArguments,
+            "host.drive: not available here".to_owned()
+        )
+    );
+}
+
+/// Outside a session the child gets only the Call-case calls: `state.get`
+/// answers empty, and a state write, a host.fs write and `host.config`
+/// reject with the shared sentence, naming the call.
+#[test]
+fn sessionless_host_calls_answer_only_the_call_case_set() {
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"send": {"id": "c1", "command": "call", "args": {"call": "state.get", "args": ["k"]}}},
+        {"send": {"id": "c2", "command": "call", "args": {"call": "state.set", "args": ["k", 1]}}},
+        {"send": {"id": "c3", "command": "call", "args": {"call": "host.fs.write", "args": ["p", "c"]}}},
+        {"send": {"id": "c4", "command": "call", "args": {"call": "host.config.get", "args": []}}},
+        {"send": {"id": "c5", "command": "call", "args": {"call": "host.drive", "args": ["steer"]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "c1", "result": {}}}}},
+        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c2", "code": "invalid_arguments", "message": "state.set: not available here"}}}},
+        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c3", "code": "invalid_arguments", "message": "host.fs.write: not available here"}}}},
+        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c4", "code": "invalid_arguments", "message": "host.config.get: not available here"}}}},
+        {"read": {"expect": {"kind": "command_rejected", "payload": {"command_id": "c5", "code": "invalid_arguments", "message": "host.drive: not available here"}}}},
+    ])
+    .to_string();
+    let owner = Harness::start_call_with_services(
+        script,
+        &[],
+        json!({}),
+        production_services,
+        FakeServices::new(),
+    );
+    for _ in 0..6 {
+        owner.pump();
+    }
+    assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// Dropping the sessionless guard reaps the child at once: the owner
+/// is finishing and its process group is gone, without waiting for any
+/// exit allowance. A session-owned handle drops without killing.
+#[test]
+fn sessionless_guard_reaps_the_child_on_drop() {
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {}},
+    ])
+    .to_string();
+    let owner = Harness::start(script, &[], serde_json::Map::new(), None);
+    owner.pump();
+    assert!(
+        owner.extension.transport().group_alive(),
+        "the child runs before the drop"
+    );
+    drop(super::package::SessionlessGuard::new(Arc::clone(
+        &owner.extension,
+    )));
+    assert!(
+        !owner.extension.transport().group_alive(),
+        "the drop kills the child"
+    );
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Finishing
+    );
+}
+
 /// Dispatching `credential` with no scope fails closed: the registry
 /// never invents a pair from the wire arguments.
 #[test]
@@ -5787,6 +6065,103 @@ fn rebound_runs_replace_stale_references() {
         Some(crate::lua::CredentialFor::Stored(seen_pair)) if *seen_pair == pair
     ));
     assert_eq!(owner.drain(), CloseReason::Eof);
+}
+
+/// The first provider call after child death restarts before the old
+/// registration can be reused: it rebinds and re-resolves, so the call
+/// succeeds on fresh references while a saved stale reference fails.
+#[test]
+fn first_provider_call_after_child_death_succeeds() {
+    let script = &json!([
+        {"read": {}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": ["p", {"models": {"timeout": 60000, "run": true}}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read_until": {"path": "payload.command_id", "equals": "ready"}},
+        {"loop": [
+            {"read": {"as": "incoming"}},
+            {"if": {"path": "incoming.kind", "equals": "extension_request", "then": [
+                {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "incoming.payload.request_id"}, "result": []}}}
+            ]}}
+        ]}
+    ])
+    .to_string();
+    let owner = Harness::start_with_manifest_extra(
+        script,
+        &[],
+        serde_json::Map::new(),
+        None,
+        json!({"providers": {"p": []}}),
+    );
+    owner.pump();
+    owner.pump();
+    let provider = process_provider(&owner, "p");
+    // The provider holds the first generation's run: killing the child
+    // retires the saved reference.
+    let stale_run =
+        support::lock(&provider.process.as_ref().expect("a process provider").runs)["models"]
+            .clone();
+    kill_peer(&owner);
+    pump_closed(&owner, "the kill closes the pipe");
+    assert_eq!(
+        lifecycle_state(&owner),
+        super::process::lifecycle::RunState::Dead
+    );
+    // The first call after death restarts, rebinds and re-resolves: it
+    // answers on the new generation, retiring the saved reference.
+    let (send, receive) = std::sync::mpsc::channel();
+    let caller_provider = Arc::clone(&provider);
+    std::thread::spawn(move || {
+        let _sent = send.send(caller_provider.call("models", json!([]), None));
+    });
+    // The worker's restart swaps the pipe under the pumps: closes
+    // observed on the dead spawn end no wait, and exactly the restart
+    // handshake and reply lines follow — the register call, ready and
+    // reply. Any further pump would block on the quiet peer, so the
+    // count stays exact.
+    let mut handled = 0;
+    for _ in 0..100_000 {
+        if handled == 3 {
+            break;
+        }
+        if owner.extension.pump_once() == Pumped::Handled {
+            handled += 1;
+        }
+    }
+    assert_eq!(handled, 3, "the restart handshake and reply arrive");
+    let answered = fakes::Deadline::after(WITHIN)
+        .recv_or_fail(&receive, "the first post-death provider call to answer");
+    assert_eq!(answered.expect("models answers after restart"), json!([]));
+    // The call restarted before rebinding: the provider holds the new
+    // generation, matching the runtime's.
+    let generation = owner
+        .extension
+        .runtime()
+        .generation("fiber.test/proc")
+        .expect("the restart re-registers");
+    assert_eq!(generation, stale_run.generation + 1);
+    assert_eq!(
+        support::lock(&provider.process.as_ref().expect("a process provider").runs,)["models"]
+            .generation,
+        generation,
+        "the rebind reads the post-restart registry"
+    );
+    // The stale reference fails: only the refreshed one dispatches.
+    assert!(
+        owner.extension.runtime().resolve(&stale_run).is_err(),
+        "the pre-death reference resolves no longer"
+    );
+    let caller = support::cancel::Token::new();
+    assert!(
+        owner
+            .extension
+            .runtime()
+            .tool_run(&stale_run, json!([]), None, &caller)
+            .is_err(),
+        "the stale run dispatches no longer"
+    );
+    kill_peer(&owner);
+    assert_eq!(owner.drain(), CloseReason::Stopped);
 }
 
 /// Builds the `testprov` process provider behind the owner's runtime,

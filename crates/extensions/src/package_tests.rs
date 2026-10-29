@@ -38,6 +38,66 @@ fn package_dir(extra: Value) -> fakes::TempDir {
     dir
 }
 
+/// A sessionless provider's declarations name its registered functions,
+/// and reading them starts the process: the hello marker proves it ran.
+#[test]
+fn sessionless_provider_declarations_list_registered_functions() {
+    let dir = fakes::TempDir::new("fiber-process-sessionless");
+    let marker = dir.path().join("hello.json");
+    let script = json!([
+        {"read": {}},
+        {"write_file": {"path": marker, "value": true}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": ["p", {"credential": {"timeout": 5000, "run": true}}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"loop": [{"read": {}}]},
+    ]);
+    let (program, args) = fakes::ProcessFixture::command("peer", Some(&script));
+    let manifest = json!({
+        "name": "fiber.test/proc",
+        "version": "v1.2.3",
+        "fiber": "0.1.0",
+        "api": 1,
+        "providers": {"p": []},
+        "process": {"program": program, "args": args, "exit_timeout_ms": 1000},
+    });
+    std::fs::write(dir.path().join("extension.json"), manifest.to_string()).unwrap();
+    let declarations = Package::load_process_provider(PackageOptions {
+        dir: dir.path().to_path_buf(),
+        clock: fakes::clock::FakeClock::new(),
+    })
+    .unwrap();
+    assert_eq!(
+        declarations,
+        vec![("p".to_owned(), vec!["credential".to_owned()])]
+    );
+    assert!(marker.is_file(), "reading declarations starts the process");
+}
+
+/// A manifest without a process section declares nothing and starts
+/// nothing: there is no child to reap.
+#[test]
+fn sessionless_non_process_manifest_returns_no_declarations() {
+    let dir = fakes::TempDir::new("fiber-process-lua-package");
+    std::fs::write(
+        dir.path().join("extension.json"),
+        json!({
+            "name": "fiber.test/lua",
+            "version": "v1.2.3",
+            "fiber": "0.1.0",
+            "api": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let declarations = Package::load_process_provider(PackageOptions {
+        dir: dir.path().to_path_buf(),
+        clock: fakes::clock::FakeClock::new(),
+    })
+    .unwrap();
+    assert!(declarations.is_empty());
+}
+
 /// Loads the package in `extra`, keeping its directory alive.
 fn load(extra: Value) -> (fakes::TempDir, Arc<Package>) {
     let dir = package_dir(extra);
@@ -243,7 +303,7 @@ impl super::process::context::ProcessHostServices for FakeServices {
 /// package directory as its workspace and home, and empty folded state.
 fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessContext {
     super::process::context::ProcessContext {
-        session_id: contract::SessionId("s_test".into()),
+        session_id: Some(contract::SessionId("s_test".into())),
         reason: contract::events::ExtensionReason::New,
         workspace: dir.path().to_path_buf(),
         data_dirs: contract::events::ExtensionDataDirs {

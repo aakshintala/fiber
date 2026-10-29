@@ -2,6 +2,14 @@
 //! (`docs/extensions.md`, "Testing an extension"). Binary cases live in
 //! main's process_extensions target, which owns the built Fiber binary.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

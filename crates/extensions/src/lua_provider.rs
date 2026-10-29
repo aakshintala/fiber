@@ -768,13 +768,20 @@ impl LuaProvider {
                     "process credential scope is unavailable".into(),
                 ));
             }
+            let caller = support::cancel::Token::new();
+            // The child restarts before the old registration can be
+            // reused: ensure it runs, then rebind and re-resolve against
+            // the new registry before invoking.
+            process
+                .owner
+                .ensure_provider_running(&self.name, function, &caller)?;
             process.rebind_runs(&self.name);
             let Some(run) = lock(&process.runs).get(function).cloned() else {
                 return Err(self.bad_return(function, "function is not registered".into()));
             };
             return process
                 .runtime
-                .tool_run(&run, arg, scope, &support::cancel::Token::new())
+                .tool_run(&run, arg, scope, &caller)
                 .map(|value| value.unwrap_or(Value::Null));
         }
         self.extension.provider_call(&self.name, function, arg)

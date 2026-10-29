@@ -366,10 +366,10 @@ impl NativeHostServices {
     ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
         let session = support::lock(&self.session);
         let Some(session) = session.as_ref() else {
-            return Err((
-                contract::ErrorCode::InvalidArguments,
-                "host.config.get: this extension has no session".to_owned(),
-            ));
+            // Without a session there is no configuration to read: the
+            // call names itself, exactly as the route and host-call gates
+            // refuse it.
+            return Err(crate::process::calls::not_available("host.config.get"));
         };
         let repo: Vec<&str> = session.repo_settings.iter().map(String::as_str).collect();
         match session
@@ -384,7 +384,7 @@ impl NativeHostServices {
 
     /// Writes `host.config.set`: one key in the calling extension's
     /// settings, in the named scope. Without a session there is nothing
-    /// to write, so the call fails naming the missing session.
+    /// to write, so the call fails naming itself.
     fn config_set(
         &self,
         context: &ProcessContext,
@@ -398,10 +398,10 @@ impl NativeHostServices {
         };
         let mut session = support::lock(&self.session);
         let Some(session) = session.as_mut() else {
-            return Err((
-                contract::ErrorCode::InvalidArguments,
-                "host.config.set: this extension has no session".to_owned(),
-            ));
+            // Without a session there is no configuration to write: the
+            // call names itself, exactly as the route and host-call gates
+            // refuse it.
+            return Err(crate::process::calls::not_available("host.config.set"));
         };
         match session
             .config
@@ -825,7 +825,15 @@ impl ProcessHostServices for NativeHostServices {
                 interval,
                 cancel,
             ),
-            HostOperation::StateGet { key } => Ok(self.state_get(&key)),
+            HostOperation::StateGet { key } => {
+                if support::lock(&self.session).is_none() {
+                    // Without a session there is no folded state to read:
+                    // a Call-case `state.get` answers empty.
+                    Ok(Some(serde_json::json!({})))
+                } else {
+                    Ok(self.state_get(&key))
+                }
+            }
             HostOperation::StateKeys => Ok(Some(self.state_keys())),
             HostOperation::StateSet {
                 key,
