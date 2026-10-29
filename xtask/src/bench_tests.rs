@@ -4159,6 +4159,97 @@ fn attach_absolute_bound_holds_without_a_comparable_base_over_50() {
 }
 
 #[test]
+fn attach_base_at_50_keeps_the_absolute_bound() {
+    // docs/performance.md:323-324: the waiver needs a comparable base
+    // median "also over 50 ms", which excludes equality. A base exactly
+    // at 50 ms leaves the flat bound in force: an over-50 head fails the
+    // absolute bound, and the row claims no 10 % base-relative waiver.
+    // Targets the `base_median > ceiling` match guard: `>=` would add
+    // "+10% over base 50.0 ms" to the row.
+    for cpu in [FAST_MODEL, SLOW_MODEL] {
+        let (h, b) = attach_pair(&[55.0; 5], &[55.0; 5], &[50.0; 5], &[50.0; 5], cpu);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures.len(), 2, "{cpu}: {:?}", out.failures);
+        assert!(
+            out.failures.iter().all(|f| f.contains("absolute bound")),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        for fixture in ["1 MiB", "10 MiB"] {
+            assert!(
+                has(&out.failures, &format!("terminal_attach_ms {fixture}")),
+                "{cpu}: {:?}",
+                out.failures
+            );
+        }
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| fail |"), "{cpu}: {line}");
+        assert!(line.contains("55.0 ms"), "{cpu}: {line}");
+        assert!(!line.contains("over base 50.0 ms"), "{cpu}: {line}");
+    }
+}
+
+#[test]
+fn attach_base_at_50_with_numeric_tolerance_keeps_the_absolute_bound() {
+    // docs/performance.md:323-324,328: the relative leg needs a base
+    // "also over 50 ms", so a base exactly at 50 ms never takes it, even
+    // with a numeric tolerance. Head 50.1 ms over base 50.0 ms at 10 %
+    // fails the absolute bound. Targets the `base_median > ceiling`
+    // branch condition: `>=` would tolerate the head within 10 % of base
+    // and leave no failure.
+    for cpu in [FAST_MODEL, SLOW_MODEL] {
+        let doc = doc_with(
+            "| 50 ms | 50 ms | 50 ms | — | — |",
+            "| 50 ms | 50 ms | 50 ms | 10 % | 10 % |",
+        );
+        let (h, b) = attach_pair(&[50.1; 5], &[50.1; 5], &[50.0; 5], &[50.0; 5], cpu);
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures.len(), 2, "{cpu}: {:?}", out.failures);
+        assert!(
+            out.failures.iter().all(|f| f.contains("absolute bound")),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        for fixture in ["1 MiB", "10 MiB"] {
+            assert!(
+                has(&out.failures, &format!("terminal_attach_ms {fixture}")),
+                "{cpu}: {:?}",
+                out.failures
+            );
+        }
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| fail |"), "{cpu}: {line}");
+        assert!(line.contains("50.1 ms"), "{cpu}: {line}");
+    }
+}
+
+#[test]
+fn attach_head_at_50_with_no_base_passes() {
+    // docs/performance.md:323,331: a fixture fails only when its median
+    // exceeds 50 ms, and without a usable comparable base only the
+    // absolute bound can fail it. Head exactly at 50 ms with no base
+    // passes, shows its measured 50.0 ms, and stays advisory. Targets the
+    // `median > ceiling` fallback: `>=` would fail the exactly-50 fixture.
+    for cpu in [FAST_MODEL, SLOW_MODEL] {
+        let (h, _) = attach_pair(&[50.0; 5], &[50.0; 5], &[60.0; 5], &[60.0; 5], cpu);
+        let out = judge(&h, None, Event::Push);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| advisory |"), "{cpu}: {line}");
+        assert!(line.contains("50.0 ms"), "{cpu}: {line}");
+        assert!(
+            line.contains("no comparable same-job base timing"),
+            "{cpu}: {line}"
+        );
+    }
+}
+
+#[test]
 fn attach_numeric_tolerance_over_50_base_judges_the_relative_leg() {
     // docs/performance.md:324,327,328: with a numeric tolerance and a base
     // over 50 ms, the boundary is the tolerance-adjusted base. Base 60 ms
