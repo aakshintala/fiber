@@ -1841,6 +1841,7 @@ impl Pages {
                 handle: self.ext.handle,
                 cache: Arc::new(self.ext.cache.scratch_sharing_pending()),
                 flat: self.ext.flat,
+                wall_ms: self.ext.wall_ms,
             }
             .bind(key, ctx)
         } else {

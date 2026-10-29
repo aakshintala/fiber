@@ -2746,7 +2746,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `handoff_band` | A handoff's band |
 | `error_line` | A failed turn's ✗ line |
 | `notice` | A notice |
-| `card:<name>` | A panel card: `session`, `changed_files`, `delegates`, `jobs`, or one an extension adds |
+| `card:<name>` | A panel card: `session`, `changed_files`, `delegates`, `jobs`, or one an extension adds. `card:quota` is not a slot: the Quota card stays built-in, and an extension reads quota through `status_rows` |
 | `working_line` | The working line |
 | `steering_queue` | The queued steering messages |
 | `input_box` | The input box |
@@ -2757,16 +2757,18 @@ itself is a separate client of the hub, not a TUI extension.
 | `question_form` | The question form, draw-only |
 | `repository_offer` | The offer of what a repository ships, draw-only |
 
-A slot receives what its built-in renderer receives. All of it comes from the
+A slot receives what its built-in renderer receives. Most of it comes from the
 event stream, except whether the row is open, which the person's clicks and
 keys set, and notices the terminal raises itself, such as a configuration or
-I/O failure. A ledger row, for example, receives the call's name,
+I/O failure. Chrome slots may also read outside the stream: the branch comes
+from `git status`, the cards follow the panel's configuration, and `spend`
+falls back to the attached spend when the session reports none. A ledger row, for example, receives the call's name,
 arguments, status, exit code, duration, line count, `changes` and error, folded
 from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
 
-Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style.
+Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style. Timestamps come as source values, never as elapsed strings. The person's own interaction state (selection, open or closed) is included only where the built-in draws it. An optional key is absent when it does not apply, never `null`. The terminal's internals stay out: no layout, width fit, cache, spinner glyph or motion clock.
 
-A replacement owns its rows whole: where the built-in row carries one target over the row, each replacement line keeps it. A target placed on part of a row goes away when the extension owns those rows. A `notice` keeps its notice target on every replacement line and its dismiss target spans those painted lines. A `notice` replacement with more lines than the notice rows left keeps its first lines in order and drops the rest, as a line too wide is cut; the rows it paints are the rows it takes, and its targets span only those. An `error_line` keeps its failed-login target on each line. A `steer` replacement drops image-line targets because it owns those lines. A `prompt` keeps the target for a single image on each replacement line and drops targets for several images. A writing `handoff_band` has no target, and `reply`, `turn_card` and `answers` remain without targets.
+A replacement owns its rows whole: where the built-in row carries one target over the row, each replacement line keeps it. A target placed on part of a row goes away when the extension owns those rows. A `notice` keeps its notice target on every replacement line and its dismiss target spans those painted lines. A `notice` replacement with more lines than the notice rows left keeps its first lines in order and drops the rest, as a line too wide is cut; the rows it paints are the rows it takes, and its targets span only those. An `error_line` keeps its failed-login target on each line. A `steer` replacement drops image-line targets because it owns those lines. A `prompt` keeps the target for a single image on each replacement line and drops targets for several images. A writing `handoff_band` has no target, and `reply`, `turn_card` and `answers` remain without targets. A `steering_queue` replacement drops the per-message edit and drop targets, and a card replacement drops the panel targets that differ from row to row; keys still do everything the dropped targets did. The working line keeps its interrupt target, and a card keeps the one target shared by every row it draws, on each replacement line.
 
 **`turn_card`** draws a turn's card whole: its prompts, every entry, and its
 ending. A replaced card is drawn whole by the extension, so no nested slot
@@ -2881,6 +2883,92 @@ failure raises the same input an extension draws.
 
 The `extension_failed` switched-off notice always draws built-in: a
 notice extension cannot hide its own switch-off failure.
+
+**`working_line`** draws the working line. It reads the attached session,
+even with a delegate transcript on screen.
+
+| Field | What it holds |
+|---|---|
+| `started` | When the turn started, as the turn card's value; absent before the turn starts |
+| `retry` | The pending retry: `code`, `attempt`, `last_attempt`, `delay_ms` and `ts`; absent otherwise |
+
+A replacement that returns no lines hides the working line. The built-in
+retry line carries no interrupt target but Esc still interrupts; a
+replacement keeps one interrupt target over each line's full width either
+way.
+
+**`steering_queue`** draws the queued steering messages: its heading, the
+queue rows and the footer. A replacement that returns no lines hides all
+three.
+
+| Field | What it holds |
+|---|---|
+| `messages` | The queued messages oldest-first, each with `text`, `images` (`path`, `width` and `height` in pixels), `droppable` (sent while steering), `selectable` (droppable with no image) and `selected` (the person's ⌥↑/⌥↓ choice) |
+
+Nothing draws and no renderer runs on an empty queue.
+
+**`status_rows`** draws the narrow layout's status rows.
+
+| Field | What it holds |
+|---|---|
+| `cards` | The cards the narrow layout shows, in order |
+| `session` | The same input `card:session` draws |
+| `changed_files` | `files`, every changed file in the order the built-in ranks them |
+| `delegates_running` | How many delegates run |
+| `jobs_running` | How many jobs run |
+| `widgets` | The extension widgets on screen, each with `extension`, `widget` and `lines` |
+| `waiting` | How many sessions wait; absent at zero |
+| `quota` | The `quota` answer (`docs/events.md`, "Payload types"): an array ordered by provider name, then credential label, each with `provider`, `credential` and `windows` or `credit` or `unreachable`, plus `notice_at`; absent when the built-in draws no Quota segment |
+
+**`card:<name>`** draws one panel card through its slot: `session`,
+`changed_files`, `delegates`, `jobs`, or one an extension adds. A widget's
+narrow row and a running delegate's narrow row draw through the same slot
+with the same input. Its narrow form caps what the built-in shows, as the
+five-file cut does, and the replacement inherits the cap.
+
+`card:session` draws the session card:
+
+| Field | What it holds |
+|---|---|
+| `workspace` | The workspace's path |
+| `branch` | The branch from `git status`; absent when unknown |
+| `model` | The model |
+| `thinking` | The thinking level |
+| `context` | `tokens`, `window` and `trigger_at` |
+| `spend` | `cost` with `tokens` (`input`, `output`, `cache_read`, `cache_write`) and `subscription_cost`; when the session reports none, the attached spend falls back to `cost` alone; absent when there is no spend at all |
+| `budget` | The spend budget; absent when unset |
+| `speed` | The last reply's output speed in tokens per second; absent before the first timed reply |
+| `turns` | How many turns the session ran |
+| `tools_down` | The tools that are down |
+| `waiting` | How many sessions wait; absent at zero |
+
+`card:changed_files` draws the changed-files card:
+
+| Field | What it holds |
+|---|---|
+| `files` | Every changed file in the order the built-in ranks them, each with `path`, `added` and `removed` |
+
+`card:delegates` draws the delegates card:
+
+| Field | What it holds |
+|---|---|
+| `delegates` | Running delegates in the order they started first, then finished ones in the order they started, each with `job_id`, `description`, `harness`, `model`, `calls`, `step` and `started`; a finished one also carries `outcome` and `ended` |
+
+`card:jobs` draws the jobs card:
+
+| Field | What it holds |
+|---|---|
+| `jobs` | The jobs, each with `job_id` and `description` |
+| `open` | Whether the person opened the jobs list |
+
+`card:<extension>/<widget>` draws an extension widget's card:
+
+| Field | What it holds |
+|---|---|
+| `extension` | The extension's name |
+| `widget` | The widget's name |
+| `lines` | The widget's lines |
+| `open` | Whether the person opened the widget |
 
 `layout` places regions and never draws them. It receives the screen's size
 and returns a rectangle for each region it shows. A region it leaves out is not
@@ -3045,9 +3133,7 @@ their own.
 
 ### Animation
 
-A renderer may declare `animate = { interval_ms }`. For conversation items and
-notices, the terminal calls it again when the frame advances, with `frame` in
-its input. The terminal uses one timer for all motion. It asks for a timer only
+A renderer may declare `animate = { interval_ms }`. For every animated slot — conversation items, notices and chrome — the terminal calls it again when the frame advances, with `frame` in its input. An animated call's input also carries `now`, the time of the frame in Unix milliseconds, so a renderer can draw elapsed time or a countdown. The terminal uses one timer for all motion. It asks for a timer only
 while an animated item or notice row was painted in the previous frame.
 Intervals below 120 ms use that floor instead.
 
@@ -3060,7 +3146,9 @@ frame; the item resumes at its stored frame when the conversation returns.
 Frame 0 is the still form. Under reduced motion, the terminal draws frame 0
 once and makes no animation calls. When reduced motion ends, the next paint
 resumes at frame 1. A renderer that returns `animate = false` stays stopped
-until its input changes. A width change redraws a stopped item once at its
+until its input changes. A renderer that declares no `animate` gets no `now`:
+it draws from timestamps alone, and its input changes only when the events
+do. A width change redraws a stopped item once at its
 stored frame, then uses the cached lines for that width. A dropped page starts
 again at frame 0. Closed draws such as search and counts do not advance or
 schedule animation. They use stored lines when available; on a miss, they may

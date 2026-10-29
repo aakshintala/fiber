@@ -909,6 +909,7 @@ fn an_animated_handoff_band_keeps_its_tag() {
             halves: None,
         },
         flat: false,
+        now: Some(1_000),
     };
     let t0 = fakes::clock::FakeClock::new().origin();
     bound.cache.begin_anim_frame(Some(t0), false);
