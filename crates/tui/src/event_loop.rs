@@ -607,7 +607,9 @@ impl<B: Backend> Loop<B> {
                     self.graphics(id, ok);
                     Effect::None
                 }
-                Event::Reply(Reply::DeviceAttributes) | Event::Focus(_) => Effect::None,
+                Event::Reply(Reply::Version(_)) => Effect::None,
+                Event::Reply(Reply::DeviceAttributes { sixel: _ }) => Effect::None,
+                Event::Focus(_) => Effect::None,
             };
             match effect {
                 Effect::None => {}

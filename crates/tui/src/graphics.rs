@@ -5,6 +5,8 @@
 use ratatui::style::Style;
 use ratatui::text::Span;
 
+pub(crate) mod logo;
+
 /// The placeholder's base character: the terminal shows the image where
 /// these cells are (`docs/tui.md`, "Images").
 const PLACEHOLDER: char = '\u{10EEEE}';

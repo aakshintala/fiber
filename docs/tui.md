@@ -184,7 +184,7 @@ accent gradient, the version dim.
   image replaces the pixel letters in exactly the same cells: a smooth wave
   and the name set in JetBrains Mono ExtraBold, in the gradient. Detection
   never delays the first frame. The pixel logo draws first, and the image
-  replaces it when the terminal's reply arrives.
+  replaces it when the terminal's reply arrives. When the terminal reports a cell larger than 64 × 128 pixels, or of zero size, the pixel logo stays.
 - **The image is an alpha mask built from the font with `cargo xtask logo-mask` and checked in,** tinted
   with the theme's accents at run time. Fiber bundles no font, and the logo
   follows any theme.
@@ -1712,8 +1712,8 @@ what it started keeps running. Large images go to the terminal in chunks (Images
 ### Rules
 
 - **Detection never blocks the first frame.** The terminal sends kitty's
-  keyboard flags query followed by a primary device attributes query, and
-  draws at once. Bindings that need the kitty protocol switch on when the
+  keyboard flags query, the XTVERSION query, and a primary device attributes
+  query, then the kitty graphics probe, and draws at once. Bindings that need the kitty protocol switch on when the
   reply arrives. crossterm parses both replies but hands them only to a call
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
