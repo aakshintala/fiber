@@ -1885,7 +1885,7 @@ fn turn_end_clears_switch_pending_notices() {
 fn one_frames_queued_notices_group_by_code() {
     // Two queued `io_failed` notices in one frame batch stack one
     // grouped row: the count and the first item up front, every item
-    // listed.
+    // listed (`docs/errors.md`, "Notices": one per code).
     let mut app = groups(1, 80, 24);
     app.screen
         .pages()

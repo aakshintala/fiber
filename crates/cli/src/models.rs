@@ -222,13 +222,42 @@ fn run(
             .is_none_or(|needle| reference.to_ascii_lowercase().contains(needle))
     };
     let (not_hosts, unconfigured) = providers.fill_placeholders_grouped(&config, &lookup)?;
+    // The `model_unconfigured` lead counts models, not notice rows: a
+    // group notice already covers several models, so two notices can
+    // cover three models (`docs/model-routing.md`, "A per-account host":
+    // the count is the models left out).
+    let earlier_unconfigured = notices
+        .iter()
+        .filter(|notice| notice.code == contract::ErrorCode::ModelUnconfigured)
+        .count();
+    let not_host_unconfigured = not_hosts
+        .iter()
+        .filter(|notice| notice.code == contract::ErrorCode::ModelUnconfigured)
+        .count();
+    let mut grouped_models = 0;
+    let mut grouped_notices = Vec::new();
+    for group in &unconfigured {
+        if let Some(notice) = group.notice(&listed) {
+            grouped_models += group
+                .models()
+                .iter()
+                .filter(|model| listed(&format!("{}/{}", group.provider(), model.id)))
+                .count();
+            grouped_notices.push(notice);
+        }
+    }
+    let total_unconfigured = earlier_unconfigured + not_host_unconfigured + grouped_models;
     notices.extend(not_hosts);
-    notices.extend(
-        unconfigured
-            .iter()
-            .filter_map(|group| group.notice(&listed)),
-    );
-    let notices = contract::events::group_notices(notices, contract::events::grouped_lead);
+    notices.extend(grouped_notices);
+    let notices = contract::events::group_notices(notices, |first, count| {
+        if first.code == contract::ErrorCode::ModelUnconfigured {
+            return format!(
+                "{total_unconfigured} models are unconfigured: {}",
+                first.message
+            );
+        }
+        contract::events::grouped_lead(first, count)
+    });
     crate::config::print_notices(err, &notices);
     // A stale list refreshes in the background for the next run: the
     // detached child, never waited on. A spawn that fails is ignored:

@@ -1202,7 +1202,9 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
 }
 
 /// The single grouped notice from `all`: exactly one, with the count and
-/// the first item up front and every item with its extension in the list.
+/// the first item up front and every item with its extension in the list
+/// (`docs/errors.md`, "Notices": one notice per code, count and first
+/// item up front, no extension across extensions).
 fn grouped_notice(all: &[Envelope]) -> &Envelope {
     let notices: Vec<&Envelope> = all.iter().filter(|line| line.kind == "notice").collect();
     assert_eq!(notices.len(), 1, "{all:?}");
@@ -1232,7 +1234,9 @@ fn grouped_notice(all: &[Envelope]) -> &Envelope {
 fn two_non_blocking_failures_write_one_grouped_notice() {
     // One `before_message` batch reaches the log as one notice: the
     // count and the first item up front, in the admission slot before the
-    // preamble, with no turn.
+    // preamble, with no turn (`docs/errors.md`, "Notices": one per code;
+    // `docs/loop.md`, "Starting a turn": before_message runs before
+    // turn_started).
     let hooks = Arc::new(FakeHooks::new());
     hooks.answer(noticed_twice(
         ("fiber.test/a", "extension fiber.test/a failed softly"),
@@ -1260,7 +1264,8 @@ fn two_non_blocking_failures_write_one_grouped_notice() {
     let all = streamed(&mut world);
     let notice = grouped_notice(&all);
     assert!(notice.turn_id.is_none(), "an idle notice names no turn");
-    // The grouped notice is written at admission, before the turn's preamble.
+    // The grouped notice is written at admission, before the turn's preamble
+    // (`docs/loop.md`, "Starting a turn").
     assert_eq!(
         kinds(&all),
         [

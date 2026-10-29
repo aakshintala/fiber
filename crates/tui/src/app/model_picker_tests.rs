@@ -139,7 +139,8 @@ fn catalogue_notices_show_under_their_own_codes() {
 fn catalogue_notices_group_by_code() {
     // Two `model_invalid` notices in one catalogue read stack one grouped
     // row; a second identical read adds none, since the run already
-    // showed it.
+    // showed it (`docs/errors.md`, "Notices": one per code;
+    // `docs/tui.md`, "Notices": no repeat in the same run).
     let mut app = home();
     let catalogue = Catalogue {
         installable: Vec::new(),

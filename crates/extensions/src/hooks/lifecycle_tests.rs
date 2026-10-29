@@ -899,7 +899,8 @@ fn a_cancel_set_before_a_session_start_chain_runs_only_its_first_hook() {
 
 /// Two non-blocking failures in one chain answer one grouped notice: the
 /// count and the first item up front, every item with its extension in
-/// the list, and no extension on the group itself.
+/// the list, and no extension on the group itself (`docs/errors.md`,
+/// "Notices": one per code, count and first item up front).
 fn assert_grouped_pair(notices: &[contract::events::Notice]) {
     assert_eq!(notices.len(), 1, "{notices:?}");
     let notice = &notices[0];

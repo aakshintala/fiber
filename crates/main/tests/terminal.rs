@@ -3490,7 +3490,8 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
     // Two home skills, each shadowed by the same name in the person's
     // `~/.agents/skills`: the first session stacks one grouped row, and
     // a second session in the same terminal run stacks none (`#3679`,
-    // "The rule").
+    // "The rule"; `docs/tui.md`, "Notices": one pass stacks one grouped
+    // row, and a notice shown once does not show again in the same run).
     let setup = support::Setup::new();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     provider(&setup, &server);
@@ -3510,9 +3511,11 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
     run.ready();
     // Home starts no session: the first prompt opens the run's first
     // session, whose opening stacks the grouped row.
+    let from = run.output().len();
     run.write(b"say hi\r");
     // One grouped row for the run's first session, directly above the
-    // input box.
+    // input box (`docs/tui.md`, "Notices": one row per code, above the
+    // working line).
     let grid = run.wait_screen("the grouped shadow notice", |grid| {
         grid.rows
             .iter()
@@ -3532,7 +3535,8 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
         .position(|row| row.contains("2 skills are shadowed"))
         .expect("the notice row");
     // The notice sits under the composed content, above the input box:
-    // the input's `›` is the last such row on the grid.
+    // the input's `›` is the last such row on the grid (`docs/tui.md`,
+    // "Notices": rows sit above the working line).
     let input = grid
         .rows
         .iter()
@@ -3542,24 +3546,49 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
         row < input,
         "the notice row {row} sits above the input row {input}"
     );
+    // The first turn completes before dismissal, so Esc leaves navigate
+    // mode without cancelling it and the layout stays put for the focus
+    // walk (`docs/testing.md`, "Waits and timeouts": turn_finished, not
+    // a real-clock wait).
+    run.turn_finished(from);
+    // Dismiss the row through keyboard focus on its ✕, so the second
+    // session's absence is observable without waiting for the 10 s fade
+    // (`docs/testing.md`, "Waits and timeouts": no real-clock wait). The
+    // run already showed the grouped text, so the identical notice stays
+    // suppressed. Enter on the dismiss cross dismisses; Esc leaves
+    // navigate mode so the next prompt goes to the input box.
+    focus_notice(&mut run, "skills are shadowed");
+    let mut grid = run.wait_screen("the notice focused", |grid| {
+        grid.rows
+            .iter()
+            .any(|row| row.contains("2 skills are shadowed"))
+    });
+    let before = reversed_cells(&grid);
+    run.write(b"\x1b[B");
+    grid = run.wait_screen("the dismiss cross focused", |next| {
+        reversed_cells(next) != before
+    });
+    run.write(b"\r");
+    run.wait_screen("the dismissed row clears", |grid| {
+        !grid.contents.contains("skills are shadowed")
+    });
+    run.write(b"\x1b[27u");
+    run.wait_screen("the input box back", |grid| reversed_cells(grid).is_empty());
     // A new session in the same run opens beside the first: its
     // identical opening notice shows no row again, since the run already
-    // showed it.
+    // showed it (`docs/tui.md`, "Notices").
     run.write(b"/new\r");
     let dir = sessions(&setup);
     fakes::wait_until("the second session", setup.deadline, move || {
         fs::read_dir(&dir).is_ok_and(|entries| entries.count() == 2)
-    });
-    // The first session's row fades on its own; only then can absence
-    // prove the second session stacked nothing.
-    run.wait_screen("the first session's row fades", |grid| {
-        !grid.contents.contains("skills are shadowed")
     });
     run.write(b"say hi\r");
     run.wait_screen("the second session's reply", |grid| {
         grid.contents.contains("Hel")
     });
     let grid = run.wait_screen("a settled frame", |grid| grid.contents.contains("›"));
+    // No repeat in the second session (`docs/tui.md`, "Notices": a notice
+    // shown once does not show again in the same run).
     assert!(
         !grid.contents.contains("skills are shadowed"),
         "no repeat in a second session"

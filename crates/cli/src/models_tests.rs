@@ -1861,7 +1861,9 @@ fn models_search_that_matches_no_hidden_model_prints_no_notice() {
 #[test]
 fn models_groups_left_out_notices_by_code_in_order() {
     // One `model_unconfigured` notice for the run: the count and the
-    // first group up front, every provider and setting listed in order.
+    // first group up front, every provider and setting listed in order
+    // (`docs/model-routing.md`, "A per-account host": one grouped notice
+    // counting the models left out; `docs/errors.md`, "Notices").
     let setup = Setup::new();
     setup.install_templated(
         "zed-ext",
@@ -1893,6 +1895,40 @@ fn models_groups_left_out_notices_by_code_in_order() {
          - `zed`: 1 model needs the setting `workspace` for its base URL, which has no value. \
          Run `fiber login zed`, or set `workspace` in `config/zed-ext.json` in Fiber home. \
          (extension `zed-ext`)\n"
+    );
+}
+
+#[test]
+fn models_counts_models_not_notices_in_the_grouped_lead() {
+    // Two `model_unconfigured` notices covering three models group to
+    // one notice counting all three (`docs/model-routing.md`, "A
+    // per-account host": the count is the models left out;
+    // `docs/errors.md`, "Notices": one notice per code).
+    let setup = Setup::new();
+    setup.install_templated(
+        "acme-ext",
+        "acme",
+        &json!([
+            model_at("hide-1", "https://{workspace}/v1"),
+            model_at("hide-2", "https://{workspace}/v1"),
+            model_at("lone", "https://{region}/v1"),
+        ]),
+    );
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert_eq!(out, "");
+    assert!(
+        err.starts_with("3 models are unconfigured: `acme`: 1 model needs the setting `region`"),
+        "the lead counts all three models, not the two notices: {err:?}"
+    );
+    assert!(
+        err.contains("`acme`: 2 models need the setting `workspace`"),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.lines().filter(|line| line.starts_with("- ")).count(),
+        2,
+        "{err:?}"
     );
 }
 

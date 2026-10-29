@@ -86,13 +86,13 @@ impl App {
             })
             .collect();
         for (slot, failure) in failures {
-            let code = match failure.kind {
-                crate::ext::FailureKind::HookFailed => contract::ErrorCode::HookFailed,
-                crate::ext::FailureKind::ExtensionFailed => contract::ErrorCode::ExtensionFailed,
-            };
-            let identity = match failure.kind {
-                crate::ext::FailureKind::HookFailed => slot.clone(),
-                crate::ext::FailureKind::ExtensionFailed => String::new(),
+            let (code, identity) = match failure.kind {
+                crate::ext::FailureKind::HookFailed => {
+                    (contract::ErrorCode::HookFailed, slot.clone())
+                }
+                crate::ext::FailureKind::ExtensionFailed => {
+                    (contract::ErrorCode::ExtensionFailed, String::new())
+                }
             };
             if self
                 .renderer_reported

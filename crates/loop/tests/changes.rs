@@ -270,7 +270,8 @@ fn a_new_instruction_file_is_created_at_the_next_turn_start() {
 fn two_new_shadowed_skills_group_at_the_next_turn_start() {
     // Two skills, each shadowed by the same name in the other repo place:
     // the next turn-start check raises one grouped `skill_shadowed`
-    // notice naming both, before `skills_changed`.
+    // notice naming both, before `skills_changed` (`docs/errors.md`,
+    // "Notices": one per code).
     let mut session = Session::new(vec![Scripted::text("One."), Scripted::text("Two.")], None);
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();

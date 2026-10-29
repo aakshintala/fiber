@@ -893,7 +893,9 @@ fn notices_from_both_stages_carry_no_action_id_and_come_first() {
 fn two_notices_from_one_stage_group_by_code() {
     // One `before_tool` batch reaches the log as one notice: the count
     // and the first item up front, with every item and its extension in
-    // the list, still before the call starts.
+    // the list, still before the call starts (`docs/errors.md`,
+    // "Notices": one per code; `docs/loop.md`, "One step": before_tool
+    // runs before the call is decided).
     let tool = Arc::new(CountingTool::new("out"));
     let mut hooks = FakeHooks::with_before(BeforeToolOutcome::Unchanged);
     for (extension, message) in [

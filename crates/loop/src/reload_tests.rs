@@ -516,7 +516,8 @@ fn failed_preamble_append_ends_after_the_reload_ack_is_accepted() {
 fn a_reload_groups_the_prepared_notices_by_code() {
     // One reload pass's prepared notices reach the log as one notice per
     // code: the two `extension_shadowed` notices become one naming both
-    // installs, in complete event order.
+    // installs, in complete event order (`docs/errors.md`, "Notices":
+    // one per code).
     let mut w = world();
     w.looped = w.looped.reloader(Arc::new(|_| {
         let mut ready = prepared();
