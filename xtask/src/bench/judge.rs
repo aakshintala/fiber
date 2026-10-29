@@ -254,6 +254,12 @@ fn attach_gates(budget: &str, rows: &[Vec<String>]) -> Result<AttachGates, Strin
     })
 }
 
+/// The tolerance (%) an attach fixture is judged against its comparable
+/// base by when the row's tolerance cell is `—` and that base median is
+/// already over the 50 ms ceiling: same-runner variance alone never fails
+/// the fixture, only a head past 10 % over the base does.
+const ATTACH_BASE_TOLERANCE_PCT: f64 = 10.0;
+
 /// The class ceiling and tolerance for `class` from attach `gates`: the
 /// ceiling the absolute bound checks, and the tolerance the relative leg
 /// needs (`None` disables it).
@@ -1319,17 +1325,50 @@ pub(super) fn judge(
                                     "; {fixture}: {median:.1} ms ({} ceiling {ceiling:.1} ms, absolute bound)",
                                     class_name(class)
                                 ));
-                                if let (Some(base_median), Some(tolerance)) = (base_median, tolerance) {
+                                // A comparable base already over the ceiling
+                                // waives the flat bound: the fixture fails
+                                // only past its tolerance-adjusted base, with
+                                // 10 % standing in for `—`. Any other usable
+                                // base keeps the relative leg below the
+                                // ceiling, and `—` disables it there.
+                                let base_leg = match (base_median, tolerance) {
+                                    (Some(base_median), tolerance) if base_median > ceiling => {
+                                        Some((base_median, tolerance.unwrap_or(ATTACH_BASE_TOLERANCE_PCT)))
+                                    }
+                                    (Some(base_median), Some(tolerance)) => {
+                                        Some((base_median, tolerance))
+                                    }
+                                    _ => None,
+                                };
+                                if let Some((base_median, tolerance)) = base_leg {
                                     line.head.push_str(&format!("; {fixture}: +{tolerance}% over base {base_median:.1} ms"));
                                 }
-                                // Either leg fails; an absolute breach takes precedence
-                                // so one fixture never produces duplicate failures.
-                                if median > ceiling {
+                                // Either leg fails, at most once per fixture:
+                                // a waived absolute breach is named in the
+                                // row while the row passes.
+                                if let Some((base_median, tolerance)) = base_leg
+                                    && base_median > ceiling
+                                {
+                                    match timing_fails(median, base_median, 0.0, tolerance) {
+                                        Ok(true) => failures.push(format!(
+                                            "{OVER}median {median:.1} ms of {id} {fixture} is over base {base_median:.1} ms by more than {tolerance}% (relative bound)"
+                                        )),
+                                        Ok(false) => {
+                                            if median > ceiling {
+                                                line.head.push_str(&format!(
+                                                    "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling (absolute bound breached, within +{tolerance}% over base {base_median:.1} ms)",
+                                                    class_name(class)
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => failures.push(format!("{id} {fixture}: {e}")),
+                                    }
+                                } else if median > ceiling {
                                     failures.push(format!(
                                         "{OVER}median {median:.1} ms of {id} {fixture} is over {ceiling:.1} ms {} ceiling (absolute bound)",
                                         class_name(class)
                                     ));
-                                } else if let (Some(base_median), Some(tolerance)) = (base_median, tolerance) {
+                                } else if let Some((base_median, tolerance)) = base_leg {
                                     // Samples are nonnegative: a zero floor checks only
                                     // the relative leg, independently of the flat ceiling.
                                     match timing_fails(median, base_median, 0.0, tolerance) {

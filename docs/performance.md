@@ -324,9 +324,7 @@ over the base median in place of its tolerance: it fails only when the median is
 with fewer than 5 stored runs, an unknown CPU model and any row without a comparable same-job base timing stay
 advisory, and the comment says why. Attaching's warm first-frame row is
 an exception: on eligible fast and slow models, each 1 MiB and 10 MiB
-own-log fixture fails if its median exceeds 50 ms. This hard ceiling holds
-with no base, a failed base, a missing or malformed base metric, a different
-base CPU, and any faster or slower base median or numeric tolerance.
+own-log fixture fails if its median exceeds 50 ms. When the comparable base median from the same job is also over 50 ms, a fixture fails only when its median exceeds that base median by more than the row's tolerance, or by 10 % while the tolerance cell is `—`; the report still names the breach. With no base, a failed base, a missing or malformed base metric, or a different base CPU, the 50 ms bound holds on its own.
 Middle, unknown and few-run models stay advisory. The opening-pass-end row
 stays advisory reference data, with no timing gate. Each over-ceiling fixture
 produces one named failure; malformed attach data fails without duplicating errors.
