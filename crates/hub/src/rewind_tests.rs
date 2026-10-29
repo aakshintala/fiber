@@ -2723,3 +2723,313 @@ fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
         );
     }
 }
+
+/// A `rewind` that fails its first call and binds after: the initial
+/// move-time start fails, then the single old-exit retry boots the child.
+#[derive(Clone)]
+struct FailOnceThenBind {
+    inner: FakeStarter,
+    attempts: Arc<Mutex<Vec<SessionId>>>,
+}
+
+impl FailOnceThenBind {
+    fn new(home: &std::path::Path) -> Self {
+        Self {
+            inner: FakeStarter::bind_and_hold(home),
+            attempts: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn attempts(&self) -> Vec<SessionId> {
+        lock(&self.attempts).clone()
+    }
+}
+
+impl Starter for FailOnceThenBind {
+    fn start(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        model: Option<&str>,
+        overrides: &[&str],
+        worktree: bool,
+        continues: Option<&SessionId>,
+        supervised: bool,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        self.inner.start(
+            id, workspace, model, overrides, worktree, continues, supervised,
+        )
+    }
+
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        credential: Option<&str>,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        self.inner.resume(id, workspace, credential)
+    }
+
+    fn rewind(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        from: &SessionId,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        let first = lock(&self.attempts).is_empty();
+        lock(&self.attempts).push(id.clone());
+        if first {
+            return Err(std::io::Error::other("the initial start fails"));
+        }
+        self.inner.rewind(id, workspace, from)
+    }
+}
+
+/// A moved child whose initial start fails is retried once when the old
+/// process exits, and the losing old-exit callback attaches to the
+/// running child instead of starting again: the feed-side retry and the
+/// relay-end `follow` share one per-child decision, in both orders, each
+/// with its own hub so the per-child claim starts fresh.
+#[test]
+fn a_failed_moved_child_retry_attaches_the_losing_callback() {
+    for feed_first in [true, false] {
+        let temp = Temp::new();
+        let workspace = temp.workspace();
+        let target = temp.dir.join("elsewhere");
+        fs::create_dir_all(&target).unwrap();
+        let old = id(1);
+        let next = id(2);
+        write_log(
+            &temp.dir,
+            &old,
+            &workspace,
+            None,
+            &[moved_line(&old, &next, &target.to_string_lossy())],
+        );
+        let starter = FailOnceThenBind::new(&temp.dir);
+        let hub = temp.hub(starter.clone());
+        // The move-time reach is the initial attempt: it fails, and the
+        // old log still ends `moved`.
+        reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
+        assert_eq!(
+            starter.attempts().len(),
+            1,
+            "the move-time start was attempted once"
+        );
+        let relays: Arc<Mutex<crate::relay::Relays>> =
+            Arc::new(Mutex::new(crate::relay::Relays::default()));
+        let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        lock(&relays).subscribed.push((old.clone(), level.clone()));
+        let (write, _) = UnixStream::pair().unwrap();
+        let writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(write));
+        if feed_first {
+            drop(retry_after_exit(
+                &hub,
+                &SessionId(old.clone()),
+                &SessionId(next.clone()),
+            ));
+            follow(&hub, &writer, &relays, &old);
+        } else {
+            follow(&hub, &writer, &relays, &old);
+            drop(retry_after_exit(
+                &hub,
+                &SessionId(old.clone()),
+                &SessionId(next.clone()),
+            ));
+        }
+        assert_eq!(
+            starter.attempts().len(),
+            2,
+            "one retry follows the initial attempt"
+        );
+        assert_eq!(
+            temp.hub_log().matches("could not start.").count(),
+            1,
+            "only the failed initial attempt writes a diagnostic"
+        );
+        let held = lock(&relays);
+        assert_eq!(
+            held.entries.len(),
+            1,
+            "the losing callback attaches instead of starting again"
+        );
+        assert_eq!(
+            held.subscription(&next),
+            Some(level),
+            "the level reaches the running child"
+        );
+    }
+}
+
+/// The relay-end `follow` retries a failed moved child on the old
+/// socket's EOF even when the feed never observes the old process exit:
+/// the retry does not wait for the feed's scan.
+#[test]
+fn a_failed_moved_child_retries_on_old_exit_before_the_feed_scan() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    let old = id(1);
+    let next = id(2);
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[moved_line(&old, &next, &target.to_string_lossy())],
+    );
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        failure(
+            ErrorCode::ExtensionRequiredFailed,
+            "the new process refused.",
+        ),
+    );
+    let hub = temp.hub(starter.clone());
+    reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(
+        starter.rewound().len(),
+        1,
+        "the move-time start was attempted once"
+    );
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    lock(&relays).subscribed.push((old.clone(), level));
+    let (write, _) = UnixStream::pair().unwrap();
+    // No feed callback runs: the old process exits before the scan.
+    follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
+    assert_eq!(
+        starter.rewound().len(),
+        2,
+        "one retry follows the initial attempt"
+    );
+    assert_eq!(
+        continued(&temp.dir, &SessionId(old.clone())),
+        Some(SessionId(next)),
+        "the old log stays ended"
+    );
+    assert_eq!(
+        temp.hub_log().matches("could not start.").count(),
+        2,
+        "the initial attempt and its one retry each write one diagnostic"
+    );
+}
+
+/// `follow` makes the shared retry decision even when no old
+/// subscription was saved: only attaching needs the kept level, so the
+/// child still starts and no relay is published for it.
+#[test]
+fn a_failed_moved_child_retries_without_a_saved_subscription() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    let old = id(1);
+    let next = id(2);
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[moved_line(&old, &next, &target.to_string_lossy())],
+    );
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        failure(
+            ErrorCode::ExtensionRequiredFailed,
+            "the new process refused.",
+        ),
+    );
+    let hub = temp.hub(starter.clone());
+    reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(
+        starter.rewound().len(),
+        1,
+        "the move-time start was attempted once"
+    );
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    let (write, _) = UnixStream::pair().unwrap();
+    follow(&hub, &Arc::new(Mutex::new(write)), &relays, &old);
+    assert_eq!(
+        starter.rewound().len(),
+        2,
+        "one retry follows the initial attempt"
+    );
+    let held = lock(&relays);
+    assert!(
+        held.entries.is_empty(),
+        "no relay without a level to attach"
+    );
+    assert_eq!(held.subscription(&next), None, "no level reaches the child");
+    assert_eq!(
+        continued(&temp.dir, &SessionId(old.clone())),
+        Some(SessionId(next)),
+        "the old log stays ended"
+    );
+}
+
+/// A failed old-exit retry stays consumed: no later old-exit callback
+/// starts the child again when it is not running.
+#[test]
+fn a_failed_old_exit_retry_is_never_repeated() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    let old = id(1);
+    let next = id(2);
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[moved_line(&old, &next, &target.to_string_lossy())],
+    );
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        failure(
+            ErrorCode::ExtensionRequiredFailed,
+            "the new process refused.",
+        ),
+    );
+    let hub = temp.hub(starter.clone());
+    reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    lock(&relays).subscribed.push((old.clone(), level));
+    let (write, _) = UnixStream::pair().unwrap();
+    let writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(write));
+    drop(retry_after_exit(
+        &hub,
+        &SessionId(old.clone()),
+        &SessionId(next.clone()),
+    ));
+    follow(&hub, &writer, &relays, &old);
+    drop(retry_after_exit(
+        &hub,
+        &SessionId(old.clone()),
+        &SessionId(next.clone()),
+    ));
+    assert_eq!(
+        starter.rewound().len(),
+        2,
+        "the initial attempt and its one retry never run again"
+    );
+    assert!(
+        lock(&relays).entries.is_empty(),
+        "a failed retry attaches nothing"
+    );
+}
