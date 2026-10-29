@@ -345,24 +345,6 @@ impl<'de> Deserialize<'de> for RawResult {
             {
                 Ok(RawResult::empty())
             }
-            // Exempt: `Option` handles a missing or null result before
-            // this deserializer runs, and `deserialize_any` never routes
-            // to `some` or `none`, so the arms never run.
-            #[cfg_attr(false, mutants::skip)]
-            fn visit_none<E>(self) -> Result<RawResult, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(RawResult::empty())
-            }
-            // Exempt: see `visit_none` above.
-            #[cfg_attr(false, mutants::skip)]
-            fn visit_some<D>(self, deserializer: D) -> Result<RawResult, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                Deserialize::deserialize(deserializer)
-            }
             fn visit_bool<E>(self, _: bool) -> Result<RawResult, E>
             where
                 E: serde::de::Error,
@@ -454,24 +436,6 @@ impl<'de> Deserialize<'de> for LenientString {
             {
                 Ok(LenientString::default())
             }
-            // Exempt: `Option` handles a missing or null string before
-            // this deserializer runs, and `deserialize_any` never routes
-            // to `some` or `none`, so the arms never run.
-            #[cfg_attr(false, mutants::skip)]
-            fn visit_none<E>(self) -> Result<LenientString, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(LenientString::default())
-            }
-            // Exempt: see `visit_none` above.
-            #[cfg_attr(false, mutants::skip)]
-            fn visit_some<D>(self, deserializer: D) -> Result<LenientString, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                Deserialize::deserialize(deserializer)
-            }
             // Exempt: a wrong-typed string reads as absent, so the arm
             // already returns the default and its mutant is identical.
             #[cfg_attr(false, mutants::skip)]
@@ -549,24 +513,6 @@ impl<'de> Deserialize<'de> for LenientU64 {
                 E: serde::de::Error,
             {
                 Ok(LenientU64(Some(value)))
-            }
-            // Exempt: `Option` handles a missing or null sequence before
-            // this deserializer runs, and `deserialize_any` never routes
-            // to `some` or `none`, so the arms never run.
-            #[cfg_attr(false, mutants::skip)]
-            fn visit_none<E>(self) -> Result<LenientU64, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(LenientU64::default())
-            }
-            // Exempt: see `visit_none` above.
-            #[cfg_attr(false, mutants::skip)]
-            fn visit_some<D>(self, deserializer: D) -> Result<LenientU64, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                Deserialize::deserialize(deserializer)
             }
             // Exempt: a wrong-typed sequence reads as absent, so the arm
             // already returns the default and its mutant is identical.

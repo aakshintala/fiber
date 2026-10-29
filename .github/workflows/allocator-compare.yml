@@ -29,9 +29,10 @@ defaults:
 jobs:
   compare:
     runs-on: ubuntu-24.04
-    # Three release builds with LTO plus three full five-sample benchmark
-    # runs: far above the Release job's 7 warm minutes for one build and
-    # two runs, so the bound is set high until 20 runs show a median.
+    # Three release builds with LTO plus four full five-sample benchmark
+    # runs, including the musl-mimalloc rerun: far above the Release job's
+    # 7 warm minutes for one build and two runs, so the bound is set high
+    # until 20 runs show a median.
     timeout-minutes: 120
     env:
       # C code (lua-src, ring, mimalloc) compiles against musl's headers
