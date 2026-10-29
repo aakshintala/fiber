@@ -779,7 +779,9 @@ fn second_handover_before_resume_keeps_retained_shown() {
         writer.stop_and_join();
     }
     assert!(lp.app.take_image_out().items.is_empty());
-    // The first post-resume reset keeps the retained image shown.
+    // The first post-resume reset keeps the retained image shown
+    // (`docs/tui.md`, "Images"): handing the terminal over sends every
+    // on-screen image again whole, so the writer-replayed image stays shown.
     lp.handover_retained = vec![1];
     lp.pending_resume = false;
     lp.note_handover_resumed();
@@ -790,7 +792,9 @@ fn second_handover_before_resume_keeps_retained_shown() {
     assert!(lp.pending_resume);
     // A second handover before the first post-resume frame: without the
     // pending check this takes an empty retained list and re-asks the
-    // image the writer will replay.
+    // image the writer will replay (`docs/tui.md`, "Images"): handing
+    // the terminal over sends every on-screen image again whole, so the
+    // parked writer's replay stays the single resend.
     lp.note_handover_resumed();
     assert!(
         lp.app.take_image_out().display.is_empty(),
