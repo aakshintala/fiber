@@ -166,6 +166,16 @@ impl SessionExtensions {
             });
         };
         let manifest = config::read_manifest(dir)?;
+        if manifest.process.is_some() {
+            return self
+                .process_providers
+                .get(&(extension.to_owned(), provider.to_owned()))
+                .cloned()
+                .ok_or_else(|| Error::Lua {
+                    extension: extension.to_owned(),
+                    message: format!("registers no provider `{provider}`"),
+                });
+        }
         let scripts = crate::providers::provider_scripts(dir)?;
         if let Some(unclaimed) = crate::providers::first_undeclared(
             &manifest.providers,

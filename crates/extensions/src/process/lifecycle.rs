@@ -92,13 +92,45 @@ pub(crate) struct Spawn {
 /// shutdown: no new dispatches past this point. A finished owner stays
 /// as it is. True when the transition ran.
 pub(crate) fn begin_finish(shared: &Shared) -> bool {
-    let mut lifecycle = lock(&shared.lifecycle);
-    match lifecycle.state {
-        RunState::Starting | RunState::Running | RunState::Dead | RunState::Restarting => {
-            lifecycle.state = RunState::Finishing;
-            true
+    let changed = {
+        let mut lifecycle = lock(&shared.lifecycle);
+        match lifecycle.state {
+            RunState::Starting | RunState::Running | RunState::Dead | RunState::Restarting => {
+                lifecycle.state = RunState::Finishing;
+                true
+            }
+            RunState::Finishing | RunState::Gone => false,
         }
-        RunState::Finishing | RunState::Gone => false,
+    };
+    if changed {
+        shared.lifecycle_park.bump();
+    }
+    changed
+}
+
+/// Waits until a closed generation is replaced or the owner is terminal.
+/// The restart swaps the transport without changing lifecycle state, so
+/// it bumps the park after the swap; terminal transitions wake the park too.
+pub(crate) fn wait_for_next_spawn(shared: &Shared, observed: u64) -> bool {
+    loop {
+        let seen = shared.lifecycle_park.generation();
+        match lock(&shared.lifecycle).state {
+            RunState::Gone | RunState::Finishing => return false,
+            RunState::Starting | RunState::Running | RunState::Dead | RunState::Restarting => {}
+        }
+        if lock(&shared.transport).spawn_id() != observed {
+            return true;
+        }
+        shared
+            .lifecycle_park
+            .park(shared.clock.as_ref(), None, seen);
+    }
+}
+
+impl super::ProcessExtension {
+    /// Whether the pump should continue after the observed transport closes.
+    pub(crate) fn wait_for_next_spawn(&self, observed: u64) -> bool {
+        wait_for_next_spawn(&self.shared, observed)
     }
 }
 
@@ -262,6 +294,7 @@ fn restart(
     let old = Arc::clone(&lock(&shared.transport));
     spawned.set_spawn_id(old.spawn_id() + 1);
     *lock(&shared.transport) = Arc::new(spawned);
+    shared.lifecycle_park.bump();
     // The old generation ends here: its group dies even when the death
     // observation raced a live child, its zombie reaps, and its threads
     // join, so no orphan, pipe or listing leaks past the swap. Each step

@@ -349,14 +349,37 @@ fn check_credential_declarations(
     }
     let dir = config::extensions_dir(&home).join(config::dir_name(&manifest.name));
     let deps = extensions::dep_dirs(&home, &dir, &manifest.depends, false);
-    let extension =
-        extensions::LuaExtension::new(manifest.name.clone(), dir, home, Arc::clone(&options.clock))
-            .with_dependencies(deps);
+    let extension = extensions::LuaExtension::new(
+        manifest.name.clone(),
+        dir.clone(),
+        home,
+        Arc::clone(&options.clock),
+    )
+    .with_dependencies(deps);
+    // A process package starts its child in sessionless mode and reads
+    // the provider/function declarations the child registers; a Lua
+    // package reads them from its files. Either way the precheck never
+    // invokes a provider function: it compares the data's labels against
+    // the registered declaration alone.
+    let process = manifest.process.is_some();
     let mut drift = Vec::new();
     for data in &providers {
-        let registered = match extension.provider_functions(&data.name) {
-            Ok(functions) => functions.iter().any(|function| function == "credential"),
-            Err(error) => return fail(&[format!("provider `{}`: {error}", data.name)]),
+        let registered = if process {
+            match extensions::Package::load_process_provider(extensions::PackageOptions {
+                dir: dir.clone(),
+                clock: Arc::clone(&options.clock),
+            }) {
+                Ok(declarations) => declarations.iter().any(|(provider, functions)| {
+                    provider == &data.name
+                        && functions.iter().any(|function| function == "credential")
+                }),
+                Err(error) => return fail(&[format!("provider `{}`: {error}", data.name)]),
+            }
+        } else {
+            match extension.provider_functions(&data.name) {
+                Ok(functions) => functions.iter().any(|function| function == "credential"),
+                Err(error) => return fail(&[format!("provider `{}`: {error}", data.name)]),
+            }
         };
         let name = &data.name;
         if registered

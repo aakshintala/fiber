@@ -21,11 +21,21 @@ use crate::Error;
 mod tests;
 
 /// Runs every `session_start` hook, in order: each is shown the same input
-/// and every return is kept, in run order.
+/// and every return is kept, in run order. Before the chain runs, the
+/// mapped latest reason is recorded on the session and every live process
+/// owner, so a restart after handoff resends the handoff reason.
 pub(super) fn session_start(
     session: &SessionExtensions,
     start: &SessionStart<'_>,
 ) -> ContextAnswer {
+    let reason = match start.reason {
+        StartReason::Start => contract::events::ExtensionReason::New,
+        StartReason::Resume => contract::events::ExtensionReason::Resume,
+        StartReason::Fork => contract::events::ExtensionReason::Fork,
+        StartReason::Rewind => contract::events::ExtensionReason::Rewind,
+        StartReason::Handoff => contract::events::ExtensionReason::Handoff,
+    };
+    session.record_start_reason(reason);
     run_additive(
         session,
         &session.lifecycle.session_start,
@@ -89,7 +99,7 @@ pub(super) fn before_model_call(
         };
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg.clone(), |value| {
+            .hook_with(&entry.hook, arg.clone(), None, |value| {
                 decode_additive(&name, BEFORE_MODEL_CALL, "refuse", value)
                     .map(|change| (change, false))
             })
@@ -158,7 +168,7 @@ fn run_additive(
         };
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg.clone(), |value| {
+            .hook_with(&entry.hook, arg.clone(), None, |value| {
                 let change = decode_additive(&name, point, key, value)?;
                 let changed = change.is_some();
                 Ok((change, changed))

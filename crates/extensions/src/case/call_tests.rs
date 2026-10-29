@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::{
     CallOutcome, Verdict, compare_credential, compare_result, failure_verdict, provider_extension,
-    run_call,
+    run_call, run_call_in,
 };
 
 #[test]
@@ -464,6 +464,179 @@ fn a_package_that_registers_nothing_is_not_chosen() {
         resolved(&installed, "openrouter", &home).as_deref(),
         Some(OPENROUTER)
     );
+}
+
+/// One fiber home holding both process packages the `run_call`
+/// selection tests share: installing twice would race the shared
+/// process, so every test passes the same directory.
+static PROCESS_HOME: std::sync::OnceLock<crate::test_support::Home> = std::sync::OnceLock::new();
+
+/// The peer script a sessionless provider runs: it records the hello,
+/// registers `provider` with a `models` function answering `[]`, then
+/// answers every request with the empty model list.
+fn process_peer_plan(provider: &str, hello: &std::path::Path) -> Value {
+    json!([
+        {"read": {"as": "hello"}},
+        {"write_file": {"path": hello, "value": {"$ref": "hello"}}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": [provider, {"models": {"timeout": 60000, "run": true}}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready"}}}},
+        {"loop": [
+            {"read": {"as": "incoming"}},
+            {"if": {"path": "incoming.kind", "equals": "extension_request", "then": [
+                {"send": {"id": "p1", "command": "reply", "args": {"request_id": {"$ref": "incoming.payload.request_id"}, "result": []}}}
+            ]}}
+        ]}
+    ])
+}
+
+/// Installs `fiber.test/<short>` as a process package registering
+/// `provider`, recording its hello at `hello`.
+fn install_process_package(
+    home: &std::path::Path,
+    short: &str,
+    provider: &str,
+    hello: &std::path::Path,
+) {
+    let src = fakes::TempDir::new("fiber-call-process-src");
+    let plan = process_peer_plan(provider, hello);
+    let (program, args) = fakes::ProcessFixture::command("peer", Some(&plan));
+    let manifest = json!({
+        "name": format!("fiber.test/{short}"),
+        "version": "v1.2.3",
+        "fiber": "0.1.0",
+        "api": 1,
+        "providers": {provider: []},
+        "process": {"program": program, "args": args, "exit_timeout_ms": 0},
+    });
+    std::fs::create_dir_all(src.path()).unwrap();
+    std::fs::write(src.path().join("extension.json"), manifest.to_string()).unwrap();
+    crate::plan(
+        home,
+        &crate::Request::Path(src.path().to_path_buf()),
+        "0.1.0",
+        &crate::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// The shared home, installing both process packages once: provider
+/// `proc` lives in `fiber.test/proc`, and provider `p` under the
+/// different short name `fiber.test/other`.
+fn process_home() -> &'static crate::test_support::Home {
+    PROCESS_HOME.get_or_init(|| {
+        let home = crate::test_support::Home::new();
+        let root = home.home();
+        install_process_package(&root, "proc", "proc", &root.join("proc-hello.json"));
+        install_process_package(&root, "other", "p", &root.join("other-hello.json"));
+        home
+    })
+}
+
+/// A `models` case for `provider`, expecting the empty list the peer
+/// answers.
+fn process_models_case(provider: &str) -> super::super::format::CallCase {
+    super::super::format::CallCase {
+        name: Some(format!("process-{provider}")),
+        steps: vec![super::super::format::CallStep {
+            operation: super::CallOperation::Invoke {
+                call: super::Call {
+                    provider: provider.to_owned(),
+                    function: "models".to_owned(),
+                    arg: json!({}),
+                },
+                outcome: super::CallOutcome::Returns(json!([])),
+            },
+            clock: Vec::new(),
+        }],
+        credentials: serde_json::Map::new(),
+        expect_credentials: serde_json::Map::new(),
+        exact_credentials: false,
+        attended: false,
+        clock: Vec::new(),
+        host: super::super::format::Host::default(),
+    }
+}
+
+/// A process package whose short name is the provider runs through the
+/// shared sessionless constructor, not as Lua: the models call passes,
+/// and the hello carries reason `call` with no session id, the CLI
+/// working directory, real data directories and empty state.
+#[test]
+fn a_process_package_matching_the_provider_short_name_runs_without_a_session() {
+    let home = process_home().home();
+    let verdict = run_call_in(
+        process_models_case("proc"),
+        "proc".to_owned(),
+        fakes::clock::FakeClock::new(),
+        home.clone(),
+    );
+    assert_eq!(verdict, Verdict::Pass);
+    let hello: Value = serde_json::from_str(
+        &std::fs::read_to_string(home.join("proc-hello.json")).expect("the peer records its hello"),
+    )
+    .expect("the hello is JSON");
+    assert_eq!(hello["payload"]["reason"], json!("call"));
+    assert!(
+        hello.get("session_id").is_none(),
+        "the call line carries no session id: {hello}"
+    );
+    assert!(
+        hello["payload"].get("session_id").is_none(),
+        "the call hello omits the session id: {hello}"
+    );
+    let cwd = std::env::current_dir().expect("a working directory");
+    assert_eq!(
+        hello["payload"]["workspace"],
+        json!(cwd.to_str().expect("a UTF-8 directory")),
+        "the hello workspace is the CLI working directory"
+    );
+    let slug = config::dir_name("fiber.test/proc");
+    assert_eq!(
+        hello["payload"]["data_dirs"]["machine"],
+        json!(
+            config::extension_data_dir(&home, &slug)
+                .to_str()
+                .expect("a UTF-8 data dir")
+        ),
+        "the hello carries the real machine data dir"
+    );
+    // The project directory is keyed by the CLI working directory, not
+    // the machine directory: identical paths would prove nothing is
+    // keyed (`docs/extensions.md:211`, "With reason `call`").
+    let project =
+        config::ProjectKey::new(log::project_key(&cwd.canonicalize().unwrap_or(cwd.clone())))
+            .expect("the CLI working directory keys a project");
+    let project_dir = config::project_data_dir(&home, &project, &slug);
+    assert_eq!(
+        hello["payload"]["data_dirs"]["project"],
+        json!(project_dir.to_str().expect("a UTF-8 data dir")),
+        "the hello carries the real project data dir"
+    );
+    assert_ne!(
+        hello["payload"]["data_dirs"]["project"], hello["payload"]["data_dirs"]["machine"],
+        "the project data dir is keyed by the CLI working directory"
+    );
+    assert_eq!(hello["payload"]["state"], json!({}));
+}
+
+/// A process package registers a provider under a different name than
+/// its own short name: the manifest skips the `providers/<name>.lua`
+/// existence check, so the provider still routes to the process host
+/// rather than falling through to Lua.
+#[test]
+fn a_process_package_registers_a_provider_under_a_different_name() {
+    let verdict = run_call_in(
+        process_models_case("p"),
+        "p".to_owned(),
+        fakes::clock::FakeClock::new(),
+        process_home().home(),
+    );
+    assert_eq!(verdict, Verdict::Pass);
 }
 
 /// Installs a dependency package holding one `trim` module.

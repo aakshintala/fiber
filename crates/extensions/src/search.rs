@@ -122,7 +122,7 @@ impl SearchBackend for ProcessSearch {
     ) -> Result<Option<Vec<SearchResult>>, Failure> {
         let returned = self
             .runtime
-            .search_run(&self.run, search_arg(query, domains), cancel);
+            .search_run(&self.run, search_arg(query, domains), None, cancel);
         search_outcome(&self.name, &self.owner, returned)
     }
 }

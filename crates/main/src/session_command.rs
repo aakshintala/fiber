@@ -16,8 +16,8 @@ use log::Log;
 use r#loop::Loop;
 
 use crate::{
-    Parts, ask_failed, ask_permissions, cli, failed, finish, late_emit, mcp_servers, parts_with,
-    run_turn, session_extensions, shutdown,
+    Parts, ask_failed, ask_permissions, cli, failed, finish, late_emit, mcp_servers,
+    parts_with_session, run_turn, session_extensions, shutdown,
 };
 
 thread_local! {
@@ -387,6 +387,9 @@ pub(crate) fn run_new(
     // Armed before the parts are read: from now a signal cancels the one
     // reads every startup credential command runs through.
     shutdown::arm(signals, &reads);
+    let fiber_path = fiber
+        .clone()
+        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
     // A rewind's new session runs where the old one did, with the model,
     // credential and thinking level the old log's latest build recorded,
     // as a resume keeps its recorded ones (`docs/events.md`, "Rewind").
@@ -438,7 +441,7 @@ pub(crate) fn run_new(
                 }
             }
             .map_err(|error| failed(error.code(), error))?;
-            parts_with(
+            parts_with_session(
                 Vec::new(),
                 folded.model.as_deref(),
                 folded.credential.as_deref(),
@@ -449,11 +452,24 @@ pub(crate) fn run_new(
                 process,
                 seed,
                 crate::session_extensions::RepositoryScope::default(),
+                crate::parts::SessionLaunch {
+                    id: id.clone(),
+                    reason: match &start.how {
+                        r#loop::Continuation::Fork { .. } => {
+                            contract::events::ExtensionReason::Fork
+                        }
+                        r#loop::Continuation::Rewind { .. } => {
+                            contract::events::ExtensionReason::Rewind
+                        }
+                    },
+                    event_cursor: 0,
+                },
+                fiber_path.clone(),
             )?
         }
         None => {
             let overrides_for_fix = overrides.clone();
-            parts_with(
+            parts_with_session(
                 overrides,
                 None,
                 None,
@@ -464,6 +480,12 @@ pub(crate) fn run_new(
                 process,
                 extensions::StateSeed::new(),
                 crate::session_extensions::RepositoryScope::default(),
+                crate::parts::SessionLaunch {
+                    id: id.clone(),
+                    reason: contract::events::ExtensionReason::New,
+                    event_cursor: 0,
+                },
+                fiber_path.clone(),
             )
             .map_err(|failure| ::cli::with_fix(failure, &overrides_for_fix))?
         }
@@ -501,6 +523,7 @@ pub(crate) fn run_new(
         extensions,
         locks,
         mut mcp,
+        pending_mcp,
         switching,
         switchable,
         resolve,
@@ -510,16 +533,13 @@ pub(crate) fn run_new(
     shutdown::arm(signals, &reads);
     // Every session declares `delegate_spawn`: a delegate is its own
     // session, so the child re-executes this binary.
-    let fiber_path = fiber
-        .clone()
-        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
     let crate::switch::quota::QuotaReaders {
         door: quota,
         model: model_quota,
         notice,
     } = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
-        fiber_path,
+        fiber_path.clone(),
         home.clone(),
         id.clone(),
         workspace.clone(),
@@ -556,8 +576,15 @@ pub(crate) fn run_new(
     if let Some(timing) = &timing {
         jobs.install_timing(Arc::clone(timing));
     }
-    let (tools, infos, driver, session_servers) = mcp_servers::session_tools(
-        fiber,
+    let pending_mcp = match pending_mcp {
+        Some(pending) => pending,
+        None => {
+            let _ = extensions.finish_processes(&support::cancel::Token::new());
+            return Err(failed(ErrorCode::IoFailed, "MCP startup was not prepared"));
+        }
+    };
+    let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
+        fiber_path.clone(),
         &home,
         &workspace,
         &dir.artifacts(),
@@ -565,9 +592,7 @@ pub(crate) fn run_new(
         &jobs,
         &locks,
         &project,
-        mcp.specs,
-        mcp.repository,
-        &[],
+        pending_mcp,
         web_search,
         &delegates,
         skills,
@@ -575,7 +600,13 @@ pub(crate) fn run_new(
         timing.clone(),
         shell_read_only.clone(),
         sandbox.clone(),
-    )?;
+    ) {
+        Ok(tools) => tools,
+        Err(failure) => {
+            let _ = extensions.finish_processes(&support::cancel::Token::new());
+            return Err(failure);
+        }
+    };
     let delegates = Arc::new(delegates);
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);

@@ -124,15 +124,30 @@ impl Event {
 /// `extension_hello`: the first line Fiber sends a process extension, with
 /// the session's identity, why it started, its workspace, the extension's
 /// data directories and its folded state. Sent again after a restart, with
-/// the state as it stands in the session
-/// (`docs/events.md`, `extension_hello`).
+/// the state as it stands in the session. A provider call outside a
+/// session omits the session's id and carries reason `call`
+/// (`docs/events.md`, `extension_hello`). The two runs are distinct
+/// variants, so a sessionless hello cannot carry a session id and a
+/// session hello cannot carry reason `call`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExtensionHello {
+    /// A session's hello: the session's id and why it started.
+    Session(SessionHello),
+    /// A provider call outside a session: no session id, reason `call`.
+    Call(CallHello),
+}
+
+/// A session's `extension_hello` payload: the session's id, why it
+/// started, its workspace, the extension's data directories and its
+/// folded state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExtensionHello {
+pub struct SessionHello {
     /// The session's id.
     pub session_id: SessionId,
     /// Why the session started.
-    pub reason: ExtensionReason,
+    pub reason: SessionReason,
     /// The workspace root.
     pub workspace: String,
     /// The paths `host.data_dir` returns.
@@ -141,7 +156,71 @@ pub struct ExtensionHello {
     pub state: Map<String, Value>,
 }
 
+/// A sessionless `extension_hello` payload: reason `call`, the CLI
+/// working directory, the real data directories and empty state, with
+/// no session id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallHello {
+    /// Why the run started: always `call` outside a session.
+    pub reason: CallReason,
+    /// The workspace root.
+    pub workspace: String,
+    /// The paths `host.data_dir` returns.
+    pub data_dirs: ExtensionDataDirs,
+    /// The extension's folded state, as `state.get` reads it: always
+    /// empty outside a session.
+    pub state: Map<String, Value>,
+}
+
+/// Why a session started, as a session `extension_hello` carries it: a
+/// closed set. `call` is not here: a provider call outside a session
+/// carries no session and uses [`ExtensionHello::Call`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionReason {
+    /// A new session.
+    New,
+    /// A resumed session.
+    Resume,
+    /// A fork.
+    Fork,
+    /// A rewind.
+    Rewind,
+    /// A handoff.
+    Handoff,
+}
+
+impl TryFrom<ExtensionReason> for SessionReason {
+    type Error = ExtensionReason;
+
+    /// Reads a session-start reason: every session start carries one of
+    /// these. `call` never starts a session, so it reads back as the
+    /// input it cannot narrow.
+    fn try_from(reason: ExtensionReason) -> Result<Self, ExtensionReason> {
+        match reason {
+            ExtensionReason::New => Ok(Self::New),
+            ExtensionReason::Resume => Ok(Self::Resume),
+            ExtensionReason::Fork => Ok(Self::Fork),
+            ExtensionReason::Rewind => Ok(Self::Rewind),
+            ExtensionReason::Handoff => Ok(Self::Handoff),
+            ExtensionReason::Call => Err(reason),
+        }
+    }
+}
+
+/// Why a sessionless run started, as a call `extension_hello` carries
+/// it: only `call`, which never carries a session id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallReason {
+    /// A provider call outside a session.
+    #[serde(rename = "call")]
+    Call,
+}
+
 /// Why a session started, as `extension_hello` carries it: a closed set.
+/// Session starts narrow this to [`SessionReason`]; `call` runs as
+/// [`ExtensionHello::Call`] with no session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionReason {
@@ -155,6 +234,8 @@ pub enum ExtensionReason {
     Rewind,
     /// A handoff.
     Handoff,
+    /// A provider call outside a session.
+    Call,
 }
 
 /// The paths `host.data_dir` returns, as `extension_hello` carries them.

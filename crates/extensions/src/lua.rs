@@ -1018,6 +1018,17 @@ pub(crate) enum CredentialFor {
     Login(LoginSlot),
 }
 
+impl std::fmt::Debug for CredentialFor {
+    /// Names the variant only: the pair's identity and the slot's value
+    /// never reach a log (`docs/code-quality.md`, "Errors").
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stored(_) => f.write_str("CredentialFor::Stored(..)"),
+            Self::Login(_) => f.write_str("CredentialFor::Login(..)"),
+        }
+    }
+}
+
 /// What a call runs.
 #[derive(Clone)]
 pub(crate) enum Target {

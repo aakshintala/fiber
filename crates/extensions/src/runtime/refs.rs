@@ -15,6 +15,7 @@ use serde_json::Value;
 use contract::CommandId;
 use contract::tool::Cancel;
 
+use crate::lua::CredentialFor;
 use crate::{Error, LuaExtension};
 
 /// A registered callback: the `call` command that registered it, the
@@ -36,8 +37,12 @@ pub(crate) struct FunctionRef {
 /// the child's answer. Arguments arrive as the Lua function would receive
 /// them, as a JSON array for callbacks taking arguments and as the decoded
 /// value elsewhere; a `None` answer means the function returned nothing.
-pub(crate) type ProcessInvoke =
-    Arc<dyn Fn(Value, &dyn Cancel) -> Result<Option<Value>, Error> + Send + Sync>;
+/// The scope is the invocation's own credential, `Some` only for the
+/// dispatcher that runs a provider's `credential()`, so ordinary calls
+/// carry `None` and never refresh.
+pub(crate) type ProcessInvoke = Arc<
+    dyn Fn(Value, Option<CredentialFor>, &dyn Cancel) -> Result<Option<Value>, Error> + Send + Sync,
+>;
 
 /// One registered function's target: a Lua function in its extension's VM,
 /// or a process function behind its installed invoker.

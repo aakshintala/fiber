@@ -580,7 +580,7 @@ impl LuaProvider {
                 .collect();
             arg.insert("headers".into(), Value::Object(headers));
         }
-        let returned = self.call("quota", Value::Object(arg))?;
+        let returned = self.call("quota", Value::Object(arg), None)?;
         let parsed =
             parse_quota(&returned).map_err(|why| self.bad_return("quota", why.to_owned()))?;
         Ok((parsed, returned))

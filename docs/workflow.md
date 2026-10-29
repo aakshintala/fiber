@@ -220,8 +220,10 @@ diff against the ruling and says so in the pull request body.
 
 The review is posted on the pull request as a comment. Each finding is
 either fixed, and the fix's diff reviewed again, or answered in a reply that
-cites evidence: a test, a doc line, a command's output. The pull request
-merges when every finding has one or the other.
+cites evidence: a test, a doc line, a command's output. A finding that the
+diff's own behaviour is wrong is fixed in the same pull request; a follow-up
+issue answers only a finding about code the diff did not change. The pull
+request merges when every finding has one or the other.
 
 A finding that a review of an earlier pull request also raised becomes a
 type, a lint or a check in `scripts/check`, in its own pull request that

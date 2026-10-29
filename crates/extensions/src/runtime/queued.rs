@@ -16,6 +16,7 @@ use support::lock;
 use crate::Error;
 
 use super::refs::ProcessInvoke;
+use crate::lua::CredentialFor;
 
 /// One queued command both backends admit: it never starts until its
 /// release, and the wait sees the run's answer.
@@ -64,18 +65,28 @@ struct ProcessQueuedState {
     invoke: Option<ProcessInvoke>,
     /// The command's text, as its handler receives it.
     arg: Value,
+    /// The invocation's credential scope: commands run user code, never
+    /// a provider's `credential()`, so a queued command carries none.
+    scope: Option<CredentialFor>,
     /// The run's answer, once release ran it.
     answer: Option<Result<Value, Error>>,
 }
 
 impl ProcessQueued {
-    /// A held call of `owner` running `invoke` on `arg` at release.
-    pub(crate) fn new(owner: String, invoke: ProcessInvoke, arg: Value) -> Self {
+    /// A held call of `owner` running `invoke` on `arg` at release,
+    /// carrying `scope`.
+    pub(crate) fn new(
+        owner: String,
+        invoke: ProcessInvoke,
+        arg: Value,
+        scope: Option<CredentialFor>,
+    ) -> Self {
         Self {
             state: Mutex::new(ProcessQueuedState {
                 owner,
                 invoke: Some(invoke),
                 arg,
+                scope,
                 answer: None,
             }),
             done: Condvar::new(),
@@ -91,13 +102,14 @@ impl ProcessQueued {
         }
         let invoke = state.invoke.take();
         let arg = state.arg.clone();
+        let scope = state.scope.clone();
         if let Some(invoke) = invoke {
             let cancel = support::cancel::Token::new();
             // The driver's return value is ignored (`docs/extensions.md`,
             // "Commands and screens"): answering nothing completes, and only
             // an error fails the wait.
             state.answer =
-                Some(invoke(arg, &cancel).map(|returned| returned.unwrap_or(Value::Null)));
+                Some(invoke(arg, scope, &cancel).map(|returned| returned.unwrap_or(Value::Null)));
         }
         self.done.notify_all();
     }
