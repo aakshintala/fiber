@@ -1674,9 +1674,10 @@ fn relay(
                         // the acknowledgement, so its next command finds
                         // it running. A start that fails is answered with
                         // the start's own code instead, through the same
-                        // ordered forward below, and the connection keeps
-                        // no subscription for the old session, so the
-                        // redirect at the socket's end moves it nowhere.
+                        // ordered forward below, and the old subscription
+                        // is kept: the redirect at the socket's end
+                        // retries the recorded child once when it sees
+                        // EOF.
                         match crate::rewind::reach(hub, &SessionId(session.to_owned()), &next) {
                             Ok(stream) => drop(stream),
                             Err(refused) => {
@@ -1698,7 +1699,6 @@ fn relay(
                                         rewound: None,
                                         last_seq: None,
                                     });
-                                    lock(relays).subscribed.retain(|(kept, _)| kept != session);
                                 }
                             }
                         }
