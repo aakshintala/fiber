@@ -2574,57 +2574,57 @@ impl Starter for RetryGate {
 /// old-exit callbacks: the relay-end `follow` and the feed's retry share
 /// one decision under the child's start guard, so the second callback
 /// starts nothing even when the first retry fails. Both callback orders
-/// run, with the first retry held inside the starter until the competing
-/// callback proves it reached the held guard.
+/// run, each with its own moved child, seeded log and hub: the claim is
+/// per child, so sharing one child across orders would spend its single
+/// retry in the first order. In each order the first retry is held inside
+/// the starter until the competing callback proves it reached the held
+/// guard.
 #[test]
 fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
-    let temp = Temp::new();
-    let workspace = temp.workspace();
-    let target = temp.dir.join("elsewhere");
-    fs::create_dir_all(&target).unwrap();
-    let old = id(1);
-    let next = id(2);
-    write_log(
-        &temp.dir,
-        &old,
-        &workspace,
-        None,
-        &[moved_line(&old, &next, &target.to_string_lossy())],
-    );
-    let starter = RetryGate {
-        inner: FakeStarter::exit_with(
-            &temp.dir,
-            failure(
-                ErrorCode::ExtensionRequiredFailed,
-                "the new process refused.",
-            ),
-        ),
-        held: SessionId(next.clone()),
-        holding: Arc::new(AtomicBool::new(false)),
-        entered: Arc::new(Mutex::new(None)),
-        release: Arc::new(Mutex::new(None)),
-    };
-    let hub = temp.hub(starter.clone());
-    // The move-time reach is the initial attempt: it fails, and the old
-    // log still ends `moved`.
-    let refused = reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
-    assert_eq!(refused.code, ErrorCode::ExtensionRequiredFailed);
-    assert_eq!(
-        starter.rewound().len(),
-        1,
-        "the move-time start was attempted once"
-    );
-    assert_eq!(
-        continued(&temp.dir, &SessionId(old.clone())),
-        Some(SessionId(next.clone())),
-        "the old log stays ended"
-    );
-    // Each order gets a fresh redirect state holding only the old
-    // session's level, with no relay for the child: a previous order's
-    // `follow` keeps the child's level, which would short-circuit the
-    // next `follow` before the starter, hiding the overlap. The feed
-    // path keeps no level, so both orders still reach the starter.
     for first_is_follow in [true, false] {
+        let temp = Temp::new();
+        let workspace = temp.workspace();
+        let target = temp.dir.join("elsewhere");
+        fs::create_dir_all(&target).unwrap();
+        let old = id(1);
+        let next = id(2);
+        write_log(
+            &temp.dir,
+            &old,
+            &workspace,
+            None,
+            &[moved_line(&old, &next, &target.to_string_lossy())],
+        );
+        let starter = RetryGate {
+            inner: FakeStarter::exit_with(
+                &temp.dir,
+                failure(
+                    ErrorCode::ExtensionRequiredFailed,
+                    "the new process refused.",
+                ),
+            ),
+            held: SessionId(next.clone()),
+            holding: Arc::new(AtomicBool::new(false)),
+            entered: Arc::new(Mutex::new(None)),
+            release: Arc::new(Mutex::new(None)),
+        };
+        let hub = temp.hub(starter.clone());
+        // The move-time reach is the initial attempt: it fails, and the
+        // old log still ends `moved`.
+        let refused = reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::ExtensionRequiredFailed);
+        assert_eq!(
+            starter.rewound().len(),
+            1,
+            "the move-time start was attempted once"
+        );
+        assert_eq!(
+            continued(&temp.dir, &SessionId(old.clone())),
+            Some(SessionId(next.clone())),
+            "the old log stays ended"
+        );
+        // The redirect holds only the old session's level, with no relay
+        // for the child, so `follow` reaches the starter.
         let relays: Arc<Mutex<crate::relay::Relays>> =
             Arc::new(Mutex::new(crate::relay::Relays::default()));
         let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
@@ -2706,20 +2706,20 @@ fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
         );
         first.join().unwrap();
         second.join().unwrap();
+        assert_eq!(
+            starter.rewound().len(),
+            2,
+            "one retry follows the initial attempt, however the callbacks interleave"
+        );
+        assert_eq!(
+            continued(&temp.dir, &SessionId(old.clone())),
+            Some(SessionId(next.clone())),
+            "the old log stays ended"
+        );
+        assert_eq!(
+            temp.hub_log().matches("could not start.").count(),
+            2,
+            "the initial attempt and its one retry each write one diagnostic"
+        );
     }
-    assert_eq!(
-        starter.rewound().len(),
-        2,
-        "one retry follows the initial attempt, however the callbacks interleave"
-    );
-    assert_eq!(
-        continued(&temp.dir, &SessionId(old.clone())),
-        Some(SessionId(next.clone())),
-        "the old log stays ended"
-    );
-    assert_eq!(
-        temp.hub_log().matches("could not start.").count(),
-        2,
-        "the initial attempt and its one retry each write one diagnostic"
-    );
 }

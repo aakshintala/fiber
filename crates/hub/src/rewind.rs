@@ -238,6 +238,9 @@ pub(crate) fn retry_after_exit(
 ) -> Option<UnixStream> {
     #[cfg(test)]
     crate::connection::probe_retry_contention(hub, &guard_for(hub, next));
+    if !hub.claim_retry(next) {
+        return None;
+    }
     reach(hub, from, next).ok()
 }
 
@@ -321,11 +324,12 @@ pub(crate) fn follow(
 /// starts of one session serialize while any other start runs at once.
 fn guard_for(hub: &Hub, next: &SessionId) -> Arc<Mutex<()>> {
     let mut starting = lock(&hub.starting);
-    starting.get(next).cloned().unwrap_or_else(|| {
-        let guard = Arc::new(Mutex::new(()));
-        starting.insert(next.clone(), Arc::clone(&guard));
-        guard
-    })
+    Arc::clone(
+        &starting
+            .entry(next.clone())
+            .or_insert_with(crate::connection::StartSlot::new)
+            .guard,
+    )
 }
 
 #[cfg(test)]
