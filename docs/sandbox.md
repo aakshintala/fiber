@@ -18,12 +18,10 @@ call that ran inside it, and nothing else. The rule that judges calls is
 
 The sandbox is opt-in and off by default. When it is on, a shell call runs
 confined on Linux under Fiber's own policy: Landlock plus seccomp; no srt,
-no bubblewrap. Calls remain reviewed; a call the model marks
-`unconfined: true` leaves the sandbox and is reviewed exactly as with the
-sandbox off. A confined call whose sandbox cannot be applied fails closed
-with the sandbox error and is never rerun unconfined (`docs/events.md`,
-"Declared effects"). This slice adds no reviewer fast path, no `/sandbox`
-toggle, and no delegate inheritance.
+no bubblewrap. Calls remain reviewed.
+A call the model marks `unconfined: true` runs outside the sandbox and is reviewed exactly as with the sandbox off.
+A confined call whose sandbox cannot be applied fails; Fiber never reruns it unconfined.
+This slice adds no reviewer fast path, no `/sandbox` toggle, and no delegate inheritance.
 A delegate does not inherit its parent's setting in this slice.
 
 The sandbox's own read deny follows whatever the credential deny covers:
