@@ -56,12 +56,13 @@ impl App {
     /// The attached screen's renderer failures since the last frame:
     /// one `hook_failed` notice per extension and slot not yet named,
     /// whether one was pushed. A repeated failure of a cached input
-    /// finds its pair in the set and adds nothing.
+    /// finds its pair in the set and adds nothing. The surviving batch
+    /// is grouped by code, so one frame raises one notice per code
+    /// (`docs/errors.md`, "Notices").
     fn drain_renderer_failures(&mut self) -> bool {
-        let mut pushed = false;
         let cache = &self.screen.pages().ext.cache;
         let mut failures = cache.take_failures();
-        let mut notices = cache.take_notices();
+        let mut queued = cache.take_notices();
         if let Some(stashed) = self
             .items
             .open
@@ -69,32 +70,52 @@ impl App {
             .and_then(|open| open.stashed.as_ref())
         {
             failures.extend(stashed.pages().ext.cache.take_failures());
-            notices.extend(stashed.pages().ext.cache.take_notices());
+            queued.extend(stashed.pages().ext.cache.take_notices());
         }
-        for (code, text) in notices {
-            self.notices.push(&code, text);
-            pushed = true;
-        }
+        let mut batch: Vec<contract::events::Notice> = queued
+            .into_iter()
+            .map(|(code, text)| contract::events::Notice {
+                // The code as the log spells it, so a queued notice
+                // groups with the same code the failures carry.
+                code: serde_json::from_value::<contract::ErrorCode>(serde_json::Value::String(
+                    code,
+                ))
+                .unwrap_or(contract::ErrorCode::Other("notice".to_owned())),
+                message: text,
+                extension: None,
+            })
+            .collect();
         for (slot, failure) in failures {
-            let (code, identity) = match failure.kind {
-                crate::ext::FailureKind::HookFailed => ("hook_failed", slot.clone()),
-                crate::ext::FailureKind::ExtensionFailed => ("extension_failed", String::new()),
+            let code = match failure.kind {
+                crate::ext::FailureKind::HookFailed => contract::ErrorCode::HookFailed,
+                crate::ext::FailureKind::ExtensionFailed => contract::ErrorCode::ExtensionFailed,
+            };
+            let identity = match failure.kind {
+                crate::ext::FailureKind::HookFailed => slot.clone(),
+                crate::ext::FailureKind::ExtensionFailed => String::new(),
             };
             if self
                 .renderer_reported
                 .insert((failure.extension.clone(), identity))
             {
-                self.notices.push(
+                batch.push(contract::events::Notice {
                     code,
-                    format!(
+                    message: format!(
                         "extension {} could not draw {slot}: {}; the built-in row is drawn",
                         failure.extension, failure.message
                     ),
-                );
-                pushed = true;
+                    extension: Some(failure.extension),
+                });
             }
         }
-        pushed
+        if batch.is_empty() {
+            return false;
+        }
+        for notice in contract::events::group_notices(batch, contract::events::grouped_lead) {
+            self.notices
+                .push(&crate::format::code(&notice.code), notice.message);
+        }
+        true
     }
 
     /// Sets where the panel and the rail are drawn.

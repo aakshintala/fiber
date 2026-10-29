@@ -1259,6 +1259,56 @@ fn a_notice_shown_once_does_not_show_again_in_the_same_run() {
 }
 
 #[test]
+fn a_notice_cleared_before_display_suppresses_nothing() {
+    // Marked only on first display, never on push: a notice cleared
+    // before any sweep shows it stacks again on its next push.
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.push("skill_shadowed", "gone".to_owned());
+    notices.clear_code("skill_shadowed", "gone");
+    notices.push("skill_shadowed", "gone".to_owned());
+    notices.sweep(t0);
+    assert_eq!(texts(&notices.lines()), ["gone"]);
+}
+
+#[test]
+fn a_changed_notice_text_shows_again() {
+    // A changed set is a new notice: the same code with another text
+    // stacks after the first text showed and faded.
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.push("skill_shadowed", "25 skills are shadowed".to_owned());
+    notices.sweep(t0);
+    notices.sweep(at(t0, 10_000));
+    assert!(notices.lines().is_empty());
+    notices.push("skill_shadowed", "26 skills are shadowed".to_owned());
+    assert_eq!(texts(&notices.lines()), ["26 skills are shadowed"]);
+}
+
+#[test]
+fn identical_switch_pending_choices_show_once_per_text() {
+    // Each sent choice stacks its own row, but an identical choice the
+    // run already showed stacks none; another wording still shows.
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.push("switch_pending", "x applies when this turn ends".to_owned());
+    notices.push("switch_pending", "x applies when this turn ends".to_owned());
+    assert_eq!(texts(&notices.lines()).len(), 2);
+    notices.sweep(t0);
+    // The turn ends and the applied shares go with it; the run keeps
+    // what it showed.
+    notices.clear_code_all("switch_pending");
+    assert!(notices.lines().is_empty());
+    notices.push("switch_pending", "x applies when this turn ends".to_owned());
+    assert!(
+        notices.lines().is_empty(),
+        "the shown identical choice shows no row again"
+    );
+    notices.push("switch_pending", "y applies when this turn ends".to_owned());
+    assert_eq!(texts(&notices.lines()), ["y applies when this turn ends"]);
+}
+
+#[test]
 fn visible_views_pass_through_without_a_notice_renderer() {
     // Nothing fills the slot: every shown notice draws built-in, oldest
     // first with "+N more" (`docs/tui.md`, "Notices"), and the overlay
