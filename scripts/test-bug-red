@@ -138,3 +138,39 @@ rc=0
 cd "$top"
 [ "$rc" -eq 1 ] || { cat "$tmp/out3.txt" >&2; fail "one-commit case exited $rc, want 1"; }
 grep -Fq "has one commit" "$tmp/out3.txt" || { cat "$tmp/out3.txt" >&2; fail "one-commit case misses the one-commit message"; }
+
+# A branch that merges main after its red commit: main modifies a test
+# file that already exists at the branch point and adds a new one. The
+# merge base is main's tip, which the red commit does not descend from,
+# so the red commit's own test file must reach the filter and neither of
+# main's test files may.
+repo4="$tmp/repo4"
+new_repo "$repo4"
+mkdir -p "$repo4/crates/a/tests"
+printf '// existing v1\n' >"$repo4/crates/a/tests/existing.rs"
+git -C "$repo4" add crates/a/tests/existing.rs
+git -C "$repo4" commit -q -m base-tests
+base4=$(git -C "$repo4" rev-parse HEAD)
+git -C "$repo4" checkout -q -b feature
+printf '// red\n' >"$repo4/crates/a/tests/red.rs"
+git -C "$repo4" add crates/a/tests/red.rs
+git -C "$repo4" commit -q -m red
+git -C "$repo4" checkout -q -b main-side "$base4"
+printf '// existing v2\n' >"$repo4/crates/a/tests/existing.rs"
+printf '// main new\n' >"$repo4/crates/a/tests/main_new.rs"
+git -C "$repo4" add crates/a/tests/existing.rs crates/a/tests/main_new.rs
+git -C "$repo4" commit -q -m main
+main4=$(git -C "$repo4" rev-parse HEAD)
+git -C "$repo4" checkout -q feature
+git -C "$repo4" merge -q --no-ff -m merge-main main-side
+head4=$(git -C "$repo4" rev-parse HEAD)
+cd "$repo4"
+rc=0
+"$bug_red" "$main4" "$head4" >"$tmp/out4.txt" 2>&1 || rc=$?
+cd "$top"
+[ "$rc" -eq 0 ] || { cat "$tmp/out4.txt" >&2; fail "merged-main case exited $rc, want 0"; }
+grep -Fq "crates/a/tests/red.rs" "$record" || { cat "$tmp/out4.txt" >&2; fail "merged-main filter misses the red commit's test"; }
+if grep -Fq "crates/a/tests/existing.rs" "$record" || grep -Fq "crates/a/tests/main_new.rs" "$record"; then
+  cat "$tmp/out4.txt" >&2
+  fail "merged-main filter names a test file main changed"
+fi

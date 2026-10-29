@@ -4,7 +4,7 @@
 # bites"). The red commit is the pull request's first commit after the merge
 # base: it holds the reproducing test and any new signature or test seam the
 # test needs, but not the fix. A test counts as changed when its test file
-# changed between the merge base and the red commit; the head is covered
+# changed in the red commit itself, against its parent; the head is covered
 # by the normal test jobs.
 #
 # Usage: scripts/bug-red BASE [HEAD]
@@ -47,7 +47,7 @@ if [ -z "$red" ] || [ "$red" = "$prhead" ]; then
   exit 1
 fi
 # shellcheck disable=SC2046
-plan=$(cargo xtask bug-filter $(git diff --name-only --diff-filter=AM "$merge_base" "$red"))
+plan=$(cargo xtask bug-filter $(git diff --name-only --diff-filter=AM "$red^" "$red"))
 filter=$(sed -n 's/^filter\t//p' <<<"$plan")
 if [ -z "$filter" ]; then
   echo "bug-red: the red commit changes no test file, so no test shows the bug"
