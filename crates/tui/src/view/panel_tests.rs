@@ -867,6 +867,112 @@ fn session_card_with_budget() {
     insta::assert_snapshot!("session_card_with_budget", screen(&app, 160, 40));
 }
 
+/// The Session card's model row for one scripted model call: the call
+/// and reasoning start markers precede streamed thinking, and the whole
+/// screen shows `high ∴` with the glyph dim; once the model's text
+/// starts the `∴` is gone, and the settled call draws the plain level
+/// again (`docs/tui.md`, "The panel").
+#[test]
+fn session_card_shows_the_thinking_glyph_while_the_model_thinks() {
+    use crate::app::panel::Spot;
+    use crate::theme::{Role, style};
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(session_line(
+        "assistant_message_started",
+        serde_json::json!({}),
+    ));
+    app.on_line(session_line("reasoning_started", serde_json::json!({})));
+    app.on_line(session_line(
+        "reasoning_delta",
+        serde_json::json!({"text": "hmm"}),
+    ));
+    // The model row reads `high ∴`: the level in attention, the glyph
+    // dim. Snapshots pin text only, so the styles are asserted here.
+    let model = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Model))
+        .expect("a model row");
+    assert_eq!(
+        model.line.to_string(),
+        "test/model".to_owned() + &" ".repeat(20) + "high ∴"
+    );
+    assert_eq!(model.line.spans[2].content, "high");
+    assert_eq!(model.line.spans[2].style, style(Role::Attention));
+    assert_eq!(model.line.spans[3].content, " ∴");
+    assert_eq!(model.line.spans[3].style, style(Role::Muted));
+    insta::assert_snapshot!("session_card_thinking", screen(&app, 160, 40));
+    // After the text starts the `∴` is gone, immediately.
+    app.on_line(session_line(
+        "assistant_message_delta",
+        serde_json::json!({"text": "done"}),
+    ));
+    let model = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Model))
+        .expect("a model row");
+    assert_eq!(
+        model.line.to_string(),
+        "test/model".to_owned() + &" ".repeat(22) + "high"
+    );
+    app.on_line(session_line(
+        "assistant_message_completed",
+        serde_json::json!({"outcome": "completed"}),
+    ));
+    app.on_line(session_line(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+    ));
+    insta::assert_snapshot!("session_card_thinking_cleared", screen(&app, 160, 40));
+}
+
+/// A second scripted model call: thinking streams, then one
+/// `tool_call_arguments_delta` clears the `∴` (`docs/tui.md`, "The
+/// panel").
+#[test]
+fn session_card_clears_the_thinking_glyph_when_a_tool_call_starts() {
+    use crate::app::panel::Spot;
+    use crate::theme::{Role, style};
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(session_line(
+        "assistant_message_started",
+        serde_json::json!({}),
+    ));
+    app.on_line(session_line("reasoning_started", serde_json::json!({})));
+    app.on_line(session_line(
+        "reasoning_delta",
+        serde_json::json!({"text": "hmm"}),
+    ));
+    let model = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Model))
+        .expect("a model row");
+    assert_eq!(
+        model.line.to_string(),
+        "test/model".to_owned() + &" ".repeat(20) + "high ∴"
+    );
+    assert_eq!(model.line.spans[2].content, "high");
+    assert_eq!(model.line.spans[2].style, style(Role::Attention));
+    assert_eq!(model.line.spans[3].content, " ∴");
+    assert_eq!(model.line.spans[3].style, style(Role::Muted));
+    // The model starting to emit a call ends the thinking: the row is
+    // back to the plain level.
+    app.on_line(session_line(
+        "tool_call_arguments_delta",
+        serde_json::json!({"index": 0, "text": "{"}),
+    ));
+    let model = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Model))
+        .expect("a model row");
+    assert_eq!(
+        model.line.to_string(),
+        "test/model".to_owned() + &" ".repeat(22) + "high"
+    );
+    insta::assert_snapshot!("session_card_thinking_tool_cleared", screen(&app, 160, 40));
+}
+
 #[test]
 fn every_context_card_row_opens_the_context_view() {
     use crate::app::panel::Spot;
