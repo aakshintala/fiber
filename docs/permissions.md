@@ -214,10 +214,9 @@ The opt-in OS sandbox is implemented in the current build: #3027 on Linux
 and #3630 on macOS. It is off by default and confines model-issued shell
 calls at the operating-system level under Fiber's own policy: Landlock
 plus seccomp on Linux with no srt and no bubblewrap, Seatbelt through
-`sandbox-exec` on macOS. A call the model marks `unconfined: true` leaves
-the sandbox. The sandbox does not confine a person's own driver-shell
-commands. Calls remain reviewed; neither slice adds a reviewer fast path.
-The policies are `docs/sandbox.md`.
+`sandbox-exec` on macOS, except a call the model marks `unconfined: true`,
+which runs outside the sandbox (`docs/sandbox.md`, "The rule"). The sandbox
+does not confine a person's own driver-shell commands.
 
 A shell call runs with the account's full rights when the sandbox is off.
 Everything on this page decides whether a call runs; when the sandbox is
