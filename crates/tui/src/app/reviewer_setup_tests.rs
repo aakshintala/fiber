@@ -191,19 +191,33 @@ fn ask(app: &mut App, result: Value) -> String {
     id
 }
 
+/// Answers the `propose_notes` the last Enter already sent: the model-free
+/// topic proposes itself, so no Enter is needed for its question.
+fn answer_sent(app: &mut App, effect: Effect, result: Value) {
+    let lines = sent(effect);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let id = id_of(&lines[0]);
+    assert!(app.on_line(accepted(&id, result)).is_empty());
+}
+
 /// Walks every topic: topic 1 gives one line the person confirms, the other
-/// four give nothing. Stops on the diff.
+/// five give nothing. Stops on the diff.
 fn to_the_diff_with_a_line(app: &mut App) {
     ask(app, one_line());
     assert_eq!(screen(app), Screen::Lines);
-    press(app, Key::Enter);
+    let mut last = press(app, Key::Enter);
     for _ in Topic::ALL {
         if screen(app) == Screen::Diff {
             break;
         }
-        assert_eq!(screen(app), Screen::Question);
-        ask(app, nothing());
-        press(app, Key::Enter);
+        if screen(app) == Screen::Waiting {
+            // The model-free topic proposed itself on the last Enter.
+            answer_sent(app, last, nothing());
+        } else {
+            assert_eq!(screen(app), Screen::Question);
+            ask(app, nothing());
+        }
+        last = press(app, Key::Enter);
     }
     assert_eq!(screen(app), Screen::Diff);
 }
@@ -712,12 +726,19 @@ fn esc_on_the_diff_sends_no_save_and_closes() {
 fn enter_on_a_diff_with_no_changed_layer_sends_no_save_and_says_nothing_changed() {
     let (mut app, fake) = app();
     start(&mut app);
+    let mut last = Effect::None;
     for _ in Topic::ALL {
         if screen(&app) == Screen::Diff {
             break;
         }
-        ask(&mut app, nothing());
-        press(&mut app, Key::Enter);
+        if screen(&app) == Screen::Waiting {
+            // The model-free topic proposed itself on the last Enter.
+            let effect = std::mem::replace(&mut last, Effect::None);
+            answer_sent(&mut app, effect, nothing());
+        } else {
+            ask(&mut app, nothing());
+        }
+        last = press(&mut app, Key::Enter);
     }
     assert_eq!(screen(&app), Screen::Diff);
     assert_eq!(press(&mut app, Key::Enter), Effect::None);

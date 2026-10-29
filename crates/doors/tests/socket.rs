@@ -6254,6 +6254,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                             );
                         }
                         contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Allows(_)
                         | contract::notes::Evidence::Answer { .. } => {
                             panic!("the remote item arrives first")
                         }
@@ -6266,6 +6267,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                             );
                         }
                         contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Allows(_)
                         | contract::notes::Evidence::Answer { .. } => {
                             panic!("the CI item arrives second")
                         }
@@ -6277,6 +6279,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                             assert_eq!(tally.here(), 1);
                         }
                         contract::notes::Evidence::Files { .. }
+                        | contract::notes::Evidence::Allows(_)
                         | contract::notes::Evidence::Answer { .. } => {
                             panic!("session evidence arrives as a session item")
                         }

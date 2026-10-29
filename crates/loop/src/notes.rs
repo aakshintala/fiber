@@ -43,6 +43,7 @@ impl Loop {
                 EvidenceKind::Files => "files",
                 EvidenceKind::Answer => "answer",
                 EvidenceKind::Session => "session",
+                EvidenceKind::Allows => "allows",
             };
             text.push_str(&format!("{} [{kind}] | {}\n", index + 1, item.text()));
         }

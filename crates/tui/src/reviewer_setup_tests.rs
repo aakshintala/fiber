@@ -93,10 +93,30 @@ fn first_lines(notes: ReviewerNotes, evidence: &[Evidence], proposed: &[Proposed
     setup
 }
 
-/// Gets past the current topic with no lines.
+/// Gets past the current topic with no lines. Leaving the last notes
+/// topic auto-proposes the model-free one, whose wait is answered at
+/// once, so every path ends past one topic with no act.
 fn skip(setup: &mut Setup) {
-    ask(setup, &[], &[]);
-    assert_eq!(press(setup, Key::Enter), Act::None);
+    if setup.screen() != Screen::Waiting {
+        ask(setup, &[], &[]);
+    }
+    match press(setup, Key::Enter) {
+        Act::None => {}
+        Act::Propose(args) => {
+            assert_eq!(args.topic, Topic::ReadOnlyCommands);
+            assert_eq!(args.answer, None);
+            assert!(args.earlier.is_empty());
+            assert_eq!(setup.screen(), Screen::Waiting);
+            setup.proposed(&[], &[], None);
+            assert_eq!(press(setup, Key::Enter), Act::None);
+        }
+        act @ (Act::Abandon
+        | Act::Save { .. }
+        | Act::Reread
+        | Act::Reload
+        | Act::Close
+        | Act::Unchanged) => panic!("leaving a topic sends nothing: {act:?}"),
+    }
 }
 
 fn texts(setup: &Setup) -> Vec<String> {
@@ -153,7 +173,15 @@ fn opening_shows_topic_one_with_both_layers_read() {
 fn the_topics_run_in_the_order_the_contract_gives_to_the_diff() {
     let mut setup = Setup::open(notes("", ""));
     let mut seen = Vec::new();
-    for _ in Topic::ALL {
+    for topic in Topic::ALL {
+        if topic == Topic::ReadOnlyCommands {
+            // Leaving the last notes topic walked the model-free one
+            // with it: the diff is open with it current.
+            assert_eq!(setup.screen(), Screen::Diff);
+            seen.push(setup.topic());
+            assert_eq!(setup.number(), seen.len());
+            break;
+        }
         assert_eq!(setup.screen(), Screen::Question);
         seen.push(setup.topic());
         assert_eq!(setup.number(), seen.len());
@@ -641,13 +669,24 @@ fn a_wrap_skips_a_decided_line_above() {
 }
 
 #[test]
-fn after_topic_five_the_diff_opens() {
+fn entering_the_last_read_only_topic_proposes_at_once_and_then_the_diff_opens() {
     let mut setup = Setup::open(notes("", ""));
     for _ in 0..4 {
         skip(&mut setup);
     }
     assert_eq!(setup.topic(), Topic::Never);
     ask(&mut setup, &[files("f")], &[line("a", &[0])]);
+    // Deciding the last notes line auto-proposes the model-free topic:
+    // no question, no answer, no earlier lines.
+    let Act::Propose(args) = press(&mut setup, Key::Enter) else {
+        panic!("the read-only topic proposes itself");
+    };
+    assert_eq!(args.topic, Topic::ReadOnlyCommands);
+    assert_eq!(args.answer, None);
+    assert!(args.earlier.is_empty());
+    assert_eq!(setup.screen(), Screen::Waiting);
+    setup.proposed(&[], &[], None);
+    assert_eq!(setup.screen(), Screen::Lines);
     assert_eq!(press(&mut setup, Key::Enter), Act::None);
     assert_eq!(setup.screen(), Screen::Diff);
 }
@@ -1264,6 +1303,12 @@ fn the_save_applies_decisions_from_every_topic_in_topic_order() {
     for topic_lines in ["one", "two", "three", "four", "five"] {
         skip_current_question_with_lines(&mut setup, &[files("f")], &[line(topic_lines, &[0])]);
     }
+    // Leaving the last notes topic auto-proposed the model-free one,
+    // which is answered with nothing: it owns no notes text.
+    assert_eq!(setup.topic(), Topic::ReadOnlyCommands);
+    assert_eq!(setup.screen(), Screen::Waiting);
+    setup.proposed(&[], &[], None);
+    assert_eq!(press(&mut setup, Key::Enter), Act::None);
     assert_eq!(setup.screen(), Screen::Diff);
     let (_, project) = save_of(press(&mut setup, Key::Enter));
     assert_eq!(

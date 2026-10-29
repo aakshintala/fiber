@@ -337,5 +337,10 @@ fn source_of(cites: &[usize], evidence: &[Evidence]) -> Option<Source> {
                 .iter()
                 .all(|item| matches!(item, Evidence::Session(tally) if tally.all_here())),
         },
+        EvidenceKind::Allows => Source::Session {
+            all_here: cited
+                .iter()
+                .all(|item| matches!(item, Evidence::Allows(tally) if tally.all_here())),
+        },
     })
 }

@@ -337,15 +337,22 @@ impl Setup {
     }
 
     /// The request for the topic: the answer only when it holds more than
-    /// whitespace, and the topic's earlier lines.
+    /// whitespace, and the topic's earlier lines. The read-only topic
+    /// asks no question, so its request carries no answer and no earlier
+    /// lines: it proposes itself from the counted subjects alone.
     fn propose(&mut self) -> Act {
         self.error = None;
-        let answer = self.answer();
-        let answer = (!answer.trim().is_empty()).then(|| answer.to_string());
+        let (answer, earlier) = if self.topic == Topic::ReadOnlyCommands {
+            (None, Vec::new())
+        } else {
+            let answer = self.answer();
+            let answer = (!answer.trim().is_empty()).then(|| answer.to_string());
+            (answer, self.earlier())
+        };
         let args = ProposeNotesArgs {
             topic: self.topic,
             answer,
-            earlier: self.earlier(),
+            earlier,
         };
         self.screen = Screen::Waiting;
         Act::Propose(args)
@@ -412,8 +419,13 @@ impl Setup {
         match Topic::ALL.get(place(self.topic) + 1) {
             Some(topic) => {
                 self.topic = *topic;
-                self.screen = Screen::Question;
                 self.error = None;
+                if *topic == Topic::ReadOnlyCommands {
+                    // The model-free topic asks no question: it proposes
+                    // at once, and the wait carries no answer or lines.
+                    return self.propose();
+                }
+                self.screen = Screen::Question;
             }
             None => self.show_diff(),
         }

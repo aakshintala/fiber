@@ -56,7 +56,7 @@ fn paragraph(text: &str, inner: usize, style: Style) -> Vec<Row> {
         .collect()
 }
 
-/// The topic line: `Topic n of 5 · <heading name>`.
+/// The topic line: `Topic n of 6 · <heading name>`.
 fn topic_row(setup: &Setup) -> Row {
     let name = setup.topic().heading().trim_start_matches("### ");
     dim_row(&format!(

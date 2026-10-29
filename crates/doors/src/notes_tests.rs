@@ -111,6 +111,12 @@ fn session_items(evidence: &[Evidence]) -> Vec<(String, u32, u32, String)> {
                 tally.here(),
                 tally.text().to_owned(),
             )),
+            Evidence::Allows(tally) => Some((
+                tally.subject().to_owned(),
+                tally.count(),
+                tally.here(),
+                tally.text().to_owned(),
+            )),
             Evidence::Files { .. } | Evidence::Answer { .. } => None,
         })
         .collect()
@@ -337,7 +343,7 @@ fn files_text(evidence: &[Evidence]) -> Vec<String> {
         .iter()
         .filter_map(|item| match item {
             Evidence::Files { text } => Some(text.clone()),
-            Evidence::Session(_) | Evidence::Answer { .. } => None,
+            Evidence::Session(_) | Evidence::Allows(_) | Evidence::Answer { .. } => None,
         })
         .collect()
 }

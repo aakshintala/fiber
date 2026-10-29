@@ -149,12 +149,8 @@ impl Fixture {
         }
     }
 
-    /// Enter on the question, then the hub's answer.
-    fn ask(&mut self, evidence: Value, proposed: Value) {
-        let Effect::Send(lines) = self.press(Key::Enter) else {
-            panic!("Enter on the question sent nothing");
-        };
-        let sent: Value = serde_json::from_str(&lines[0]).expect("a json line");
+    /// Answers one sent `propose_notes` line with `evidence` and `proposed`.
+    fn accept(&mut self, sent: &Value, evidence: Value, proposed: Value) {
         assert_eq!(sent["command"], "propose_notes");
         let answer = envelope(
             "command_accepted",
@@ -164,10 +160,25 @@ impl Fixture {
         assert!(self.app.on_line(answer).is_empty());
     }
 
-    /// Leaves a topic with no lines for it.
+    /// Enter on the question, then the hub's answer.
+    fn ask(&mut self, evidence: Value, proposed: Value) {
+        let Effect::Send(lines) = self.press(Key::Enter) else {
+            panic!("Enter on the question sent nothing");
+        };
+        let sent: Value = serde_json::from_str(&lines[0]).expect("a json line");
+        self.accept(&sent, evidence, proposed);
+    }
+
+    /// Leaves a topic with no lines for it. The model-free topic proposes
+    /// itself on the last Enter, so its wait is answered at once and left
+    /// with the same Enter that leaves every other topic.
     fn skip(&mut self) {
         self.ask(json!([]), json!([]));
-        self.press(Key::Enter);
+        if let Effect::Send(lines) = self.press(Key::Enter) {
+            let sent: Value = serde_json::from_str(&lines[0]).expect("a json line");
+            self.accept(&sent, json!([]), json!([]));
+            self.press(Key::Enter);
+        }
     }
 
     /// Skips topics until the question on show is `topic`'s.
@@ -638,7 +649,7 @@ fn the_header_stays_when_it_and_the_focused_line_fit_exactly() {
         "the sum and the product of {header} and {focused} differ"
     );
     let exact = body_of(&fx, height_for(whole.len()));
-    assert!(exact[0].starts_with("Topic 1 of 5"), "{exact:?}");
+    assert!(exact[0].starts_with("Topic 1 of 6"), "{exact:?}");
     assert_eq!(exact, whole);
 }
 
@@ -653,7 +664,7 @@ fn the_header_gives_way_when_the_focused_line_and_it_do_not_fit() {
     let whole = body_of(&fx, 400);
     let header = 1 + wrap(Topic::SourceControl.question(), inner).len();
     let short = body_of(&fx, height_for(whole.len() - 1));
-    assert!(!short[0].starts_with("Topic 1 of 5"), "{short:?}");
+    assert!(!short[0].starts_with("Topic 1 of 6"), "{short:?}");
     assert_eq!(short.len(), whole.len() - header, "only the focused line");
 }
 
@@ -763,9 +774,9 @@ fn modifiers_at(fx: &Fixture, needle: &str) -> Modifier {
 #[test]
 fn the_topic_line_is_dim_and_the_answer_marker_is_bold() {
     let fx = question();
-    assert!(modifiers_at(&fx, "Topic 1 of 5").contains(Modifier::DIM));
+    assert!(modifiers_at(&fx, "Topic 1 of 6").contains(Modifier::DIM));
     assert!(modifiers_at(&fx, "›").contains(Modifier::BOLD));
-    assert!(!modifiers_at(&fx, "Topic 1 of 5").contains(Modifier::BOLD));
+    assert!(!modifiers_at(&fx, "Topic 1 of 6").contains(Modifier::BOLD));
     assert!(!modifiers_at(&fx, "›").contains(Modifier::DIM));
 }
 

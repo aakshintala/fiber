@@ -17,7 +17,7 @@ expression: "checked(flipped(), \"flipped\", 1)"
 
             Reviewer setup                                                    ✕
 
-            Topic 4 of 5 · Routine actions
+            Topic 4 of 6 · Routine actions
             What routine actions, such as squash-merging your own pull requests
             once CI passes, should the reviewer allow?
             14 escalations answered allow for `gh pr merge … --squash`

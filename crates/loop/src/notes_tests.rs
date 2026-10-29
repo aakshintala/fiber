@@ -583,6 +583,11 @@ fn notes_number_each_kind_in_evidence_order_and_answer_last() {
 #[test]
 fn observed_notes_use_the_session_factory_and_each_topics_instructions() {
     for topic in Topic::ALL {
+        // The model-free topic sends no provider request; its branch is
+        // pinned beside the inbox test.
+        if topic == Topic::ReadOnlyCommands {
+            continue;
+        }
         let unused = Arc::new(ScriptedProvider::new([]));
         let observed = Arc::new(ScriptedProvider::new([Scripted::text("1 | rule")]));
         let (mut looped, _log, _home, _clock) = started(unused.clone());
