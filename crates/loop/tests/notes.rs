@@ -318,6 +318,30 @@ fn read_only_notes_withhold_a_non_flag_word_after_the_subcommand() {
 }
 
 #[test]
+fn read_only_notes_withhold_a_flag_with_only_a_left_angle_after_the_subcommand() {
+    // No later non-flag word masks the angle check; only the left angle
+    // condition holds.
+    let ask = read_only_ask();
+    ambiguous_withheld(
+        ask,
+        "kubectl get -n --json<",
+        "a flag holding `<` after the subcommand",
+    );
+}
+
+#[test]
+fn read_only_notes_withhold_a_flag_with_only_a_right_angle_after_the_subcommand() {
+    // No later non-flag word masks the angle check; only the right angle
+    // condition holds.
+    let ask = read_only_ask();
+    ambiguous_withheld(
+        ask,
+        "kubectl get -n --json>",
+        "a flag holding `>` after the subcommand",
+    );
+}
+
+#[test]
 fn read_only_notes_withhold_a_flag_with_a_left_angle_after_the_subcommand() {
     // Only the middle side of the disjunction holds: the word is a
     // flag and holds `<` but not `>`.

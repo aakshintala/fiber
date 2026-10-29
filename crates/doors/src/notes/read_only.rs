@@ -426,9 +426,9 @@ mod tests {
     }
 
     #[test]
-    fn retained_command_rejects_each_redirect_delimiter_alone() {
-        assert_eq!(retained_command("acme-cli query>out"), None);
-        assert_eq!(retained_command("acme-cli query<input"), None);
+    fn retained_command_rejects_each_disallowed_device_redirect_alone() {
+        assert_eq!(retained_command("acme-cli query 0</dev/tcp/host/80"), None);
+        assert_eq!(retained_command("acme-cli query 0</dev/udp/host/80"), None);
     }
 
     #[test]
