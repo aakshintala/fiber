@@ -30,6 +30,20 @@ impl App {
         }
     }
 
+    /// Shifts the open offer three wrapped rows for a wheel step through
+    /// its own entry point: the source's rows when open, else the
+    /// offer's, keeping the cursor while it shows. The choice never
+    /// changes and nothing sends. `None` while the offer is closed.
+    /// Never an Up/Down step: the keys keep their own path.
+    pub(super) fn offer_wheel(&mut self, up: bool) -> Option<Effect> {
+        if !self.offer.open() {
+            return None;
+        }
+        let height = self.conversation_height();
+        self.offer.wheel(up, self.column_width(), height);
+        Some(Effect::None)
+    }
+
     /// An edit for the open offer; `None` while the approval panel is open,
     /// which takes edits as its feedback, or while the offer is closed.
     pub(super) fn offer_edit(&mut self, edit: &Edit) -> Option<Effect> {

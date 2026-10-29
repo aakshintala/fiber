@@ -31,6 +31,7 @@ impl App {
             }
         }
         self.model_picker.store(result);
+        self.keep_model_picker_top(false);
     }
 
     /// Counts the startup catalogue read as owed, so its answer never
@@ -145,6 +146,7 @@ impl App {
                 .as_ref()
                 .map(|(model, level)| (model.as_str(), level.as_deref())),
         );
+        self.keep_model_picker_top(true);
         super::Effect::None
     }
 
@@ -881,6 +883,52 @@ impl App {
         self.model_picker.is_open()
     }
 
+    /// The model picker's draw height below its one-row swapped-view
+    /// header, matching the `area.height - 1` passed by `swapped::draw`.
+    fn model_picker_area_height(&self) -> u16 {
+        let area = if self.home.is_some() && self.session().is_none() {
+            usize::from(self.screen.height())
+        } else {
+            self.conversation_area_height()
+        };
+        u16::try_from(area).unwrap_or(u16::MAX).saturating_sub(1)
+    }
+
+    /// Keeps the model-picker top within the current rendered body and
+    /// keeps focus visible. A row-set replacement uses the focus-derived
+    /// start; navigation and refresh retain the current top when possible.
+    fn keep_model_picker_top(&mut self, reset: bool) {
+        let Some(view) = self.model_picker_view() else {
+            return;
+        };
+        let height = self.model_picker_area_height();
+        let top = if reset {
+            crate::view::model_picker::focus_window_top(&view, height)
+        } else {
+            crate::view::model_picker::keep_focus_visible_top(&view, height)
+        };
+        if let Some(open) = self.model_picker.open.as_mut() {
+            open.top = top;
+        }
+    }
+
+    /// Moves the model picker's body viewport by three rendered rows.
+    /// The match selection stays separate and unchanged while find is open.
+    pub(crate) fn model_picker_wheel(&mut self, up: bool) -> super::Effect {
+        let Some(view) = self.model_picker_view() else {
+            return super::Effect::None;
+        };
+        let height = self.model_picker_area_height();
+        let (top, focus) = crate::view::model_picker::picker_wheel_window(&view, up, height);
+        if let Some(open) = self.model_picker.open.as_mut() {
+            open.top = top;
+        }
+        if let Some(focus) = focus {
+            self.model_picker.select_frame_row(focus);
+        }
+        super::Effect::None
+    }
+
     /// A key for the open picker; `None` while it is closed, for Ctrl+C
     /// and for the global actions' keys, so quitting and every global
     /// action keep their keys. Enter toggles
@@ -905,14 +953,20 @@ impl App {
             | Key::AltDigit(_) => None,
             Key::Up => {
                 self.model_picker.move_row(-1);
+                self.keep_model_picker_top(false);
                 Some(super::Effect::None)
             }
             Key::Down => {
                 self.model_picker.move_row(1);
+                self.keep_model_picker_top(false);
                 Some(super::Effect::None)
             }
             Key::Tab => {
+                let before = self.model_picker.open.as_ref().map(|open| open.show_all);
                 self.model_picker.toggle_show_all();
+                if self.model_picker.open.as_ref().map(|open| open.show_all) != before {
+                    self.keep_model_picker_top(true);
+                }
                 Some(super::Effect::None)
             }
             Key::CtrlR => {
@@ -922,16 +976,13 @@ impl App {
             Key::PageUp | Key::PageDown => {
                 // A page is the windowed models less one: the overlay's
                 // body height in models.
-                let height = if self.on_home() {
-                    self.screen.height()
-                } else {
-                    u16::try_from(self.conversation_height()).unwrap_or(u16::MAX)
-                };
+                let height = self.model_picker_area_height();
                 let step = self
                     .model_picker_view()
                     .map(|view| crate::view::model_picker::page_step(&view, height))
                     .unwrap_or(usize::from(height));
                 self.model_picker.move_page(key, step);
+                self.keep_model_picker_top(false);
                 Some(super::Effect::None)
             }
             Key::Esc => {
@@ -940,6 +991,7 @@ impl App {
                 let typed = !self.model_picker.query().is_empty();
                 if typed {
                     self.model_picker.clear_query();
+                    self.keep_model_picker_top(true);
                     Some(super::Effect::None)
                 } else {
                     self.model_picker.close();
@@ -968,12 +1020,20 @@ impl App {
             Key::Char(c) => {
                 // Typing filters the list on every letter, Space
                 // included, in every mode.
+                let before = self.model_picker.query().to_owned();
                 self.model_picker.push_query(*c);
+                if self.model_picker.query() != before {
+                    self.keep_model_picker_top(true);
+                }
                 Some(super::Effect::None)
             }
             Key::Backspace => {
                 // Backspace shortens the filter query in every mode.
+                let before = self.model_picker.query().to_owned();
                 self.model_picker.pop_query();
+                if self.model_picker.query() != before {
+                    self.keep_model_picker_top(true);
+                }
                 Some(super::Effect::None)
             }
             // Every other key does nothing, and no key cycles.

@@ -131,6 +131,19 @@ impl Rules {
         Act::Stay
     }
 
+    /// Shifts the window one wheel step: three rows, clamping the
+    /// selection onto a row that takes a key as the keys do.
+    pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        let shown = self.shown(ctx);
+        let before = (self.list.top(), self.list.selected());
+        self.list.wheel(up, self.items.len(), shown, 3);
+        self.list.rest_on(&self.takes(), self.items.len(), shown);
+        if (self.list.top(), self.list.selected()) != before {
+            self.said.clear();
+        }
+        Act::Stay
+    }
+
     /// Handles one editing key: Delete revokes the selected rule.
     pub(crate) fn edit_key(&mut self, edit: &Edit, ctx: &Ctx<'_>) -> Act {
         if *edit == Edit::Delete {

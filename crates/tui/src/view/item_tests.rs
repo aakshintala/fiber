@@ -765,26 +765,34 @@ fn the_wheel_over_the_transcript_scrolls_it() {
     }
     let height = app.conversation_height();
     assert!(height > 0);
-    // Below the header's five rows, on the transcript's last row: past
-    // the grip, which takes column 0.
+    // Below the header's five rows, on the transcript's first row: past
+    // the grip, which takes column 0. The window covers the header and
+    // the transcript rows under it (`docs/tui.md`, "Swapped views").
     let header = u16::try_from(crate::view::item::ITEM_HEADER_ROWS).unwrap_or(u16::MAX);
-    let row = header.saturating_add(u16::try_from(height).unwrap_or(u16::MAX).saturating_sub(1));
     app.on_wheel(&Mouse {
         kind: MouseKind::WheelUp,
         col: 2,
-        row,
+        row: header,
     });
     assert!(app.top().is_some());
-    // Over the header the wheel scrolls nothing: the view follows again
-    // and a header-row wheel leaves it there.
+    // Over the header the wheel is still the item's, but that region has
+    // no scrollable rows and swallows the wheel (`docs/tui.md`,
+    // "Swapped views"; see #3578).
     app.on_key(Key::End, clock.now());
     assert_eq!(app.top(), None);
+    // The header's first drawn row: the conversation column's top-left
+    // cell, whatever chrome surrounds it.
+    let column = app.chrome().layout().expect("a layout").column;
     app.on_wheel(&Mouse {
         kind: MouseKind::WheelUp,
-        col: 0,
-        row: 0,
+        col: column.x,
+        row: column.y,
     });
-    assert_eq!(app.top(), None);
+    assert_eq!(
+        app.top(),
+        None,
+        "the non-scrolling header swallows the wheel"
+    );
 }
 
 #[test]

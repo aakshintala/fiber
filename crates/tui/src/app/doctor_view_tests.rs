@@ -367,3 +367,31 @@ fn slash_doctor_on_a_remote_home_needs_no_workspace() {
     let error = hub.reject_global_file();
     assert_eq!(error.code, contract::ErrorCode::StaleRequest);
 }
+
+/// The wheel shifts the visible rows three a step, keeping a visible
+/// selection where it was, with no seam or workspace involved
+/// (`docs/tui.md`, "Swapped views"; see #3578).
+#[test]
+fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
+    use super::doctor_view::Doctor;
+    use crate::settings_view::Act;
+    let report = (0..60)
+        .map(|n| format!("line {n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut view = Doctor::open(&report);
+    for _ in 0..10 {
+        assert!(matches!(view.key(&Key::Down, 24), Act::Stay));
+    }
+    assert_eq!(
+        (view.frame().list.top(), view.frame().list.selected()),
+        (0, 10)
+    );
+    assert!(matches!(view.wheel(false, 24), Act::Stay));
+    assert_eq!(view.frame().list.top(), 3);
+    assert_eq!(
+        view.frame().list.selected(),
+        10,
+        "a visible selection stays"
+    );
+}

@@ -1712,10 +1712,13 @@ impl App {
     /// in its place, the steering queue, the banner, the badge and the
     /// hint, and the narrow layout's rows under the conversation. None on
     /// a screen too short for them.
-    pub(crate) fn conversation_height(&self) -> usize {
+    pub(crate) fn conversation_area_height(&self) -> usize {
         let below = self.below_rows();
-        let height =
-            usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below));
+        usize::from(self.screen.height()).saturating_sub(below + self.narrow_rows(below))
+    }
+
+    pub(crate) fn conversation_height(&self) -> usize {
+        let height = self.conversation_area_height();
         // The item view's header takes the conversation's top rows.
         if self.item_open() {
             height.saturating_sub(crate::view::item::ITEM_HEADER_ROWS)

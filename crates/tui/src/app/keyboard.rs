@@ -390,6 +390,18 @@ impl App {
         Effect::None
     }
 
+    /// Shifts the `/keys` screen's list three rows for a wheel step while
+    /// browsing; Capture and Clash swallow through the wrapper. The
+    /// router swallows the wheel over the notice overlay's own slab
+    /// before calling. Away from `bindings_press`.
+    pub(crate) fn keys_screen_wheel(&mut self, up: bool) -> Effect {
+        let height = self.keys_height();
+        if let Some(screen) = self.keyboard.screen.as_mut() {
+            let _ = screen.wheel(up, &self.keyboard.keys, height);
+        }
+        Effect::None
+    }
+
     /// The screen's height in rows: the attached conversation's, or the
     /// screen's on home, as the model picker computes its own.
     fn keys_height(&self) -> usize {

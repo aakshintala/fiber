@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
-assertion_line: 235
+assertion_line: 245
 expression: text
 ---
   Models  /model                                                     Esc returns
@@ -8,22 +8,22 @@ expression: text
 
    Type to search █
    30 models                                                     ⟳ refresh all
+         thinking low [high]
+
    apex
      m23
          thinking low [high]
 
-   acme
-     m24
+⋮  acme
+⋮    m24
 ⋮        thinking low [high]
-⋮
-⋮  zeta
+
+   zeta
    › m25
-         thinking low [high]
 
    ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refr
 
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

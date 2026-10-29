@@ -19,10 +19,10 @@ use crate::view::overlay;
 
 /// A heading's group.
 // debt: Group, Item, rows_key, target_rows, the list assembly in draw,
-// list_chrome, shown_body_rows, window_start, text_row, blank_row and
-// wrapped_rows mirror login_view.rs; share one list both views call once
-// login_view.rs is in the fence. Upgrade trigger: the next ticket that
-// touches login_view.rs.
+// list_chrome, shown_body_rows, text_row, blank_row and wrapped_rows
+// mirror login_view.rs; share one list both views call once login_view.rs
+// is in the fence. Upgrade trigger: the next ticket that touches
+// login_view.rs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Group {
     /// The stored and configured provider labels.
@@ -65,6 +65,10 @@ pub(crate) struct Logout {
     /// The focused row, an index into `items`: a target whenever one
     /// exists, else 0. Headings, the gap and the note never take it.
     selected: usize,
+    /// The first body row shown: the wheel moves it three rows a step,
+    /// and the keys move it only as far as needed to keep the focus
+    /// shown.
+    top: usize,
     mode: Mode,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
@@ -84,6 +88,7 @@ impl Logout {
             rows,
             items,
             selected: 0,
+            top: 0,
             mode: Mode::Rows,
             said,
         };
@@ -195,6 +200,34 @@ impl Logout {
             }
         }
         Act::Stay
+    }
+
+    /// Shifts the provider list's window one wheel step: three body
+    /// rows, clamped at either end, keeping the focus while it shows,
+    /// else moving it to the nearest shown target row. The confirm
+    /// takes no wheel: it does not scroll, so the wheel is swallowed
+    /// there.
+    pub(crate) fn wheel(&mut self, up: bool, ctx: &Ctx<'_>) -> Act {
+        if !matches!(self.mode, Mode::Rows) {
+            return Act::Stay;
+        }
+        let shown = shown_body_rows(ctx.height);
+        let targets = self.target_rows();
+        (self.selected, self.top) = crate::swapped::wheel_targets_window(
+            up,
+            self.selected,
+            self.top,
+            self.body_len(ctx.width),
+            shown,
+            &targets,
+        );
+        Act::Stay
+    }
+
+    /// How many body rows the provider list holds at `width` wide, shared
+    /// with `/login` so both windows shift alike.
+    fn body_len(&self, width: usize) -> usize {
+        crate::swapped::body_len(self.items.len(), &self.said, width)
     }
 
     /// A key over the confirm: delete the confirmed row, or go back to
@@ -432,7 +465,17 @@ impl Logout {
             .spans
             .push(Span::raw(" ".repeat(wide.saturating_sub(have))));
         let shown = shown_body_rows(usize::from(area.height));
-        let start = window_start(self.selected, shown, body.len());
+        // The window starts at the wheel's top row, moved only as far
+        // as needed to keep the focus shown: the keys never re-derive
+        // the window from the focus, so a wheeled position survives
+        // them, and a shorter body clamps it back into range.
+        let start = if body.is_empty() || shown == 0 {
+            0
+        } else {
+            let end = body.len().saturating_sub(shown);
+            let low = self.selected.saturating_add(1).saturating_sub(shown);
+            self.top.clamp(low, self.selected).min(end)
+        };
         let end = start.saturating_add(shown).min(body.len());
         let framed = overlay::Overlay {
             title: Some(("Log out".to_owned(), Some(Span::raw("✕")))),
@@ -509,18 +552,6 @@ fn list_chrome() -> usize {
 /// the height less its chrome, or none when the chrome fills it.
 fn shown_body_rows(height: usize) -> usize {
     height.saturating_sub(list_chrome())
-}
-
-/// Where the list overlay's window starts so `focused` shows in `shown`
-/// rows of `rows`: past the rows shown with it when the focused row
-/// would fall below the window, else the top. An empty body or window
-/// starts at the top.
-fn window_start(focused: usize, shown: usize, rows: usize) -> usize {
-    if rows == 0 || shown == 0 || focused < shown {
-        0
-    } else {
-        focused.saturating_add(1).saturating_sub(shown)
-    }
 }
 
 /// One row's text as drawn: the provider and its label with the
