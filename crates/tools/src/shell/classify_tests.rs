@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use contract::shapes::Effect;
 use contract::tool::Effects;
 
-use super::super::read_only::COMMANDS;
+use super::super::read_only::{COMMANDS, Flag};
 use super::classify;
 
 #[test]
@@ -341,6 +341,37 @@ fn git_diff_read_only_flags_read() {
         "git diff --diff-filter=",
     ] {
         assert_reads(command);
+    }
+}
+
+#[test]
+fn git_unified_and_diff_filter_forms() {
+    // `-U<n>` takes attached digits only, and `--unified=<n>` its inline
+    // all-digit value, for `git diff`, `git log` and `git show`;
+    // `--diff-filter=<value>` takes its value inline only. A flag after
+    // the first operand still reads.
+    for command in [
+        "git diff -U80 a..HEAD --check",
+        "git log -U3",
+        "git show --unified=5",
+        "git diff --unified=007",
+        "git log -U0",
+    ] {
+        assert_reads(command);
+    }
+    for command in [
+        "git diff -U",
+        "git diff -U8x",
+        "git diff -U 80",
+        "git diff --unified",
+        "git diff --unified=",
+        "git diff --unified=x",
+        "git diff --unified 5",
+        "git diff --diff-filter",
+        "git diff --diff-filter ACM",
+        "git rev-parse -U5",
+    ] {
+        assert_closed(command);
     }
 }
 
@@ -838,6 +869,21 @@ fn every_listed_command_with_a_plain_operand_reads() {
     }
 }
 
+/// One read-only spelling of a flag: an inline-only value rides `=`, an
+/// all-digit value rides `=5`, any other value rides the next word, and a
+/// plain flag stands alone.
+fn inline_value_line(name: &str, flag: &Flag) -> String {
+    if flag.digits_only {
+        format!("{name} {}=5", flag.spelling)
+    } else if flag.inline_only {
+        format!("{name} {}=v", flag.spelling)
+    } else if flag.takes_value {
+        format!("{name} {} v", flag.spelling)
+    } else {
+        format!("{name} {}", flag.spelling)
+    }
+}
+
 #[test]
 fn each_allowed_flag_keeps_the_command_read_only() {
     for command in COMMANDS {
@@ -845,21 +891,13 @@ fn each_allowed_flag_keeps_the_command_read_only() {
         // with the default host instead of `Reads`.
         if command.name.starts_with("gh ") {
             for flag in command.flags {
-                let line = if flag.takes_value {
-                    format!("{} {} v", command.name, flag.spelling)
-                } else {
-                    format!("{} {}", command.name, flag.spelling)
-                };
+                let line = inline_value_line(command.name, flag);
                 assert_network(&line, &[], &["/work"]);
             }
             continue;
         }
         for flag in command.flags {
-            let line = if flag.takes_value {
-                format!("{} {} v", command.name, flag.spelling)
-            } else {
-                format!("{} {}", command.name, flag.spelling)
-            };
+            let line = inline_value_line(command.name, flag);
             assert_reads(&line);
             let paths = classified(&line).declared.paths;
             if command.paths {

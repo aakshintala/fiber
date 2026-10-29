@@ -8,6 +8,12 @@ pub(super) struct Flag {
     pub(super) spelling: &'static str,
     /// Whether the next word, or the text after `=`, is this flag's value.
     pub(super) takes_value: bool,
+    /// Whether the value rides only after `=`: a bare word with this
+    /// spelling refuses instead of consuming the next word, as with
+    /// `--diff-filter`.
+    pub(super) inline_only: bool,
+    /// Whether the `=` value holds only ASCII digits, as in `--unified=5`.
+    pub(super) digits_only: bool,
 }
 
 /// One command on the built-in list.
@@ -37,6 +43,8 @@ const fn flag(spelling: &'static str) -> Flag {
     Flag {
         spelling,
         takes_value: false,
+        inline_only: false,
+        digits_only: false,
     }
 }
 
@@ -44,6 +52,31 @@ const fn value(spelling: &'static str) -> Flag {
     Flag {
         spelling,
         takes_value: true,
+        inline_only: false,
+        digits_only: false,
+    }
+}
+
+/// A `--long` flag taking any value only after `=`, as in
+/// `--diff-filter=ACM`: a bare word refuses, so it never consumes the next
+/// word.
+const fn inline_value(spelling: &'static str) -> Flag {
+    Flag {
+        spelling,
+        takes_value: true,
+        inline_only: true,
+        digits_only: false,
+    }
+}
+
+/// A `--long` flag taking only an all-digit value after `=`, as in
+/// `--unified=5`; `-U<n>` is its attached short form.
+const fn inline_digits(spelling: &'static str) -> Flag {
+    Flag {
+        spelling,
+        takes_value: true,
+        inline_only: true,
+        digits_only: true,
     }
 }
 
@@ -189,7 +222,8 @@ const GIT_DIFF: &[Flag] = &[
     flag("--merge-base"),
     flag("-w"),
     flag("--ignore-all-space"),
-    value("--diff-filter"),
+    inline_value("--diff-filter"),
+    inline_digits("--unified"),
 ];
 
 const GIT_LOG: &[Flag] = &[
@@ -203,6 +237,7 @@ const GIT_LOG: &[Flag] = &[
     flag("--no-color"),
     flag("--no-ext-diff"),
     value("-n"),
+    inline_digits("--unified"),
 ];
 
 // debt: git diff and git show can run a configured external diff or textconv, drop both entries when the read-only list is no longer trusted
@@ -214,6 +249,7 @@ const GIT_SHOW: &[Flag] = &[
     flag("--name-only"),
     flag("--no-color"),
     flag("--no-ext-diff"),
+    inline_digits("--unified"),
 ];
 
 const GIT_REV_PARSE: &[Flag] = &[

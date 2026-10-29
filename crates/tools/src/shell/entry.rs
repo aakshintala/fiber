@@ -178,7 +178,9 @@ fn is_option_word(cooked: &str) -> bool {
 
 /// Whether the entry accepts one flag word, consuming its value when the
 /// flag takes one. Clusters, `--name=value` and `-<digits>` follow the
-/// built-in grammar; anything else is refused.
+/// built-in grammar; anything else is refused. An inline-only value flag
+/// takes its value only after `=`: a bare word with its spelling refuses,
+/// so it never consumes the next word.
 pub(super) fn accept_flag(
     entry: &Command,
     words: &mut std::slice::Iter<'_, Word>,
@@ -188,13 +190,30 @@ pub(super) fn accept_flag(
         return entry
             .flags
             .iter()
-            .any(|flag| flag.takes_value && flag.spelling == name)
+            .any(|flag| {
+                flag.takes_value
+                    && flag.spelling == name
+                    && (!flag.digits_only || digits_value(cooked))
+            })
             .then_some(());
     }
     if let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == cooked) {
+        if flag.inline_only {
+            return None;
+        }
         if flag.takes_value {
             words.next()?;
         }
+        return Some(());
+    }
+    // `-U<digits>`, the attached short form of `--unified=<digits>`, as in
+    // `git diff -U80`. Only an entry listing `--unified` takes it; a bare
+    // `-U` never consumes the next word.
+    if let Some(digits) = cooked.strip_prefix("-U")
+        && !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && entry.flags.iter().any(|flag| flag.spelling == "--unified")
+    {
         return Some(());
     }
     // `git log -<digits>`, as in `git log -8`.
@@ -202,6 +221,14 @@ pub(super) fn accept_flag(
         return Some(());
     }
     short_cluster(entry, cooked).then_some(())
+}
+
+/// Whether the text after the first `=` holds only ASCII digits, never
+/// empty, as in `--unified=5`.
+fn digits_value(cooked: &str) -> bool {
+    cooked.split_once('=').is_some_and(|(_, value)| {
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 /// `--name=value`, and only that form. A short flag does not take `=`.
