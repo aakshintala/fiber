@@ -196,7 +196,7 @@ fn tool_hook_plan(hello_marker: &str) -> Value {
         plan.push(action.clone());
     }
     plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
-    plan.push(json!({"read_until": {"path": "kind", "equals": "command_accepted"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
     plan.push(json!({"loop": serve}));
     Value::Array(plan)
 }
@@ -356,7 +356,7 @@ fn gated_plan(gate: &str, hello_marker: &str) -> Value {
         plan.push(action.clone());
     }
     plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
-    plan.push(json!({"read_until": {"path": "kind", "equals": "command_accepted"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
     plan.push(json!({"loop": serve}));
     Value::Array(plan)
 }
@@ -429,7 +429,7 @@ fn flaky_plan(hello_marker: &str) -> Value {
         plan.push(action.clone());
     }
     plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
-    plan.push(json!({"read_until": {"path": "kind", "equals": "command_accepted"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
     plan.push(json!({"read": {"as": "req"}}));
     plan.push(json!({"send": {"id": "a-tool", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "flaky-ok"}}}));
     plan.push(json!({"exit": {}}));
@@ -480,7 +480,7 @@ fn late_plan(alive_marker: &str, hello_marker: &str) -> Value {
         plan.push(action.clone());
     }
     plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
-    plan.push(json!({"read_until": {"path": "kind", "equals": "command_accepted"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
     // The tool call answers; its hook stays silent and times out.
     // The owner answers every reply with a `command_accepted` ack, so
     // each reply is followed by a `read_until` consuming its ack before
@@ -809,7 +809,7 @@ fn envelope_plan(hello_marker: &str, watch_marker: &str) -> Value {
         plan.push(action.clone());
     }
     plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
-    plan.push(json!({"read_until": {"path": "kind", "equals": "command_accepted"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
     plan.push(json!({"loop": serve}));
     Value::Array(plan)
 }
