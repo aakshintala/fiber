@@ -682,13 +682,11 @@ fn an_accepted_png_answer_transmits_and_places() {
     let id = asked(&mut app, 1);
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
     let out = app.take_image_out();
-    // The answer queues one item: its transmit chunks in order, then its
-    // place, so the writer sends the transmit before the place.
-    assert_eq!(out.items.len(), 1);
+    // The answer queues its transmit before its place, so the writer sends
+    // the transmit first (`docs/tui.md`, "Images").
     match &out.items[0] {
-        Item::Image { id, chunks, place } => {
+        Item::Image { id, place, .. } => {
             assert_eq!(*id, 1);
-            assert_eq!(chunks.len(), 1);
             assert!(place.starts_with(b"\x1b_Ga=p,U=1,i=1,"));
         }
         Item::Delete(_) => panic!("the answer queues its transmit, not a delete"),
@@ -1033,7 +1031,8 @@ fn forgetting_a_shown_image_deletes_it() {
     // returns, and drops the old fetch.
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbbbbbb".to_owned()));
     // The shown image's delete goes out before the next session draws,
-    // under its own id.
+    // under its own id (`docs/tui.md`, "Images"): the session change
+    // deletes the previous session's placements.
     let deletes = app.take_image_deletes();
     assert_eq!(deletes.len(), 1);
     assert_eq!(deletes[0].id, 1);
@@ -1085,7 +1084,9 @@ fn handover_keeps_retained_and_reasks_dropped() {
     assert!(!app.take_image_out().items.is_empty());
     // The writer still holds the ancestor's image: it stays shown and is
     // sent again whole, while the dropped image goes back to asked with a
-    // fresh request, even though no frame drew it again.
+    // fresh request, even though no frame drew it again (`docs/tui.md`,
+    // "Images"): handing the terminal over sends every on-screen image
+    // again whole.
     let kept = image_id(&app, OTHER, "artifacts/old.png");
     app.images_after_handover(vec![kept]);
     let out = app.take_image_out();
@@ -1110,7 +1111,8 @@ fn handover_with_nothing_retained_reasks_every_shown_image() {
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
     assert!(!app.take_image_out().items.is_empty());
     // The writer holds nothing: the shown image goes back to asked with a
-    // fresh request.
+    // fresh request (`docs/tui.md`, "Images"): handing the terminal over
+    // sends every on-screen image again whole.
     app.images_after_handover(Vec::new());
     let out = app.take_image_out();
     assert_eq!(out.display.len(), 1);

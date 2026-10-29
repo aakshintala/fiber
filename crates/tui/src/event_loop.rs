@@ -878,6 +878,8 @@ impl<B: Backend> Loop<B> {
         // A selection's copy waiting on dropped pages runs once they load,
         // and a `/copy` waiting on an opening pass once the pass ends.
         if let Some(text) = self.app.take_copy() {
+            let lock = Arc::clone(&self.tty_lock);
+            let _guard = lock.loop_write();
             clipboard::copy(
                 Some(&self.tty),
                 self.programs.copy.as_deref(),
@@ -886,6 +888,8 @@ impl<B: Backend> Loop<B> {
             );
         }
         if let Some(text) = self.app.take_owed_copy() {
+            let lock = Arc::clone(&self.tty_lock);
+            let _guard = lock.loop_write();
             clipboard::copy(
                 Some(&self.tty),
                 self.programs.copy.as_deref(),
@@ -896,6 +900,8 @@ impl<B: Backend> Loop<B> {
         // A call view's `y` copy waiting on its pages runs once they
         // all land; a failed page aborts it with no write.
         if let Some(text) = self.app.take_call_copy() {
+            let lock = Arc::clone(&self.tty_lock);
+            let _guard = lock.loop_write();
             clipboard::copy(
                 Some(&self.tty),
                 self.programs.copy.as_deref(),
@@ -1156,6 +1162,9 @@ impl<B: Backend> Loop<B> {
     /// "Getting the person's attention"). A failed write is dropped.
     fn write_alerts(&mut self) {
         let bytes = self.app.take_alerts();
+        if bytes.is_empty() {
+            return;
+        }
         let lock = Arc::clone(&self.tty_lock);
         let _guard = lock.loop_write();
         let mut tty = &self.tty;
@@ -1475,6 +1484,19 @@ impl<B: Backend> Loop<B> {
     /// resize below reuses. After a successful resume the writer's retained
     /// images stay shown while dropped ones are re-asked, and the first
     /// post-resume frame restarts the writer.
+    /// After a successful resume, keeps writer-retained images shown and
+    /// re-asks dropped ones, once: a second handover before the first
+    /// post-resume frame must not reset again, or the retained images the
+    /// parked writer will replay are requested and sent twice.
+    fn note_handover_resumed(&mut self) {
+        if self.pending_resume {
+            return;
+        }
+        let retained = std::mem::take(&mut self.handover_retained);
+        self.app.images_after_handover(retained);
+        self.pending_resume = true;
+    }
+
     fn hand_over(&mut self, program: impl FnOnce() -> Option<i32>) -> Option<i32> {
         self.reader.pause();
         // A failed suspend still runs the program: the terminal may be
@@ -1502,9 +1524,7 @@ impl<B: Backend> Loop<B> {
         let (width, height) = term::size(&self.tty)
             .unwrap_or_else(|_| (self.screen.area().width, self.screen.area().height));
         self.app.set_size(width, height);
-        let retained = std::mem::take(&mut self.handover_retained);
-        self.app.images_after_handover(retained);
-        self.pending_resume = true;
+        self.note_handover_resumed();
         self.screen.resize(width, height).err().map(|_| 1)
     }
 }

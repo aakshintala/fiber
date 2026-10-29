@@ -546,16 +546,9 @@ impl Runner {
             }
             self.pending.push_front(Active { next: 0, ..active });
         }
-        if self.emit_pending().is_err() {
-            let barriers = std::mem::take(&mut self.barriers);
-            self.fail(barriers);
-            return Parked::Gone;
-        }
-        if self.ack_barriers().is_err() {
-            let barriers = std::mem::take(&mut self.barriers);
-            self.fail(barriers);
-            return Parked::Gone;
-        }
+        // The loop's pre-handover drain already emitted pending deletes
+        // and acknowledged barriers: the abort above queues neither, so
+        // nothing remains to emit or ack here.
         let ids: Vec<u32> = self.pending.iter().map(|active| active.id).collect();
         if ack.send(ids).is_err() {
             self.fail(Vec::new());

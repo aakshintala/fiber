@@ -754,6 +754,50 @@ fn pause_kitty_while_resume_pends_skips_a_second_handover() {
     lp.stop_kitty();
 }
 
+/// Two handovers before the first post-resume frame reset once: the second
+/// must not re-ask the retained image the parked writer will replay.
+#[test]
+fn second_handover_before_resume_keeps_retained_shown() {
+    let (mut lp, theirs, tx, rx) = inline_opened(image_session());
+    // A pipe tty: the writer's transmit proves the image is shown.
+    let (tty_read, tty_write) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
+    lp.tty = std::fs::File::from(std::os::fd::OwnedFd::from(tty_write));
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    let id = read_display_id(&theirs);
+    let (mut lp, rx) = stepped(lp, rx, display_answer(&id));
+    drop(tx);
+    drop(rx);
+    let (sent, _read) = recv_wire(&read_until(
+        std::fs::File::from(std::os::fd::OwnedFd::from(tty_read)),
+        &["Ga=t,"],
+    ));
+    assert!(
+        String::from_utf8_lossy(&sent).contains("i=1"),
+        "the answer transmitted, so image 1 is shown: {sent:?}"
+    );
+    if let Some(writer) = lp.kitty_writer.take() {
+        writer.stop_and_join();
+    }
+    assert!(lp.app.take_image_out().items.is_empty());
+    // The first post-resume reset keeps the retained image shown.
+    lp.handover_retained = vec![1];
+    lp.pending_resume = false;
+    lp.note_handover_resumed();
+    assert!(
+        lp.app.take_image_out().display.is_empty(),
+        "the retained image stays shown after the first resume"
+    );
+    assert!(lp.pending_resume);
+    // A second handover before the first post-resume frame: without the
+    // pending check this takes an empty retained list and re-asks the
+    // image the writer will replay.
+    lp.note_handover_resumed();
+    assert!(
+        lp.app.take_image_out().display.is_empty(),
+        "the second resume before the frame asks nothing again"
+    );
+}
+
 /// The pre-draw delete drain never waits while a resume pends: the writer
 /// is still parked in its handover, so a barrier would hang the frame
 /// before it ever reaches the resume.
