@@ -1315,7 +1315,11 @@ fn a_matching_header_under_another_directory_name_diverts() {
     // The source directory's name never decides: the checked SKILL.md's
     // header name matches the agents-side skill's.
     let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
-    let got = already_read(&tree.home(), Some(&tree.person()), &[checked.clone()]);
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
     assert_eq!(got, BTreeMap::from([(checked, logged)]));
 }
 
@@ -1382,7 +1386,11 @@ fn a_symlinked_source_directory_resolves_under_the_target_name() {
     let link = tree.root.join("source/skills/review");
     std::fs::create_dir_all(link.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(tree.person().join(".agents/skills/review"), &link).unwrap();
-    let got = already_read(&tree.home(), Some(&tree.person()), &[link.clone()]);
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&link),
+    );
     assert_eq!(got, BTreeMap::from([(link, logged)]));
 }
 
@@ -1395,7 +1403,11 @@ fn a_model_disabled_agents_skill_still_diverts() {
         "---\nname: review\ndescription: Reviews code.\ndisable-model-invocation: true\n---\n\nBody.\n",
     );
     let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
-    let got = already_read(&tree.home(), Some(&tree.person()), &[checked.clone()]);
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
     // The disabled switch leaves the skill out of the listing, never out
     // of loading: discovery still reads it, so it still diverts.
     assert_eq!(got, BTreeMap::from([(checked, logged)]));
@@ -1414,7 +1426,11 @@ fn a_fiber_home_winner_does_not_stop_the_diversion() {
     // Presence, not winner, decides: Fiber home wins the name today, yet
     // the copy must still go, so the agents-side skill still diverts.
     let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
-    let got = already_read(&tree.home(), Some(&tree.person()), &[checked.clone()]);
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
     assert_eq!(got, BTreeMap::from([(checked, logged)]));
 }
 
@@ -1450,7 +1466,11 @@ fn the_first_agents_directory_wins_a_shared_header_name() {
     // Discovery keeps the first skill under each name in read order, and
     // read order is byte order of the directory names.
     let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
-    let got = already_read(&tree.home(), Some(&tree.person()), &[checked.clone()]);
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
     assert_eq!(got, BTreeMap::from([(checked, first)]));
 }
 
@@ -1493,7 +1513,11 @@ fn a_two_mebibyte_valid_pair_diverts_through_the_unbounded_read() {
     write(&tree.root.join("source/skills"), "mine", &source_text);
     // Both sides exceed the import's 1 MiB file cap, which does not bind
     // this check: discovery reads them whole, so the pair still diverts.
-    let got = already_read(&tree.home(), Some(&tree.person()), &[checked.clone()]);
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
     assert_eq!(got, BTreeMap::from([(checked, logged)]));
 }
 
