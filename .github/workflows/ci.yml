@@ -692,7 +692,9 @@ jobs:
               [ -f "$file" ] || continue
               while IFS= read -r line || [ -n "$line" ]; do
                 [ -n "$line" ] || continue
-                title="Flaky test: ${line%%$'\t'*}"
+                name=${line%%$'\t'*}
+                # Legacy `Flaky test: <binary> <test>` tickets are never matched.
+                title="Flaky tests: ${name%% *}"
                 grep -Fxq "$title" "$titles" || printf '%s\n' "$title" >> "$titles"
               done < "$file"
             done
