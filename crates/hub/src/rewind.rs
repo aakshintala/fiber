@@ -91,9 +91,26 @@ pub(crate) fn reach(
     // Admission first: a rewind admitted before the store reaches its
     // bind or refuses, and one after is refused at once. The guard
     // spans the whole reach.
-    let _admitted = hub.admit()?;
+    let admitted = hub.admit()?;
     let guard = guard_for(hub, next);
+    #[cfg(test)]
+    crate::connection::probe_retry_contention(hub, &guard);
     let held = lock(&guard);
+    reach_locked(hub, from, next, held, admitted)
+}
+
+/// The body of [`reach`] after admission and the per-child guard: the
+/// socket fast path, the resume fallback, and the recorded-workspace
+/// start with its bind wait. The caller holds both guards across the
+/// call, so two starts of one session serialize; the resume path drops
+/// the start guard before the shared gate, as [`reach`] documents.
+fn reach_locked(
+    hub: &Arc<Hub>,
+    from: &SessionId,
+    next: &SessionId,
+    held: std::sync::MutexGuard<'_, ()>,
+    _admitted: crate::connection::Admitted<'_>,
+) -> Result<UnixStream, crate::connection::Refused> {
     let socket = hub.home.join("run").join(&next.0);
     if let Ok(stream) = UnixStream::connect(&socket) {
         return Ok(stream);
@@ -225,27 +242,58 @@ pub(crate) fn reach(
     }
 }
 
+/// Starts `next` after `from`'s old process exits: the retry both
+/// old-exit callbacks (the relay-end `follow` and the feed's `on_rewound`)
+/// share, so the two paths reach one decision point. The move-time
+/// `reach` stays the initial attempt. The claim runs under the child's
+/// start guard, so the first callback to lock it starts and the loser
+/// blocks until that start finishes before connecting: it attaches to
+/// the winner's child when it runs, and starts nothing when the claimed
+/// attempt failed.
+pub(crate) fn retry_after_exit(
+    hub: &Arc<Hub>,
+    from: &SessionId,
+    next: &SessionId,
+) -> Option<UnixStream> {
+    let guard = guard_for(hub, next);
+    #[cfg(test)]
+    crate::connection::probe_retry_contention(hub, &guard);
+    let held = lock(&guard);
+    if !hub.claim_retry(next) {
+        drop(held);
+        let socket = hub.home.join("run").join(&next.0);
+        return UnixStream::connect(&socket).ok();
+    }
+    let Ok(admitted) = hub.admit() else {
+        return None;
+    };
+    reach_locked(hub, from, next, held, admitted).ok()
+}
+
 /// Subscribes the connection to the session `old`'s log continues in, at
 /// the level it held on `old`: connects to the new session, starting or
 /// resuming it, and sends the kept subscription under a hub-minted id
 /// whose acknowledgement the relay thread drops, as a reconnect does. A
-/// connection with no kept level, one already holding the level on the
-/// new session, or a log that continues nowhere, changes nothing. When
-/// the client already relayed the new session, still unsubscribed -- its
-/// command for it landed while the old relay waited for EOF -- the level
-/// is transferred onto that relay instead of starting a second one.
+/// connection with no kept level still retries the recorded child once,
+/// attaching nothing: the retry is not conditional on the level, so it
+/// runs even when the feed never observes the old process exit. One
+/// already holding the level on the new session, or a log that continues
+/// nowhere, changes nothing. When the client already relayed the new
+/// session, still unsubscribed -- its command for it landed while the old
+/// relay waited for EOF -- the level is transferred onto that relay
+/// instead of starting a second one.
 pub(crate) fn follow(
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<crate::relay::Relays>>,
     old: &str,
 ) {
-    let replay = lock(relays).subscription(old);
-    let Some(replay) = replay else {
-        return;
-    };
     let from = SessionId(old.to_owned());
     let Some(next) = continued(&hub.home, &from) else {
+        return;
+    };
+    let Some(replay) = lock(relays).subscription(old) else {
+        drop(retry_after_exit(hub, &from, &next));
         return;
     };
     // The new session opens once: the sweep never opens it while this
@@ -286,7 +334,7 @@ pub(crate) fn follow(
     if lock(relays).transfer(&next.0, &replay) {
         return;
     }
-    let Some(stream) = reach(hub, &from, &next).ok() else {
+    let Some(stream) = retry_after_exit(hub, &from, &next) else {
         return;
     };
     attach(
@@ -305,11 +353,12 @@ pub(crate) fn follow(
 /// starts of one session serialize while any other start runs at once.
 fn guard_for(hub: &Hub, next: &SessionId) -> Arc<Mutex<()>> {
     let mut starting = lock(&hub.starting);
-    starting.get(next).cloned().unwrap_or_else(|| {
-        let guard = Arc::new(Mutex::new(()));
-        starting.insert(next.clone(), Arc::clone(&guard));
-        guard
-    })
+    Arc::clone(
+        &starting
+            .entry(next.clone())
+            .or_insert_with(crate::connection::StartSlot::new)
+            .guard,
+    )
 }
 
 #[cfg(test)]
