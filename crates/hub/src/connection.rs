@@ -221,6 +221,13 @@ pub(crate) struct Hub {
     /// effects, 1011 closes and `io_failed` answers, not thrift.
     #[cfg(test)]
     pub(crate) fail_spawn: Mutex<Option<&'static str>>,
+    /// Tests only: a one-shot signal fired after a competing old-exit
+    /// callback sees this child's start guard already held, before it
+    /// blocks on that guard. The retry test arms it to prove the second
+    /// callback reached the shared retry decision point while the first
+    /// retry still runs inside the starter.
+    #[cfg(test)]
+    pub(crate) on_retry_contended: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: scripted process reads for the session-socket refusal
     /// paths; production always reads the kernel. The seam makes the
     /// kernel report a false ancestry for the connecting peer, pinning the
@@ -349,6 +356,8 @@ impl Hub {
             before_abort_answer: Mutex::new(None),
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
+            #[cfg(test)]
+            on_retry_contended: Mutex::new(None),
             line_cap: AtomicUsize::new(support::framing::MAX_LINE),
         }
     }
@@ -1764,6 +1773,19 @@ pub(crate) fn spawn(
 }
 
 pub(crate) use support::lock;
+
+/// Tests only: fires the hub's one-shot `on_retry_contended` signal when
+/// `guard` is already held, before the caller blocks on it. A free guard
+/// fires nothing. It proves a competing old-exit callback reached the
+/// shared retry decision point while the first retry still runs.
+#[cfg(test)]
+pub(crate) fn probe_retry_contention(hub: &Hub, guard: &Mutex<()>) {
+    if guard.try_lock().is_err() {
+        if let Some(fire) = lock(&hub.on_retry_contended).take() {
+            fire();
+        }
+    }
+}
 
 /// Locks an opener gate in tests, signaling only after `try_lock` proves
 /// another opener still holds it. It serializes the two `race_openers`

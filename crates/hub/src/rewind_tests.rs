@@ -2507,3 +2507,219 @@ fn follow_moves_the_kept_level_to_the_moved_child() {
         "the relay thread drops its acknowledgement"
     );
 }
+
+/// A starter whose `rewind` of one session waits for a release while
+/// reporting entry, once armed: the retry test holds the first old-exit
+/// callback inside the starter while the competing callback reaches the
+/// same child's start guard. Unarmed calls run at once.
+#[derive(Clone)]
+struct RetryGate {
+    inner: FakeStarter,
+    held: SessionId,
+    holding: Arc<AtomicBool>,
+    entered: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    release: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
+}
+
+impl RetryGate {
+    fn rewound(&self) -> Vec<(SessionId, PathBuf, SessionId)> {
+        self.inner.rewound()
+    }
+}
+
+impl Starter for RetryGate {
+    fn start(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        model: Option<&str>,
+        overrides: &[&str],
+        worktree: bool,
+        continues: Option<&SessionId>,
+        supervised: bool,
+    ) -> std::io::Result<Box<dyn crate::Started>> {
+        self.inner.start(
+            id, workspace, model, overrides, worktree, continues, supervised,
+        )
+    }
+
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        credential: Option<&str>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.inner.resume(id, workspace, credential)
+    }
+
+    fn rewind(
+        &self,
+        id: &SessionId,
+        workspace: &std::path::Path,
+        from: &SessionId,
+    ) -> std::io::Result<Box<dyn Started>> {
+        if *id == self.held && self.holding.load(Ordering::SeqCst) {
+            if let Some(entered) = lock(&self.entered).take() {
+                entered.send(()).unwrap_or(());
+            }
+            if let Some(release) = lock(&self.release).take() {
+                release.recv().unwrap_or(());
+            }
+        }
+        self.inner.rewind(id, workspace, from)
+    }
+}
+
+/// A moved child whose start fails retries exactly once across both
+/// old-exit callbacks: the relay-end `follow` and the feed's retry share
+/// one decision under the child's start guard, so the second callback
+/// starts nothing even when the first retry fails. Both callback orders
+/// run, with the first retry held inside the starter until the competing
+/// callback proves it reached the held guard.
+#[test]
+fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let target = temp.dir.join("elsewhere");
+    fs::create_dir_all(&target).unwrap();
+    let old = id(1);
+    let next = id(2);
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[moved_line(&old, &next, &target.to_string_lossy())],
+    );
+    let starter = RetryGate {
+        inner: FakeStarter::exit_with(
+            &temp.dir,
+            failure(
+                ErrorCode::ExtensionRequiredFailed,
+                "the new process refused.",
+            ),
+        ),
+        held: SessionId(next.clone()),
+        holding: Arc::new(AtomicBool::new(false)),
+        entered: Arc::new(Mutex::new(None)),
+        release: Arc::new(Mutex::new(None)),
+    };
+    let hub = temp.hub(starter.clone());
+    // The move-time reach is the initial attempt: it fails, and the old
+    // log still ends `moved`.
+    let refused = reach(&hub, &SessionId(old.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::ExtensionRequiredFailed);
+    assert_eq!(
+        starter.rewound().len(),
+        1,
+        "the move-time start was attempted once"
+    );
+    assert_eq!(
+        continued(&temp.dir, &SessionId(old.clone())),
+        Some(SessionId(next.clone())),
+        "the old log stays ended"
+    );
+    // Each order gets a fresh redirect state holding only the old
+    // session's level, with no relay for the child: a previous order's
+    // `follow` keeps the child's level, which would short-circuit the
+    // next `follow` before the starter, hiding the overlap. The feed
+    // path keeps no level, so both orders still reach the starter.
+    for first_is_follow in [true, false] {
+        let relays: Arc<Mutex<crate::relay::Relays>> =
+            Arc::new(Mutex::new(crate::relay::Relays::default()));
+        let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        lock(&relays).subscribed.push((old.clone(), level));
+        let (write, _) = UnixStream::pair().unwrap();
+        let writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(write));
+        let (entered_tx, entered) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel::<()>();
+        *lock(&starter.entered) = Some(entered_tx);
+        *lock(&starter.release) = Some(release);
+        starter.holding.store(true, Ordering::SeqCst);
+        let (first_tx, first_done) = mpsc::channel();
+        let first = thread::Builder::new()
+            .name("first-old-exit".to_owned())
+            .spawn({
+                let hub = Arc::clone(&hub);
+                let relays = Arc::clone(&relays);
+                let writer = Arc::clone(&writer);
+                let (from, next) = (old.clone(), next.clone());
+                move || {
+                    if first_is_follow {
+                        follow(&hub, &writer, &relays, &from);
+                    } else {
+                        drop(retry_after_exit(&hub, &SessionId(from), &SessionId(next)));
+                    }
+                    first_tx.send(()).unwrap_or(());
+                }
+            })
+            .unwrap();
+        // The first retry is inside the starter before the competing
+        // callback runs: the channel says so, never a sleep.
+        assert!(
+            Deadline::after(DEADLINE).recv(&entered).is_ok(),
+            "the first retry reaches the starter"
+        );
+        // The competing callback runs only now, so its contention
+        // signal proves it reached the same child's held guard before
+        // blocking on it.
+        let (contended_tx, contended) = mpsc::channel();
+        *lock(&hub.on_retry_contended) = Some(Box::new(move || {
+            contended_tx.send(()).unwrap_or(());
+        }));
+        let (second_tx, second_done) = mpsc::channel();
+        let second = thread::Builder::new()
+            .name("second-old-exit".to_owned())
+            .spawn({
+                let hub = Arc::clone(&hub);
+                let relays = Arc::clone(&relays);
+                let writer = Arc::clone(&writer);
+                let (from, next) = (old.clone(), next.clone());
+                move || {
+                    if first_is_follow {
+                        drop(retry_after_exit(&hub, &SessionId(from), &SessionId(next)));
+                    } else {
+                        follow(&hub, &writer, &relays, &from);
+                    }
+                    second_tx.send(()).unwrap_or(());
+                }
+            })
+            .unwrap();
+        assert!(
+            Deadline::after(DEADLINE).recv(&contended).is_ok(),
+            "the competing callback sees the child's start guard held"
+        );
+        drop(release_tx);
+        // Each worker's result arrives through its channel under the
+        // deadline; only then do the joins run, so a regression fails
+        // the test instead of hanging it.
+        assert!(
+            Deadline::after(DEADLINE).recv(&first_done).is_ok(),
+            "the first retry answers"
+        );
+        assert!(
+            Deadline::after(DEADLINE).recv(&second_done).is_ok(),
+            "the competing callback answers"
+        );
+        first.join().unwrap();
+        second.join().unwrap();
+    }
+    assert_eq!(
+        starter.rewound().len(),
+        2,
+        "one retry follows the initial attempt, however the callbacks interleave"
+    );
+    assert_eq!(
+        continued(&temp.dir, &SessionId(old.clone())),
+        Some(SessionId(next.clone())),
+        "the old log stays ended"
+    );
+    assert_eq!(
+        temp.hub_log().matches("could not start.").count(),
+        2,
+        "the initial attempt and its one retry each write one diagnostic"
+    );
+}

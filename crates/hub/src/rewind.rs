@@ -93,6 +93,8 @@ pub(crate) fn reach(
     // spans the whole reach.
     let _admitted = hub.admit()?;
     let guard = guard_for(hub, next);
+    #[cfg(test)]
+    crate::connection::probe_retry_contention(hub, &guard);
     let held = lock(&guard);
     let socket = hub.home.join("run").join(&next.0);
     if let Ok(stream) = UnixStream::connect(&socket) {
@@ -225,6 +227,20 @@ pub(crate) fn reach(
     }
 }
 
+/// Starts `next` after `from`'s old process exits: the retry both
+/// old-exit callbacks (the relay-end `follow` and the feed's `on_rewound`)
+/// share, so the two paths reach one decision point. The move-time
+/// `reach` stays the initial attempt.
+pub(crate) fn retry_after_exit(
+    hub: &Arc<Hub>,
+    from: &SessionId,
+    next: &SessionId,
+) -> Option<UnixStream> {
+    #[cfg(test)]
+    crate::connection::probe_retry_contention(hub, &guard_for(hub, next));
+    reach(hub, from, next).ok()
+}
+
 /// Subscribes the connection to the session `old`'s log continues in, at
 /// the level it held on `old`: connects to the new session, starting or
 /// resuming it, and sends the kept subscription under a hub-minted id
@@ -286,7 +302,7 @@ pub(crate) fn follow(
     if lock(relays).transfer(&next.0, &replay) {
         return;
     }
-    let Some(stream) = reach(hub, &from, &next).ok() else {
+    let Some(stream) = retry_after_exit(hub, &from, &next) else {
         return;
     };
     attach(
