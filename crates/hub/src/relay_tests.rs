@@ -3545,3 +3545,13 @@ fn a_closing_answer_for_a_partly_written_command_is_not_routed_again() {
     );
     assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
 }
+
+#[test]
+fn parse_typed_rejects_wrong_typed_payload_values_like_the_full_parse() {
+    for payload in [
+        "null", "true", "false", "7", "4.5", "\"text\"", "[]", "[1e999]",
+    ] {
+        let line = format!("{{\"kind\":\"command_accepted\",\"payload\":{payload}}}");
+        typed_none(line.as_bytes());
+    }
+}

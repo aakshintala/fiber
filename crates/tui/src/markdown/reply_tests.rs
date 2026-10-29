@@ -226,6 +226,34 @@ fn a_reply_decorator_draws_the_built_in_text_under_its_badge() {
 }
 
 #[test]
+fn count_only_reply_decorators_keep_the_built_in_text() {
+    use crate::ext::tests::{SlotRenderer, SlotScript, raw};
+    let reply = Reply::new("Hello.".to_owned(), 7);
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["reply"],
+        SlotScript::Decorate {
+            badge: vec![vec![raw("BADGE")]],
+            trim: 5,
+        },
+    ));
+    let mut rows =
+        crate::rows::Rows::count_only().with_seam(crate::ext::tests::seam(&fake, "s", 0, false));
+    reply.count_rows(40, &mut rows);
+    assert_eq!(fake.builtins.borrow().as_slice(), &[35]);
+    let shown: Vec<String> = rows
+        .into_parts()
+        .0
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    assert!(
+        shown.iter().any(|row| row.starts_with("BADGE")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("Hello")), "{shown:?}");
+}
+
+#[test]
 fn a_reply_error_falls_back_with_one_failure() {
     use crate::ext::FailureKind;
     use crate::ext::tests::{SlotRenderer, SlotScript};
@@ -331,19 +359,85 @@ fn a_flat_reply_replacement_drops_every_style() {
 
 fn count_and_draw(text: &str, width: u16) -> (Vec<crate::turn::Row>, Vec<crate::turn::Row>) {
     let reply = Reply::new(text.to_owned(), 17);
+    let rendered = reply.rendered(width);
+    let counted_result = reply.counted(width);
+    assert_eq!(
+        counted_result.rows,
+        rendered.lines.len(),
+        "logical row count: {text:?} at {width}"
+    );
+    assert_eq!(
+        counted_result.targets,
+        rendered
+            .targets
+            .iter()
+            .map(|target| target.line)
+            .collect::<Vec<_>>(),
+        "copy target offsets: {text:?} at {width}"
+    );
+
     let mut shown = crate::rows::Rows::default();
     reply.rows(width, &mut shown);
     let shown = shown.into_parts().0;
+    crate::work::take();
     let mut counted = crate::rows::Rows::count_only();
     reply.count_rows(width, &mut counted);
+    let reply_renders = crate::work::take().reply_renders;
+    assert_eq!(
+        reply_renders > 0,
+        counted_result.over_width,
+        "fallback decision: {text:?} at {width}"
+    );
     let counted = counted.into_parts().0;
     (shown, counted)
+}
+
+#[test]
+fn markdown_exact_row_width_matches_the_text_width_helper() {
+    for code in 0..=0x7f {
+        let text = char::from(code).to_string();
+        assert_eq!(
+            crate::markdown::exact_width(&text),
+            crate::text::width(&text),
+            "ASCII character {code}"
+        );
+    }
+    for text in ["ordinary ASCII", "界", "❤️", "👩‍💻", "e\u{301}", "a\u{1}"] {
+        assert_eq!(
+            crate::markdown::exact_width(text),
+            crate::text::width(text),
+            "row {text:?}"
+        );
+    }
+}
+
+#[test]
+fn markdown_ascii_cell_widths_match_the_text_width_helper() {
+    for code in 0..=0x7f {
+        let ch = char::from(code);
+        assert_eq!(
+            crate::markdown::wrap::char_width(ch),
+            crate::text::char_width(ch),
+            "ASCII character {code}"
+        );
+    }
+    for ch in ['界', '❤', '\u{fe0f}', '👩', '\u{301}', '\u{200d}'] {
+        assert_eq!(
+            crate::markdown::wrap::char_width(ch),
+            crate::text::char_width(ch),
+            "Unicode character {ch:?}"
+        );
+    }
 }
 
 #[test]
 fn count_only_matches_each_markdown_row_kind_and_copy_target() {
     let samples = [
         "plain paragraph with a very long word abcdefghijklmnopqrstuvwxyz\nnext line",
+        "abcdefghijklmnopqrstuvwxyz",
+        "12345",
+        "        a word that must wrap after a spaces-only prefix",
+        "- one\n  - nested item with a long unbroken sequence abcdefghijklmnopqrstuvwxyz\n  - sibling",
         "## heading\n\n- first item\n- second item",
         "> quoted text with words that wrap at narrow widths",
         "```\n\twide界 code\n\nlast\n```",
@@ -390,6 +484,35 @@ fn fitting_ascii_count_does_not_render_and_count_cache_is_shared_by_key() {
 }
 
 #[test]
+fn a_table_whose_minimum_columns_exceed_the_viewport_falls_back() {
+    let reply = Reply::new(
+        "| alpha | bravo | charlie | delta | echo | foxtrot |\n|---|---|---|---|---|---|\n| one | two | three | four | five | six |"
+            .to_owned(),
+        1,
+    );
+    assert!(reply.counted(20).over_width);
+    let mut shown = crate::rows::Rows::default();
+    reply.rows(20, &mut shown);
+    let shown = shown.into_parts().0;
+    crate::work::take();
+    let mut counted = crate::rows::Rows::count_only();
+    reply.count_rows(20, &mut counted);
+    assert_eq!(counted.into_parts().0, shown);
+    assert_eq!(crate::work::take().reply_renders, 1);
+}
+
+#[test]
+fn an_exact_width_count_does_not_render() {
+    let reply = Reply::new("12345".to_owned(), 1);
+    assert!(!reply.counted(5).over_width);
+    crate::work::take();
+    let mut rows = crate::rows::Rows::count_only();
+    reply.count_rows(5, &mut rows);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(crate::work::take().reply_renders, 0);
+}
+
+#[test]
 fn an_over_width_count_falls_back_to_the_drawn_rows() {
     let reply = Reply::new("界".to_owned(), 1);
     let mut shown = crate::rows::Rows::default();
@@ -423,4 +546,28 @@ fn count_cache_text_changes_detach_only_the_changed_reply() {
     assert!(!std::sync::Arc::ptr_eq(&original, &pushed));
     clone.set("set text".to_owned());
     assert!(clone.count_cached_at(40).is_none());
+}
+
+#[test]
+fn count_and_draw_agree_at_markdown_table_and_code_boundaries() {
+    let samples = [
+        "| left | numeric | right |\n|:---|---:|---|\n| a very long cell | 123456789 | ❤️ and 👩‍💻 |\n| x | 0 | e\u{301} |",
+        "| short | centered |\n|:---|:---:|\n| x | a long centered cell |",
+        "| a | b | c | d | e | f |\n|---|---|---|---|---|---|\n| one two three | 99 | 界 | | | end |",
+        "```\nalpha beta gamma delta\n\twide界\n\nend\n```",
+        "```rust\nlet value = 123456789;\nfn main() { println!(\"👩‍💻\"); }\n```",
+        "```diff\n+alpha beta gamma\n-removed 界\n```",
+        "```md\n**bold** and a longwordwithoutspaces\n```",
+    ];
+    for text in samples {
+        for width in 1..=80 {
+            let (shown, counted) = count_and_draw(text, width);
+            assert_eq!(counted.len(), shown.len(), "{text:?} at {width}");
+            assert_eq!(
+                counted.iter().map(|row| row.1).collect::<Vec<_>>(),
+                shown.iter().map(|row| row.1).collect::<Vec<_>>(),
+                "targets: {text:?} at {width}"
+            );
+        }
+    }
 }

@@ -40,6 +40,16 @@ pub(crate) struct Counted {
     pub(crate) over_width: bool,
 }
 
+/// Exact terminal width for a complete row: printable ASCII occupies one
+/// column per byte; Unicode and control characters use the shared helper.
+pub(super) fn exact_width(text: &str) -> usize {
+    if text.is_ascii() && !text.bytes().any(|byte| byte.is_ascii_control()) {
+        text.len()
+    } else {
+        crate::text::width(text)
+    }
+}
+
 /// A code block's click-to-copy target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CopyTarget {
@@ -93,6 +103,8 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
         counted_rows: 0,
         count_targets: Vec::new(),
         over_width: false,
+        counted_line: String::new(),
+        count_widths: Vec::new(),
     };
     let options = Options::ENABLE_TABLES.union(Options::ENABLE_STRIKETHROUGH);
     for event in Parser::new_ext(text, options) {
@@ -127,6 +139,8 @@ pub(crate) fn render_count(text: &str, width: u16) -> Counted {
         counted_rows: 0,
         count_targets: Vec::new(),
         over_width: false,
+        counted_line: String::new(),
+        count_widths: Vec::new(),
     };
     let options = Options::ENABLE_TABLES.union(Options::ENABLE_STRIKETHROUGH);
     for event in Parser::new_ext(text, options) {
@@ -178,6 +192,10 @@ struct Writer {
     counted_rows: usize,
     count_targets: Vec<usize>,
     over_width: bool,
+    /// Reused joined row for count-only width checks.
+    counted_line: String,
+    /// Reused character widths for count-only wrapping.
+    count_widths: Vec<usize>,
 }
 
 impl Writer {
@@ -491,12 +509,15 @@ impl Writer {
             self.inline_links.clear();
             return;
         }
-        let cells = std::mem::take(&mut self.inline);
-        let links = std::mem::take(&mut self.inline_links);
+        let mut cells = std::mem::take(&mut self.inline);
         if self.count_only {
-            self.count_flush(cells);
+            self.count_flush(&cells);
+            cells.clear();
+            self.inline = cells;
+            self.inline_links.clear();
             return;
         }
+        let links = std::mem::take(&mut self.inline_links);
         let (first, rest) = self.prefixes();
         let bars = self.quote_width();
         let hang = u16::try_from(rest.iter().map(Span::width).sum::<usize>()).unwrap_or(u16::MAX);
@@ -521,49 +542,62 @@ impl Writer {
         }
     }
 
-    fn count_flush(&mut self, cells: Vec<Cell>) {
+    fn count_flush(&mut self, cells: &[Cell]) {
         let (first, rest) = self.prefixes();
         let first_parts: Vec<String> = first.iter().map(|span| span.content.to_string()).collect();
         let rest_parts: Vec<String> = rest.iter().map(|span| span.content.to_string()).collect();
-        let widths: Vec<usize> = cells
-            .iter()
-            .map(|(ch, _)| crate::text::char_width(*ch))
-            .collect();
+        let mut widths = std::mem::take(&mut self.count_widths);
+        widths.clear();
+        widths.extend(cells.iter().map(|(ch, _)| wrap::char_width(*ch)));
         let first_width: usize = first.iter().map(Span::width).sum();
         let rest_width: usize = rest.iter().map(Span::width).sum();
         let first_room = usize::from(self.width).saturating_sub(first_width).max(1);
         let rest_room = usize::from(self.width).saturating_sub(rest_width).max(1);
+        let mut run_parts: Vec<String> = Vec::new();
         let mut at = 0usize;
         visit_wrap_ranges(
-            &cells,
+            cells,
             &widths,
             first_room,
             rest_room,
             true,
             |range, _join| {
-                let mut parts = if at == 0 {
-                    first_parts.clone()
-                } else {
-                    rest_parts.clone()
-                };
+                let prefix = if at == 0 { &first_parts } else { &rest_parts };
+                let mut run_at = 0usize;
                 if let Some(row) = cells.get(range) {
                     for run in row.chunk_by(|a, b| a.1 == b.1) {
-                        parts.push(run.iter().map(|(ch, _)| *ch).collect());
+                        if let Some(part) = run_parts.get_mut(run_at) {
+                            part.clear();
+                            part.extend(run.iter().map(|(ch, _)| *ch));
+                        } else {
+                            run_parts.push(run.iter().map(|(ch, _)| *ch).collect());
+                        }
+                        run_at = run_at.saturating_add(1);
                     }
                 }
-                self.count_row(parts);
+                run_parts.truncate(run_at);
+                self.count_row_chunks(prefix, &run_parts);
                 at = at.saturating_add(1);
             },
         );
         if at == 0 {
-            self.count_row(first_parts);
+            self.count_row(&first_parts);
         }
+        self.count_widths = widths;
     }
 
-    fn count_row(&mut self, parts: Vec<String>) {
-        let joined = parts.concat();
-        let joined_width = crate::text::width(&joined);
-        let (span_width, pad_width) = crate::rows::row_widths(parts.iter().map(String::as_str));
+    fn count_row(&mut self, parts: &[String]) {
+        self.count_row_chunks(parts, &[]);
+    }
+
+    fn count_row_chunks(&mut self, first: &[String], second: &[String]) {
+        self.counted_line.clear();
+        for part in first.iter().chain(second) {
+            self.counted_line.push_str(part);
+        }
+        let joined_width = exact_width(&self.counted_line);
+        let (span_width, pad_width) =
+            crate::rows::row_widths(first.iter().chain(second).map(String::as_str));
         if self.inner_width() > 0
             && joined_width.max(span_width).max(pad_width) > usize::from(self.width)
         {
@@ -684,7 +718,8 @@ impl Writer {
             width
         };
         let quote = "│ ".repeat(self.quote);
-        self.count_row(vec![quote.clone(), "─".repeat(usize::from(inner))]);
+        let top_edge = "─".repeat(usize::from(inner));
+        self.count_row(&[quote.clone(), top_edge]);
 
         let copy = if content >= COPY.len() { COPY } else { "" };
         let room = content.saturating_sub(COPY.len().saturating_add(2));
@@ -703,7 +738,7 @@ impl Writer {
         if boxed {
             header.push("│".into());
         }
-        self.count_row(header);
+        self.count_row(&header);
 
         let code = code.strip_suffix('\n').unwrap_or(code);
         let digits = code.split('\n').count().to_string().len().max(NUMBER_WIDTH);
@@ -723,10 +758,7 @@ impl Writer {
                     cells.push((ch, tinted(Role::CodeText)));
                 }
             }
-            let widths: Vec<usize> = cells
-                .iter()
-                .map(|(ch, _)| crate::text::char_width(*ch))
-                .collect();
+            let widths: Vec<usize> = cells.iter().map(|(ch, _)| wrap::char_width(*ch)).collect();
             let mut emitted = 0usize;
             visit_wrap_ranges(&cells, &widths, room, room, false, |range, _join| {
                 let text: String = cells
@@ -750,7 +782,7 @@ impl Writer {
                 if boxed {
                     parts.push("│".into());
                 }
-                self.count_row(parts);
+                self.count_row(&parts);
                 emitted = emitted.saturating_add(1);
             });
             if emitted == 0 {
@@ -762,10 +794,11 @@ impl Writer {
                 if boxed {
                     parts.push("│".into());
                 }
-                self.count_row(parts);
+                self.count_row(&parts);
             }
         }
-        self.count_row(vec![quote, "─".repeat(width)]);
+        let bottom_edge = "─".repeat(width);
+        self.count_row(&[quote, bottom_edge]);
     }
 }
 

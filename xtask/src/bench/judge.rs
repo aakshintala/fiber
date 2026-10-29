@@ -1179,6 +1179,13 @@ pub(super) type Measured<'a> = (Option<&'a Results>, Option<&'a Results>, &'a st
 /// a result that is missing or malformed.
 const OVER: &str = "over budget: ";
 
+/// Adds an error only when an earlier check has not already reported it.
+pub(super) fn push_failure_once(failures: &mut Vec<String>, error: String) {
+    if !failures.iter().any(|failure| failure.contains(&error)) {
+        failures.push(error);
+    }
+}
+
 /// Whether `failures` are non-empty and all measured violations. Only these
 /// can be excused by a base that has them too.
 fn all_over(failures: &[String]) -> bool {
@@ -1447,9 +1454,7 @@ pub(super) fn judge(
                     // `fold_per_mib` already reported the same shape;
                     // naming it twice would double-count, so only add
                     // what it missed.
-                    if !failures.iter().any(|f| f.contains(&e)) {
-                        failures.push(e);
-                    }
+                    push_failure_once(&mut failures, e);
                 }
                 (_, _, None) => {}
                 (Ok(rates), Ok(_), Some(bound)) => match info {

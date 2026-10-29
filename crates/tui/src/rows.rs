@@ -439,6 +439,12 @@ pub(crate) fn row_widths<'a>(parts: impl IntoIterator<Item = &'a str>) -> (usize
     parts
         .into_iter()
         .fold((0usize, 0usize), |(spans, pad), part| {
+            if part.is_ascii() && !part.bytes().any(|byte| byte.is_ascii_control()) {
+                return (
+                    spans.saturating_add(part.len()),
+                    pad.saturating_add(part.len()),
+                );
+            }
             let span = Span::raw(part);
             let pad = span
                 .styled_graphemes(Style::default())

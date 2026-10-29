@@ -9,6 +9,16 @@ use ratatui::text::{Line, Span};
 
 use crate::rows::Join;
 
+/// Exact character width for markdown cells without routing ordinary
+/// ASCII through the Unicode width tables.
+pub(super) fn char_width(ch: char) -> usize {
+    if ch == ' ' || ch.is_ascii_graphic() {
+        1
+    } else {
+        crate::text::char_width(ch)
+    }
+}
+
 /// One character and its style, before wrapping.
 pub(super) type Cell = (char, Style);
 
@@ -54,10 +64,7 @@ pub(super) fn wrap_joined_indices(
     rest: usize,
     words: bool,
 ) -> Vec<(Vec<Cell>, Join, Vec<usize>)> {
-    let widths: Vec<usize> = cells
-        .iter()
-        .map(|(ch, _)| crate::text::char_width(*ch))
-        .collect();
+    let widths: Vec<usize> = cells.iter().map(|(ch, _)| char_width(*ch)).collect();
     let mut rows = Vec::new();
     visit_wrap_ranges(cells, &widths, first, rest, words, |range, join| {
         let row = cells.get(range.clone()).unwrap_or_default().to_vec();
@@ -166,11 +173,11 @@ pub(super) fn link_cols(
         {
             let mut start = prefix;
             for (ch, _) in row.get(..first).unwrap_or_default() {
-                start = start.saturating_add(crate::text::char_width(*ch));
+                start = start.saturating_add(char_width(*ch));
             }
             let mut end = start;
             for (ch, _) in cells {
-                end = end.saturating_add(crate::text::char_width(*ch));
+                end = end.saturating_add(char_width(*ch));
             }
             let start = u16::try_from(start).unwrap_or(u16::MAX);
             let end = u16::try_from(end).unwrap_or(u16::MAX);

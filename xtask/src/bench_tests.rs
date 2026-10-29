@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::judge::{Check, Rule};
+use super::judge::{Check, Rule, push_failure_once};
 use super::*;
 
 const DOC: &str = concat!(
@@ -1699,6 +1699,16 @@ fn malformed_fold_stage_rows_fail_once() {
             out.comment
         );
     }
+}
+
+#[test]
+fn fold_validation_does_not_repeat_an_existing_error() {
+    let error = "attach_stage_ms: malformed fold samples";
+    let mut failures = vec![error.to_owned()];
+    push_failure_once(&mut failures, "malformed fold samples".to_owned());
+    assert_eq!(failures, [error]);
+    push_failure_once(&mut failures, "a distinct error".to_owned());
+    assert_eq!(failures, [error, "a distinct error"]);
 }
 
 #[test]

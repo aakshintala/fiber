@@ -50,6 +50,29 @@ fn row_widths_keep_span_and_grapheme_measures_separate() {
 }
 
 #[test]
+fn row_widths_keep_the_ascii_fast_path_exact() {
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+    for part in [
+        "ordinary ASCII text",
+        "a\tb",
+        "a\nb",
+        "\u{1b}[31mred",
+        "界",
+        "👩‍💻",
+    ] {
+        let span = Span::raw(part);
+        let expected = (
+            span.width(),
+            span.styled_graphemes(Style::default())
+                .map(|grapheme| crate::format::width(grapheme.symbol))
+                .sum::<usize>(),
+        );
+        assert_eq!(super::row_widths([part]), expected, "{part:?}");
+    }
+}
+
+#[test]
 fn a_plain_push_is_a_break_with_no_skip() {
     let mut rows = Rows::default();
     rows.push(row("a"));

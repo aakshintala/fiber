@@ -92,7 +92,7 @@ impl Table {
                     let cell = row.get(column).map_or(&[][..], |(cell, _)| cell.as_slice());
                     let cell_widths: Vec<usize> = cell
                         .iter()
-                        .map(|(ch, _)| crate::text::char_width(*ch))
+                        .map(|(ch, _)| super::wrap::char_width(*ch))
                         .collect();
                     let mut pieces = Vec::new();
                     visit_wrap_ranges(cell, &cell_widths, *width, *width, true, |range, _| {
@@ -153,7 +153,7 @@ impl Table {
                     parts.push(" ".repeat(pad.saturating_sub(before)));
                 }
                 let joined = parts.concat();
-                let exact = crate::text::width(&joined);
+                let exact = super::exact_width(&joined);
                 let (span_width, pad_width) =
                     crate::rows::row_widths(parts.iter().map(String::as_str));
                 if width > 0 && exact.max(span_width).max(pad_width) > width {
@@ -170,7 +170,7 @@ impl Table {
                     rule.push("─".repeat(*width));
                 }
                 let joined = rule.concat();
-                let exact = crate::text::width(&joined);
+                let exact = super::exact_width(&joined);
                 let (span_width, pad_width) =
                     crate::rows::row_widths(rule.iter().map(String::as_str));
                 if width > 0 && exact.max(span_width).max(pad_width) > width {
@@ -332,6 +332,6 @@ fn is_number(text: &str) -> bool {
 fn cells_width(cells: &[Cell]) -> usize {
     cells
         .iter()
-        .map(|(ch, _)| crate::text::char_width(*ch))
+        .map(|(ch, _)| super::wrap::char_width(*ch))
         .sum()
 }
