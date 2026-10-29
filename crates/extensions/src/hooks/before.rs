@@ -47,7 +47,7 @@ pub(super) fn before_tool(
         let arg = shown(call, &arguments);
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg, |value| {
+            .hook_with(&entry.hook, arg, None, |value| {
                 let change = decode_tool(&name, value)?;
                 let changed = matches!(&change, ToolReturn::Rewrite(_));
                 Ok((change, changed))
@@ -117,7 +117,7 @@ pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>)
         let arg = shown(call, call.arguments);
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg, |value| {
+            .hook_with(&entry.hook, arg, None, |value| {
                 decode_check(&name, value).map(|change| (change, false))
             })
             .map(|(change, lines, _)| {
@@ -171,7 +171,7 @@ pub(super) fn before_message(
         let arg = shown_message(current, message);
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg, |value| {
+            .hook_with(&entry.hook, arg, None, |value| {
                 let change = decode_message(&name, current, value, entry.check)?;
                 let changed = matches!(&change, MessageReturn::Change { .. });
                 Ok((change, changed))

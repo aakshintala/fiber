@@ -4,7 +4,7 @@
 use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::fs;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
@@ -38,6 +38,36 @@ fn redaction_replaces_each_non_empty_call_value() {
             .collect();
         assert_eq!(redact_values(message, &values), *expected, "{values:?}");
     }
+}
+
+/// `CredentialFor` never prints the pair or the slot's value: a debug
+/// log must not disclose credential identity or value. A rendering that
+/// varied by pair would leak identity through the log.
+#[test]
+fn credential_debug_redacts_identity_and_value() {
+    let pair = CredentialPair {
+        credential: "remote".to_owned(),
+        label: "default".to_owned(),
+    };
+    let stored = format!("{:?}", crate::lua::CredentialFor::Stored(pair));
+    assert!(
+        !stored.contains("remote") && !stored.contains("default"),
+        "redacted debug names no pair: {stored}"
+    );
+    let other = format!(
+        "{:?}",
+        crate::lua::CredentialFor::Stored(CredentialPair {
+            credential: "other".to_owned(),
+            label: "someone".to_owned(),
+        })
+    );
+    assert_eq!(stored, other, "redacted debug is pair-independent");
+    let slot: crate::oauth::LoginSlot = Arc::new(Mutex::new(Some(json!({"token": "tok-secret"}))));
+    let login = format!("{:?}", crate::lua::CredentialFor::Login(slot));
+    assert!(
+        !login.contains("tok-secret"),
+        "redacted debug names no value: {login}"
+    );
 }
 
 #[test]

@@ -176,14 +176,17 @@ fn session(
         deny_read: Vec::new(),
         fiber_home: root.path().join("home"),
     }));
+    let artifacts = root.path().join("artifacts");
+    let images = super::session_images(fiber.clone(), &artifacts, timing.clone());
     let (tools, _infos, _driver, _forget, images) = super::builtin_timed(
         fiber,
         &root.path().join("home"),
         root.path(),
-        &root.path().join("artifacts"),
+        &artifacts,
         &clock,
         &jobs,
         &Arc::new(tools::PathLocks::new()),
+        images,
         None,
         &super::tests::delegates(),
         super::tests::skills(),

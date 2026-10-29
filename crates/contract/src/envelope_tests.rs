@@ -12,6 +12,17 @@ fn parse(line: &str) -> Envelope {
     serde_json::from_str(line).unwrap()
 }
 
+/// A session line without `session_id` fails to deserialize: every
+/// session line carries one (`docs/events.md`, "The envelope"). The
+/// sessionless process line is a different type with no `session_id`
+/// key at all.
+#[test]
+fn a_session_line_without_session_id_fails_to_deserialize() {
+    let line = r#"{"kind":"x","ts":1,"schema_version":1,"payload":{}}"#;
+    let error = serde_json::from_str::<Envelope>(line).expect_err("no session_id");
+    assert!(error.to_string().contains("session_id"), "{error}");
+}
+
 #[test]
 fn the_doc_examples_round_trip_byte_for_byte() {
     let lines = doc_examples();

@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
@@ -19,14 +19,15 @@ use contract::tool::Cancel;
 use crate::host::admission::CallbackContext;
 
 /// What one process extension runs as: the first `extension_hello` line's
-/// payload, and the context every native host call reads.
+/// payload, and the context every native host call reads. The session
+/// activates the owner at load, so the context is live from construction.
+/// The run is either a session's or outside one: a sessionless run has
+/// no session id and keeps reason `call`, so the contradictory state a
+/// bare session id beside reason `call` would name cannot be built.
 #[derive(Debug, Clone)]
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct ProcessContext {
-    /// The session's id, as `extension_hello` carries it.
-    pub session_id: contract::SessionId,
-    /// Why the session started, resent after a restart.
-    pub reason: contract::events::ExtensionReason,
+    /// Which run this is: a session's, or one outside a session.
+    pub run: ProcessRun,
     /// The session's workspace, resolving relative paths.
     pub workspace: PathBuf,
     /// The paths `host.data_dir` returns.
@@ -39,18 +40,55 @@ pub(crate) struct ProcessContext {
     pub home: PathBuf,
 }
 
-#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+/// Which run a process context belongs to: a session's, carrying its
+/// id and why it started, or one outside a session.
+#[derive(Debug, Clone)]
+pub(crate) enum ProcessRun {
+    /// A session's run: the id and reason the hello carries.
+    Session {
+        /// The session's id, as `extension_hello` carries it.
+        session_id: contract::SessionId,
+        /// Why the session started, resent after a restart.
+        reason: contract::events::SessionReason,
+    },
+    /// A run outside a session: no id, reason `call`.
+    Call,
+}
+
 impl ProcessContext {
+    /// Whether the run is outside a session: only the Call-case set
+    /// runs, and its lines carry no session id.
+    pub(crate) fn is_call(&self) -> bool {
+        matches!(self.run, ProcessRun::Call)
+    }
+
     /// The `extension_hello` payload: the session's identity, why it
     /// started, its workspace, the extension's data directories and its
-    /// folded state, with the state as it stands now.
+    /// folded state, with the state as it stands now. A call outside a
+    /// session carries reason `call` and omits the session's id; the
+    /// payload, not a mode flag, carries that reason.
     pub(crate) fn hello(&self) -> contract::events::ExtensionHello {
-        contract::events::ExtensionHello {
-            session_id: self.session_id.clone(),
-            reason: self.reason,
-            workspace: self.workspace.display().to_string(),
-            data_dirs: self.data_dirs.clone(),
-            state: self.state.clone(),
+        let workspace = self.workspace.display().to_string();
+        let data_dirs = self.data_dirs.clone();
+        let state = self.state.clone();
+        match &self.run {
+            ProcessRun::Session { session_id, reason } => {
+                contract::events::ExtensionHello::Session(contract::events::SessionHello {
+                    session_id: session_id.clone(),
+                    reason: *reason,
+                    workspace,
+                    data_dirs,
+                    state,
+                })
+            }
+            ProcessRun::Call => {
+                contract::events::ExtensionHello::Call(contract::events::CallHello {
+                    reason: contract::events::CallReason::Call,
+                    workspace,
+                    data_dirs,
+                    state,
+                })
+            }
         }
     }
 
@@ -58,6 +96,18 @@ impl ProcessContext {
     /// stands in the session.
     pub(crate) fn refold(&mut self, state: Map<String, Value>) {
         self.state = state;
+    }
+
+    /// Records the session's latest start reason, resent after a restart
+    /// with the state as it stands in the session. A run outside a
+    /// session keeps reason `call`: nothing resends there.
+    pub(crate) fn set_reason(&mut self, reason: contract::events::SessionReason) {
+        if let ProcessRun::Session {
+            reason: current, ..
+        } = &mut self.run
+        {
+            *current = reason;
+        }
     }
 }
 
@@ -353,7 +403,9 @@ pub(crate) trait ProcessHostServices: Send + Sync {
 /// The production host services: shared native operations behind the
 /// trait, with the session's services present only when the session
 /// wired them. Without a session, service-backed calls fail exactly as
-/// the Lua half fails without one.
+/// the Lua half fails without one. The session installs the late-bound
+/// services (model, delegate, driver) after the child spawns, before any
+/// session dispatches to it; the mutexes hold that handoff.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct NativeHostServices {
     /// Emits the session-visible lines: exec, status, widget, message,
@@ -365,14 +417,21 @@ pub(crate) struct NativeHostServices {
     pub clock: Arc<dyn contract::clock::Clock>,
     /// Opens URLs and serves the OAuth callback.
     pub browser: Arc<dyn crate::oauth::Browser>,
-    /// Runs model requests; absent without a session.
-    pub model: Option<Arc<dyn contract::model::HostModel>>,
-    /// Starts delegates; absent without a session.
-    pub delegate: Option<Arc<dyn contract::extension::HostDelegate>>,
-    /// Runs inner tools; absent without a session.
-    pub tool_runner: Option<Arc<dyn ToolRunner>>,
+    /// Runs model requests; installed by the session after spawn.
+    pub model: Mutex<Option<Arc<dyn contract::model::HostModel>>>,
+    /// Starts delegates; installed by the session after spawn.
+    pub delegate: Mutex<Option<Arc<dyn contract::extension::HostDelegate>>>,
+    /// Runs inner tools; installed by the session after spawn.
+    pub tool_runner: Mutex<Option<Arc<dyn ToolRunner>>>,
     /// The manifest's declared secret names.
     pub secrets: Vec<String>,
+    /// Answers scripted host calls before any real effect: set for case
+    /// runs, absent in live sessions, exactly as the Lua half consults it.
+    pub host_script: Option<Arc<crate::host::script::HostScript>>,
+    /// The session's configuration, settings and path locks behind
+    /// `host.config` and locked `host.fs`: `None` without a session, when
+    /// those calls fail naming the missing session.
+    pub session: Mutex<Option<crate::host::Session>>,
 }
 
 /// How long one parked wait rests before re-reading its end condition.

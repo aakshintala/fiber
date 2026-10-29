@@ -54,7 +54,7 @@ pub(super) fn before_handoff(
         );
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg, |value| {
+            .hook_with(&entry.hook, arg, None, |value| {
                 let change = decode(&name, value)?;
                 let changed = change.is_some();
                 Ok((change, changed))

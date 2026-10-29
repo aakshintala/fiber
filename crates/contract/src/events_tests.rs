@@ -2479,3 +2479,72 @@ fn a_session_status_omits_supervised_when_false_and_round_trips_when_true() {
     assert!(present.supervised);
     assert_eq!(serde_json::to_value(&present).unwrap(), shown);
 }
+
+/// A `call` hello carries no `session_id` and reads back; any other
+/// reason without one is rejected, and a `call` with one is rejected
+/// too: the runs are distinct variants (`docs/events.md`,
+/// `extension_hello`).
+#[test]
+fn a_call_hello_omits_session_id_and_other_reasons_require_it() {
+    let hello = ExtensionHello::Call(CallHello {
+        reason: CallReason::Call,
+        workspace: "/work".to_owned(),
+        data_dirs: ExtensionDataDirs {
+            machine: "/data".to_owned(),
+            project: "/data/project".to_owned(),
+        },
+        state: Default::default(),
+    });
+    let value = serde_json::to_value(&hello).unwrap();
+    assert_eq!(value.get("reason"), Some(&json!("call")));
+    assert!(
+        !value.as_object().unwrap().contains_key("session_id"),
+        "a call hello omits session_id: {value}"
+    );
+    assert_eq!(
+        serde_json::from_value::<ExtensionHello>(value).unwrap(),
+        hello
+    );
+    let mut resume = serde_json::to_value(&hello).unwrap();
+    resume["reason"] = json!("resume");
+    serde_json::from_value::<ExtensionHello>(resume).expect_err("resume needs session_id");
+    let mut contradicting = serde_json::to_value(&hello).unwrap();
+    contradicting["session_id"] = json!("s");
+    serde_json::from_value::<ExtensionHello>(contradicting)
+        .expect_err("a call hello cannot carry a session id");
+    let session_call = serde_json::json!({
+        "session_id": "s",
+        "reason": "call",
+        "workspace": "/work",
+        "data_dirs": {"machine": "/data", "project": "/data/project"},
+        "state": {},
+    });
+    serde_json::from_value::<ExtensionHello>(session_call)
+        .expect_err("a session hello cannot carry reason call");
+}
+
+/// A session hello carries its session id and one of the session
+/// reasons, and reads back with its shape unchanged (`docs/events.md`,
+/// `extension_hello`).
+#[test]
+fn a_session_hello_carries_its_session_id_and_reason() {
+    let hello = ExtensionHello::Session(SessionHello {
+        session_id: SessionId("s".into()),
+        reason: SessionReason::New,
+        workspace: "/work".to_owned(),
+        data_dirs: ExtensionDataDirs {
+            machine: "/data".to_owned(),
+            project: "/data/project".to_owned(),
+        },
+        state: Default::default(),
+    });
+    let value = serde_json::to_value(&hello).unwrap();
+    assert_eq!(
+        serde_json::to_string(&value).unwrap(),
+        r#"{"data_dirs":{"machine":"/data","project":"/data/project"},"reason":"new","session_id":"s","state":{},"workspace":"/work"}"#,
+    );
+    assert_eq!(
+        serde_json::from_value::<ExtensionHello>(value).unwrap(),
+        hello
+    );
+}

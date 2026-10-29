@@ -322,16 +322,18 @@ pub(crate) const PROCESS_READ_CAP: usize = 1 << 20;
 
 impl Fs {
     /// The `host.fs` handle for a process extension: the workspace its
-    /// paths resolve under, the folded data directories and the process
-    /// read bound. Without a session there are no path locks to hold.
+    /// paths resolve under, the folded data directories, the process
+    /// read bound, and the session's path locks for locked calls when
+    /// one is wired (`None` without a session holds no locks).
     pub(crate) fn for_process(
         workspace: PathBuf,
         machine_dir: String,
         project_dir: String,
+        locks: Option<Arc<dyn PathLock>>,
     ) -> Self {
         Self {
             workspace,
-            locks: None,
+            locks,
             machine_dir: Some(PathBuf::from(machine_dir)),
             project_dir: Some(PathBuf::from(project_dir)),
             memory_cap: PROCESS_READ_CAP,

@@ -789,6 +789,90 @@ fn stream_items_wait_for_the_last_reply() {
 }
 
 #[test]
+fn reply_ack_is_queued_before_settlement_releases_stream_waiters() {
+    let table = Arc::new(Table::new());
+    let held = minted(&table, "hook a");
+    assert!(table.acquire_stream(&held.id, table.generation()));
+    let waiter = Arc::clone(&table);
+    let (acquired_tx, acquired_rx) = mpsc::channel();
+    let next = table.mint(RequestKind::Stream, "e", "hook b".into(), None, None, None);
+    let next_id = next.id.clone();
+    let stream_waiting = table.observe_next_stream_wait();
+    std::thread::spawn(move || {
+        let acquired = waiter.acquire_stream(&next.id, waiter.generation());
+        match acquired_tx.send(acquired) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    fakes::Deadline::after(WITHIN)
+        .recv(&stream_waiting)
+        .expect("the next stream item is parked behind the first");
+
+    let held_id = held.id.clone();
+    let held_wait = Arc::clone(&held.wait);
+    let settling = Arc::clone(&table);
+    let (before_ack_tx, before_ack_rx) = mpsc::channel();
+    let (release_ack_tx, release_ack_rx) = mpsc::channel();
+    let (settled_tx, settled_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = settling.settle_with_before_wake(
+            &held_id,
+            Outcome::Answered(Answer::Value(json!(true))),
+            || {
+                let visible = support::lock(&held_wait.mutex).is_some();
+                match before_ack_tx.send(visible) {
+                    Ok(()) | Err(_) => {}
+                }
+                match release_ack_rx.recv() {
+                    Ok(()) | Err(_) => {}
+                }
+            },
+        );
+        match settled_tx.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+
+    let visible_before_ack = fakes::Deadline::after(WITHIN)
+        .recv(&before_ack_rx)
+        .expect("the reply queue callback runs before settlement wakes its waiter");
+    assert!(
+        !visible_before_ack,
+        "the request is not settled before its ack is queued"
+    );
+    assert!(matches!(
+        acquired_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    match release_ack_tx.send(()) {
+        Ok(()) | Err(_) => {}
+    }
+    assert_eq!(
+        fakes::Deadline::after(WITHIN)
+            .recv(&settled_rx)
+            .expect("the request settles after the ack is queued"),
+        Settled::Completed
+    );
+    assert!(
+        fakes::Deadline::after(WITHIN)
+            .recv(&acquired_rx)
+            .expect("the next stream item starts after the ack is queued")
+    );
+
+    let mut stale_ack = false;
+    assert_eq!(
+        table.settle_with_before_wake(
+            &held.id,
+            Outcome::Answered(Answer::Value(json!(false))),
+            || stale_ack = true,
+        ),
+        Settled::Stale
+    );
+    assert!(!stale_ack, "a late reply never queues an accepted ack");
+    table.cancel(&next_id);
+}
+
+#[test]
 fn retirement_releases_a_waiting_stream_item_stale() {
     let table = Arc::new(Table::new());
     let held = minted(&table, "hook a");

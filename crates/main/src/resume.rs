@@ -443,6 +443,9 @@ fn resumed_session(
         .as_deref()
         .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
     crate::shutdown::arm(signals, &reads);
+    let fiber_path = fiber
+        .clone()
+        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
     // The diagnostic process: a one-turn resume is an ask; a resumed
     // session keeps its session identity.
     let process = if one_turn {
@@ -455,7 +458,7 @@ fn resumed_session(
         &log::history(dir.path()).map_err(|error| failed(error.code(), error))?,
     )
     .map_err(|error| failed(error.code(), error))?;
-    let mut parts = crate::parts_with(
+    let mut parts = crate::parts_with_session(
         overrides,
         folded.model.as_deref(),
         crate::credential::Labels::new(credential.as_deref(), folded.credential.as_deref()),
@@ -469,6 +472,12 @@ fn resumed_session(
             workspace: Some(std::path::PathBuf::from(&folded.workspace)),
             skipped: folded.skipped(),
         },
+        crate::parts::SessionLaunch {
+            id: id.clone(),
+            reason: contract::events::ExtensionReason::Resume,
+            event_cursor: log.count(),
+        },
+        fiber_path.clone(),
     )?;
     // The session directory's log: the opening message's
     // environment names it.
@@ -497,6 +506,7 @@ fn resumed_session(
         extensions,
         locks,
         mut mcp,
+        pending_mcp,
         switching,
         switchable,
         resolve,
@@ -537,12 +547,6 @@ fn resumed_session(
         jobs.install_timing(Arc::clone(timing));
     }
     // A resumed session declares `delegate_spawn` too, parented to itself.
-    let fiber_path = match fiber.clone() {
-        Ok(fiber_path) => fiber_path,
-        Err(message) => {
-            return Err(failed(ErrorCode::IoFailed, message));
-        }
-    };
     let Some(sessions) = dir.path().parent() else {
         return Err(failed(
             ErrorCode::IoFailed,
@@ -555,7 +559,7 @@ fn resumed_session(
         notice,
     } = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
-        fiber_path,
+        fiber_path.clone(),
         home.clone(),
         id.clone(),
         Path::new(&folded.workspace).to_path_buf(),
@@ -570,9 +574,15 @@ fn resumed_session(
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
     let web_search =
         crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
-    let skipped = folded.skipped();
-    let (tools, infos, driver, session_servers) = crate::mcp_servers::session_tools(
-        fiber,
+    let pending_mcp = match pending_mcp {
+        Some(pending) => pending,
+        None => {
+            let _ = extensions.finish_processes(&support::cancel::Token::new());
+            return Err(failed(ErrorCode::IoFailed, "MCP startup was not prepared"));
+        }
+    };
+    let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
+        fiber_path.clone(),
         &home,
         Path::new(&folded.workspace),
         &dir.artifacts(),
@@ -580,9 +590,7 @@ fn resumed_session(
         &jobs,
         &locks,
         &project,
-        mcp.specs,
-        mcp.repository,
-        &skipped,
+        pending_mcp,
         web_search,
         &delegates,
         skills,
@@ -590,7 +598,13 @@ fn resumed_session(
         timing.clone(),
         shell_read_only.clone(),
         sandbox.clone(),
-    )?;
+    ) {
+        Ok(tools) => tools,
+        Err(failure) => {
+            let _ = extensions.finish_processes(&support::cancel::Token::new());
+            return Err(failure);
+        }
+    };
     let delegates = std::sync::Arc::new(delegates);
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);

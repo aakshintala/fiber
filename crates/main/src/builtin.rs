@@ -68,6 +68,7 @@ pub(crate) fn builtin(
         deny_read: Vec::new(),
         fiber_home: home.to_path_buf(),
     }));
+    let images = session_images(fiber.clone(), artifacts, None);
     builtin_timed(
         fiber,
         home,
@@ -76,6 +77,7 @@ pub(crate) fn builtin(
         clock,
         jobs,
         locks,
+        images,
         web_search,
         delegates,
         skills,
@@ -85,12 +87,24 @@ pub(crate) fn builtin(
     )
 }
 
+/// The shared image child for MCP servers and the session's image tool.
+/// The caller builds it before extensions load so it can start with MCP.
+pub(crate) fn session_images(
+    fiber: PathBuf,
+    artifacts: &Path,
+    timing: Option<Timing>,
+) -> Arc<dyn contract::images::Images> {
+    let mut images = tools::ImageChild::new(fiber, artifacts.to_path_buf());
+    if let Some(timing) = timing {
+        images = images.with_timing(timing);
+    }
+    Arc::new(images)
+}
+
 /// One session's built-in tools with an optional image-child timing: the
 /// same registration as [`builtin`], timing each entered image or PDF
-/// count/cut call as `picture.run` when `timing` is present. The timing is
-/// applied to both image drivers, the file tools' child and the shared
-/// standalone child, before either is built; `None` keeps today's
-/// behaviour with no callable invoked.
+/// count/cut call as `picture.run` when `timing` is present. `images` is
+/// the shared child already used by MCP startup.
 #[allow(
     clippy::too_many_arguments,
     reason = "one session's built-ins need Fiber home and the recorded executable alongside the session's own paths"
@@ -103,6 +117,7 @@ pub(crate) fn builtin_timed(
     clock: &Arc<dyn Clock>,
     jobs: &Arc<jobs::Registry>,
     locks: &Arc<tools::PathLocks>,
+    images: Arc<dyn contract::images::Images>,
     web_search: Option<(Arc<dyn Tool>, ToolInfo)>,
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
@@ -111,17 +126,14 @@ pub(crate) fn builtin_timed(
     sandbox: crate::settings::SandboxHandle,
 ) -> Result<SessionTools, Failure> {
     let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
-    let mut images = tools::ImageChild::new(fiber.clone(), artifacts.to_path_buf());
-    // The scan's clone comes before `images` takes `timing`, which moves it.
-    // The shell's clone is taken alongside, for the same reason.
+    // The scan's clone comes before `timing` moves; the shell's clone is
+    // taken alongside, for the same reason.
     let scan_timing = timing.clone();
     let shell_timing = timing.clone();
     if let Some(timing) = timing {
-        files = files.with_timing(timing.clone());
-        images = images.with_timing(timing);
+        files = files.with_timing(timing);
     }
     let files = Arc::new(files.with_images(fiber.clone(), artifacts.to_path_buf()));
-    let images: Arc<dyn contract::images::Images> = Arc::new(images);
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
     // Only `fiber ask` reaches here, new or resumed: a non-interactive run.
     // The model's shell and the driver shell spill their output past 1 MiB
