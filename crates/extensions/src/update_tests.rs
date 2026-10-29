@@ -18,9 +18,12 @@ use fakes::ustar::{archive, gzip, header, sha256 as sha};
 use super::{Target, stage_update};
 use crate::Error;
 use crate::manage::{Request, plan};
+use crate::release::{Release, install_release};
 
 const RELEASE: &str = "0.2.0";
 const TRIPLE: &str = "test-triple";
+/// The nightly release the fixture serves above [`RELEASE`].
+const NIGHTLY: &str = "0.2.1-nightly.20240101";
 
 /// A fixture release served over HTTP: a binary archive holding `marker`
 /// as the top-level `fiber` file, the docs archive holding `docs`, the
@@ -76,6 +79,76 @@ fn serve(
         ok(sha(&extensions).into_bytes()),
         ok(nightlies.as_bytes().to_vec()),
     ];
+    fakes::ProviderServer::start_routed(
+        paths.iter().map(String::as_str).zip(bodies),
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap()
+}
+
+/// A fixture nightly release served over HTTP: the binary, docs and
+/// first-party extensions archives for [`NIGHTLY`], and the nightly
+/// list. Every archive route is answered twice, since the install and
+/// the stage fetch every archive and the fixture server answers one
+/// request per route.
+// debt: serve and serve_nightly build the same three archives from
+// (marker, docs, shorts); share one archives(marker, docs, shorts) helper
+// after lane 1232's held update_tests work lands and serve is available
+// to edit.
+fn serve_nightly(marker: &[u8], docs: &[u8], shorts: &[(&str, &str)]) -> fakes::ProviderServer {
+    let binary = gzip(&archive(&[(
+        header("fiber", b'0', marker.len() as u64, 0o755, ""),
+        marker,
+    )]));
+    let docs_archive = gzip(&archive(&[(
+        header("v", b'0', docs.len() as u64, 0o644, ""),
+        docs,
+    )]));
+    let members: Vec<([u8; 512], &[u8])> = shorts
+        .iter()
+        .map(|(short, manifest)| {
+            (
+                header(
+                    &format!("{short}/extension.json"),
+                    b'0',
+                    manifest.len() as u64,
+                    0o644,
+                    "",
+                ),
+                manifest.as_bytes(),
+            )
+        })
+        .collect();
+    let extensions = gzip(&archive(&members));
+    let binary_file = format!("fiber-{TRIPLE}.tar.gz");
+    let mut paths = Vec::new();
+    let mut bodies = Vec::new();
+    let ok = |body: Vec<u8>| fakes::Response::status(200, body);
+    // The install and the stage fetch every archive: two answers per
+    // route, as a real server answers every request.
+    for _ in 0..2 {
+        for (name, bytes) in [
+            (
+                format!("/download/v{NIGHTLY}/{binary_file}"),
+                binary.clone(),
+            ),
+            (
+                format!("/download/v{NIGHTLY}/fiber-docs.tar.gz"),
+                docs_archive.clone(),
+            ),
+            (
+                format!("/download/v{NIGHTLY}/fiber-extensions.tar.gz"),
+                extensions.clone(),
+            ),
+        ] {
+            paths.push(name);
+            bodies.push(ok(bytes.clone()));
+            paths.push(format!("{}.sha256", paths.last().unwrap()));
+            bodies.push(ok(sha(&bytes).into_bytes()));
+        }
+    }
+    paths.push("/releases".into());
+    bodies.push(ok("[]".as_bytes().to_vec()));
     fakes::ProviderServer::start_routed(
         paths.iter().map(String::as_str).zip(bodies),
         fakes::Response::status(404, "not found"),
@@ -391,6 +464,51 @@ fn an_update_moves_every_member_and_leaves_a_removed_first_party_absent() {
         !setup.home().join("extensions/memory").exists(),
         "a removed first-party extension stays removed"
     );
+}
+
+/// A home the nightly release installed, with its nightly-versioned
+/// records, stages an update to that nightly: the shared floor accepts
+/// the nightly form, so the update succeeds and keeps the nightly.
+#[test]
+fn stage_update_to_a_nightly_release_stages_nightly_installed_records() {
+    let mut setup = Setup::new();
+    let memory = "github.com/aakshintala/fiber/extensions/memory";
+    // The member's package lives in the fiber repository, committed
+    // before the nightly tag, so the update's clone finds it.
+    setup.member(memory, "0.2.1");
+    fakes::git::git(&setup.fiber, &["tag", &format!("v{NIGHTLY}")]);
+    let server = serve_nightly(b"marker", b"new", &[("memory", &manifest(memory, "0.2.1"))]);
+    let clock = fakes::clock::FakeClock::new();
+    install_release(
+        &setup.home(),
+        &Release {
+            base: server.url(),
+            version: NIGHTLY.into(),
+            commit: commit_of(&setup.fiber, &format!("v{NIGHTLY}")),
+        },
+        clock.as_ref(),
+    )
+    .unwrap();
+    let staged = stage_update(
+        &setup.home(),
+        &Target {
+            base: server.url(),
+            version: NIGHTLY.into(),
+            triple: TRIPLE.into(),
+        },
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap();
+    let names: Vec<String> = staged.plan().items().map(|i| i.name.clone()).collect();
+    assert_eq!(names, [memory]);
+    let binary = staged.commit().unwrap();
+    assert_eq!(std::fs::read(&binary).unwrap(), b"marker");
+    let record = setup.record("memory");
+    assert_eq!(record["version"], NIGHTLY);
+    assert_eq!(record["requested"], true);
 }
 
 /// `fresh` holds only members not yet installed: the installed widget

@@ -623,101 +623,115 @@ a click on it returns too. The mouse wheel over a view moves its visible rows 3 
   finished row opens its replay. The top row is `Delegates` with
   `/delegates` dim; there is no heading row and no count. With no
   delegates the view says "No delegates".
-- **The model picker:** models by provider with roles marked, a chip for each
-  thinking level the model supports, each model's input and output prices,
-  and what a switch to it costs to rebuild the prompt cache. Choosing a model
-  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. On a remote terminal it lists the hub's catalogue, the models the hub's machine can reach (`docs/invocation.md`, "What the hub speaks", `models`), and a session started from it runs on the hub. Ctrl+S
-  marks the choice as this session only, and then nothing is saved. A choice
-  sent while a turn runs says it applies when the turn ends: the chips hold
-  the old model and level until the session accepts it, and the choice
-  applies at the turn's end. The notice appears when the choice is sent; if
-  the session rejects the choice, the rejection's notice replaces it. When
-  `scoped_models` is set, the picker shows only those models, with a "show
-  all" toggle on Tab. Typing filters the list on every letter: each
-  space-separated word of the query must match, in order but not
-  necessarily next to each other and ignoring case, the model's provider,
-  id or display name. The filter keeps the list's order and only drops
-  rows. Backspace removes a letter; Esc clears the query first and closes
-  the picker on the next press. Enter with nothing focused does nothing and
-  leaves the picker open; it installs only a row ↓ or a click has focused.
-  Ctrl+L opens it, as `/model` does. It draws from the cached
-  model lists at once and refreshes stale ones in the background; its refresh
-  button refreshes every list (`docs/model-routing.md`, "Model discovery").
 
-  Under the view's top row the picker is an overlay ("Look", "Overlays").
-  Its first row is the filter: "Type to search" dim until something is
-  typed, then "›" dim and the query bold, with a dim block cursor either
-  way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
-  under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
-  while every model shows, and "⟳ refresh all" dim at the right end. Each
-  provider is a section, a blank row between them: the provider's name dim,
-  then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
-  `attention` while its list refreshes. Each model takes two rows. The first
-  is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
-  "● current" bold in `accent` on the session's model, "· scoped" dim on a
-  scoped model while every model shows, then its input and output prices per
-  million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
-  and nothing for a model whose provider data names no cost. A model priced
-  by request size shows the prices of the tier the session's last call falls
-  in, with the tier's threshold ("$6.00 in · $30.00 out /M · tier 200k+";
-  `docs/model-routing.md`, "Cost"), and its base prices before the session's
-  first call. On a screen too narrow for 60 columns inside the picker, the
-  prices are left out. Once the session has made a call, the switch cost is
-  dim at the right end: the prompt-cache rebuild a switch to that model costs
-  at its rebuild price ("switch ~84k tokens · $0.31", "switch ~250k · $1.88"
-  at a tier's price, "switch ~58k tokens" for a model with no price, "—" for
-  the current model). On home and before the session's first call, no row
-  shows a switch cost. The second,
-  indented four columns, is "thinking" dim and the model's levels, or "fixed
-  thinking" dim for a model with none. On the focused model the levels are in
-  `attention`, its saved level bold, and the chosen chip bold in brackets
-  ("[high]"); elsewhere they are dim. ← and → move between the focused
-  model's chips. A model chosen for this session only gets a third row,
-  "ⓢ this session only · nothing saved" dim. While a query is typed, the
-  characters of each id it matched are underlined and bold; a query that
-  matches no model and no not-installed row shows one line, "No models
-  match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
-  Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+#### The model picker
 
-  Below the last provider section, after a blank row, the choosing picker
-  lists each first-party provider no installed extension declares, one row
-  each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
-  `accent`, " · not installed" dim. The scripted provider is never listed
-  (`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
-  `/scoped-models` list none. Typing filters these rows by provider name as it
-  filters models, and a query that matches no model and no row still shows the
-  one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
-  walk the models and then these rows; no row is focused until ↓ or a click
-  puts it there, so Enter with no row focused does what it does with none
-  listed (a query that hides every model focuses nothing). The focused row
-  reads as a focused model does, with "› " in its gutter, bold, on the bar.
-  Enter, or a click on the name, installs the provider as `fiber extension
-  install <name>` does, asking nothing more: choosing the row is the approval.
-  While it installs the row reads " ⟳ installing" and the spinner in
-  `attention`; choosing another row does nothing until it ends, and closing the
-  picker does not stop it. A failed install keeps the row, still marked not
-  installed, and adds a row under it, indented four columns, "✗ " and the
-  error in `error`, its first line cut at 80 columns; choosing the row again
-  tries again. A successful install drops the row, asks one model refresh so
-  the provider's models list, and draws under the list, until the picker closes
-  and indented four columns: "✓ " in `success` and "installed <name>", the
-  lines of the install summary dim ("What an install shows",
-  `docs/extensions.md`), and, for a provider whose key is missing, "<name>
-  needs a credential: run `fiber login <name>`" dim, or, for a key that could
-  not be read, "✗ <name>'s credential could not be read: <error>" in `error`.
-  An install that ends while the picker is closed asks the refresh and, if it
-  failed, shows the notice "Installing <name> failed: <error>"; if it
-  succeeded, each credential line above is a notice instead
-  (`credential_missing`, `credential_failed`). On a remote terminal the install
-  runs on the hub (`docs/invocation.md`, `configure`, `install_provider`) and
-  the list is the hub's; with the hub not connected the row fails with "The hub
-  is not connected."; and the install holds the terminal's one hub connection
-  until it ends, up to 1,800 s for each install step (`docs/extensions.md`,
-  "Installing"), so other hub commands wait behind it; while it runs on a
-  remote terminal, `/settings` and the other config views are refused with "a
-  provider is installing; try again when it finishes" (a local terminal gets
-  no such refusal), and on either terminal Esc closes the picker with the
-  install still running.
+Models by provider with roles marked, a chip for each
+thinking level the model supports, each model's input and output prices,
+and what a switch to it costs to rebuild the prompt cache. Choosing a model
+saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. On a remote terminal it lists the hub's catalogue, the models the hub's machine can reach (`docs/invocation.md`, "What the hub speaks", `models`), and a session started from it runs on the hub. Ctrl+S
+marks the choice as this session only, and then nothing is saved. A choice
+sent while a turn runs says it applies when the turn ends: the chips hold
+the old model and level until the session accepts it, and the choice
+applies at the turn's end. The notice appears when the choice is sent; if
+the session rejects the choice, the rejection's notice replaces it. When
+`scoped_models` is set, the picker shows only those models, with a "show
+all" toggle on Tab. A provider hidden by `scoped_models` has no section and no count row, and does not by itself make the picker show "No models match". Typing filters the list on every letter: each
+space-separated word of the query must match, in order but not
+necessarily next to each other and ignoring case, the model's provider,
+id or display name. A left-out count row matches the same way, against
+each left-out model's provider, id or display name, and shows only the
+matched count; no row shows when none matches. The filter keeps the
+list's order and only drops rows. Backspace removes a letter; Esc clears the query first and closes
+the picker on the next press. Enter with nothing focused does nothing and
+leaves the picker open; it installs only a row ↓ or a click has focused.
+Ctrl+L opens it, as `/model` does. It draws from the cached
+model lists at once and refreshes stale ones in the background; its refresh
+button refreshes every list (`docs/model-routing.md`, "Model discovery").
+
+Under the view's top row the picker is an overlay ("Look", "Overlays").
+Its first row is the filter: "Type to search" dim until something is
+typed, then "›" dim and the query bold, with a dim block cursor either
+way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
+under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
+while every model shows, and "⟳ refresh all" dim at the right end. Each
+provider is a section, a blank row between them: the provider's name dim,
+then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
+`attention` while its list refreshes. In the choosing picker, a provider
+with models left out for a placeholder with no value shows one count row
+after its heading and before its models, indented four columns and
+uniformly dim: "2 models need workspace: run `fiber login acme`", or "1
+model needs api_key: set it in `config/acme-ext.json`" naming the supplied
+file when the provider's data declares a `credential_label`. The row never
+focuses and takes no clicks; it shows under "show all" too, and never in
+`/thinking` or `/scoped-models`. Under `scoped_models` with "show all"
+off, a provider with no scoped installed model shows no section and no
+count row. Each model takes two rows. The first
+is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
+"● current" bold in `accent` on the session's model, "· scoped" dim on a
+scoped model while every model shows, then its input and output prices per
+million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
+and nothing for a model whose provider data names no cost. A model priced
+by request size shows the prices of the tier the session's last call falls
+in, with the tier's threshold ("$6.00 in · $30.00 out /M · tier 200k+";
+`docs/model-routing.md`, "Cost"), and its base prices before the session's
+first call. On a screen too narrow for 60 columns inside the picker, the
+prices are left out. Once the session has made a call, the switch cost is
+dim at the right end: the prompt-cache rebuild a switch to that model costs
+at its rebuild price ("switch ~84k tokens · $0.31", "switch ~250k · $1.88"
+at a tier's price, "switch ~58k tokens" for a model with no price, "—" for
+the current model). On home and before the session's first call, no row
+shows a switch cost. The second,
+indented four columns, is "thinking" dim and the model's levels, or "fixed
+thinking" dim for a model with none. On the focused model the levels are in
+`attention`, its saved level bold, and the chosen chip bold in brackets
+("[high]"); elsewhere they are dim. ← and → move between the focused
+model's chips. A model chosen for this session only gets a third row,
+"ⓢ this session only · nothing saved" dim. While a query is typed, the
+characters of each id it matched are underlined and bold; a query that
+matches no model, no count row and no not-installed row shows one
+line, "No models match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+
+Below the last provider section, after a blank row, the choosing picker
+lists each first-party provider no installed extension declares, one row
+each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
+`accent`, " · not installed" dim. The scripted provider is never listed
+(`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
+`/scoped-models` list none. Typing filters these rows by provider name as it
+filters models, and a query that matches no model, no count row and no not-installed row
+still shows the one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
+walk the models and then these rows; no row is focused until ↓ or a click
+puts it there, so Enter with no row focused does what it does with none
+listed (a query that hides every model focuses nothing). The focused row
+reads as a focused model does, with "› " in its gutter, bold, on the bar.
+Enter, or a click on the name, installs the provider as `fiber extension
+install <name>` does, asking nothing more: choosing the row is the approval.
+While it installs the row reads " ⟳ installing" and the spinner in
+`attention`; choosing another row does nothing until it ends, and closing the
+picker does not stop it. A failed install keeps the row, still marked not
+installed, and adds a row under it, indented four columns, "✗ " and the
+error in `error`, its first line cut at 80 columns; choosing the row again
+tries again. A successful install drops the row, asks one model refresh so
+the provider's models list, and draws under the list, until the picker closes
+and indented four columns: "✓ " in `success` and "installed <name>", the
+lines of the install summary dim ("What an install shows",
+`docs/extensions.md`), and, for a provider whose key is missing, "<name>
+needs a credential: run `fiber login <name>`" dim, or, for a key that could
+not be read, "✗ <name>'s credential could not be read: <error>" in `error`.
+An install that ends while the picker is closed asks the refresh and, if it
+failed, shows the notice "Installing <name> failed: <error>"; if it
+succeeded, each credential line above is a notice instead
+(`credential_missing`, `credential_failed`). On a remote terminal the install
+runs on the hub (`docs/invocation.md`, `configure`, `install_provider`) and
+the list is the hub's; with the hub not connected the row fails with "The hub
+is not connected."; and the install holds the terminal's one hub connection
+until it ends, up to 1,800 s for each install step (`docs/extensions.md`,
+"Installing"), so other hub commands wait behind it; while it runs on a
+remote terminal, `/settings` and the other config views are refused with "a
+provider is installing; try again when it finishes" (a local terminal gets
+no such refusal), and on either terminal Esc closes the picker with the
+install still running.
 - The credential picker, `/credential`: the header reads "Credentials" bold,
   "  /credential" dim and "Esc returns" dim, right-aligned. The provider's
   labels follow the header in the answer's order,
@@ -2939,8 +2953,8 @@ built-in rather than drawing the row again.
 - **Each drawn item is cached** by its input and the width. Its spans name
   colour roles, which the theme resolves as the frame is written, so a theme
   change runs no renderer. A renderer runs again only when its input, the width,
-  or an on-screen animated item's frame changes ("Animation"), so an unchanged
-  frame calls no Lua: one call per cache miss or frame advance, none on a hit.
+  or an on-screen animated item's or notice's frame changes ("Animation"), so an
+  unchanged frame calls no Lua: one call per cache miss or frame advance, none on a hit.
   The cache lives with the paging window and is dropped with its pages.
   The key also includes the page's session and index, the selected extension,
   and its session-half version when it has one. A change to any of these
@@ -2957,6 +2971,18 @@ built-in rather than drawing the row again.
   session's id and never an empty one. A client-only half draws for every
   home notice; a range-bound half stays inert without notice until the
   session's first `extensions_loaded`, as on a session it has not seen.
+- **A TUI extension binds whole-screen keys with `fiber.key`.**
+  `fiber.key(name, { timeout, run })` runs `run` for the key when nothing
+  built in should, and `fiber.key(name, { action, variant })` dispatches a
+  built-in action through its checked canonical event for that variant
+  (`docs/extensions.md`, "Whole-screen keys"). `run` receives exactly
+  `{ session_id = "…" }` and returns `true` when it handled the key;
+  anything else falls through to the built-in key map. Only `true`
+  handles: `false` and `nil` do not, and any other value is the usual
+  wrong-shape failure. A timeout switches the extension off until
+  `/reload`, exactly as a still call does. A client-only extension stays
+  compatible before the first `extensions_loaded`, with no session half at
+  all.
 
 Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
 ([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a
@@ -2975,6 +3001,18 @@ top. An extension's view or overlay takes focus when it opens.
   or `shift+enter`, and typed text as text. A paste is one event. The handler
   returns whether it handled the key. A key it did not handle goes to the key
   map as if no extension were there.
+- **Whole-screen bindings act before the built-in key map.** An eligible
+  `run` binding runs before every built-in early path; an action binding
+  runs before them where the Bindings table lists it for the context on
+  screen ("Bindings"). Neither kind acts with no session on screen, on a
+  job's live PTY view, or for a key the person set in `keys`. A `run`
+  binding never acts while an overlay, a picker or search has the keyboard,
+  and bare typing never reaches it in the input box: a single character
+  with no modifier but Shift, the space bar, and shift+space type instead.
+  A handled `run` settles with nothing built in running; drained notices
+  settle before the fallthrough, and action events keep their built-in
+  settle behavior. Only Ctrl+C reaches the bindings from the `/keys`
+  screen, so no screen code skips dispatch: Ctrl+C itself is unregistrable.
 - **Esc** closes whatever is on top, unless the focused slot handles it
   itself.
 - **The second Ctrl+C always quits** ("Quit"), whatever the focused
@@ -2993,11 +3031,11 @@ their own.
 
 ### Animation
 
-A renderer may declare `animate = { interval_ms }`. For conversation items,
-the terminal calls it again when the item's frame advances, with `frame` in
+A renderer may declare `animate = { interval_ms }`. For conversation items and
+notices, the terminal calls it again when the frame advances, with `frame` in
 its input. The terminal uses one timer for all motion. It asks for a timer only
-while an animated item was painted in the previous frame. Intervals below 120
-ms use that floor instead.
+while an animated item or notice row was painted in the previous frame.
+Intervals below 120 ms use that floor instead.
 
 The terminal calls an item when at least one of its rows was painted in the
 previous frame. It may make one due call on the frame the item scrolls off.
@@ -3014,7 +3052,16 @@ again at frame 0. Closed draws such as search and counts do not advance or
 schedule animation. They use stored lines when available; on a miss, they may
 cache frame 0 without changing animation state.
 
-Notices that declare animation draw frame 0 once. They do not animate yet.
+A notice animates as a conversation item does: frame 0 is still, and later
+frames advance only while a replacement row was painted in the prior frame. An
+advanced open frame's one result both measures and draws. After fade or
+dismissal, a re-raised notice is new and starts at frame 0; its animation
+state goes when the notice does. Live notices with identical code and text
+have independent frames. The animation key is stable across page changes;
+a new per-`Screen` cache starts a live notice at frame 0. A replacement
+returning no lines stays hidden until it fades or is pruned, and never advances
+or schedules animation while hidden. An event notice's fade and a condition's
+re-evaluation are unchanged, so an animation never holds a notice on screen.
 
 An extension's own timers (`host.after`, `host.every`) are for work other than
 drawing. They wake the terminal whether or not anything is on screen, which is
@@ -3031,7 +3078,12 @@ and a timeout switches the extension off as a still one does.
   again until that input changes. One notice names the extension, the slot
   and the Lua error, once for each extension and slot until `/reload`. A key or click handler that errors
   counts as not having handled the input. An extension's own view or overlay
-  has no built-in, so it closes.
+  has no built-in, so it closes. A key handler that errors or returns the
+  wrong shape likewise counts as not handled, falling back to the built-in
+  key map with one `hook_failed` notice for each extension and key slot
+  until `/reload`; a key handler that passes its timeout switches the
+  extension off until `/reload`, with one `extension_failed` notice, as a
+  still renderer does.
 - **A timeout** switches the extension off in this terminal until `/reload`
   (the terminal command; the `reload` driver command acts on the session
   only), with one notice. Every slot it replaced
@@ -3053,7 +3105,26 @@ one tool, the input box, the layout, or one key.
   (`docs/extensions.md`, "Commands and screens").
   The notice comes once for each slot and set of contenders until `/reload`. A `tui.slots."<slot>"` that names none of them picks no winner, and the notice names the setting.
 - **A key the person bound in `keys`** is the person's. An extension that
-  binds the same key does not get it, and a notice names the extension.
+  binds the same key does not get it, and a notice names the extension. The
+  registration stays dormant and reactivates at once when the person binding
+  lifts, so a `/keys` change flips the owner per stroke. A key the person
+  owns stays theirs in every context, even where the action does not act.
+
+Whole-screen keys canonicalize before they contend, with the same grammar
+as `keys` ("Bindings"): modifier order and the case of modifier and key
+names never distinguish two spellings, while an uppercase letter reads as
+Shift with that letter, so `Ctrl+C` parses as `ctrl+shift+c` and stays
+bindable, and plain `ctrl+c` never binds. The first registration to
+canonicalize to a key wins; a later one is skipped with one notice naming
+the extension. A key with one contender and no setting still selects that
+contender. An unparseable key suffix, or a setting naming no registered
+contender, selects no winner, with one notice naming the full setting, for
+example:
+
+`Invalid key binding setting: tui.slots."key:ctrl+"; the key does not parse; no extension wins.`
+
+A setting that names an extension that does not contend for the key never
+silently falls back to the one that does.
 - **A per-tool ledger row beats the catch-all** `ledger_row`, with no notice.
 - **An extension replacing a built-in** is not a conflict. The extension wins,
   as it does for a tool it registers by name.
@@ -3064,8 +3135,8 @@ The terminal holds the budgets in `docs/performance.md`: its idle memory, idle
 CPU and time to first frame. The design keeps to them this way:
 
 - **Nothing runs while nothing happens.** With no turn, delegate or job running and
-  no animated item on screen, there is no timer: no frame, no byte written (an on-screen
-  animated item holds the timer, "Animation"). A still pointer sends nothing under hover.
+  no animated item or notice on screen, there is no timer: no frame, no byte written (an
+  on-screen animated item or notice holds the timer, "Animation"). A still pointer sends nothing under hover.
 - **The first frame waits on nothing but the session's last page and loading TUI extensions.** Keyboard detection, the logo's image and session listing each arrive after it. The budget is measured with no TUI extension installed. Attaching reads the last page with `history` before the first frame, and the whole log once after it ("History and paging"). The pass takes about 12 ms per MiB of log on macOS arm64, so the scroll bar of a large session appears later than a small one's.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**

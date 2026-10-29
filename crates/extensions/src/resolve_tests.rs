@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{newest, pick};
+use super::{meets, newest, newest_within, pick, root_meets};
 use crate::Error;
 
 fn tags(list: &[&str]) -> Vec<String> {
@@ -116,7 +116,6 @@ fn newest_is_the_highest_version_tag() {
 
 #[test]
 fn newest_within_accepted_major_skips_a_newer_major() {
-    use super::newest_within;
     let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
     // At, just below and just above the edge of major 1's newest tag.
     for (min, got) in [
@@ -140,7 +139,6 @@ fn newest_within_accepted_major_skips_a_newer_major() {
 
 #[test]
 fn newest_within_with_two_dependents_takes_the_newest_of_their_major() {
-    use super::newest_within;
     let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
     let w = wants(&[("a", "1.2"), ("b", "1.4")]);
     assert_eq!(newest_within("d", &w, &all).unwrap(), "v1.5.0");
@@ -148,7 +146,6 @@ fn newest_within_with_two_dependents_takes_the_newest_of_their_major() {
 
 #[test]
 fn newest_within_with_two_majors_stops_naming_both() {
-    use super::newest_within;
     let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
     let w = wants(&[("a", "1.2"), ("b", "2.0")]);
     let err = newest_within("d", &w, &all).unwrap_err();
@@ -161,7 +158,6 @@ fn newest_within_with_two_majors_stops_naming_both() {
 
 #[test]
 fn newest_within_without_constraints_is_the_newest_tag() {
-    use super::newest_within;
     let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
     assert_eq!(newest_within("d", &wants(&[]), &all).unwrap(), "v2.0.0");
     assert!(matches!(
@@ -172,7 +168,6 @@ fn newest_within_without_constraints_is_the_newest_tag() {
 
 #[test]
 fn newest_within_is_deterministic_in_any_order() {
-    use super::newest_within;
     let w = wants(&[("a", "1.2")]);
     let mut shuffled = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
     shuffled.reverse();
@@ -239,6 +234,9 @@ fn version_rejects_what_is_not_three_numbers() {
 
 #[test]
 fn meets_orders_stable_and_nightly_forms() {
+    // docs/releasing.md, "Versions": two nightlies on one base sort by
+    // their YYYYMMDD identifier, so the later date sorts higher; SemVer
+    // sorts a nightly below its base stable.
     use super::at_least;
     let cases: [(&str, &str, bool); 8] = [
         ("0.3.0", "0.3.0", true),
@@ -261,4 +259,113 @@ fn meets_orders_stable_and_nightly_forms() {
         at_least("0.3.0", "bogus"),
         Err(Error::BadVersion { .. })
     ));
+}
+
+#[test]
+fn newest_within_accepts_a_nightly_minimum_where_its_base_passes() {
+    // docs/releasing.md, "Versions": a nightly minimum orders
+    // with its base triple, below the same-base stable release.
+    let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
+    // A nightly minimum orders with its base triple: the same-base
+    // stable tag still wins, below the base nothing qualifies.
+    for (min, got) in [
+        ("1.4.0-nightly.20240101", "v1.5.0"),
+        ("1.5.0-nightly.20240101", "v1.5.0"),
+        ("1.2.0-nightly.20240101", "v1.5.0"),
+    ] {
+        let w = wants(&[("a", min)]);
+        assert_eq!(newest_within("d", &w, &all).unwrap(), got, "{min}");
+    }
+    // At, just below and just above the edge of the accepted major: a
+    // nightly below the newest tag still takes it, one above takes none.
+    for min in ["1.6.0-nightly.20240101", "1.5.1-nightly.20240101"] {
+        let w = wants(&[("a", min)]);
+        assert!(
+            matches!(newest_within("d", &w, &all), Err(Error::NoVersion { .. })),
+            "{min}"
+        );
+    }
+    // A malformed minimum, including a malformed nightly shape, is
+    // refused rather than accepted or skipped.
+    for bad in [
+        "",
+        "x",
+        "1.2.3.4",
+        "1.2.0-nightly.2024010",
+        "1.2.0-nightly.202401011",
+    ] {
+        let w = wants(&[("a", bad)]);
+        assert!(
+            matches!(newest_within("d", &w, &all), Err(Error::BadVersion { .. })),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn meets_orders_a_nightly_have_below_its_base_stable() {
+    // docs/releasing.md, "Versions": two nightlies on one base sort by
+    // their YYYYMMDD identifier, and SemVer sorts a nightly below its base
+    // stable; the floor's base decides.
+    let cases: [(&str, &str, bool); 9] = [
+        ("0.3.0", "0.3.0", true),
+        ("0.3.0", "0.3.0-nightly.20240101", false),
+        ("0.3.0-nightly.20240101", "0.3.0", true),
+        ("0.3.0-nightly.20240101", "0.3.0-nightly.20240201", true),
+        ("0.3.0-nightly.20240201", "0.3.0-nightly.20240101", false),
+        ("0.3.0-nightly.20240101", "0.3.0-nightly.20240101", true),
+        ("0.2.0", "0.3.0-nightly.20240101", true),
+        ("0.3.0", "0.2.0-nightly.20240101", false),
+        ("1.0.0", "2.0.0-nightly.20240101", false),
+    ];
+    for (floor, have, want) in cases {
+        let w = wants(&[("a", floor)]);
+        assert_eq!(meets("h", have, &w).unwrap(), want, "{floor} needs {have}");
+    }
+    // A malformed have, including a malformed nightly shape, stays a
+    // miss rather than an error, so the update restages it.
+    for bad in ["bogus", "0.3.0-nightly.2024010"] {
+        let w = wants(&[("a", "0.3.0")]);
+        assert!(!meets("h", bad, &w).unwrap(), "{bad}");
+    }
+    // A malformed minimum, including a malformed nightly shape, is
+    // refused rather than accepted.
+    for bad in ["bogus", "0.3.0-nightly.2024010"] {
+        let w = wants(&[("a", bad)]);
+        assert!(
+            matches!(meets("h", "0.3.0", &w), Err(Error::BadVersion { .. })),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_floor_keeps_a_zero_base_nightly_minimum() {
+    // docs/releasing.md, "Versions": the empty floor sorts below
+    // every valid minimum, including `0.0.0-nightly.YYYYMMDD`: an equal
+    // nightly `have` meets its own minimum instead of losing to the
+    // sentinel. Flipping the sentinel's `false` back to `true` fails
+    // the first two assertions.
+    let w = wants(&[("a", "0.0.0-nightly.20240101")]);
+    assert!(meets("h", "0.0.0-nightly.20240101", &w).unwrap());
+    root_meets("h", "0.0.0-nightly.20240101", &w).unwrap();
+    // With no minima at all, a nightly `have` still meets.
+    assert!(meets("h", "0.0.0-nightly.20240101", &wants(&[])).unwrap());
+}
+
+#[test]
+fn root_meets_accepts_a_nightly_release_and_refuses_a_malformed_one() {
+    // docs/releasing.md, "Versions": the nightly install's
+    // own version meets its dependents' minima.
+    let w = wants(&[("a", "0.2.0")]);
+    root_meets("h", "0.3.0-nightly.20240101", &w).unwrap();
+    // A malformed root release, including a malformed nightly shape,
+    // is refused through the minimum parser.
+    for bad in ["bogus", "0.3.0-nightly.2024010"] {
+        let w = wants(&[("a", "0.2.0")]);
+        assert!(
+            matches!(root_meets("h", bad, &w), Err(Error::BadVersion { .. })),
+            "{bad}"
+        );
+    }
 }

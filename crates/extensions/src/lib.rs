@@ -120,7 +120,8 @@ pub use oauth::{Browser, SystemBrowser};
 pub use package::{Package, PackageOptions};
 pub use prepare::platform;
 pub use providers::{
-    Model, Providers, START_ONLY, StartedRefresh, Unconfigured, leave_out_invalid, refresh_lists,
+    Model, Providers, START_ONLY, StartedRefresh, Unconfigured, UnconfiguredModel,
+    leave_out_invalid, refresh_lists,
 };
 pub use release::fetch_nightly_tag;
 pub use release::install_docs_if_missing;
@@ -134,7 +135,7 @@ pub use repository::{
 };
 pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
-pub use tui_vm::{RenderOut, Span, TuiVm};
+pub use tui_vm::{KeyBinding, KeyForm, KeyRejection, RenderOut, Span, TuiVm};
 pub use update::{StagedUpdate, Target, stage_update};
 
 /// The extension API's major version this Fiber speaks

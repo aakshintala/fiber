@@ -330,7 +330,7 @@ fn jobs_alone_ask_nothing() {
 }
 
 #[test]
-fn an_animated_notice_uses_its_still_form_without_an_animation_wake() {
+fn a_painted_animated_notice_asks_its_animation_wake() {
     use crate::ext::tests::AnimatedRenderer;
     let clock = FakeClock::new();
     let origin = clock.origin();
@@ -346,13 +346,202 @@ fn an_animated_notice_uses_its_still_form_without_an_animation_wake() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    // The notice uses frame 0, but its animation does not contribute a
-    // wake. Any wake belongs to the notice's existing fade behavior.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2983: notices draw frame 0 once.
-    assert_ne!(
+    // The notice paints frame 0 through the shared exit, so its key
+    // marks and the frame asks its animation wake beside the fade wake.
+    // docs/tui.md:3016: frame 0 is the notice's still form.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(
         app.take_wake(),
         origin.checked_add(Duration::from_millis(500))
     );
+}
+
+#[test]
+fn a_notice_raised_during_a_drag_waits_for_the_release() {
+    use crate::ext::tests::AnimatedRenderer;
+    let clock = FakeClock::new();
+    let origin = clock.origin();
+    let mut app = app();
+    app.notices.hold();
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "notice",
+        Duration::from_millis(500),
+        1,
+    ));
+    app.install_renderer(fake.clone());
+    app.set_now(origin, WALL);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    // A notice waiting for the drag's release is not on screen: no row,
+    // no renderer call, and no animation wake.
+    // docs/tui.md:1280: a notice that arrives during a drag waits for the release.
+    assert!(fake.frames.borrow().is_empty());
+    assert!(!crate::view::text(&buf).contains("a read failed"));
+    assert_eq!(app.take_wake(), None);
+    // After the release the row paints and starts at frame 0.
+    app.notices.release();
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(fake.frames.borrow().clone(), vec![0]);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn a_dismissed_notice_drops_its_animation_state_and_wake() {
+    use crate::ext::tests::AnimatedRenderer;
+    let clock = FakeClock::new();
+    let origin = clock.origin();
+    let mut app = app();
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "notice",
+        Duration::from_millis(500),
+        1,
+    ));
+    app.install_renderer(fake.clone());
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    // Each frame closes through `take_wake`, as the loop does: the mark
+    // rotates into the next frame's painted set, scheduling the advance.
+    app.set_now(origin, WALL);
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(500))
+    );
+    app.set_now(
+        origin.checked_add(Duration::from_millis(500)).expect("due"),
+        WALL,
+    );
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(1000))
+    );
+    app.set_now(
+        origin
+            .checked_add(Duration::from_millis(1000))
+            .expect("due"),
+        WALL,
+    );
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(1500))
+    );
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2]);
+    // Dismissing drops the instance: the next render prunes every
+    // per-notice store before painting, makes no further renderer call,
+    // and arms no wake.
+    // docs/tui.md:3020: a notice's animation state goes when the notice does.
+    let id = app.notices.live_ids();
+    assert_eq!(id.len(), 1);
+    app.notices.dismiss(id[0]);
+    app.set_now(
+        origin
+            .checked_add(Duration::from_millis(1500))
+            .expect("due"),
+        WALL,
+    );
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2]);
+    assert!(!app.pages().ext.cache.has_notice_state(id[0]));
+    assert_eq!(app.take_wake(), None);
+    // The same code and text raised again is a new item: frame 0, then 1.
+    app.push_notice("io_failed", "a read failed".to_owned());
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2, 0]);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(2000))
+    );
+    app.set_now(
+        origin
+            .checked_add(Duration::from_millis(2000))
+            .expect("due"),
+        WALL,
+    );
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2, 0, 1]);
+}
+
+#[test]
+fn a_notice_expiring_after_its_paint_arms_no_animation_wake() {
+    use crate::ext::tests::AnimatedRenderer;
+    let clock = FakeClock::new();
+    let origin = clock.origin();
+    let mut app = app();
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = std::rc::Rc::new(AnimatedRenderer::filling(
+        "notice",
+        Duration::from_millis(500),
+        1,
+    ));
+    app.install_renderer(fake.clone());
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    // The pre-draw sweep births the notice; two frames paint 0 then 1,
+    // each closing through `take_wake` as the loop does.
+    app.sweep_notices(origin);
+    app.set_now(origin, WALL);
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(500))
+    );
+    app.set_now(
+        origin.checked_add(Duration::from_millis(500)).expect("due"),
+        WALL,
+    );
+    crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(
+        app.take_wake(),
+        origin.checked_add(Duration::from_millis(1000))
+    );
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
+    // The post-draw sweep expires it past its fade: the still-painted
+    // key is filtered, so no animation instant is armed, and with the
+    // stack empty there is no fade instant either.
+    // docs/tui.md:3025: an animation never holds a notice on screen.
+    app.sweep_notices(origin.checked_add(crate::app::FADE).expect("fade"));
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn an_empty_replacement_stays_hidden_without_advancing_or_scheduling() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let clock = FakeClock::new();
+    let origin = clock.origin();
+    let mut app = app();
+    app.push_notice("io_failed", "a read failed".to_owned());
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["notice"],
+        SlotScript::Replace(vec![]),
+    ));
+    app.install_renderer(fake.clone());
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    app.set_now(origin, WALL);
+    crate::view::render(&app, area, &mut buf, None);
+    // Empty output hides the notice: no row, one hidden probe, no wake.
+    // docs/tui.md:3023: no replacement lines stay hidden without advancing.
+    assert!(!crate::view::text(&buf).contains("io_failed"));
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(app.take_wake(), None);
+    // A later frame reuses the hidden probe with no recall and no wake.
+    app.set_now(
+        origin.checked_add(Duration::from_millis(500)).expect("due"),
+        WALL,
+    );
+    crate::view::render(&app, area, &mut buf, None);
+    assert!(!crate::view::text(&buf).contains("io_failed"));
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(app.take_wake(), None);
 }
 
 #[test]

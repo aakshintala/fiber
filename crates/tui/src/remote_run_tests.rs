@@ -49,6 +49,7 @@ fn client_models(calls: Arc<Mutex<usize>>) -> crate::ReadModels {
             }],
             notices: Vec::new(),
             lists: Vec::new(),
+            left_out: Vec::new(),
         })
     })
 }

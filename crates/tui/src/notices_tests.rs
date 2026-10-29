@@ -455,6 +455,7 @@ fn catalogue_notices_show_under_their_own_codes_and_a_read_error_is_io_failed() 
             },
         ],
         lists: Vec::new(),
+        left_out: Vec::new(),
     }));
     let codes: Vec<String> = app
         .notices()

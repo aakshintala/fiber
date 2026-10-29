@@ -79,6 +79,7 @@ fn catalogue() -> Catalogue {
         models: vec![entry("acme/m1", &["low", "high"]), entry("acme/m2", &[])],
         notices: Vec::new(),
         lists: Vec::new(),
+        left_out: Vec::new(),
     }
 }
 

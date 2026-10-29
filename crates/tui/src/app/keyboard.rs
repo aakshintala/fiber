@@ -3,7 +3,10 @@
 
 use std::time::Instant;
 
+use std::rc::Rc;
+
 use super::{App, Effect, Surface};
+use crate::ext::{KeyOutcome, SessionCtx};
 use crate::keymap::{KeyMap, KeyPress};
 use crate::keys::{Edit, Event, Key, default_event};
 use crate::keyset::{Context, KeysSetup, Keyset, Resolved, load};
@@ -26,6 +29,31 @@ fn ctrl_c() -> Stroke {
     Stroke {
         code: Code::Char('c'),
         mods: Mods::CTRL,
+    }
+}
+
+/// Whether `stroke` is bare typing: a single character with no modifier
+/// but Shift, or the space bar with no modifier but Shift
+/// (`docs/tui.md`, "Bindings"). Typing reaches the input box, so a `run`
+/// binding never sees it in the input context.
+fn is_bare_typing(stroke: &Stroke) -> bool {
+    match stroke.code {
+        Code::Char(_) | Code::Space => stroke.mods == Mods::NONE || stroke.mods == Mods::SHIFT,
+        Code::Enter
+        | Code::Esc
+        | Code::Tab
+        | Code::Backspace
+        | Code::Delete
+        | Code::Insert
+        | Code::Home
+        | Code::End
+        | Code::PageUp
+        | Code::PageDown
+        | Code::Up
+        | Code::Down
+        | Code::Left
+        | Code::Right
+        | Code::F(_) => false,
     }
 }
 
@@ -172,14 +200,106 @@ impl App {
         effect
     }
 
-    /// One stroke through the effective bindings in the context on screen.
-    /// Home owns plain arrows on a chip or a list stop: they dispatch
-    /// as its own keys ahead of the bindings, so a rebound `recall_prompt`
-    /// or `focus_next_prev` leaves them to home. Returns the effect with
-    /// whether the Loop entry still settles: `on_key` and `on_edit`
-    /// settle themselves, an action leaves the settle to the entry, and
-    /// a stroke nothing handles settles nothing.
+    /// One stroke through the whole-screen extension bindings, ahead of
+    /// every built-in early path (`docs/tui.md`, "Input and focus"): an
+    /// eligible `run` binding first, then an action binding where the
+    /// Bindings table lists it. Neither kind acts with no session on
+    /// screen, on a job's live PTY view, or for a key the person set in
+    /// the live keyset. Returns the dispatch with whether the Loop entry
+    /// still settles: a handled `run` or action settles with its own
+    /// handling, while drained adapter notices settle the fallthrough
+    /// the built-in paths still run.
+    fn extension_press(&mut self, stroke: &Stroke, now: Instant) -> (Option<(Effect, bool)>, bool) {
+        // Neither kind of binding acts with no session on screen.
+        let Some(session) = self.session().cloned() else {
+            return (None, false);
+        };
+        // A job's live PTY view owns every keystroke but its built-ins.
+        if self.item_job_target().is_some() {
+            return (None, false);
+        }
+        let Some(renderer) = self.handle.get() else {
+            return (None, false);
+        };
+        let Some(canonical) = crate::canonical_key(&stroke.name()) else {
+            return (None, false);
+        };
+        let halves = self.pages().halves_for(&session);
+        let ctx = SessionCtx {
+            session_id: Some(session),
+            halves,
+        };
+        let context = self.key_context();
+        let person_bound = self.keys().person_bound_any(stroke);
+        // A `run` binding acts everywhere but its run-only exclusions: no
+        // Overlay, Picker or Search surface, and no bare typing in the
+        // input box, where typing reaches the input box instead.
+        let run_eligible = !matches!(
+            context,
+            Context::Overlay | Context::Picker | Context::Search
+        ) && !(context == Context::Input && is_bare_typing(stroke));
+        if run_eligible && renderer.run_key(&ctx, &canonical, person_bound) == KeyOutcome::Handled {
+            self.drain_key_notices(&renderer);
+            return (Some((Effect::None, true)), false);
+        }
+        // An action binding acts where the Bindings table lists it for
+        // the current context.
+        if let Some((id, variant)) = renderer.key_action(&ctx, &canonical, person_bound)
+            && crate::bindings::BINDINGS
+                .iter()
+                .any(|binding| binding.id == id && binding.contexts.contains(context))
+            && let Some(event) = Keyset::action_event(&id, variant.as_deref())
+        {
+            self.drain_key_notices(&renderer);
+            return (
+                Some(match event {
+                    Resolved::Key(key) => (self.on_key(key, now), false),
+                    Resolved::Edit(edit) => (self.on_edit(edit), false),
+                    Resolved::Action(id) => (self.on_action(id), true),
+                    Resolved::Nothing => (Effect::None, false),
+                }),
+                false,
+            );
+        }
+        // Nothing handled the stroke: the adapter's queued notices settle
+        // the fallthrough, and the built-in paths below still run.
+        let mut noticed = false;
+        for (code, text) in renderer.take_pending() {
+            self.push_notice(&code, text);
+            noticed = true;
+        }
+        (None, noticed)
+    }
+
+    /// Drains the renderer's queued key notices onto the screen.
+    fn drain_key_notices(&mut self, renderer: &Rc<dyn crate::ext::Renderer>) {
+        for (code, text) in renderer.take_pending() {
+            self.push_notice(&code, text);
+        }
+    }
+
+    /// One stroke through the whole-screen extension bindings, then the
+    /// built-in paths and the effective bindings in the context on
+    /// screen. Returns the effect with whether the Loop entry still
+    /// settles: `on_key` and `on_edit` settle themselves, an action
+    /// leaves the settle to the entry, a handled extension binding or a
+    /// drained key notice settles, and a stroke nothing handles settles
+    /// nothing.
     fn bindings_press(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
+        let (dispatch, noticed) = self.extension_press(&stroke, now);
+        if let Some(dispatch) = dispatch {
+            return dispatch;
+        }
+        let (effect, settle) = self.builtin_press(stroke, now);
+        (effect, settle || noticed)
+    }
+
+    /// One stroke through the built-in early paths and the effective
+    /// bindings in the context on screen. Home owns plain arrows on a
+    /// chip or a list stop: they dispatch as its own keys ahead of the
+    /// bindings, so a rebound `recall_prompt` or `focus_next_prev`
+    /// leaves them to home.
+    fn builtin_press(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
         if let Some(effect) = self.rail_stroke(&stroke, now) {
             return (effect, false);
         }
