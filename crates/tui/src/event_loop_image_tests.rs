@@ -678,9 +678,8 @@ fn sixel_with_an_out_of_bound_cell_keeps_the_pixels() {
     assert!(!lp.app.sixel());
 }
 
-/// A loop on home with its tty on a pipe, so positioned writes and the
-/// kitty writer's chunks land where the test reads them.
-fn logo_loop() -> (Loop<TestBackend>, std::io::PipeReader, Receiver<Input>) {
+/// The home app the logo loops draw.
+fn logo_app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(80, 24);
     app.set_home(crate::home::Launch {
@@ -700,14 +699,38 @@ fn logo_loop() -> (Loop<TestBackend>, std::io::PipeReader, Receiver<Input>) {
         panel_cards: Vec::new(),
         ..Default::default()
     });
+    app
+}
+
+/// A loop on home with its tty on a pipe, so positioned writes and the
+/// kitty writer's chunks land where the test reads them.
+fn logo_loop() -> (Loop<TestBackend>, std::io::PipeReader, Receiver<Input>) {
     let (tty_out, tty_in) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
     let (mut lp, _) = super::tests::new_loop(
         TestBackend::new(80, 24),
         Some(std::fs::File::from(std::os::fd::OwnedFd::from(tty_in))),
     );
-    lp.app = app;
+    lp.app = logo_app();
     let (_, rx) = mpsc::channel();
     (lp, tty_out, rx)
+}
+
+/// A loop on home with its tty on a temp file: an unexpected emission
+/// cannot fill a pipe and wedge the test, so a mutant that re-emits
+/// fails on the assertions instead of hanging.
+fn logo_file_loop() -> (Loop<TestBackend>, PathBuf, Receiver<Input>, fakes::TempDir) {
+    let dir = fakes::TempDir::new("fiber-logo-reject");
+    let tty_path = dir.path().join("tty");
+    let tty = std::fs::File::create(&tty_path).unwrap_or_else(|err| panic!("tty: {err}"));
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(80, 24), Some(tty));
+    lp.app = logo_app();
+    let (_, rx) = mpsc::channel();
+    (lp, tty_path, rx, dir)
+}
+
+/// What the loop has written to its file tty so far.
+fn read_tty(path: &PathBuf) -> Vec<u8> {
+    std::fs::read(path).unwrap_or_else(|err| panic!("tty: {err}"))
 }
 
 /// The drawn TestBackend buffer.
@@ -837,7 +860,7 @@ fn logo_kitty_swap_transmits_once() {
 /// no retry this session.
 #[test]
 fn logo_kitty_rejection_draws_pixels_without_retry() {
-    let (mut lp, mut tty, rx) = logo_loop();
+    let (mut lp, tty, rx, _dir) = logo_file_loop();
     lp.app.set_graphics();
     assert_eq!(
         lp.step(Input::Bytes(b"\x1b_Gi=30;EINVAL\x1b\\".to_vec()), &rx),
@@ -850,18 +873,14 @@ fn logo_kitty_rejection_draws_pixels_without_retry() {
     assert_eq!(buf[(35, 1)].symbol(), "v");
     super::tests::flush_kitty(&lp);
     assert!(
-        !drain_tty(&mut tty)
-            .windows(4)
-            .any(|window| window == b"i=30"),
+        !read_tty(&tty).windows(4).any(|window| window == b"i=30"),
         "no transmit after a rejection"
     );
     // Another frame with the same tint: still no transmit.
     assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
     super::tests::flush_kitty(&lp);
     assert!(
-        !drain_tty(&mut tty)
-            .windows(4)
-            .any(|window| window == b"i=30"),
+        !read_tty(&tty).windows(4).any(|window| window == b"i=30"),
         "a rejected session never re-asks"
     );
 }
