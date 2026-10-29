@@ -268,8 +268,9 @@ with an internal command, not a door (`docs/invocation.md`, "Processes").
 The session process runs no image code.
 
 The terminal runs in a separate process (`docs/invocation.md`,
-"Processes") with two threads of its own: terminal input, which owns the
-keyboard, and terminal render, which owns the screen. Neither is in the
+"Processes") with three threads of its own: terminal input, which owns the
+keyboard, terminal render, which owns the screen, and the Kitty writer,
+which sends image uploads in chunks. None is in the
 session's process.
 Each thread the terminal spawns has a 1 MiB stack (rendering runs on the
 process's main thread, whose stack the OS sets): a 2 MiB default stack can

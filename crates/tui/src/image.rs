@@ -580,10 +580,13 @@ pub(crate) struct Out {
     /// Display `read_file` command lines the loop sends for the inline
     /// images the frame drew (`docs/tui.md`, "Images").
     pub(crate) display: Vec<String>,
-    /// Kitty transmit and place bytes the loop writes after the screen
-    /// draw: each answer's transmit and place contiguously, never
-    /// deletes (`docs/tui.md`, "Images").
-    pub(crate) kitty: Vec<u8>,
+    /// Ordered Kitty items the loop hands to the writer thread: each
+    /// answer's transmit chunks then its place, never deletes
+    /// (`docs/tui.md`, "Images").
+    pub(crate) items: Vec<crate::event_loop::kitty_writer::Item>,
+    /// Set when a session change forgot shown images: the loop purges the
+    /// writer's queued payloads before handing later items over.
+    pub(crate) purge: bool,
 }
 
 #[cfg(test)]
