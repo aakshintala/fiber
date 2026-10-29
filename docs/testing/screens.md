@@ -77,6 +77,8 @@ mode-enable sequences or the end of the first frame, never after a grid
 match alone. That signal is existing output: the shipped binary gets no
 test-only switch (`docs/testing.md`, "Levels").
 
+A test reads the grid outside a wait only when the frame is settled: the wait just before it checked every cell property the read asserts, with no input in between, or the test has seen the last output that can change those cells and the grid shows its effect. A text-only wait, a poll, a sleep or a raw-byte marker does not settle a frame. Each such read names its signal in a `// settled:` comment.
+
 A pointer event targets a row whose position the test has made final with a
 signal, not by matching rows drawn so far. A row that background data can
 still move, such as the panel while usage folds in, is clicked only after
