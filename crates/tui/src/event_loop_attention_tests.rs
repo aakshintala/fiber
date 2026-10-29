@@ -135,3 +135,18 @@ fn a_left_press_anywhere_ends_a_finished_title() {
     );
     assert_eq!(lp.app.title(), "fiber");
 }
+
+/// An event that writes nothing never waits behind a Kitty chunk: empty
+/// alerts return before taking the terminal-output lock.
+#[test]
+fn empty_alerts_write_nothing_without_the_output_lock() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    assert!(lp.app.take_alerts().is_empty());
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+    lp.tty_lock.set_queued_hook(queued_tx);
+    lp.write_alerts();
+    assert!(
+        queued_rx.try_recv().is_err(),
+        "an event that writes nothing must not wait behind a Kitty chunk"
+    );
+}
