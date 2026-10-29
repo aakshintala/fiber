@@ -120,7 +120,7 @@ impl Setup {
     }
 
     /// The workspace as the command sees it: resolved, so it names the
-    /// same project as `doors::project` derives inside `run`.
+    /// same project as `worktree::project` derives inside `run`.
     fn workspace(&self) -> PathBuf {
         fs::canonicalize(self.root.path().join("workspace")).unwrap()
     }
