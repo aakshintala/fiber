@@ -592,6 +592,16 @@ fn code_block_counts_keep_tab_width_and_language_fallback_boundaries() {
 }
 
 #[test]
+fn table_with_repeated_heart_clusters_uses_the_draw_fallback() {
+    let table = "| x |\n|---|\n| ❤️❤️❤️❤️❤️ |";
+    let reply = Reply::new(table.to_owned(), 1);
+    assert!(reply.counted(5).over_width);
+
+    let (shown, counted) = count_and_draw(table, 5);
+    assert_eq!(counted.len(), shown.len(), "padded table rows at width 5");
+}
+
+#[test]
 fn a_table_count_distinguishes_exact_fit_from_overflow() {
     let table = "| a | b |\n|---|---|\n| 1 | 2 |";
     assert!(!Reply::new(table.to_owned(), 1).counted(5).over_width);
