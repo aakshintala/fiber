@@ -5,33 +5,8 @@ use super::{
     COLS, Dcs, Emit, HEIGHT, MASK, Protocol, ROWS, Tint, WAVE_PX, WIDTH, cell_ok, dcs, iterm,
     kitty, rgba, scale, select, sixel,
 };
+use crate::graphics::test_support::bounded_sixel_test;
 use crate::keys::{Event, Reply};
-
-fn bounded_sixel_test(name: &str, body: fn()) {
-    const CHILD: &str = "FIBER_SIXEL_TEST_CHILD";
-    if std::env::var_os(CHILD).is_some() {
-        body();
-        return;
-    }
-    use std::os::unix::process::CommandExt as _;
-    let child = std::process::Command::new(std::env::current_exe().expect("the test binary"))
-        .arg("--exact")
-        .arg(name)
-        .arg("--nocapture")
-        .env(CHILD, "1")
-        .process_group(0)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("the Sixel test process spawns");
-    let output = fakes::wait_output(child, name);
-    assert!(
-        output.status.success(),
-        "{name} passed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 /// A complete reply carries the version text and its length.
 #[test]
