@@ -4241,7 +4241,12 @@ fn attach_head_at_50_with_no_base_passes() {
         );
         let line = row(&out.comment, "Terminal to its first frame, attaching");
         assert!(line.ends_with("| advisory |"), "{cpu}: {line}");
-        assert!(line.contains("50.0 ms"), "{cpu}: {line}");
+        for fixture in ["1 MiB", "10 MiB"] {
+            assert!(
+                line.contains(&format!("{fixture}: 50.0 ms")),
+                "{cpu}: {line}"
+            );
+        }
         assert!(
             line.contains("no comparable same-job base timing"),
             "{cpu}: {line}"
