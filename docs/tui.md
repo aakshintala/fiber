@@ -2529,10 +2529,10 @@ transmits shows that image's rows blank, at their size, until it lands.
 Images transmit and place in the order queued, and no other image command
 goes between one image's chunks except a delete, which goes at the next
 chunk boundary: an image it removes sends nothing more, and an unrelated
-upload it interrupts is sent again whole after it. A failed write to the
-terminal is the terminal failing: every pending image is dropped and
-nothing more is written. A graceful Stop during a partial upload sends the
-same abort delete as Purge at the next chunk boundary.
+upload it interrupts is sent again whole after it. Quitting while an image
+transmits sends the delete for that image at the next chunk boundary and
+nothing more of it. A failed write to the terminal is the terminal failing:
+every pending image is dropped and nothing more is written.
 
 - An image is at most 40% of the conversation's width and 12 rows tall,
   keeping its proportions. A click opens it in the system viewer, from a
