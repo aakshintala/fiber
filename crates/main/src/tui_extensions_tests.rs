@@ -2363,8 +2363,7 @@ fn a_working_line_renderer_reads_started_and_retry() {
     ) else {
         panic!("a working line draws")
     };
-    // docs/tui.md:2877-2878: started and the pending retry shape.
-    assert_eq!(lines[0][0].text, "7:rate_limited:2:4:4000:9:false"); // docs/tui.md:2877-2878.
+    assert_eq!(lines[0][0].text, "7:rate_limited:2:4:4000:9:false");
 }
 
 #[test]
