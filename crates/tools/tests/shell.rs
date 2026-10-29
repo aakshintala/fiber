@@ -3257,11 +3257,20 @@ impl MacosConfined {
     }
 
     fn run(&self, command: &str) -> contract::tool::Output {
-        run_prepared(
-            &self.shell,
-            &args(command),
-            &CancelToken::new(),
-            &Recorder::default(),
+        let shell = self.shell.clone();
+        let command = command.to_owned();
+        let what = format!("confined command {command:?}");
+        fakes::within(
+            &what,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                run_prepared(
+                    &shell,
+                    &args(&command),
+                    &CancelToken::new(),
+                    &Recorder::default(),
+                )
+            },
         )
     }
 }
@@ -3816,6 +3825,7 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
     // its read. The fake clock never moved: the handoff waited for the
     // marker, not for output, the end, or a deadline (`docs/sandbox.md`,
     // "On macOS": no move before the marker is observed).
+    // The call creates one job object (`docs/tools.md`, "Background jobs").
     assert_eq!(jobs.started(), vec![job.clone()]);
     assert_eq!(contract::clock::Clock::now(&*running.clock), running.start);
     assert!(
@@ -3878,10 +3888,19 @@ fn macos_confined_stty_on_a_pty_succeeds() {
 /// Runs one confined call to completion on an existing shell.
 #[cfg(target_os = "macos")]
 fn call(shell: &Shell, command: &str) -> contract::tool::Output {
-    run_prepared(
-        shell,
-        &args(command),
-        &CancelToken::new(),
-        &Recorder::default(),
+    let shell = shell.clone();
+    let command = command.to_owned();
+    let what = format!("confined command {command:?}");
+    fakes::within(
+        &what,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            run_prepared(
+                &shell,
+                &args(&command),
+                &CancelToken::new(),
+                &Recorder::default(),
+            )
+        },
     )
 }

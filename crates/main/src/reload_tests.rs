@@ -2875,6 +2875,8 @@ fn a_reload_that_newly_breaks_the_sandbox_reports_once() {
     fixture.rig.write_global(&broken(true));
     let prepared = fixture.prepare();
     let notices = sandbox_unavailable(&prepared);
+    // The session reports sandbox unavailability once (`docs/sandbox.md`,
+    // "When the sandbox is unavailable").
     assert_eq!(
         notices.len(),
         1,
@@ -2889,13 +2891,16 @@ fn a_reload_that_newly_breaks_the_sandbox_reports_once() {
     // The settings still apply: only the duplicate notice is latched.
     assert!(fixture.state.sandbox.lock().unwrap().enabled);
     let again = fixture.prepare();
+    // Later reloads keep the session's notice latched (`docs/sandbox.md`,
+    // "When the sandbox is unavailable").
     assert!(
         sandbox_unavailable(&again).is_empty(),
         "a second broken reload reports nothing"
     );
     (again.installed)();
     // Toggling off and on again reports nothing either: the latch covers
-    // the session, not the configuration.
+    // the session, not the configuration (`docs/sandbox.md`,
+    // "When the sandbox is unavailable").
     fixture.rig.write_global(&broken(false));
     (fixture.prepare().installed)();
     fixture.rig.write_global(&broken(true));
