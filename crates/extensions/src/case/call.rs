@@ -42,6 +42,17 @@ pub fn run_call(case: CallCase, process_clock: Arc<dyn Clock>) -> Verdict {
         Ok(home) => home,
         Err(error) => return failure_verdict(vec![error.to_string()]),
     };
+    run_call_in(case, provider_name, process_clock, home)
+}
+
+/// Runs a validated provider call against `home`, the fiber home the
+/// public [`run_call`] resolved from the environment.
+fn run_call_in(
+    case: CallCase,
+    provider_name: String,
+    process_clock: Arc<dyn Clock>,
+    home: PathBuf,
+) -> Verdict {
     let installed = match crate::list(&home, process_clock.as_ref()) {
         Ok(listing) => listing.installed,
         Err(error) => return failure_verdict(vec![error.to_string()]),

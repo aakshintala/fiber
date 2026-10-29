@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::{
     CallOutcome, Verdict, compare_credential, compare_result, failure_verdict, provider_extension,
-    run_call,
+    run_call, run_call_in,
 };
 
 #[test]
@@ -468,7 +468,7 @@ fn a_package_that_registers_nothing_is_not_chosen() {
 
 /// One fiber home holding both process packages the `run_call`
 /// selection tests share: installing twice would race the shared
-/// process, so every test points `FIBER_HOME` at the same directory.
+/// process, so every test passes the same directory.
 static PROCESS_HOME: std::sync::OnceLock<crate::test_support::Home> = std::sync::OnceLock::new();
 
 /// The peer script a sessionless provider runs: it records the hello,
@@ -537,23 +537,6 @@ fn process_home() -> &'static crate::test_support::Home {
     })
 }
 
-/// Points `FIBER_HOME` at the shared process home: both selection tests
-/// set the identical value, and no other test in this binary reads it,
-/// so the shared process never observes a change.
-#[allow(
-    unsafe_code,
-    reason = "the value never varies between the tests that set it, and `run_call` is this binary's only reader"
-)]
-fn use_process_home() -> std::path::PathBuf {
-    let home = process_home().home();
-    // SAFETY: every setter writes this same shared home, and no other
-    // test in this binary reads `FIBER_HOME`.
-    unsafe {
-        std::env::set_var("FIBER_HOME", &home);
-    }
-    home
-}
-
 /// A `models` case for `provider`, expecting the empty list the peer
 /// answers.
 fn process_models_case(provider: &str) -> super::super::format::CallCase {
@@ -585,8 +568,13 @@ fn process_models_case(provider: &str) -> super::super::format::CallCase {
 /// working directory, real data directories and empty state.
 #[test]
 fn a_process_package_matching_the_provider_short_name_runs_without_a_session() {
-    let home = use_process_home();
-    let verdict = run_call(process_models_case("proc"), fakes::clock::FakeClock::new());
+    let home = process_home().home();
+    let verdict = run_call_in(
+        process_models_case("proc"),
+        "proc".to_owned(),
+        fakes::clock::FakeClock::new(),
+        home.clone(),
+    );
     assert_eq!(verdict, Verdict::Pass);
     let hello: Value = serde_json::from_str(
         &std::fs::read_to_string(home.join("proc-hello.json")).expect("the peer records its hello"),
@@ -632,8 +620,12 @@ fn a_process_package_matching_the_provider_short_name_runs_without_a_session() {
 /// rather than falling through to Lua.
 #[test]
 fn a_process_package_registers_a_provider_under_a_different_name() {
-    use_process_home();
-    let verdict = run_call(process_models_case("p"), fakes::clock::FakeClock::new());
+    let verdict = run_call_in(
+        process_models_case("p"),
+        "p".to_owned(),
+        fakes::clock::FakeClock::new(),
+        process_home().home(),
+    );
     assert_eq!(verdict, Verdict::Pass);
 }
 
