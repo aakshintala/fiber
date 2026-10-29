@@ -306,6 +306,55 @@ fn an_explicit_unconfined_retry_reads_the_denied_path() {
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
     assert!(!lines.is_empty(), "the session writes event lines");
+    // The complete ordered event kinds (`docs/testing.md`, "Event streams"):
+    // `support::kinds` sets aside the independently triggered
+    // `session_status` lines, and `tool_call_delta` is ephemeral with a
+    // pacing-dependent count (`docs/tools.md`, "Progress"), so the
+    // comparison pins every other kind in order and asserts a delta
+    // separately.
+    let kinds: Vec<&str> = support::kinds(&lines)
+        .into_iter()
+        .filter(|kind| *kind != "tool_call_delta")
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert!(
+        lines.iter().any(|line| line["kind"] == "tool_call_delta"),
+        "a running shell streams deltas"
+    );
     // No automatic retry: exactly one request per model response
     // (`docs/events.md`, "Declared effects": a failed confined call is never
     // rerun unconfined; the fixture serves two model responses with one call
