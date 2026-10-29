@@ -3225,6 +3225,112 @@ fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
     );
 }
 
+/// Through the loop's seam, an unconfined call reads what a confined call
+/// is refused: the declaration leaves the sandbox and the run follows it.
+#[test]
+fn an_unconfined_call_reads_what_a_confined_call_is_refused() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home, "fiber-tools-shell-unconfined");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let secret = root.path().join("secret");
+    std::fs::write(&secret, "shh").unwrap();
+    let sandbox = Arc::new(Mutex::new(tools::SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: vec![secret.clone()],
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox);
+    // The confined call is refused the denied file.
+    let refused_args = args(&format!("cat {}", quote(&secret)));
+    let refused_effects = shell
+        .effects(&refused_args)
+        .expect("the shell command classifies");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert!(refused_effects.declared.confined);
+    let refused = run_prepared(
+        &shell,
+        &refused_args,
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        assert!(
+            refused.error.is_some(),
+            "a confined read of the denied file fails"
+        );
+        assert!(
+            !text(&refused).contains("shh"),
+            "no denied byte reaches the caller"
+        );
+    }
+    // The explicit unconfined call declares reviewed and reads it.
+    let mut unconfined_args = args(&format!("cat {}", quote(&secret)));
+    unconfined_args.insert("unconfined".into(), json!(true));
+    let unconfined_effects = shell
+        .effects(&unconfined_args)
+        .expect("the shell command classifies");
+    assert!(
+        !unconfined_effects.declared.confined,
+        "an unconfined call is reviewed as with the sandbox off"
+    );
+    let read = run_prepared(
+        &shell,
+        &unconfined_args,
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        read.error.is_none(),
+        "an unconfined read succeeds: {}",
+        text(&read)
+    );
+    assert!(
+        text(&read).contains("shh"),
+        "the denied file stays readable outside the sandbox"
+    );
+}
+
+/// A confined spawn failure fails once: the call ends with the sandbox
+/// error and its command never runs, so no unconfined retry happens.
+#[test]
+fn a_confined_spawn_failure_fails_once_without_an_unconfined_retry() {
+    let dir = fakes::TempDir::new("fiber-tools-shell-fail-once");
+    let workspace = dir.path().to_path_buf();
+    let sandbox = Arc::new(Mutex::new(sandbox_settings_for_integration("fail-once")));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
+    let marker = workspace.join("marker");
+    let command = format!("touch {} && echo hi", quote(&marker));
+    let effects = shell
+        .effects(&args(&command))
+        .expect("the shell command classifies");
+    // The reload turns the sandbox off between the declaration and the run.
+    sandbox.lock().unwrap().enabled = false;
+    let output = shell.run_with_effects(
+        &args(&command),
+        &effects,
+        &CancelToken::new(),
+        &Recorder::default(),
+        &NoAsk,
+    );
+    assert_eq!(
+        code(&output),
+        Some(ErrorCode::ToolError),
+        "the failed spawn fails with a tool error"
+    );
+    assert!(
+        text(&output).contains("The sandbox could not be applied"),
+        "the failure names the sandbox: {}",
+        text(&output)
+    );
+    assert!(
+        !marker.exists(),
+        "the failed call ran nothing once, and never reran unconfined"
+    );
+}
+
 /// A confined shell on macOS: an enabled sandbox with no overlap. The
 /// fixture root sits under the owner's home, never the temp dir, and the
 /// deny sits beside the workspace.
