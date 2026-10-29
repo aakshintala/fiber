@@ -3077,7 +3077,7 @@ fn after_quiesce_a_late_connection_closed_before_its_timeout_accepts_invalid_inp
     let (closed, reached) = mpsc::channel();
     let reader = thread::spawn(move || {
         let mut empty = [0u8; 64];
-        let _ = closed.send(probe.read(&mut empty));
+        closed.send(probe.read(&mut empty)).unwrap();
     });
     match Deadline::after(DEADLINE)
         .recv(&reached)
