@@ -223,6 +223,25 @@ impl ProcessExtension {
         }
     }
 
+    /// Runs one host-call worker on its own thread: every host call
+    /// parks on the pump thread's behalf, so the pump never blocks on
+    /// the host. A worker that never starts answers `IoFailed`, as a
+    /// call the worker never ran.
+    fn spawn_host_task(
+        &self,
+        id: &contract::CommandId,
+        task: &str,
+        cant_start: String,
+        run: Box<dyn FnOnce() + Send + 'static>,
+    ) {
+        let spawned = std::thread::Builder::new()
+            .name(format!("process {task} {}", self.shared.owner))
+            .spawn(run);
+        if spawned.is_err() {
+            self.answer_rejected(id, ErrorCode::IoFailed, cant_start);
+        }
+    }
+
     /// Runs one decoded host operation on a worker, answering accepted
     /// with its value or rejected with its code and sentence.
     fn serve_host(
@@ -237,9 +256,11 @@ impl ProcessExtension {
         // holds the owner lock while it runs.
         let context = support::lock(&shared.context).clone();
         let answer_id = id.clone();
-        let spawned = std::thread::Builder::new()
-            .name(format!("process host {}", shared.owner))
-            .spawn(move || {
+        self.spawn_host_task(
+            &id,
+            "host",
+            format!("{call}: Fiber could not start the host call"),
+            Box::new(move || {
                 let id = answer_id;
                 let cancel = callback.cancel.clone();
                 match shared
@@ -259,14 +280,8 @@ impl ProcessExtension {
                         answer_off(&shared, &id, contract::inbox::Rejection { code, message })
                     }
                 }
-            });
-        if spawned.is_err() {
-            self.answer_rejected(
-                &id,
-                ErrorCode::IoFailed,
-                format!("{call}: Fiber could not start the host call"),
-            );
-        }
+            }),
+        );
     }
 
     /// Answers one `host.oauth.refresh`: without a credential scope the
@@ -291,19 +306,15 @@ impl ProcessExtension {
         };
         let shared = Arc::clone(&self.shared);
         let answer_id = id.clone();
-        let spawned = std::thread::Builder::new()
-            .name(format!("process refresh {}", shared.owner))
-            .spawn(move || {
+        self.spawn_host_task(
+            &id,
+            "refresh",
+            "host.oauth.refresh: Fiber could not start the host call".to_owned(),
+            Box::new(move || {
                 let id = answer_id;
                 oauth::refresh_continue(&shared, &id, callback, scope, &shared.oauth);
-            });
-        if spawned.is_err() {
-            self.answer_rejected(
-                &id,
-                ErrorCode::IoFailed,
-                "host.oauth.refresh: Fiber could not start the host call".to_owned(),
-            );
-        }
+            }),
+        );
     }
 
     /// Answers one `host.ask`: at once when no request is answered, and
@@ -327,20 +338,16 @@ impl ProcessExtension {
         };
         let shared = Arc::clone(&self.shared);
         let answer_id = id.clone();
-        let spawned = std::thread::Builder::new()
-            .name(format!("process ask {}", shared.owner))
-            .spawn(move || {
+        self.spawn_host_task(
+            &id,
+            "ask",
+            "host.ask: Fiber could not start the host call".to_owned(),
+            Box::new(move || {
                 let id = answer_id;
                 shared.table.wait_end(&request, shared.clock.as_ref());
                 answer_on(&shared, &id, Some(declined()));
-            });
-        if spawned.is_err() {
-            self.answer_rejected(
-                &id,
-                ErrorCode::IoFailed,
-                "host.ask: Fiber could not start the host call".to_owned(),
-            );
-        }
+            }),
+        );
     }
 
     /// The context one `call` with no `request_id` runs under: the entry
