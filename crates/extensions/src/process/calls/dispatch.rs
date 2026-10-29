@@ -21,7 +21,7 @@ impl ProcessExtension {
         let live = Arc::clone(&support::lock(&self.shared.transport));
         match live.recv() {
             transport::Incoming::Line(bytes) => {
-                self.handle_line(&bytes);
+                self.handle_line(&bytes, &live);
                 Pumped::Handled
             }
             transport::Incoming::Closed(reason) => {
@@ -32,7 +32,7 @@ impl ProcessExtension {
     }
 
     /// Handles one complete child line, answering it.
-    fn handle_line(&self, bytes: &[u8]) {
+    fn handle_line(&self, bytes: &[u8], live: &transport::Transport) {
         match transport::parse_line(bytes) {
             transport::ParsedLine::Call {
                 id,
@@ -61,8 +61,10 @@ impl ProcessExtension {
                         requests::Outcome::Answered(requests::Answer::Failure { code, message })
                     }
                 };
-                match self.shared.table.settle(&request_id, outcome) {
-                    requests::Settled::Completed => self.answer_accepted(&id, None),
+                match self.shared.table.settle_with_before_wake(&request_id, outcome, || {
+                    self.answer_accepted_on(live, &id, None);
+                }) {
+                    requests::Settled::Completed => {}
                     requests::Settled::Stale => self.answer_stale(&id),
                 }
             }

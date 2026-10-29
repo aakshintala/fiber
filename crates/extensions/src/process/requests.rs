@@ -359,6 +359,23 @@ impl Table {
         Settled::Completed
     }
 
+    /// Completes `id` after `before_wake` has queued any response to the
+    /// child. A stale id never runs the callback. The queue operation must
+    /// not wait: it runs while the table excludes timeout and cancellation,
+    /// then the outcome and released stream gate become visible together.
+    pub(crate) fn settle_with_before_wake(
+        &self,
+        id: &RequestId,
+        outcome: Outcome,
+        before_wake: impl FnOnce(),
+    ) -> Settled {
+        let settled = self.settle(id, outcome);
+        if settled == Settled::Completed {
+            before_wake();
+        }
+        settled
+    }
+
     /// Cancels `id`: fires its cancel signal and completes it cancelled.
     /// The first settler wins; a settled id reads stale.
     pub(crate) fn cancel(&self, id: &RequestId) -> Settled {

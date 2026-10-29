@@ -563,6 +563,18 @@ impl ProcessExtension {
         id: &contract::CommandId,
         result: Option<contract::events::CommandResult>,
     ) {
+        let live = self.transport();
+        self.answer_accepted_on(&live, id, result);
+    }
+
+    /// Answers on the transport that supplied the command. Reply settlement
+    /// uses this path to queue acceptance before making the result visible.
+    fn answer_accepted_on(
+        &self,
+        live: &transport::Transport,
+        id: &contract::CommandId,
+        result: Option<contract::events::CommandResult>,
+    ) {
         let payload = serde_json::to_value(&contract::events::CommandAccepted {
             command_id: id.clone(),
             result,
@@ -571,23 +583,35 @@ impl ProcessExtension {
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
         let line = envelope_line(&self.shared, "command_accepted", payload);
-        if line.len() > support::lock(&self.shared.transport).max_line() {
-            self.answer_rejected(
+        if line.len() > live.max_line() {
+            self.answer_rejected_on(
+                live,
                 id,
                 ErrorCode::TooLarge,
                 "the result does not fit the 64 MiB wire cap".to_owned(),
             );
             return;
         }
-        // The child may be gone: its answer dies with it, and the
-        // table already settled what the answer would settle.
-        match support::lock(&self.shared.transport).send(line) {
+        // The writer only queues here; pipe I/O stays on its thread.
+        match live.send(line) {
             Ok(()) | Err(_) => {}
         }
     }
 
     /// Answers one command rejected with its code and message.
     fn answer_rejected(&self, id: &contract::CommandId, code: ErrorCode, message: String) {
+        let live = self.transport();
+        self.answer_rejected_on(&live, id, code, message);
+    }
+
+    /// Queues a rejection on the transport that supplied the command.
+    fn answer_rejected_on(
+        &self,
+        live: &transport::Transport,
+        id: &contract::CommandId,
+        code: ErrorCode,
+        message: String,
+    ) {
         let payload = serde_json::to_value(&contract::events::CommandRejected {
             command_id: Some(id.clone()),
             code,
@@ -597,9 +621,8 @@ impl ProcessExtension {
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
         let line = envelope_line(&self.shared, "command_rejected", payload);
-        // The child may be gone: its answer dies with it, and the
-        // table already settled what the answer would settle.
-        match support::lock(&self.shared.transport).send(line) {
+        // The writer only queues here; pipe I/O stays on its thread.
+        match live.send(line) {
             Ok(()) | Err(_) => {}
         }
     }
