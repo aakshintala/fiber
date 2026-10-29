@@ -67,6 +67,78 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     buf
 }
 
+/// A renderer that draws whatever the built-in queue draws, so the
+/// test observes the built-in cross decision at the callback width.
+#[derive(Debug, Default)]
+struct BuiltinEcho {
+    /// The widths the slot drew at, in order.
+    widths: std::cell::RefCell<Vec<u16>>,
+}
+
+impl crate::ext::Renderer for BuiltinEcho {
+    fn name(&self) -> &str {
+        "builtin-test"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "steering_queue"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        width: u16,
+        builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        self.widths.borrow_mut().push(width);
+        crate::ext::Decision::Draw {
+            extension: self.name().into(),
+            lines: builtin(input, width),
+        }
+    }
+}
+
+/// The queue row holding `text` on `shown`.
+fn queue_row<'a>(shown: &'a str, text: &str) -> &'a str {
+    shown
+        .lines()
+        .find(|row| row.contains(text))
+        .unwrap_or_else(|| panic!("no {text:?} row\n{shown}"))
+}
+
+#[test]
+fn a_replacement_sees_the_builtin_cross_only_at_exact_fit() {
+    use std::rc::Rc;
+    // "use the parser" is 14 cells: with the four-cell prefix and the
+    // three-cell cross the row fits exactly at 21 columns.
+    let mut app = queued(21, 12);
+    let fake = Rc::new(BuiltinEcho::default());
+    app.install_renderer(fake.clone());
+    let wide = screen(&app, 21, 12);
+    // The built-in heading, rows and footer all draw through the
+    // replacement (`docs/tui.md`, "What a renderer returns").
+    assert!(wide.contains("Steering, joins"), "{wide}");
+    let fitted = queue_row(&wide, "use the parser");
+    assert!(
+        fitted.trim_end().ends_with("use the parser  ✕"),
+        "{fitted:?}"
+    );
+    let plain = queue_row(&wide, "and test it");
+    assert!(!plain.contains('✕'), "{plain:?}");
+    // One column short the same input draws without its cross: the
+    // input still carries the full 14-cell text, and only the callback
+    // width changed.
+    let narrow = screen(&app, 20, 12);
+    assert!(narrow.contains("Steering, joins"), "{narrow}");
+    let clipped = queue_row(&narrow, "use the parser");
+    assert!(!clipped.contains('✕'), "{clipped:?}");
+    // Both draws reached the built-in at their own width.
+    assert!(fake.widths.borrow().contains(&21));
+    assert!(fake.widths.borrow().contains(&20));
+}
+
 #[test]
 fn wide_and_combining_marks_draw_whole() {
     // `界` takes two cells and `é` here is `e` with a combining acute:
