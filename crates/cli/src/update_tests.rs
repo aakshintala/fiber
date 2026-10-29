@@ -670,3 +670,46 @@ fn update_maps_a_failed_tag_fetch_to_exit_one() {
     );
     assert_eq!(code, 1);
 }
+
+/// A platform with no published archive fails before any download: the
+/// run reports the platform and the published targets, and the fixture
+/// sees no request of any kind, including the release-tag fetch.
+#[test]
+fn unlisted_platform_fails_before_any_download() {
+    let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, OLD_BINARY);
+    let before = world.server.requests().len();
+    let mut err = Vec::new();
+    let result = super::run(
+        &world.home,
+        "0.1.0",
+        "x86_64-apple-darwin",
+        Channel::Stable,
+        &world.bases(),
+        &fakes::clock::SystemClock,
+        Io {
+            terminal: false,
+            input: &mut Cursor::new(b"".as_slice()),
+            err: &mut err,
+        },
+        &world.binary,
+        &world.origin(),
+        &World::no_restart,
+    );
+    let failed = result.unwrap_err();
+    assert_eq!(failed.code(), contract::ErrorCode::Usage);
+    let said = failed.to_string();
+    assert!(said.contains("x86_64-apple-darwin"), "{said}");
+    for archive in [
+        "fiber-aarch64-apple-darwin.tar.gz",
+        "fiber-x86_64-unknown-linux-musl.tar.gz",
+        "fiber-aarch64-unknown-linux-musl.tar.gz",
+    ] {
+        assert!(said.contains(archive), "{said}");
+    }
+    assert_eq!(
+        world.server.requests().len(),
+        before,
+        "no request runs, including the tag fetch: {:?}",
+        world.server.requests()
+    );
+}

@@ -19,6 +19,7 @@ use super::{Target, stage_update};
 use crate::Error;
 use crate::manage::{Request, plan};
 use crate::release::{Release, install_release};
+use contract::ErrorCode;
 
 const RELEASE: &str = "0.2.0";
 const TRIPLE: &str = "test-triple";
@@ -30,6 +31,19 @@ const NIGHTLY: &str = "0.2.1-nightly.20240101";
 /// first-party extensions archive holding `shorts` (each short with its
 /// manifest), and the nightly list.
 fn serve(
+    marker: &[u8],
+    docs: &[u8],
+    shorts: &[(&str, &str)],
+    nightlies: &str,
+) -> fakes::ProviderServer {
+    serve_for(TRIPLE, marker, docs, shorts, nightlies)
+}
+
+/// A fixture release serving the binary archive named `archive`: the
+/// caller names the musl archive while staging a gnu triple, so the
+/// stage must ask for the served name rather than the build triple.
+fn serve_for(
+    archive_name: &str,
     marker: &[u8],
     docs: &[u8],
     shorts: &[(&str, &str)],
@@ -59,7 +73,7 @@ fn serve(
         })
         .collect();
     let extensions = gzip(&archive(&members));
-    let binary_file = format!("fiber-{TRIPLE}.tar.gz");
+    let binary_file = format!("fiber-{archive_name}.tar.gz");
     let paths = [
         format!("/download/v{RELEASE}/{binary_file}"),
         format!("/download/v{RELEASE}/{binary_file}.sha256"),
@@ -963,4 +977,109 @@ fn a_binary_archive_without_fiber_errors_before_any_rename() {
     };
     assert_eq!(archive, &binary_file);
     assert_eq!(setup.installed_state(), before);
+}
+
+/// A Linux gnu build stages the musl archive: the fixture serves only
+/// the musl archive, and the stage asks for it rather than the gnu
+/// name the binary was built against.
+#[test]
+fn a_gnu_linux_build_stages_the_musl_archive() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let server = serve_for(
+        "x86_64-unknown-linux-musl",
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &Target {
+            base: server.url(),
+            version: RELEASE.into(),
+            triple: "x86_64-unknown-linux-gnu".into(),
+        },
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap();
+    let binary = staged.commit().unwrap();
+    assert_eq!(fs::read(&binary).unwrap(), b"marker");
+    // Only the musl archive is ever fetched: no request names the gnu
+    // archive the binary was built against.
+    let paths: Vec<String> = server
+        .requests()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.contains("fiber-x86_64-unknown-linux-musl.tar.gz")),
+        "the stage fetches the musl archive: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains("linux-gnu")),
+        "no request names the gnu archive: {paths:?}"
+    );
+}
+
+/// A platform with no published archive fails before any download: the
+/// error names the platform and every published target, and the
+/// fixture sees no request of any kind.
+#[test]
+fn an_unlisted_platform_fails_before_any_download() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let err = match stage_update(
+        &setup.home(),
+        &Target {
+            base: server.url(),
+            version: RELEASE.into(),
+            triple: "x86_64-apple-darwin".into(),
+        },
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    ) {
+        Ok(_) => panic!("an unlisted platform stages no update"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code(), ErrorCode::Usage);
+    let said = err.to_string();
+    assert!(said.contains("x86_64-apple-darwin"), "{said}");
+    for archive in [
+        "fiber-aarch64-apple-darwin.tar.gz",
+        "fiber-x86_64-unknown-linux-musl.tar.gz",
+        "fiber-aarch64-unknown-linux-musl.tar.gz",
+    ] {
+        assert!(said.contains(archive), "{said}");
+    }
+    assert!(
+        server.requests().is_empty(),
+        "no download runs: {:?}",
+        server.requests()
+    );
 }
