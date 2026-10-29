@@ -3313,6 +3313,51 @@ fn macos_confined_shell_enforces_read_write_boundaries() {
     assert!(text(&sibling).contains("ok"));
 }
 
+/// Symlink, `..` and child-process escapes stay inside the grants: a link
+/// to an outside file, a `..` write and a grandchild `python3` write all
+/// fail with nothing created outside, while an inside write succeeds.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_confined_shell_blocks_symlink_and_child_process_escapes() {
+    let confined = MacosConfined::new("fiber-macos-shell-escapes", &[]);
+    let effects = confined
+        .shell
+        .effects(&args("echo hi"))
+        .expect("the shell command classifies");
+    assert!(effects.declared.confined);
+
+    let inside = confined.run("echo ok > inside.txt");
+    assert!(inside.error.is_none(), "an inside write succeeds");
+    assert_eq!(
+        std::fs::read_to_string(confined.workspace.join("inside.txt")).unwrap(),
+        "ok\n"
+    );
+
+    let target = confined.root.path().join("escape-target");
+    let linked = confined.run(&format!(
+        "ln -s {} link && echo evil > link",
+        quote(&target)
+    ));
+    assert!(linked.error.is_some(), "a symlink write outside fails");
+    assert!(!target.exists(), "nothing escaped through the link");
+
+    let dotdot = confined.root.path().join("escape-dotdot");
+    let traversed = confined.run("echo evil > ../escape-dotdot");
+    assert!(traversed.error.is_some(), "a `..` write outside fails");
+    assert!(!dotdot.exists(), "nothing escaped through `..`");
+
+    let py = confined.root.path().join("escape-py");
+    let grandchild = confined.run(&format!(
+        "python3 -c \"open('{}', 'w').write('evil')\"",
+        py.display()
+    ));
+    assert!(
+        grandchild.error.is_some(),
+        "a grandchild write outside fails"
+    );
+    assert!(!py.exists(), "nothing escaped through the grandchild");
+}
+
 /// A configured credential file outside the workspace reads as denied
 /// while its sibling reads fine: the deny travels as a binding, not as
 /// profile text.
