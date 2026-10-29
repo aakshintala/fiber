@@ -184,7 +184,7 @@ pub use login::{
 };
 pub use mcp::{DeclaredServer, McpDeclaration, declared_servers, mcp_add, mcp_list, mcp_remove};
 pub use mcp_login::{login_target, mcp_login, mcp_logout};
-pub use model_lists::{ModelLists, ModelListsError, model_lists, roles_of};
+pub use model_lists::{ModelLists, ModelListsError, model_lists, model_lists_grouped, roles_of};
 pub use models::{models, refresh_model_lists};
 pub use prune::{
     HubDelete, HubPruneRemoved, HubPruneSelection, HubPruneSession, HubPruneWant, format_size,

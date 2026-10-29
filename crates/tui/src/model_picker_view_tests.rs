@@ -113,6 +113,7 @@ fn catalogue() -> Catalogue {
         ],
         notices: Vec::new(),
         lists: Vec::new(),
+        left_out: Vec::new(),
     }
 }
 
@@ -233,6 +234,7 @@ fn model_picker_long_list_scrolls_to_the_selection() {
             .collect(),
         notices: Vec::new(),
         lists: Vec::new(),
+        left_out: Vec::new(),
     }));
     open(&mut app);
     for _ in 0..25 {
