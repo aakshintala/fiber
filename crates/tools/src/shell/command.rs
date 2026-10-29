@@ -177,12 +177,12 @@ impl std::error::Error for SandboxApply {}
 /// macOS Seatbelt one gated on the confinement marker. A gated call hands
 /// nothing off before its marker is observed or the wrapper exits; a
 /// missing marker at the end fails closed instead of ending normally.
-enum Drive<'a> {
+enum Drive {
     /// The existing pipeline: one drive pass, then the end.
     Plain,
     /// The Seatbelt pipeline: every handoff waits for the marker.
     #[cfg(target_os = "macos")]
-    Gated(&'a super::sandbox::MarkerWatch),
+    Gated(Arc<super::sandbox::MarkerWatch>),
 }
 
 /// The streams one spawn holds open for the shared driver below.
@@ -246,7 +246,7 @@ fn finish_spawned(
     spill: Option<SpillConfig>,
     alive: fn(u32) -> bool,
     ps: &Path,
-    drive: Drive<'_>,
+    drive: Drive,
 ) -> Result<Ran, std::io::Error> {
     let pgid = child.id();
     let shared = Arc::new(Shared::default());
@@ -338,7 +338,7 @@ fn finish_spawned(
             emit,
             alive,
             ps,
-            Some(*watch),
+            Some(&**watch),
         ),
     };
     // A call that left the foreground wait is no longer counted, whether it
@@ -634,7 +634,7 @@ pub(crate) fn execute_confined(
         spill,
         alive,
         ps,
-        Drive::Gated(&watch),
+        Drive::Gated(watch),
     )
 }
 
