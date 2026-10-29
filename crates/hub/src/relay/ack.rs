@@ -5,7 +5,7 @@
 use contract::SessionId;
 use serde_json::{Map, Value};
 
-use super::{Kept, Replayed, valid_session_id};
+use super::{Kept, KeptState, Replayed, valid_session_id};
 use crate::connection::{Hub, lock};
 
 /// Whether `kept` still holds `id`: an acknowledgement for one it does
@@ -37,14 +37,14 @@ pub(super) fn settle(
     exiting: bool,
 ) -> Option<Settled> {
     let ack = ack?;
-    let (id, command) = {
+    let (id, command, state) = {
         let mut kept = lock(kept);
         if kept.is_empty() {
             return None;
         }
         let at = kept.iter().position(|(kept, _, _)| *kept == ack.id)?;
-        let (_, command, _) = kept.remove(at);
-        (ack.id.clone(), command)
+        let (_, command, state) = kept.remove(at);
+        (ack.id.clone(), command, state)
     };
     // The kept lock is released before the caller takes the relays lock:
     // `route` takes relays and then kept, so the reverse order deadlocks.
@@ -52,7 +52,14 @@ pub(super) fn settle(
         Verdict::Closing
             if exiting || crate::resume::exited(&hub.home, &SessionId(session.to_owned())) =>
         {
-            Some(Settled::Reroute(id, command))
+            // A command the hub only partly wrote may have run: its own
+            // closing answer reaches the client, and the command is never
+            // routed again.
+            if state == KeptState::Partial {
+                None
+            } else {
+                Some(Settled::Reroute(id, command))
+            }
         }
         Verdict::Accepted
             if command.get("command").and_then(Value::as_str) == Some("subscribe") =>

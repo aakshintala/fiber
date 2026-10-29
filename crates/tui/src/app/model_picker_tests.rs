@@ -58,6 +58,7 @@ fn catalogue() -> Catalogue {
             extension: None,
         }],
         lists: Vec::new(),
+        left_out: Vec::new(),
     }
 }
 
@@ -105,6 +106,7 @@ fn catalogue_notices_show_under_their_own_codes() {
             },
         ],
         lists: Vec::new(),
+        left_out: Vec::new(),
     };
     app.on_models(Ok(catalogue.clone()));
     assert_eq!(app.notices().len(), 3);
@@ -244,6 +246,7 @@ fn three() -> Catalogue {
         ],
         notices: Vec::new(),
         lists: Vec::new(),
+        left_out: Vec::new(),
     }
 }
 
@@ -751,6 +754,7 @@ fn thirty() -> Catalogue {
             .collect(),
         notices: Vec::new(),
         lists: Vec::new(),
+        left_out: Vec::new(),
     }
 }
 
@@ -1892,6 +1896,7 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
         ],
         notices: Vec::new(),
         lists: Vec::new(),
+        left_out: Vec::new(),
     };
     let mut app = home();
     app.on_line(hello());
