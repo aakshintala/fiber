@@ -172,7 +172,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `tui.hover` | true | no | Whether hover highlights the click target under the pointer; false drops mouse mode 1003 (`docs/tui.md`, "Mouse and hover"). |
 | `tui.inline_images` | true | no | Whether images show inline where the terminal speaks kitty's graphics protocol (`docs/tui.md`, "Images"). |
 | `tui.logo_glyph` | `"⌇"` | no | The glyph before the name in the logo, `"⌇"` or `"≈"`, for a font without ⌇ (`docs/tui.md`, "The logo"). |
-| `tui.slots."<slot>"` | none | no | The extension that fills a slot two extensions replace, such as `tui.slots."ledger_row:shell"`; the same for a key two extensions bind, as `tui.slots."key:ctrl+k"` (`docs/tui.md`, "When two extensions want one slot"). |
+| `tui.slots."<slot>"` | none | no | The extension that fills a slot two extensions replace, such as `tui.slots."ledger_row:shell"`; the same for a key two extensions bind, as `tui.slots."key:ctrl+k"`, where the suffix canonicalizes as a key name and an unmatched setting wins nothing (`docs/tui.md`, "When two extensions want one slot"). |
 
 Hook order and hook timeouts are person-only so that the person keeps the
 final say over the hooks they run. Order is precedence, not a security

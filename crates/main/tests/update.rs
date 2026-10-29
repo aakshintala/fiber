@@ -47,8 +47,21 @@ impl Github {
     fn new(setup: &Setup) -> Self {
         let base = setup.root.path().join("gh");
         let repo = base.join("aakshintala/fiber");
-        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(repo.join("providers/anthropic")).unwrap();
         fs::write(repo.join("fiber.md"), "fiber").unwrap();
+        // The installed extension's package, committed before the
+        // served tags, so an update that clones it finds the package.
+        fs::write(
+            repo.join("providers/anthropic/extension.json"),
+            json!({
+                "name": "github.com/aakshintala/fiber/providers/anthropic",
+                "version": VERSION,
+                "fiber": "0.0.0",
+                "api": 1,
+            })
+            .to_string(),
+        )
+        .unwrap();
         fakes::git::git(&repo, &["init", "--quiet"]);
         fakes::git::git(&repo, &["add", "."]);
         fakes::git::git(&repo, &["commit", "--quiet", "-m", "fiber"]);
@@ -278,10 +291,75 @@ fn nightly_update_takes_the_newest_pre_release() {
     let server = serve();
     let github = Github::new(&setup);
     let copy = copy_binary(&setup);
-    let run = setup.run_update(&copy, &server, &github, &["update"], Some("nightly"));
+    let run = setup.run_update(
+        &copy,
+        &server,
+        &github,
+        &["update", "--channel", "nightly"],
+        None,
+    );
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(fs::read(&copy).unwrap(), MARKER);
     assert!(setup.home().join("docs").is_dir(), "{}", run.stderr);
+}
+
+/// Home as a nightly install writes it, with an installed extension
+/// whose record carries the nightly version: `fiber update --channel
+/// nightly` installs the newest nightly over it.
+#[test]
+fn nightly_update_with_an_installed_extension_replaces_the_running_copy() {
+    const NAME: &str = "github.com/aakshintala/fiber/providers/anthropic";
+    let setup = Setup::new();
+    let server = serve();
+    let github = Github::new(&setup);
+    // The manifest plus the install record the nightly install writes:
+    // the version from the record, requested, and the release tag's
+    // commit as the source.
+    let dir = setup.home().join("extensions/anthropic");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({
+            "name": NAME,
+            "version": NIGHTLY,
+            "fiber": "0.0.0",
+            "api": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let repo = setup.root.path().join("gh/aakshintala/fiber");
+    let commit = fakes::git::git(&repo, &["rev-list", "-n", "1", &format!("v{NIGHTLY}")]);
+    fs::write(
+        dir.join(".fiber.json"),
+        json!({
+            "name": NAME,
+            "version": NIGHTLY,
+            "requested": true,
+            "source": { "commit": commit },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let copy = copy_binary(&setup);
+    let run = setup.run_update(
+        &copy,
+        &server,
+        &github,
+        &["update", "--channel", "nightly"],
+        None,
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(fs::read(&copy).unwrap(), MARKER);
+    assert!(setup.home().join("docs").is_dir(), "{}", run.stderr);
+    assert!(run.stderr.contains("fiber: updated docs"), "{}", run.stderr);
+    let record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join(".fiber.json")).unwrap()).unwrap();
+    assert_eq!(record["version"], NIGHTLY, "{record}");
+    assert_eq!(record["requested"], true, "{record}");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
+    assert_eq!(manifest["name"], NAME, "{manifest}");
 }
 
 #[test]

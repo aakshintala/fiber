@@ -129,7 +129,7 @@ pub use open_at::OpenAt;
 
 pub use look::ThemeSetting;
 
-pub use keyset::KeysSetup;
+pub use keyset::{KeysSetup, canonical_key, check_action, person_bound_keys};
 
 pub use layout::{DEFAULT_PANEL_SHARE, DEFAULT_RAIL_SHARE, session_columns};
 
@@ -139,8 +139,8 @@ pub use paging_session::paging_session;
 pub use event_loop::run;
 
 pub use ext::{
-    CallState, Failure, Input as RendererInput, LedgerResult, LedgerRow, RawSpan, Renderer,
-    RowError,
+    CallState, Failure, Input as RendererInput, KeyOutcome, LedgerResult, LedgerRow, RawSpan,
+    Renderer, RowError,
 };
 
 /// Connects to the hub, starting one when none runs: the stream and the

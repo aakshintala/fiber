@@ -52,8 +52,12 @@ impl App {
     /// Folds the painted animations' dues into the motion wake: each
     /// animated item on screen asks its next frame at its last tick plus
     /// its interval, and the loop arms the earliest ask after the frame.
+    /// A notice that left the stack after its paint — fading in the
+    /// post-draw sweep — contributes no due, so no animation timer is
+    /// armed after fade or dismissal.
     fn anim_asks(&self) {
-        for (last, interval) in self.pages().ext.cache.anim_dues() {
+        let live = self.notices.live_ids();
+        for (last, interval) in self.pages().ext.cache.anim_dues_live(&live) {
             self.motion.ask_animate(last, interval);
         }
     }
