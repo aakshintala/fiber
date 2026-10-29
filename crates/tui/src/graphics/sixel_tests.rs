@@ -129,20 +129,39 @@ fn two_columns_pin_the_band_walk_to_row_times_width() {
 }
 
 /// Thirteen rows open three bands: the tail band holds one row. The
-/// encode runs on a worker under the must-succeed bound, so a broken
-/// band step fails the test instead of hanging its runner.
+/// encode runs in a child process under the must-succeed bound, so a
+/// broken band step fails the test instead of hanging its runner: the
+/// child's group is killed and reaped on the deadline.
 #[test]
 fn thirteen_rows_open_three_bands() {
-    use fakes::{Deadline, MUST_SUCCEED_WITHIN, within};
-    let rgba = [[255, 0, 0, 255]].repeat(13).concat();
-    let encoded = within(
-        "the third band encodes",
-        Deadline::after(MUST_SUCCEED_WITHIN),
-        move || encode(1, 13, &rgba, [0, 0, 0]),
-    );
-    assert_eq!(
-        encoded,
-        b"\x1bP0;1q\"1;1;1;13#0;2;100;0;0#0~$-#0~$-#0@$-\x1b\\".as_slice()
+    // In the child, run the probe and assert the exact bytes here, so
+    // a mismatch fails where the bytes are made.
+    if std::env::var("FIBER_SIXEL_BAND_PROBE").is_ok() {
+        let rgba = [[255, 0, 0, 255]].repeat(13).concat();
+        assert_eq!(
+            encode(1, 13, &rgba, [0, 0, 0]),
+            b"\x1bP0;1q\"1;1;1;13#0;2;100;0;0#0~$-#0~$-#0@$-\x1b\\".as_slice()
+        );
+        return;
+    }
+    use std::os::unix::process::CommandExt as _;
+    let exe = std::env::current_exe().expect("the test binary");
+    let child = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("graphics::sixel::tests::thirteen_rows_open_three_bands")
+        .arg("--nocapture")
+        .env("FIBER_SIXEL_BAND_PROBE", "1")
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the band probe spawns");
+    let output = fakes::wait_output(child, "the third band encodes");
+    assert!(
+        output.status.success(),
+        "the band probe passed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
