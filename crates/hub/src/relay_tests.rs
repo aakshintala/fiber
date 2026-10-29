@@ -2778,8 +2778,7 @@ fn the_command_state_table_matches_the_transition_api() {
         stages(&order, from);
         order.transition("c_1", to).is_ok()
     }
-    let doc = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/invocation.md");
-    let text = std::fs::read_to_string(&doc).expect("docs/invocation.md is readable");
+    let text = include_str!("../../../docs/invocation.md");
     let start = text
         .find("**A relayed command passes through these states.**")
         .expect("the relayed-command table intro is present");
