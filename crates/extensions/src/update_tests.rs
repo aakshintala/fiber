@@ -38,19 +38,6 @@ fn serve(
     shorts: &[(&str, &str)],
     nightlies: &str,
 ) -> fakes::ProviderServer {
-    serve_for(TRIPLE, marker, docs, shorts, nightlies)
-}
-
-/// A fixture release serving the binary archive named `archive`: the
-/// caller names the musl archive while staging a gnu triple, so the
-/// stage must ask for the served name rather than the build triple.
-fn serve_for(
-    archive_name: &str,
-    marker: &[u8],
-    docs: &[u8],
-    shorts: &[(&str, &str)],
-    nightlies: &str,
-) -> fakes::ProviderServer {
     let binary = gzip(&archive(&[(
         header("fiber", b'0', marker.len() as u64, 0o755, ""),
         marker,
@@ -75,7 +62,7 @@ fn serve_for(
         })
         .collect();
     let extensions = gzip(&archive(&members));
-    let binary_file = format!("fiber-{archive_name}.tar.gz");
+    let binary_file = format!("fiber-{TRIPLE}.tar.gz");
     let paths = [
         format!("/download/v{RELEASE}/{binary_file}"),
         format!("/download/v{RELEASE}/{binary_file}.sha256"),
@@ -990,8 +977,7 @@ fn a_gnu_linux_build_stages_the_musl_archive() {
     setup.member("github.com/acme/widget", "1.0.0");
     setup.install("github.com/acme/widget");
     setup.tag_release();
-    let server = serve_for(
-        "x86_64-unknown-linux-musl",
+    let server = serve(
         b"marker",
         b"new",
         &[(
@@ -1035,9 +1021,10 @@ fn a_gnu_linux_build_stages_the_musl_archive() {
     );
 }
 
-/// A platform with no published archive fails before any download: the
-/// error names the platform and every published target, and the
-/// fixture sees no request of any kind.
+/// A platform with no published archive fails before any download
+/// (`docs/releasing.md`, "Updating" step 2): the error names the
+/// platform and every published target, and the fixture sees no
+/// request of any kind.
 #[test]
 fn an_unlisted_platform_fails_before_any_download() {
     let mut setup = Setup::new();
@@ -1079,6 +1066,8 @@ fn an_unlisted_platform_fails_before_any_download() {
     ] {
         assert!(said.contains(archive), "{said}");
     }
+    // `docs/releasing.md`, "Updating" step 2: an unlisted platform stops
+    // before any download.
     assert!(
         server.requests().is_empty(),
         "no download runs: {:?}",
