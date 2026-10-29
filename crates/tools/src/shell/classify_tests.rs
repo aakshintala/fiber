@@ -1603,18 +1603,31 @@ fn a_configured_link_following_flag_stays_reviewed() {
             "grep",
             &["--dereference-recursive="],
         ),
+        ("grep -Rn x ws", "grep", &["-Rn"]),
+        ("grep -nR x ws", "grep", &["-nR"]),
+        ("grep -Rr x ws", "grep", &["-Rr"]),
         ("rg -L x", "rg", &["-L"]),
         ("rg --follow x", "rg", &["--follow"]),
+        ("rg -Ln x ws", "rg", &["-Ln"]),
         ("find -L x", "find", &["-L"]),
         ("find -H x", "find", &["-H"]),
         ("find -follow x", "find", &["-follow"]),
+        ("find -LH x", "find", &["-LH"]),
         ("ls -L x", "ls", &["-L"]),
+        ("ls -lL x", "ls", &["-lL"]),
     ] {
         let entries = [configured(name, flags)];
         assert_configured_closed(command, &entries);
     }
-    // Near misses still read: the guard fires on the exact spelling in
-    // flag position only.
+    // A bundled cluster without the link-following letter still reads under
+    // its listed spelling.
+    assert_configured_reads(
+        "grep -Pn x ws",
+        &[configured("grep", &["-Pn"])],
+        &["/work/ws"],
+    );
+    // Near misses still read: the guard fires on the exact spelling or a
+    // cluster holding its letter, in flag position only.
     for command in [
         "grep -r x ws",
         "grep -L x ws",

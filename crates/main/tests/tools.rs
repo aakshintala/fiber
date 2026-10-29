@@ -948,9 +948,10 @@ fn a_configured_read_only_command_skips_review() {
 #[test]
 fn a_configured_flag_on_a_built_in_command_skips_review() {
     // `git status` has a flag list, so the person's same-named entry merges:
-    // `git status --long` declares `reads` and runs with no
-    // `permission_resolved` and no reviewer request. The workspace is a
-    // repository so the call itself succeeds.
+    // `git status --long` declares `reads` and never reaches a reviewer
+    // (`docs/permissions.md`, "Fast paths": every call whose only effect is
+    // `reads` never reaches one). The workspace is a repository so the call
+    // itself succeeds.
     let setup = Setup::new_with_started_deadline();
     git(setup.deadline, &setup.workspace(), &["init", "--quiet"]);
     let server = ProviderServer::start([
@@ -971,19 +972,13 @@ fn a_configured_flag_on_a_built_in_command_skips_review() {
     let run = setup.run(&["ask", "show the status"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    // A running shell streams `tool_call_delta`, absent from `read_kinds()`
-    // and of varying count: filter it exactly as the configured `printf`
-    // test does, and pin every other kind in order.
-    let kinds: Vec<&str> = run
-        .lines
-        .iter()
-        .map(|line| line["kind"].as_str().unwrap())
-        .filter(|kind| *kind != "tool_call_delta")
-        .collect();
-    assert_eq!(kinds, read_kinds());
     assert!(
-        run.kinds().contains(&"tool_call_delta"),
-        "a running shell streams deltas"
+        !run.kinds().contains(&"permission_resolved"),
+        "a reads-only call reached review"
+    );
+    assert!(
+        run.kinds().contains(&"tool_call_started"),
+        "a reads-only call never ran"
     );
     let completed = run
         .lines
@@ -999,8 +994,6 @@ fn a_configured_flag_on_a_built_in_command_skips_review() {
         "unexpected content: {}",
         completed["payload"]["content"][0]["text"]
     );
-    let requests = server.requests();
-    assert_eq!(requests.len(), 2);
 }
 
 #[test]

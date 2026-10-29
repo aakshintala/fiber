@@ -1033,11 +1033,13 @@ fn builtin_outcome(
 /// follow symbolic links, such as `grep -R`: the credential deny sees only
 /// the paths a call names, never a link below them, so the call is reviewed
 /// even when the person lists the flag. The built-in list omits these
-/// spellings; this guard keeps a merged entry from adding one back. Only a
-/// flag-position word reaches it: an operand after `--` keeps its meaning.
+/// spellings; this guard keeps a merged entry from adding one back. A
+/// bundled short-option cluster counts letter by letter, such as `grep -Rn`:
+/// the system tool follows links for the `R` inside it. Only a flag-position
+/// word reaches it: an operand after `--` keeps its meaning.
 fn follows_links(command: &str, word: &str) -> bool {
     let spelling = word.split('=').next().unwrap_or(word);
-    matches!(
+    if matches!(
         (command, spelling),
         ("grep", "-R")
             | ("grep", "--dereference-recursive")
@@ -1047,7 +1049,21 @@ fn follows_links(command: &str, word: &str) -> bool {
             | ("find", "-H")
             | ("find", "-follow")
             | ("ls", "-L")
-    )
+    ) {
+        return true;
+    }
+    let Some(cluster) = spelling.strip_prefix('-') else {
+        return false;
+    };
+    if cluster.starts_with('-') || cluster.is_empty() {
+        return false;
+    }
+    match command {
+        "grep" => cluster.contains('R'),
+        "rg" | "ls" => cluster.contains('L'),
+        "find" => cluster.contains('L') || cluster.contains('H'),
+        _ => false,
+    }
 }
 
 /// Whether the merged entry accepts one flag word under the configured
