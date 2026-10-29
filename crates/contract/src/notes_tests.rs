@@ -253,6 +253,7 @@ fn builtin_names_hold_builtins_and_their_slash_forms_but_no_sample_data() {
         "git log",
         "git show",
         "git rev-parse",
+        "git merge-base",
         "git ls-files",
         "git blame",
         "git stash list",

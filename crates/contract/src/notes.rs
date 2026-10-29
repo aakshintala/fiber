@@ -458,6 +458,7 @@ pub const BUILTIN_READ_ONLY_NAMES: &[&str] = &[
     "git log",
     "git show",
     "git rev-parse",
+    "git merge-base",
     "git ls-files",
     "git blame",
     "git stash list",
