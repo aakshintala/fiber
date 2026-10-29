@@ -1613,6 +1613,8 @@ fn a_configured_link_following_flag_stays_reviewed() {
         ("find -H x", "find", &["-H"]),
         ("find -follow x", "find", &["-follow"]),
         ("find -LH x", "find", &["-LH"]),
+        ("find -Lx x", "find", &["-Lx"]),
+        ("find -Hx x", "find", &["-Hx"]),
         ("ls -L x", "ls", &["-L"]),
         ("ls -lL x", "ls", &["-lL"]),
     ] {
@@ -1624,6 +1626,14 @@ fn a_configured_link_following_flag_stays_reviewed() {
     assert_configured_reads(
         "grep -Pn x ws",
         &[configured("grep", &["-Pn"])],
+        &["/work/ws"],
+    );
+    // A long option is never letter-matched: only the exact spellings above
+    // follow links, so a configured long spelling holding `R` still reads.
+    // The `||` guard pins this: `&&` would letter-match `-fooR` and execute.
+    assert_configured_reads(
+        "grep --fooR x ws",
+        &[configured("grep", &["--fooR"])],
         &["/work/ws"],
     );
     // Near misses still read: the guard fires on the exact spelling or a
