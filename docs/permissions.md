@@ -357,19 +357,48 @@ Each proposal comes from evidence:
 
 - the project's own files: its git remotes, its CI configuration and its
   package registries;
-- the person's answer to one question per topic;
+- the person's answer to one question per topic, except Read-only commands,
+  which asks none;
 - the person's Fiber sessions: calls the reviewer blocked that a person then
   allowed, an escalation answered allow ("What happens on a block"), counted
-  per prefix. Nothing else in a session is read.
+  per prefix; reviewer allow decisions on shell calls, counted by their
+  subject for the last topic below — the single command plus the flags it
+  used, as in "What a rule matches". A subject does not count when any of
+  its flags, by name before any "=", is on this fixed list: "-o",
+  "--output", "--out", "--output-file", "-w", "--write", "-i",
+  "--in-place", "--fix", "--apply", "--force", "--delete", "--save", so
+  "acme-cli query --output out.txt" is never proposed. A command word
+  containing "/" gets no entry. The risk line still shows for every proposal,
+  because the list is a minimum, not proof. Nothing else in a session is
+  read: allowed-escalation counts and reviewer-allow counts.
+- **Read-only commands**, the last topic: reviewer allow decisions on shell
+  calls, counted by subject. A subject counts once it has at least 5 allows
+  across the person's sessions and no deny, block or escalation; a call
+  counts toward a subject when its `permission_resolved` has
+  `"decision: allow"` and `"decided_by: reviewer"`. A call with more than
+  one part has no subject, so it never counts. The tally counts the command
+  the reviewer saw, after `before_tool`.
 
-The session's model turns the evidence for each topic into proposed lines, one
-fact or rule a line, in a request of its own that carries no conversation. Its
-`usage_recorded` belongs to no action. Fourteen escalations answered allow for
-`gh pr merge … --squash` on the person's repositories become "squash-merging my
-own pull requests once CI passes". The person confirms, edits or strikes each
-line. Only confirmed lines are kept, and no model writes or rewrites the notes
-themselves: a template sets each confirmed line as a bullet under its topic's
-heading.
+The session's model turns the evidence for each topic but Read-only commands
+into proposed lines, one fact or rule a line, in a request of its own that
+carries no conversation. Its `usage_recorded` belongs to no action. Fourteen
+escalations answered allow for `gh pr merge … --squash` on the person's
+repositories become "squash-merging my own pull requests once CI passes". The
+person confirms, edits or strikes each line. Only confirmed lines are kept,
+and no model writes or rewrites the notes themselves: a template sets each
+confirmed line as a bullet under its topic's heading.
+
+For Read-only commands no model request goes out and no `usage_recorded` is
+written: a template builds each proposal from its tally, and the proposal
+shows the counted calls' subjects so the person sees what they are vouching
+for. Each proposal is a `shell.read_only."<command> [<subcommand>]".flags`
+entry holding the flags the counted calls used. The person confirms, edits
+or strikes each entry as with note lines, and Esc on its lines goes back to
+the previous topic's lines, because this topic has no question to return
+to. No model writes the entry. A confirmed entry goes to the per-project
+config when every allow behind it came from this project, and to the global
+config otherwise, using the rule session lines already use. A save that
+writes only entries counts as saved.
 
 Each line shows the layer it will go to, and one key flips it. A line from the
 project's files goes to the per-project notes. An answer about accounts, hosts
@@ -378,14 +407,52 @@ when every escalation behind it came from this project, and to the global notes
 otherwise.
 
 Last, one screen shows each layer's notes exactly as they will be saved, as a
-diff against what is there, with the file named. Approving saves them and then
-offers a reload now or the change from the next session, because the notes are
-fixed for the session. Cancelling saves nothing.
+diff against what is there, with the file named, and beside them the config
+file's diff with its entries, with the file named. Approving saves them and
+then offers a reload now or the change from the next session, because the
+notes are fixed for the session. Cancelling saves nothing.
 
-The command owns the bullets under its topic headings. Run again, it shows its
-earlier lines first, to keep or strike, and proposes only what they do not
-already cover. Text outside its headings, such as prose the person wrote, is
-kept byte for byte.
+The command owns the bullets under its topic headings; Read-only commands
+owns none, because its entries live in configuration, not the notes. Run
+again, it shows its earlier lines first, to keep or strike, and proposes
+only what they do not already cover; a command the built-in list or either
+layer's `shell.read_only` already holds is never re-proposed. Text outside
+its headings, such as prose the person wrote — including a person's own
+"### Read-only commands" — is kept byte for byte.
+
+An entry is proposed only when the command and subcommand words end where
+its paths begin, and only for a command path that neither equals, contains
+nor falls under an entry already configured; existing entries are never
+changed. When either layer's "shell.read_only" cannot be read, no entry is
+proposed.
+
+A command the built-in list already holds is never proposed. A built-in
+entry wins over a configured one of the same name.
+
+An entry always names a subcommand path, and is not proposed when any call
+it would cover was denied, blocked or escalated.
+
+A denied, blocked or escalated call that cannot be parsed counts against
+every entry whose command name appears in it, and so does one an extension
+ran.
+
+A subject that gets no entry is shown dim with the reason, and is never
+saved.
+
+A call that gave a flag a value, such as "--exec=ls", gets no entry.
+
+A command word containing "/" gets no entry.
+
+If the read-only proposal fails, the setup shows why and goes on to the
+diff without it.
+
+An entry is trusted: a command on it that writes after all writes without
+review.
+
+Subjects are counted by their exact text. User names and passwords are
+removed from every URL in the evidence text before it leaves the session. A
+proposed entry holds only the command, the subcommand and flag names, never
+flag values, so it carries no URL.
 
 ### How it runs
 
