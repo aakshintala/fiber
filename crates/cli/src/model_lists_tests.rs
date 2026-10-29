@@ -817,6 +817,52 @@ fiber.provider("acme", {{
 const HUB_ENV_HOST: &str = "FIBER_TEST_MODEL_LISTS_HUB_ENV_HOST";
 
 /// Installs the extension `extension` registering the provider `name`
+/// with one model whose base URL fills `{setting}`, declared with no
+/// environment fallback, and writes `value` for it to the extension's
+/// global configuration file.
+fn install_placeholder_setting(
+    setup: &Setup,
+    extension: &str,
+    name: &str,
+    setting: &str,
+    value: &str,
+) {
+    let dir = setup.home().join("extensions").join(extension);
+    let data = json!({
+        "name": name,
+        "placeholders": {setting: {}},
+        "models": [{"id": "m", "protocol": "openai-responses",
+                    "base_url": format!("https://{{{setting}}}/v1"),
+                    "context_window": 1000}],
+    });
+    let mut manifest = json!({
+        "name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": extensions::API,
+    });
+    manifest["providers"] = Value::Object(
+        [(
+            name.to_owned(),
+            json!([format!("https://{{{setting}}}/v1")]),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    std::fs::write(
+        dir.join("providers").join(format!("{name}.json")),
+        data.to_string(),
+    )
+    .unwrap();
+    let file = setup
+        .home()
+        .join("config")
+        .join(format!("{extension}.json"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, json!({setting: value}).to_string()).unwrap();
+}
+
+/// Installs the extension `extension` registering the provider `name`
 /// with one model whose base URL fills `{workspace}` from the
 /// environment variable `var`.
 fn install_placeholder(setup: &Setup, extension: &str, name: &str, var: &str) {
@@ -1022,4 +1068,105 @@ fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
     )
     .unwrap();
     assert_eq!(notices, [others, unconfigured].concat());
+}
+
+#[test]
+fn model_lists_grouped_separates_missing_groups_from_not_a_host_notices() {
+    assert!(
+        std::env::var_os(HUB_ENV_HOST).is_none(),
+        "the test process lacks {HUB_ENV_HOST}"
+    );
+    let setup = Setup::new("fiber-model-list-grouped");
+    // Provider `acme` with a placeholder with no value: Missing.
+    install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
+    // Provider `bad` with a setting value that is not a host: NotHost.
+    install_placeholder_setting(&setup, "bad-ext", "bad", "host", "x/y");
+    let called = Cell::new(false);
+    let grouped = || {
+        super::model_lists_grouped(
+            &setup.home(),
+            &setup.workspace(),
+            ModelLists::Cached,
+            &unloaded(&called),
+            &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+    };
+    let (providers, _config, others, not_host, groups) = grouped();
+    // The Missing model is absent from both notice lists and present as
+    // one group.
+    assert!(
+        others
+            .iter()
+            .all(|notice| !notice.message.contains("acme/m")),
+        "{others:?}"
+    );
+    assert!(
+        not_host
+            .iter()
+            .all(|notice| !notice.message.contains("acme/m")),
+        "{not_host:?}"
+    );
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].provider(), "acme");
+    assert_eq!(groups[0].setting(), "workspace");
+    let ids: Vec<&str> = groups[0]
+        .models()
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(ids, ["m"]);
+    // The value that is not a host stays a per-model notice.
+    assert_eq!(not_host.len(), 1, "{not_host:?}");
+    assert!(not_host[0].message.contains("bad/m"), "{not_host:?}");
+    assert!(
+        not_host[0].message.contains("is not a host"),
+        "{not_host:?}"
+    );
+    assert_eq!(not_host[0].code, ErrorCode::ModelUnconfigured);
+    // Grouped and apart reads agree on the listed models and differ only
+    // in the Missing representation.
+    let mut grouped_models = Vec::new();
+    for name in providers.names() {
+        let Some(data) = providers.get(name) else {
+            continue;
+        };
+        for model in &data.models {
+            grouped_models.push(format!("{name}/{}", model.id));
+        }
+    }
+    let (apart, _, _, apart_unconfigured) = super::model_lists_apart(
+        &setup.home(),
+        &setup.workspace(),
+        ModelLists::Cached,
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let mut apart_models = Vec::new();
+    for name in apart.names() {
+        let Some(data) = apart.get(name) else {
+            continue;
+        };
+        for model in &data.models {
+            apart_models.push(format!("{name}/{}", model.id));
+        }
+    }
+    assert_eq!(grouped_models, apart_models);
+    assert!(apart_models.is_empty(), "{apart_models:?}");
+    assert_eq!(apart_unconfigured.len(), 2, "{apart_unconfigured:?}");
+    assert!(
+        apart_unconfigured
+            .iter()
+            .any(|notice| notice.message.contains("acme/m")),
+        "{apart_unconfigured:?}"
+    );
+    assert!(
+        apart_unconfigured
+            .iter()
+            .any(|notice| notice.message.contains("bad/m")),
+        "{apart_unconfigured:?}"
+    );
 }

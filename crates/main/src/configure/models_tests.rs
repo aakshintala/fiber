@@ -52,6 +52,38 @@ fn install_data(home: &Path, extension: &str, name: &str, ids: &[&str], extra: &
     );
 }
 
+/// Installs a data-only extension `extension` registering provider
+/// `name` with `models` on `{setting}` and that one placeholder
+/// declared, the `install_data` layout with separate extension and
+/// provider names. `credential` is merged into the provider data, so a
+/// `credential_label` reads a login no `fiber login` asks for. The
+/// directory is the extension's short name, as on disk.
+fn install_placeholder(
+    home: &Path,
+    extension: &str,
+    name: &str,
+    setting: &str,
+    models: Value,
+    credential: &Value,
+) {
+    let mut data = json!({"name": name, "models": models});
+    data["placeholders"] = Value::Object([(setting.to_owned(), json!({}))].into_iter().collect());
+    for (key, value) in credential.as_object().cloned().unwrap_or_default() {
+        data[key] = value;
+    }
+    install_extension(
+        home,
+        &format!("extensions/{}", config::dir_name(extension)),
+        json!({
+            "name": extension,
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API,
+        }),
+        &[(name, data)],
+    );
+}
+
 /// Installs a Lua extension with this `init.lua`, the way
 /// `fiber extension install <path>` does.
 fn install_lua(root: &Path, home: &Path, extension: &str, init: &str, providers: &Value) {
@@ -512,4 +544,77 @@ fn hub_models_keeps_an_io_failure_code() {
     let error = call(&seam, "models", json!({"workspace": rig.workspace})).unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert_ne!(error.code, ErrorCode::ConfigInvalid);
+}
+
+/// A placeholder with no value rides the answer as one `left_out`
+/// element with all six fields: the raw extension, the file built from
+/// it, and each model's name only when the provider data names one.
+#[test]
+fn hub_models_encodes_a_group_with_no_value() {
+    let rig = Rig::new("fiber-hub-models-left-out");
+    install_placeholder(
+        &rig.home,
+        "acme-ext",
+        "acme",
+        "api_key",
+        json!([
+            {"id": "m1", "protocol": "openai-responses",
+             "base_url": "https://{api_key}/v1", "context_window": 1000,
+             "name": "Acme One"},
+            {"id": "m2", "protocol": "openai-responses",
+             "base_url": "https://{api_key}/v1", "context_window": 1000},
+        ]),
+        &json!({"credential_label": {"names": "key", "default": "the environment"}}),
+    );
+    let seam = Seam::new(rig.home.clone());
+    let catalogue = result(&seam, "models", json!({"workspace": rig.workspace}));
+    assert!(references(&catalogue).is_empty(), "{catalogue:?}");
+    assert_eq!(
+        catalogue["notices"],
+        json!([]),
+        "no Missing notice at launch: {catalogue:?}"
+    );
+    assert_eq!(
+        catalogue["left_out"],
+        json!([{
+            "provider": "acme",
+            "extension": "acme-ext",
+            "file": "config/acme-ext.json",
+            "setting": "api_key",
+            "login": false,
+            "models": [{"id": "m1", "name": "Acme One"}, {"id": "m2"}],
+        }]),
+    );
+}
+
+/// A first-party extension's `left_out` element carries its full name
+/// while its file is the short directory name.
+#[test]
+fn hub_models_encodes_a_first_party_group() {
+    let rig = Rig::new("fiber-hub-models-first-party");
+    install_placeholder(
+        &rig.home,
+        "github.com/aakshintala/fiber/providers/opencode",
+        "opencode",
+        "workspace",
+        json!([
+            {"id": "m1", "protocol": "openai-responses",
+             "base_url": "https://{workspace}/v1", "context_window": 1000},
+        ]),
+        &json!({}),
+    );
+    let seam = Seam::new(rig.home.clone());
+    let catalogue = result(&seam, "models", json!({"workspace": rig.workspace}));
+    assert!(references(&catalogue).is_empty(), "{catalogue:?}");
+    assert_eq!(
+        catalogue["left_out"],
+        json!([{
+            "provider": "opencode",
+            "extension": "github.com/aakshintala/fiber/providers/opencode",
+            "file": "config/opencode.json",
+            "setting": "workspace",
+            "login": true,
+            "models": [{"id": "m1"}],
+        }]),
+    );
 }

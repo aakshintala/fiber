@@ -23,7 +23,7 @@ mod placeholders;
 mod scripted;
 
 pub(crate) use declared::{first_undeclared, provider_scripts};
-pub use placeholders::Unconfigured;
+pub use placeholders::{Unconfigured, UnconfiguredModel};
 pub use scripted::START_ONLY;
 
 /// One model a placeholder fill left out: its per-model notice, and, for a
@@ -911,7 +911,10 @@ impl Providers {
                                     setting: name.clone(),
                                     variable: variable.map(str::to_owned),
                                     login,
-                                    models: vec![model.id.clone()],
+                                    models: vec![UnconfiguredModel {
+                                        id: model.id.clone(),
+                                        name: model.name.clone(),
+                                    }],
                                 }),
                             });
                         }

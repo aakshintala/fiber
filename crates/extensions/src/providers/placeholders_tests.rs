@@ -11,7 +11,10 @@ use std::path::Path;
 
 use config::{Config, ConfigError, Placeholder, ProjectKey, ProviderData, Sources};
 
-use super::{Filled, Source, Unconfigured, fill, host, hosts, not_a_host, unconfigured, value};
+use super::{
+    Filled, Source, Unconfigured, UnconfiguredModel, fill, host, hosts, not_a_host, unconfigured,
+    value,
+};
 use crate::Providers;
 
 /// A lookup that serves `value` from the setting for `name` and nothing
@@ -528,7 +531,13 @@ fn left_out(ids: &[&str], variable: Option<&str>, login: bool) -> Unconfigured {
         setting: "workspace".to_owned(),
         variable: variable.map(str::to_owned),
         login,
-        models: ids.iter().map(|id| (*id).to_owned()).collect(),
+        models: ids
+            .iter()
+            .map(|id| UnconfiguredModel {
+                id: (*id).to_owned(),
+                name: None,
+            })
+            .collect(),
     }
 }
 
@@ -620,7 +629,15 @@ fn the_aggregate_notice_counts_only_the_models_listed_admits() {
     let group = left_out(&["alpha-1", "alpha-2", "beta-1"], None, true);
     assert_eq!(group.provider(), "acme");
     assert_eq!(group.setting(), "workspace");
-    assert_eq!(group.models(), ["alpha-1", "alpha-2", "beta-1"]);
+    assert_eq!(group.extension(), "ext-acme");
+    assert!(group.login());
+    let ids: Vec<&str> = group
+        .models()
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(ids, ["alpha-1", "alpha-2", "beta-1"]);
+    assert!(group.models().iter().all(|model| model.name.is_none()));
     let alpha = group
         .notice(&|reference: &str| reference.starts_with("acme/alpha"))
         .unwrap();
@@ -638,4 +655,39 @@ fn the_aggregate_notice_counts_only_the_models_listed_admits() {
         beta.message
     );
     assert_eq!(group.notice(&|_: &str| false), None);
+}
+
+#[test]
+fn a_group_over_named_models_keeps_their_names_and_counts_them_as_before() {
+    let group = Unconfigured {
+        provider: "acme".to_owned(),
+        extension: "ext-acme".to_owned(),
+        setting: "workspace".to_owned(),
+        variable: None,
+        login: true,
+        models: vec![
+            UnconfiguredModel {
+                id: "m1".to_owned(),
+                name: Some("Acme One".to_owned()),
+            },
+            UnconfiguredModel {
+                id: "m2".to_owned(),
+                name: None,
+            },
+        ],
+    };
+    assert_eq!(group.models().len(), 2);
+    assert_eq!(group.models()[0].id, "m1");
+    assert_eq!(group.models()[0].name.as_deref(), Some("Acme One"));
+    assert_eq!(group.models()[1].id, "m2");
+    assert_eq!(group.models()[1].name, None);
+    assert_eq!(group.extension(), "ext-acme");
+    assert!(group.login());
+    let notice = group.notice(&every).unwrap();
+    assert_eq!(
+        notice.message,
+        "`acme`: 2 models need the setting `workspace` for their base URL, \
+         which has no value. Run `fiber login acme`, or set `workspace` in \
+         `config/ext-acme.json` in Fiber home."
+    );
 }
