@@ -2278,14 +2278,10 @@ fn wheel_inside_search_and_completion_slabs_over_an_item_moves_nothing() {
         tall_transcript(&mut app);
         app.jump(1);
         let item = app.screen.top().expect("the transcript starts scrolled");
-        match surface {
-            crate::app::Surface::Search => {
-                app.open_search();
-            }
-            crate::app::Surface::Completion => {
-                app.on_key(Key::Char('/'), fakes::clock::FakeClock::new().now());
-            }
-            _ => unreachable!(),
+        if surface == crate::app::Surface::Search {
+            app.open_search();
+        } else {
+            app.on_key(Key::Char('/'), fakes::clock::FakeClock::new().now());
         }
         let (width, height) = app.screen_size();
         let area = Rect::new(0, 0, width, height);
