@@ -3400,12 +3400,12 @@ fn macos_confined_shell_refuses_a_configured_credential_file() {
 fn macos_confined_git_commit_works_in_a_checkout() {
     let confined = MacosConfined::new("fiber-macos-shell-git", &[]);
     let repo = &confined.workspace;
-    git(&["init", "-q"], repo);
-    git(&["config", "user.email", "confined@example.com"], repo);
-    git(&["config", "user.name", "Confined"], repo);
+    fakes::git::git(repo, &["init", "-q"]);
+    fakes::git::git(repo, &["config", "user.email", "confined@example.com"]);
+    fakes::git::git(repo, &["config", "user.name", "Confined"]);
     std::fs::write(repo.join("file.txt"), "one\n").unwrap();
-    git(&["add", "file.txt"], repo);
-    git(&["commit", "-qm", "initial"], repo);
+    fakes::git::git(repo, &["add", "file.txt"]);
+    fakes::git::git(repo, &["commit", "-qm", "initial"]);
 
     let status = confined.run("GIT_CONFIG_GLOBAL=/dev/null git status --short");
     assert!(status.error.is_none(), "status runs confined");
@@ -3414,7 +3414,7 @@ fn macos_confined_git_commit_works_in_a_checkout() {
     assert!(wrote.error.is_none(), "a tracked write succeeds");
     let commit = confined.run("GIT_CONFIG_GLOBAL=/dev/null git commit -qam confined");
     assert!(commit.error.is_none(), "a confined commit lands");
-    let log = git(&["log", "--format=%s"], repo);
+    let log = fakes::git::git(repo, &["log", "--format=%s"]);
     assert!(log.contains("confined"), "the commit is in the log");
 
     let checkout = confined.run("GIT_CONFIG_GLOBAL=/dev/null git checkout -qb branch");
@@ -3449,14 +3449,14 @@ fn macos_confined_git_commit_works_in_a_worktree() {
     let root = fakes::TempDir::under(&home, "fiber-macos-shell-worktree");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    git(&["init", "-q"], &repo);
-    git(&["config", "user.email", "confined@example.com"], &repo);
-    git(&["config", "user.name", "Confined"], &repo);
+    fakes::git::git(&repo, &["init", "-q"]);
+    fakes::git::git(&repo, &["config", "user.email", "confined@example.com"]);
+    fakes::git::git(&repo, &["config", "user.name", "Confined"]);
     std::fs::write(repo.join("file.txt"), "one\n").unwrap();
-    git(&["add", "file.txt"], &repo);
-    git(&["commit", "-qm", "initial"], &repo);
+    fakes::git::git(&repo, &["add", "file.txt"]);
+    fakes::git::git(&repo, &["commit", "-qm", "initial"]);
     let worktree = root.path().join("wt");
-    git(&["worktree", "add", &worktree.to_string_lossy()], &repo);
+    fakes::git::git(&repo, &["worktree", "add", &worktree.to_string_lossy()]);
 
     let sandbox = Arc::new(Mutex::new(SandboxSettings {
         enabled: true,
@@ -3481,7 +3481,7 @@ fn macos_confined_git_commit_works_in_a_worktree() {
         "a worktree commit lands: {}",
         text(&commit)
     );
-    let log = git(&["log", "--format=%s"], &worktree);
+    let log = fakes::git::git(&worktree, &["log", "--format=%s"]);
     assert!(log.contains("worktree"), "the commit is in the log");
 
     let pointer = std::fs::read_to_string(worktree.join(".git")).unwrap();
@@ -3518,8 +3518,9 @@ fn macos_confined_git_commit_works_in_a_worktree() {
 }
 
 /// Unix sockets stay unreachable: a bind inside the workspace fails, and a
-/// connect to a listener outside the grants fails too. `launchd` stays
-/// unreachable as well.
+/// connect to a listener outside the grants — including Fiber's own
+/// `FIBER_HOME/run/` socket path — fails too. `launchd` stays unreachable
+/// as well.
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_confined_shell_cannot_reach_sockets() {
@@ -3549,6 +3550,22 @@ fn macos_confined_shell_cannot_reach_sockets() {
         outside.display()
     ));
     assert!(connected.error.is_some(), "a unix connect fails");
+
+    // Fiber's own `run/` sockets stay unreachable too: a listener under the
+    // session's `FIBER_HOME/run/` answers nothing to a confined call.
+    let run_dir = confined.root.path().join("fiber-home").join("run");
+    std::fs::create_dir_all(&run_dir).expect("the test makes its run dir");
+    let run_sock = run_dir.join("test.sock");
+    let _run_listener = UnixListener::bind(&run_sock).expect("the test binds its own run socket");
+    let run_connected = confined.run(&format!(
+        "python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('{}')\"",
+        run_sock.display()
+    ));
+    assert!(run_connected.error.is_some(), "a run-socket connect fails");
+    assert!(
+        !text(&run_connected).contains("FIBER_SANDBOX_CONFINED"),
+        "the marker never reaches the caller"
+    );
 
     let launchd = confined.run("launchctl list");
     assert!(launchd.error.is_some(), "launchd stays unreachable");
@@ -3722,7 +3739,9 @@ fn macos_confined_background_call_moves_only_after_its_marker() {
 /// A quiet confined call hands off right after its marker: with the fake
 /// clock frozen and no output after the marker, only the marker
 /// observation can wake the parked drive loop, so the receipt arrives
-/// while the command still runs instead of at its end.
+/// while the command still runs instead of at its end
+/// (`docs/sandbox.md`, "On macOS": no move hands the call to a job before
+/// the marker is observed).
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
@@ -3743,7 +3762,18 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
         .expect("the shell command classifies");
     assert!(effects.declared.confined);
 
-    let running = start_confined(workspace, "sleep 30", true, false, jobs.clone(), sandbox);
+    // The held read blocks with no output and no deadline: the handoff the
+    // test waits for below can only come from the marker observation.
+    let hold = root.path().join("hold");
+    fakes::fifo(&hold);
+    let running = start_confined(
+        workspace,
+        &format!("read -r _ < {}", quote(&hold)),
+        true,
+        false,
+        jobs.clone(),
+        sandbox,
+    );
     let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
         Ok(receipt) => receipt,
         Err(_) => panic!(
@@ -3753,14 +3783,29 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
     };
     let job = started(&receipt);
     assert!(receipt.error.is_none(), "{}", text(&receipt));
-    // The sleeper still runs and the fake clock never moved: the handoff
-    // waited for the marker, not for output, the end, or a deadline.
+    // The held read still runs and the fake clock never moved: the handoff
+    // waited for the marker, not for output, the end, or a deadline
+    // (`docs/sandbox.md`, "On macOS": no move before the marker is observed).
     assert_eq!(jobs.started(), vec![job.clone()]);
     assert_eq!(contract::clock::Clock::now(&*running.clock), running.start);
     assert!(
         !running.recorder.text().contains("FIBER_SANDBOX_CONFINED"),
         "the marker never reaches the caller"
     );
+    // Release the held read and reap the job: the test leaves no detached
+    // call behind. Opening read-write never blocks, so a command that never
+    // reached its read still cannot hang the test here.
+    let mut release = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&hold)
+        .unwrap();
+    writeln!(release, "go").unwrap();
+    drop(release);
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
 }
 
 /// `stty` on the inherited pty keeps working confined: the single ioctl
@@ -3815,19 +3860,4 @@ fn call(shell: &Shell, command: &str) -> contract::tool::Output {
         &CancelToken::new(),
         &Recorder::default(),
     )
-}
-
-#[cfg(target_os = "macos")]
-fn git(args: &[&str], dir: &Path) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).into_owned()
 }

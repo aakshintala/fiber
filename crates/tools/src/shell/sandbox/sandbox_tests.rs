@@ -1236,9 +1236,110 @@ fn macos_profile_follows_a_worktree_pointer() {
     }
 }
 
+/// A hostile `.git` pointer at the filesystem root earns no git write
+/// grant: `/` is no recognized git layout, so both directories fall back to
+/// the workspace-local `.git` the workspace grant already covers.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_absolute_git_pointer_at_root_grants_neither() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-root");
+    std::fs::write(fixture.workspace.join(".git"), "gitdir: /\n").expect("write hostile pointer");
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
+    let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_GITDIR"),
+        fallback,
+        "an unverified gitdir falls back inside the workspace"
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_COMMONDIR"),
+        fallback,
+        "an unverified common dir falls back inside the workspace"
+    );
+    for (_, value) in &prepared.bindings {
+        assert!(
+            !["/", "/objects", "/refs", "/logs"].contains(&value.as_str()),
+            "no binding names the root or its git entries: {value}"
+        );
+    }
+}
+
+/// A pointer at an existing directory without git entries earns no grant
+/// either: only a recognized layout carries the commit paths.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_git_pointer_at_a_non_git_dir_grants_neither() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-plain");
+    let plain = fixture.dir.path().join("plain");
+    std::fs::create_dir_all(&plain).expect("create plain dir");
+    std::fs::write(
+        fixture.workspace.join(".git"),
+        format!("gitdir: {}\n", plain.display()),
+    )
+    .expect("write hostile pointer");
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
+    let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_GITDIR"),
+        fallback,
+        "a non-git dir falls back inside the workspace"
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_COMMONDIR"),
+        fallback,
+        "a non-git common dir falls back inside the workspace"
+    );
+    assert!(
+        prepared
+            .bindings
+            .iter()
+            .all(|(_, value)| value != &plain.to_string_lossy()),
+        "the plain dir earns no binding"
+    );
+}
+
+/// A valid gitdir whose `commondir` points at `/` still grants neither: the
+/// common directory is validated as a recognized layout too.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_git_pointer_with_root_commondir_grants_neither() {
+    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-common");
+    let gitdir = fixture.dir.path().join("real-gitdir");
+    std::fs::create_dir_all(&gitdir).expect("create gitdir");
+    std::fs::write(gitdir.join("commondir"), "/\n").expect("write hostile commondir");
+    std::fs::write(
+        fixture.workspace.join(".git"),
+        format!("gitdir: {}\n", gitdir.display()),
+    )
+    .expect("write the worktree pointer");
+    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
+    let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_GITDIR"),
+        fallback,
+        "an unverified common dir pulls the gitdir back inside the workspace"
+    );
+    assert_eq!(
+        MacosFixture::binding(&prepared, "FIBER_COMMONDIR"),
+        fallback,
+        "an unverified common dir falls back inside the workspace"
+    );
+    for (_, value) in &prepared.bindings {
+        assert!(
+            !["/", "/objects", "/refs", "/logs"].contains(&value.as_str()),
+            "no binding names the root or its git entries: {value}"
+        );
+    }
+}
+
 /// The wrapper prints the marker before the user program; the strip
 /// adapter removes exactly that first line, even when the user program
-/// echoes the marker text afterwards.
+/// echoes the marker text afterwards (`docs/sandbox.md`, "On macOS": the
+/// marker line precedes the user program, and the reader strips exactly
+/// that first line).
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_marker_wrap_then_strip_is_byte_identical() {
@@ -1277,30 +1378,35 @@ fn macos_marker_strip_tolerates_a_pty_carriage_return() {
     assert_eq!(kept, b"user\n");
 }
 
-/// Observing the marker fires the installed wake exactly once: the parked
-/// drive loop of a quiet call wakes on the observation, not on later
-/// output. A miss or a repeated line never wakes.
+/// Observing the marker wakes the parked drive loop: a quiet call offers
+/// no later output to wake on, so the observation itself must wake the
+/// loop (`docs/sandbox.md`, "On macOS": no move before the marker is
+/// observed). The test asserts delivery, not a count; the observable
+/// handoff timing is pinned by
+/// `macos_confined_quiet_call_hands_off_right_after_its_marker`.
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_marker_observation_fires_the_wake_once() {
+fn macos_marker_observation_wakes_the_parked_loop() {
     let token = marker_token();
     let watch = MarkerWatch::new(&token);
-    let fired = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = fired.clone();
+    let fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let delivered = fired.clone();
     watch.set_wake(std::sync::Arc::new(move || {
-        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        delivered.store(true, std::sync::atomic::Ordering::SeqCst);
     }));
     assert!(
         watch.check(format!("FIBER_SANDBOX_CONFINED {token}").as_bytes()),
         "the marker is recognized"
     );
-    assert!(!watch.check(b"something else"), "a later line is not");
-    watch.miss(b"trailing");
-    assert_eq!(
+    assert!(
         fired.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "only the first observation wakes"
+        "the first observation wakes the loop"
     );
+    assert!(
+        !watch.check(b"something else"),
+        "a later line is not the marker"
+    );
+    assert!(watch.observed(), "the marker stays observed");
 }
 
 /// Without the marker the adapter drains what the wrapper wrote and reports

@@ -173,6 +173,207 @@ impl std::fmt::Display for SandboxApply {
 
 impl std::error::Error for SandboxApply {}
 
+/// Which drive loop `finish_spawned` runs: the existing pipeline, or the
+/// macOS Seatbelt one gated on the confinement marker. A gated call hands
+/// nothing off before its marker is observed or the wrapper exits; a
+/// missing marker at the end fails closed instead of ending normally.
+enum Drive<'a> {
+    /// The existing pipeline: one drive pass, then the end.
+    Plain,
+    /// The Seatbelt pipeline: every handoff waits for the marker.
+    #[cfg(target_os = "macos")]
+    Gated(&'a super::sandbox::MarkerWatch),
+}
+
+/// The streams one spawn holds open for the shared driver below.
+struct SpawnStreams {
+    input: Option<contract::jobs::Input>,
+    errors: Option<std::io::PipeReader>,
+    read: Box<dyn Read + Send>,
+}
+
+/// Opens the terminal or the pipes for `cmd`, by move policy.
+fn open_streams(cmd: &mut Command, policy: MovePolicy) -> std::io::Result<SpawnStreams> {
+    let tty = policy == MovePolicy::Terminal;
+    let mut input = None;
+    let mut errors = None;
+    let read: Box<dyn Read + Send> = if tty {
+        let terminal = tty::open()?;
+        cmd.stdin(Stdio::from(terminal.secondary.try_clone()?))
+            .stdout(Stdio::from(terminal.secondary.try_clone()?))
+            .stderr(Stdio::from(terminal.secondary));
+        input = Some(terminal.input);
+        Box::new(terminal.reader)
+    } else {
+        let (read, write) = std::io::pipe()?;
+        // A monitor's standard error is its own pipe, kept from its lines.
+        let write_err = if policy == MovePolicy::Monitor {
+            let (read_err, write_err) = std::io::pipe()?;
+            errors = Some(read_err);
+            write_err
+        } else {
+            write.try_clone()?
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::from(write))
+            .stderr(Stdio::from(write_err));
+        Box::new(read)
+    };
+    Ok(SpawnStreams {
+        input,
+        errors,
+        read,
+    })
+}
+
+/// Drives a spawned child through the existing execution pipeline. The
+/// Seatbelt spawn shares it; only its command construction, marker
+/// stripping, and handoff gating differ, carried by `drive`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "spawn, the deadline, the move policy, the spill and the drive gate are one call"
+)]
+fn finish_spawned(
+    child: std::process::Child,
+    listing: support::group::Listing,
+    streams: SpawnStreams,
+    timeout: Duration,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
+    spill: Option<SpillConfig>,
+    alive: fn(u32) -> bool,
+    ps: &Path,
+    drive: Drive<'_>,
+) -> Result<Ran, std::io::Error> {
+    let pgid = child.id();
+    let shared = Arc::new(Shared::default());
+    // The marker observation wakes the drive loop parked in
+    // `drive_confined`: the wake bumps under the same lock the park
+    // holds from check into wait, so it is never missed, and the loop
+    // re-checks the observed marker before handing the call off.
+    #[cfg(target_os = "macos")]
+    if let Drive::Gated(watch) = &drive {
+        let waked = Arc::clone(&shared);
+        watch.set_wake(Arc::new(move || {
+            let mut inner = lock(&waked.inner);
+            bump(&mut inner);
+            drop(inner);
+            waked.cv.notify_all();
+        }));
+    }
+    {
+        let mut inner = lock(&shared.inner);
+        inner.input = streams.input;
+        if streams.errors.is_some() {
+            inner.lines = Some(Vec::new());
+            inner.errors = Some(Errors::default());
+        }
+        // Only a foreground call, a shell without jobs, or a resumed one
+        // spills: a move on the first pass keeps today's buffer
+        // (`docs/tools.md`, "Result and output").
+        if matches!(policy, MovePolicy::Foreground | MovePolicy::Stay) {
+            inner.spill_config = spill.clone();
+        }
+    }
+    let reader = Arc::clone(&shared);
+    let read = streams.read;
+    thread::spawn(move || read_output(read, &reader));
+    if let Some(read_err) = streams.errors {
+        let reader = Arc::clone(&shared);
+        thread::spawn(move || read_errors(read_err, &reader));
+    }
+    let waiter = Arc::clone(&shared);
+    thread::spawn(move || wait_child(child, &waiter));
+
+    // The clock watches the command. The call's cancel watches a bridge, so
+    // dropping the bridge after a move stops that cancel reaching the job.
+    let bridge = CancelBridge::arm(&shared);
+    clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
+    cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
+
+    // Registered before the drive loop parks and held until it returns, so
+    // `background` finds the call for as long as it waits in the foreground.
+    let registered = jobs
+        .filter(|_| policy == MovePolicy::Foreground)
+        .map(|jobs| {
+            MoveAsk::register(
+                jobs,
+                Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)),
+            )
+        });
+    let start = clock.now();
+    let mut progress = Run {
+        ask: registered.as_ref().map(|(ask, _)| Arc::clone(ask)),
+        phase: Phase::Running,
+        stop: None,
+        sent_signal: false,
+        seen_empty: false,
+        stream_carry: Vec::new(),
+        timeout_at: start.checked_add(timeout),
+        move_at: match policy {
+            MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
+            MovePolicy::Stay
+            | MovePolicy::Background
+            | MovePolicy::Terminal
+            | MovePolicy::Monitor => None,
+        },
+        members: None,
+        pgid,
+        listing: Some(Box::new(listing)),
+        shared,
+        job: None,
+        feed: None,
+    };
+    let ended = match &drive {
+        Drive::Plain => pump_inner(&mut progress, policy, clock, cancel, emit, alive, ps),
+        #[cfg(target_os = "macos")]
+        Drive::Gated(watch) => drive_confined(
+            &mut progress,
+            policy,
+            clock,
+            cancel,
+            emit,
+            alive,
+            ps,
+            Some(*watch),
+        ),
+    };
+    // A call that left the foreground wait is no longer counted, whether it
+    // finished or moved: `background` must not find it during the open.
+    if let Some((ask, _)) = &registered {
+        ask.end();
+    }
+    // A gated call whose wrapper never showed its marker fails closed
+    // instead of ending normally: nothing proved the sandbox applied, so no
+    // end — finished or moved — may carry the call's output as confined.
+    #[cfg(target_os = "macos")]
+    if let Drive::Gated(watch) = &drive
+        && !watch.observed()
+    {
+        let status = lock(&progress.shared.inner).status;
+        drop(bridge);
+        return Err(std::io::Error::other(SandboxApply {
+            cause: super::sandbox::apply_cause(watch, status),
+        }));
+    }
+    match ended {
+        LoopEnd::Finished(finished) => {
+            drop(bridge);
+            Ok(Ran::Finished(finished))
+        }
+        LoopEnd::Move(reason) => Ok(Ran::Moved(Box::new(Moved {
+            reason,
+            bridge: Some(bridge),
+            progress,
+            cap: OUTPUT_CAP,
+            spill,
+        }))),
+    }
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "spawn, the deadline, the move policy, the spill, the sandbox and the injected probe are one call"
@@ -205,8 +406,9 @@ fn execute_inner(
     // marker to a sandbox-apply failure, so the call never runs unconfined.
     // A disabled sandbox skips the policy and runs as before; an enabled
     // one that cannot apply fails instead of falling back to unconfined.
-    // The confined launch below owns the whole macOS spawn, so a test can
-    // drive the same helper with an intentionally invalid profile.
+    // The confined launch below builds the Seatbelt command and shares the
+    // existing execution pipeline, so a test can drive the same helper
+    // with an intentionally invalid profile.
     #[cfg(target_os = "macos")]
     if sandbox_settings.enabled {
         match super::sandbox::check_available(sandbox_settings, sandbox_workspace) {
@@ -244,30 +446,7 @@ fn execute_inner(
     let tty = policy == MovePolicy::Terminal;
     let mut cmd = Command::new(program);
     cmd.arg("-c").arg(command).current_dir(workdir);
-    let mut input = None;
-    let mut errors = None;
-    let read: Box<dyn Read + Send> = if tty {
-        let terminal = tty::open()?;
-        cmd.stdin(Stdio::from(terminal.secondary.try_clone()?))
-            .stdout(Stdio::from(terminal.secondary.try_clone()?))
-            .stderr(Stdio::from(terminal.secondary));
-        input = Some(terminal.input);
-        Box::new(terminal.reader)
-    } else {
-        let (read, write) = std::io::pipe()?;
-        // A monitor's standard error is its own pipe, kept from its lines.
-        let write_err = if policy == MovePolicy::Monitor {
-            let (read_err, write_err) = std::io::pipe()?;
-            errors = Some(read_err);
-            write_err
-        } else {
-            write.try_clone()?
-        };
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::from(write))
-            .stderr(Stdio::from(write_err));
-        Box::new(read)
-    };
+    let streams = open_streams(&mut cmd, policy)?;
     scrub_env(&mut cmd);
     if let Some(path) = matches {
         cmd.env(crate::search::matches::MATCHES_ENV, path);
@@ -346,98 +525,31 @@ fn execute_inner(
     // when the last holder exits.
     drop(cmd);
 
-    let pgid = child.id();
-    let shared = Arc::new(Shared::default());
-    {
-        let mut inner = lock(&shared.inner);
-        inner.input = input;
-        if errors.is_some() {
-            inner.lines = Some(Vec::new());
-            inner.errors = Some(Errors::default());
-        }
-        // Only a foreground call, a shell without jobs, or a resumed one
-        // spills: a move on the first pass keeps today's buffer
-        // (`docs/tools.md`, "Result and output").
-        if matches!(policy, MovePolicy::Foreground | MovePolicy::Stay) {
-            inner.spill_config = spill.clone();
-        }
-    }
-    let reader = Arc::clone(&shared);
-    thread::spawn(move || read_output(read, &reader));
-    if let Some(read_err) = errors {
-        let reader = Arc::clone(&shared);
-        thread::spawn(move || read_errors(read_err, &reader));
-    }
-    let waiter = Arc::clone(&shared);
-    thread::spawn(move || wait_child(child, &waiter));
-
-    // The clock watches the command. The call's cancel watches a bridge, so
-    // dropping the bridge after a move stops that cancel reaching the job.
-    let bridge = CancelBridge::arm(&shared);
-    clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
-    cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
-
-    // Registered before the drive loop parks and held until it returns, so
-    // `background` finds the call for as long as it waits in the foreground.
-    let registered = jobs
-        .filter(|_| policy == MovePolicy::Foreground)
-        .map(|jobs| {
-            MoveAsk::register(
-                jobs,
-                Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)),
-            )
-        });
-    let start = clock.now();
-    let mut progress = Run {
-        ask: registered.as_ref().map(|(ask, _)| Arc::clone(ask)),
-        phase: Phase::Running,
-        stop: None,
-        sent_signal: false,
-        seen_empty: false,
-        stream_carry: Vec::new(),
-        timeout_at: start.checked_add(timeout),
-        move_at: match policy {
-            MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
-            MovePolicy::Stay
-            | MovePolicy::Background
-            | MovePolicy::Terminal
-            | MovePolicy::Monitor => None,
-        },
-        members: None,
-        pgid,
-        listing: Some(Box::new(listing)),
-        shared,
-        job: None,
-        feed: None,
-    };
-    let ended = pump_inner(&mut progress, policy, clock, cancel, emit, alive, ps);
-    // A call that left the foreground wait is no longer counted, whether it
-    // finished or moved: `background` must not find it during the open.
-    if let Some((ask, _)) = &registered {
-        ask.end();
-    }
-    match ended {
-        LoopEnd::Finished(finished) => {
-            drop(bridge);
-            Ok(Ran::Finished(finished))
-        }
-        LoopEnd::Move(reason) => Ok(Ran::Moved(Box::new(Moved {
-            reason,
-            bridge: Some(bridge),
-            progress,
-            cap: OUTPUT_CAP,
-            spill,
-        }))),
-    }
+    finish_spawned(
+        child,
+        listing,
+        streams,
+        timeout,
+        clock,
+        cancel,
+        emit,
+        policy,
+        jobs,
+        spill,
+        alive,
+        ps,
+        Drive::Plain,
+    )
 }
 
 /// Runs one confined call on macOS: the shell spawns wrapped through
 /// `sandbox-exec` with the prepared profile and bindings, its reader strips
-/// the confinement marker, and the drive hands off only after the marker.
-/// The same helper serves production and the rejected-profile test, which
-/// drives it with an intentionally invalid profile: the wrapper then exits
-/// without a marker, nothing runs, and the call fails closed with the
-/// wrapper's diagnostic. A spawn that never starts fails the same way.
+/// the confinement marker, and the shared execution pipeline below hands off
+/// only after the marker. The same helper serves production and the
+/// rejected-profile test, which drives it with an intentionally invalid
+/// profile: the wrapper then exits without a marker, nothing runs, and the
+/// call fails closed with the wrapper's diagnostic. A spawn that never
+/// starts fails the same way.
 #[cfg(target_os = "macos")]
 #[allow(
     clippy::too_many_arguments,
@@ -479,35 +591,18 @@ pub(crate) fn execute_confined(
         .arg("-c")
         .arg(&wrapped)
         .current_dir(workdir);
-    let mut input = None;
-    let mut errors = None;
-    let read: Box<dyn Read + Send> = if tty {
-        let terminal = tty::open()?;
-        cmd.stdin(Stdio::from(terminal.secondary.try_clone()?))
-            .stdout(Stdio::from(terminal.secondary.try_clone()?))
-            .stderr(Stdio::from(terminal.secondary));
-        input = Some(terminal.input);
-        Box::new(terminal.reader)
-    } else {
-        let (read, write) = std::io::pipe()?;
-        // A monitor's standard error is its own pipe, kept from its lines.
-        let write_err = if policy == MovePolicy::Monitor {
-            let (read_err, write_err) = std::io::pipe()?;
-            errors = Some(read_err);
-            write_err
-        } else {
-            write.try_clone()?
-        };
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::from(write))
-            .stderr(Stdio::from(write_err));
-        Box::new(read)
-    };
+    let streams = open_streams(&mut cmd, policy)?;
     // The reader runs through the strip adapter fed by the call's marker
     // watch: exactly the first marker line is suppressed, and user output
     // stays byte-identical past it.
-    let read: Box<dyn Read + Send> =
-        Box::new(super::sandbox::StripMarker::new(read, Arc::clone(&watch)));
+    let streams = SpawnStreams {
+        input: streams.input,
+        errors: streams.errors,
+        read: Box::new(super::sandbox::StripMarker::new(
+            streams.read,
+            Arc::clone(&watch),
+        )),
+    };
     scrub_env(&mut cmd);
     if let Some(path) = matches {
         cmd.env(crate::search::matches::MATCHES_ENV, path);
@@ -526,121 +621,21 @@ pub(crate) fn execute_confined(
     // when the last holder exits.
     drop(cmd);
 
-    let pgid = child.id();
-    let shared = Arc::new(Shared::default());
-    // The marker observation wakes the drive loop parked in
-    // `drive_confined`: the wake bumps under the same lock the park
-    // holds from check into wait, so it is never missed, and the loop
-    // re-checks the observed marker before handing the call off.
-    {
-        let waked = Arc::clone(&shared);
-        watch.set_wake(Arc::new(move || {
-            let mut inner = lock(&waked.inner);
-            bump(&mut inner);
-            drop(inner);
-            waked.cv.notify_all();
-        }));
-    }
-    {
-        let mut inner = lock(&shared.inner);
-        inner.input = input;
-        if errors.is_some() {
-            inner.lines = Some(Vec::new());
-            inner.errors = Some(Errors::default());
-        }
-        // Only a foreground call, a shell without jobs, or a resumed one
-        // spills: a move on the first pass keeps today's buffer
-        // (`docs/tools.md`, "Result and output").
-        if matches!(policy, MovePolicy::Foreground | MovePolicy::Stay) {
-            inner.spill_config = spill.clone();
-        }
-    }
-    let reader = Arc::clone(&shared);
-    thread::spawn(move || read_output(read, &reader));
-    if let Some(read_err) = errors {
-        let reader = Arc::clone(&shared);
-        thread::spawn(move || read_errors(read_err, &reader));
-    }
-    let waiter = Arc::clone(&shared);
-    thread::spawn(move || wait_child(child, &waiter));
-
-    // The clock watches the command. The call's cancel watches a bridge, so
-    // dropping the bridge after a move stops that cancel reaching the job.
-    let bridge = CancelBridge::arm(&shared);
-    clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
-    cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
-
-    // Registered before the drive loop parks and held until it returns, so
-    // `background` finds the call for as long as it waits in the foreground.
-    let registered = jobs
-        .filter(|_| policy == MovePolicy::Foreground)
-        .map(|jobs| {
-            MoveAsk::register(
-                jobs,
-                Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)),
-            )
-        });
-    let start = clock.now();
-    let mut progress = Run {
-        ask: registered.as_ref().map(|(ask, _)| Arc::clone(ask)),
-        phase: Phase::Running,
-        stop: None,
-        sent_signal: false,
-        seen_empty: false,
-        stream_carry: Vec::new(),
-        timeout_at: start.checked_add(timeout),
-        move_at: match policy {
-            MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
-            MovePolicy::Stay
-            | MovePolicy::Background
-            | MovePolicy::Terminal
-            | MovePolicy::Monitor => None,
-        },
-        members: None,
-        pgid,
-        listing: Some(Box::new(listing)),
-        shared,
-        job: None,
-        feed: None,
-    };
-    let ended = drive_confined(
-        &mut progress,
-        policy,
+    finish_spawned(
+        child,
+        listing,
+        streams,
+        timeout,
         clock,
         cancel,
         emit,
+        policy,
+        jobs,
+        spill,
         alive,
         ps,
-        Some(&watch),
-    );
-    // A call that left the foreground wait is no longer counted, whether it
-    // finished or moved: `background` must not find it during the open.
-    if let Some((ask, _)) = &registered {
-        ask.end();
-    }
-    // A call whose wrapper never showed its marker fails closed instead of
-    // ending normally: nothing proved the sandbox applied, so no end —
-    // finished or moved — may carry the call's output as confined.
-    if !watch.observed() {
-        let status = lock(&progress.shared.inner).status;
-        drop(bridge);
-        return Err(std::io::Error::other(SandboxApply {
-            cause: super::sandbox::apply_cause(&watch, status),
-        }));
-    }
-    match ended {
-        LoopEnd::Finished(finished) => {
-            drop(bridge);
-            Ok(Ran::Finished(finished))
-        }
-        LoopEnd::Move(reason) => Ok(Ran::Moved(Box::new(Moved {
-            reason,
-            bridge: Some(bridge),
-            progress,
-            cap: OUTPUT_CAP,
-            spill,
-        }))),
-    }
+        Drive::Gated(&watch),
+    )
 }
 
 /// Drives a macOS call, gating every handoff on the confinement marker:

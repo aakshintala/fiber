@@ -195,11 +195,8 @@ fn check_available_linux(settings: &Settings, workspace: &Path) -> Result<(), Un
 /// `/usr/bin/sandbox-exec`, hardcoded and never `$PATH`, so a command
 /// cannot inject a malicious wrapper.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn check_available_with_exec(
     settings: &Settings,
     workspace: &Path,
@@ -511,11 +508,8 @@ pub(crate) struct Prepared {
 /// Prepares the Seatbelt profile: a setup error aborts spawn, so the call
 /// fails closed and never runs unconfined.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
     check_available(settings, workspace).map_err(|unavailable| unavailable.to_string())?;
     build_profile(settings, workspace)
@@ -527,11 +521,8 @@ pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared,
 /// `credentials/` directory, every configured and resolved read deny, and
 /// the git and `.fiber/` protections below.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
     let workspace = canonicalize_root("the workspace", workspace)?;
     let temp = canonicalize_root("the temp directory", &std::env::temp_dir())?;
@@ -622,11 +613,8 @@ fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, Stri
 /// Canonicalizes one writable root for the profile, naming it on failure so
 /// the call fails closed instead of running unconfined.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn canonicalize_root(label: &str, root: &Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(root).map_err(|cause| {
         format!(
@@ -639,11 +627,8 @@ fn canonicalize_root(label: &str, root: &Path) -> Result<PathBuf, String> {
 /// The binding text for one path. Paths are carried as argv values, never
 /// parsed by a shell, so no quoting applies here.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -658,16 +643,30 @@ struct GitLayout {
     commondir: Option<PathBuf>,
 }
 
+/// Whether `path` looks like a git directory: an existing directory holding
+/// the entries git itself keeps there (`HEAD`, `commondir`, or `objects`).
+/// A hostile `.git` pointer names an absolute path the checkout author
+/// chose, so the pointer target earns a write grant only when it is a
+/// recognized layout; anything else grants neither directory.
+#[cfg(target_os = "macos")]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
+fn is_git_layout(path: &Path) -> bool {
+    path.is_dir()
+        && (path.join("HEAD").exists()
+            || path.join("commondir").exists()
+            || path.join("objects").is_dir())
+}
+
 /// Discovers the git directories without running git: a `.git` directory is
 /// both, a `.git` file points at the gitdir whose `commondir` file points at
-/// the common directory, and anything else grants no git directory. Reads
+/// the common directory, and anything else grants no git directory. A
+/// pointer target outside a recognized git layout grants neither directory,
+/// so `gitdir: /` never earns a write grant at the filesystem root. Reads
 /// are capped, so a hostile checkout cannot make prepare read unboundedly.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn discover_git(workspace: &Path) -> GitLayout {
     let dot_git = workspace.join(".git");
     let layout = GitLayout {
@@ -711,19 +710,20 @@ fn discover_git(workspace: &Path) -> GitLayout {
         }
         _ => gitdir.clone(),
     };
+    let common = rooted_path(&common);
+    if !is_git_layout(&gitdir) || !is_git_layout(&common) {
+        return layout;
+    }
     GitLayout {
         gitdir: Some(gitdir),
-        commondir: Some(rooted_path(&common)),
+        commondir: Some(common),
     }
 }
 
 /// Reads at most 4 KiB: the git pointer files prepare reads are one line.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn read_capped(path: &Path) -> String {
     use std::io::Read as _;
     let mut text = String::new();
@@ -738,11 +738,8 @@ fn read_capped(path: &Path) -> String {
 /// The canonical path when it resolves, else the lexical absolute: deny
 /// rules still name the configured spelling when the target is missing.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn rooted_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| normalize_absolute(path))
 }
@@ -763,11 +760,8 @@ const MARKER_STASH_CAP: usize = 65_536;
 /// Mints one marker token per call from the process id and a counter: the
 /// token only has to be unique per call, and no clock is read.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 pub(crate) fn marker_token() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let count = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -779,11 +773,8 @@ pub(crate) fn marker_token() -> String {
 /// user exec in the same shell process, so its bytes precede any user byte
 /// on the pipe; the exit status stays the command's.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 pub(crate) fn wrap_command(command: &str, token: &str) -> String {
     format!("printf '%s\\n' '{MARKER_PREFIX} {token}'; {command}")
 }
@@ -965,11 +956,8 @@ impl<R: std::io::Read> std::io::Read for StripMarker<R> {
 /// The fail-closed cause for a call whose wrapper never showed its marker:
 /// the wrapper's captured diagnostic and status, naming Seatbelt's cause.
 #[cfg(target_os = "macos")]
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where it is not compiled"
-)]
+// mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 pub(crate) fn apply_cause(watch: &MarkerWatch, status: Option<ExitStatus>) -> String {
     let code = status
         .and_then(|status| status.code())
