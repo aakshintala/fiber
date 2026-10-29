@@ -36,12 +36,30 @@ pub(super) fn classify(
     let Some(script) = super::syntax::parse(command) else {
         return executes(None, None);
     };
-    let (subject, prefix) = subject_and_prefix(&script);
-    match outcome(&script, workspace, workdir, configured) {
+    let verdict = outcome(&script, workspace, workdir, configured);
+    // A substituted call that executes names no subject: no allow rule can
+    // match a reviewed call whose words arrive only when it runs. A read
+    // keeps its raw-token subject, substitution spellings included.
+    let (subject, prefix) = match &verdict {
+        Outcome::Executes if script_has_substituted(&script) => (None, None),
+        Outcome::Executes | Outcome::Reads(_) | Outcome::Network(_) => subject_and_prefix(&script),
+    };
+    match verdict {
         Outcome::Reads(paths) => reads(paths, subject, prefix),
         Outcome::Network(paths) => network(paths, subject, prefix),
         Outcome::Executes => executes(subject, prefix),
     }
+}
+
+/// Whether any stage of the script holds a substituted word.
+fn script_has_substituted(script: &Script) -> bool {
+    script
+        .elements
+        .iter()
+        .flat_map(|element| element.stages.iter())
+        .any(|stage| {
+            matches!(stage, Stage::Simple(simple) if simple.words.iter().any(|word| word.substituted))
+        })
 }
 
 fn reads(paths: Vec<String>, subject: Option<String>, prefix: Option<String>) -> Effects {
@@ -368,6 +386,11 @@ fn stage_outcome(
             }
         }
     }
+    // A substitution survives unwrapping only in a direct read: a wrapper
+    // around one, such as `env` or `timeout`, never reads.
+    if stepped && words.iter().any(|word| word.substituted) {
+        return Outcome::Executes;
+    }
     // A bare `cd`, or one with an allow-listed assignment prefix, is a
     // read-only step through the existing `cd` path: the prefix is not a
     // subprocess, so the join still tracks the directory for later
@@ -391,7 +414,11 @@ fn stage_outcome(
     let (verdict, gh_entry) = if EXACT.iter().any(|row| cooked_equals(words, row)) {
         (Outcome::Reads(Vec::new()), None)
     } else if words.first().is_some_and(|word| word.cooked == "sed") {
-        // `sed` has its own print-only grammar, not a table row.
+        // `sed` has its own print-only grammar, not a table row. It never
+        // takes a substituted word: only a listed git read validates one.
+        if words.iter().any(|word| word.substituted) {
+            return Outcome::Executes;
+        }
         let files = words.iter().skip(1).map(|word| word.cooked.as_str());
         let Some(files) = super::sed::files(files) else {
             return Outcome::Executes;
@@ -399,11 +426,34 @@ fn stage_outcome(
         (path_tail(&files, dirs), None)
     } else {
         match entry::find(words, configured) {
-            Found::Builtin(entry) => (builtin_outcome(words, entry, dirs), Some(entry)),
-            Found::Configured(flags, consumed) => (
-                entry::configured_outcome(flags, rest_after(words, consumed), dirs),
-                None,
-            ),
+            Found::Builtin(entry) => {
+                // Leading outer redirects prepend their spellings to the
+                // tokens, so the words start past them: a substitution in
+                // `>/dev/null git diff $(...)..HEAD` still lines up with
+                // its own token. A redirect's extra word stays out of line
+                // by construction, so it still executes.
+                let base = simple
+                    .tokens
+                    .iter()
+                    .position(|token| simple.words.first().is_some_and(|word| *token == word.raw))
+                    .unwrap_or(0);
+                (
+                    builtin_outcome(words, entry, dirs, Some((&simple.tokens, base))),
+                    Some(entry),
+                )
+            }
+            Found::Configured(flags, consumed) => {
+                // A configured entry never takes a substituted word: its
+                // operands declare paths, and a substitution is never one.
+                if words.iter().any(|word| word.substituted) {
+                    (Outcome::Executes, None)
+                } else {
+                    (
+                        entry::configured_outcome(flags, rest_after(words, consumed), dirs),
+                        None,
+                    )
+                }
+            }
             Found::None => (Outcome::Executes, None),
         }
     };
@@ -485,7 +535,7 @@ fn repo_selects_host(words: &[Word], gh_entry: Option<&Command>) -> bool {
                 else {
                     continue;
                 };
-                if !flag.takes_value {
+                if !flag.takes_value() {
                     continue;
                 }
                 let Some(value) = rest.next() else {
@@ -555,7 +605,7 @@ fn xargs_outcome(
         if !stdin_proven || has_input(simple) {
             return Outcome::Executes;
         }
-        let Outcome::Reads(mut declared) = builtin_outcome(inner, entry, dirs) else {
+        let Outcome::Reads(mut declared) = builtin_outcome(inner, entry, dirs, None) else {
             return Outcome::Executes;
         };
         let Some(canonical_dirs) = canonical_dirs(dirs) else {
@@ -580,7 +630,7 @@ fn xargs_outcome(
         }
         return with_inputs(Outcome::Reads(declared), simple, dirs);
     }
-    with_inputs(builtin_outcome(inner, entry, dirs), simple, dirs)
+    with_inputs(builtin_outcome(inner, entry, dirs, None), simple, dirs)
 }
 
 /// Whether a stage reads stdin from a redirect file of its own, rather
@@ -596,11 +646,15 @@ fn has_input(simple: &Simple) -> bool {
 /// every operand word reaches `xargs` stdin as written. Any other stage's
 /// filenames are unproven, including a `printf` whose format string
 /// transforms its operands and any listing whose names come from command
-/// output. Appends the operand words when static.
+/// output. Appends the operand words when static. A substituted word is
+/// never static: its text arrives only when it runs.
 fn static_words(stage: &Stage, words: &mut Vec<String>) -> bool {
     let Stage::Simple(simple) = stage else {
         return false;
     };
+    if simple.words.iter().any(|word| word.substituted) {
+        return false;
+    }
     let Some(first) = simple.words.first() else {
         return false;
     };
@@ -710,6 +764,9 @@ fn cd_operand(simple: &Simple) -> Option<&str> {
     if !dashed && operand.cooked.starts_with('-') {
         return None;
     }
+    if operand.substituted {
+        return None;
+    }
     Some(operand.cooked.as_str())
 }
 
@@ -778,20 +835,168 @@ fn rest_after(words: &[Word], skip: usize) -> std::slice::Iter<'_, Word> {
     rest
 }
 
+/// Whether a substituted operand word may read: the substitution sits at
+/// a word edge, bare or composed with one `..`/`...` range against a plain
+/// outer ref, and its inner text is exactly `git merge-base <rev> <rev>`.
+/// On empty substitution output the runtime word is the bare range, which
+/// git parses as revisions: never a flag and never a path.
+fn substituted_operand_ok(raw: &str) -> bool {
+    let Some((inner, remainder, sub_first)) = substitution_parts(raw) else {
+        return false;
+    };
+    if !inner_ok(inner) {
+        return false;
+    }
+    if remainder.is_empty() {
+        return true;
+    }
+    if sub_first {
+        let range = remainder
+            .strip_prefix("...")
+            .or_else(|| remainder.strip_prefix(".."));
+        range.is_some_and(outer_ref_ok)
+    } else {
+        let range = remainder
+            .strip_suffix("...")
+            .or_else(|| remainder.strip_suffix(".."));
+        range.is_some_and(outer_ref_ok)
+    }
+}
+
+/// Split a substituted word into its inner command text and the outer
+/// remainder, with whether the substitution stands first. The substitution
+/// must start at the word's first byte or end at its last byte; any prefix
+/// and suffix together refuse.
+fn substitution_parts(raw: &str) -> Option<(&str, &str, bool)> {
+    if let Some(rest) = raw.strip_prefix("$(") {
+        let end = rest.find(')')?;
+        return Some((&rest[..end], &rest[end + 1..], true));
+    }
+    let start = raw.rfind("$(")?;
+    if !raw.ends_with(')') {
+        return None;
+    }
+    Some((&raw[start + 2..raw.len() - 1], &raw[..start], false))
+}
+
+/// Whether the outer ref beside a substitution names a plain revision:
+/// non-empty, never starting with `-` (a flag on empty output) or `.` (a
+/// path), holding no `..` and no `:`, over the plain alphabet otherwise.
+fn outer_ref_ok(text: &str) -> bool {
+    !text.is_empty()
+        && !text.starts_with('-')
+        && !text.starts_with('.')
+        && !text.contains("..")
+        && text
+            .chars()
+            .all(|ch| super::syntax::is_plain(ch) && ch != ':')
+}
+
+/// Whether the inner text is exactly `git merge-base <rev> <rev>` over the
+/// safe byte alphabet: the plain set plus the `^~{}` suffix bytes and
+/// literal spaces. Every other byte refuses before tokenizing, so a
+/// newline can never separate a second command.
+fn inner_ok(inner: &str) -> bool {
+    if !inner
+        .chars()
+        .all(|ch| super::syntax::is_plain(ch) || matches!(ch, '^' | '~' | '{' | '}' | ' '))
+    {
+        return false;
+    }
+    let mut words = inner.split(' ').filter(|word| !word.is_empty());
+    match (
+        words.next(),
+        words.next(),
+        words.next(),
+        words.next(),
+        words.next(),
+    ) {
+        (Some("git"), Some("merge-base"), Some(first), Some(second), None) => {
+            rev_ok(first) && rev_ok(second)
+        }
+        _ => false,
+    }
+}
+
+/// Whether an inner revision matches the ticket grammar: a non-empty base
+/// over the plain alphabet without `:`, never starting with `-` and
+/// holding no `..`, with at most one `^`, `~<digits>` or `^{commit}`
+/// suffix. A shape-ok revision a `merge-base` run rejects fails with no
+/// output, so it is never a path.
+fn rev_ok(rev: &str) -> bool {
+    let base = if let Some(base) = rev.strip_suffix("^{commit}") {
+        base
+    } else if let Some(base) = rev.strip_suffix('^') {
+        base
+    } else if let Some((base, digits)) = rev.split_once('~') {
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return false;
+        }
+        base
+    } else {
+        rev
+    };
+    !base.is_empty()
+        && !base.starts_with('-')
+        && !base.contains("..")
+        && base
+            .chars()
+            .all(|ch| super::syntax::is_plain(ch) && ch != ':')
+}
+
 /// The built-in flag walk, kept from the hand lexer: flags by the table,
 /// `--` where the entry says so, any other `-` word an operand for `echo`,
 /// the first operand the pattern for `grep` and `rg`. The entry's path
-/// words never reach the walk: `git status -s` walks from `-s`.
-fn builtin_outcome(words: &[Word], entry: &Command, dirs: &[String]) -> Outcome {
-    let mut words = rest_after(words, entry.name.split(' ').count());
+/// words never reach the walk: `git status -s` walks from `-s`. `aligned`
+/// holds the stage's tokens with the walked words' base index, past any
+/// leading redirect spellings, so a substituted word reads only in its own
+/// operand slot: a redirect's extra word never lines up with the tokens
+/// there. No walk runs for it: `None` always executes on a substituted
+/// word.
+fn builtin_outcome(
+    words: &[Word],
+    entry: &Command,
+    dirs: &[String],
+    aligned: Option<(&[String], usize)>,
+) -> Outcome {
+    let skipped = entry.name.split(' ').count();
+    let mut words = rest_after(words, skipped);
+    let total = words.len();
     let mut operands = Vec::new();
     let mut ended = false;
     let mut pattern_given = false;
     while let Some(word) = words.next() {
+        // The word's index into the walked rest: yields so far, values a
+        // flag consumed included, so it lines up with the stage's tokens.
+        let at = total - words.len() - 1;
         match entry::word_at(word, ended, entry) {
-            entry::WordAt::Operand(cooked) => operands.push(cooked),
+            entry::WordAt::Operand(cooked) => {
+                if word.substituted {
+                    // A substituted operand reads only validated, in a
+                    // listed git read before `--`, in its own token slot:
+                    // anywhere else it executes, and it never declares a
+                    // path and never reads as a flag.
+                    let direct = aligned.is_some_and(|(tokens, base)| {
+                        tokens
+                            .get(base + skipped + at)
+                            .is_some_and(|token| *token == word.raw)
+                    });
+                    if ended
+                        || !entry.name.starts_with("git ")
+                        || !direct
+                        || !substituted_operand_ok(&word.raw)
+                    {
+                        return Outcome::Executes;
+                    }
+                } else {
+                    operands.push(cooked);
+                }
+            }
             entry::WordAt::EndFlags => ended = true,
             entry::WordAt::Flag => {
+                if word.substituted {
+                    return Outcome::Executes;
+                }
                 if entry::accept_flag(entry, &mut words, &word.cooked).is_none() {
                     return Outcome::Executes;
                 }
@@ -869,7 +1074,8 @@ fn resolve(dir: &str, operand: &str) -> Option<String> {
 
 /// Whether `command` is one plain `grep` call, so the run can attach its
 /// match lines. An assignment prefix or a redirect does not disqualify it;
-/// a second element, a second stage, or any unparsed text does.
+/// a second element, a second stage, a substituted word, or any unparsed
+/// text does: the pattern must be known before the call runs.
 pub(super) fn one_grep(command: &str) -> bool {
     let Some(script) = super::syntax::parse(command) else {
         return false;
@@ -880,6 +1086,9 @@ pub(super) fn one_grep(command: &str) -> bool {
     let [Stage::Simple(simple)] = element.stages.as_slice() else {
         return false;
     };
+    if simple.words.iter().any(|word| word.substituted) {
+        return false;
+    }
     simple
         .words
         .first()
