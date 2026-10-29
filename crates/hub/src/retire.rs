@@ -302,7 +302,7 @@ fn allowed(from: CommandState, to: CommandState) -> bool {
             | (Queued, Queued | Written | Partial | Answered | Dropped)
             | (Written, Written | Rerouted | Answered | Dropped)
             | (Partial, Answered | Dropped)
-            | (Rerouted, Written | Answered | Dropped)
+            | (Rerouted, Answered | Dropped)
     )
 }
 

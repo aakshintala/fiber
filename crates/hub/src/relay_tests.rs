@@ -2643,7 +2643,7 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
                 | (Queued, Queued | Written | Partial | Answered | Dropped)
                 | (Written, Written | Rerouted | Answered | Dropped)
                 | (Partial, Answered | Dropped)
-                | (Rerouted, Written | Answered | Dropped)
+                | (Rerouted, Answered | Dropped)
         )
     }
     fn stage(order: &AckOrder, from: CommandState) {
@@ -2717,6 +2717,152 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
             "an unrecorded command never moves to {to:?}",
         );
     }
+}
+
+/// `docs/invocation.md`, "What the hub speaks" (`docs/code-quality/lints.md:20-22`):
+/// the relayed-command state table mirrors `CommandState` and the transition
+/// API, so a test fails when the two differ. Every state is named in the
+/// table, every bare move the table documents is allowed by
+/// [`crate::retire::AckOrder::transition`], and no row moves out of
+/// `Rerouted` except to its ending answer — the one-delivery promise the
+/// table states and the API keeps.
+#[test]
+fn the_command_state_table_matches_the_transition_api() {
+    use crate::relay::CommandState;
+    use crate::retire::AckOrder;
+    fn names(text: &str, state: &str) -> bool {
+        let mut rest = text;
+        while let Some(at) = rest.find(state) {
+            let before = rest[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            let after = rest[at + state.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            if !before && !after {
+                return true;
+            }
+            rest = &rest[at + state.len()..];
+        }
+        false
+    }
+    fn stages(order: &AckOrder, from: CommandState) {
+        order.enqueue("s", "c_1");
+        match from {
+            CommandState::Read => {}
+            CommandState::Queued => {
+                order.transition("c_1", CommandState::Queued).unwrap();
+            }
+            CommandState::Written | CommandState::Rerouted => {
+                order.transition("c_1", CommandState::Written).unwrap();
+                if from == CommandState::Rerouted {
+                    order.transition("c_1", CommandState::Rerouted).unwrap();
+                }
+            }
+            CommandState::Partial => {
+                order.transition("c_1", CommandState::Partial).unwrap();
+            }
+            CommandState::Answered => {
+                order.transition("c_1", CommandState::Answered).unwrap();
+            }
+            CommandState::Dropped => {
+                order.transition("c_1", CommandState::Queued).unwrap();
+                order.transition("c_1", CommandState::Dropped).unwrap();
+            }
+        }
+    }
+    fn allows(from: CommandState, to: CommandState) -> bool {
+        let order = AckOrder::default();
+        stages(&order, from);
+        order.transition("c_1", to).is_ok()
+    }
+    let doc = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/invocation.md");
+    let text = std::fs::read_to_string(&doc).expect("docs/invocation.md is readable");
+    let start = text
+        .find("**A relayed command passes through these states.**")
+        .expect("the relayed-command table intro is present");
+    let end = text
+        .find("**A session behind a relayed command passes through these states.**")
+        .expect("the session table intro ends the relayed-command table");
+    assert!(start < end, "the relayed-command table comes first");
+    let table = &text[start..end];
+    let states = [
+        CommandState::Read,
+        CommandState::Queued,
+        CommandState::Written,
+        CommandState::Partial,
+        CommandState::Rerouted,
+        CommandState::Answered,
+        CommandState::Dropped,
+    ];
+    for state in states {
+        assert!(
+            names(table, &format!("{state:?}")),
+            "the table names every command state: {state:?}",
+        );
+    }
+    let mut documented = Vec::new();
+    for line in table.lines() {
+        let line = line.trim();
+        if !line.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = line.split('|').collect();
+        if cells.len() < 5 {
+            continue;
+        }
+        let (before, after) = (cells[1].trim(), cells[3].trim());
+        if before.contains("State before") || before.starts_with("---") {
+            continue;
+        }
+        let froms: Vec<CommandState> = states
+            .iter()
+            .copied()
+            .filter(|state| names(before, &format!("{state:?}")))
+            .collect();
+        let tos: Vec<CommandState> = states
+            .iter()
+            .copied()
+            .filter(|state| names(after, &format!("{state:?}")))
+            .collect();
+        if froms.is_empty() {
+            continue;
+        }
+        assert_eq!(
+            tos.len(),
+            1,
+            "each table row ends in one command state: {line}",
+        );
+        // `Read after ...` rows describe when the hub read the command;
+        // the reroute they end in is claimed from `Written` once the write
+        // lands, which the bare `Written -> Rerouted` rows document.
+        if before.contains("after ") {
+            continue;
+        }
+        for from in froms {
+            documented.push((from, tos[0]));
+        }
+    }
+    assert!(!documented.is_empty(), "the table documents moves");
+    for (from, to) in &documented {
+        assert!(
+            allows(*from, *to),
+            "the table documents {from:?} -> {to:?}, so the transition API allows it",
+        );
+        if *from == CommandState::Rerouted {
+            assert_eq!(
+                *to,
+                CommandState::Answered,
+                "no table row spends the reroute claim again: {from:?} -> {to:?}",
+            );
+        }
+    }
+    assert!(
+        !allows(CommandState::Rerouted, CommandState::Written),
+        "a resumed write never reclaims the reroute the table promises once",
+    );
 }
 
 /// One relay thread at its session's end, over a hub with a fake starter
@@ -2966,6 +3112,44 @@ fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     );
 }
 
+/// `docs/invocation.md:1157`, "What the hub speaks": a command already
+/// rerouted once keeps its `Rerouted` claim through the resumed session's
+/// write, so a second clean exit without an answer is rejected `closing`
+/// instead of delivered again (`docs/invocation.md:1166`).
+#[test]
+fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    ended
+        .order
+        .transition("c_1", CommandState::Rerouted)
+        .expect("the first handover claims the re-route");
+    // The resumed session's write reports `Written`: the claim holds, so
+    // the report is refused and the state stays `Rerouted`.
+    report(&ended.order, "c_1", CommandState::Written);
+    assert_eq!(
+        ended.order.state("c_1"),
+        Some(CommandState::Rerouted),
+        "the resumed write keeps the reroute claim"
+    );
+    ended.close_session();
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "closing", "{line}");
+    assert_eq!(
+        line["payload"]["message"], "The session ended before answering.",
+        "{line}"
+    );
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(ended.received_ids().is_empty(), "nothing is delivered");
+    assert_eq!(ended.order.session_for("c_1"), None);
+    assert_eq!(
+        ended.order.state("c_1"),
+        None,
+        "the answered id is forgotten"
+    );
+}
+
 /// `docs/invocation.md`, "Lifecycle" (#2054): a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
 #[test]
 fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
@@ -3149,11 +3333,13 @@ fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
-/// `docs/invocation.md`, "Lifecycle" (#3616): a command whose write fails
-/// before its line feed may still run. End-of-file framing delivers the
-/// cut body as a final line, so the session answers it, and the hub
-/// suppresses that answer: the client gets exactly one `indeterminate`
-/// answer, and the command is never routed again.
+/// `docs/invocation.md:1148`, "What the hub speaks" (#3616): a command whose
+/// write fails after the session may have read a byte — a whole JSON body
+/// without its line feed counts — is answered `indeterminate` and never
+/// delivered again. End-of-file framing delivers the cut body as a final
+/// line, so the session answers it, and the hub suppresses that answer:
+/// the client gets exactly one `indeterminate` answer, and the command is
+/// never routed again (`docs/invocation.md:1164`).
 #[test]
 fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
     use std::sync::{Arc, Mutex};

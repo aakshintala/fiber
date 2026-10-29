@@ -626,9 +626,9 @@ pub(crate) fn route(
         // answers it `indeterminate` however the session ends, and never
         // routes it again. A write that accepted nothing keeps the
         // command unsent, as when a live relay's socket closes.
+        let partial = matches!(&outcome, Some(Err(partial)) if partial.written > 0);
         if let Some(entry) = held.entries.get_mut(at) {
             entry.retiring = Some(Retire::Dead);
-            let partial = matches!(&outcome, Some(Err(partial)) if partial.written > 0);
             if let Some(kept) = lock(&entry.kept)
                 .iter_mut()
                 .find(|(kept, _, _)| *kept == id.0)
@@ -648,7 +648,7 @@ pub(crate) fn route(
         report(
             &order,
             &id.0,
-            if matches!(&outcome, Some(Err(partial)) if partial.written > 0) {
+            if partial {
                 CommandState::Partial
             } else {
                 CommandState::Queued

@@ -2671,7 +2671,7 @@ impl Starter for RetryGate {
 }
 
 /// A moved child whose start fails retries exactly once across both
-/// old-exit callbacks (#3565): the relay-end `follow` and the feed's retry
+/// old-exit callbacks (#3565, `docs/invocation.md:1184`): the relay-end `follow` and the feed's retry
 /// share one decision under the child's start guard, so the second
 /// callback starts nothing even when the first retry fails. Both callback
 /// orders run, each with its own moved child, seeded log and hub: the
@@ -2807,7 +2807,7 @@ fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
         );
         first.join().unwrap();
         second.join().unwrap();
-        // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
+        // `docs/invocation.md:1184`, "What the hub speaks": the hub retries the same child id once when the old process exits.
         assert_eq!(
             starter.rewound().len(),
             2,
