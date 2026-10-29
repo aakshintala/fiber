@@ -3178,10 +3178,9 @@ fn a_spawn_failure_answers_the_written_command() {
     assert_eq!(order.session_for("c_unspawned"), None);
 }
 
-/// The command writer counts the bytes it accepted before its failure,
-/// so a cut write reports how much of the command the session may have
-/// read. A whole write succeeds; a cut fails with exactly the accepted
-/// count; a zero cap accepts nothing.
+/// The command writer counts accepted bytes before a write or flush
+/// failure. A whole write succeeds; a cut reports its accepted count; a
+/// zero cap accepts nothing; a failed flush reports the whole line.
 #[test]
 fn the_command_writer_counts_accepted_bytes_before_its_failure() {
     use std::os::unix::net::UnixStream;
@@ -3199,6 +3198,31 @@ fn the_command_writer_counts_accepted_bytes_before_its_failure() {
         Err(partial) => assert_eq!(partial.written, 0, "a zero cap writes nothing"),
         Ok(()) => panic!("a zero-capped write fails"),
     }
+
+    struct FlushFails(Vec<u8>);
+    impl std::io::Write for FlushFails {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the test failed the flush",
+            ))
+        }
+    }
+
+    let mut writer = FlushFails(Vec::new());
+    match write_through(&mut writer, bytes) {
+        Err(partial) => assert_eq!(partial.written, bytes.len(), "the line was accepted"),
+        Ok(()) => panic!("a failed flush is a failed write"),
+    }
+    assert_eq!(
+        writer.0, bytes,
+        "the fake accepted the whole line before flush"
+    );
 }
 
 /// `docs/invocation.md`, "Lifecycle": a `closing` answer for a command

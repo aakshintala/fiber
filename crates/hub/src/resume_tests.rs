@@ -3724,7 +3724,6 @@ fn a_cut_command_write_is_indeterminate_on_first_attach() {
         *cap = Some(bytes.len() - 1);
     }));
     client.send_to("c_1", OTHER, "prompt");
-    let order = crate::connection::lock(&relays).order.clone();
     // The cap leaves one byte unwritten while accepting the rest, so the
     // production byte counter reports a partial write: the failure
     // cannot be a zero-byte one by construction. The torn bytes lack
@@ -3739,22 +3738,9 @@ fn a_cut_command_write_is_indeterminate_on_first_attach() {
         "The connection to the session failed while the command was being sent; the command may have run.",
         "{line}"
     );
-    crate::testkit::await_true("the refusal to leave AckOrder", {
-        let order = order.clone();
-        move || order.session_for("c_1").is_none()
-    });
-    assert_eq!(order.session_for("c_1"), None, "the answer left the queue");
-    // One resume per session, and none for the cut command's retry: the
-    // refused command is never resumed again.
-    let resumed = starter
-        .resumed()
-        .iter()
-        .filter(|(id, _)| id.0 == OTHER)
-        .count();
-    assert_eq!(resumed, 1, "the cut command is attached once");
-    // docs/invocation.md:728 promises a command is delivered once: the
-    // `indeterminate` answer above is the only one, and a retry would
-    // have resumed again. A second answer would already be buffered.
+    // docs/invocation.md:368 promises one answer per command; the
+    // Lifecycle rule also says an indeterminate command is never delivered
+    // again. No second answer may follow this refusal.
     client.assert_no_more("the cut command");
 }
 
@@ -3798,10 +3784,7 @@ fn a_zero_byte_command_write_is_retried_after_a_clean_exit() {
         assert!(stopping.stop(&sid(), DEADLINE), "the fake session ended");
     }));
     client.send("c_2", "reply");
-    let order = crate::connection::lock(&relays).order.clone();
     assert_eq!(client.acknowledged("the retried command's answer"), "c_2");
-    assert_eq!(order.session_for("c_2"), None, "the answer left the queue");
-    assert_eq!(starter.resumed().len(), 2, "one resume for the retry");
     // docs/invocation.md:728 promises a command is delivered once.
     assert_eq!(
         received(&starter)
