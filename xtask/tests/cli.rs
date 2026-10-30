@@ -1517,3 +1517,46 @@ fn an_unknown_or_missing_command_is_an_error() {
     );
     assert_eq!(xtask(&dir, &[], &[], "").0, 2);
 }
+
+#[test]
+fn kinds_ratchet_passes_at_both_caps_and_fails_above_them() {
+    let dir = workspace();
+    // Two literal sites on one line plus one direct-support site: both
+    // occurrences on the shared line count.
+    dir.write(
+        "crates/a/src/lib.rs",
+        "fn check() {\nassert_eq!(kinds(&a), A); assert_eq!(kinds(&b), B);\nassert_eq!(support::kinds(&c), C);\n}\n",
+    );
+    let (code, out) = xtask(
+        &dir,
+        &["kinds-ratchet", "--max", "2", "--support-max", "1"],
+        &[],
+        "",
+    );
+    assert_eq!((code, out.as_str()), (0, "kinds-ratchet: ok\n"));
+    let (code, out) = xtask(
+        &dir,
+        &["kinds-ratchet", "--max", "1", "--support-max", "1"],
+        &[],
+        "",
+    );
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("2 `assert_eq!(kinds(` occurrences") && out.contains("committed maximum 1"),
+        "{out}"
+    );
+    let (code, out) = xtask(
+        &dir,
+        &["kinds-ratchet", "--max", "2", "--support-max", "0"],
+        &[],
+        "",
+    );
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("1 `assert_eq!(support::kinds` occurrences")
+            && out.contains("committed maximum 0"),
+        "{out}"
+    );
+    // A missing flag is a usage error, proving argument parsing.
+    assert_eq!(xtask(&dir, &["kinds-ratchet", "--max", "2"], &[], "").0, 2);
+}
