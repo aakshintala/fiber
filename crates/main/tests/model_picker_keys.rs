@@ -580,8 +580,8 @@ fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
 }
 
 /// Installs a Lua provider `cat` whose entry script and model list each
-/// come over one `host.http` fetch, with a static credential and a
-/// silent signer, and makes `cat/m1` the configured model: the picker
+/// come over one `host.http` fetch, with a credential-presence env key,
+/// a Lua credential callback and a silent signer, and makes `cat/m1` the configured model: the picker
 /// catalogue answers from the fake server, so a catalogue load is the
 /// entry's fetch plus the models fetch.
 fn install_lua_catalogue_provider(setup: &Setup, server_url: &str, debug: bool) {
@@ -623,7 +623,11 @@ fn install_lua_catalogue_provider(setup: &Setup, server_url: &str, debug: bool) 
     .unwrap()
     .commit()
     .unwrap();
-    let mut config = json!({"model": "cat/m1", "hub": {"idle_exit_ms": 200}});
+    let mut config = json!({
+        "model": "cat/m1",
+        "hub": {"idle_exit_ms": 200},
+        "providers": {"cat": {"credentials": {"default": {"env": "FIBER_TEST_CAT_KEY"}}}}
+    });
     if debug {
         config["diagnostics"] = json!({"level": "debug"});
     }
@@ -654,7 +658,16 @@ fn all_log_lines(setup: &Setup) -> Vec<Value> {
 /// Opens the picker on a Lua catalogue and quits: the picker shows the
 /// fetched `m1`, and the closed run exits cleanly.
 fn open_catalogue_and_quit(setup: &Setup) {
-    let mut run = Run::spawn(setup, 120, 32, &[], &[("TERM", "xterm-256color")]);
+    let mut run = Run::spawn(
+        setup,
+        120,
+        32,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_CAT_KEY", "sk-test"),
+        ],
+    );
     run.ready();
     run.wait_screen("home with its chip", |screen| shows(screen, "[cat/m1]"));
     run.write(b"\x0c");
