@@ -135,6 +135,17 @@ fn copy_binary(setup: &Setup) -> PathBuf {
     copy
 }
 
+/// The binary archive the fixture publishes for every release: the
+/// mapped triple's archive — on Linux the musl archive whatever libc
+/// the test binary was built against, and the running target's own
+/// archive elsewhere.
+fn binary_archive() -> String {
+    format!(
+        "fiber-{}.tar.gz",
+        extensions::release_triple(env!("FIBER_TARGET")).unwrap()
+    )
+}
+
 /// The fixture releases: docs, extensions and binary archives for
 /// [`VERSION`] and [`NIGHTLY`], the `/releases/latest` redirect at the
 /// stable tag, and the nightly list naming [`NIGHTLY`].
@@ -163,10 +174,7 @@ fn serve() -> fakes::ProviderServer {
         // server, as a real server answers every request.
         for _ in 0..2 {
             for (name, bytes) in [
-                (
-                    format!("fiber-{}.tar.gz", env!("FIBER_TARGET")),
-                    binary.clone(),
-                ),
+                (binary_archive(), binary.clone()),
                 ("fiber-docs.tar.gz".to_owned(), docs.clone()),
                 ("fiber-extensions.tar.gz".to_owned(), extensions.clone()),
             ] {
