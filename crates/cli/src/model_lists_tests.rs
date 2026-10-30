@@ -1248,21 +1248,11 @@ fn with_environment(function: &str, vars: &[(&str, &str)], check: impl FnOnce(&P
     );
 }
 
-/// Installs the real first-party `providers/<package>` data as extension
+/// Installs embedded first-party provider data as extension
 /// `extension`, declaring `provider` with these base-URL literals.
 /// Nothing is stored: presence comes from the process environment the
 /// test sets.
-fn install_first_party(
-    setup: &Setup,
-    extension: &str,
-    package: &str,
-    provider: &str,
-    urls: &[&str],
-) {
-    let data = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../providers/{package}/providers/{provider}.json"
-    )))
-    .unwrap();
+fn install_first_party(setup: &Setup, extension: &str, data: &str, provider: &str, urls: &[&str]) {
     let dir = setup.home().join("extensions").join(extension);
     let mut manifest = json!({
         "name": extension, "version": "v1.0.0", "fiber": "0.1.0", "api": extensions::API,
@@ -1280,11 +1270,23 @@ const VERTEX_URL: &str =
     "https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google";
 
 fn install_bedrock(setup: &Setup) {
-    install_first_party(setup, "bed-ext", "bedrock", "bedrock", &[BEDROCK_URL]);
+    install_first_party(
+        setup,
+        "bed-ext",
+        include_str!("../../../providers/bedrock/providers/bedrock.json"),
+        "bedrock",
+        &[BEDROCK_URL],
+    );
 }
 
 fn install_vertex(setup: &Setup) {
-    install_first_party(setup, "vertex-ext", "vertex", "vertex", &[VERTEX_URL]);
+    install_first_party(
+        setup,
+        "vertex-ext",
+        include_str!("../../../providers/vertex/providers/vertex.json"),
+        "vertex",
+        &[VERTEX_URL],
+    );
 }
 
 /// A `Cached` read of `home` that starts no extension.
