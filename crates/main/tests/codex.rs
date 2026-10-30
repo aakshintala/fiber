@@ -242,7 +242,7 @@ fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
 }
 
 #[test]
-fn a_codex_ask_with_nothing_stored_is_authentication_failed_naming_login() {
+fn a_codex_ask_with_nothing_stored_is_credential_missing_before_the_session() {
     let setup = Setup::new_with_fx_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.install(&server);
@@ -251,7 +251,9 @@ fn a_codex_ask_with_nothing_stored_is_authentication_failed_naming_login() {
 
     assert_eq!(run.code, Some(1), "{}", run.stderr);
     let error = &run.last()["payload"]["error"];
-    assert_eq!(error["code"], "authentication_failed");
+    assert_eq!(error["code"], "credential_missing");
+    assert_eq!(run.kinds(), ["fiber_exited"]);
+    assert!(run.last().get("session_id").is_none());
     assert!(
         error["message"]
             .as_str()

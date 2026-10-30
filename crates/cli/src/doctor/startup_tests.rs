@@ -283,7 +283,7 @@ fn a_placeholder_model_without_its_value_gives_unconfigured() {
 }
 
 #[test]
-fn a_disabled_package_gives_provider_missing_but_keeps_its_block() {
+fn a_disabled_package_with_a_credential_is_ready() {
     let setup = Setup::new();
     setup.place(
         "off",
@@ -296,37 +296,22 @@ fn a_disabled_package_gives_provider_missing_but_keeps_its_block() {
         manifest("off"),
     );
     setup.write_config(&json!({"model": "fake/m", "extensions": {"off": {"enabled": false}}}));
-    let checked = setup.check(&[], &env_of(&[("FIBER_TEST_UNSET_KEY", "k")]));
-    let blocker = checked.blocker.unwrap();
-    assert!(
-        blocker
-            .line
-            .starts_with("The provider `fake` is not installed."),
-        "{}",
-        blocker.line
-    );
-    assert!(
-        checked.lines.iter().any(|line| line == "fake:"),
-        "{:?}",
-        checked.lines
-    );
-    assert!(
-        checked.lines.iter().all(|line| !line.contains("(no key)")),
-        "{:?}",
-        checked.lines
-    );
-    // Enabled for this project, the same package is ready: the key the
-    // injected environment holds answers.
+    // Only the provider part ignores `enabled`: the key the injected
+    // environment holds answers, so the disabled package is ready and its
+    // rows show.
+    let lines = setup.ready(&[], &env_of(&[("FIBER_TEST_UNSET_KEY", "k")]));
+    assert!(lines.iter().any(|line| line == "fake:"), "{lines:?}");
+    // Enabled for this project, the same package is ready too.
     setup.write_project(&json!({"extensions": {"off": {"enabled": true}}}));
     let lines = setup.ready(&[], &env_of(&[("FIBER_TEST_UNSET_KEY", "k")]));
     assert!(lines.iter().any(|line| line == "fake:"), "{lines:?}");
 }
 
 #[test]
-fn a_disabled_package_with_malformed_provider_json_is_informational() {
-    // The session starts from the enabled set and skips the disabled
-    // package before reading its provider file; doctor must not exit 1
-    // for what the session never reads.
+fn a_disabled_package_with_malformed_provider_json_blocks_startup() {
+    // The session starts from the enabled set, which reads the disabled
+    // package's provider file too; a malformed file blocks startup however
+    // the package is switched.
     let setup = Setup::new();
     setup.fake();
     setup.place(
@@ -345,14 +330,11 @@ fn a_disabled_package_with_malformed_provider_json_is_informational() {
     )
     .unwrap();
     setup.write_config(&json!({"model": "fake/m", "extensions": {"off": {"enabled": false}}}));
-    let lines = setup.ready(&[], &env_of(&[("FIBER_TEST_UNSET_KEY", "k")]));
+    let (code, line) = setup.blocked(&[], &env_of(&[("FIBER_TEST_UNSET_KEY", "k")]));
     assert!(
-        lines
-            .first()
-            .is_some_and(|line| line.starts_with("extensions do not load:")),
-        "{lines:?}"
+        line.starts_with("extensions do not load:"),
+        "{code:?}: {line}"
     );
-    assert!(lines.iter().any(|line| line == "fake:"), "{lines:?}");
 }
 
 #[test]

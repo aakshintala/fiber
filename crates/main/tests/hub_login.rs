@@ -57,6 +57,13 @@ fn provider() -> ProviderServer {
     .unwrap()
 }
 fn install(setup: &Setup, provider: &ProviderServer, oauth: &OauthServer, port: Option<u16>) {
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let source = setup.root.path().join("source");
     let base = provider.url();
     let login = oauth.url();
