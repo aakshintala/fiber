@@ -111,9 +111,10 @@ if [ "$scope" != platform ]; then
     # the frame it observes can differ from the waited one
     # (docs/testing/screens.md, "Screens"). Each file under
     # crates/main/tests/ holds at most its inline maximum of unmarked
-    # call lines, and a file missing from the list holds none: only a
-    # real `// settled:` line comment on the call line or the line before
-    # it exempts a call. `crates/main/tests/support/` is outside the rule,
+    # call lines, and a file missing from the list holds none: the literal
+    # text `// settled:` on the call line or the line before it exempts a
+    # call, even inside a string literal, since the count is a conservative
+    # upper bound. `crates/main/tests/support/` is outside the rule,
     # and a `.screen` field access (as in `login.rs`) is not a call. Call
     # detection, comment recognition and the per-file comparison live in
     # `cargo xtask screen-ratchet` (docs/testing.md, "Levels").
