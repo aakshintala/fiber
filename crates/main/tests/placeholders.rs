@@ -218,6 +218,9 @@ fn models_json_keeps_the_notice_on_stderr() {
 #[test]
 fn the_bedrock_package_prints_one_line() {
     let setup = Setup::new();
+    let credentials = setup.root.path().join(".aws/credentials");
+    std::fs::create_dir_all(credentials.parent().unwrap()).unwrap();
+    std::fs::write(credentials, "").unwrap();
     let to = setup.root.path().join("pkg-bedrock");
     support::package::copy_package("bedrock", &to, "https://", "https://");
     let installed = run_to_exit(

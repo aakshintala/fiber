@@ -544,6 +544,29 @@ fn parts_inner(
     let lua = providers.lua(&model.provider.name);
     let lua_providers::Access { key, signer, .. } = settle(
         scripted::access(model.provider, || {
+            if !config
+                .credentials()
+                .has_credential(model.provider, &|name| std::env::var(name).ok())
+            {
+                // Ordinary key acquisition retains its detailed missing-source
+                // diagnostic. Function providers never read stored origins.
+                if matches!(
+                    model.provider.credential_from,
+                    config::CredentialFrom::Stored { .. }
+                ) {
+                    crate::credential::session_credential(
+                        &config,
+                        model.provider,
+                        Some(&label),
+                        &run,
+                    )?;
+                }
+                return Err(crate::credential::no_label(
+                    &model.provider.name,
+                    &label,
+                    &config.credentials().labels(model.provider),
+                ));
+            }
             lua_providers::session_credential(lua, model.provider, &label, || {
                 if let Some(asked) = labels.asked {
                     let listed = config.credentials().labels(model.provider);

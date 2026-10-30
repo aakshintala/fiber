@@ -138,7 +138,9 @@ a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`; AWS keys in
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN`
 when set; and the AWS CLI's own default chain, which reads `AWS_PROFILE`.
 Credentials with an `Expiration` are refreshed before it, as any token is
-("Keys, tokens and OAuth"). With none of these, the call fails with
+("Keys, tokens and OAuth"). Without a declared environment or path source
+("Credentials"), startup fails with `credential_missing` before any callback
+or session. When a source exists but acquisition fails, the call fails with
 `credential_failed`, and the extension's own message, in `provider.message`
 (`docs/errors.md`, "The shape"), says to set `AWS_BEARER_TOKEN_BEDROCK`
 or name a profile. `fiber login bedrock` is not supported: it stores a key,
@@ -174,9 +176,11 @@ credentials, fails with `credential_failed` and says to run `gcloud auth
 login`, so a session never switches to the account Application Default
 Credentials hold. Each command's `--format` prints the token and its expiry
 and no other field. The token is refreshed before its expiry, as any token is
-("Keys, tokens and OAuth"). With no account selected and no Application
-Default Credentials, the call fails with `credential_failed`, and the
-extension's own message, in `provider.message`, says to run `gcloud auth
+("Keys, tokens and OAuth"). Without a declared path source ("Credentials"),
+startup fails with `credential_missing` before gcloud or a session starts.
+With a source present but no account selected and no Application Default
+Credentials, the callback fails with `credential_failed`, and the extension's
+own message, in `provider.message`, says to run `gcloud auth
 login` or `gcloud auth application-default login`,
 or name a configuration. The failure keeps gcloud's own reason, with an
 address shown as `[account]` and any run of 20 or more token-like characters
@@ -595,7 +599,8 @@ Most of a provider is data. For the provider:
 - `credential_label`, when that function supplies the credential and reads
   nothing Fiber stores, as AWS Bedrock's and Google Vertex's do: `names`,
   what a credential label names, such as `AWS profile`, `default`, what
-  the `default` label reads, and `credential_paths`, the paths it draws
+  the `default` label reads, optional `credential_env`, a list of environment
+  variable names whose nonempty values prove presence, and `credential_paths`, the paths it draws
   secrets from, which the credential deny protects (`docs/permissions.md`,
   "Credentials"). Such a provider has no key for `fiber login` to
   store, so `fiber doctor` shows its label as that source, unchecked
@@ -823,7 +828,7 @@ runs in the background and never holds a list back. The generator leaves out ids
   provider whose quota a client asked for (`docs/tools.md`, "Fetching"), and
   a provider with no credential never runs.
 - **When no cached copy exists,** `models()` runs when the list is first
-  needed. `models()` receives `{ key, placeholders }`: the provider's key as
+  needed, but only for a provider with a credential. `models()` receives `{ key, placeholders }`: the provider's key as
   a session reads it, absent when its token comes from `credential()`, and
   the host each declared placeholder holds. Fiber does not call `models()`
   while a declared placeholder has no value or a value that is not a host,
@@ -832,6 +837,12 @@ runs in the background and never holds a list back. The generator leaves out ids
   is older than `model_lists.refresh_after`, and updates the list when the result
   arrives. Its refresh button refreshes every provider with a credential,
   whatever the age of its list.
+
+Displayed lists filter out providers without credential presence on every
+read, including cached reads, before grouping missing host settings. Logging
+out hides their models without deleting cache files. No refresh starts for a
+provider that is off. Installed provider identity remains available for
+session resolution and credential diagnostics.
 
 The age of a list is the age of its cache file, so sessions that start
 together refresh a provider once. A provider already refreshing is not
@@ -1112,6 +1123,32 @@ A stored credential owns its label. If it fails, Fiber reports the failure. It
 does not fall back to an environment variable or a command under the same
 label.
 
+A provider is switched on exactly when it has credential presence, independently
+of installation and the label a session selects. Provider data and discovery
+ignore `extensions."<name>".enabled`; non-provider init, commands and hooks in
+the same package still obey it.
+
+For a key or OAuth provider, any label counts: a validated stored regular file,
+a nonempty environment value, an existing regular-file source, or a configured
+command. Empty regular files count; presence checks neither read key bytes nor
+run commands or callbacks. Stored-path validation, including symlink refusal,
+stays unchanged. Presence is not proof that acquisition will succeed.
+
+A provider whose credential comes from a function and declares `credential_label`
+instead uses only its declared `credential_env` and `credential_paths`.
+Stored labels and configured key origins, including commands, do not count.
+Any declared environment variable set to a nonempty value counts, including
+whitespace. Bedrock declares `AWS_BEARER_TOKEN_BEDROCK` and `AWS_ACCESS_KEY_ID`;
+either alone proves presence, not validity. Vertex declares none.
+
+Declared paths use the environment replacement and appended `join` described
+in `docs/configuration.md`, "A provider's data". A regular file counts even
+when empty. A directory needs one entry: Fiber performs one directory read,
+checks at most its first result, and never opens or inspects the entry.
+Symlinks to declared files and directories are followed; missing targets and
+failed checks do not prove presence. These rules do not change stored-path
+validation. No AWS or gcloud command runs to decide presence.
+
 ### Logging in
 
 `fiber login <provider> --as <label>` stores a credential under that label.
@@ -1130,7 +1167,16 @@ global key, one per provider; `reviewer.model` stays the override that
 applies to every provider. Without a terminal the credential is stored and
 nothing is asked.
 
+Removing the last stored label switches a provider off unless another source,
+such as its environment key or a configured command, still supplies presence.
+Removing one label while another remains does not switch it off. Logout
+removes stored credentials, not external sources or model-list caches.
+
 ### Which credential a session uses
+
+Provider presence considers any eligible label, not the selected label. A
+missing selected label still fails at startup even if another keeps the
+provider on; Fiber never substitutes that other label.
 
 A session picks its credential label when it starts. Fiber picks it in this
 order:
@@ -1172,7 +1218,9 @@ or is rejected. The failure is reported as any other.
 ### When a credential is missing or fails
 
 Fiber looks for the session's credential at startup, before the session
-starts. A run with none fails there with `credential_missing`
+starts. A provider with no presence fails before its credential callback runs;
+the built-in local `scripted` provider needs no credential. A run with none
+fails there with `credential_missing`
 (`docs/errors.md`, "Before a session exists"). A credential that is stored but
 cannot be used, or a `credential()` call that errors, fails with
 `credential_failed`, except a failed OAuth refresh ("Keys, tokens and OAuth").
