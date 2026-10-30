@@ -2327,6 +2327,7 @@ fn protected_pair(
 }
 
 /// The baseline file of the one project under `home`.
+#[cfg(target_os = "linux")]
 fn baseline_of(home: &std::path::Path) -> std::path::PathBuf {
     let mut found = Vec::new();
     for project in std::fs::read_dir(home.join("projects")).expect("projects lists") {
