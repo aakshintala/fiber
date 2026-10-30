@@ -807,6 +807,10 @@ impl<B: Backend> Loop<B> {
                     );
                 } else {
                     let lines = self.app.on_line(Line::Hub(hello));
+                    // The summary span starts before the send, so the
+                    // send through the acceptance is covered; the frame
+                    // top keeps it and drops it after it folds.
+                    self.poll_summary_span();
                     self.hub.send(&lines, &mut self.app);
                     // A `hub_hello` this terminal cannot read leaves it
                     // unconnected: it says so and disconnects.
