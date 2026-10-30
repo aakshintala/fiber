@@ -678,7 +678,9 @@ impl SessionExtensions {
         let found = entries.found;
         // An approved repository copy loads in place of the personal
         // install of the same name: the merged list carries both in slug
-        // order, with one notice per shadowed install.
+        // order, with one notice per shadowed install, grouped by code
+        // with the pass's other notices before it is written
+        // (`docs/errors.md`, "Notices").
         let (merged, mut candidate_notices): (Vec<crate::repository::Candidate>, Vec<Notice>) =
             crate::repository::candidates(found, &repository, &|name: &str| {
                 crate::is_enabled(config, name)

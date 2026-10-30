@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use contract::events::{
     ContextNudged, Event, HandoffTrigger, Notice, Outcome, SkillLoad, SkillSent, SkillsResent,
-    ToolCallRequested, TurnCompleted, TurnOutcome,
+    ToolCallRequested, TurnCompleted, TurnOutcome, group_notices, grouped_lead,
 };
 use contract::provider::{Input, ModelRequest};
 use contract::shapes::{DeclaredEffects, Effect, Failure, Tokens};
@@ -473,14 +473,18 @@ impl Loop {
                 None,
             )?;
         }
-        for event in std::iter::once(Event::OpeningMessage(message))
-            .chain(notices.into_iter().map(Event::Notice))
-            .chain(command_notices.into_iter().map(Event::Notice))
-        {
+        // One pass's notices, grouped by code: the opening's, the
+        // refreshed commands', and the resend's, so one pass raises one
+        // notice per code (`docs/errors.md`, "Notices").
+        let mut batch = notices;
+        batch.extend(command_notices);
+        batch.extend(left_out);
+        for event in std::iter::once(Event::OpeningMessage(message)).chain(
+            group_notices(batch, grouped_lead)
+                .into_iter()
+                .map(Event::Notice),
+        ) {
             self.write(&event, turn, None)?;
-        }
-        for notice in left_out {
-            self.write(&Event::Notice(notice), turn, None)?;
         }
         Ok(())
     }

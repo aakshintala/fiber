@@ -8,6 +8,7 @@ use contract::RequestId;
 use contract::events::{
     Answer, Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, InteractionResolved,
     LoadedExtension, McpServerFailed, MessageOutcome, Notice, ResolvedBy, TurnOutcome,
+    group_notices, grouped_lead,
 };
 use contract::shapes::{Failure, Question, True};
 use log::Log;
@@ -39,7 +40,7 @@ pub fn extensions_loaded(
 ) -> Result<(), Error> {
     let event = Event::ExtensionsLoaded(ExtensionsLoaded { extensions: loaded });
     log.append(&event, None, None)?;
-    for notice in notices {
+    for notice in group_notices(notices, grouped_lead) {
         log.append(&Event::Notice(notice), None, None)?;
     }
     Ok(())
@@ -57,7 +58,7 @@ pub fn mcp_servers_started(
     for failure in failed {
         log.append(&Event::McpServerFailed(failure), None, None)?;
     }
-    for notice in notices {
+    for notice in group_notices(notices, grouped_lead) {
         log.append(&Event::Notice(notice), None, None)?;
     }
     Ok(())
