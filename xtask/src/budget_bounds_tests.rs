@@ -73,7 +73,10 @@ fn the_bounds_match_the_shared_consts() {
 fn malformed_rust_fails_closed() {
     let failures = check("crates/x/tests/a.rs", "tests/a.rs", "fn a( {", &[1]);
     assert_eq!(failures.len(), 1, "{failures:?}");
-    assert!(failures[0].contains("does not tokenise as Rust"), "{failures:?}");
+    assert!(
+        failures[0].contains("does not tokenise as Rust"),
+        "{failures:?}"
+    );
 }
 
 #[test]
@@ -444,6 +447,157 @@ fn an_unshown_guard_const_fails_closed() {
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert!(
         failures[0].ends_with("is not shown at or below 90 s"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn a_bracketed_after_call_is_not_a_deadline_bound() {
+    // `site_at` only fires on a parenthesised call: a bracketed `after`
+    // is not a call, so a long bracketed bound passes while the
+    // parenthesised twin fails. Flipping the delimiter check to `==`
+    // inverts both, failing each assertion.
+    let paren = "fn a() { Deadline::after(Duration::from_secs(60)); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", paren, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].ends_with("is 60 s or more"), "{failures:?}");
+    let bracket = "fn a() { Deadline::after[Duration::from_secs(60)]; }";
+    assert!(
+        check("crates/x/tests/a.rs", "tests/a.rs", bracket, &[1]).is_empty(),
+        "{bracket}"
+    );
+}
+
+#[test]
+fn a_raised_budget_const_fails() {
+    // Deleting the `BUDGET` match arm silences this bound: without the
+    // arm the raised `BUDGET` const reports nothing.
+    let failures = check(
+        "crates/support/src/deadline.rs",
+        "src/deadline.rs",
+        "pub const BUDGET: Duration = Duration::from_secs(111);",
+        &[1],
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0]
+            .starts_with("crates/support/src/deadline.rs:1: const BUDGET is 111 s, above 110 s"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn exact_budget_cap_passes_and_one_over_fails() {
+    // Pins the `<=` guard in `const_site`: at-cap passes, one over fails.
+    // Flipping `<=` to `>` inverts both.
+    assert!(
+        check(
+            "crates/support/src/deadline.rs",
+            "src/deadline.rs",
+            "pub const BUDGET: Duration = Duration::from_secs(110);",
+            &[1],
+        )
+        .is_empty()
+    );
+    let failures = check(
+        "crates/support/src/deadline.rs",
+        "src/deadline.rs",
+        "pub const BUDGET: Duration = Duration::from_secs(111);",
+        &[1],
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+}
+
+#[test]
+fn a_two_arg_after_is_not_a_bound() {
+    // `split_top_level` must see exactly one argument: a two-argument
+    // `after` passes while the single-argument long twin fails. Replacing
+    // the split with `vec![]` empties both, silencing the single-arg failure.
+    let single = "fn a() { Deadline::after(Duration::from_secs(60)); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", single, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    let two = "fn a() { Deadline::after(Duration::from_secs(60), 1); }";
+    assert!(
+        check("crates/x/tests/a.rs", "tests/a.rs", two, &[1]).is_empty(),
+        "{two}"
+    );
+}
+
+#[test]
+fn a_bracketed_duration_fails_closed() {
+    // The `||` chain in `duration` fails closed on a non-parenthesised
+    // duration: a bracketed `from_secs` reports "not shown below 60 s".
+    // Tightening the last `||` to `&&` parses the bracket as 30 s, silencing it.
+    let source = "fn a() { Deadline::after(Duration::from_secs[30]); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].ends_with("is not shown below 60 s"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn a_single_colon_root_fails_closed() {
+    // The `&&` guard in `duration` requires a doubled colon before
+    // stripping a leading `::`: a single-colon root stays unreadable and
+    // fails closed. Loosening it to `||` strips the root and reads 30 s.
+    let source = "fn a() { Deadline::after(:x std::time::Duration::from_secs(30)); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].ends_with("is not shown below 60 s"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn a_hex_sixty_second_after_is_read_as_sixty() {
+    // Deleting the `0x` arm misreads `0x3c` (60) as unshown: the message
+    // must say "is 60 s or more", not "not shown below 60 s".
+    let source = "fn a() { Deadline::after(Duration::from_secs(0x3c)); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].ends_with("is 60 s or more"), "{failures:?}");
+}
+
+#[test]
+fn deadline_and_other_after_are_distinguished_in_one_file() {
+    // `deadline_path` must accept `Deadline::after` and reject
+    // `Other::after`: one file holding both reports exactly the Deadline
+    // site. Loosening the middle `&&` to `||` also accepts `Other::after`,
+    // reporting two sites instead of one.
+    let source = "fn a() { Deadline::after(Duration::from_secs(60)); Other::after(Duration::from_secs(60)); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].contains("Deadline::after("), "{failures:?}");
+}
+
+#[test]
+fn failure_messages_name_the_numeric_bounds() {
+    // `show` renders both sides of a raised-const message: the raised
+    // value and its cap. Emptying `show` blanks both, failing each
+    // assertion below.
+    let failures = check(
+        "crates/support/src/deadline.rs",
+        "src/deadline.rs",
+        "pub const CLEANUP: Duration = Duration::from_secs(101);",
+        &[1],
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains("101 s") && failures[0].contains("100 s"),
+        "{failures:?}"
+    );
+    let failures = check(
+        "crates/support/src/deadline.rs",
+        "src/deadline.rs",
+        "pub const WAITS: Duration = Duration::from_millis(90001);",
+        &[1],
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains("90001 ms") && failures[0].contains("90 s"),
         "{failures:?}"
     );
 }
