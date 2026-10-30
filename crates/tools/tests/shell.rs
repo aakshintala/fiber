@@ -2858,6 +2858,12 @@ fn the_destructive_guard_matches_each_form_in_every_placement() {
     }
     cases.push("sudo /usr/bin/rm -rf tmp".to_owned());
     cases.push("echo hi && sudo /usr/bin/git clean -fd".to_owned());
+    // Long and quoted spellings take the same matcher paths: `--recursive`
+    // is the long form of `-r`, and quotes around the command name do not
+    // hide it.
+    cases.push("rm --recursive tmp".to_owned());
+    cases.push("'rm' -rf tmp".to_owned());
+    cases.push("'git' clean -fd".to_owned());
     // Best-effort text matching over-matches: a quoted or echoed form still
     // counts, since only review is at stake.
     cases.push("echo rm -rf tmp".to_owned());

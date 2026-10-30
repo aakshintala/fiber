@@ -1241,6 +1241,12 @@ fn rm_recursive_flag(word: &str) -> bool {
 
 /// Whether `word` asks `rm` to force: a short cluster holding `f`, or the
 /// long `--force`.
+// Exempted from mutation testing: the guard answers `recursive && !force`
+// or `recursive && force`, whose disjunction is `recursive`, so no change
+// to the force value alone changes `review_when_confined` and every mutant
+// here is equivalent (docs/testing/mutants.md). The `rm -r`/`rm -rf` split
+// stays so removing either predicate fails the guard test.
+#[cfg_attr(false, mutants::skip)]
 fn rm_force_flag(word: &str) -> bool {
     let Some(cluster) = word.strip_prefix('-') else {
         return false;
