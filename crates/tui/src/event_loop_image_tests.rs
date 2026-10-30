@@ -436,6 +436,8 @@ fn read_wire(read: std::io::PipeReader, terms: usize) -> Vec<u8> {
         .name("loop-tty-read".to_owned())
         .spawn(move || {
             let mut read = read;
+            rustix::fs::fcntl_setfl(&mut read, rustix::fs::OFlags::empty())
+                .unwrap_or_else(|err| panic!("blocking: {err}"));
             let mut bytes = Vec::new();
             let mut chunk = [0u8; 4096];
             loop {

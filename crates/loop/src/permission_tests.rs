@@ -28,6 +28,7 @@ fn call(effects: Vec<Effect>, paths: Option<Vec<&str>>, subject: Option<&str>) -
         subject: subject.map(str::to_owned),
         prefix: None,
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     }
 }
@@ -35,6 +36,7 @@ fn call(effects: Vec<Effect>, paths: Option<Vec<&str>>, subject: Option<&str>) -
 fn reviewed(effects: Effects) -> Effects {
     Effects {
         always_reviewed: true,
+        review_when_confined: false,
         ..effects
     }
 }
@@ -672,6 +674,7 @@ fn credential_paths_match_inside_the_directory_and_fail_closed() {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         };
         judge(

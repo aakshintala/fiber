@@ -137,6 +137,7 @@ impl contract::tool::Tool for CommandTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
