@@ -803,3 +803,112 @@ fn a_server_with_both_command_and_url_is_never_started() {
         notices[0]["payload"]["message"]
     );
 }
+
+/// Every diagnostic line under the home's `logs/`, parsed.
+fn log_lines(setup: &Setup) -> Vec<Value> {
+    let mut lines = Vec::new();
+    let logs = setup.home().join("logs");
+    if !logs.exists() {
+        return lines;
+    }
+    let mut files: Vec<_> = fs::read_dir(&logs)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    files.sort();
+    for path in files {
+        let text = fs::read_to_string(&path).unwrap();
+        for line in text.lines() {
+            lines.push(serde_json::from_str(line).unwrap());
+        }
+    }
+    lines
+}
+
+#[test]
+fn a_debug_ask_writes_one_mcp_line_per_request() {
+    let setup = Setup::new();
+    let model = ProviderServer::start([
+        stream(&[function_call("echo", "mcp__remote__echo", &json!({}))]),
+        allow_text(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_reviewer(&model);
+    let mcp = mcp_server(json!([echo_tool()]), |_request, id| echo_answer(id, "hi"));
+    let url = format!("{}/mcp", mcp.url());
+    setup.configure(&json!({"remote": {"url": url}}));
+    // Diagnostics at debug, keeping the model, reviewer and servers.
+    let path = setup.home().join("config.json");
+    let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    config["diagnostics"] = json!({"level": "debug"});
+    write(&path, &config);
+    let run = setup.run(&["ask", "echo"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.kinds(), reviewed_kinds(&[&[]]));
+    assert_eq!(
+        run.first("tool_call_completed")["payload"]["status"],
+        "completed"
+    );
+    let requests = mcp.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request_method(request) == "tools/list"),
+        "the turn lists tools"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request_method(request) == "tools/call"),
+        "the turn calls the tool"
+    );
+    let all = log_lines(&setup);
+    let lines: Vec<&Value> = all
+        .iter()
+        .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "mcp")
+        .collect();
+    // Every fake request, handshake included, writes exactly one line.
+    assert_eq!(lines.len(), requests.len(), "{lines:?}");
+    for line in &lines {
+        assert_eq!(line["process"], "ask");
+        assert_eq!(line["message"], "An HTTP request ended.");
+        let data = &line["data"];
+        assert!(data.get("provider").is_none(), "{data}");
+        assert!(data.get("extension").is_none(), "{data}");
+        assert!(data.get("model").is_none(), "{data}");
+        assert!(data.get("host").is_none(), "{data}");
+        assert!(data.get("path").is_none(), "{data}");
+        assert_eq!(data["attempt"], 1);
+        assert!(data["status"].is_u64(), "every request answered: {data}");
+    }
+    // The sent lengths match the recorded bodies, however they interleave.
+    let mut sent: Vec<u64> = lines
+        .iter()
+        .map(|line| line["data"]["request_bytes"].as_u64().unwrap())
+        .collect();
+    sent.sort_unstable();
+    let mut recorded: Vec<u64> = requests
+        .iter()
+        .map(|request| request.body.len() as u64)
+        .collect();
+    recorded.sort_unstable();
+    assert_eq!(sent, recorded, "one line per request body");
+    // The tool call's line carries the 200 and its answer's bytes.
+    let call = requests
+        .iter()
+        .find(|request| request_method(request) == "tools/call")
+        .unwrap();
+    let call_line = lines
+        .iter()
+        .find(|line| line["data"]["request_bytes"] == call.body.len() as u64)
+        .expect("the call's line");
+    assert_eq!(call_line["data"]["status"], 200);
+    assert!(
+        call_line["data"]["response_bytes"].as_u64().unwrap() > 0,
+        "{call_line}"
+    );
+    // The call runs inside the turn, after the session attaches: its
+    // line carries the session id. The handshake predates the attach.
+    assert_eq!(call_line["session_id"], run.session_id());
+}

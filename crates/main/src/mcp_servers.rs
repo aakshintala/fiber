@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use config::{Config, Source};
 use contract::ErrorCode;
+use contract::diag::DebugLog as _;
 use contract::events::{McpServerFailed, Notice, ToolInfo, ToolSource};
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
@@ -593,7 +594,15 @@ impl crate::reload::State {
                 self.log.clock().clone(),
                 Arc::clone(&waiting),
             ),
-            login: mcp_login(self.sources.clone(), waiting, self.log.clock().clone()),
+            login: mcp_login(
+                self.sources.clone(),
+                waiting,
+                self.log.clock().clone(),
+                // The session writer: `Some` at debug, `None` at info.
+                self.diag
+                    .debugging()
+                    .then(|| Arc::clone(&self.diag) as Arc<dyn contract::diag::DebugLog>),
+            ),
             reconnect: reconnect_server(
                 self.sources.clone(),
                 Arc::clone(&self.servers),
@@ -759,11 +768,13 @@ fn fold_server_line(
 /// waiting map, so the `mcp_servers` answer shows `auth_url` while it
 /// waits, and the stored token is picked up by the reconnect the thread
 /// delivers before it answers (`docs/mcp.md`, "Servers, their state and
-/// the per-server commands").
+/// the per-server commands"). The hub keeps its login silent: `debug`
+/// is always `None` here, so the flow writes no `http_request` line.
 fn mcp_login(
     sources: config::Sources,
     waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
     clock: Arc<dyn contract::clock::Clock>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> doors::McpLogin {
     Arc::new(
         move |server: &str, deliver: Arc<dyn Fn(contract::inbox::Delivery) + Send + Sync>| {
@@ -784,7 +795,7 @@ fn mcp_login(
             let finish = |waiting: &Arc<std::sync::Mutex<HashMap<String, Option<String>>>>| {
                 support::lock(waiting).remove(server);
             };
-            let url = match cli::login_target(
+            let (url, _) = match cli::login_target(
                 &sources.home,
                 &sources.workspace,
                 server,
@@ -809,7 +820,8 @@ fn mcp_login(
                 support::lock(&waiting).insert(server.to_owned(), Some(auth_url.to_owned()));
                 extensions::SystemBrowser::default().open(auth_url);
             };
-            let outcome = mcp::login_observed(&files, &url, &present, clock.as_ref(), None);
+            let outcome =
+                mcp::login_observed(&files, &url, &present, clock.as_ref(), debug.clone());
             support::lock(&waiting).insert(server.to_owned(), None);
             if let Err(error) = outcome {
                 finish(&waiting);

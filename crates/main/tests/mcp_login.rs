@@ -323,10 +323,16 @@ fn percent_decode(text: &str) -> String {
 }
 
 /// Runs `fiber mcp login <name>` with no opener on `PATH`, sends one
-/// callback to the shown redirect, and returns the exit and every stderr
-/// line. The authorization URL is read from stderr through one `Deadline`
-/// on a scoped thread; the child runs in its own process group.
-fn login_with_callback(setup: &Setup, name: &str, empty_path: &Path) -> (Option<i32>, Vec<String>) {
+/// callback to the shown redirect, and returns the exit, every stderr
+/// line, and the child's process id: the `cli-<pid>.log` name matches
+/// the id. The authorization URL is read from stderr through one
+/// `Deadline` on a scoped thread; the child runs in its own process
+/// group.
+fn login_with_callback(
+    setup: &Setup,
+    name: &str,
+    empty_path: &Path,
+) -> (Option<i32>, Vec<String>, u32) {
     let mut command = setup.fiber(&["mcp", "login", name], empty_path);
     let (mut child, watchdog) = spawn_watched(&mut command);
     let group = child.id();
@@ -378,7 +384,7 @@ fn login_with_callback(setup: &Setup, name: &str, empty_path: &Path) -> (Option<
         assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(setup.deadline.cleanup_phase());
-        (status.code(), lines)
+        (status.code(), lines, group)
     })
 }
 
@@ -400,7 +406,7 @@ fn login_stores_the_token_ask_sends_it_and_logout_deletes_it() {
     let mcp = oauth_and_mcp(|_request, id| echo_answer(id));
     let url = format!("{}/mcp", mcp.url());
     setup.configure(&json!({"x": {"url": url}}));
-    let (code, lines) = login_with_callback(&setup, "x", &empty);
+    let (code, lines, _) = login_with_callback(&setup, "x", &empty);
     assert_eq!(code, Some(0), "{lines:?}");
     // The token file: mode 0600, recording the URL, under the SHA-256 of
     // the canonical URL.
@@ -595,4 +601,79 @@ fn login_and_logout_of_an_unknown_name_name_it() {
     let logout = setup.run(&["mcp", "logout", "zzz"], &empty);
     assert_eq!(logout.code, Some(2), "{logout:?}");
     assert!(logout.stderr.contains("zzz"), "{logout:?}");
+}
+
+/// The diagnostic lines of one log file.
+fn diagnostic_file(home: &Path, name: &str) -> Vec<Value> {
+    let text = fs::read_to_string(home.join("logs").join(name)).unwrap();
+    text.lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn one_shot_mcp_login_logs_with_cli_process_and_no_session() {
+    let setup = Setup::new();
+    let empty = setup.root.path().join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    let mcp = oauth_and_mcp(|_request, id| echo_answer(id));
+    let url = format!("{}/mcp", mcp.url());
+    setup.configure(&json!({"x": {"url": url}}));
+    // Diagnostics at debug: the one-shot command observes its flow.
+    let path = setup.home().join("config.json");
+    let mut config: Value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(json!({}));
+    config["diagnostics"] = json!({"level": "debug"});
+    fs::write(&path, config.to_string()).unwrap();
+    let (code, lines, pid) = login_with_callback(&setup, "x", &empty);
+    assert_eq!(code, Some(0), "{lines:?}");
+    // The pid-named file matches the child process id exactly.
+    let name = format!("cli-{pid}.log");
+    let records = diagnostic_file(&setup.home(), &name);
+    let requests: Vec<&Value> = records
+        .iter()
+        .filter(|line| line["code"] == "http_request")
+        .collect();
+    assert!(
+        requests.len() >= 5,
+        "probe, two discovery fetches, registration, exchange: {records:?}"
+    );
+    for request in &requests {
+        assert_eq!(request["level"], "debug");
+        assert_eq!(request["process"], "cli");
+        assert_eq!(request["message"], "An HTTP request ended.");
+        assert!(
+            request.get("session_id").is_none(),
+            "no session on a one-shot command: {request}"
+        );
+        let data = &request["data"];
+        assert_eq!(data["purpose"], "mcp");
+        assert!(data.get("provider").is_none(), "{data}");
+        assert!(data.get("extension").is_none(), "{data}");
+        assert!(data.get("model").is_none(), "{data}");
+        assert!(data.get("host").is_none(), "{data}");
+        assert!(data.get("path").is_none(), "{data}");
+        assert_eq!(data["attempt"], 1);
+    }
+    let statuses: Vec<u64> = requests
+        .iter()
+        .map(|request| request["data"]["status"].as_u64().unwrap())
+        .collect();
+    assert!(statuses.contains(&401), "the probe's line: {statuses:?}");
+    assert!(statuses.contains(&200), "the flow's lines: {statuses:?}");
+    let dump: String = records
+        .iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!dump.contains("at-1"), "no token in the log");
+    for entry in fs::read_dir(setup.home().join("logs")).unwrap() {
+        let name = entry.unwrap().file_name().into_string().unwrap();
+        assert!(
+            !name.starts_with("session-"),
+            "no session log on a one-shot command: {name}"
+        );
+    }
 }

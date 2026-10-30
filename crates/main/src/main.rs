@@ -458,9 +458,11 @@ impl contract::McpRemote for McpClient {
         url: &str,
         present: &dyn Fn(&str),
         clock: &dyn contract::clock::Clock,
+        debug: Option<std::sync::Arc<dyn contract::diag::DebugLog>>,
     ) -> Result<(), contract::shapes::Failure> {
-        // The hub keeps its `None`: the login writes no `http_request` line.
-        mcp::login_observed(files, url, present, clock, None)
+        // The caller carries the sink: the one-shot command passes its
+        // `Process::Cli` writer at debug, the hub passes `None`.
+        mcp::login_observed(files, url, present, clock, debug)
             .map_err(|e| failure(e.code(), e.to_string()))
     }
 }
