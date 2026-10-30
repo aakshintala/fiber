@@ -2625,9 +2625,9 @@ fn a_replay_that_cannot_start_is_refused_io_failed() {
     );
 }
 
-/// `docs/invocation.md`, "What the hub speaks": only the move into
-/// `Rerouted` claims a command's one permitted re-route, and only from
-/// `Written`. Every other second claim, every move out of a terminal
+/// `docs/invocation.md:1142-1166`, "What the hub speaks": only the move
+/// into `Rerouted` claims a command's one permitted re-route, and only
+/// from `Written`. Every other second claim, every move out of a terminal
 /// state, and every move for an unrecorded command is refused, and a
 /// refused move leaves the recorded state alone.
 #[test]
@@ -2719,7 +2719,7 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
     }
 }
 
-/// `docs/invocation.md`, "What the hub speaks" (`docs/code-quality/lints.md:20-22`):
+/// `docs/invocation.md:1140-1166`, "What the hub speaks" (`docs/code-quality/lints.md:20-22`):
 /// the relayed-command state table mirrors `CommandState` and the transition
 /// API, so a test fails when the two differ. Every state is named in the
 /// table, every bare move the table documents is allowed by
@@ -3059,7 +3059,7 @@ fn rejection(id: &str, code: &str) -> Value {
     json!({"kind": "command_rejected", "payload": {"command_id": id, "code": code, "message": "m"}})
 }
 
-/// `docs/invocation.md`, "Lifecycle" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
+/// `docs/invocation.md:1157`, "What the hub speaks" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_clean_exit_re_routes_a_sent_unanswered_command_once() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3100,7 +3100,7 @@ fn a_queue_pump_reroute_rechecks_the_connection_attribution() {
     );
 }
 
-/// `docs/invocation.md`, "Lifecycle" (#2054): a command is delivered once; a second unanswered end is rejected `closing` instead of routed again.
+/// `docs/invocation.md:1157`, "What the hub speaks" (#2054): a command is delivered once; a second unanswered end is rejected `closing` instead of routed again.
 #[test]
 fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3165,7 +3165,7 @@ fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
     );
 }
 
-/// `docs/invocation.md`, "Lifecycle" (#2054): a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
+/// `docs/invocation.md:1154`, "What the hub speaks" (#2054): a command is delivered once; a `closing` answer to it after it already rerouted once is rejected `closing`, never routed again.
 #[test]
 fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3183,7 +3183,7 @@ fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
-/// `docs/invocation.md`, "Lifecycle" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
+/// `docs/invocation.md:1153`, "What the hub speaks" (#2054): after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_closing_answer_the_first_time_is_routed_to_the_resumed_session() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3483,7 +3483,7 @@ fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
     join_within_deadline(thread);
 }
 
-/// `docs/invocation.md`, "Lifecycle" (#3491, #3534): a command the session
+/// `docs/invocation.md:1152`, "What the hub speaks" (#3491, #3534): a command the session
 /// read while closing is answered `closing`, never stranded and never
 /// `indeterminate`. Without the exited window the hub forwards the
 /// session's answer as promised instead of routing it again.
@@ -3506,7 +3506,7 @@ fn a_command_read_while_closing_is_answered_closing_not_stranded() {
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
-/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order"
+/// `docs/invocation.md:1156`, "What the hub speaks", "Commands keep their order"
 /// (#3279, #3326): a session-read command in the exit window gets exactly
 /// one answer before shutdown. The session's accept is forwarded, and the
 /// relay's end routes nothing, resumes nothing and refuses nothing.
@@ -3528,7 +3528,7 @@ fn a_session_read_command_in_the_exit_window_is_answered_exactly_once() {
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
-/// `docs/invocation.md`, "What the hub speaks" (#1662, #2094): a
+/// `docs/invocation.md:1188`, "What the hub speaks" (#1662, #2094): a
 /// connection that ends before `hub_hello` is a connect retry, never a
 /// completed relayed command. While the hub is exiting, the accept is
 /// dropped unanswered: the peer reads EOF with no line before it.
@@ -3818,12 +3818,12 @@ fn the_command_writer_counts_accepted_bytes_before_its_failure() {
     );
 }
 
-/// `docs/invocation.md`, "Lifecycle": a command the hub had started
-/// writing to the session when the write failed may have been read, so it
-/// is rejected `indeterminate` however the session ends, and is never
-/// delivered again. Any answer the session sends for the cut command is
-/// suspect, so the hub suppresses it and settles one `indeterminate`
-/// answer instead.
+/// `docs/invocation.md:1148`, "What the hub speaks": a command the hub had
+/// started writing to the session when the write failed may have been
+/// read, so it is rejected `indeterminate` however the session ends, and
+/// is never delivered again. Any answer the session sends for the cut
+/// command is suspect, so the hub suppresses it and settles one
+/// `indeterminate` answer instead (`docs/invocation.md:1164`).
 #[test]
 fn a_closing_answer_for_a_partly_written_command_is_suppressed_for_indeterminate() {
     let held = fakes::TempDir::new("rs");

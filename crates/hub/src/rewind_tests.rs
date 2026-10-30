@@ -1171,7 +1171,7 @@ fn a_refused_rewind_keeps_the_old_sessions_kept_level_for_the_retry() {
     // The refusal keeps the rewound session's kept level and the
     // untouched one, so the redirect retries once through the kept level:
     // both sides of the kept-level check, plus the retry.
-    // `docs/invocation.md`, "Change workspace": the hub retries the same child id once when the old process exits.
+    // `docs/invocation.md:1184`, "What the hub speaks" (#3565): the hub retries the same child id once when the old process exits.
     assert_eq!(
         starter.rewound().len(),
         2,
@@ -2908,8 +2908,8 @@ impl Starter for FailOnceThenBind {
 /// per-child claim starts fresh. The winning retry is held inside the
 /// starter until the peer proves it reached the held guard, so the loser
 /// waits for the claimed start to finish before connecting instead of
-/// missing the bind (`docs/invocation.md`, "Change workspace": the hub
-/// retries the same child id once when the old process exits).
+/// missing the bind (`docs/invocation.md:1184`, "What the hub speaks":
+/// the hub retries the same child id once when the old process exits).
 #[test]
 fn a_failed_moved_child_retry_attaches_the_losing_callback() {
     for first_is_follow in [true, false] {
@@ -3042,9 +3042,9 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
 /// socket's EOF even when the feed never observes the old process exit
 /// (#3565): the retry does not wait for the feed's scan. With and without
 /// a saved subscription, the shared decision still makes the one retry;
-/// only attaching needs the kept level (`docs/invocation.md`, "Change
-/// workspace": the hub retries the same child id once when the old
-/// process exits).
+/// only attaching needs the kept level (`docs/invocation.md:1184`,
+/// "What the hub speaks": the hub retries the same child id once when
+/// the old process exits).
 #[test]
 fn a_failed_moved_child_retries_on_old_exit_before_the_feed_scan() {
     for saved_subscription in [true, false] {
