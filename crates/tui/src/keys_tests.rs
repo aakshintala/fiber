@@ -127,7 +127,7 @@ fn kitty_and_device_attributes_replies() {
     );
     assert_eq!(
         feed_all(&[b"\x1b[?1;2c"]),
-        vec![Event::Reply(Reply::DeviceAttributes)],
+        vec![Event::Reply(Reply::DeviceAttributes { sixel: false })],
     );
 }
 
@@ -1450,4 +1450,144 @@ fn overlong_graphics_candidate_resolves() {
         })),
         "a held candidate never resolves"
     );
+}
+
+/// The XTVERSION reply parses to the terminal's version text.
+#[test]
+fn xtversion_reply_parses_to_its_text() {
+    for (bytes, want) in [
+        (b"\x1bP>|iTerm2 3.5.0\x1b\\".as_slice(), "iTerm2 3.5.0"),
+        (
+            b"\x1bP>|WezTerm 20240203\x1b\\".as_slice(),
+            "WezTerm 20240203",
+        ),
+        (b"\x1bP>|ghostty 1.0\x07".as_slice(), "ghostty 1.0"),
+        (b"\x1bP>|\x1b\\".as_slice(), ""),
+    ] {
+        assert_eq!(
+            feed_all(&[bytes]),
+            vec![Event::Reply(Reply::Version(want.to_owned()))],
+            "{bytes:?} is the version"
+        );
+    }
+}
+
+/// An XTVERSION reply split across reads parses once whole.
+#[test]
+fn xtversion_reply_split_across_reads_parses() {
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1bP>|iTerm2 ").is_empty());
+    assert_eq!(
+        parser.feed(b"3.5.0\x1b\\"),
+        vec![Event::Reply(Reply::Version("iTerm2 3.5.0".to_owned()))]
+    );
+    // A terminator split after its `ESC` holds for the next read.
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1bP>|WezTerm 1\x1b").is_empty());
+    assert_eq!(
+        parser.feed(b"\\"),
+        vec![Event::Reply(Reply::Version("WezTerm 1".to_owned()))]
+    );
+}
+
+/// A control byte in an XTVERSION reply is no reply: the bytes read as
+/// keys instead, and the bytes after it still parse.
+#[test]
+fn xtversion_control_byte_reads_as_keys() {
+    let mut parser = Parser::default();
+    let events = parser.feed(b"\x1bP>|\x01x");
+    assert!(
+        events.iter().all(|event| !matches!(event, Event::Reply(_))),
+        "{events:?} holds no reply"
+    );
+    assert_eq!(
+        parser.feed(b"z"),
+        vec![Event::Stroke(Stroke {
+            code: Code::Char('z'),
+            mods: Mods::NONE,
+        })],
+        "the bytes after still parse"
+    );
+}
+
+/// A never-terminated XTVERSION candidate resolves instead of holding
+/// forever: past the cap it reads as keys.
+#[test]
+fn overlong_xtversion_candidate_resolves() {
+    let mut candidate = b"\x1bP>|".to_vec();
+    candidate.extend(std::iter::repeat_n(b'x', 300));
+    let mut parser = Parser::default();
+    let events = parser.feed(&candidate);
+    assert_eq!(
+        events.first(),
+        Some(&Event::Stroke(Stroke {
+            code: Code::Char('p'),
+            mods: Mods::SHIFT | Mods::ALT,
+        })),
+        "a held candidate never resolves"
+    );
+}
+
+/// `ESC p` in one read is Alt+P. A lone `ESC P` holds for the next
+/// read, like `ESC _`: the DCS prefix may follow.
+#[test]
+fn alt_p_reads_as_a_stroke() {
+    assert_eq!(
+        feed_strokes(&[b"\x1bp"]),
+        vec![Stroke {
+            code: Code::Char('p'),
+            mods: Mods::ALT,
+        }]
+    );
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1bP").is_empty());
+    assert_eq!(
+        parser.feed(b"q"),
+        vec![
+            Event::Stroke(Stroke {
+                code: Code::Char('p'),
+                mods: Mods::SHIFT | Mods::ALT,
+            }),
+            Event::Stroke(Stroke {
+                code: Code::Char('q'),
+                mods: Mods::NONE,
+            }),
+        ]
+    );
+}
+
+/// Typed text around an XTVERSION reply stays keys.
+#[test]
+fn typing_around_an_xtversion_reply_stays_keys() {
+    assert_eq!(
+        feed_all(&[b"hi\x1bP>|iTerm2 3.5.0\x1b\\bye"]),
+        vec![
+            Event::Key(Key::Char('h')),
+            Event::Key(Key::Char('i')),
+            Event::Reply(Reply::Version("iTerm2 3.5.0".to_owned())),
+            Event::Key(Key::Char('b')),
+            Event::Key(Key::Char('y')),
+            Event::Key(Key::Char('e')),
+        ]
+    );
+}
+
+/// The Sixel bit in a device-attributes reply: a `?`-led parameter of
+/// exactly `4` names Sixel.
+#[test]
+fn device_attributes_sixel_bit() {
+    for (bytes, sixel) in [
+        (b"\x1b[?62;4c".as_slice(), true),
+        (b"\x1b[?4c".as_slice(), true),
+        (b"\x1b[?62;4;8c".as_slice(), true),
+        (b"\x1b[?62;14c".as_slice(), false),
+        (b"\x1b[?c".as_slice(), false),
+        (b"\x1b[?1;2c".as_slice(), false),
+    ] {
+        assert_eq!(
+            feed_all(&[bytes]),
+            vec![Event::Reply(Reply::DeviceAttributes { sixel })],
+            "{bytes:?} names sixel {sixel}"
+        );
+    }
 }
