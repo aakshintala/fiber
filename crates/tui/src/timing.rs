@@ -8,21 +8,21 @@ use std::sync::Arc;
 use contract::diag::Op;
 
 /// The loop's timing state: the diagnostic writer its scopes share, and
-/// the attach latches. `tui.log_read` and `tui.transcript` each write at
-/// most once per process: a reconnect, a delegate swap or a second attach
-/// never writes a second line.
+/// the attach latches. Each latched operation writes at most once per
+/// process: a reconnect, a delegate swap or a second attach never writes
+/// a second line.
 pub(crate) struct Timing {
     diag: Arc<log::diag::Diag>,
     log_read: bool,
     transcript: bool,
     attach_summary: bool,
     tail_wait: bool,
+    preview_fold: bool,
     tail_install: bool,
 }
 
 impl Timing {
-    /// Shares `diag` with the loop's scopes; both attach latches start
-    /// unset.
+    /// Shares `diag` with the loop's scopes; all latches start unset.
     pub(crate) fn new(diag: Arc<log::diag::Diag>) -> Self {
         Self {
             diag,
@@ -30,6 +30,7 @@ impl Timing {
             transcript: false,
             attach_summary: false,
             tail_wait: false,
+            preview_fold: false,
             tail_install: false,
         }
     }
@@ -104,10 +105,12 @@ impl Timing {
         log::diag::timed(&self.diag, Op::TuiTailWait, None, None)
     }
 
-    /// Starts one preview fold's guard. Each tail answer folds the
-    /// candidate separately, so no latch: every fold writes its own
-    /// line.
-    pub(crate) fn preview_fold(&self) -> Option<log::diag::Timer> {
+    /// Starts the first answer fold's guard, once per process. The
+    /// initial seed is empty, and later folds do not write a second line.
+    pub(crate) fn preview_fold(&mut self) -> Option<log::diag::Timer> {
+        if std::mem::replace(&mut self.preview_fold, true) {
+            return None;
+        }
         log::diag::timed(&self.diag, Op::TuiPreviewFold, None, None)
     }
 

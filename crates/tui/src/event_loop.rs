@@ -1442,9 +1442,7 @@ impl<B: Backend> Loop<B> {
         self.app.clear_tail_read();
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
-            let install = self.timing.tail_install();
             self.app.install_tail();
-            drop(install);
             return;
         }
         if self

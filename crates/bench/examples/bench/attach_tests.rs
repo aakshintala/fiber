@@ -593,7 +593,9 @@ fn span_op(op: &str, ms: u64) -> String {
 
 /// Each `op_timing` line in the sample's TUI log becomes one
 /// `attach_span_ms` row carrying the fixture, the sample, the operation
-/// and its milliseconds; other codes and blank lines are not spans.
+/// and its milliseconds; other codes and blank lines are not spans. The
+/// terminal operation inventory and its per-process limits are in
+/// `docs/state.md:423-446`.
 #[test]
 fn span_samples_emit_one_row_per_op_timing_line() {
     let text = [

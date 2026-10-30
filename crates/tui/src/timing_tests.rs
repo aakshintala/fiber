@@ -255,19 +255,20 @@ fn tail_wait_writes_once_per_process() {
     assert_terminal_wire(&lines, "tui.tail_wait");
 }
 
-/// Each preview fold writes its own line: two answers fold twice.
+/// The first answer fold writes once per process: a later fold writes no
+/// second line.
 #[test]
-fn preview_fold_writes_one_line_per_fold() {
+fn preview_fold_writes_once_per_process() {
     let home = fakes::TempDir::new("tui-timing-preview-fold");
     let clock = FakeClock::new();
-    let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     drop(timing.preview_fold());
-    drop(timing.preview_fold());
+    assert!(
+        timing.preview_fold().is_none(),
+        "a later answer fold takes no guard"
+    );
     let lines = op_lines(home.path());
-    assert_eq!(lines.len(), 2, "one line per fold: {lines:?}");
-    for line in &lines {
-        assert_terminal_wire(std::slice::from_ref(line), "tui.preview_fold");
-    }
+    assert_terminal_wire(&lines, "tui.preview_fold");
 }
 
 /// The pre-frame install writes once: a second install takes no guard,
@@ -802,14 +803,14 @@ fn summary_poll_starts_nothing_once_the_latch_is_set() {
 }
 
 /// The open's pre-frame tail read is timed end to end: one
-/// `tui.tail_wait` line spans the whole fetch, two `tui.preview_fold`
-/// lines cover the initial seed fold and the answer's fold separately,
-/// and one `tui.tail_install` line covers the install, which installs
-/// the newest candidate without another fold (`docs/tui.md`, "History
-/// and paging"). A `Phase::Count` read takes no `tail_wait` guard, so
-/// swapping the arms leaves none here.
+/// `tui.tail_wait` line spans the whole fetch, one `tui.preview_fold`
+/// line covers the answer fold (the empty seed fold writes none), and
+/// one `tui.tail_install` line covers installation, which installs the
+/// newest candidate without another fold (`docs/tui.md`, "History and
+/// paging"). A `Phase::Count` read takes no attach guard, so swapping
+/// the arms leaves none here (`docs/state.md`, "Diagnostic logs").
 #[test]
-fn open_tail_times_the_wait_and_every_fold() {
+fn open_tail_times_the_wait_answer_fold_and_install() {
     let (home, mut lp, id) = subscribing_lp("tui-timing-open-tail");
     accept_summary(&mut lp, &id);
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
@@ -876,11 +877,7 @@ fn open_tail_times_the_wait_and_every_fold() {
         .filter(|line| line["data"]["op"] == "tui.preview_fold")
         .cloned()
         .collect();
-    assert_eq!(
-        folds.len(),
-        2,
-        "the initial seed fold and the answer's fold: {folds:?}"
-    );
+    assert_eq!(folds.len(), 1, "the answer fold only: {folds:?}");
     assert_terminal_wires(&folds, "tui.preview_fold");
     let installs: Vec<Value> = lines
         .iter()
