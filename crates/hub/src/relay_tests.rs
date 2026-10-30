@@ -2365,9 +2365,11 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
         .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_known\"}}\n")
         .unwrap();
     session_peer.flush().unwrap();
-    // The relay forwards in stream order, so a forwarded unknown
-    // acknowledgement would be the first line: the first line is the
-    // known one. The read keeps the 10 s socket deadline.
+    // `docs/invocation.md:1106`, "Commands keep their order": the
+    // session's acknowledgements come back in the order it sends them,
+    // so a forwarded unknown acknowledgement would be the first line:
+    // the first line is the known one. The read keeps the 10 s socket
+    // deadline.
     let mut first = String::new();
     read.read_line(&mut first).unwrap();
     // Closing the session's end ends the relay's read, as a session's
