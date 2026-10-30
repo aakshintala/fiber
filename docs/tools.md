@@ -142,7 +142,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   It is never sent to the model and the loop never reads it. A client that does
   not recognise a tool's `details` shows `content` instead: tool identity is an
   opaque name and an extension can replace any tool, so no client may depend
-  on one tool's `details`.
+  on one tool's `details`. A confined Linux shell result includes
+  `protected_paths: { restored, failed }` when it restores a protected path or
+  cannot restore one. The shell names each changed path in `content`; the loop
+  also carries the report on the completion event.
 - `changes`: the lines each file gained and lost, as
   `{ path, added, removed }` per file, on a call that changed files. It is the
   one tool-neutral account of a change: a client draws a group's "+442 −12"
@@ -618,7 +621,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   A timeout is as above; a cancellation is `cancelled`.
 - `details` is `{ "command": "<command>", "exit_code": N }`, or `"signal"`
   in place of `"exit_code"` when a signal killed it, so a client draws the
-  command and how it ended. When the command is a single built-in `grep`
+  command and how it ended. A confined Linux call that changes a protected
+  path also adds `protected_paths: { restored, failed }`; it lists restored
+  paths and any restore failures. The shell names each changed path in its
+  closing output, without changing the command's exit result. When the command
+  is a single built-in `grep`
   over files that prints lines ("Search"), `details` also holds `"matches"`: one
   `{ "path", "lines" }` per file in the order printed, each line a
   `{ "line", "text", "spans" }`: its line number, its text, and the

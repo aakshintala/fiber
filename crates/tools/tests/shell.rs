@@ -3330,6 +3330,70 @@ fn a_confined_shell_runs_and_marks_its_effects() {
     assert!(text(&output).contains("hi"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
+    let root = fakes::TempDir::new("fiber-shell-protected-paths");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    fakes::git::git(&workspace, &["init", "-q"]);
+    std::fs::create_dir_all(workspace.join(".git/hooks")).unwrap();
+    std::fs::create_dir_all(workspace.join(".fiber")).unwrap();
+    std::fs::write(workspace.join(".git/config"), "config baseline\n").unwrap();
+    std::fs::write(workspace.join(".git/hooks/pre-commit"), "hook baseline\n").unwrap();
+    std::fs::write(workspace.join(".fiber/state"), "fiber baseline\n").unwrap();
+    let sandbox = sandbox_settings_for_integration("protected");
+    let fiber_home = sandbox.fiber_home.clone();
+    let (protection, recovery) =
+        tools::ProtectedPaths::open(&fiber_home, &workspace).expect("the project baseline opens");
+    assert!(
+        recovery.is_none(),
+        "the first session has no stale baseline"
+    );
+    let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_sandbox(Arc::new(Mutex::new(sandbox)))
+        .with_protection(protection);
+
+    let arguments = args(
+        "printf changed > .git/config && printf changed > .git/hooks/pre-commit && printf changed > .fiber/state",
+    );
+    assert!(
+        shell.effects(&arguments).unwrap().declared.confined,
+        "the test needs a confined Linux call"
+    );
+    let output = run_prepared(
+        &shell,
+        &arguments,
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+
+    assert!(
+        output.error.is_none(),
+        "the command completed: {}",
+        text(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join(".git/config")).unwrap(),
+        "config baseline\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join(".git/hooks/pre-commit")).unwrap(),
+        "hook baseline\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join(".fiber/state")).unwrap(),
+        "fiber baseline\n"
+    );
+    let report = output
+        .protected_paths
+        .as_ref()
+        .expect("the restore is in the result");
+    assert_eq!(report.restored, vec![".git", ".fiber"]);
+    assert!(report.failed.is_empty());
+    assert!(text(&output).contains(".git"));
+}
+
 #[test]
 fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
     let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-fail");
