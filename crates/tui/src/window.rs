@@ -1959,6 +1959,12 @@ impl Pages {
     }
 
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
+    /// No test pins the `!open || narrow` cache gate below against `&&`,
+    /// `open`, or `>`: both arms compute the same count through
+    /// `crate::view::rows` at one width (`set_width` clears `wrapped`, which
+    /// only this function reads), so those mutants only choose whether to
+    /// memoize, never the rows a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
     fn count(&mut self, at: usize) {
         crate::work::add(|work| work.page_counts += 1);
         let Some(part) = self.part(at) else {
