@@ -3434,6 +3434,10 @@ fn parse_typed_matches_last_wrong_typed_duplicates_and_escaped_optional_objects(
         accepted("c", None),
     );
     parity(
+        br#"{"kind":"command_accepted","payload":[1],"payload":{"command_id":"c"}}"#,
+        accepted("c", None),
+    );
+    parity(
         br#"{"kind":"command_accepted","payload":{"command_id":"c"},"payload":[]}"#,
         None,
     );
