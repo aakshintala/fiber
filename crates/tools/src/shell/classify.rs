@@ -1191,10 +1191,12 @@ pub(super) fn one_grep(command: &str) -> bool {
 /// The scan runs before parsing and never claims a complete parse: a word
 /// sequence in any `;`-, `&`-, `|`-, group- or newline-separated component
 /// matches, whether the parser accepts the command or not. Quotes do not
-/// hide a form and wrappers do not reveal one: only a component whose own
-/// first word names the command counts, with a slash-qualified name
-/// compared by its basename. Each form below is its own check, so removing
-/// one leaves its commands unguarded.
+/// hide a form and wrappers do not hide one either: the listed sequence
+/// matches at any word offset within a component, so `sudo rm -rf tmp`
+/// counts, with a slash-qualified name compared by its basename. The scan
+/// is textual and may over-match, so a quoted or echoed form still counts;
+/// over-matching only keeps a call reviewed. Each form below is its own
+/// check, so removing one leaves its commands unguarded.
 pub(super) fn review_when_confined(command: &str) -> bool {
     components(command).into_iter().any(|words| {
         rm_recursive(&words)
@@ -1249,45 +1251,61 @@ fn rm_force_flag(word: &str) -> bool {
     cluster.contains('f')
 }
 
-/// `rm -r` without `-f`. A force flag beside it is the `rm -rf` form
-/// below, so the two checks never overlap and deleting one fails its own
-/// cases.
+/// `rm -r` without `-f`, at any word offset within the component so a
+/// wrapper such as `sudo` does not hide it. A force flag beside it is the
+/// `rm -rf` form below, so the two checks never overlap and deleting one
+/// fails its own cases.
 fn rm_recursive(words: &[&str]) -> bool {
-    let Some((head, rest)) = words.split_first() else {
-        return false;
-    };
-    if command_name(head) != "rm" {
-        return false;
-    }
-    let recursive = rest.iter().any(|word| rm_recursive_flag(word));
-    let force = rest.iter().any(|word| rm_force_flag(word));
-    recursive && !force
+    rm_starts(words).any(|rest| {
+        let recursive = rest.iter().any(|word| rm_recursive_flag(word));
+        let force = rest.iter().any(|word| rm_force_flag(word));
+        recursive && !force
+    })
 }
 
-/// `rm -rf`: recurse and force together, in one cluster or two words.
+/// `rm -rf`, at any word offset: recurse and force together, in one cluster
+/// or two words.
 fn rm_recursive_force(words: &[&str]) -> bool {
-    let Some((head, rest)) = words.split_first() else {
-        return false;
-    };
-    if command_name(head) != "rm" {
-        return false;
-    }
-    rest.iter().any(|word| rm_recursive_flag(word)) && rest.iter().any(|word| rm_force_flag(word))
+    rm_starts(words).any(|rest| {
+        rest.iter().any(|word| rm_recursive_flag(word))
+            && rest.iter().any(|word| rm_force_flag(word))
+    })
 }
 
-/// Whether `words` names `git <name>`: the component's own first word is
-/// `git` by basename, and its second word is the subcommand.
+/// The words after each `rm` word in the component, by basename, so a
+/// wrapper before `rm` does not hide the form.
+fn rm_starts<'a>(words: &'a [&'a str]) -> impl Iterator<Item = &'a [&'a str]> {
+    words.iter().enumerate().filter_map(|(start, word)| {
+        if command_name(word) == "rm" {
+            words.get(start + 1..)
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether `words` holds `git <name>` at any word offset: a `git` word by
+/// basename, directly followed by the subcommand.
 fn git_subcommand(words: &[&str], name: &str) -> bool {
-    let [head, second, ..] = words else {
-        return false;
-    };
-    command_name(head) == "git" && *second == name
+    git_starts(words, name).next().is_some()
+}
+
+/// The words after each `git <name>` occurrence in the component.
+fn git_starts<'a>(words: &'a [&'a str], name: &str) -> impl Iterator<Item = &'a [&'a str]> {
+    words.iter().enumerate().filter_map(move |(start, word)| {
+        if command_name(word) == "git" && words.get(start + 1).is_some_and(|second| *second == name)
+        {
+            words.get(start + 2..)
+        } else {
+            None
+        }
+    })
 }
 
 /// `git reset --hard`: the reset runs with the hard flag anywhere after
 /// the subcommand.
 fn git_reset_hard(words: &[&str]) -> bool {
-    git_subcommand(words, "reset") && words.iter().skip(2).any(|word| *word == "--hard")
+    git_starts(words, "reset").any(|rest| rest.contains(&"--hard"))
 }
 
 /// `git clean`: the subcommand alone names it, whatever flags follow.
@@ -1297,7 +1315,7 @@ fn git_clean(words: &[&str]) -> bool {
 
 /// `git checkout --`: the checkout separates paths with a bare `--`.
 fn git_checkout_dashdash(words: &[&str]) -> bool {
-    git_subcommand(words, "checkout") && words.iter().skip(2).any(|word| *word == "--")
+    git_starts(words, "checkout").any(|rest| rest.contains(&"--"))
 }
 
 /// `git restore`: the subcommand alone names it, whatever follows.

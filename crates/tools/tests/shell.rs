@@ -2812,8 +2812,9 @@ fn effects_of(shell: &Shell, command: &str) -> contract::tool::Effects {
 /// The destructive-command guard (`docs/tools.md`, "What a tool declares"):
 /// the shell declares `review_when_confined` when any component of a
 /// multi-part command holds a built-in destructive form, matched by command
-/// text. Each of the six forms stands alone below so deleting one matcher
-/// predicate fails this test.
+/// text at any word offset within the component, so a wrapper such as
+/// `sudo` does not hide it. Each of the six forms stands alone below so
+/// deleting one matcher predicate fails this test.
 #[test]
 fn the_destructive_guard_matches_each_form_in_every_placement() {
     let dir = fakes::TempDir::new("fiber-shell-destructive-guard");
@@ -2840,6 +2841,27 @@ fn the_destructive_guard_matches_each_form_in_every_placement() {
     cases.push("/usr/bin/rm -rf tmp".to_owned());
     cases.push("/usr/bin/git reset --hard".to_owned());
     cases.push("/usr/bin/git clean -fd && echo hi".to_owned());
+    // A wrapper before the form does not hide it: each form guarded above
+    // stays guarded under `sudo`, standalone and in multi-part placements.
+    let wrapped = [
+        "sudo rm -r tmp",
+        "sudo rm -rf tmp",
+        "sudo git reset --hard",
+        "sudo git clean -fd",
+        "sudo git checkout -- README.md",
+        "sudo git restore README.md",
+    ];
+    for form in wrapped {
+        cases.push(form.to_owned());
+        cases.push(format!("echo hi && {form}"));
+        cases.push(format!("{form} && echo hi"));
+    }
+    cases.push("sudo /usr/bin/rm -rf tmp".to_owned());
+    cases.push("echo hi && sudo /usr/bin/git clean -fd".to_owned());
+    // Best-effort text matching over-matches: a quoted or echoed form still
+    // counts, since only review is at stake.
+    cases.push("echo rm -rf tmp".to_owned());
+    cases.push("echo \"rm -rf tmp\"".to_owned());
     for command in cases {
         let effects = effects_of(&shell, &command);
         assert!(
@@ -2870,8 +2892,6 @@ fn the_destructive_guard_ignores_near_misses() {
         "git checkout -b feature",
         "git status",
         "echo hi",
-        "echo rm -rf tmp",
-        "echo \"rm -rf tmp\"",
     ] {
         let effects = effects_of(&shell, command);
         assert!(
