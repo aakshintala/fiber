@@ -551,7 +551,15 @@ fn steps_without_an_answer_print_their_skip_lines() {
     );
     let mut err = Vec::new();
     assert_eq!(
-        step_import(&setup.home(), &flags, &test_clock(), None, &mut err).unwrap(),
+        step_import(
+            &setup.home(),
+            &flags,
+            &config::no_personal_sources,
+            &test_clock(),
+            None,
+            &mut err
+        )
+        .unwrap(),
         0
     );
     assert_eq!(
@@ -902,6 +910,7 @@ fn setup_import_flag_and_answers_run_and_report() {
         let code = step_import(
             &home,
             &flags,
+            &config::no_personal_sources,
             &test_clock(),
             Some(&mut stdin),
             &mut std::io::stderr(),
@@ -913,7 +922,15 @@ fn setup_import_flag_and_answers_run_and_report() {
             ..Default::default()
         };
         child_case_marker("flags");
-        let code = step_import(&home, &flags, &test_clock(), None, &mut std::io::stderr()).unwrap();
+        let code = step_import(
+            &home,
+            &flags,
+            &config::no_personal_sources,
+            &test_clock(),
+            None,
+            &mut std::io::stderr(),
+        )
+        .unwrap();
         child_report("flags", code);
         // The receipt landed: nothing pends, so the no answer is only shown done.
         child_case_marker("terminal-no");
@@ -922,6 +939,7 @@ fn setup_import_flag_and_answers_run_and_report() {
         let code = step_import(
             &home,
             &flags,
+            &config::no_personal_sources,
             &test_clock(),
             Some(&mut stdin),
             &mut std::io::stderr(),
@@ -984,6 +1002,7 @@ fn setup_import_terminal_reports_done_and_skips_when_nothing_pends() {
         let code = step_import(
             &home,
             &flags,
+            &config::no_personal_sources,
             &test_clock(),
             Some(&mut stdin),
             &mut std::io::stderr(),
@@ -1000,6 +1019,7 @@ fn setup_import_terminal_reports_done_and_skips_when_nothing_pends() {
         let code = step_import(
             &home,
             &flags,
+            &config::no_personal_sources,
             &test_clock(),
             Some(&mut stdin),
             &mut std::io::stderr(),
@@ -1047,7 +1067,15 @@ fn setup_import_flag_failure_without_a_home_names_the_step() {
             ..Default::default()
         };
         child_case_marker("flags");
-        let code = step_import(&home, &flags, &test_clock(), None, &mut std::io::stderr()).unwrap();
+        let code = step_import(
+            &home,
+            &flags,
+            &config::no_personal_sources,
+            &test_clock(),
+            None,
+            &mut std::io::stderr(),
+        )
+        .unwrap();
         child_report("flags", code);
         return;
     }
@@ -1365,6 +1393,7 @@ fn setup_hub_failures_name_the_step() {
 fn child_setup(flags: &SetupFlags) -> i32 {
     setup(
         flags,
+        &config::no_personal_sources,
         test_clock(),
         test_locks(),
         &fakes::children::grouped_output,
@@ -1536,6 +1565,7 @@ fn child_run_terminal(flags: &SetupFlags, stdin: &mut dyn BufRead) -> i32 {
         &child_home(),
         &child_workspace(),
         flags,
+        &config::no_personal_sources,
         &test_clock(),
         &test_locks(),
         &fakes::children::grouped_output,

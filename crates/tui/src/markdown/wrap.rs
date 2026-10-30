@@ -9,6 +9,16 @@ use ratatui::text::{Line, Span};
 
 use crate::rows::Join;
 
+/// Exact character width for markdown cells without routing ordinary
+/// ASCII through the Unicode width tables.
+pub(super) fn char_width(ch: char) -> usize {
+    if ch.is_ascii() {
+        1
+    } else {
+        crate::text::char_width(ch)
+    }
+}
+
 /// One character and its style, before wrapping.
 pub(super) type Cell = (char, Style);
 
@@ -54,23 +64,45 @@ pub(super) fn wrap_joined_indices(
     rest: usize,
     words: bool,
 ) -> Vec<(Vec<Cell>, Join, Vec<usize>)> {
-    let mut rows: Vec<(Vec<Cell>, Join, Vec<usize>)> = Vec::new();
-    let mut row: Vec<Cell> = Vec::new();
-    let mut indices: Vec<usize> = Vec::new();
+    let widths: Vec<usize> = cells.iter().map(|(ch, _)| char_width(*ch)).collect();
+    let mut rows = Vec::new();
+    visit_wrap_ranges(cells, &widths, first, rest, words, |range, join| {
+        let row = cells.get(range.clone()).unwrap_or_default().to_vec();
+        rows.push((row, join, range.collect()));
+    });
+    rows
+}
+
+/// Visits the source ranges used by the drawing wrapper, without making
+/// each row's cells or indices. Both drawing and counting use this walker.
+pub(super) fn visit_wrap_ranges(
+    cells: &[Cell],
+    widths: &[usize],
+    first: usize,
+    rest: usize,
+    words: bool,
+    mut visit: impl FnMut(Range<usize>, Join),
+) {
+    let mut rows = 0usize;
+    let mut start = 0usize;
+    let mut end = 0usize;
     let mut join = Join::Break;
     let mut used = 0usize;
     let mut at = 0usize;
-    // Each pass takes at least the cell at `at`, so the loop ends.
     while let Some(&(ch, _)) = cells.get(at) {
         if ch == '\n' {
-            rows.push((std::mem::take(&mut row), join, std::mem::take(&mut indices)));
+            visit(start..end, join);
+            rows = rows.saturating_add(1);
+            at = at.saturating_add(1);
+            start = at;
+            end = at;
             join = Join::Break;
             used = 0;
-            at = at.saturating_add(1);
             continue;
         }
+        let piece_start = at;
         let next = at.saturating_add(1);
-        let end = if words && ch != ' ' {
+        let piece_end = if words && ch != ' ' {
             cells
                 .iter()
                 .skip(next)
@@ -79,50 +111,50 @@ pub(super) fn wrap_joined_indices(
         } else {
             next
         };
-        let piece = cells.get(at..end).unwrap_or_default();
-        let start = at;
-        at = end;
-        let width: usize = piece
+        at = piece_end;
+        let piece_width = widths
+            .get(piece_start..piece_end)
+            .unwrap_or_default()
             .iter()
-            .map(|(ch, _)| crate::text::char_width(*ch))
-            .sum();
-        let room = if rows.is_empty() { first } else { rest };
-        // A word that overflows goes to the next row when it fits there.
-        if words && !row.is_empty() && used.saturating_add(width) > room && width <= rest {
-            // Each pass pops one cell, so the loop ends.
-            while row.last().is_some_and(|(ch, _)| *ch == ' ') {
-                row.pop();
-                indices.pop();
-            }
-            rows.push((std::mem::take(&mut row), join, std::mem::take(&mut indices)));
+            .fold(0usize, |sum, width| sum.saturating_add(*width));
+        let room = if rows == 0 { first } else { rest };
+        if words && start < end && used.saturating_add(piece_width) > room && piece_width <= rest {
+            let trailing_space_start = cells
+                .get(start..end)
+                .unwrap_or_default()
+                .iter()
+                .rposition(|(ch, _)| *ch != ' ')
+                .map_or(start, |at| start.saturating_add(at).saturating_add(1));
+            end = trailing_space_start;
+            visit(start..end, join);
+            rows = rows.saturating_add(1);
+            start = piece_start;
+            end = piece_start;
             join = Join::WrapSpace;
             used = 0;
         }
-        // Spaces at the start of a wrapped row are dropped. Only a break
-        // at a space, which joins with one, or a newline leaves a row
-        // empty: a break inside a word puts the cell that overflowed on the
-        // new row at once.
-        if words && ch == ' ' && row.is_empty() && !rows.is_empty() {
+        if words && ch == ' ' && start == end && rows > 0 {
+            start = at;
+            end = at;
             continue;
         }
-        // One pass per cell of the piece.
-        for (offset, &cell) in piece.iter().enumerate() {
-            let room = if rows.is_empty() { first } else { rest };
-            let width = crate::text::char_width(cell.0);
-            if used.saturating_add(width) > room && !row.is_empty() {
-                rows.push((std::mem::take(&mut row), join, std::mem::take(&mut indices)));
+        for index in piece_start..piece_end {
+            let room = if rows == 0 { first } else { rest };
+            let cell_width = widths.get(index).copied().unwrap_or_default();
+            if used.saturating_add(cell_width) > room && start < end {
+                visit(start..end, join);
+                rows = rows.saturating_add(1);
+                start = index;
                 join = Join::Wrap;
                 used = 0;
             }
-            row.push(cell);
-            indices.push(start.saturating_add(offset));
-            used = used.saturating_add(width);
+            end = index.saturating_add(1);
+            used = used.saturating_add(cell_width);
         }
     }
-    if !row.is_empty() {
-        rows.push((row, join, indices));
+    if start < end {
+        visit(start..end, join);
     }
-    rows
 }
 
 /// The links drawn on one wrapped row: each link range over the source
@@ -144,11 +176,11 @@ pub(super) fn link_cols(
         {
             let mut start = prefix;
             for (ch, _) in row.get(..first).unwrap_or_default() {
-                start = start.saturating_add(crate::text::char_width(*ch));
+                start = start.saturating_add(char_width(*ch));
             }
             let mut end = start;
             for (ch, _) in cells {
-                end = end.saturating_add(crate::text::char_width(*ch));
+                end = end.saturating_add(char_width(*ch));
             }
             let start = u16::try_from(start).unwrap_or(u16::MAX);
             let end = u16::try_from(end).unwrap_or(u16::MAX);

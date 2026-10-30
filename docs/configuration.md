@@ -734,6 +734,8 @@ suffixed, since a suffixed fixed name is never read — the existing file
 stands and the item goes to left-behind with the occupied target as its
 reason. Identical bytes are skipped without error.
 
+A skill Fiber already reads from another source, such as a Claude Code skill whose directory is a link into `~/.agents/skills/` or one whose name is already in `~/.agents/skills/`, is not copied: it goes to left-behind with "already read from <path>", whatever other reason would also leave it behind. Here "already read" means that discovery would load it.
+
 One receipt file per source sits at the top of Fiber home,
 `import-claude-code.json` and `import-codex.json`, each holding its source,
 time and counts (`docs/state.md`, "What each part holds"). A completed

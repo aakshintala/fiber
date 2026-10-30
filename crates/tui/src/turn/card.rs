@@ -315,7 +315,13 @@ impl Turn {
             }
             let gap_before = separates;
             let drew = block(out, inner, pad, gap_before, |out| match entry {
-                Entry::Reply { reply, .. } => reply.rows(inner, out),
+                Entry::Reply { reply, .. } => {
+                    if out.is_count_only() {
+                        reply.count_rows(inner, out);
+                    } else {
+                        reply.rows(inner, out);
+                    }
+                }
                 Entry::Steer(steered) => steered.rows(inner, zone, layout, out),
                 Entry::Group(at) => {
                     if let Some(group) = self.groups.get(*at) {
