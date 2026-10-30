@@ -708,11 +708,11 @@ fn logo_app() -> App {
 /// kitty writer's chunks land where the test reads them.
 fn logo_loop() -> (Loop<TestBackend>, std::io::PipeReader, Receiver<Input>) {
     let (tty_out, tty_in) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
-    let (mut lp, _) = super::tests::new_loop(
-        TestBackend::new(80, 24),
-        Some(std::fs::File::from(std::os::fd::OwnedFd::from(tty_in))),
-    );
-    lp.app = logo_app();
+    let app = logo_app();
+    let screen =
+        Screen::new(TestBackend::new(80, 24), 80, 24).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop::for_test(app, screen);
+    lp.tty = std::fs::File::from(std::os::fd::OwnedFd::from(tty_in));
     let (_, rx) = mpsc::channel();
     (lp, tty_out, rx)
 }

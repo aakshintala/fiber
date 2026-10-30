@@ -4,6 +4,8 @@
 //! the hub's `prompt_history`, page by page (`docs/state.md`, "Prompt
 //! history").
 
+#[cfg(debug_assertions)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
@@ -17,6 +19,33 @@ use super::overlay::Overlay;
 use super::{App, Effect, mint};
 use crate::keys::{Edit, Key};
 use crate::slash::{SHOWN, window_start};
+
+#[cfg(debug_assertions)]
+std::thread_local! {
+    static SETTLE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(debug_assertions)]
+struct SettleDepth;
+
+#[cfg(debug_assertions)]
+impl SettleDepth {
+    fn enter() -> Self {
+        SETTLE_DEPTH.with(|depth| {
+            let current = depth.get();
+            debug_assert_eq!(current, 0, "App::settle called recursively");
+            depth.set(current + 1);
+        });
+        Self
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for SettleDepth {
+    fn drop(&mut self) {
+        SETTLE_DEPTH.with(|depth| depth.set(0));
+    }
+}
 
 /// The search panel's first line, before the query.
 const SEARCH: &str = "search prompts: ";
@@ -545,7 +574,9 @@ impl App {
     /// file search's return. The first time after an ↑ starts waiting for
     /// a page it notes what covers the input box; once that differs,
     /// whatever opened or closed a panel, the recall waits no more.
-    pub(super) fn settle(&mut self) {
+    pub(crate) fn settle(&mut self) {
+        #[cfg(debug_assertions)]
+        let _depth = SettleDepth::enter();
         self.relayout();
         let height = self.conversation_height();
         // A batch settles once at its end: trimming mid-batch would drop

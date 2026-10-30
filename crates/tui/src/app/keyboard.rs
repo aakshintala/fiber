@@ -152,7 +152,21 @@ impl App {
     /// `/keys` screen first while it is open, else through the effective
     /// bindings in the context on screen. A stroke ends a finished
     /// attention title (`docs/tui.md`, "Getting the person's attention").
+    #[cfg(test)]
     pub(crate) fn on_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
+        let (effect, settle) = self.press_route(stroke, now);
+        if settle {
+            self.settle();
+        }
+        effect
+    }
+
+    /// Handles one stroke without settling; the input boundary owns the layout pass.
+    pub(crate) fn on_press_inner(&mut self, stroke: Stroke, now: Instant) -> Effect {
+        self.press_route(stroke, now).0
+    }
+
+    fn press_route(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
         self.attention_seen();
         if self.top_surface() == Surface::KeysScreen {
             // The notice overlay hides the screen: Esc closes the
@@ -182,22 +196,19 @@ impl App {
             } else if stroke == ctrl_c() {
                 None
             } else {
-                return Effect::None;
+                return (Effect::None, false);
             };
             if let Some(effect) = effect {
                 self.edited();
-                self.settle();
-                return effect;
+                return (effect, true);
             }
         }
-        // The bindings settle here: `on_key` and `on_edit` settle
-        // themselves, so only an action settles from this Loop entry,
-        // once per input.
-        let (effect, settle) = self.bindings_press(stroke, now);
-        if settle {
-            self.settle();
-        }
-        effect
+        // Every binding uses unsettled routes. The direct `on_press`
+        // wrapper settles when requested; `on_press_inner` leaves the
+        // layout pass to the Loop input boundary.
+        let mut routed = false;
+        let (effect, settle) = self.bindings_press_with_routes(stroke, now, &mut routed);
+        (effect, settle || routed)
     }
 
     /// One stroke through the whole-screen extension bindings, ahead of
@@ -209,7 +220,12 @@ impl App {
     /// still settles: a handled `run` or action settles with its own
     /// handling, while drained adapter notices settle the fallthrough
     /// the built-in paths still run.
-    fn extension_press(&mut self, stroke: &Stroke, now: Instant) -> (Option<(Effect, bool)>, bool) {
+    fn extension_press(
+        &mut self,
+        stroke: &Stroke,
+        now: Instant,
+        routed: &mut bool,
+    ) -> (Option<(Effect, bool)>, bool) {
         // Neither kind of binding acts with no session on screen.
         let Some(session) = self.session().cloned() else {
             return (None, false);
@@ -253,8 +269,20 @@ impl App {
             self.drain_key_notices(&renderer);
             return (
                 Some(match event {
-                    Resolved::Key(key) => (self.on_key(key, now), false),
-                    Resolved::Edit(edit) => (self.on_edit(edit), false),
+                    Resolved::Key(key) => (
+                        {
+                            *routed = true;
+                            self.on_key_inner(key, now)
+                        },
+                        false,
+                    ),
+                    Resolved::Edit(edit) => (
+                        {
+                            *routed = true;
+                            self.on_edit_inner(edit)
+                        },
+                        false,
+                    ),
                     Resolved::Action(id) => (self.on_action(id), true),
                     Resolved::Nothing => (Effect::None, false),
                 }),
@@ -281,16 +309,30 @@ impl App {
     /// One stroke through the whole-screen extension bindings, then the
     /// built-in paths and the effective bindings in the context on
     /// screen. Returns the effect with whether the Loop entry still
-    /// settles: `on_key` and `on_edit` settle themselves, an action
-    /// leaves the settle to the entry, a handled extension binding or a
-    /// drained key notice settles, and a stroke nothing handles settles
-    /// nothing.
+    /// settles: this test entry settles key/edit dispatch itself, while
+    /// actions, handled extension bindings and drained notices leave the
+    /// settle to the caller. A stroke nothing handles settles nothing.
+    #[cfg(test)]
     fn bindings_press(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
-        let (dispatch, noticed) = self.extension_press(&stroke, now);
+        let mut routed = false;
+        let dispatch = self.bindings_press_with_routes(stroke, now, &mut routed);
+        if routed {
+            self.settle();
+        }
+        dispatch
+    }
+
+    fn bindings_press_with_routes(
+        &mut self,
+        stroke: Stroke,
+        now: Instant,
+        routed: &mut bool,
+    ) -> (Effect, bool) {
+        let (dispatch, noticed) = self.extension_press(&stroke, now, routed);
         if let Some(dispatch) = dispatch {
             return dispatch;
         }
-        let (effect, settle) = self.builtin_press(stroke, now);
+        let (effect, settle) = self.builtin_press(stroke, now, routed);
         (effect, settle || noticed)
     }
 
@@ -299,8 +341,9 @@ impl App {
     /// chip or a list stop: they dispatch as its own keys ahead of the
     /// bindings, so a rebound `recall_prompt` or `focus_next_prev`
     /// leaves them to home.
-    fn builtin_press(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
+    fn builtin_press(&mut self, stroke: Stroke, now: Instant, routed: &mut bool) -> (Effect, bool) {
         if let Some(effect) = self.rail_stroke(&stroke, now) {
+            *routed = true;
             return (effect, false);
         }
         // Unshifted Home edits the input editor's line, but only where
@@ -320,7 +363,13 @@ impl App {
                 Context::Input | Context::Steering | Context::Conversation
             ) && !self.keys().person_bound(&stroke, context)
             {
-                return (self.on_edit(edit), false);
+                return (
+                    {
+                        *routed = true;
+                        self.on_edit_inner(edit)
+                    },
+                    false,
+                );
             }
         }
         if self.home_owns_arrows()
@@ -331,8 +380,24 @@ impl App {
             )
         {
             match default_event(&stroke) {
-                Some(Event::Key(key)) => return (self.on_key(key, now), false),
-                Some(Event::Edit(edit)) => return (self.on_edit(edit), false),
+                Some(Event::Key(key)) => {
+                    return (
+                        {
+                            *routed = true;
+                            self.on_key_inner(key, now)
+                        },
+                        false,
+                    );
+                }
+                Some(Event::Edit(edit)) => {
+                    return (
+                        {
+                            *routed = true;
+                            self.on_edit_inner(edit)
+                        },
+                        false,
+                    );
+                }
                 Some(Event::Stroke(_) | Event::Mouse(_) | Event::Reply(_) | Event::Focus(_))
                 | None => {
                     return (Effect::None, false);
@@ -340,8 +405,20 @@ impl App {
             }
         }
         match self.keys().resolve(&stroke, self.key_context()) {
-            Resolved::Key(key) => (self.on_key(key, now), false),
-            Resolved::Edit(edit) => (self.on_edit(edit), false),
+            Resolved::Key(key) => (
+                {
+                    *routed = true;
+                    self.on_key_inner(key, now)
+                },
+                false,
+            ),
+            Resolved::Edit(edit) => (
+                {
+                    *routed = true;
+                    self.on_edit_inner(edit)
+                },
+                false,
+            ),
             Resolved::Action(id) => (self.on_action(id), true),
             Resolved::Nothing => (Effect::None, false),
         }
@@ -452,7 +529,7 @@ impl App {
             if self.credential_view_open() {
                 return self.credential_session_only();
             }
-            return self.model_picker_session_only();
+            return self.model_picker_session_only_inner();
         }
         if !matches!(id, "new_session" | "go_home") {
             return Effect::None;

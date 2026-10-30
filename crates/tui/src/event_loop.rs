@@ -575,6 +575,13 @@ impl<B: Backend> Loop<B> {
     /// parses reads itself. Returns the exit code when the terminal
     /// quits, before any frame.
     fn handle_events(&mut self, events: Vec<Event>) -> Option<i32> {
+        let result = self.handle_events_inner(events);
+        self.app.settle();
+        result
+    }
+
+    /// Dispatches parsed events without settling; the input boundary owns the layout pass.
+    fn handle_events_inner(&mut self, events: Vec<Event>) -> Option<i32> {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -592,10 +599,10 @@ impl<B: Backend> Loop<B> {
                 self.hub.send(&[line], &mut self.app);
             }
             let effect = match event {
-                Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
-                Event::Key(key) => self.app.on_key(key, self.clock.now()),
-                Event::Edit(edit) => self.app.on_edit(edit),
-                Event::Mouse(mouse) => self.app.on_mouse(
+                Event::Stroke(stroke) => self.app.on_press_inner(stroke, self.clock.now()),
+                Event::Key(key) => self.app.on_key_inner(key, self.clock.now()),
+                Event::Edit(edit) => self.app.on_edit_inner(edit),
+                Event::Mouse(mouse) => self.app.on_mouse_inner(
                     &mouse,
                     self.screen.targets(),
                     &mut self.pointer,
@@ -671,7 +678,7 @@ impl<B: Backend> Loop<B> {
                         // result can never arrive: landing the
                         // failure shows the notice and clears the
                         // gate for the next press.
-                        self.app.on_image(ticket, Err(notice));
+                        self.app.on_image_inner(ticket, Err(notice));
                     }
                 }
                 Effect::Feedback { description } => {
@@ -683,7 +690,7 @@ impl<B: Backend> Loop<B> {
                     ) {
                         // Nothing started, so no answer can arrive:
                         // landing the failure shows the notice.
-                        self.app.on_feedback(Err(notice));
+                        self.app.on_feedback_inner(Err(notice));
                     }
                 }
                 Effect::FindPause { generation, after } => {
@@ -764,6 +771,17 @@ impl<B: Backend> Loop<B> {
     /// sends. Returns the exit code when the terminal quits, before any
     /// frame, as handling every input in `step` did.
     fn handle(&mut self, input: Input) -> Option<i32> {
+        if let Input::Bytes(bytes) = input {
+            let events = self.parser.feed(&bytes);
+            return self.handle_events(events);
+        }
+        let result = self.handle_inner(input);
+        self.app.settle();
+        result
+    }
+
+    /// Dispatches one input without settling; the input boundary owns the layout pass.
+    fn handle_inner(&mut self, input: Input) -> Option<i32> {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -779,10 +797,10 @@ impl<B: Backend> Loop<B> {
             Input::KittyFailed => return Some(1),
             Input::Bytes(bytes) => {
                 let events = self.parser.feed(&bytes);
-                return self.handle_events(events);
+                return self.handle_events_inner(events);
             }
             Input::Hub(line) => {
-                let lines = self.app.on_line(line);
+                let lines = self.app.on_line_inner(line);
                 self.hub.send(&lines, &mut self.app);
             }
             Input::Connected(stream, hello) => {
@@ -792,12 +810,12 @@ impl<B: Backend> Loop<B> {
                 // connect does. The reader's end of it retries like any
                 // other lost connection.
                 if !self.hub.has_stream() {
-                    self.app.connect_failed(
+                    self.app.connect_failed_inner(
                         "Could not set up the hub connection: its write timeout could not be set"
                             .to_owned(),
                     );
                 } else {
-                    let lines = self.app.on_line(Line::Hub(hello));
+                    let lines = self.app.on_line_inner(Line::Hub(hello));
                     self.hub.send(&lines, &mut self.app);
                     // A `hub_hello` this terminal cannot read leaves it
                     // unconnected: it says so and disconnects.
@@ -808,19 +826,19 @@ impl<B: Backend> Loop<B> {
             }
             Input::ConnectFailed(error) => {
                 self.app
-                    .connect_failed(format!("Could not reach the hub: {error}"));
+                    .connect_failed_inner(format!("Could not reach the hub: {error}"));
                 self.hub.retry_later(&mut self.app);
             }
             Input::Disconnected => self.hub.on_disconnected(&mut self.app),
-            Input::Files { generation, result } => self.app.on_files(generation, result),
+            Input::Files { generation, result } => self.app.on_files_inner(generation, result),
             Input::Models(result) => {
-                self.app.on_models(result);
+                self.app.on_models_inner(result);
                 // The queued read, if one waits, starts on the loop's
                 // channel.
                 self.model_reader.done(&self.files_out);
             }
-            Input::Image { ticket, result } => self.app.on_image(ticket, result),
-            Input::Feedback(result) => self.app.on_feedback(result),
+            Input::Image { ticket, result } => self.app.on_image_inner(ticket, result),
+            Input::Feedback(result) => self.app.on_feedback_inner(result),
             Input::Viewed {
                 id,
                 name,
@@ -865,7 +883,7 @@ impl<B: Backend> Loop<B> {
                         term::pixels(&self.tty),
                         (width, height),
                     ));
-                    self.app.set_size(width, height);
+                    self.app.set_size_inner(width, height);
                     let lock = Arc::clone(&self.tty_lock);
                     let _guard = lock.loop_write();
                     if self.screen.resize(width, height).is_err() {
@@ -881,6 +899,13 @@ impl<B: Backend> Loop<B> {
     /// batch, after every input in it is handled. Returns the exit code
     /// when the terminal cannot be drawn.
     fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
+        let result = self.frame_inner(rx);
+        self.app.settle();
+        result
+    }
+
+    /// Runs the frame without settling; the frame boundary owns the layout pass.
+    fn frame_inner(&mut self, rx: &Receiver<Input>) -> Option<i32> {
         // A failed Kitty write ends the loop from the next frame top: no
         // further frame, title, shape, alert or delete write starts. A
         // loop write already running may be attempted before this check,
@@ -1499,16 +1524,19 @@ impl<B: Backend> Loop<B> {
                     // transcript, once per process. A failed fetch never
                     // takes the latch, so it stays for the next load.
                     let transcript = self.timing.transcript();
-                    self.app.load(&session, lines);
+                    self.app.load_inner(&session, lines);
                     drop(transcript);
                     // An answer that folded nothing into the page would
                     // leave it needed, and the frame asking forever.
                     if self.app.needs().first() == Some(&(session.clone(), range.clone())) {
-                        self.app
-                            .load_failed(&session, &range, "the answer held none of its lines");
+                        self.app.load_failed_inner(
+                            &session,
+                            &range,
+                            "the answer held none of its lines",
+                        );
                     }
                 }
-                Err(message) => self.app.load_failed(&session, &range, &message),
+                Err(message) => self.app.load_failed_inner(&session, &range, &message),
             }
         }
     }
@@ -1562,7 +1590,7 @@ impl<B: Backend> Loop<B> {
             // so only Done reaches here: the draft is unchanged on a
             // kill, and live sessions keep their resume lines.
             if let editor::Outcome::Done(done) = result {
-                self.app.editor_returned(target, done);
+                self.app.editor_returned_inner(target, done);
             }
         }
         code

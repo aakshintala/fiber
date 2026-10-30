@@ -552,13 +552,22 @@ impl App {
     /// queued for the caller to take and answer. `None` when no start
     /// went out or another question holds the foot.
     pub(in crate::app) fn refuse_start_for_offer(&mut self, text: &str) -> Option<String> {
+        let id = self.refuse_start_for_offer_inner(text);
+        self.settle();
+        id
+    }
+
+    fn refuse_start_for_offer_inner(&mut self, text: &str) -> Option<String> {
         use contract::clock::Clock;
         let now = fakes::clock::FakeClock::new().now();
         if self.session().is_none() {
             for ch in text.chars() {
-                self.on_key(crate::keys::Key::Char(ch), now);
+                self.on_key_inner(crate::keys::Key::Char(ch), now);
             }
-            if !matches!(self.on_key(crate::keys::Key::Enter, now), Effect::Send(_)) {
+            if !matches!(
+                self.on_key_inner(crate::keys::Key::Enter, now),
+                Effect::Send(_)
+            ) {
                 return None;
             }
         } else if self.clear_pending.is_none() && !matches!(self.clear(), Effect::Send(_)) {
@@ -590,7 +599,7 @@ impl App {
             .into_iter()
             .collect(),
         });
-        self.on_line(refused);
+        self.on_line_inner(refused);
         self.hooks_offer_open().then_some(id)
     }
 }

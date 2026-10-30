@@ -52,6 +52,32 @@ impl Chrome {
         self.rail_hidden = false;
     }
 
+    /// Shows the rail and reports whether the panel must shed at this size.
+    pub(crate) fn show_rail_and_sheds_panel(
+        &mut self,
+        width: u16,
+        height: u16,
+        home: Option<HomeState>,
+    ) -> bool {
+        self.show_rail();
+        let Some(home) =
+            home.filter(|home| !home.on_home && layout::floor_line(width, height).is_none())
+        else {
+            return false;
+        };
+        let layout = layout::split(
+            width,
+            height,
+            &home.shares,
+            &Want {
+                rail: true,
+                rail_by_count: true,
+                panel: !self.panel_hidden,
+            },
+        );
+        layout.rail.is_none() && layout.panel.is_some()
+    }
+
     /// Lays a `width` by `height` screen out, returning whether the
     /// regions moved. The rail is wanted unless the person hid it; a
     /// rail the width sheds leaves its grip.
@@ -219,7 +245,6 @@ impl App {
     /// ⌥P and `/panel`: shows or hides the panel.
     pub(super) fn toggle_panel(&mut self) -> Effect {
         self.chrome.toggle_panel();
-        self.settle();
         Effect::None
     }
 }

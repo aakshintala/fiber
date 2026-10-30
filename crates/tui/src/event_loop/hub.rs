@@ -465,7 +465,7 @@ impl Connection {
     /// so each ended connection gives the hub thread one permit.
     pub(super) fn on_disconnected(&mut self, app: &mut App) {
         self.hub = None;
-        app.disconnected();
+        app.disconnected_inner();
         self.retry_later(app);
     }
 
@@ -481,7 +481,7 @@ impl Connection {
     /// reader's end of the stream gives the permit.
     pub(super) fn lost(&mut self, app: &mut App) {
         self.hang_up();
-        app.disconnected();
+        app.disconnected_inner();
     }
 
     /// Writes command lines to the hub, each one written kept for resending
@@ -494,7 +494,7 @@ impl Connection {
             };
             if link::write_line(hub, line).is_err() {
                 self.hang_up();
-                app.write_failed(lines.get(at..).unwrap_or_default());
+                app.write_failed_inner(lines.get(at..).unwrap_or_default());
                 return;
             }
             app.outbox.wrote(line);

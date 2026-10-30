@@ -686,6 +686,13 @@ impl App {
     /// waiting for a page waits on only through ↑ and the keys that move
     /// the view.
     pub(crate) fn on_key(&mut self, key: Key, now: Instant) -> Effect {
+        let result = self.on_key_inner(key, now);
+        self.settle();
+        result
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_key_inner(&mut self, key: Key, now: Instant) -> Effect {
         if !matches!(
             key,
             Key::Up | Key::PageUp | Key::PageDown | Key::End | Key::CtrlO
@@ -694,7 +701,6 @@ impl App {
         }
         let effect = self.route_key(key, now);
         self.edited();
-        self.settle();
         effect
     }
 
@@ -702,7 +708,15 @@ impl App {
     /// Nothing while the key map is open, while navigating with the panel
     /// closed, or in the Ctrl+R panel. A recall waiting for a page waits
     /// no more.
+    #[cfg(test)]
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
+        let result = self.on_edit_inner(edit);
+        self.settle();
+        result
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_edit_inner(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
         self.copy_owed = false;
         self.history.cancel();
@@ -769,9 +783,7 @@ impl App {
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
         self.completion.selected = 0;
-        let effect = self.query_changed();
-        self.settle();
-        effect
+        self.query_changed()
     }
 
     /// A key the draft takes: a character or Backspace, which may open or
@@ -1310,6 +1322,12 @@ impl App {
     /// as typed with image labels relinked and the cursor at its end; an
     /// error is the notice, and the draft stays.
     pub(crate) fn editor_returned(&mut self, target: Target, result: Result<String, String>) {
+        self.editor_returned_inner(target, result);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn editor_returned_inner(&mut self, target: Target, result: Result<String, String>) {
         match (result, target) {
             (Err(notice), _) => self.notices.push("io_failed", notice),
             (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
@@ -1318,22 +1336,26 @@ impl App {
         }
         self.completion.selected = 0;
         self.edited();
-        self.settle();
     }
 
     /// A clipboard image read finished: its image lands at the cursor
     /// when its ticket is running and the box holds its draft, its notice
     /// shows, and anything else is dropped silently.
+    #[cfg(test)]
     pub(crate) fn on_image(&mut self, ticket: u64, result: Result<String, String>) {
+        self.on_image_inner(ticket, result);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_image_inner(&mut self, ticket: u64, result: Result<String, String>) {
         match self.paste.land(ticket, self.draft.serial(), result) {
             super::paste::Landed::Image(data) => {
                 self.draft.insert_image(data);
                 self.edited();
-                self.settle();
             }
             super::paste::Landed::Notice(notice) => {
                 self.notices.push("io_failed", notice);
-                self.settle();
             }
             super::paste::Landed::Dropped => {}
         }
@@ -1342,7 +1364,14 @@ impl App {
     /// A feedback report finished writing: the path with the issue link
     /// shows, and the draft clears. A failure keeps the draft with its
     /// notice, as a rejected command does.
+    #[cfg(test)]
     pub(crate) fn on_feedback(&mut self, result: Result<crate::FeedbackDone, String>) {
+        self.on_feedback_inner(result);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_feedback_inner(&mut self, result: Result<crate::FeedbackDone, String>) {
         match result {
             Ok(done) => {
                 self.draft.clear();
@@ -1355,7 +1384,6 @@ impl App {
                 self.notices.push("feedback", notice);
             }
         }
-        self.settle();
     }
 }
 

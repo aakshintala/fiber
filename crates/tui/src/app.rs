@@ -662,11 +662,11 @@ impl App {
             Key::Esc if self.item_open() => self.item_esc(),
             Key::Esc => self.on_esc(),
             Key::PageUp | Key::PageDown => {
-                self.page(*key == Key::PageUp);
+                self.page_inner(*key == Key::PageUp);
                 Effect::None
             }
             Key::CtrlO => {
-                self.toggle_ledgers();
+                self.toggle_ledgers_inner();
                 Effect::None
             }
             // End moves to the line's end in the input editor, where
@@ -711,6 +711,14 @@ impl App {
     /// Folds one line from the hub, returning command lines to send. An
     /// answer releases the line kept for resending as it folds.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
+        let mut lines = self.on_line_inner(line);
+        self.settle();
+        lines.extend(self.find_outgoing());
+        lines
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_line_inner(&mut self, line: Line) -> Vec<String> {
         if let Line::Session(envelope) = &line {
             self.observe_session_status(envelope);
         }
@@ -733,7 +741,6 @@ impl App {
             }
             self.land_pass();
         }
-        self.settle();
         lines.extend(self.find_outgoing());
         lines
     }
@@ -1150,7 +1157,7 @@ impl App {
             held,
             landing: false,
         };
-        self.land(*fold, held);
+        self.land_inner(*fold, held);
     }
 
     /// Swaps the pass's second `Pages` in at its boundary: the preview's
@@ -1164,7 +1171,14 @@ impl App {
     /// fold lacks it. A dropped page keeps the old width's rows until
     /// it loads, so the pages hold the anchor and each load finds the
     /// top again.
-    fn land(&mut self, mut fold: Pages, held: bool) {
+    #[cfg(test)]
+    fn land(&mut self, fold: Pages, held: bool) {
+        self.land_inner(fold, held);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    fn land_inner(&mut self, mut fold: Pages, held: bool) {
         fold.ext.cache.promote();
         // The preview's closed ancestor runs land in the fold front
         // beside the carried opens, under their own sessions, before the
@@ -1189,7 +1203,6 @@ impl App {
             match pages.anchored_row() {
                 Some(row) => {
                     self.screen.jump_kept(row);
-                    self.settle();
                 }
                 None => self.attached_screen_mut().follow(),
             }
@@ -1400,7 +1413,7 @@ impl App {
                         held,
                         landing: false,
                     };
-                    self.land(*fold, held);
+                    self.land_inner(*fold, held);
                 }
                 self.overlay = Overlay::Kept { last };
                 self.attached_screen_mut().set_frozen(false);
@@ -1430,7 +1443,14 @@ impl App {
     /// The hub could not be reached, or runs a schema this terminal cannot
     /// read: the notice for the first failure in a run, and a held `start`
     /// fails as if rejected.
+    #[cfg(test)]
     pub(crate) fn connect_failed(&mut self, notice: String) {
+        self.connect_failed_inner(notice);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn connect_failed_inner(&mut self, notice: String) {
         self.outbox.link = Link::Down;
         if self.notice_due() {
             self.notices.push("connection_failed", notice);
@@ -1440,13 +1460,19 @@ impl App {
             let id = command_id.clone();
             self.fail(&id);
         }
-        self.settle();
     }
 
     /// The hub connection ended; the loop retries it. A connection never
     /// connected, refused for its schema version, keeps the notice that
     /// says why.
+    #[cfg(test)]
     pub(crate) fn disconnected(&mut self) {
+        self.disconnected_inner();
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn disconnected_inner(&mut self) {
         self.passes.clear();
         // The pass ends here without folding: a `/copy` waiting on it
         // has nothing new to copy.
@@ -1471,7 +1497,6 @@ impl App {
         self.call_view_lost();
         self.rewind_lost();
         self.abandon_copy();
-        self.settle();
     }
 
     /// Writing `unsent`, command lines this app made, to the hub failed:
@@ -1481,9 +1506,16 @@ impl App {
     /// leaves the draft alone, so the next connection sends it again
     /// (`docs/invocation.md`, "The command line"). A close from the
     /// quit question that was never written keeps its resume line.
+    #[cfg(test)]
     pub(crate) fn write_failed(&mut self, unsent: &[String]) {
+        self.write_failed_inner(unsent);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn write_failed_inner(&mut self, unsent: &[String]) {
         self.home_unsent(unsent);
-        self.disconnected();
+        self.disconnected_inner();
         for line in unsent {
             if let Some(id) = serde_json::from_str::<Value>(line)
                 .ok()
@@ -1499,7 +1531,6 @@ impl App {
                 self.fail(&id);
             }
         }
-        self.settle();
     }
 
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
@@ -1537,6 +1568,12 @@ impl App {
     /// Sets the screen size for wrapping and paging; a new width re-counts
     /// every page.
     pub(crate) fn set_size(&mut self, width: u16, height: u16) {
+        self.set_size_inner(width, height);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn set_size_inner(&mut self, width: u16, height: u16) {
         self.screen.set_size(width, height);
         // A resize while open applies to both screens, so the restored
         // screen keeps the new size.
@@ -1545,7 +1582,6 @@ impl App {
         {
             stashed.set_size(width, height);
         }
-        self.settle();
     }
 
     /// The terminal's size in columns and rows: what full-screen
@@ -1874,10 +1910,16 @@ impl App {
 
     /// Opens or closes what `target` names. The rows move, so a selection
     /// clears.
+    #[cfg(test)]
     pub(crate) fn open(&mut self, target: Target) {
+        self.open_inner(target);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn open_inner(&mut self, target: Target) {
         if self.screen.open(target) {
             self.clear_selection();
-            self.settle();
         }
     }
 
@@ -1912,6 +1954,12 @@ impl App {
     /// Folds a fetched range's durable lines into their pages, the
     /// window's segment: every line in a page shares its session.
     pub(crate) fn load(&mut self, session: &SessionId, lines: Vec<Envelope>) {
+        self.load_inner(session, lines);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn load_inner(&mut self, session: &SessionId, lines: Vec<Envelope>) {
         self.screen.pages_mut().load(session, &lines);
         // A held landing's top, found again at the width the load counted.
         // The pass stays live while a stale page is still owed, after it
@@ -1921,13 +1969,24 @@ impl App {
         if live && let Some(row) = self.screen.pages_mut().anchored_row() {
             self.screen.jump_kept(row);
         }
-        self.settle();
     }
 
     /// Loading `range` of segment `session` failed: its rows stay blank
     /// and the notice says why.
     /// A failed page ends a whole-turn copy waiting on dropped pages.
+    #[cfg(test)]
     pub(crate) fn load_failed(
+        &mut self,
+        session: &SessionId,
+        range: &RangeInclusive<Seq>,
+        message: &str,
+    ) {
+        self.load_failed_inner(session, range, message);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn load_failed_inner(
         &mut self,
         session: &SessionId,
         range: &RangeInclusive<Seq>,
@@ -1944,9 +2003,14 @@ impl App {
 
     /// Scrolls so `row` is the top row, as dragging the scroll bar does.
     pub(crate) fn jump(&mut self, row: usize) {
+        self.jump_inner(row);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn jump_inner(&mut self, row: usize) {
         self.screen.pages_mut().clear_anchor();
         self.screen.jump(row);
-        self.settle();
     }
 
     /// The pages.
@@ -2027,10 +2091,16 @@ impl App {
 
     /// `toggle_ledgers`: closes every ledger when all are open, else opens
     /// them all. Groups made later start the same way.
+    #[cfg(test)]
     fn toggle_ledgers(&mut self) {
+        self.toggle_ledgers_inner();
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    fn toggle_ledgers_inner(&mut self) {
         self.screen.pages_mut().toggle_ledgers();
         self.clear_selection();
-        self.settle();
     }
 
     /// Ctrl+C clears, then quits: a second press before [`QUIT_WINDOW`]
@@ -2067,7 +2137,7 @@ impl App {
                 self.hub_hello_version(&hub.payload);
                 // The hub was reached, so the refusal always says why.
                 self.hub_reached();
-                self.connect_failed(format!(
+                self.connect_failed_inner(format!(
                     "The hub runs schema version {}; this terminal reads {}.",
                     hub.schema_version,
                     contract::SCHEMA_VERSION
@@ -2587,10 +2657,10 @@ impl App {
     }
 
     /// PageUp and PageDown move by the conversation height less one.
-    fn page(&mut self, up: bool) {
+    /// The input boundary owns the layout pass.
+    fn page_inner(&mut self, up: bool) {
         let height = self.conversation_height();
         self.screen.page(up, height);
-        self.settle();
     }
 }
 
