@@ -96,6 +96,7 @@ impl Vm {
             name,
             dir,
             home,
+            run_entry,
             load_by,
             memory_cap,
             browser,
@@ -212,7 +213,10 @@ impl Vm {
             delegate_handles,
         };
 
-        if !dir.join(ENTRY).is_file() {
+        // A provider-only VM finishes the common setup with entry
+        // registration closed and skips the entry script: its provider
+        // scripts still load on demand through `load_provider`.
+        if !run_entry || !dir.join(ENTRY).is_file() {
             entry.set(false);
             init.set(false);
             *loading.borrow_mut() = None;

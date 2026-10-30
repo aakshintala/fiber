@@ -1,5 +1,9 @@
 {
   "credential_label": {
+    "credential_env": [
+      "AWS_BEARER_TOKEN_BEDROCK",
+      "AWS_ACCESS_KEY_ID"
+    ],
     "credential_paths": [
       {
         "env": "AWS_SHARED_CREDENTIALS_FILE",

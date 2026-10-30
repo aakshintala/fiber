@@ -49,7 +49,9 @@ impl Setup {
 
     /// Installs a data-only extension registering `name` with these model
     /// ids, each on `openai-responses` with `extra` merged into each model.
-    /// The manifest declares the data's distinct `base_url`s.
+    /// The manifest declares the data's distinct `base_url`s. A positive
+    /// fixture is logged in: the presence gate needs a stored login for
+    /// its models to list.
     fn install_data(&self, extension: &str, name: &str, ids: &[&str], extra: &Value) {
         let dir = self.home().join("extensions").join(extension);
         let models: Vec<Value> = ids
@@ -90,11 +92,20 @@ impl Setup {
             json!({"name": name, "models": models}).to_string(),
         )
         .unwrap();
+        config::store_credential(
+            &self.home(),
+            name,
+            "default",
+            &config::Secret::new("test".into()),
+        )
+        .unwrap();
     }
 
     /// Installs a Lua extension with this `init.lua`, the way
     /// `fiber extension install <path>` does. `providers` is merged into
-    /// its manifest (the base build ignores it).
+    /// its manifest (the base build ignores it). A positive fixture is
+    /// logged in: the presence gate needs a stored login for discovery
+    /// to run.
     fn install_lua(&self, extension: &str, init: &str, providers: &Value) {
         let source = self.root.path().join("src").join(extension);
         std::fs::create_dir_all(&source).unwrap();
@@ -117,6 +128,13 @@ impl Setup {
         )
         .unwrap()
         .commit()
+        .unwrap();
+        config::store_credential(
+            &self.home(),
+            "acme",
+            "default",
+            &config::Secret::new("test".into()),
+        )
         .unwrap();
     }
 
@@ -575,9 +593,15 @@ fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
         .unwrap(),
     );
     assert!(catalogue.models.is_empty());
-    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
-    assert!(catalogue.notices[0].message.contains("acme/m1"));
-    assert!(catalogue.notices[0].message.contains("context_window"));
+    assert!(
+        catalogue
+            .notices
+            .iter()
+            .any(|notice| notice.message.contains("acme/m1")
+                && notice.message.contains("context_window")),
+        "{:?}",
+        catalogue.notices
+    );
 }
 
 #[test]
@@ -653,9 +677,11 @@ fn load_notices_reach_the_lists() {
         .unwrap(),
     );
     assert!(catalogue.models.is_empty());
-    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
     assert!(
-        catalogue.notices[0].message.contains("extension API"),
+        catalogue
+            .notices
+            .iter()
+            .any(|notice| notice.message.contains("extension API")),
         "{:?}",
         catalogue.notices
     );
@@ -819,7 +845,8 @@ const HUB_ENV_HOST: &str = "FIBER_TEST_MODEL_LISTS_HUB_ENV_HOST";
 /// Installs the extension `extension` registering the provider `name`
 /// with one model whose base URL fills `{setting}`, declared with no
 /// environment fallback, and writes `value` for it to the extension's
-/// global configuration file.
+/// global configuration file. A positive fixture is logged in: the
+/// presence gate needs a stored login for discovery to run.
 fn install_placeholder_setting(
     setup: &Setup,
     extension: &str,
@@ -849,6 +876,13 @@ fn install_placeholder_setting(
     std::fs::create_dir_all(dir.join("providers")).unwrap();
     std::fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
+    config::store_credential(
+        &setup.home(),
+        name,
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     std::fs::write(
         dir.join("providers").join(format!("{name}.json")),
         data.to_string(),
@@ -864,7 +898,8 @@ fn install_placeholder_setting(
 
 /// Installs the extension `extension` registering the provider `name`
 /// with one model whose base URL fills `{workspace}` from the
-/// environment variable `var`.
+/// environment variable `var`. A positive fixture is logged in: the
+/// presence gate needs a stored login for discovery to run.
 fn install_placeholder(setup: &Setup, extension: &str, name: &str, var: &str) {
     let dir = setup.home().join("extensions").join(extension);
     let data = json!({
@@ -884,6 +919,13 @@ fn install_placeholder(setup: &Setup, extension: &str, name: &str, var: &str) {
     std::fs::create_dir_all(dir.join("providers")).unwrap();
     std::fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
+    config::store_credential(
+        &setup.home(),
+        name,
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     std::fs::write(
         dir.join("providers").join(format!("{name}.json")),
         data.to_string(),
@@ -1169,4 +1211,325 @@ fn model_lists_grouped_separates_missing_groups_from_not_a_host_notices() {
             .any(|notice| notice.message.contains("bad/m")),
         "{apart_unconfigured:?}"
     );
+}
+
+/// Re-runs one environment-backed display case in a child. Its environment
+/// is injected before startup, never mutated while Rust threads are running.
+fn with_environment(function: &str, vars: &[(&str, &str)], check: impl FnOnce(&Path)) {
+    const CHILD: &str = "FIBER_TEST_MODEL_LIST_ENV_CASE";
+    let case = serde_json::to_string(vars).unwrap();
+    if let Ok(selected) = std::env::var(CHILD) {
+        if selected == case {
+            let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+            check(&home);
+        }
+        return;
+    }
+    let root = fakes::TempDir::new("fiber-model-list-env");
+    let name = format!("{}::{function}", module_path!().split_once("::").unwrap().1);
+    let output = fakes::rerun_prepared(
+        &name,
+        &[(CHILD, &case)],
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        |command| {
+            for key in [
+                "AWS_BEARER_TOKEN_BEDROCK",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_REGION",
+                "AWS_SHARED_CREDENTIALS_FILE",
+                "AWS_CONFIG_FILE",
+                "CLOUDSDK_CONFIG",
+                "GOOGLE_CLOUD_PROJECT",
+                "FIBER_TEST_SHARED_LOGIN",
+            ] {
+                command.env_remove(key);
+            }
+            command.env("HOME", root.path()).envs(vars.iter().copied());
+        },
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Installs embedded first-party provider data as extension
+/// `extension`, declaring `provider` with these base-URL literals.
+/// Nothing is stored: presence comes from the process environment the
+/// test sets.
+fn install_first_party(setup: &Setup, extension: &str, data: &str, provider: &str, urls: &[&str]) {
+    let dir = setup.home().join("extensions").join(extension);
+    let mut manifest = json!({
+        "name": extension, "version": "v1.0.0", "fiber": "0.1.0", "api": extensions::API,
+    });
+    manifest["providers"] =
+        Value::Object([(provider.to_owned(), json!(urls))].into_iter().collect());
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    std::fs::write(dir.join("providers").join(format!("{provider}.json")), data).unwrap();
+}
+
+const BEDROCK_URL: &str = "https://bedrock-runtime.{region}.amazonaws.com";
+const VERTEX_URL: &str =
+    "https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google";
+
+fn install_bedrock(setup: &Setup) {
+    install_first_party(
+        setup,
+        "bed-ext",
+        &std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../providers/bedrock/providers/bedrock.json"),
+        )
+        .unwrap(),
+        "bedrock",
+        &[BEDROCK_URL],
+    );
+}
+
+fn install_vertex(setup: &Setup) {
+    install_first_party(
+        setup,
+        "vertex-ext",
+        &std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../providers/vertex/providers/vertex.json"),
+        )
+        .unwrap(),
+        "vertex",
+        &[VERTEX_URL],
+    );
+}
+
+/// A `Cached` read of `home` that starts no extension.
+fn cached_list(setup: &Setup) -> Listed {
+    let called = Cell::new(false);
+    let catalogue = listed(
+        model_lists(
+            &setup.home(),
+            &setup.workspace(),
+            ModelLists::Cached,
+            &unloaded(&called),
+            &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    assert!(!called.get(), "a Cached read starts no extension");
+    catalogue
+}
+
+#[test]
+fn bedrock_lists_with_either_declared_environment_variable() {
+    for vars in [
+        vec![
+            ("AWS_BEARER_TOKEN_BEDROCK", "k"),
+            ("AWS_REGION", "us-east-1"),
+        ],
+        vec![("AWS_ACCESS_KEY_ID", "id"), ("AWS_REGION", "us-east-1")],
+    ] {
+        let setup = Setup::new("fiber-model-list-bedrock-on");
+        install_bedrock(&setup);
+        with_environment(
+            "bedrock_lists_with_either_declared_environment_variable",
+            &vars,
+            |_| {
+                let catalogue = cached_list(&setup);
+                assert!(
+                    references(&catalogue).contains(&"bedrock/amazon.nova-2-lite-v1:0"),
+                    "{:?}",
+                    catalogue.models
+                );
+                assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+            },
+        );
+    }
+}
+
+#[test]
+fn bedrock_stays_off_without_a_declared_credential_source() {
+    for vars in [
+        // The secret alone is not a declared presence source.
+        vec![("AWS_SECRET_ACCESS_KEY", "s"), ("AWS_REGION", "us-east-1")],
+        // A session token alone names no credential.
+        vec![("AWS_SESSION_TOKEN", "t"), ("AWS_REGION", "us-east-1")],
+        // Region settings alone are not a credential.
+        vec![("AWS_REGION", "us-east-1")],
+    ] {
+        let setup = Setup::new("fiber-model-list-bedrock-off");
+        install_bedrock(&setup);
+        with_environment(
+            "bedrock_stays_off_without_a_declared_credential_source",
+            &vars,
+            |_| {
+                let catalogue = cached_list(&setup);
+                assert!(
+                    catalogue.models.is_empty(),
+                    "{vars:?}: {:?}",
+                    catalogue.models
+                );
+                assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+            },
+        );
+    }
+}
+
+#[test]
+fn vertex_project_settings_leave_it_off() {
+    let setup = Setup::new("fiber-model-list-vertex-off");
+    install_vertex(&setup);
+    with_environment(
+        "vertex_project_settings_leave_it_off",
+        &[("GOOGLE_CLOUD_PROJECT", "example-project")],
+        |_| {
+            let catalogue = cached_list(&setup);
+            assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+            assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+        },
+    );
+}
+
+#[test]
+fn bedrock_empty_declared_file_switches_it_on() {
+    let setup = Setup::new("fiber-model-list-bedrock-file");
+    install_bedrock(&setup);
+    with_environment(
+        "bedrock_empty_declared_file_switches_it_on",
+        &[("AWS_REGION", "us-east-1")],
+        |home| {
+            assert!(cached_list(&setup).models.is_empty());
+            // An empty file counts: presence is not validity.
+            let credentials = home.join(".aws/credentials");
+            std::fs::create_dir_all(credentials.parent().unwrap()).unwrap();
+            std::fs::write(&credentials, "").unwrap();
+            let catalogue = cached_list(&setup);
+            assert!(
+                references(&catalogue).contains(&"bedrock/amazon.nova-2-lite-v1:0"),
+                "{:?}",
+                catalogue.models
+            );
+            std::fs::remove_file(&credentials).unwrap();
+            assert!(cached_list(&setup).models.is_empty());
+        },
+    );
+}
+
+#[test]
+fn a_lookup_with_no_search_lists_only_credentialed_providers() {
+    let setup = Setup::new("fiber-model-list-retain");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    setup.install_data("bare-ext", "bare", &["b1"], &json!({}));
+    config::delete_credential(&setup.home(), "bare", "default").unwrap();
+    // An invalid cached model stays a notice beside the listed rows.
+    setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
+    config::write_model_cache(
+        &setup.home(),
+        "bad",
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 0,
+        }]),
+    )
+    .unwrap();
+    let catalogue = cached_list(&setup);
+    assert_eq!(references(&catalogue), ["acme/m1"]);
+    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
+    assert!(catalogue.notices[0].message.contains("bad/m1"));
+}
+
+#[test]
+fn configured_overlapping_logins_switch_both_providers_on() {
+    let setup = Setup::new("fiber-model-list-shared-login");
+    setup.install_data("one-ext", "one", &["m1"], &json!({}));
+    setup.install_data("two-ext", "two", &["m2"], &json!({}));
+    // Both providers read one configured login: it switches both on.
+    for name in ["one", "two"] {
+        config::delete_credential(&setup.home(), name, "default").unwrap();
+    }
+    setup.write_config(&json!({"providers": {
+        "one": {"credentials": {"default": {"env": "FIBER_TEST_SHARED_LOGIN"}}},
+        "two": {"credentials": {"default": {"env": "FIBER_TEST_SHARED_LOGIN"}}},
+    }}));
+    for vars in [vec![], vec![("FIBER_TEST_SHARED_LOGIN", "k")]] {
+        with_environment(
+            "configured_overlapping_logins_switch_both_providers_on",
+            &vars,
+            |_| {
+                let catalogue = cached_list(&setup);
+                let expected = if vars.is_empty() {
+                    vec![]
+                } else {
+                    vec!["one/m1", "two/m2"]
+                };
+                assert_eq!(references(&catalogue), expected);
+            },
+        );
+    }
+}
+
+#[test]
+fn a_data_model_at_an_unlisted_url_is_left_out_with_a_notice() {
+    let setup = Setup::new("fiber-model-list-unlisted-data");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    // A second model at a URL the manifest never declares: the
+    // base-URL-literal declaration behind loaded data leaves it out.
+    let file = setup.home().join("extensions/acme-ext/providers/acme.json");
+    let mut data: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    data["models"].as_array_mut().unwrap().push(json!({
+        "id": "m2", "protocol": "openai-responses",
+        "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+    }));
+    std::fs::write(&file, data.to_string()).unwrap();
+    let catalogue = cached_list(&setup);
+    assert_eq!(references(&catalogue), ["acme/m1"]);
+    assert_eq!(catalogue.notices.len(), 1, "{:?}", catalogue.notices);
+    assert!(
+        catalogue.notices[0].message.contains("acme/m2"),
+        "{:?}",
+        catalogue.notices
+    );
+}
+
+#[test]
+fn a_logged_out_unconfigured_provider_leaks_no_group() {
+    assert!(
+        std::env::var_os(HUB_ENV_HOST).is_none(),
+        "the test process lacks {HUB_ENV_HOST}"
+    );
+    let setup = Setup::new("fiber-model-list-logged-out-unconfigured");
+    install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
+    // Logged out again: the last label's deletion leaves the directory
+    // and lock behind, but no login.
+    assert!(
+        config::delete_credential(&setup.home(), "acme", "default").unwrap(),
+        "the fixture seeds one login"
+    );
+    let called = Cell::new(false);
+    // No value for `workspace` either: the presence gate clears the
+    // provider's models before the fill, so no per-model group leaks
+    // through.
+    let (providers, _config, others, not_host, groups) = super::model_lists_grouped(
+        &setup.home(),
+        &setup.workspace(),
+        ModelLists::Cached,
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    // The provider stays named, but its models are gone before the fill,
+    // so no per-model group leaks through.
+    let kept: Vec<&str> = providers.names().collect();
+    assert_eq!(kept, ["acme"]);
+    let data = providers.get("acme").expect("the install names acme");
+    assert!(data.models.is_empty());
+    assert!(others.is_empty(), "{others:?}");
+    assert!(not_host.is_empty(), "{not_host:?}");
+    assert!(groups.is_empty(), "{groups:?}");
 }

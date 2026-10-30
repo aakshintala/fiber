@@ -249,6 +249,13 @@ fn tagging(tag: &str, phase: &str) -> String {
 fn an_installed_extension_is_loaded_before_the_first_request_and_its_hook_redacts_the_result() {
     let setup = Setup::new();
     setup.install(fakes::lua_fixture());
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("k-fixture".into()),
+    )
+    .unwrap();
     let (run, server) = setup.read_note("the password is hunter2\n", &json!({}));
 
     // `extensions_loaded` follows `fiber_started`, before the first step.
@@ -280,6 +287,13 @@ fn an_installed_extension_is_loaded_before_the_first_request_and_its_hook_redact
 fn a_result_no_hook_changes_names_nobody() {
     let setup = Setup::new();
     setup.install(fakes::lua_fixture());
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("k-fixture".into()),
+    )
+    .unwrap();
     let (run, server) = setup.read_note("nothing secret\n", &json!({}));
     assert_eq!(run.kinds(), read_kinds(&["notice"], &[]));
     let completed = run.completed();

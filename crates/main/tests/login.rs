@@ -39,6 +39,45 @@ use support::{Deadline, KillGroup, Output, Setup, spawn_watched};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
+#[test]
+fn login_and_last_label_logout_switch_only_that_providers_models() {
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    setup.install_provider("other", None, None);
+    let cache = json!([{"id":"cached","protocol":"openai-responses","base_url":"http://127.0.0.1:9/v1","context_window":1000}]);
+    config::write_model_cache(&setup.home(), "acme", &cache).unwrap();
+    let path = setup.home().join("cache/models/acme.json");
+    let bytes = fs::read(&path).unwrap();
+    let list = || {
+        let output = setup.run_with_input(&["models", "--json"], "");
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        assert_eq!(output.stderr, "");
+        output
+            .stdout
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<Value>(line).unwrap()["model"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(list().is_empty());
+    let login = setup.run_with_input(&["login", "acme"], "fake-key\n");
+    assert_eq!(login.code, Some(0), "{}", login.stderr);
+    assert_eq!(list(), ["acme/cached"]);
+    let login = setup.run_with_input(&["login", "acme", "--as", "work"], "work-key\n");
+    assert_eq!(login.code, Some(0), "{}", login.stderr);
+    let logout = setup.run_with_input(&["logout", "acme", "--as", "default"], "");
+    assert_eq!(logout.code, Some(0), "{}", logout.stderr);
+    assert_eq!(list(), ["acme/cached"]);
+    let logout = setup.run_with_input(&["logout", "acme", "--as", "work"], "");
+    assert_eq!(logout.code, Some(0), "{}", logout.stderr);
+    assert!(list().is_empty());
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+}
+
 impl Setup {
     #[track_caller]
     fn new_with_fl_root() -> Self {
