@@ -177,6 +177,76 @@ fn loaded_names(run: &Run) -> Vec<String> {
         .collect()
 }
 
+/// The count rule each kind-multiset assertion cites.
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+
+/// The exclusion each kind-multiset assertion cites for the fake
+/// stream's text deltas.
+const IGNORE_DELTA_DOC: &str = "docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta` (`docs/events.md`, \"Jobs\"), may be excluded from the multiset only when its count is not under test.; docs/events.md:116: - **Ephemeral** means a later durable line makes it obsolete: text deltas,";
+
+/// The reply order each promised-order assertion cites.
+const REPLY_DOC: &str = "docs/events.md:582-586: A reply's items are logged in the order the model produced them: its `text_completed`, `reasoning_completed` and `tool_call_requested` lines follow its `assistant_message_started` in that order, and its `assistant_message_completed` closes it. Replay rebuilds the reply from them in that order.";
+
+/// The reload order the reload test's first promised-order assertion cites.
+const RELOAD_PREAMBLE_DOC: &str = "docs/events.md:1154-1155: `reloaded` is written once the new tool set is declared, and `preamble_built` follows it. The next model request misses the prompt cache.";
+
+/// The reload order the reload test's second promised-order assertion cites.
+const RELOAD_EXTENSIONS_DOC: &str = "docs/events.md:1163-1168: Durable. The full set of extensions the session loaded. Written at each process start, a resume included, before the first model request; again before the process's first `preamble_built` when its offer approved an extension, which then loads in that process, with no `reloaded` (`docs/extensions.md`, \"Code a repository ships\"); and again after every `reload`, following `reloaded`. It always carries the whole set, never a";
+
+/// Asserts `actual` holds exactly `expected` as a multiset: the sorted
+/// kinds must match, so a duplicated or missing event fails. The fake
+/// provider scripts its text in two chunks, but chunking is not under
+/// test: `assistant_message_delta` is ephemeral, made obsolete by the
+/// durable `text_completed` that follows it, so deltas are set aside from
+/// the actual kinds while `text_completed` stays counted. `expected` must
+/// not name the set-aside kind. Each call cites the count rule and the
+/// exclusion.
+#[track_caller]
+fn assert_kinds_without_deltas(
+    actual: &[&str],
+    expected: &[&str],
+    ignore_delta_doc: &str,
+    count_doc: &str,
+) {
+    assert!(
+        !expected.contains(&"assistant_message_delta"),
+        "contradictory policy: `assistant_message_delta` is expected yet excluded ({ignore_delta_doc})"
+    );
+    let mut actual: Vec<&str> = actual
+        .iter()
+        .copied()
+        .filter(|kind| *kind != "assistant_message_delta")
+        .collect();
+    actual.sort_unstable();
+    let mut expected = expected.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        actual, expected,
+        "event kinds as a set with counts ({count_doc})"
+    );
+}
+
+/// Asserts each `first` line is followed by a `second` line: both kinds
+/// occur, and no `first` sits at or after the last `second`. `doc` is the
+/// verbatim doc line promising the order, so the order and its reason sit
+/// together.
+#[track_caller]
+fn assert_each_followed_by(kinds: &[&str], first: &str, second: &str, doc: &str) {
+    assert!(kinds.contains(&first), "no `{first}` line ({doc})");
+    let last_second = kinds
+        .iter()
+        .rposition(|kind| *kind == second)
+        .unwrap_or_else(|| panic!("no `{second}` line ({doc})"));
+    for (at, kind) in kinds.iter().enumerate() {
+        if *kind == first {
+            assert!(
+                at < last_second,
+                "`{first}` at {at} has no later `{second}` in {kinds:?} ({doc})"
+            );
+        }
+    }
+}
+
 #[test]
 fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
     let setup = Setup::new_with_fm_root();
@@ -243,9 +313,10 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
     // `clients` is set aside: written when the connection attaches, with
     // no position against the session's other lines (`docs/testing.md`,
     // "Event streams"); one attach writes exactly one.
-    assert_eq!(
-        support::kinds(&lines),
-        [
+    let kinds = support::kinds(&lines);
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -265,8 +336,6 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
             "step_started",
             "extension_exec",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
@@ -287,15 +356,40 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
             "step_started",
             "extension_exec",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "command_accepted",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "tool_call_requested",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(&kinds, "reloaded", "preamble_built", RELOAD_PREAMBLE_DOC);
+    assert_each_followed_by(
+        &kinds,
+        "reloaded",
+        "extensions_loaded",
+        RELOAD_EXTENSIONS_DOC,
     );
     assert_eq!(
         lines
@@ -340,9 +434,10 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -360,14 +455,32 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
             "tool_call_completed",
             "step_started",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "tool_call_requested",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
@@ -401,7 +514,7 @@ fn an_on_failure_less_entry_beside_a_blocking_one_fails_closed_when_removed() {
     setup.remove_hooks();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(1));
-    assert_eq!(run.kinds(), ["fiber_exited"]);
+    assert_kinds_without_deltas(&run.kinds(), &["fiber_exited"], IGNORE_DELTA_DOC, COUNT_DOC);
     assert_eq!(
         run.first("fiber_exited")["payload"]["error"]["code"],
         "extension_missing"
@@ -424,9 +537,10 @@ fn no_hooks_key_loads_no_hooks_vm() {
     setup.install_hooks();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -435,14 +549,26 @@ fn no_hooks_key_loads_no_hooks_vm() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
     assert!(!loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
     assert!(run.all("notice").is_empty());
@@ -453,9 +579,10 @@ fn empty_hooks_settings_load_silently() {
     let (setup, _server) = hooked(vec![hello()], &json!({}));
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -465,14 +592,26 @@ fn empty_hooks_settings_load_silently() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
     assert!(run.all("notice").is_empty());
@@ -489,7 +628,7 @@ fn a_removed_package_with_a_blocking_entry_fails_closed() {
     setup.remove_hooks();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(1));
-    assert_eq!(run.kinds(), ["fiber_exited"]);
+    assert_kinds_without_deltas(&run.kinds(), &["fiber_exited"], IGNORE_DELTA_DOC, COUNT_DOC);
     assert_eq!(
         run.first("fiber_exited")["payload"]["error"]["code"],
         "extension_missing"
@@ -521,7 +660,7 @@ fn the_door_stays_closed_for_a_removed_blocking_guard() {
     );
     let run = Run::from(output);
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), ["fiber_exited"]);
+    assert_kinds_without_deltas(&run.kinds(), &["fiber_exited"], IGNORE_DELTA_DOC, COUNT_DOC);
     assert_eq!(
         run.first("fiber_exited")["payload"]["error"]["code"],
         "extension_missing"
@@ -546,9 +685,10 @@ fn a_removed_package_with_only_non_blocking_entries_warns_and_runs() {
     setup.remove_hooks();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -558,14 +698,26 @@ fn a_removed_package_with_only_non_blocking_entries_warns_and_runs() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
 
     let notices = run.all("notice");
@@ -594,9 +746,10 @@ fn a_removed_package_with_watcher_only_declarations_runs_quietly() {
     setup.remove_hooks();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -605,14 +758,26 @@ fn a_removed_package_with_watcher_only_declarations_runs_quietly() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
     assert!(
         run.all("notice").is_empty(),
@@ -638,9 +803,10 @@ fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
     );
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -651,14 +817,26 @@ fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
@@ -705,9 +883,10 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -726,22 +905,38 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
             "step_started",
             "extension_exec",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "tool_call_requested",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
-    // Session fixtures assert the complete ordered durable stream
-    // (`docs/extensions.md`, "Testing an extension"); positions follow
-    // `docs/events.md`, "Identity and ordering", "Session and turn",
-    // "Actions" and "Extensions". The missing timeout must yield an
-    // entry/field notice (`docs/extensions.md`, "Hooks declared in configuration").
+    // The kinds hold as a set with counts, pinning only the reply's
+    // promised order; the missing timeout must yield an entry/field
+    // notice (`docs/extensions.md`, "Hooks declared in configuration").
     // The watch entry missing `timeout` left its notice and never ran;
     // the hook entry ran.
     let notices = run.all("notice");
@@ -795,9 +990,10 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -816,14 +1012,32 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
             "step_started",
             "extension_exec",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "tool_call_requested",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
@@ -831,8 +1045,7 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
     // one ran (`docs/errors.md`, "Notices": one notice per code;
     // `docs/extensions.md`, "Hooks declared in configuration": a hook
     // entry names its `command`, and a `notice` names the entry that
-    // cannot register). The notice lands right after
-    // `extensions_loaded`.
+    // cannot register).
     let notices = run.all("notice");
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0]["payload"]["code"], "extension_failed");
@@ -865,9 +1078,10 @@ fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
+    let kinds = run.kinds();
+    assert_kinds_without_deltas(
+        &kinds,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -886,14 +1100,32 @@ fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
             "step_started",
             "extension_exec",
             "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "tool_call_requested",
+        "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "text_completed",
+        "assistant_message_completed",
+        REPLY_DOC,
     );
 
     assert_eq!(captured(&setup, "soft.log").len(), 1);
@@ -963,10 +1195,11 @@ fn a_non_object_entry_is_config_invalid() {
             // One line only, so no turn starts: a failure before
             // `fiber_started` prints one `fiber_exited` line
             // (`docs/errors.md:85-91`).
-            assert_eq!(
-                run.kinds(),
-                ["fiber_exited"],
-                "installed: {installed}, entries: {entries}"
+            assert_kinds_without_deltas(
+                &run.kinds(),
+                &["fiber_exited"],
+                IGNORE_DELTA_DOC,
+                COUNT_DOC,
             );
             assert_eq!(
                 run.first("fiber_exited")["payload"]["error"]["code"],
@@ -1000,7 +1233,7 @@ fn a_non_object_hooks_value_is_config_invalid_naming_hooks() {
         // One line only, so no turn starts (`docs/errors.md:85-91`); the
         // message names the `hooks` key (`docs/extensions.md`, "Hooks
         // declared in configuration").
-        assert_eq!(run.kinds(), ["fiber_exited"], "installed: {installed}");
+        assert_kinds_without_deltas(&run.kinds(), &["fiber_exited"], IGNORE_DELTA_DOC, COUNT_DOC);
         assert_eq!(
             run.first("fiber_exited")["payload"]["error"]["code"],
             "config_invalid",
@@ -1011,4 +1244,131 @@ fn a_non_object_hooks_value_is_config_invalid_naming_hooks() {
             .unwrap();
         assert!(message.contains("hooks"), "{message}");
     }
+}
+
+/// The multiset helper pins every counted kind while letting the fake
+/// stream's text-delta chunking vary: the same kinds in another order,
+/// with another delta count, pass; a duplicated, missing or extra counted
+/// kind fails, and naming the set-aside delta kind is a contradictory
+/// policy.
+#[test]
+fn kinds_without_deltas_hold_counts_but_not_delta_chunking() {
+    let reported = [
+        "turn_completed",
+        "assistant_message_delta",
+        "text_completed",
+        "assistant_message_delta",
+        "assistant_message_delta",
+    ];
+    assert_kinds_without_deltas(
+        &reported,
+        &["text_completed", "turn_completed"],
+        IGNORE_DELTA_DOC,
+        COUNT_DOC,
+    );
+    // A duplicated counted kind fails.
+    assert!(
+        std::panic::catch_unwind(|| assert_kinds_without_deltas(
+            &reported,
+            &["text_completed", "text_completed", "turn_completed"],
+            IGNORE_DELTA_DOC,
+            COUNT_DOC,
+        ))
+        .is_err()
+    );
+    // A counted kind the stream dropped fails: `text_completed` stays
+    // counted.
+    assert!(
+        std::panic::catch_unwind(|| assert_kinds_without_deltas(
+            &["turn_completed", "assistant_message_delta"],
+            &["text_completed", "turn_completed"],
+            IGNORE_DELTA_DOC,
+            COUNT_DOC,
+        ))
+        .is_err()
+    );
+    // An extra counted kind fails.
+    assert!(
+        std::panic::catch_unwind(|| assert_kinds_without_deltas(
+            &["turn_completed", "assistant_message_delta", "notice"],
+            &["turn_completed"],
+            IGNORE_DELTA_DOC,
+            COUNT_DOC,
+        ))
+        .is_err()
+    );
+    // Naming the set-aside delta kind is a contradictory policy.
+    assert!(
+        std::panic::catch_unwind(|| assert_kinds_without_deltas(
+            &reported,
+            &["assistant_message_delta", "turn_completed"],
+            IGNORE_DELTA_DOC,
+            COUNT_DOC,
+        ))
+        .is_err()
+    );
+}
+
+/// The promised-order helper pins each pair with its doc line: an
+/// adjacent or separated pair passes, while a `first` with no later
+/// `second`, or a missing kind, fails.
+#[test]
+fn each_followed_by_pins_the_promised_pair() {
+    let doc = "no doc promises this test pair";
+    assert_each_followed_by(
+        &["reloaded", "preamble_built"],
+        "reloaded",
+        "preamble_built",
+        doc,
+    );
+    assert_each_followed_by(
+        &["reloaded", "extensions_loaded", "preamble_built"],
+        "reloaded",
+        "preamble_built",
+        doc,
+    );
+    assert_each_followed_by(
+        &["reloaded", "preamble_built", "reloaded", "preamble_built"],
+        "reloaded",
+        "preamble_built",
+        doc,
+    );
+    // A `first` at the end, or with `second` only before it, fails.
+    assert!(
+        std::panic::catch_unwind(|| assert_each_followed_by(
+            &["reloaded", "preamble_built", "reloaded"],
+            "reloaded",
+            "preamble_built",
+            doc,
+        ))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(|| assert_each_followed_by(
+            &["preamble_built", "reloaded"],
+            "reloaded",
+            "preamble_built",
+            doc,
+        ))
+        .is_err()
+    );
+    // A missing kind fails on either side.
+    assert!(
+        std::panic::catch_unwind(|| assert_each_followed_by(
+            &["reloaded"],
+            "reloaded",
+            "preamble_built",
+            doc,
+        ))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(|| assert_each_followed_by(
+            &["preamble_built"],
+            "reloaded",
+            "preamble_built",
+            doc,
+        ))
+        .is_err()
+    );
 }
