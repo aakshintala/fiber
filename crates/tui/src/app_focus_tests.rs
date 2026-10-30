@@ -1512,9 +1512,9 @@ fn y_on_a_turn_spanning_dropped_pages_loads_the_whole_turn() {
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::Copy(want));
 }
 
-/// Turn 0's dropped pages pinned by a first y press, with the pinned
-/// count from before the press to return to.
-fn pending_copy() -> (App, Vec<contract::Envelope>, usize) {
+/// Turn 0's dropped pages held by a first y press, with the pending copy
+/// to release.
+fn pending_copy() -> (App, Vec<contract::Envelope>) {
     let lines = spanning_session();
     let envelopes = envelopes_of(&lines);
     let mut app = spanning_app(&lines, &envelopes, 8);
@@ -1522,56 +1522,68 @@ fn pending_copy() -> (App, Vec<contract::Envelope>, usize) {
         app.pages().part(0).is_none(),
         "the first page stays resident"
     );
-    let prior = app.pages().pinned();
     app.focus = Some(TargetId::Turn(0));
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
     assert_eq!(app.notice(), Some("Loading history…"));
     assert!(
-        app.pages().pinned() > prior,
-        "nothing pinned the dropped pages"
+        app.pending_turn
+            .as_ref()
+            .is_some_and(|pending| pending.turn == 0 && !pending.pages.is_empty()),
+        "nothing waits on the dropped pages"
     );
-    (app, envelopes, prior)
+    (app, envelopes)
 }
 
 #[test]
 fn esc_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
-    let (mut app, _, prior) = pending_copy();
+    let (mut app, _) = pending_copy();
     // With the notice open Esc closes it and keeps focus: only the Esc
-    // path releases the pinned pages.
+    // path releases the waiting copy.
     app.open_notice(0);
     app.on_key(Key::Esc, now());
     assert_eq!(app.focused(), Some(TargetId::Turn(0)));
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(app.pending_turn.is_none(), "Esc keeps the copy waiting");
 }
 
 #[test]
 fn moving_focus_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
-    let (mut app, _, prior) = pending_copy();
+    let (mut app, _) = pending_copy();
     app.on_key(Key::BackTab, now());
     assert_ne!(app.focused(), Some(TargetId::Turn(0)));
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(
+        app.pending_turn.is_none(),
+        "the moved focus keeps the copy waiting"
+    );
 }
 
 #[test]
 fn a_failed_history_load_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
-    let (mut app, _, prior) = pending_copy();
+    let (mut app, _) = pending_copy();
     let needs: Vec<_> = app.needs().into_iter().collect();
     assert!(!needs.is_empty(), "nothing asked for the dropped pages");
     for (session, range) in &needs {
         app.load_failed(session, range, "boom");
     }
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(
+        app.pending_turn.is_none(),
+        "the failed load keeps the copy waiting"
+    );
+    assert!(
+        app.needs().is_empty(),
+        "the failed pages are asked for still: {:?}",
+        app.needs()
+    );
 }
 
 #[test]
 fn requesting_another_turn_releases_the_pending_whole_turn_copy() {
-    let (mut app, _, prior) = pending_copy();
+    let (mut app, _) = pending_copy();
     app.focus = Some(TargetId::Turn(1));
     // No settle runs here, so only the replacement branch can release
-    // turn 0's pages.
+    // turn 0's wait.
     let text = app.turn_text(1);
     assert!(text.is_some(), "the resident turn has text");
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(app.pending_turn.is_none(), "turn 0's copy waits still");
 }
 
 #[test]
@@ -1600,33 +1612,39 @@ fn ctrl_g_on_a_turn_spanning_dropped_pages_opens_the_whole_turn() {
 
 #[test]
 fn a_second_y_on_a_pending_turn_pins_nothing_twice() {
-    let (mut app, envelopes, prior) = pending_copy();
-    let pinned = app.pages().pinned();
+    let (mut app, envelopes) = pending_copy();
+    let waiting = app
+        .pending_turn
+        .as_ref()
+        .map(|pending| pending.pages.clone())
+        .unwrap_or_default();
     app.focus = Some(TargetId::Turn(0));
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
     assert_eq!(
-        app.pages().pinned(),
-        pinned,
-        "the second press pinned a page again"
+        app.pending_turn
+            .as_ref()
+            .map(|pending| pending.pages.clone())
+            .unwrap_or_default(),
+        waiting,
+        "the second press waits on a page again"
     );
     load_needed(&mut app, &envelopes);
     app.focus = Some(TargetId::Turn(0));
     assert!(matches!(app.on_key(Key::Char('y'), now()), Effect::Copy(_)));
-    assert_eq!(
-        app.pages().pinned(),
-        prior,
-        "the copy unpins what it pinned"
+    assert!(
+        app.pending_turn.is_none(),
+        "the copy waits on its pages still"
     );
 }
 
 #[test]
 fn a_turn_copy_with_nothing_missing_pins_nothing() {
-    let (mut app, _, prior) = pending_copy();
-    // Turn 1 is resident: copying it pins nothing, and replaces turn 0's
-    // pending copy, whose pins go with it.
+    let (mut app, _) = pending_copy();
+    // Turn 1 is resident: copying it waits on nothing, and replaces turn
+    // 0's pending copy, whose wait goes with it.
     app.focus = Some(TargetId::Turn(1));
     assert!(app.turn_text(1).is_some());
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(app.needs().is_empty(), "turn 1's copy waits on a page");
     assert!(app.pending_turn.is_none());
 }
 
@@ -1936,7 +1954,7 @@ fn a_notice_undrawn_at_a_session_switch_still_shows() {
 
 #[test]
 fn loaded_history_clears_its_loading_notice() {
-    let (mut app, envelopes, _) = pending_copy();
+    let (mut app, envelopes) = pending_copy();
     assert_eq!(app.notice(), Some("Loading history…"));
     load_needed(&mut app, &envelopes);
     app.focus = Some(TargetId::Turn(0));

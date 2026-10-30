@@ -18,19 +18,9 @@ fn unpin_of_an_unpinned_page_does_nothing() {
     let mut pins = Pins::default();
     pins.unpin(2);
     assert!(!pins.contains(2));
-    assert_eq!(pins.total(), 0);
+    assert_eq!(pins.pages().count(), 0);
     pins.pin(1);
     pins.unpin(2);
     assert!(pins.contains(1));
-    assert_eq!(pins.total(), 1);
-}
-
-#[test]
-fn total_sums_the_counts() {
-    let mut pins = Pins::default();
-    pins.pin(0);
-    pins.pin(4);
-    pins.pin(4);
-    assert_eq!(pins.total(), 3);
-    assert_eq!(pins.pages().collect::<Vec<_>>(), [0, 4]);
+    assert_eq!(pins.pages().count(), 1);
 }

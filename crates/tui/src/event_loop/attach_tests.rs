@@ -2025,7 +2025,8 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
     let last = session().len() as u64 + 10;
     opening(&mut lp.app, last);
     select_report(&mut lp.app, MouseKind::Release, 59, 2);
-    assert!(lp.app.pages().pinned() > 0);
+    // The release waits on its dropped page: the copy below runs once it
+    // loads.
     assert_eq!(lp.app.take_copy(), None);
     assert!(lp.app.needs().is_empty());
     lp.app.on_line(Line::Session(replay(last)));

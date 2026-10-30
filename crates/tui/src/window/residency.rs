@@ -309,13 +309,6 @@ impl Residency {
         self.pins.unpin(at);
     }
 
-    /// How many pins pending copies hold (tests only: what an abandoned
-    /// copy must return to).
-    #[cfg(test)]
-    pub(crate) fn pinned(&self) -> usize {
-        self.pins.total()
-    }
-
     /// Whether page `at`'s load failed since the width last changed.
     pub(crate) fn page_failed(&self, at: usize) -> bool {
         self.failed.contains(&at)

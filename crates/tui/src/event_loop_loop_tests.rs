@@ -1690,8 +1690,9 @@ fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
     inputs.push(Input::Bytes(b"\x1b[<0;1;1M\x1b[<32;60;3M".to_vec()));
     inputs.push(Input::Bytes(b"\x1b[F".to_vec()));
     inputs.push(Input::Bytes(b"\x1b[<0;60;3m".to_vec()));
-    let lp = run(lp, rx, &tx, inputs);
-    assert_eq!(lp.app.pages().pinned(), 0, "its pages stay pinned");
+    let _lp = run(lp, rx, &tx, inputs);
+    // The release waits on page 0, which the same step fetches: the copy
+    // below proves the wait resolved.
     let before = ranges(&seen).iter().filter(|range| range.0 == 0).count();
     assert!(
         before >= 2,

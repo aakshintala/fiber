@@ -963,7 +963,6 @@ fn select_dropped(app: &mut App, lines: &[Line]) -> (Effect, Vec<String>) {
 fn a_selection_over_a_dropped_page_copies_after_it_loads() {
     let lines = spanning();
     let mut app = spanning_app(&lines);
-    let prior = app.pages().pinned();
     // Scrolled during the drag with PageUp: the press at the bottom, the
     // pointer at the top.
     let bottom = app.conversation_area().bottom() - 1;
@@ -983,10 +982,18 @@ fn a_selection_over_a_dropped_page_copies_after_it_loads() {
         .expect("the top row's page");
     assert!(app.pages().part(page).is_none(), "its page stays resident");
     assert_eq!(release(&mut app, (0, bottom)), Effect::None);
-    let pinned = app.pages().pinned();
-    assert!(pinned > prior);
+    // The release waits on the dropped page: the copy runs once it loads.
+    let waiting = app.select.pending_pages().to_vec();
+    assert!(
+        waiting.contains(&page),
+        "the release waits on the dropped page: {waiting:?}"
+    );
     assert_eq!(app.take_copy(), None, "the page is not loaded yet");
-    assert_eq!(app.pages().pinned(), pinned, "a waiting copy pins once");
+    assert_eq!(
+        app.select.pending_pages(),
+        waiting.as_slice(),
+        "a waiting copy waits on nothing more"
+    );
     load_needed(&mut app, &lines);
     let text = app.take_copy().expect("the copy runs once the page loads");
     // The copy holds the rows' text: the bar's glyphs are chrome, never
@@ -995,7 +1002,10 @@ fn a_selection_over_a_dropped_page_copies_after_it_loads() {
     assert!(text.starts_with(top), "{text:?} from {top_row:?}");
     assert!(text.lines().count() > 8, "{text:?}");
     assert!(app.copied());
-    assert_eq!(app.pages().pinned(), prior, "its pages are unpinned");
+    assert!(
+        app.select.pending_pages().is_empty(),
+        "the copy waits on no page more"
+    );
     assert_eq!(app.take_copy(), None, "a copy runs once");
 }
 
@@ -1003,7 +1013,6 @@ fn a_selection_over_a_dropped_page_copies_after_it_loads() {
 fn a_failed_page_abandons_the_copy_with_a_notice() {
     let lines = spanning();
     let mut app = spanning_app(&lines);
-    let prior = app.pages().pinned();
     let (effect, _) = select_dropped(&mut app, &lines);
     assert_eq!(effect, Effect::None);
     for (session, range) in app.needs() {
@@ -1011,7 +1020,10 @@ fn a_failed_page_abandons_the_copy_with_a_notice() {
     }
     assert_eq!(app.take_copy(), None);
     assert_eq!(app.notice(), Some(COPY_FAILED));
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(
+        app.select.pending_pages().is_empty(),
+        "the abandoned copy waits on no page"
+    );
     assert!(!app.copied());
 }
 
@@ -1019,13 +1031,15 @@ fn a_failed_page_abandons_the_copy_with_a_notice() {
 fn a_lost_link_abandons_the_copy() {
     let lines = spanning();
     let mut app = spanning_app(&lines);
-    let prior = app.pages().pinned();
     let (effect, _) = select_dropped(&mut app, &lines);
     assert_eq!(effect, Effect::None);
     app.disconnected();
     assert_eq!(app.notice(), Some(COPY_FAILED));
     assert_eq!(app.take_copy(), None);
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(
+        app.select.pending_pages().is_empty(),
+        "the abandoned copy waits on no page"
+    );
 
     // A copy released with the link already down is abandoned in the step.
     let mut app = spanning_app(&lines);
@@ -1035,14 +1049,16 @@ fn a_lost_link_abandons_the_copy() {
     assert_ne!(app.notice(), Some(COPY_FAILED));
     assert_eq!(app.take_copy(), None);
     assert_eq!(app.notice(), Some(COPY_FAILED));
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(
+        app.select.pending_pages().is_empty(),
+        "the abandoned copy waits on no page"
+    );
 }
 
 #[test]
 fn overlapping_pending_copies_keep_each_others_pins() {
     let lines = spanning();
     let mut app = spanning_app(&lines);
-    let prior = app.pages().pinned();
     let (effect, shown) = select_dropped(&mut app, &lines);
     assert_eq!(effect, Effect::None);
     // A whole-turn copy of turn 0 waits on page 0 too.
@@ -1055,8 +1071,13 @@ fn overlapping_pending_copies_keep_each_others_pins() {
     let text = app.take_copy().expect("the selection copies");
     // The gap row above the bubble copies as its blank line.
     assert_eq!(text, "\ngo", "{text:?} from {shown:?}");
-    // The turn copy still pins its pages: page 0 stays.
-    assert!(app.pages().pinned() > prior);
+    // The turn copy still waits on its pages: page 0 stays past the window.
+    assert!(
+        app.pending_turn
+            .as_ref()
+            .is_some_and(|pending| pending.turn == 0),
+        "the turn copy waits no more"
+    );
     app.on_key(Key::End, now());
     assert!(
         app.pages().part(0).is_some(),
@@ -1064,7 +1085,10 @@ fn overlapping_pending_copies_keep_each_others_pins() {
     );
     app.focus = Some(TargetId::Turn(0));
     assert!(matches!(app.on_key(Key::Char('y'), now()), Effect::Copy(_)));
-    assert_eq!(app.pages().pinned(), prior);
+    assert!(
+        app.pending_turn.is_none(),
+        "the turn copy waits on no page more"
+    );
 }
 
 /// Whether `text` shows on the screen, and whether a notice target is

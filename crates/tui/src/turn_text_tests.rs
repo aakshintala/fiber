@@ -1,6 +1,6 @@
 //! Tests for whole-turn paging (`docs/tui.md`, "History and paging"): which
-//! pages hold a turn at its boundaries, and that pinning a turn's pages and
-//! releasing them are observable in the pinned set.
+//! pages hold a turn at its boundaries, and that requesting a turn's pages
+//! and releasing them are observable in what the next load asks for.
 
 use super::{pages_for_turn, request_turn};
 use crate::window::Pages;
@@ -38,12 +38,34 @@ fn request_turn_pins_only_what_its_copy_does_not_hold() {
     assert!(pages.page_count() > 1, "no page cut");
     pages.trim(usize::MAX / 2, 1);
     assert!(pages.part(0).is_none(), "page 0 stays resident");
+    assert!(
+        pages.needs(usize::MAX / 2, 1).is_empty(),
+        "nothing waits on a page yet"
+    );
     let missing = request_turn(&mut pages, 0, &[]);
     assert_eq!(missing, vec![0]);
-    assert_eq!(pages.pinned(), 1);
-    // The pending copy holds page 0 already: asking again pins nothing.
+    // The pending copy's page is asked for: it loads before the copy runs.
+    let asked = pages.needs(usize::MAX / 2, 1);
+    assert_eq!(asked.len(), 1, "the copy waits on one page: {asked:?}");
+    assert_eq!(
+        asked[0].0,
+        contract::SessionId(SESSION.to_owned()),
+        "the copy waits on its own session: {asked:?}"
+    );
+    // The pending copy holds page 0 already: asking again waits on the
+    // same page, once.
     assert_eq!(request_turn(&mut pages, 0, &missing), vec![0]);
-    assert_eq!(pages.pinned(), 1);
+    assert_eq!(
+        pages.needs(usize::MAX / 2, 1),
+        asked,
+        "the second press waits on nothing new"
+    );
+    // One release lets page 0 go: it was held exactly once.
+    pages.unwant(0);
+    assert!(
+        pages.needs(usize::MAX / 2, 1).is_empty(),
+        "the released page waits no more"
+    );
 }
 
 /// One line of a session that cuts pages, numbered from `seq`.
