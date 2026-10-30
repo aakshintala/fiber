@@ -2723,9 +2723,12 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
 /// the relayed-command state table mirrors `CommandState` and the transition
 /// API, so a test fails when the two differ. Every state is named in the
 /// table, every bare move the table documents is allowed by
-/// [`crate::retire::AckOrder::transition`], and no row moves out of
-/// `Rerouted` except to its ending answer — the one-delivery promise the
-/// table states and the API keeps.
+/// [`crate::retire::AckOrder::transition`], every contract move the API
+/// allows is documented, and no row moves out of `Rerouted` except to its
+/// ending answer — the one-delivery promise the table states and the API
+/// keeps. The two self-reports (`Queued -> Queued`, `Written -> Written`)
+/// are internal no-ops, not contract moves: a write that changes nothing
+/// reports its outcome anyway, and the client learns nothing new.
 #[test]
 fn the_command_state_table_matches_the_transition_api() {
     use crate::relay::CommandState;
@@ -2851,10 +2854,29 @@ fn the_command_state_table_matches_the_transition_api() {
             "the table documents {from:?} -> {to:?}, so the transition API allows it",
         );
         if *from == CommandState::Rerouted {
-            assert_eq!(
-                *to,
-                CommandState::Answered,
+            assert!(
+                matches!(*to, CommandState::Answered | CommandState::Dropped),
                 "no table row spends the reroute claim again: {from:?} -> {to:?}",
+            );
+        }
+    }
+    // Every contract move the API allows is documented: the two
+    // self-reports are internal no-ops, not contract moves.
+    let noops = [
+        (CommandState::Queued, CommandState::Queued),
+        (CommandState::Written, CommandState::Written),
+    ];
+    for from in states {
+        for to in states {
+            if !allows(from, to) {
+                continue;
+            }
+            if noops.contains(&(from, to)) {
+                continue;
+            }
+            assert!(
+                documented.contains(&(from, to)),
+                "the API allows {from:?} -> {to:?}, so the table documents it",
             );
         }
     }

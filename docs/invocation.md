@@ -1143,9 +1143,9 @@ line, and `Dropped` sends none.
 | Read | the session's relay is live and takes the whole line | Written | nothing yet |
 | Read | the relay is retiring and its thread is alive | Queued | nothing yet |
 | Read | no relay is published and the session connects or resumes | Written | nothing yet |
-| Read | no relay is published and the open is refused | Answered | one `command_rejected` with the refusal's code |
+| Read or Queued | no relay is published and the open is refused | Answered | one `command_rejected` with the refusal's code |
 | Read | the write fails before the session could read a byte | Queued | nothing yet; delivered once to the resumed session |
-| Read | the write fails after the session may have read a byte; a whole JSON body without its line feed counts | Partial | one `command_rejected indeterminate`; never delivered again |
+| Read or Queued | the write fails after the session may have read a byte; a whole JSON body without its line feed counts | Partial | one `command_rejected indeterminate`; never delivered again |
 | Read after `close`, while the session still reads | the session ends | Rerouted | nothing yet; the resumed session ends it with one `closing` |
 | Read after the session stopped reading | the clean exit | Rerouted | delivered once to the resumed session, in read order |
 | Written | the session answers accepted or rejected | Answered | the acknowledgement |
@@ -1158,7 +1158,7 @@ line, and `Dropped` sends none.
 | Written | the session crashes without answering | Answered | one `command_rejected indeterminate`; never delivered again |
 | Written | the session is rewound or moved without answering | Dropped | nothing; the transition already answered it |
 | Written | the relay's thread never starts, or its admission is refused, after the write | Answered | one `command_rejected` with the refusal's code; never written again |
-| Written or Queued | the client disconnects | Dropped | nothing |
+| Written, Queued, Partial or Rerouted | the client disconnects | Dropped | nothing |
 | Queued | the retiring relay passes it on: after the handover ahead is answered when exiting, at its end when dead | Written on the next relay | nothing yet |
 | Queued | the relay ends with no entry left | Dropped | nothing |
 | Partial | the relay ends, however the session ended | Answered | one `command_rejected indeterminate`; never delivered again |
