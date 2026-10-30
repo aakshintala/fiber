@@ -798,14 +798,19 @@ fn the_registry_never_hands_out_31() {
                 .expect("the image is kept");
         ids.push(layout.note(&part));
     }
-    // Id 31 is the graphics probe's: the 31st image takes 32, and every
-    // id stays unique.
+    // Ids 30 and 31 are the logo's and the graphics probe's: the 30th
+    // image takes 32, the 31st takes 33, and every id stays unique
+    // (`docs/tui.md`, "The logo", "Images").
+    assert!(
+        !ids.contains(&crate::graphics::logo::ID),
+        "the logo's id is never an image: {ids:?}"
+    );
     assert!(
         !ids.contains(&31),
         "the probe's id is never an image: {ids:?}"
     );
-    assert_eq!(ids[30], 32);
-    assert_eq!(ids[31], 33);
+    assert_eq!(ids[29], 32);
+    assert_eq!(ids[30], 33);
     let mut sorted = ids.clone();
     sorted.sort_unstable();
     sorted.dedup();
@@ -1266,5 +1271,30 @@ fn grid_handles_the_largest_logged_size() {
     assert_eq!(
         super::grid(&sized(u32::MAX, 1), u16::MAX, (10, 20)),
         (64, 1)
+    );
+}
+
+#[test]
+fn the_allocator_never_hands_out_the_logo_id() {
+    // The logo transmits under its own reserved id, like the graphics
+    // probe's (`docs/tui.md`, "The logo").
+    assert!(super::placeholder_eligible(crate::graphics::logo::ID));
+    let allocator = IdAllocator::default();
+    let mut layout = Layout::default();
+    layout.set_allocator(allocator);
+    let mut ids = Vec::new();
+    for at in 0..40 {
+        let part =
+            super::Part::from_content(&session(), &image(&format!("artifacts/i_{at}.png"), 10, 20))
+                .expect("the image is kept");
+        ids.push(layout.note(&part));
+    }
+    assert!(
+        !ids.contains(&crate::graphics::logo::ID),
+        "the logo's id is reserved"
+    );
+    assert!(
+        !ids.contains(&crate::term::PROBE_ID),
+        "the graphics probe's id is reserved"
     );
 }

@@ -741,3 +741,38 @@ fn hover_frames_finds_the_badge_row_at_160_by_48() {
     assert!(bytes[0] > 0);
     assert!(bytes[1] > 0);
 }
+
+/// Folding the fixture through `measure_open` into `fold_batch` makes
+/// exactly one borrowed decode per `read!` the fold reaches: no line
+/// decodes twice, and none is skipped.
+#[test]
+fn folding_the_fixture_counts_each_borrowed_decode_once() {
+    let fixture = [
+        ("turn_started", json!({"input": []})),
+        ("turn_completed", json!({"outcome": "completed"})),
+        ("text_completed", json!({"text": "t"})),
+    ]
+    .iter()
+    .map(|(kind, payload)| {
+        serde_json::to_string(&Envelope {
+            kind: (*kind).to_owned(),
+            session_id: contract::SessionId(SESSION.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        })
+        .unwrap_or_default()
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
+    let clock = fakes::clock::FakeClock::new();
+    let before = crate::app::decode_count();
+    crate::measure_open(&fixture, 60, 12, usize::MAX, clock)
+        .unwrap_or_else(|error| panic!("{error}"));
+    // Two reads for the started turn, one for its completion and one for
+    // the completed text, whose read needs the open turn.
+    assert_eq!(crate::app::decode_count() - before, 4);
+}

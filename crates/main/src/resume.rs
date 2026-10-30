@@ -708,6 +708,11 @@ fn resumed_session(
     let (reloader, late) = reload.preparers(written);
     session.mcp_servers(providers.refresh);
     session.mcp_login(providers.login);
+    session.personal_source_check(crate::prompt_files::personal_source_check(
+        prompt_inputs.home.clone(),
+        prompt_inputs.agents_home.clone(),
+        Arc::clone(&prompt_inputs.clock),
+    ));
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was. The commit below
     // decides the window between `start` and the first write: a recorded

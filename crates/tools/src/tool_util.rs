@@ -78,6 +78,7 @@ pub(crate) fn effects(
         subject,
         prefix,
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     }
 }

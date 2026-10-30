@@ -287,14 +287,13 @@ fn the_setup_saves_the_notes_byte_for_byte_and_a_cancel_leaves_them() {
 }
 
 /// The read-only topic's lines screen, which asks no question: Enter on
-/// its empty lines leaves for the diff.
+/// its empty lines leaves for the diff. The topic proposes at once, so
+/// the wait names the lines screen itself: the topic number alone also
+/// matches the wait before it, and the second Enter then lands on the
+/// diff and saves what the cancel must not save.
 fn pass_read_only_topic(run: &mut Run) {
     run.wait_screen("topic 6's lines", |grid| {
-        grid.contents.contains("Topic 6 of 6")
-    });
-    run.write(b"\r");
-    run.wait_screen("a topic with no lines", |grid| {
-        grid.contents.contains("No lines for this topic")
+        grid.contents.contains("Topic 6 of 6") && grid.contents.contains("No lines for this topic")
     });
     run.write(b"\r");
 }

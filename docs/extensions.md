@@ -2043,7 +2043,9 @@ the personal install loads everywhere else. The order is the one skills use:
 repository before personal ("Skills" in `docs/system-prompt.md`). It holds for
 first-party extensions too. A `notice` with code `extension_shadowed` names both
 versions, so a personal install that is newer than the repository's copy is
-visible. Two repository copies of one name load the same way: the first
+visible. When one load shadows several installs, the pass raises one grouped
+notice: its message gives the count and lists each install with both versions.
+Two repository copies of one name load the same way: the first
 declared loads, and the same notice names both versions.
 
 **Commands that read an approved copy.** A session loads its project's

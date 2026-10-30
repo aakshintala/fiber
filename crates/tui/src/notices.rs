@@ -5,6 +5,7 @@
 //! first, at most three show, then "+N more". A child of `app`, so the calls
 //! the click layer makes sit here beside the stack.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use super::App;
@@ -128,6 +129,12 @@ pub(crate) struct Notices {
     /// waits for the release even for rows already visible, so the
     /// noted rows a drag reads cannot fade under it (rule R3).
     held_visible: Vec<usize>,
+    /// Every `(code, full text)` shown in this terminal run: a notice
+    /// matching one never stacks again, so a notice shown once does not
+    /// show again as sessions open and reload (`docs/tui.md`, "Notices").
+    /// Marked only on first display, never on push: an undrawn notice
+    /// cleared before display suppresses nothing.
+    seen: HashSet<(String, String)>,
 }
 
 /// One drawn row: a notice, or the "+N more" row for the rest.
@@ -148,9 +155,10 @@ pub(crate) enum NoticeLine {
 
 impl Notices {
     /// Adds `text` under `code` on top, dropping a same-code same-text
-    /// repeat while it is stacked. A sent `switch_pending` choice is one
-    /// notice worth of state even beside an identical choice, so each
-    /// push stacks its own row.
+    /// repeat while it is stacked, and one the run already showed. A sent
+    /// `switch_pending` choice is one notice worth of state even beside
+    /// an identical choice, so each push stacks its own row; an identical
+    /// choice shown before still shows no row again.
     pub(crate) fn push(&mut self, code: &str, text: String) {
         let identity = if code == "switch_pending" {
             format!("{}#{}", text, self.next)
@@ -161,10 +169,15 @@ impl Notices {
     }
 
     /// Adds `text` under `code` with `identity` on top, dropping a
-    /// same-code same-identity repeat while it is stacked: the session id
-    /// for `stream_closed`, the full text otherwise, so a second message
-    /// with another identity stacks beside the first.
+    /// same-code same-identity repeat while it is stacked, and one whose
+    /// code and full text the run already showed: the session id for
+    /// `stream_closed`, the full text otherwise, so a second message
+    /// with another identity stacks beside the first, but a repeat of a
+    /// shown notice never does.
     pub(crate) fn push_identified(&mut self, code: &str, identity: String, text: String) {
+        if self.seen.contains(&(code.to_owned(), text.clone())) {
+            return;
+        }
         if self
             .stack
             .iter()
@@ -199,6 +212,9 @@ impl Notices {
         for notice in &mut self.stack {
             if notice.born.is_none() && visible.contains(&notice.id) {
                 notice.born = Some(now);
+                // Shown once in this run: the code and full text join
+                // the seen set on first display, never on push.
+                self.seen.insert((notice.code.clone(), notice.text.clone()));
             }
         }
         let overlay = self.overlay;
