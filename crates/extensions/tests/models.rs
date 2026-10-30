@@ -19,7 +19,7 @@ use fakes::{Deadline, NoLock};
 use serde_json::json;
 
 #[test]
-fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complete() {
+fn disabled_packages_keep_their_provider_data() {
     fakes::within(
         "Providers::load_enabled",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -46,12 +46,12 @@ fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complet
                     let (providers, notices) =
                         Providers::load_enabled(&setup.home(), &configuration).unwrap();
                     assert!(notices.is_empty(), "{notices:?}");
-                    let expected = if enabled == Some(false) {
-                        vec!["other"]
-                    } else {
-                        vec!["opencode-go", "opencode-zen", "other"]
-                    };
-                    assert_eq!(providers.names().collect::<Vec<_>>(), expected);
+                    // Only the provider part ignores `enabled`: the data
+                    // loads however the package is switched.
+                    assert_eq!(
+                        providers.names().collect::<Vec<_>>(),
+                        ["opencode-go", "opencode-zen", "other"]
+                    );
                     assert_eq!(providers.resolve("other/m").unwrap().reference(), "other/m");
                     let (inventory, notices) = Providers::load(&setup.home()).unwrap();
                     assert!(notices.is_empty());
@@ -80,13 +80,16 @@ fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complet
             })
             .unwrap();
             let (providers, _) = Providers::load_enabled(&setup.home(), &other_config).unwrap();
-            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+            assert_eq!(
+                providers.names().collect::<Vec<_>>(),
+                ["opencode-go", "opencode-zen", "other"]
+            );
         },
     );
 }
 
 #[test]
-fn disabled_packages_are_skipped_before_provider_files_secrets_and_cached_models() {
+fn disabled_packages_keep_provider_data_secrets_and_cached_models() {
     fakes::within(
         "Providers::load_enabled",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -101,16 +104,14 @@ fn disabled_packages_are_skipped_before_provider_files_secrets_and_cached_models
             let (providers, notices) =
                 Providers::load_enabled(&setup.home(), &configuration).unwrap();
             assert!(notices.is_empty());
-            assert_eq!(providers.names().collect::<Vec<_>>(), Vec::<&str>::new());
-            assert_eq!(providers.secrets().collect::<Vec<_>>(), Vec::<&str>::new());
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["p"]);
+            assert_eq!(providers.secrets().collect::<Vec<_>>(), ["acme-token"]);
+            assert!(providers.resolve("p/cached").is_ok());
             write(
                 &setup.home().join("extensions/acme/providers/p.json"),
                 "not JSON",
             );
-            let (providers, notices) =
-                Providers::load_enabled(&setup.home(), &configuration).unwrap();
-            assert!(notices.is_empty());
-            assert_eq!(providers.names().collect::<Vec<_>>(), Vec::<&str>::new());
+            assert!(Providers::load_enabled(&setup.home(), &configuration).is_err());
             assert!(Providers::load(&setup.home()).is_err());
         },
     );
@@ -721,7 +722,16 @@ fn leave_out_invalid_filters_a_model_list_like_models_returns() {
     );
 }
 
+/// A bare `acme` Lua provider whose login is stored, so the credential
+/// gate lets `models()` run: what most `add_lua` tests use.
 fn lua_acme(setup: &Setup, dir: &str, models_run: &str) -> std::sync::Arc<extensions::LuaProvider> {
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &Secret::new("test".into()),
+    )
+    .unwrap();
     lua_named(setup, dir, "acme", models_run)
 }
 
@@ -1008,6 +1018,13 @@ fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
         "broke",
         &["http://127.0.0.1:1/v1"],
     );
+    config::store_credential(
+        &setup2.home(),
+        "broke",
+        "default",
+        &Secret::new("test".into()),
+    )
+    .unwrap();
     let bad = lua_named(&setup2, "bad", "broke", "error(\"boom\")");
     assert_eq!(
         failing
@@ -1416,6 +1433,10 @@ fn refresh_lists_starts_only_the_stale_provider_with_a_credential() {
     set_cache_mtime(&home, "fresh", clock.wall());
     stale(&home, "stale", &["old-stale"]);
     stale(&home, "nocred", &["old-nocred"]);
+    for name in ["fresh", "stale"] {
+        config::store_credential(&setup.home(), name, "default", &Secret::new("test".into()))
+            .unwrap();
+    }
     let fresh = lua_named(&setup, "one", "fresh", &lua_list(&["new-fresh"]));
     let stale = lua_named(&setup, "two", "stale", &lua_list(&["new-stale"]));
     let nocred = lua_bare(&setup, "three", "nocred", "error(\"must not run\")");
@@ -1585,11 +1606,7 @@ fn add_lua_for_a_provider_with_only_cost_keeps_its_data_models_and_its_handle() 
     let config = config(&setup, &[]);
     // A credential is there and no cache is: only the missing `models`
     // keeps `add_lua` from calling it.
-    assert!(lua.has_credential(
-        &config,
-        providers.get("acme").unwrap(),
-        &fakes::children::grouped_output
-    ));
+    assert!(lua.has_credential(&config, providers.get("acme").unwrap()));
     let notices = providers.add_lua(
         "acme-ext",
         &lua,
@@ -1935,6 +1952,13 @@ fn add_lua_leaves_out_a_models_result_at_an_unlisted_url() {
     install(&setup.home(), &source, "0.1.0").unwrap();
     let (mut providers, notices) = Providers::load(&setup.home()).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &Secret::new("test".into()),
+    )
+    .unwrap();
     let lua = lua_named(
         &setup,
         "ext",

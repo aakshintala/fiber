@@ -681,10 +681,11 @@ impl SessionExtensions {
         // order, with one notice per shadowed install, grouped by code
         // with the pass's other notices before it is written
         // (`docs/errors.md`, "Notices").
+        // The merged inventory, however each entry is switched: the
+        // candidates' filter stays open, and each arm below applies its
+        // own policy, so a disabled package's provider data still loads.
         let (merged, mut candidate_notices): (Vec<crate::repository::Candidate>, Vec<Notice>) =
-            crate::repository::candidates(found, &repository, &|name: &str| {
-                crate::is_enabled(config, name)
-            });
+            crate::repository::candidates(found, &repository, &|_: &str| true);
         session.has_repository_hooks = repository.has_hook_declarations();
         session.notices.extend(repository.notices);
         session.notices.append(&mut candidate_notices);
@@ -711,6 +712,9 @@ impl SessionExtensions {
         // names settle across every extension before any is kept or
         // unloaded.
         let mut started: Vec<Started> = Vec::new();
+        // Disabled provider-only entries never join `started`: they keep
+        // only their provider handles and directories, set aside below.
+        let mut provider_only: Vec<Started> = Vec::new();
         for candidate in merged {
             // The first-party `hooks` extension loads only when the
             // configuration declares a `hooks` key (`docs/extensions.md`,
@@ -748,6 +752,81 @@ impl SessionExtensions {
             // Written for another API: it does not load (`docs/extensions.md`,
             // "The extension API version").
             if manifest.api != API {
+                continue;
+            }
+            // Only the provider part ignores `enabled`: a disabled package
+            // that declares providers keeps its provider data, so whether
+            // its models show depends on its credentials. Its init,
+            // commands and hooks stay off, so it takes the provider-only
+            // arm: validation and provider handles, then out before
+            // prompts, process startup, lazy commands, init, registration
+            // and settlement, tools, search, watchers and the loaded set.
+            // An ordinary disabled personal package stays out, as the
+            // filter kept it out; an approved copy keeps its activation.
+            if !crate::is_enabled(config, &name) && !manifest.providers.is_empty() {
+                if manifest.process.is_some() {
+                    // A disabled process package starts no child: its
+                    // static provider data loads through `Providers`, never
+                    // here.
+                    continue;
+                }
+                let Some(scripts) =
+                    Self::validated_provider_scripts(&mut session, &name, &dir, &manifest)
+                else {
+                    continue;
+                };
+                // The VM serves provider scripts only: with none, no VM is
+                // built, as the full load builds none either.
+                let extension = if scripts.is_empty() {
+                    None
+                } else {
+                    let (extension, mut ignored) = match start::start_vm(
+                        &name,
+                        &dir,
+                        home,
+                        config,
+                        &manifest,
+                        Arc::clone(&clock),
+                        Arc::clone(&locks),
+                        Arc::clone(&session.state),
+                    ) {
+                        Ok(started) => started,
+                        Err(e) => {
+                            session.failed(&name, &e);
+                            continue;
+                        }
+                    };
+                    session.notices.append(&mut ignored);
+                    let extension = extension
+                        .without_entry()
+                        .with_browser(session.browser.clone());
+                    Some(Arc::new(match &host {
+                        Some(script) => extension.with_host_script(Arc::clone(script)),
+                        None => extension,
+                    }))
+                };
+                provider_only.push(Started {
+                    name,
+                    version,
+                    slug,
+                    dir,
+                    manifest,
+                    prompt: None,
+                    extension,
+                    package: None,
+                    declared: None,
+                    commands: Vec::new(),
+                    tools: Vec::new(),
+                    backends: Vec::new(),
+                    providers: scripts,
+                    lazy: None,
+                });
+                continue;
+            }
+            if !crate::is_enabled(config, &name)
+                && manifest.providers.is_empty()
+                && !start::is_repository_copy(&dir, home)
+            {
                 continue;
             }
             // A named prompt file that is missing or outside the package
@@ -842,51 +921,18 @@ impl SessionExtensions {
                 providers: Vec::new(),
                 lazy: None,
             };
-            // A data provider the manifest does not declare under
-            // `providers` keeps the extension out, before its VM starts.
-            // `Providers::load` already reported it, so no notice here.
-            match config::provider_files(&entry.dir) {
-                Ok(files) => {
-                    let stems: Vec<String> = files
-                        .iter()
-                        .filter_map(|file| file.file_stem())
-                        .map(|stem| stem.to_string_lossy().into_owned())
-                        .collect();
-                    if crate::providers::first_undeclared(
-                        &entry.manifest.providers,
-                        stems.iter().map(String::as_str),
-                    )
-                    .is_some()
-                    {
-                        continue;
-                    }
-                }
-                Err(e) => {
-                    session.failed(&entry.name, &Error::Config(e));
-                    continue;
-                }
-            }
-            entry.providers = match crate::providers::provider_scripts(&entry.dir) {
-                Ok(names) => names,
-                Err(e) => {
-                    session.failed(&entry.name, &e);
-                    continue;
-                }
-            };
-            if let Some(unclaimed) = crate::providers::first_undeclared(
-                &entry.manifest.providers,
-                entry.providers.iter().map(String::as_str),
+            // The declaration checks both the full load and the disabled
+            // provider-only arm share: a misdeclared extension stays out
+            // the same way in either.
+            entry.providers = match Self::validated_provider_scripts(
+                &mut session,
+                &entry.name,
+                &entry.dir,
+                &entry.manifest,
             ) {
-                session.failed(
-                    &entry.name,
-                    &Error::UndeclaredProvider {
-                        extension: entry.name.clone(),
-                        provider: unclaimed.to_owned(),
-                    },
-                );
-                session.reject(&entry.name);
-                continue;
-            }
+                Some(scripts) => scripts,
+                None => continue,
+            };
             // A `commands` key, `{}` included, makes the extension lazy: its
             // VM is built but not started, and its commands come from the
             // manifest.
@@ -1138,6 +1184,23 @@ impl SessionExtensions {
                 replaces: s.manifest.replaces,
             });
         }
+        // Provider-only entries never passed through finalization: they
+        // keep only their provider handles and directories, so a later
+        // `model` switch can start their providers without their init,
+        // commands, hooks, tools, search, watchers or loaded entries.
+        for s in provider_only {
+            if let Err(e) = start::provider_handles(
+                &mut session,
+                &s,
+                config,
+                Arc::clone(&clock),
+                Arc::clone(&locks),
+            ) {
+                session.failed(&s.name, &e);
+                continue;
+            }
+            session.dirs.push((s.name.clone(), s.dir.clone()));
+        }
         chain.fill(config, &mut session);
         session
             .lua_providers
@@ -1158,6 +1221,64 @@ impl SessionExtensions {
             session.notices.push(notice);
         }
         session
+    }
+
+    /// The provider scripts `name` serves, after the declaration checks a
+    /// full load runs: `None` keeps the extension out. A data provider the
+    /// manifest does not declare under `providers` is skipped silently,
+    /// before any VM starts, since `Providers::load` already reported it;
+    /// an unreadable package fails the load, and an undeclared script
+    /// fails it and retires the registration, as the full load does. Both
+    /// the full load and the disabled provider-only arm share it.
+    fn validated_provider_scripts(
+        session: &mut Self,
+        name: &str,
+        dir: &Path,
+        manifest: &config::Manifest,
+    ) -> Option<Vec<String>> {
+        match config::provider_files(dir) {
+            Ok(files) => {
+                let stems: Vec<String> = files
+                    .iter()
+                    .filter_map(|file| file.file_stem())
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .collect();
+                if crate::providers::first_undeclared(
+                    &manifest.providers,
+                    stems.iter().map(String::as_str),
+                )
+                .is_some()
+                {
+                    return None;
+                }
+            }
+            Err(e) => {
+                session.failed(name, &Error::Config(e));
+                return None;
+            }
+        }
+        let scripts = match crate::providers::provider_scripts(dir) {
+            Ok(names) => names,
+            Err(e) => {
+                session.failed(name, &e);
+                return None;
+            }
+        };
+        if let Some(unclaimed) = crate::providers::first_undeclared(
+            &manifest.providers,
+            scripts.iter().map(String::as_str),
+        ) {
+            session.failed(
+                name,
+                &Error::UndeclaredProvider {
+                    extension: name.to_owned(),
+                    provider: unclaimed.to_owned(),
+                },
+            );
+            session.reject(name);
+            return None;
+        }
+        Some(scripts)
     }
 
     /// Starts one process package for a session activation: the child

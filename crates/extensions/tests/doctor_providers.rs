@@ -1,6 +1,7 @@
 //! Whether a provider can be checked without running extension code:
-//! data-only packages register, and every code, disabled, damaged or
-//! incompatible case does not.
+//! data-only packages register, disabled or not, and every code, damaged
+//! or incompatible case does not. A disabled entry script alone registers
+//! nothing.
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 
@@ -74,14 +75,18 @@ fn a_process_only_package_does_not_register_without_running_it() {
     assert!(!providers.could_register("fake"));
 }
 
+/// Only the provider part ignores `enabled`: a disabled data-only
+/// package's file still registers, so whether its models show depends on
+/// its credentials.
 #[test]
-fn a_disabled_package_registers_nothing() {
+fn a_disabled_data_only_package_still_registers() {
     let setup = Setup::new();
     installed(&setup, "acme", manifest("acme"));
     let configuration = common::config(&setup, &["extensions.acme.enabled=false"]);
     let (providers, notices) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
-    assert!(!providers.could_register("fake"));
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["fake"]);
+    assert!(providers.could_register("fake"));
     // The package itself is fine: unfiltered it registers.
     assert!(loaded(&setup).could_register("fake"));
 }

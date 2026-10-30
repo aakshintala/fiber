@@ -61,7 +61,7 @@ fn stale_lists(
         };
         if let Ok(Some(age)) = config::model_cache_age(home, name, now)
             && age > max_age
-            && lua.has_credential(config, &providers.data(name), run)
+            && lua.has_credential(config, &providers.data(name))
         {
             stale.push(name.to_owned());
         }

@@ -288,7 +288,11 @@ impl Providers {
     }
 
     /// Reads the installed providers enabled by the effective configuration.
-    /// Disabled packages contribute no providers, declarations or secrets.
+    /// Only the provider part ignores `enabled`: a disabled package's
+    /// provider data still loads, so whether its models show depends on its
+    /// credentials, as with any provider. Its init, commands and hooks stay
+    /// off, as `enabled = false` says, and an ordinary disabled personal
+    /// package contributes nothing.
     pub fn load_enabled(
         home: &Path,
         config: &config::Config,
@@ -303,8 +307,10 @@ impl Providers {
     /// Reads the session's providers from the merged personal and
     /// repository entries: an approved repository copy replaces the
     /// personal install of the same name, with one notice naming both,
-    /// whether or not it is enabled. A damaged personal install keeps
-    /// its `extension_failed` notice.
+    /// whether or not it is enabled. Only the provider part ignores
+    /// `enabled`: a disabled package's provider data still loads, while
+    /// its init, commands and hooks stay off. A damaged personal install
+    /// keeps its `extension_failed` notice.
     pub fn load_repository(
         home: &Path,
         config: &config::Config,
@@ -364,7 +370,7 @@ impl Providers {
             ));
         }
         candidates.sort_by(|(a, _), (b, _)| a.key.cmp(&b.key));
-        Self::load_candidates(home, candidates, notices)
+        Self::load_candidates(home, candidates, notices, &|_| true)
     }
 
     fn load_with(
@@ -389,13 +395,18 @@ impl Providers {
         // one notice per shadowed install, grouped by code with the
         // pass's other notices before it is written (`docs/errors.md`,
         // "Notices").
+        // The merged inventory, however each entry is switched: provider
+        // data eligibility stays with this loader, never with the
+        // candidates' filter, so a disabled package's provider data still
+        // loads.
         let (merged, mut shadows) =
-            crate::repository::candidates(entries.found, repository, &enabled);
+            crate::repository::candidates(entries.found, repository, &|_| true);
         notices.append(&mut shadows);
         Self::load_candidates(
             home,
             merged.into_iter().map(|candidate| (candidate, false)),
             notices,
+            &enabled,
         )
     }
 
@@ -403,11 +414,24 @@ impl Providers {
         home: &Path,
         candidates: impl IntoIterator<Item = (crate::repository::Candidate, bool)>,
         mut notices: Vec<Notice>,
+        enabled: &dyn Fn(&str) -> bool,
     ) -> Result<(Self, Vec<Notice>), Error> {
         let mut providers = Self::default();
         for (candidate, staged) in candidates {
             let dir = candidate.dir;
             let manifest = candidate.manifest;
+            // Only the provider part ignores `enabled`: a disabled
+            // package's provider data still loads, while an ordinary
+            // disabled personal package stays out whole, as the filter
+            // kept it out. An approved copy keeps its activation, with or
+            // without provider data.
+            let off = !enabled(&manifest.name);
+            let provides = !manifest.providers.is_empty();
+            let approved = dir.starts_with(config::pinned_dir(home));
+            if off && !provides && !approved {
+                continue;
+            }
+            let active = !off || (approved && !provides);
             if manifest.api != API {
                 notices.push(Notice {
                     code: ErrorCode::ExtensionIncompatible,
@@ -434,10 +458,13 @@ impl Providers {
                 .extend(manifest.secrets.iter().cloned());
             // A provider served with code in the loop cannot be checked
             // without running it: a `process` program, an `init.lua`, or
-            // a `providers/*.lua` script names the extension coded.
-            if manifest.process.is_some()
-                || dir.join("init.lua").is_file()
-                || provider_scripts(&dir).is_ok_and(|scripts| !scripts.is_empty())
+            // a `providers/*.lua` script names the extension coded. Only
+            // active code counts: a disabled package's entry script never
+            // runs, so it supplies no active registration.
+            if active
+                && (manifest.process.is_some()
+                    || dir.join("init.lua").is_file()
+                    || provider_scripts(&dir).is_ok_and(|scripts| !scripts.is_empty()))
             {
                 providers.coded.insert(manifest.name.clone());
             }
@@ -465,7 +492,7 @@ impl Providers {
             providers
                 .declared
                 .insert(manifest.name.clone(), manifest.providers.clone());
-            providers.record_code_candidates(&dir, &manifest);
+            providers.record_code_candidates(&dir, &manifest, active);
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
             // The built-in provider's name is reserved: a package that
@@ -525,9 +552,11 @@ impl Providers {
     /// conservative criterion, an uncertain registration is never a
     /// definite absence — else only the providers with their own
     /// `providers/<name>.lua` script. A process-only package supplies
-    /// no Lua. Runs during the load, without running code.
-    fn record_code_candidates(&mut self, dir: &Path, manifest: &config::Manifest) {
-        let init = dir.join("init.lua").is_file();
+    /// no Lua. Runs during the load, without running code. A disabled
+    /// package's entry script never runs, so its providers stay eligible
+    /// only through their own scripts.
+    fn record_code_candidates(&mut self, dir: &Path, manifest: &config::Manifest, active: bool) {
+        let init = active && dir.join("init.lua").is_file();
         let scripts = provider_scripts(dir).unwrap_or_default();
         if !init && scripts.is_empty() {
             return;
@@ -696,10 +725,12 @@ impl Providers {
         let arg = if provider.has_model_cache() {
             ModelsArg::default()
         } else {
-            if matches!(provider.registers("models"), Ok(false)) {
+            // Presence comes before any registration lookup: asking what
+            // the provider registered can start its VM.
+            if !provider.has_credential(config, &self.data(&name)) {
                 return Vec::new();
             }
-            if !provider.has_credential(config, &self.data(&name), run) {
+            if matches!(provider.registers("models"), Ok(false)) {
                 return Vec::new();
             }
             match self.models_arg(extension, provider, config, run, env) {
@@ -1255,7 +1286,7 @@ pub fn refresh_lists(
         if provider.fresh(max_age) {
             continue;
         }
-        if !provider.has_credential(config, &providers.data(provider.name()), run) {
+        if !provider.has_credential(config, &providers.data(provider.name())) {
             continue;
         }
         // A declared placeholder with no host starts nothing: the same
