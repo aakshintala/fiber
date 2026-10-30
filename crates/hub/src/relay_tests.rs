@@ -3165,6 +3165,36 @@ fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
     );
 }
 
+/// `docs/invocation.md:1166`, "What the hub speaks": a `Partial` candidate
+/// reported after the `Written -> Rerouted` claim is refused, so the
+/// canonical state stays `Rerouted`; the kept attempt still settles
+/// `indeterminate` once and is never replayed, and the wire answer is the
+/// same `closing` rejection a second clean exit earns.
+#[test]
+fn a_partial_report_after_reroute_keeps_the_canonical_claim() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    ended
+        .order
+        .transition("c_1", CommandState::Rerouted)
+        .expect("the first handover claims the re-route");
+    // The failed write's candidate outcome: the session may have read a
+    // byte, but the command already moved past it, so the canonical
+    // report is refused and the state stays `Rerouted`.
+    report(&ended.order, "c_1", CommandState::Partial);
+    assert_eq!(
+        ended.order.state("c_1"),
+        Some(CommandState::Rerouted),
+        "the partial candidate keeps the reroute claim"
+    );
+    ended.close_session();
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "closing", "{line}");
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(ended.received_ids().is_empty(), "nothing is delivered");
+}
+
 /// `docs/invocation.md:1154`, "What the hub speaks" (#2054): a command is delivered once; a `closing` answer to it after it already rerouted once is rejected `closing`, never routed again.
 #[test]
 fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {

@@ -626,9 +626,14 @@ pub(crate) fn route(
         // answers it `indeterminate` however the session ends, and never
         // routes it again. A write that accepted nothing keeps the
         // command unsent, as when a live relay's socket closes.
-        // One outcome for both consumers: the kept entry and the
-        // canonical report always agree, so the two never disagree about
-        // whether the session may have read the command.
+        // One candidate outcome for the kept attempt and the canonical
+        // report: the kept entry takes it first, then the same value is
+        // reported to `AckOrder`. The canonical claim wins when the two
+        // differ: a report the command already moved past is refused and
+        // keeps its state, so a `Partial` candidate after the
+        // `Written -> Rerouted` claim leaves the canonical state
+        // `Rerouted` while the kept attempt still settles `indeterminate`
+        // once and is never replayed.
         let state = match &outcome {
             Some(Err(partial)) if partial.written > 0 => CommandState::Partial,
             _ => CommandState::Queued,
@@ -645,8 +650,9 @@ pub(crate) fn route(
                 Ok(()) | Err(_) => {}
             }
         }
-        // A rerouted command keeps its claim through the failed write: a
-        // second clean exit still answers it `closing`.
+        // A rerouted command keeps its claim through the failed write:
+        // the `Partial` report is refused and the canonical state stays
+        // `Rerouted`, so a second clean exit still answers it `closing`.
         report(&order, &id.0, state);
         true
     };
