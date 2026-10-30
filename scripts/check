@@ -141,6 +141,8 @@ crates/main/tests/terminal.rs 2
 crates/main/tests/tui_extensions.rs 2
 crates/main/tests/wheel_scroll.rs 1
 EOF
+    echo "== kinds ratchet"
+    cargo xtask kinds-ratchet --max 238 --support-max 36
     # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
     # ships shellcheck, so a missing one fails rather than skips.
     if [ "$(uname -s)" = Linux ]; then
