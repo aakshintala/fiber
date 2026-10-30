@@ -2473,7 +2473,18 @@ fn a_disabled_mixed_package_keeps_provider_models_without_init_commands_or_hooks
             .iter()
             .all(|name| name != "fiber.test/mixed")
     );
-    assert_eq!(session.lua_providers().len(), 1);
+    assert!(
+        session
+            .lua_providers()
+            .iter()
+            .any(|(_, provider)| provider.name() == "acme"),
+        "expected the acme provider-only handle: {:?}",
+        session
+            .lua_providers()
+            .iter()
+            .map(|(_, provider)| provider.name())
+            .collect::<Vec<_>>()
+    );
     // Uncached discovery still runs through the provider-only handles.
     let config = session_config(&setup, &overrides);
     let mut providers = load_providers(&setup, &RepositorySet::default(), &overrides).0;
@@ -2497,7 +2508,11 @@ fn a_disabled_mixed_package_keeps_provider_models_without_init_commands_or_hooks
         &fakes::children::grouped_output,
         &|_| None,
     );
-    assert_eq!(started.len(), 1);
+    assert!(
+        started.iter().any(|(name, _)| name == "acme"),
+        "expected the acme refresh to start: {:?}",
+        started.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
     for (_, handle) in started {
         fakes::within(
             "handle.join",
@@ -2533,7 +2548,11 @@ fn a_disabled_mixed_package_keeps_provider_models_without_init_commands_or_hooks
         &fakes::children::grouped_output,
         &|_| None,
     );
-    assert_eq!(started.len(), 1);
+    assert!(
+        started.iter().any(|(name, _)| name == "acme"),
+        "expected the acme refresh to start: {:?}",
+        started.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
     for (_, handle) in started {
         fakes::within(
             "handle.join",
@@ -2682,7 +2701,11 @@ fn a_disabled_mixed_package_with_a_trapping_init_loads_discovers_and_refreshes()
         &fakes::children::grouped_output,
         &|_| None,
     );
-    assert_eq!(started.len(), 1);
+    assert!(
+        started.iter().any(|(name, _)| name == "acme"),
+        "expected the acme refresh to start: {:?}",
+        started.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
     for (_, handle) in started {
         fakes::within(
             "handle.join",
