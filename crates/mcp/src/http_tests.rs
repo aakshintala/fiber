@@ -2994,7 +2994,14 @@ fn the_pump_stop_with_a_session_writes_the_delete_line() {
     let setup = Setup::new();
     let server = ProviderServer::start_responding(standard()).unwrap();
     let (remote, _) = setup.observed(&server, Duration::from_secs(5));
-    let before = setup.lines().len();
+    let is_goodbye = |request: &HttpRequest| {
+        request.status == Some(200) && request.request_bytes == 0 && request.response_bytes == 0
+    };
+    let before = setup
+        .lines()
+        .iter()
+        .filter(|request| is_goodbye(request))
+        .count();
     fakes::within(
         "remote stop",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -3002,20 +3009,26 @@ fn the_pump_stop_with_a_session_writes_the_delete_line() {
     );
     // The stop joins the pump after its goodbye, so the line is written.
     let lines = setup.lines();
-    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
-    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
-    assert_eq!(lines.len(), before + 1, "the goodbye writes one line");
-    let line = lines.last().unwrap();
+    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends. In this fixture only the DELETE has an empty body and a 200 response.
+    let goodbyes: Vec<_> = lines.iter().filter(|request| is_goodbye(request)).collect();
+    assert_eq!(
+        goodbyes.len(),
+        before + 1,
+        "the goodbye writes one line: {lines:?}"
+    );
+    let line = goodbyes.last().unwrap();
     assert_mcp_shape(line);
     assert_eq!(line.status, Some(200), "{line:?}");
     assert_eq!(line.request_bytes, 0, "a DELETE posts nothing");
     assert_eq!(line.response_bytes, 0, "the goodbye body is never read");
-    assert!(
+    assert_eq!(
         server
             .requests()
             .iter()
-            .any(|request| request.method == "DELETE"),
-        "the line is the goodbye"
+            .filter(|request| request.method == "DELETE")
+            .count(),
+        1,
+        "the line is the one goodbye request"
     );
 }
 
