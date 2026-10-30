@@ -432,6 +432,12 @@ pub struct ProtectedPaths {
 }
 
 impl ProtectedPaths {
+    /// No path changed and no restore failed: every surface omits the
+    /// report.
+    pub fn is_empty(&self) -> bool {
+        self.restored.is_empty() && self.failed.is_empty()
+    }
+
     /// The person's warning lines, one per path: what changed while the
     /// confined call ran, never which call changed it.
     pub fn warning_lines(&self) -> Vec<String> {

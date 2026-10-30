@@ -367,7 +367,7 @@ fn parts_inner(
     let (protection, startup) = tools::ProtectedPaths::open(&home, &workspace)
         .map_err(|message| failed(ErrorCode::IoFailed, message))?;
     if let Some(report) = startup {
-        startup_notices.extend(report.notice_lines().into_iter().map(|message| {
+        startup_notices.extend(report.warning_lines().into_iter().map(|message| {
             contract::events::Notice {
                 code: contract::ErrorCode::ProtectedPathsRestored,
                 message,

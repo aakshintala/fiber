@@ -635,7 +635,7 @@ pub(super) fn to_completed_reported(
     let stopped =
         !capped && !flooded && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
     let mut output = assemble(limit, finished, None, None);
-    output.protected_paths = report.as_ref().and_then(ProtectedReport::contract_paths);
+    output.protected_paths = report.as_ref().filter(|report| !report.is_empty()).cloned();
     if capped {
         output.error = Some(Failure::from(&ToolError::from(ShellError::Capped)));
     } else if flooded {

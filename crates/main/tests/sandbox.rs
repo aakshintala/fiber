@@ -702,10 +702,29 @@ fn a_killed_call_leaves_a_stale_baseline_the_next_session_recovers() {
     let fiber = workspace.join(".fiber");
     fs::create_dir_all(&fiber).unwrap();
     fs::write(fiber.join("note.txt"), "original\n").unwrap();
-    // The sleep keeps the call alive to be killed; the note changes while
-    // the call runs, and the guard restores whatever changed it without
-    // naming a writer.
-    let command = "sleep 120 < /dev/null";
+    // The child signals its own start, then blocks to be killed: `tee`
+    // creates the signal file first and reads the FIFO the test holds
+    // open, so the open blocks until the kill. A single simple stage with
+    // an input redirect keeps the call rule-matchable: a chained command
+    // or an output-to-file redirect names no subject, so no allow rule
+    // could match it (`crates/tools/src/shell/classify.rs`,
+    // `subject_and_prefix`; `crates/tools/src/shell/syntax.rs`,
+    // `Redirect`). Spawn follows the baseline, so the signal proves the
+    // child runs with the baseline held. The note changes only after that
+    // signal, while the call runs, and the guard restores whatever changed
+    // it without naming a writer.
+    let command = "tee ready.signal < input.fifo";
+    std::process::Command::new("mkfifo")
+        .arg(workspace.join("input.fifo"))
+        .status()
+        .expect("the signal FIFO is created");
+    // Opened read-write, the FIFO never blocks on open; held until the
+    // end, the writer keeps `tee` blocked reading.
+    let _held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(workspace.join("input.fifo"))
+        .expect("the signal FIFO opens");
 
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -731,7 +750,7 @@ fn a_killed_call_leaves_a_stale_baseline_the_next_session_recovers() {
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "sleep"})
+            json!({"decision": "allow", "tool": "shell", "prefix": "tee"})
         ),
     )
     .unwrap();
@@ -773,31 +792,13 @@ fn a_killed_call_leaves_a_stale_baseline_the_next_session_recovers() {
             break;
         }
     }
-    // The note changes only once the baseline records the original: the
-    // baseline file's existence proves the snapshot read already happened,
-    // since the same call writes it after.
-    let home = setup.home().to_path_buf();
-    fakes::within(
-        "the baseline lands",
-        support::Deadline::start(),
-        move || {
-            loop {
-                let projects = home.join("projects");
-                let ready = fs::read_dir(&projects).is_ok_and(|entries| {
-                    entries.flatten().any(|project| {
-                        project
-                            .path()
-                            .join("protected-paths")
-                            .join("baseline.json")
-                            .is_file()
-                    })
-                });
-                if ready {
-                    break;
-                }
-            }
-        },
-    );
+    // The note changes only once the confined child proves it started: the
+    // child's own signal lands after the baseline exists, since the call
+    // writes the baseline before spawn. Neither `tool_call_started` nor the
+    // baseline file proves the child runs; this file does.
+    fakes::within("the child signals", support::Deadline::start(), move || {
+        while fs::read(workspace.join("ready.signal")).is_err() {}
+    });
     fs::write(fiber.join("note.txt"), "changed\n").unwrap();
     // SIGKILL the whole session, then reap it on every path past this point.
     fakes::kill_group(group, "KILL").expect("the session dies");

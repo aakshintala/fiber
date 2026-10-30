@@ -852,7 +852,7 @@ pub(crate) fn assemble_reported(
 ) -> Output {
     let notice: Vec<String> = report
         .as_ref()
-        .map(ProtectedReport::notice_lines)
+        .map(ProtectedReport::warning_lines)
         .unwrap_or_default();
     let extra = match (extra, notice.is_empty()) {
         (None, true) => None,
@@ -861,12 +861,15 @@ pub(crate) fn assemble_reported(
         (Some(line), false) => Some(format!("{line}\n{}", notice.join("\n"))),
     };
     let mut output = assemble(limit, finished, extra.as_deref(), command);
-    if let Some(inner) = report.as_ref().and_then(ProtectedReport::details_value)
+    if let Some(inner) = report
+        .as_ref()
+        .filter(|report| !report.is_empty())
+        .and_then(|report| serde_json::to_value(report).ok())
         && let Some(Value::Object(map)) = output.details.as_mut()
     {
         map.insert("protected_paths".to_owned(), inner);
     }
-    output.protected_paths = report.as_ref().and_then(ProtectedReport::contract_paths);
+    output.protected_paths = report.as_ref().filter(|report| !report.is_empty()).cloned();
     output
 }
 

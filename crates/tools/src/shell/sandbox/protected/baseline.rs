@@ -25,11 +25,12 @@ pub(crate) struct Identity {
 
 /// Resolves the identity of `workspace` with one `git rev-parse`, through
 /// the scrubbed git command, so the caller's environment cannot redirect
-/// the discovery. A lookup git cannot answer leaves the workspace itself:
-/// the protected config may itself be what broke git, so discovery never
-/// fails the call — capture below does, when a protected entry cannot be
-/// read or recorded.
-pub(crate) fn identity(workspace: &Path) -> Identity {
+/// the discovery. Outside a repository the workspace itself is the
+/// identity. When a `.git` entry is reachable from the workspace but git
+/// cannot answer, the discovery is incomplete — the protected config may
+/// itself be what broke git — so the lookup fails instead of leaving the
+/// shared paths unprotected.
+pub(crate) fn identity(workspace: &Path) -> Result<Identity, String> {
     let common = support::git::command("git")
         .arg("-C")
         .arg(workspace)
@@ -40,17 +41,52 @@ pub(crate) fn identity(workspace: &Path) -> Identity {
             let text = String::from_utf8_lossy(&out.stdout);
             let raw = text.trim_end_matches('\n');
             let path = PathBuf::from(raw);
-            Identity {
+            Ok(Identity {
                 path: path.canonicalize().unwrap_or(path),
                 in_repository: true,
-            }
+            })
         }
-        Ok(_) | Err(_) => Identity {
-            path: workspace
-                .canonicalize()
-                .unwrap_or_else(|_| workspace.to_path_buf()),
-            in_repository: false,
-        },
+        Ok(out) => fallback_or_fail(workspace, &describe(&out.status, &out.stderr)),
+        Err(source) => fallback_or_fail(workspace, &source.to_string()),
+    }
+}
+
+/// The workspace itself when no `.git` entry is reachable from it, else
+/// the git failure that leaves discovery incomplete.
+fn fallback_or_fail(workspace: &Path, cause: &str) -> Result<Identity, String> {
+    if has_git_entry(workspace) {
+        return Err(format!(
+            "the project identity of {} could not be read: {cause}",
+            workspace.display()
+        ));
+    }
+    Ok(Identity {
+        path: workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf()),
+        in_repository: false,
+    })
+}
+
+/// Whether `workspace` or any ancestor holds a `.git` entry: a repository
+/// git cannot see is broken discovery, never a plain directory.
+fn has_git_entry(workspace: &Path) -> bool {
+    let base = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    base.ancestors()
+        .any(|ancestor| ancestor.join(".git").symlink_metadata().is_ok())
+}
+
+/// Why a git lookup failed: git's own diagnostic when it printed one, else
+/// its exit status.
+fn describe(status: &std::process::ExitStatus, stderr: &[u8]) -> String {
+    let trimmed = String::from_utf8_lossy(stderr);
+    let trimmed = trimmed.trim();
+    if trimmed.is_empty() {
+        format!("git exited with {status}")
+    } else {
+        trimmed.to_owned()
     }
 }
 
@@ -102,7 +138,7 @@ pub(crate) struct StatePaths {
 /// projects root (`docs/state.md`, "Projects"). The key names one file in
 /// `projects/`; anything else fails closed before spawn.
 pub(crate) fn state_paths(home: &Path, workspace: &Path) -> Result<StatePaths, String> {
-    let key = state_key(&identity(workspace).path);
+    let key = state_key(&identity(workspace)?.path);
     let key = config::ProjectKey::new(key).map_err(|source| source.to_string())?;
     let dir = config::projects_dir(home)
         .join(key.as_str())
@@ -116,6 +152,7 @@ pub(crate) fn state_paths(home: &Path, workspace: &Path) -> Result<StatePaths, S
 }
 
 /// One registered worktree: its root, and whether git lists it first.
+#[derive(Debug)]
 pub(crate) struct Worktree {
     /// The worktree's root.
     pub(crate) root: PathBuf,
@@ -124,30 +161,39 @@ pub(crate) struct Worktree {
 }
 
 /// Lists the main checkout and every registered worktree with one
-/// `git worktree list --porcelain`. A failure, or a repository `git` cannot
-/// see, leaves the single workspace: the baseline then holds only the
-/// workspace-local entries. The list itself never fails the call, because
-/// the shared config it cannot list may be what broke git.
-pub(crate) fn enumerate(workspace: &Path) -> Vec<Worktree> {
+/// `git worktree list --porcelain`. A repository git just proved through
+/// `identity` is listed completely or not at all: a failure, or a listing
+/// that names no checkout, fails instead of leaving registered checkouts
+/// unprotected.
+pub(crate) fn enumerate(workspace: &Path) -> Result<Vec<Worktree>, String> {
     let out = support::git::command("git")
         .arg("-C")
         .arg(workspace)
         .args(["worktree", "list", "--porcelain"])
-        .output();
-    let Ok(out) = out else {
-        return vec![Worktree {
-            root: workspace.to_path_buf(),
-            main: true,
-        }];
-    };
+        .output()
+        .map_err(|source| {
+            format!(
+                "the worktrees of {} could not be listed: {source}",
+                workspace.display()
+            )
+        })?;
     if !out.status.success() {
-        return vec![Worktree {
-            root: workspace.to_path_buf(),
-            main: true,
-        }];
+        return Err(format!(
+            "the worktrees of {} could not be listed: {}",
+            workspace.display(),
+            describe(&out.status, &out.stderr)
+        ));
     }
+    parse_worktrees(workspace, &out.stdout)
+}
+
+/// Reads one `git worktree list --porcelain` output: each `worktree ` line
+/// names a checkout, the first one the main checkout. A listing that names
+/// none fails, so a repository git proved never snapshots a single
+/// checkout as its whole project.
+pub(crate) fn parse_worktrees(workspace: &Path, stdout: &[u8]) -> Result<Vec<Worktree>, String> {
     let mut worktrees = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in String::from_utf8_lossy(stdout).lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
             let root = PathBuf::from(path);
             let main = worktrees.is_empty();
@@ -155,12 +201,12 @@ pub(crate) fn enumerate(workspace: &Path) -> Vec<Worktree> {
         }
     }
     if worktrees.is_empty() {
-        return vec![Worktree {
-            root: workspace.to_path_buf(),
-            main: true,
-        }];
+        return Err(format!(
+            "the worktrees of {} could not be listed: git listed none",
+            workspace.display()
+        ));
     }
-    worktrees
+    Ok(worktrees)
 }
 
 /// One protected path: where it is, how the report names it, and what the
@@ -216,13 +262,12 @@ pub(crate) struct Baseline {
 /// `.git/config` and hooks once, and each registered worktree's `.git`
 /// pointer and workspace-local `.fiber/`. Worktree membership is captured
 /// here and never re-read while calls are active. A protected entry that
-/// cannot be read or recorded fails closed with its cause, so the call
-/// never runs unprotected; discovery itself falls back, because the
-/// protected config may be what broke git.
+/// cannot be read or recorded fails closed with its cause, and incomplete
+/// discovery fails the same way, so the call never runs unprotected.
 pub(crate) fn snapshot(workspace: &Path) -> Result<Vec<Entry>, String> {
-    let found = identity(workspace);
+    let found = identity(workspace)?;
     let worktrees = if found.in_repository {
-        enumerate(workspace)
+        enumerate(workspace)?
     } else {
         vec![Worktree {
             root: workspace.to_path_buf(),

@@ -1542,7 +1542,7 @@ fn macos_a_line_past_the_stash_budget_is_a_miss() {
 // compare, restore and report at a call's end. The production helper is
 // the only seam these tests use.
 
-use super::protected::{ProtectedPaths, Report};
+use super::protected::{ProtectedPaths, Report, baseline};
 
 /// A Fiber home for the protection state, beside the fixture.
 fn protected_home(dir: &fakes::TempDir) -> std::path::PathBuf {
@@ -1736,7 +1736,7 @@ fn changed_bytes_new_entries_deletions_and_modes_are_restored() {
         report.failed
     );
     assert_eq!(
-        report.notice_lines().len(),
+        report.warning_lines().len(),
         1,
         "one notice per changed path"
     );
@@ -1766,7 +1766,7 @@ fn an_untouched_call_reports_nothing() {
     let report = begin.guard.finish();
     assert!(report.is_empty(), "no change means no report");
     assert!(
-        report.notice_lines().is_empty(),
+        report.warning_lines().is_empty(),
         "no change means no notice"
     );
     assert!(
@@ -1774,9 +1774,8 @@ fn an_untouched_call_reports_nothing() {
             restored: Vec::new(),
             failed: Vec::new(),
         }
-        .details_value()
-        .is_none(),
-        "no change means no details"
+        .is_empty(),
+        "no change means no report and no details"
     );
 }
 
@@ -2093,11 +2092,11 @@ fn a_baseline_read_failure_at_finish_is_reported_not_empty() {
         "a failed restore is never reported as success: {report:?}"
     );
     assert!(
-        report.contract_paths().is_some(),
-        "the result carries the failure"
+        !report.is_empty(),
+        "the result carries the failure: {report:?}"
     );
     assert_eq!(
-        report.notice_lines().len(),
+        report.warning_lines().len(),
         1,
         "the warning carries the failure"
     );
@@ -2105,9 +2104,11 @@ fn a_baseline_read_failure_at_finish_is_reported_not_empty() {
 
 #[test]
 fn a_failed_baseline_update_reaches_the_caller_and_keeps_the_approved_write() {
-    // Forcing the baseline update to fail with an active holder: the error
-    // reaches the approved-write caller, and the holder's end cannot
-    // restore the old baseline over the approved content.
+    // The baseline read succeeds, but the atomic write fails with an active
+    // holder: blocking the write's temp file forces the persistence
+    // failure. The error reaches the approved-write caller, the old
+    // baseline is dropped so the holder's end cannot restore it over the
+    // approved content, and the end reports the missing baseline.
     let workspace = fakes::TempDir::new("fiber-protected-approved-fail");
     let fiber = workspace.path().join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
@@ -2117,7 +2118,11 @@ fn a_failed_baseline_update_reaches_the_caller_and_keeps_the_approved_write() {
     let handle = open_handle(&home, workspace.path());
     let begin = handle.begin(workspace.path()).expect("begin snapshots");
     std::fs::write(&protected, b"approved").expect("approved lands");
-    std::fs::write(baseline_file(&home), b"not json").expect("baseline corrupted");
+    let stuck = baseline_file(&home)
+        .parent()
+        .expect("the baseline has a parent")
+        .join(format!(".baseline-{}.tmp", std::process::id()));
+    std::fs::create_dir(&stuck).expect("the write's temp path is blocked");
     let error = handle
         .note_approved_write(workspace.path(), &protected)
         .expect_err("the baseline failure propagates");
@@ -2129,8 +2134,8 @@ fn a_failed_baseline_update_reaches_the_caller_and_keeps_the_approved_write() {
         "the approved write survives the holder's end"
     );
     assert!(
-        !report.is_empty(),
-        "the failure is reported, never as success: {report:?}"
+        report.restored.is_empty(),
+        "nothing is restored over the approved write: {report:?}"
     );
     assert!(
         report
@@ -2170,6 +2175,51 @@ fn an_unreadable_protected_file_fails_begin_before_spawn() {
 }
 
 #[test]
+fn an_unreadable_protected_file_fails_the_end_compare() {
+    // The baseline records the readable file, but the end cannot read it
+    // back: the compare fails with the path and its cause, and nothing is
+    // reported as restored over the unreadable file.
+    let workspace = fakes::TempDir::new("fiber-protected-unreadable-end");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o000))
+            .expect("mode removed");
+    }
+    if std::fs::read(&protected).is_ok() {
+        // A privileged runner still reads through the mode: nothing here
+        // can fail, so the test proves nothing and stops.
+        return;
+    }
+    let report = begin.guard.finish();
+    assert!(
+        report.restored.is_empty(),
+        "nothing is reported as restored: {report:?}"
+    );
+    assert_eq!(
+        report.failed.len(),
+        1,
+        "the compare failure is reported: {report:?}"
+    );
+    assert_eq!(report.failed[0].path, ".fiber");
+    assert!(
+        report.failed[0].message.contains("could not be compared"),
+        "the error names its cause: {report:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&protected).is_ok(),
+        "the unreadable file is left alone"
+    );
+}
+
+#[test]
 fn setup_fails_closed_when_the_state_cannot_be_recorded() {
     let workspace = fakes::TempDir::new("fiber-protected-unwritable");
     let file = workspace.path().join("file-home");
@@ -2192,6 +2242,51 @@ fn a_corrupt_baseline_fails_the_call_closed() {
         .begin(workspace.path())
         .expect_err("a corrupt baseline stops the call");
     assert!(!error.to_string().is_empty(), "the failure names its cause");
+}
+
+#[test]
+fn broken_git_discovery_fails_begin_before_spawn() {
+    // A repository git cannot read is incomplete discovery, not a plain
+    // directory: the call fails before spawn instead of running with a
+    // workspace-only baseline that leaves the shared config, hooks and
+    // worktree pointers unprotected.
+    let repo = fakes::git::repo("fiber-protected-broken-discovery");
+    let home = protected_home(&repo);
+    let handle = open_handle(&home, repo.path());
+    std::fs::write(repo.path().join(".git/config"), b"garbage{{{").expect("config broken");
+    let listed = baseline::enumerate(repo.path()).expect_err("no listing from broken git");
+    assert!(
+        listed.contains("could not be listed"),
+        "the listing failure names its cause: {listed}"
+    );
+    let error = handle
+        .begin(repo.path())
+        .expect_err("broken discovery stops the call");
+    assert!(
+        error.to_string().contains("could not be read"),
+        "the failure names its cause: {error}"
+    );
+}
+
+#[test]
+fn an_empty_worktree_listing_fails_closed() {
+    // `git worktree list` proved the repository, so a listing that names
+    // no checkout is incomplete discovery, never a single checkout.
+    let workspace = fakes::TempDir::new("fiber-protected-empty-list");
+    let error = baseline::parse_worktrees(workspace.path(), b"")
+        .expect_err("an empty listing stops the call");
+    assert!(
+        error.contains("listed none"),
+        "the failure names its cause: {error}"
+    );
+    let names = baseline::parse_worktrees(
+        workspace.path(),
+        b"worktree /repo\nHEAD abc\n\nworktree /repo/wt\nHEAD abc\n",
+    )
+    .expect("a listing names its checkouts");
+    assert_eq!(names.len(), 2, "every listed checkout is kept");
+    assert!(names[0].main, "the first checkout stays the main one");
+    assert!(!names[1].main, "later checkouts are linked ones");
 }
 
 #[test]

@@ -2385,7 +2385,7 @@ fn a_confined_call_restores_its_protected_paths_and_reports() {
         b"original",
         "the damage is restored"
     );
-    assert_eq!(report.notice_lines().len(), 1);
+    assert_eq!(report.warning_lines().len(), 1);
 }
 
 #[test]

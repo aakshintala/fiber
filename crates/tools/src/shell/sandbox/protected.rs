@@ -21,7 +21,7 @@
 //! restore half lives in [`restore`]: one recursive reconciler with
 //! symlink-safe comparison.
 
-mod baseline;
+pub(crate) mod baseline;
 mod restore;
 
 use std::fs::{File, TryLockError};
@@ -68,70 +68,11 @@ pub(crate) struct Guard {
     pub(crate) recovered: Report,
 }
 
-/// What changed while a confined call ran: the paths restored to the
-/// baseline, and the restores that failed. Empty means nothing changed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Report {
-    /// Workspace-relative paths restored to the recorded baseline.
-    pub restored: Vec<String>,
-    /// The restores that did not succeed, with the cause.
-    pub failed: Vec<RestoreFailure>,
-}
-
-/// One restore that did not succeed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RestoreFailure {
-    /// The workspace-relative path.
-    pub path: String,
-    /// Why the restore failed.
-    pub message: String,
-}
-
-impl Report {
-    /// No path changed and no restore failed.
-    pub fn is_empty(&self) -> bool {
-        self.restored.is_empty() && self.failed.is_empty()
-    }
-
-    /// One notice line per changed path for the model and the person. A
-    /// line says the path changed while a confined call ran; it never says
-    /// this call changed it.
-    pub fn notice_lines(&self) -> Vec<String> {
-        // One wording for every surface: the model text, the person's
-        // warning line and the completion notice all read the shared
-        // report's lines.
-        self.contract_paths()
-            .map(|report| report.warning_lines())
-            .unwrap_or_default()
-    }
-
-    /// The shared contract report, for the tool result and the completion
-    /// events: absent when nothing changed.
-    pub(crate) fn contract_paths(&self) -> Option<contract::shapes::ProtectedPaths> {
-        if self.is_empty() {
-            return None;
-        }
-        Some(contract::shapes::ProtectedPaths {
-            restored: self.restored.clone(),
-            failed: self
-                .failed
-                .iter()
-                .map(|failure| contract::shapes::ProtectedPathFailure {
-                    path: failure.path.clone(),
-                    message: failure.message.clone(),
-                })
-                .collect(),
-        })
-    }
-
-    /// The structured report, for the call result's `details`: absent when
-    /// nothing changed. Serialized through the contract shape, so the wire
-    /// result never drifts from the shared type.
-    pub(crate) fn details_value(&self) -> Option<serde_json::Value> {
-        let report = self.contract_paths()?;
-        serde_json::to_value(&report).ok()
-    }
-}
+/// What changed while a confined call ran: the shared protected-path
+/// report (`docs/events.md`, "Payload types"). Empty means nothing
+/// changed: every surface omits it, and the warning lines name each
+/// changed path for the model and the person.
+pub use contract::shapes::{ProtectedPathFailure as RestoreFailure, ProtectedPaths as Report};
 
 /// Why a confined command never started: the baseline could not be read or
 /// recorded. The caller fails the call closed with this cause before spawn.
@@ -275,9 +216,14 @@ impl ProtectedPaths {
                 changed = true;
             }
         }
-        if changed {
-            baseline::write_baseline(&dir.baseline, &baseline.entries)
-                .map_err(|source| source.to_string())?;
+        if changed
+            && let Err(source) = baseline::write_baseline(&dir.baseline, &baseline.entries)
+        {
+            // The old baseline would roll the approved bytes back at
+            // the holder's end: drop it, so the end reports the failure
+            // instead of restoring what the call recorded.
+            let _removed = std::fs::remove_file(&dir.baseline);
+            return Err(source.to_string());
         }
         Ok(())
     }
@@ -301,9 +247,20 @@ impl Guard {
                 if file.lock().is_err() {
                     finish_failure("the baseline lock could not be taken")
                 } else {
-                    let report = match restore::compare_restore_report(&dir) {
-                        Ok(report) => report,
-                        Err(source) => finish_failure(&source.to_string()),
+                    let report = if !dir.baseline.exists() {
+                        // No baseline while a holder exists: an approved
+                        // write dropped it after its own write failed, or
+                        // something removed it mid-call. Restoring is
+                        // impossible; the missing file is reported.
+                        finish_failure(&format!(
+                            "the protected-path baseline is missing from {}",
+                            dir.baseline.display()
+                        ))
+                    } else {
+                        match restore::compare_restore_report(&dir) {
+                            Ok(report) => report,
+                            Err(source) => finish_failure(&source.to_string()),
+                        }
                     };
                     drop(file);
                     report

@@ -3337,9 +3337,11 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     fakes::git::git(&workspace, &["init", "-q"]);
+    // A valid config the discovery reads: the baseline records the shared
+    // config and hooks through git, never as a fallback directory.
+    fakes::git::git(&workspace, &["config", "fiber.probe", "config baseline"]);
     std::fs::create_dir_all(workspace.join(".git/hooks")).unwrap();
     std::fs::create_dir_all(workspace.join(".fiber")).unwrap();
-    std::fs::write(workspace.join(".git/config"), "config baseline\n").unwrap();
     std::fs::write(workspace.join(".git/hooks/pre-commit"), "hook baseline\n").unwrap();
     std::fs::write(workspace.join(".fiber/state"), "fiber baseline\n").unwrap();
     let sandbox = sandbox_settings_for_integration("protected");
@@ -3373,9 +3375,11 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
         "the command completed: {}",
         text(&output)
     );
-    assert_eq!(
-        std::fs::read_to_string(workspace.join(".git/config")).unwrap(),
-        "config baseline\n"
+    assert!(
+        std::fs::read_to_string(workspace.join(".git/config"))
+            .unwrap()
+            .contains("config baseline"),
+        "the shared config is restored"
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join(".git/hooks/pre-commit")).unwrap(),
@@ -3389,9 +3393,12 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
         .protected_paths
         .as_ref()
         .expect("the restore is in the result");
-    assert_eq!(report.restored, vec![".git", ".fiber"]);
+    assert_eq!(
+        report.restored,
+        vec![".git/config", ".git/hooks", ".fiber"]
+    );
     assert!(report.failed.is_empty());
-    assert!(text(&output).contains(".git"));
+    assert!(text(&output).contains(".git/config"));
 }
 
 #[test]

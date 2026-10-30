@@ -64,14 +64,19 @@ fn reconcile_kind(path: &Path, kind: &EntryKind) -> Result<bool, String> {
     match kind {
         EntryKind::File { mode, bytes } => {
             // Without following symlinks: a symlink, a directory or a
-            // missing path is never an unchanged file.
-            let same = is_regular_file(path)
-                && std::fs::read(path)
-                    .map(|current| current == *bytes)
-                    .unwrap_or(false)
-                && mode_matches(path, *mode);
-            if same {
-                return Ok(false);
+            // missing path is never an unchanged file. A read failure on
+            // a regular file is a failed compare, never a mismatch: the
+            // caller reports it with the path instead of restoring over
+            // an unreadable file.
+            // A non-file is never unchanged: it falls through to the
+            // restore below.
+            if is_regular_file(path) {
+                let current = std::fs::read(path).map_err(|source| {
+                    format!("{} could not be compared: {source}", path.display())
+                })?;
+                if current == *bytes && mode_matches(path, *mode) {
+                    return Ok(false);
+                }
             }
             remove_any(path)?;
             std::fs::write(path, bytes).map_err(|source| source.to_string())?;
