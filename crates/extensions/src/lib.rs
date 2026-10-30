@@ -138,6 +138,7 @@ pub use repository::{
 pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
 pub use tui_vm::{KeyBinding, KeyForm, KeyRejection, RenderOut, Span, TuiVm};
+pub use update::release_triple;
 pub use update::{StagedUpdate, Target, stage_update};
 
 /// The extension API's major version this Fiber speaks
@@ -365,6 +366,19 @@ pub enum Error {
         archive: String,
         /// Why, naming the member.
         why: String,
+    },
+    /// The running binary's platform has no published release archive,
+    /// so `fiber update` names no archive to download: a wrong
+    /// invocation on this platform, which maps to the existing `usage`
+    /// code.
+    #[error(
+        "`{triple}` has no published `fiber update` archive; the release publishes only {archives:?}."
+    )]
+    UnsupportedPlatform {
+        /// The running binary's target triple.
+        triple: String,
+        /// Every published binary archive file name.
+        archives: [String; 3],
     },
     /// A move failed and some extensions could not be put back.
     #[error("The install failed ({why}) and these could not be put back: {}", stuck.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))]
@@ -604,6 +618,7 @@ impl Error {
             }
             Self::BadRepositoryPath { .. } => ErrorCode::ConfigInvalid,
             Self::Overlaps { .. } | Self::GitMissing | Self::SlugTaken { .. } => ErrorCode::Usage,
+            Self::UnsupportedPlatform { .. } => ErrorCode::Usage,
             Self::Git { .. } | Self::Download { .. } => ErrorCode::FetchFailed,
             Self::Busy
             | Self::BadRecord { .. }

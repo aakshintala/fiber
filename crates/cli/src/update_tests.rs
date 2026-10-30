@@ -54,9 +54,10 @@ use std::path::PathBuf;
 
 use fakes::ustar::{archive, gzip, header, sha256};
 
-/// The triple `update` asks the fixture server for: any name works, the
-/// release step only interpolates it into the archive file name.
-const TRIPLE: &str = "test-arch-test-os";
+/// The triple `update` asks the fixture server for: a listed triple,
+/// so [`super::run`]'s platform check maps it to itself and the stage
+/// asks for the served archive.
+const TRIPLE: &str = "x86_64-unknown-linux-musl";
 
 /// The bytes the fixture binary archive holds: the staged `fiber` binary.
 const MARKER: &[u8] = b"new-fiber-binary";
@@ -669,4 +670,51 @@ fn update_maps_a_failed_tag_fetch_to_exit_one() {
         &extensions::Origin::github(),
     );
     assert_eq!(code, 1);
+}
+
+/// A platform with no published archive fails before downloading an
+/// archive (`docs/releasing.md`, "Updating" step 2): the run reports
+/// the platform and published targets, and the fixture sees no archive
+/// download request.
+#[test]
+fn unlisted_platform_fails_before_any_download() {
+    let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, OLD_BINARY);
+    let before = world.server.requests().len();
+    let mut err = Vec::new();
+    let result = super::run(
+        &world.home,
+        "0.1.0",
+        "x86_64-apple-darwin",
+        Channel::Stable,
+        &world.bases(),
+        &fakes::clock::SystemClock,
+        Io {
+            terminal: false,
+            input: &mut Cursor::new(b"".as_slice()),
+            err: &mut err,
+        },
+        &world.binary,
+        &world.origin(),
+        &World::no_restart,
+    );
+    let failed = result.unwrap_err();
+    assert_eq!(failed.code(), contract::ErrorCode::Usage);
+    let said = failed.to_string();
+    assert!(said.contains("x86_64-apple-darwin"), "{said}");
+    for archive in [
+        "fiber-aarch64-apple-darwin.tar.gz",
+        "fiber-x86_64-unknown-linux-musl.tar.gz",
+        "fiber-aarch64-unknown-linux-musl.tar.gz",
+    ] {
+        assert!(said.contains(archive), "{said}");
+    }
+    // `docs/releasing.md`, "Updating" step 2: an unlisted platform stops
+    // before downloading any archive.
+    assert!(
+        world.server.requests()[before..]
+            .iter()
+            .all(|request| !request.path.contains("/download/")),
+        "no archive is downloaded: {:?}",
+        world.server.requests()
+    );
 }
