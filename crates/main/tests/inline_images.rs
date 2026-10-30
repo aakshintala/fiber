@@ -17,6 +17,7 @@
 mod support;
 
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -94,19 +95,29 @@ fn wheel_until(run: &mut Run, up: bool, what: &str, done: impl Fn(&Grid) -> bool
 
 const FRAME_END: &[u8] = b"\x1b[?2026l";
 
-/// The scripted turns: `reads` distinct PNG reads, each its own step so
-/// the completions land in order, then closing text, then the same
-/// session's text-only turn. With `with_tail` the closing text carries
-/// a long tail below the images: the scroll room the single-image
-/// journeys scroll through. The many-reads journey needs no scroll
-/// room: its group row must stay on screen under the closing text.
+/// The scripted turns: `reads` distinct PNG reads, grouped several to a
+/// step so one turn pays one model round trip per group rather than one
+/// per read, then closing text, then the same session's text-only turn.
+/// The turn still runs one tool call per image, so the session logs one
+/// completion per read and the ledger folds them into one group row.
+/// With `with_tail` the closing text carries a long tail below the
+/// images: the scroll room the single-image journeys scroll through.
+/// The many-reads journey needs no scroll room: its group row must stay
+/// on screen under the closing text.
 fn script_reads(setup: &Setup, inline: bool, reads: usize, with_tail: bool) {
     for n in 0..reads {
         fs::write(setup.workspace().join(format!("pic-{n:03}.png")), PNG).unwrap();
     }
-    let mut steps: Vec<Value> = (0..reads)
-        .map(|n| {
-            json!({"tool_calls": [{"name": "read", "arguments": {"path": format!("pic-{n:03}.png")}}]})
+    // The number of reads sharing one scripted step: 255 reads become
+    // 51 model steps, while the turn still runs one tool call per image.
+    const READS_PER_STEP: usize = 5;
+    let indexes: Vec<usize> = (0..reads).collect();
+    let mut steps: Vec<Value> = indexes
+        .chunks(READS_PER_STEP)
+        .map(|chunk| {
+            json!({"tool_calls": chunk.iter().map(|n| {
+                json!({"name": "read", "arguments": {"path": format!("pic-{n:03}.png")}})
+            }).collect::<Vec<_>>()})
         })
         .collect();
     if with_tail {
@@ -318,23 +329,83 @@ fn logged_image(text: &str) -> Option<(String, u64, u64)> {
     logged_images(text).into_iter().next()
 }
 
-/// The logged path and size of the last of `reads` image parts in
-/// `events`, read under the setup's deadline: the hub logs each read's
-/// image as its tool completes, so the last logged image is the one
-/// that found the registry exhausted.
-fn last_image(setup: &Setup, events: &Path, reads: usize) -> (String, u64, u64) {
+/// The logged path and size of the image the read of `wanted` completed
+/// in `text`, matching each completion to its request by `action_id`:
+/// the completion carries the stored copy under a fresh stem, while the
+/// request carries the `pic-NNN.png` source path. Calls sharing one
+/// scripted step can complete out of order, so the past-range image is
+/// found by its requested name rather than by completion position.
+fn image_named(text: &str, wanted: &str) -> Option<(String, u64, u64)> {
+    let mut sources: HashMap<String, String> = HashMap::new();
+    for line in support::complete_lines(text) {
+        if line.get("kind").and_then(Value::as_str) != Some("tool_call_requested") {
+            continue;
+        }
+        let payload = line.get("payload");
+        if payload
+            .and_then(|payload| payload.get("name"))
+            .and_then(Value::as_str)
+            != Some("read")
+        {
+            continue;
+        }
+        let Some(action) = line.get("action_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let path = payload
+            .and_then(|payload| payload.get("arguments"))
+            .and_then(|arguments| arguments.get("path"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        sources.insert(
+            action.to_owned(),
+            path.rsplit('/').next().unwrap_or(path).to_owned(),
+        );
+    }
+    for line in support::complete_lines(text) {
+        if line.get("kind").and_then(Value::as_str) != Some("tool_call_completed") {
+            continue;
+        }
+        let Some(action) = line.get("action_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if sources.get(action).map(String::as_str) != Some(wanted) {
+            continue;
+        }
+        let content = line
+            .get("payload")
+            .and_then(|payload| payload.get("content"))
+            .and_then(Value::as_array);
+        for part in content.into_iter().flatten() {
+            if part.get("type").and_then(Value::as_str) == Some("image")
+                && let (Some(path), Some(width), Some(height)) = (
+                    part.get("path").and_then(Value::as_str),
+                    part.get("width").and_then(Value::as_u64),
+                    part.get("height").and_then(Value::as_u64),
+                )
+            {
+                return Some((path.to_owned(), width, height));
+            }
+        }
+    }
+    None
+}
+
+/// The logged path and size of the read of `wanted` in `events`' tool
+/// completions, read under the setup's deadline: the hub logs each
+/// read's image as its tool completes, so the wait holds until all
+/// `reads` images landed and the wanted source's image is among them.
+fn image_for_read(setup: &Setup, events: &Path, reads: usize, wanted: &str) -> (String, u64, u64) {
     let events = events.to_owned();
     let waiting = events.clone();
+    let wanted_line = wanted.to_owned();
     fakes::wait_until("all reads to log their image", setup.deadline, move || {
-        fs::read_to_string(&waiting)
-            .ok()
-            .is_some_and(|text| logged_images(&text).len() >= reads)
+        fs::read_to_string(&waiting).ok().is_some_and(|text| {
+            logged_images(&text).len() >= reads && image_named(&text, &wanted_line).is_some()
+        })
     });
     let text = fs::read_to_string(events).expect("the session log");
-    logged_images(&text)
-        .into_iter()
-        .last()
-        .expect("the last logged image")
+    image_named(&text, wanted).expect("the wanted logged image")
 }
 
 /// The caption the ledger draws for the image at `path`: its file name
@@ -647,7 +718,15 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
     started(&mut run);
     let sessions = sessions(&setup);
     assert_eq!(sessions.len(), 1, "one session ran");
-    let (path, width, height) = last_image(&setup, &sessions[0].join("events.jsonl"), READS);
+    // The past-range image is `pic-254.png`: the first 254 reads fill
+    // the kitty placeholder colours. It is selected by its requested
+    // source path, never by completion position.
+    let (path, width, height) = image_for_read(
+        &setup,
+        &sessions[0].join("events.jsonl"),
+        READS,
+        "pic-254.png",
+    );
     let caption = caption_of(&path, width, height);
 
     // The turn's reads share one group row above the closing text; it
