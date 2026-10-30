@@ -197,23 +197,16 @@ fn run(
     run: config::Runner<'_>,
 ) -> Result<(), CliError> {
     // Each notice as one line on stderr: this load's, the session
-    // extensions', then discovery and placeholders', each once per
-    // command run.
+    // extensions', then discovery and placeholders'. The session load
+    // merges the same repository set, so it repeats the providers load's
+    // shadow notices; the batch groups by code, so one pass prints one
+    // notice per code (`docs/errors.md`, "Notices").
     let (mut providers, config, set, loading) =
         providers_config_and_set(home, workspace, Arc::clone(&clock))?;
     let mut notices: Vec<Notice> = config.notices().to_vec();
     notices.extend(loading);
     let extensions = load(&config, set);
-    // The session load merges the same repository set, so it repeats the
-    // providers load's shadow notices: each message prints once per run.
-    for notice in extensions.notices() {
-        if !notices
-            .iter()
-            .any(|printed| printed.message == notice.message)
-        {
-            notices.push(notice);
-        }
-    }
+    notices.extend(extensions.notices());
     // Each placeholder value from the hub's captured environment, so the
     // list agrees with the session the hub would start; no hub answers
     // and the process environment serves, as before.
@@ -229,12 +222,42 @@ fn run(
             .is_none_or(|needle| reference.to_ascii_lowercase().contains(needle))
     };
     let (not_hosts, unconfigured) = providers.fill_placeholders_grouped(&config, &lookup)?;
+    // The `model_unconfigured` lead counts models, not notice rows: a
+    // group notice already covers several models, so two notices can
+    // cover three models (`docs/model-routing.md`, "A per-account host":
+    // the count is the models left out).
+    let earlier_unconfigured = notices
+        .iter()
+        .filter(|notice| notice.code == contract::ErrorCode::ModelUnconfigured)
+        .count();
+    let not_host_unconfigured = not_hosts
+        .iter()
+        .filter(|notice| notice.code == contract::ErrorCode::ModelUnconfigured)
+        .count();
+    let mut grouped_models = 0;
+    let mut grouped_notices = Vec::new();
+    for group in &unconfigured {
+        if let Some(notice) = group.notice(&listed) {
+            grouped_models += group
+                .models()
+                .iter()
+                .filter(|model| listed(&format!("{}/{}", group.provider(), model.id)))
+                .count();
+            grouped_notices.push(notice);
+        }
+    }
+    let total_unconfigured = earlier_unconfigured + not_host_unconfigured + grouped_models;
     notices.extend(not_hosts);
-    notices.extend(
-        unconfigured
-            .iter()
-            .filter_map(|group| group.notice(&listed)),
-    );
+    notices.extend(grouped_notices);
+    let notices = contract::events::group_notices(notices, |first, count| {
+        if first.code == contract::ErrorCode::ModelUnconfigured {
+            return format!(
+                "{total_unconfigured} models are unconfigured: {}",
+                first.message
+            );
+        }
+        contract::events::grouped_lead(first, count)
+    });
     crate::config::print_notices(err, &notices);
     // A stale list refreshes in the background for the next run: the
     // detached child, never waited on. A spawn that fails is ignored:

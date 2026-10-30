@@ -721,8 +721,8 @@ variable.
 A model whose placeholder has no value, or a value that is not a host, is
 left out of the model list. A value that is not a host raises the notice
 `model_unconfigured`. For a placeholder with no value,
-`fiber models` prints one notice per provider and setting, not one per
-model: it names the provider and the setting and counts the models it
+`fiber models` prints one grouped notice, not one per
+model: it names the providers and settings and counts the models it
 leaves out, then lists the models that are configured, possibly none. A
 search filters the count as it filters the list: the count holds the
 left-out models whose `provider/model` contains the text, and no notice
