@@ -621,8 +621,9 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
     const READS: usize = 255;
     let mut setup = Setup::new();
     // The 255-read run and its later screen and frame waits share one
-    // bounded wall-clock budget with room for load.
-    setup.deadline = Deadline::after(Duration::from_secs(120));
+    // bounded wall-clock budget with room for load: the reads alone
+    // take about two minutes on a heavily loaded host.
+    setup.deadline = Deadline::after(Duration::from_secs(300));
     script_reads(&setup, true, READS, false);
     // A standing allow rule for `read`: 255 approval panels would bury
     // the turn, and the reads need no review.

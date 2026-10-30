@@ -38,4 +38,4 @@ success-output = "immediate"
 # docs/testing.md, "Waits and timeouts": allow twice the test's deadline plus run time.
 [[profile.default.overrides]]
 filter = 'package(main) & test(=images_past_the_placeholder_range_keep_a_unique_viewer_target)'
-slow-timeout = { period = "30s", terminate-after = 12 }
+slow-timeout = { period = "30s", terminate-after = 24 }
