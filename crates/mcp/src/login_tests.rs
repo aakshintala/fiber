@@ -2748,14 +2748,14 @@ fn run_observed_with_callback(
         // The result first, through the deadline: joining a stuck login
         // would hang past the hang guard. On expiry the clock wait is
         // released so the scope can still join.
-        let result = match fakes::Deadline::after(WITHIN).recv(&received_done) {
+        let result = match fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&received_done) {
             Ok(result) => result,
             Err(_) => {
                 clock.advance_when_parked(
                     Some(clock.origin() + CALLBACK_WAIT),
                     None,
                     CALLBACK_WAIT,
-                    &fakes::Deadline::after(WITHIN),
+                    &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
                 );
                 login.join().unwrap();
                 panic!("waited until the deadline for the driven login");

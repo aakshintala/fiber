@@ -842,18 +842,18 @@ fn a_redirect_chain_writes_one_line_per_hop() {
     let server = serve([redirect(302, "/there"), ok("text/plain", "arrived")]);
     // The second hop's response is held, so the clock moves between the
     // hops: the first line stamps the start, the second the later stamps.
-    server.hold_from(2, fakes::Deadline::after(SIGNAL).left());
+    server.hold_from(2, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN).left());
     let rig = Rig::new();
     let call = rig.start(&format!("{}/here", server.url()));
     assert!(
-        server.await_requests(2, Deadline::after(SIGNAL)),
+        server.await_requests(2, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "both hops are in flight"
     );
     rig.clock.advance_when_parked(
         Some(rig.clock.origin() + Duration::from_secs(60)),
         None,
         Duration::from_secs(5),
-        &Deadline::after(SIGNAL),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     server.release();
     let output = call.wait();
@@ -1413,18 +1413,18 @@ fn a_deadline_while_the_body_is_read_keeps_status_and_partial_bytes() {
     let call = rig.start(&server.url());
     assert!(rig.clock.await_parked(
         rig.clock.origin() + Duration::from_secs(60),
-        fakes::Deadline::after(SIGNAL)
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
     // Past headers: the partial body is what the read is blocked on.
     assert!(
-        server.await_partial(1, Deadline::after(SIGNAL)),
+        server.await_partial(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the partial response was sent"
     );
     rig.clock.advance_when_parked(
         Some(rig.clock.origin() + Duration::from_secs(60)),
         None,
         Duration::from_secs(60),
-        &Deadline::after(SIGNAL),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let output = call.wait();
     assert_eq!(
@@ -1452,10 +1452,10 @@ fn a_cancel_while_the_body_is_read_keeps_status_and_partial_bytes() {
     let call = rig.start(&server.url());
     assert!(rig.clock.await_parked(
         rig.clock.origin() + Duration::from_secs(60),
-        fakes::Deadline::after(SIGNAL)
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
     assert!(
-        server.await_partial(1, Deadline::after(SIGNAL)),
+        server.await_partial(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the partial response was sent"
     );
     call.cancel.cancel();

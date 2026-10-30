@@ -112,18 +112,22 @@ impl Setup {
         let url = format!("{}/mcp", server.url());
         let clock = self.clock();
         let debug = self.sink();
-        let opened = fakes::within("the remote start", Deadline::after(WITHIN), move || {
-            super::start(
-                &url,
-                Arc::new(crate::test_support::FakeTokens::default()),
-                None,
-                net::LIMITS,
-                &clock,
-                timeout,
-                "0.0.0",
-                debug,
-            )
-        })
+        let opened = fakes::within(
+            "the remote start",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                super::start(
+                    &url,
+                    Arc::new(crate::test_support::FakeTokens::default()),
+                    None,
+                    net::LIMITS,
+                    &clock,
+                    timeout,
+                    "0.0.0",
+                    debug,
+                )
+            },
+        )
         .expect("the remote server starts");
         let OpenServer { server, listed, .. } = opened;
         (Arc::new(server), listed)
@@ -2891,9 +2895,11 @@ fn an_observed_start_writes_one_mcp_line_per_post() {
         "the call's posted length: {line:?}"
     );
     assert!(line.response_bytes > 0, "{line:?}");
-    fakes::within("remote stop", Deadline::after(WITHIN), move || {
-        remote.stop()
-    });
+    fakes::within(
+        "remote stop",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || remote.stop(),
+    );
 }
 
 #[test]
@@ -2906,18 +2912,22 @@ fn a_refused_exchange_writes_a_statusless_line() {
     let url = format!("http://127.0.0.1:{port}/mcp");
     let clock = setup.clock();
     let debug = setup.sink();
-    let start = fakes::within("the refused start", Deadline::after(WITHIN), move || {
-        super::start(
-            &url,
-            Arc::new(crate::test_support::FakeTokens::default()),
-            None,
-            net::LIMITS,
-            &clock,
-            Duration::from_secs(5),
-            "0.0.0",
-            debug,
-        )
-    });
+    let start = fakes::within(
+        "the refused start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+                debug,
+            )
+        },
+    );
     assert!(start.is_err(), "a refused server never starts");
     let lines = setup.lines();
     assert_eq!(lines.len(), 1, "one refused post writes one line");
@@ -2940,18 +2950,22 @@ fn an_initialize_4xx_writes_the_post_and_probe_lines() {
     let url = format!("{}/mcp", server.url());
     let clock = setup.clock();
     let debug = setup.sink();
-    let start = fakes::within("the probed start", Deadline::after(WITHIN), move || {
-        super::start(
-            &url,
-            Arc::new(crate::test_support::FakeTokens::default()),
-            None,
-            net::LIMITS,
-            &clock,
-            Duration::from_secs(5),
-            "0.0.0",
-            debug,
-        )
-    });
+    let start = fakes::within(
+        "the probed start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+                debug,
+            )
+        },
+    );
     assert!(start.is_err(), "a legacy-only server never starts");
     let lines = setup.lines();
     assert_eq!(lines.len(), 2, "the post and its probe: {lines:?}");
@@ -2976,9 +2990,11 @@ fn the_pump_stop_with_a_session_writes_the_delete_line() {
     let server = ProviderServer::start_responding(standard()).unwrap();
     let (remote, _) = setup.observed(&server, Duration::from_secs(5));
     let before = setup.lines().len();
-    fakes::within("remote stop", Deadline::after(WITHIN), move || {
-        remote.stop()
-    });
+    fakes::within(
+        "remote stop",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || remote.stop(),
+    );
     // The stop joins the pump after its goodbye, so the line is written.
     let lines = setup.lines();
     assert_eq!(lines.len(), before + 1, "the goodbye writes one line");
@@ -3005,18 +3021,22 @@ fn token_start_observed(
 ) -> Result<OpenServer, StartError> {
     let clock = setup.clock();
     let debug = setup.sink();
-    fakes::within("OAuth remote start", Deadline::after(WITHIN), move || {
-        super::start(
-            &url,
-            files,
-            None,
-            net::LIMITS,
-            &clock,
-            Duration::from_secs(5),
-            "0.0.0",
-            debug,
-        )
-    })
+    fakes::within(
+        "OAuth remote start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            super::start(
+                &url,
+                files,
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+                debug,
+            )
+        },
+    )
 }
 
 #[test]
@@ -3048,9 +3068,11 @@ fn a_token_refresh_post_writes_an_mcp_line() {
     for line in &lines {
         assert_mcp_shape(line);
     }
-    fakes::within("remote stop", Deadline::after(WITHIN), move || {
-        opened.server.stop()
-    });
+    fakes::within(
+        "remote stop",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || opened.server.stop(),
+    );
     // The stop's goodbye is a fifth line, with no body either way.
     let lines = setup.lines();
     assert_eq!(lines.len(), 5, "{lines:?}");
@@ -3086,18 +3108,22 @@ fn an_info_sink_records_nothing() {
     let url = format!("{}/mcp", server.url());
     let clock = setup.clock();
     let debug = Some(Arc::clone(&quiet) as Arc<dyn DebugLog>);
-    let opened = fakes::within("the remote start", Deadline::after(WITHIN), move || {
-        super::start(
-            &url,
-            Arc::new(crate::test_support::FakeTokens::default()),
-            None,
-            net::LIMITS,
-            &clock,
-            Duration::from_secs(5),
-            "0.0.0",
-            debug,
-        )
-    })
+    let opened = fakes::within(
+        "the remote start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+                debug,
+            )
+        },
+    )
     .expect("the remote server starts");
     let remote = Arc::new(opened.server);
     setup
@@ -3108,9 +3134,11 @@ fn an_info_sink_records_nothing() {
             &fakes::CancelToken::new(),
         )
         .expect("the call answers");
-    fakes::within("remote stop", Deadline::after(WITHIN), move || {
-        remote.stop()
-    });
+    fakes::within(
+        "remote stop",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || remote.stop(),
+    );
     assert!(
         quiet.lines.lock().unwrap().is_empty(),
         "an info sink records nothing"

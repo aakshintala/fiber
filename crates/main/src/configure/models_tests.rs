@@ -651,18 +651,22 @@ fn hub_models_debug_refresh_logs_the_fetch_lines() {
     let home = rig.home.clone();
     let workspace = rig.workspace.clone();
     let clock = fakes::clock::FakeClock::new();
-    let catalogue = fakes::within("the debug refresh", Deadline::after(DEADLINE), move || {
-        let seam = Seam::new(home);
-        seam.configure(
-            "models",
-            json!({"workspace": workspace, "refresh": "every"})
-                .as_object()
-                .unwrap(),
-            clock,
-        )
-        .unwrap()
-        .unwrap()
-    });
+    let catalogue = fakes::within(
+        "the debug refresh",
+        Deadline::after(Duration::from_secs(20)),
+        move || {
+            let seam = Seam::new(home);
+            seam.configure(
+                "models",
+                json!({"workspace": workspace, "refresh": "every"})
+                    .as_object()
+                    .unwrap(),
+                clock,
+            )
+            .unwrap()
+            .unwrap()
+        },
+    );
     assert_eq!(references(&catalogue), ["acme/served"]);
     let log = hub_log(&rig.home);
     let requests: Vec<&Value> = log
@@ -703,18 +707,22 @@ fn hub_models_info_refresh_writes_no_request_lines() {
     let home = rig.home.clone();
     let workspace = rig.workspace.clone();
     let clock = fakes::clock::FakeClock::new();
-    let catalogue = fakes::within("the info refresh", Deadline::after(DEADLINE), move || {
-        let seam = Seam::new(home);
-        seam.configure(
-            "models",
-            json!({"workspace": workspace, "refresh": "every"})
-                .as_object()
-                .unwrap(),
-            clock,
-        )
-        .unwrap()
-        .unwrap()
-    });
+    let catalogue = fakes::within(
+        "the info refresh",
+        Deadline::after(Duration::from_secs(20)),
+        move || {
+            let seam = Seam::new(home);
+            seam.configure(
+                "models",
+                json!({"workspace": workspace, "refresh": "every"})
+                    .as_object()
+                    .unwrap(),
+                clock,
+            )
+            .unwrap()
+            .unwrap()
+        },
+    );
     assert_eq!(references(&catalogue), ["acme/served"]);
     let requests: Vec<Value> = hub_log(&rig.home)
         .into_iter()
