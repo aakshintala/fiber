@@ -118,7 +118,9 @@ image child's driver in `tools` that `doors` and `mcp` use for pasted and MCP
 images, `Scan`, the session log search in `log` that `tools` uses for
 `session_search`, `SearchBackend`, the Lua search backend in `extensions`
 that `tools` uses for Fiber's own `web_search`, `Skills`, skill
-discovery in `loop` that `tools` uses for `skill`, and `TokenFiles`, credential
+discovery in `loop` that `tools` uses for `skill`, `PersonalSourceCheck`,
+the already-read skill check in `loop` that `config` uses for `import`,
+and `TokenFiles`, credential
 files in `config` that `mcp` uses for remote servers' OAuth tokens, and `HostModel`,
 the session's model call in `main` that `extensions` uses for `host.model`, and `HostDelegate`,
 the session's delegate start in `main` that `extensions` uses for `host.delegate`.

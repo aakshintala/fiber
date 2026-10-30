@@ -320,7 +320,16 @@ impl hub::Machine for Seam {
         };
         // The ports the driver would print, minus the printing: each
         // source's report extended into one answer, a failed source
-        // refusing the rest rather than answering a partial report.
+        // refusing the rest rather than answering a partial report. The
+        // person's home gives the `~/.agents/skills` place, when it is
+        // absolute, as the local import reads it; a relative one leaves
+        // that place unread.
+        let agents = home.is_absolute().then(|| home.to_path_buf());
+        let check = crate::prompt_files::personal_source_check(
+            self.home.clone(),
+            agents,
+            Arc::clone(&clock),
+        );
         let mut imported = Imported::default();
         let mut left_behind = Vec::new();
         for source in sources {
@@ -328,6 +337,7 @@ impl hub::Machine for Seam {
                 &self.home,
                 &config::source_home(home, *source),
                 *source,
+                check.as_ref(),
                 clock.as_ref(),
             )
             .map_err(|error| failure(error.code(), error.to_string()))?;
