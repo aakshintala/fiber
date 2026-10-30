@@ -147,7 +147,7 @@ impl App {
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
             SessionView::AllDelegates => Open::AllDelegates(List::default()),
-            SessionView::Call(id) => return self.open_call_view(id),
+            SessionView::Call(id) => return self.open_call_view_inner(id),
             SessionView::Rewind => {
                 self.session_views.open = Some(Open::Rewind(List::default()));
                 return self.open_rewind();
@@ -320,7 +320,7 @@ impl App {
             // The top row closes the view with the call's row still
             // focused, as Esc does; a body row selects it.
             if spot == Spot::Close {
-                self.close_call_view();
+                self.close_call_view_inner();
                 return Effect::None;
             }
             return self.call_view_click(&spot);

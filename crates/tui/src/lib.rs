@@ -166,6 +166,9 @@ pub(crate) enum Input {
     ConnectFailed(String),
     /// The hub connection ended.
     Disconnected,
+    /// A command write failed after its Loop boundary settled; the
+    /// unsent commands are applied and settled as this follow-up input.
+    WriteFailed(Vec<String>),
     /// The terminal was resized.
     Resize,
     /// A file search result for the `@` panel, tagged with the generation
