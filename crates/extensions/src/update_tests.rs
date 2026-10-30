@@ -1222,6 +1222,7 @@ fn an_observed_stage_writes_one_extension_release_line_per_archive() {
         "/download/v0.2.0/fiber-docs.tar.gz",
         "/download/v0.2.0/fiber-docs.tar.gz.sha256",
     ];
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
     assert_eq!(
         lines.len(),
         paths.len(),
@@ -1234,8 +1235,7 @@ fn an_observed_stage_writes_one_extension_release_line_per_archive() {
         assert_eq!(line.status, Some(200), "{line:?}");
         assert_eq!(line.attempt, 1, "{line:?}");
         assert_eq!(line.request_bytes, 0, "{line:?}");
-        assert_eq!(line.provider, None, "no provider: {line:?}");
-        assert_eq!(line.extension, None, "no extension: {line:?}");
+        assert_eq!(line.identity, None, "no identity: {line:?}");
         assert_eq!(line.model, None, "no model: {line:?}");
         if let Some(headers) = line.headers_ms {
             assert!(

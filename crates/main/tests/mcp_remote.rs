@@ -868,7 +868,9 @@ fn a_debug_ask_writes_one_mcp_line_per_request() {
         .iter()
         .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "mcp")
         .collect();
-    // Every fake request, handshake included, writes exactly one line.
+    // Every fake request, handshake included, writes exactly one line
+    // (docs/state.md, "Diagnostic logs": one line per POST the transport
+    // sends, and one per GET or DELETE it sends).
     assert_eq!(lines.len(), requests.len(), "{lines:?}");
     for line in &lines {
         assert_eq!(line["process"], "ask");

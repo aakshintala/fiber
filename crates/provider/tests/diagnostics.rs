@@ -16,7 +16,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use contract::diag::{DebugLog, HttpRequest};
+use contract::diag::{DebugLog, HttpRequest, Identity};
 use contract::events::CacheLifetime;
 use contract::provider::{ModelCall, ModelRequest};
 use fakes::{Deadline, ProviderServer, Response};
@@ -237,7 +237,7 @@ fn each_protocol_writes_one_complete_record() {
         let lines = log.lines();
         assert_eq!(lines.len(), 1, "one call writes one line on {protocol}");
         let line = &lines[0];
-        assert_eq!(line.provider.as_deref(), Some(protocol));
+        assert_eq!(line.identity, Some(Identity::Provider(protocol.to_owned())));
         assert_eq!(line.model.as_deref(), Some("m"));
         assert_eq!(line.purpose, contract::diag::Purpose::ModelCall);
         let host = server.url().split_once("://").unwrap().1.to_owned();

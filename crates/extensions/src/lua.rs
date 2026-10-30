@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use contract::JobId;
 use contract::clock::Clock;
-use contract::diag::{DebugLog, Purpose};
+use contract::diag::{DebugLog, Identity, Purpose};
 use serde_json::{Value, json};
 
 use crate::oauth::{Browser, LoginSlot, SystemBrowser};
@@ -1105,19 +1105,14 @@ pub(crate) enum Target {
 /// name and why an HTTP request it makes is recorded. `models`, `quota`,
 /// `credential` (a stored credential and a login alike) and `cost` are
 /// recorded; `sign` and every other target never are, whatever HTTP they
-/// send. A pure mapping of the value, as the seam holds no behaviour.
+/// send. The function-name mapping is the contract's, shared with the
+/// process adapter; this only reads the target. A pure mapping of the
+/// value, as the seam holds no behaviour.
 pub(crate) fn provider_purpose(target: &Target) -> Option<(&str, Purpose)> {
     let Target::Provider { name, function, .. } = target else {
         return None;
     };
-    let purpose = match *function {
-        "models" => Purpose::ModelList,
-        "quota" => Purpose::Quota,
-        "credential" => Purpose::TokenRefresh,
-        "cost" => Purpose::Cost,
-        _ => return None,
-    };
-    Some((name, purpose))
+    Purpose::for_provider_function(function).map(|purpose| (name.as_str(), purpose))
 }
 
 /// Snapshots the owned observation context for an HTTP request about to
@@ -1136,22 +1131,24 @@ pub(crate) fn http_observation(
     target: &Target,
     extension: &str,
 ) -> Option<host::HttpObservation> {
-    let (provider, observed_extension, purpose) = match provider_purpose(target) {
-        Some((provider, purpose)) => (Some(provider.to_owned()), None, purpose),
+    let (identity, purpose) = match provider_purpose(target) {
+        Some((provider, purpose)) => (Identity::Provider(provider.to_owned()), purpose),
         // Outside a provider function there is no provider purpose: the
         // request is the extension's own. The named provider functions
-        // above were illustrative, so the test is "outside a provider
-        // function" and the list cannot go stale.
+        // live in the contract's mapping, so the test is "outside a
+        // provider function" and the list cannot go stale.
         None if matches!(target, Target::Provider { .. }) => return None,
-        None => (None, Some(extension.to_owned()), Purpose::Extension),
+        None => (
+            Identity::Extension(extension.to_owned()),
+            Purpose::Extension,
+        ),
     };
     let debug = hub.diagnostics()?;
     if !debug.debugging() {
         return None;
     }
     Some(host::HttpObservation {
-        provider,
-        extension: observed_extension,
+        identity,
         purpose,
         debug,
         clock: hub.clock_handle(),

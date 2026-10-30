@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use config::Config;
 use contract::clock::Clock;
-use contract::diag::{DebugLog, Purpose};
+use contract::diag::{DebugLog, Identity, Purpose};
 use contract::files::PathLock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
@@ -628,8 +628,7 @@ pub(crate) fn perform_observed(
 /// before admission and carried to the worker, never read from shared or
 /// mutable state. No URL, credential, body, header or model is held.
 pub(crate) struct HttpObservation {
-    pub(crate) provider: Option<String>,
-    pub(crate) extension: Option<String>,
+    pub(crate) identity: Identity,
     pub(crate) purpose: Purpose,
     pub(crate) debug: Arc<dyn DebugLog>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -760,13 +759,15 @@ fn write_request(
 ) {
     // Exactly one identity is set: the snapshot recorded a provider
     // purpose with the provider's name, or any other target with the
-    // extension's name.
-    let mut line = match (observation.provider.clone(), observation.extension.clone()) {
-        (_, Some(extension)) => contract::diag::HttpRequest::for_extension(extension),
-        (Some(provider), None) => {
-            contract::diag::HttpRequest::for_provider(provider, observation.purpose)
+    // extension's name. The enum makes the match total: no silent
+    // preference, no unwritten line.
+    let mut line = match &observation.identity {
+        Identity::Extension(extension) => {
+            contract::diag::HttpRequest::for_extension(extension.clone())
         }
-        (None, None) => return,
+        Identity::Provider(provider) => {
+            contract::diag::HttpRequest::for_provider(provider.clone(), observation.purpose)
+        }
     };
     line.status = status;
     line.request_bytes = request_bytes;

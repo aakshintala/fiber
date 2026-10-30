@@ -131,7 +131,6 @@ pub fn install_docs_if_missing_observed(
 pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
     latest_stable_tag_observed(
         web_base,
-        &support::clock::System,
         &Observe {
             debug: None,
             clock: &support::clock::System,
@@ -140,12 +139,7 @@ pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
 }
 
 /// As [`latest_stable_tag`], writing the probe's line on `observe`.
-pub fn latest_stable_tag_observed(
-    web_base: &str,
-    clock: &dyn Clock,
-    observe: &Observe<'_>,
-) -> Result<String, Error> {
-    use contract::diag::HttpRequest;
+pub fn latest_stable_tag_observed(web_base: &str, observe: &Observe<'_>) -> Result<String, Error> {
     use ureq::ResponseExt as _;
     let url = format!("{}/releases/latest", web_base.trim_end_matches('/'));
     let fail = |why: String| Error::Download {
@@ -163,38 +157,24 @@ pub fn latest_stable_tag_observed(
     let response = match agent.get(&url).call() {
         Ok(response) => response,
         Err(error) => {
-            if let Some(debug) = observe.debug.as_ref()
-                && debug.debugging()
-            {
-                let end = clock.now();
-                let since = start.unwrap_or(end);
-                let total = u64::try_from(end.saturating_duration_since(since).as_millis())
-                    .unwrap_or(u64::MAX);
-                let (host, path) = crate::prepare::sanitized_url(&url);
-                let mut line = HttpRequest::for_extension_release(host, path);
-                line.attempt = 1;
-                line.total_ms = total;
-                debug.http_request(&line);
+            // A status-bearing failure keeps the status and the header
+            // timing, as a download's does; a failure before a response
+            // carries neither.
+            if let ureq::Error::StatusCode(status) = &error {
+                observe.line(&url, start, observe.stamp(), Some(*status), 0);
+            } else {
+                observe.line(&url, start, None, None, 0);
             }
             return Err(fail(error.to_string()));
         }
     };
-    if let Some(debug) = observe.debug.as_ref()
-        && debug.debugging()
-    {
-        let end = clock.now();
-        let start = start.unwrap_or(end);
-        let elapsed = |instant: std::time::Instant| {
-            u64::try_from(instant.saturating_duration_since(start).as_millis()).unwrap_or(u64::MAX)
-        };
-        let (host, path) = crate::prepare::sanitized_url(&url);
-        let mut line = HttpRequest::for_extension_release(host, path);
-        line.status = Some(response.status().as_u16());
-        line.attempt = 1;
-        line.headers_ms = Some(elapsed(end));
-        line.total_ms = elapsed(end);
-        debug.http_request(&line);
-    }
+    observe.line(
+        &url,
+        start,
+        observe.stamp(),
+        Some(response.status().as_u16()),
+        0,
+    );
     let tag = response
         .get_uri()
         .path()

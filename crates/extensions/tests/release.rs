@@ -646,6 +646,7 @@ fn an_observed_install_writes_one_extension_release_line_per_download() {
             files.extensions_sum.len(),
         ),
     ];
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
     assert_eq!(
         lines.len(),
         bodies.len(),
@@ -663,8 +664,7 @@ fn an_observed_install_writes_one_extension_release_line_per_download() {
             u64::try_from(bytes).unwrap(),
             "the line counts what the server served: {line:?}"
         );
-        assert_eq!(line.provider, None, "no provider: {line:?}");
-        assert_eq!(line.extension, None, "no extension: {line:?}");
+        assert_eq!(line.identity, None, "no identity: {line:?}");
         assert_eq!(line.model, None, "no model: {line:?}");
         assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
         if let Some(headers) = line.headers_ms {

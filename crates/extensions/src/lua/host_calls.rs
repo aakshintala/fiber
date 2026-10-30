@@ -279,7 +279,11 @@ pub(super) fn admit<'a>(
                             drop(worker.lock());
                             #[cfg(test)]
                             if let Some(observation) = http.as_ref() {
-                                await_observed_release(observation.provider.as_deref());
+                                let provider = match &observation.identity {
+                                    contract::diag::Identity::Provider(name) => Some(name.as_str()),
+                                    contract::diag::Identity::Extension(_) => None,
+                                };
+                                await_observed_release(provider);
                             }
                             http_deliver(Reply::Http(match http {
                                 Some(observation) => host::perform_observed(&request, observation),

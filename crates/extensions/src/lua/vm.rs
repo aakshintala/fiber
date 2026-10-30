@@ -551,8 +551,9 @@ impl Vm {
                         None => match &self.diagnostics {
                             Some(debug) if debug.debugging() => {
                                 let observation = host::HttpObservation {
-                                    provider: None,
-                                    extension: Some(self.name.clone()),
+                                    identity: contract::diag::Identity::Extension(
+                                        self.name.clone(),
+                                    ),
                                     purpose: contract::diag::Purpose::Extension,
                                     debug: Arc::clone(debug),
                                     clock: Arc::clone(&self.clock),

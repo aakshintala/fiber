@@ -415,6 +415,71 @@ fn admission_row(ran_by: Option<&str>) -> (Option<admission::ToolAnchor>, bool, 
 }
 
 #[test]
+fn http_attribution_keeps_provider_callbacks_with_their_purpose() {
+    use admission::HttpAttribution::{Extension, Provider, Silent};
+    use contract::diag::Purpose::{Cost, ModelList, Quota, TokenRefresh};
+    // Each eligible provider function keeps its name and purpose.
+    assert_eq!(
+        admission::http_attribution(Some("provider acme.models")),
+        Provider {
+            provider: "acme".into(),
+            purpose: ModelList,
+        }
+    );
+    assert_eq!(
+        admission::http_attribution(Some("provider acme.quota")),
+        Provider {
+            provider: "acme".into(),
+            purpose: Quota,
+        }
+    );
+    assert_eq!(
+        admission::http_attribution(Some("provider acme.credential")),
+        Provider {
+            provider: "acme".into(),
+            purpose: TokenRefresh,
+        }
+    );
+    assert_eq!(
+        admission::http_attribution(Some("provider acme.cost")),
+        Provider {
+            provider: "acme".into(),
+            purpose: Cost,
+        }
+    );
+    // Dots in the provider name belong to the name: the function is the
+    // last segment.
+    assert_eq!(
+        admission::http_attribution(Some("provider acme.v2.models")),
+        Provider {
+            provider: "acme.v2".into(),
+            purpose: ModelList,
+        }
+    );
+    // A provider function with no eligible purpose stays silent, as the
+    // Lua half stays silent.
+    assert_eq!(
+        admission::http_attribution(Some("provider acme.sign")),
+        Silent
+    );
+    assert_eq!(
+        admission::http_attribution(Some("provider acme.bogus")),
+        Silent
+    );
+    // Anything else is the extension's own request: other callbacks, a
+    // provider shape with no function, and entry or timer callbacks.
+    for ran_by in [
+        Some("tool t"),
+        Some("hook point"),
+        Some("command c"),
+        Some("provider acme"),
+        None,
+    ] {
+        assert_eq!(admission::http_attribution(ran_by), Extension, "{ran_by:?}");
+    }
+}
+
+#[test]
 fn admission_shares_the_attribution_table() {
     use admission::ToolAnchor::{Command, Tool};
     // A tool request anchors an inner call and skips the exec line.

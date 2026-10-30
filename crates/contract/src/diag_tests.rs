@@ -8,8 +8,7 @@ use std::collections::BTreeMap;
 
 fn full() -> HttpRequest {
     HttpRequest {
-        provider: Some("fake".into()),
-        extension: None,
+        identity: Some(Identity::Provider("fake".into())),
         model: Some("m".into()),
         purpose: Purpose::ModelCall,
         host: Some("127.0.0.1:50731".into()),
@@ -53,10 +52,42 @@ fn every_purpose_serializes_to_its_snake_case_name() {
 }
 
 #[test]
+fn identity_serializes_to_its_own_wire_key() {
+    // One enum, so a line cannot name both: each variant flattens to
+    // exactly its own key.
+    assert_eq!(
+        serde_json::to_string(&Identity::Provider("fake".into())).unwrap(),
+        "{\"provider\":\"fake\"}"
+    );
+    assert_eq!(
+        serde_json::to_string(&Identity::Extension("mem".into())).unwrap(),
+        "{\"extension\":\"mem\"}"
+    );
+}
+
+#[test]
+fn for_provider_function_maps_names_to_purposes() {
+    for (function, purpose) in [
+        ("models", Purpose::ModelList),
+        ("quota", Purpose::Quota),
+        ("credential", Purpose::TokenRefresh),
+        ("cost", Purpose::Cost),
+    ] {
+        assert_eq!(
+            Purpose::for_provider_function(function),
+            Some(purpose),
+            "{function}"
+        );
+    }
+    for function in ["sign", "bogus", ""] {
+        assert_eq!(Purpose::for_provider_function(function), None, "{function}");
+    }
+}
+
+#[test]
 fn an_absent_option_is_left_out_never_null() {
     let request = HttpRequest {
-        provider: Some("fake".into()),
-        extension: None,
+        identity: Some(Identity::Provider("fake".into())),
         model: None,
         purpose: Purpose::Quota,
         host: None,
@@ -206,7 +237,11 @@ fn provider_purposes_keep_provider_and_gain_no_extension() {
             "{purpose:?} keeps provider: {line}"
         );
         assert!(!line.contains("extension"), "{purpose:?}: {line}");
-        assert_eq!(request.extension, None, "{purpose:?}");
+        assert_eq!(
+            request.identity,
+            Some(Identity::Provider("fake".into())),
+            "{purpose:?}"
+        );
     }
 }
 

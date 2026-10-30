@@ -58,8 +58,7 @@ fn observed(clock: &fakes::clock::FakeClock) -> (Arc<Lines>, Observe<'_>) {
 /// one GET, nothing posted, and the headers before the end.
 fn assert_release_shape(line: &HttpRequest) {
     assert_eq!(line.purpose, Purpose::ExtensionRelease, "{line:?}");
-    assert_eq!(line.provider, None, "no provider: {line:?}");
-    assert_eq!(line.extension, None, "no extension: {line:?}");
+    assert_eq!(line.identity, None, "no identity: {line:?}");
     assert_eq!(line.model, None, "no model: {line:?}");
     assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
     assert_eq!(line.attempt, 1, "every download sends once: {line:?}");
@@ -734,6 +733,7 @@ fn an_observed_nightly_tag_writes_its_lists_line() {
     let tag = fetch_nightly_tag_observed(&server.url(), &observe).unwrap();
     assert_eq!(tag, "v0.3.0-nightly.20240102");
     let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
     assert_eq!(lines.len(), 1, "one line per list: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -762,9 +762,10 @@ fn an_observed_stable_tag_writes_its_probes_line() {
     .unwrap();
     let clock = fakes::clock::FakeClock::new();
     let (lines, observe) = observed(&clock);
-    let tag = latest_stable_tag_observed(&server.url(), clock.as_ref(), &observe).unwrap();
+    let tag = latest_stable_tag_observed(&server.url(), &observe).unwrap();
     assert_eq!(tag, "v0.2.0");
     let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
     assert_eq!(lines.len(), 1, "one line per probe: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -773,6 +774,37 @@ fn an_observed_stable_tag_writes_its_probes_line() {
     assert_eq!(
         line.response_bytes, 0,
         "the redirect target is read, never the body: {line:?}"
+    );
+}
+
+/// An observed stable tag whose probe fails with a status keeps the
+/// status and the header timing: a response arrived, so the line is a
+/// status line with zero body bytes, as a download's is.
+#[test]
+fn an_observed_stable_tag_failure_keeps_the_status_and_header_timing() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(500, "boom")]).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    let err = latest_stable_tag_observed(&server.url(), &observe).unwrap_err();
+    assert!(
+        matches!(err, super::Error::Download { .. }),
+        "a failed probe names its URL: {err}"
+    );
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    assert_eq!(lines.len(), 1, "one line per probe: {lines:?}");
+    let line = &lines[0];
+    assert_release_shape(line);
+    assert_eq!(line.path.as_deref(), Some("/releases/latest"), "{line:?}");
+    assert_eq!(line.status, Some(500), "{line:?}");
+    assert_eq!(
+        line.headers_ms,
+        Some(0),
+        "the response head arrived: {line:?}"
+    );
+    assert_eq!(
+        line.response_bytes, 0,
+        "the error body is never read: {line:?}"
     );
 }
 
@@ -794,6 +826,7 @@ fn an_observed_nightly_tag_failure_writes_only_the_lists_line() {
         "a failed list names its URL: {err}"
     );
     let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
     assert_eq!(lines.len(), 1, "the rejection reads no target: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);

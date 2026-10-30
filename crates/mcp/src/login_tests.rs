@@ -2771,8 +2771,7 @@ fn run_observed_with_callback(
 /// identity, host or path, and the first attempt.
 fn assert_mcp_shape(line: &HttpRequest) {
     assert_eq!(line.purpose, Purpose::Mcp);
-    assert_eq!(line.provider, None, "no provider: {line:?}");
-    assert_eq!(line.extension, None, "no extension: {line:?}");
+    assert_eq!(line.identity, None, "no identity: {line:?}");
     assert_eq!(line.model, None, "no model: {line:?}");
     assert_eq!(line.host, None, "no host: {line:?}");
     assert_eq!(line.path, None, "no path: {line:?}");
@@ -2806,6 +2805,8 @@ fn an_observed_login_writes_one_mcp_line_per_request() {
         ],
         "the probe, two discovery fetches, the registration, the exchange"
     );
+    // docs/state.md, "Diagnostic logs": one line per POST the transport sends; login, discovery and token refresh alike.
+    // docs/state.md, "Diagnostic logs": one line per POST the transport sends; login, discovery and token refresh alike.
     assert_eq!(lines.len(), requests.len(), "{lines:?}");
     for (line, request) in lines.iter().zip(requests.iter()) {
         assert_mcp_shape(line);

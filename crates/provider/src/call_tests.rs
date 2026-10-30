@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use contract::diag::{DebugLog, HttpRequest};
+use contract::diag::{DebugLog, HttpRequest, Identity};
 
 use super::*;
 use fakes::Deadline;
@@ -134,9 +134,13 @@ fn finish_carries_provider_and_no_extension() {
     let mut finish = record(&log, &clock, clock.now());
     finish.finish();
     let lines = log.lines();
+    // docs/state.md, "Diagnostic logs": one line when the call ends; a retried call writes one line per attempt.
+    // docs/state.md, "Diagnostic logs": one line when the call ends; a retried call writes one line per attempt.
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].provider.as_deref(), Some("fake"));
-    assert_eq!(lines[0].extension, None);
+    assert_eq!(
+        lines[0].identity,
+        Some(Identity::Provider("fake".to_owned()))
+    );
 }
 
 #[test]

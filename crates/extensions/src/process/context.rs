@@ -433,9 +433,10 @@ pub(crate) struct NativeHostServices {
     /// those calls fail naming the missing session.
     pub session: Mutex<Option<crate::host::Session>>,
     /// The session's diagnostic sink, when it debugs: an entry or callback
-    /// `host.http` the child makes records one `http_request` line as the
-    /// extension's own. `None` on test-only and sessionless starts, which
-    /// record nothing.
+    /// `host.http` the child makes records one `http_request` line with
+    /// the callback's attribution — a provider function keeps its
+    /// provider and purpose, anything else the extension's own. `None`
+    /// on test-only and sessionless starts, which record nothing.
     pub diagnostics: Option<Arc<dyn contract::diag::DebugLog>>,
 }
 

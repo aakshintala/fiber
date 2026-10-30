@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use contract::diag::Purpose;
 use contract::{ErrorCode, RequestId};
 
 use crate::lua::CredentialFor;
@@ -246,6 +247,45 @@ pub(crate) fn delegate_permitted(ran_by: Option<&str>) -> bool {
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn exec_logged(ran_by: Option<&str>) -> bool {
     !matches!(tool_anchor(ran_by), Some(ToolAnchor::Tool(_)))
+}
+
+/// How a process `host.http` in a callback running as `ran_by` is
+/// attributed (`docs/state.md`, "Diagnostic logs"): a provider function
+/// keeps its eligible purpose with the provider's registered name, a
+/// provider function with no eligible purpose (`sign`, or any other
+/// future one) stays silent exactly as the Lua half stays silent, and
+/// anything else is the extension's own request. The function-name
+/// mapping is the contract's, shared with the Lua half.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) enum HttpAttribution {
+    /// Inside an eligible provider function: the provider and purpose.
+    Provider { provider: String, purpose: Purpose },
+    /// Inside a provider function with no eligible purpose: silent.
+    Silent,
+    /// Anywhere else: the extension's own request.
+    Extension,
+}
+
+/// The attribution of a process `host.http` in a callback running as
+/// `ran_by`: the dispatch formats a provider callback as
+/// `provider {name}.{function}`, every other callback otherwise, and an
+/// entry or timer callback carries no `ran_by` at all.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+pub(crate) fn http_attribution(ran_by: Option<&str>) -> HttpAttribution {
+    let Some(rest) = ran_by.and_then(|ran_by| ran_by.strip_prefix("provider ")) else {
+        return HttpAttribution::Extension;
+    };
+    let Some((provider, function)) = rest.rsplit_once('.') else {
+        return HttpAttribution::Extension;
+    };
+    match Purpose::for_provider_function(function) {
+        Some(purpose) => HttpAttribution::Provider {
+            provider: provider.to_owned(),
+            purpose,
+        },
+        None => HttpAttribution::Silent,
+    }
 }
 
 /// The entry-script refusal for `call`: the sentence and code the Lua

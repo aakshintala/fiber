@@ -288,6 +288,7 @@ fn process_hook_http_records_the_extension_line() {
         .iter()
         .filter(|line| line["data"]["purpose"] == "extension")
         .collect();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
     assert_eq!(extension.len(), 1, "one extension request: {requests:?}");
     let line = extension[0];
     assert_eq!(line["data"]["extension"], "fiber.test/probe");

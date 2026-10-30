@@ -205,8 +205,7 @@ fn code(output: &Output) -> Option<ErrorCode> {
 #[track_caller]
 fn assert_fixed(line: &HttpRequest) {
     assert_eq!(line.purpose, Purpose::WebFetch);
-    assert_eq!(line.provider, None);
-    assert_eq!(line.extension, None);
+    assert_eq!(line.identity, None);
     assert_eq!(line.model, None);
     assert_eq!(line.host, None);
     assert_eq!(line.path, None);
@@ -859,6 +858,7 @@ fn a_redirect_chain_writes_one_line_per_hop() {
     let output = call.wait();
     assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request, each redirect hop included.
     assert_eq!(lines.len(), 2);
     for line in &lines {
         assert_fixed(line);
@@ -891,6 +891,7 @@ fn a_redirect_limit_keeps_every_hop_then_fails_silent() {
         "the twelfth request is never sent"
     );
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request, each redirect hop included.
     assert_eq!(lines.len(), 11, "every hop kept its line");
     for line in &lines {
         assert_fixed(line);
@@ -910,6 +911,7 @@ fn a_redirect_to_a_blocked_address_keeps_the_first_line_only() {
     assert_eq!(code(&output), Some(ErrorCode::BlockedHost));
     assert_eq!(server.requests().len(), 1);
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request; a request never sent writes none.
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].status, Some(302));
 }
@@ -922,6 +924,7 @@ fn a_redirect_to_an_invalid_target_keeps_the_first_line_only() {
     assert_eq!(code(&output), Some(ErrorCode::HttpError));
     assert_eq!(server.requests().len(), 1);
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request; a request never sent writes none.
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].status, Some(302));
 }
@@ -1236,6 +1239,7 @@ fn a_refused_connection_writes_a_line_without_a_response() {
     let output = rig.fetch(&format!("{}/", fakes::refused::url()));
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a failure after the send but before a response head writes one line, without status or headers_ms.
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
     assert_fixed(line);
@@ -1256,6 +1260,7 @@ fn an_error_status_keeps_its_status_and_prefix_bytes() {
         fakes::text_of(&output)
     );
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a refusal keeps the status and the bytes consumed.
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
     assert_fixed(line);
@@ -1434,6 +1439,7 @@ fn a_deadline_while_the_body_is_read_keeps_status_and_partial_bytes() {
         fakes::text_of(&output)
     );
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a body read that fails keeps the status, the headers and the bytes read.
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
     assert_fixed(line);
@@ -1463,6 +1469,7 @@ fn a_cancel_while_the_body_is_read_keeps_status_and_partial_bytes() {
     assert_eq!(code(&output), None);
     assert_eq!(fakes::text_of(&output), "Cancelled and stopped.\n");
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a body read that fails keeps the status, the headers and the bytes read.
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
     assert_fixed(line);
@@ -1506,6 +1513,7 @@ fn a_stop_after_a_full_body_read_keeps_the_completed_line() {
     });
     assert!(matches!(result, Err(Ended::Stopped(Stop::Cancelled))));
     let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a body read that fails keeps the status, the headers and the bytes read.
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
     assert_fixed(line);

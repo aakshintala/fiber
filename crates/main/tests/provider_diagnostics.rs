@@ -179,6 +179,7 @@ fn ask_debug_writes_one_http_request_and_two_resources_lines() {
         .iter()
         .filter(|line| line["code"] == "resources")
         .collect();
+    // docs/state.md, "Diagnostic logs": a resources line after each turn's turn_completed and one more at the orderly end.
     assert_eq!(peaks.len(), 2, "one turn and one orderly exit");
     let mut disk_read = 0;
     let mut disk_write = 0;
@@ -1004,13 +1005,19 @@ fn each_protocol_writes_one_diagnostics_line() {
 fn a_debug_turn_grows_the_session_events_file() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
+    // No session exists before the turn, so the turn starts from zero
+    // bytes: a fresh home holds no session log.
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    assert!(!sessions.exists(), "no session exists before the turn");
+    let before = 0;
     let run = ask_debug(&setup, &server, json!({}));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let events = support::session_dir(&setup, run.session_id()).join("events.jsonl");
     let after = fs::metadata(&events).unwrap().len();
     assert!(
-        after > 0,
-        "the turn wrote and fsynced the session log: {}",
+        after > before,
+        "the turn wrote and fsynced the session log ({} bytes): {}",
+        after,
         events.display()
     );
     let lines = diagnostic_file(&setup, &format!("ask-{}.log", run.session_id()));
@@ -1018,6 +1025,7 @@ fn a_debug_turn_grows_the_session_events_file() {
         .iter()
         .filter(|line| line["code"] == "resources")
         .collect();
+    // docs/state.md, "Diagnostic logs": a resources line after each turn's turn_completed and one more at the orderly end.
     assert_eq!(peaks.len(), 2, "one turn and one orderly exit");
     for peak in &peaks {
         for field in [

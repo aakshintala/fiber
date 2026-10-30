@@ -84,8 +84,7 @@ fn session() -> SessionId {
 
 fn request() -> HttpRequest {
     HttpRequest {
-        provider: Some("fake".into()),
-        extension: None,
+        identity: Some(contract::diag::Identity::Provider("fake".into())),
         model: Some("m".into()),
         purpose: Purpose::ModelCall,
         host: Some("127.0.0.1:50731".into()),

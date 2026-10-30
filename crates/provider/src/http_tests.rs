@@ -2059,33 +2059,6 @@ fn a_fixed_bearer_token_is_redacted_from_the_recorded_path() {
     );
 }
 
-#[test]
-fn percent_decode_decodes_exact_bytes() {
-    let cases: Vec<(&[u8], &[u8])> = vec![
-        (b"", b""),
-        (b"plain", b"plain"),
-        (b"a%2Fb", b"a/b"),
-        (b"a%2fb", b"a/b"),
-        (b"%41%42", b"AB"),
-        (b"%%41", b"%A"),
-        (b"%4%41", b"%4A"),
-        (b"%%%41", b"%%A"),
-        (b"%zz", b"%zz"),
-        (b"%2", b"%2"),
-        (b"%", b"%"),
-        (b"100%sure", b"100%sure"),
-        (b"%FF", &[0xFF]),
-        (b"a%20b", b"a b"),
-    ];
-    for (raw, expected) in cases {
-        assert_eq!(
-            super::percent_decode(raw),
-            expected.to_vec(),
-            "decoding {raw:?}"
-        );
-    }
-}
-
 /// One header map with this `content-type`, or none when absent.
 fn content_headers(content_type: Option<&str>) -> ureq::http::HeaderMap {
     let mut headers = ureq::http::HeaderMap::new();

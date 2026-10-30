@@ -32,6 +32,21 @@ pub struct PrefixHashes {
     pub messages: Vec<String>,
 }
 
+/// Whose request it was: exactly one identity per line. A provider's
+/// purposes carry the provider's registered name; `extension` carries
+/// the extension's registered name; every other purpose carries none.
+/// One enum, so a line cannot name both (`docs/code-quality.md`,
+/// "Types").
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Identity {
+    /// A provider's request: `model_call`, `model_list`, `quota`,
+    /// `token_refresh` or `cost`.
+    Provider(String),
+    /// One Lua or process `host.http` call outside a provider function.
+    Extension(String),
+}
+
 /// Why Fiber made an HTTP request. A provider function keeps the
 /// provider purpose it already had; every Lua or process `host.http`
 /// call outside a provider function records `Extension`, each MCP-client
@@ -64,18 +79,31 @@ pub enum Purpose {
     ExtensionRelease,
 }
 
+impl Purpose {
+    /// The eligible purpose of a provider `function` name (`models`,
+    /// `quota`, `credential` or `cost`): `sign` and anything else records
+    /// nothing, as the Lua and process adapters' silence shows.
+    pub fn for_provider_function(function: &str) -> Option<Purpose> {
+        match function {
+            "models" => Some(Purpose::ModelList),
+            "quota" => Some(Purpose::Quota),
+            "credential" => Some(Purpose::TokenRefresh),
+            "cost" => Some(Purpose::Cost),
+            _ => None,
+        }
+    }
+}
+
 /// The `data` of one `http_request` line. The fields serialize in the
 /// order declared here, and an absent option is left out, never `null`.
 /// Nothing here may hold a credential, header value, query string, prompt or
 /// model text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HttpRequest {
-    /// The provider's name, on a provider's purposes only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    /// The extension's registered name, on `extension` only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extension: Option<String>,
+    /// Whose request it was, absent on purposes that carry no identity.
+    /// Flattened, so the wire keeps the `provider` or `extension` key.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Identity>,
     /// The model, on a model call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -131,30 +159,16 @@ impl HttpRequest {
     /// `quota`, `token_refresh` or `cost`.
     pub fn for_provider(provider: impl Into<String>, purpose: Purpose) -> Self {
         Self {
-            provider: Some(provider.into()),
-            extension: None,
-            model: None,
+            identity: Some(Identity::Provider(provider.into())),
             purpose,
-            host: None,
-            path: None,
-            status: None,
-            attempt: 1,
-            request_bytes: 0,
-            response_bytes: 0,
-            headers_ms: None,
-            first_token_ms: None,
-            total_ms: 0,
-            prefix_hashes: None,
-            cache_read: None,
-            cache_write: None,
+            ..Self::for_web_fetch()
         }
     }
 
     /// One `web_fetch` request.
     pub fn for_web_fetch() -> Self {
         Self {
-            provider: None,
-            extension: None,
+            identity: None,
             model: None,
             purpose: Purpose::WebFetch,
             host: None,
@@ -183,7 +197,7 @@ impl HttpRequest {
     /// One `host.http` call outside a provider function.
     pub fn for_extension(extension: impl Into<String>) -> Self {
         Self {
-            extension: Some(extension.into()),
+            identity: Some(Identity::Extension(extension.into())),
             purpose: Purpose::Extension,
             ..Self::for_web_fetch()
         }

@@ -79,44 +79,8 @@ pub(crate) fn sanitized_url(url: &str) -> (Option<String>, Option<String>) {
     let (authority, path) = rest.find('/').map_or((rest, "/"), |at| rest.split_at(at));
     let host = authority.rsplit('@').next().unwrap_or(authority);
     let host = (!host.is_empty()).then(|| host.to_owned());
-    let path = String::from_utf8(percent_decode(path.as_bytes())).ok();
+    let path = String::from_utf8(support::percent_decode(path.as_bytes())).ok();
     (host, path)
-}
-
-/// Percent-decodes `raw`: each `%` followed by two hex digits becomes
-/// its byte; anything else stays literal.
-fn percent_decode(raw: &[u8]) -> Vec<u8> {
-    let mut decoded = Vec::with_capacity(raw.len());
-    let mut bytes = raw.iter().copied().peekable();
-    while let Some(byte) = bytes.next() {
-        if byte != b'%' {
-            decoded.push(byte);
-            continue;
-        }
-        let mut look = bytes.clone();
-        match (look.next(), look.next()) {
-            (Some(high), Some(low)) => match (hex_val(high), hex_val(low)) {
-                (Some(high), Some(low)) => {
-                    decoded.push((high << 4) + low);
-                    bytes.next();
-                    bytes.next();
-                }
-                _ => decoded.push(byte),
-            },
-            _ => decoded.push(byte),
-        }
-    }
-    decoded
-}
-
-/// The hex digit's value, in either case.
-fn hex_val(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 use crate::Error;

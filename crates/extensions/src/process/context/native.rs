@@ -25,10 +25,12 @@ impl NativeHostServices {
     /// reply comes from the case alone, exactly as the Lua half consults
     /// it: a scripted miss never falls through to native I/O, and a
     /// scripted request records nothing. A real request records one
-    /// `http_request` line as the extension's own — the callback's
-    /// extension with `Purpose::Extension`, never a provider, model,
-    /// host or path — with the same attempt-1 and failure semantics the
-    /// Lua path observes.
+    /// `http_request` line with the callback's attribution — a provider
+    /// function keeps its provider and purpose, `sign` stays silent as
+    /// the Lua half stays silent, and anything else records as the
+    /// extension's own with `Purpose::Extension`, never a model, host or
+    /// path — with the same attempt-1 and failure semantics the Lua path
+    /// observes.
     fn http(
         &self,
         method: &str,
@@ -55,15 +57,29 @@ impl NativeHostServices {
             .deadline
             .map(|end| end.saturating_duration_since(self.clock.now()) + GRACE);
         let request = crate::host::HttpRequest { timeout, ..request };
-        // The extension's own request, observed exactly as the Lua path
-        // observes it: the callback's extension names it, whatever
-        // callback made it, and the sink stamps it. A silent sink, or no
-        // sink, runs the same request unobserved.
+        // The callback's attribution, observed exactly as the Lua path
+        // observes it: a provider function keeps its provider and
+        // purpose, `sign` stays silent, and anything else is the
+        // extension's own. A silent sink, or no sink, runs the same
+        // request unobserved.
         let observation = self.diagnostics.as_ref().and_then(|debug| {
-            debug.debugging().then(|| crate::host::HttpObservation {
-                provider: None,
-                extension: Some(callback.extension.clone()),
-                purpose: contract::diag::Purpose::Extension,
+            if !debug.debugging() {
+                return None;
+            }
+            let (identity, purpose) =
+                match crate::host::admission::http_attribution(callback.ran_by()) {
+                    crate::host::admission::HttpAttribution::Provider { provider, purpose } => {
+                        (contract::diag::Identity::Provider(provider), purpose)
+                    }
+                    crate::host::admission::HttpAttribution::Extension => (
+                        contract::diag::Identity::Extension(callback.extension.clone()),
+                        contract::diag::Purpose::Extension,
+                    ),
+                    crate::host::admission::HttpAttribution::Silent => return None,
+                };
+            Some(crate::host::HttpObservation {
+                identity,
+                purpose,
                 debug: Arc::clone(debug),
                 clock: Arc::clone(&self.clock),
             })

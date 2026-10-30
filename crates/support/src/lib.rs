@@ -47,7 +47,8 @@ pub mod stoppable;
 /// One wire line: bytes to the next line feed.
 pub mod framing;
 
-/// Lowercase hex and SHA-256 as lowercase hex, each built into one `String`.
+/// Lowercase hex and SHA-256 as lowercase hex, each built into one
+/// `String`; and percent-decoding.
 mod hex;
 
 /// Text on one line: control characters as spaces.
@@ -55,7 +56,7 @@ pub mod text;
 
 pub use atomic::write_atomic;
 
-pub use hex::{hex, sha256_hex};
+pub use hex::{hex, percent_decode, sha256_hex};
 
 pub use id::mint;
 

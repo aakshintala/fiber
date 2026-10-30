@@ -375,6 +375,7 @@ fn a_debug_fetch_writes_one_web_fetch_line() {
         .iter()
         .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "web_fetch")
         .collect();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request.
     assert_eq!(fetched.len(), 1, "{lines:?}");
     let data = &fetched[0]["data"];
     assert_eq!(data["status"], 200);

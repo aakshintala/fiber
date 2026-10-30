@@ -65,8 +65,7 @@ fn observed(clock: &FakeClock) -> (Arc<Lines>, Observe<'_>) {
 /// nothing posted, and the headers before the end.
 fn assert_release_shape(line: &HttpRequest) {
     assert_eq!(line.purpose, Purpose::ExtensionRelease, "{line:?}");
-    assert_eq!(line.provider, None, "no provider: {line:?}");
-    assert_eq!(line.extension, None, "no extension: {line:?}");
+    assert_eq!(line.identity, None, "no identity: {line:?}");
     assert_eq!(line.model, None, "no model: {line:?}");
     assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
     assert_eq!(line.attempt, 1, "every download sends once: {line:?}");
@@ -613,6 +612,7 @@ fn an_observed_download_writes_one_extension_release_line() {
     let bytes = download_observed("probe", &url, &observe).unwrap();
     assert_eq!(bytes, b"{}");
     let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
     assert_eq!(lines.len(), 1, "one line per download: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -639,6 +639,7 @@ fn a_refused_download_writes_a_statusless_line() {
     let err = download_observed("probe", &format!("{closed}/tool"), &observe).unwrap_err();
     assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
     let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
     assert_eq!(
         lines.len(),
         1,
@@ -662,6 +663,7 @@ fn a_failed_status_keeps_its_status() {
     let err = download_observed("probe", &url, &observe).unwrap_err();
     assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
     let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
     assert_eq!(lines.len(), 1, "{lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -689,6 +691,7 @@ fn a_stalled_body_keeps_its_status_and_consumed_bytes() {
     .unwrap_err();
     assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
     let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
     assert_eq!(lines.len(), 1, "{lines:?}");
     let line = &lines[0];
     assert_release_shape(line);

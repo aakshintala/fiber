@@ -26,7 +26,7 @@ use config::{Config, ProjectKey, Sources};
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::clock::Wake;
-use contract::diag::{DebugLog, HookChain, HttpRequest, Op, Purpose, Timing};
+use contract::diag::{DebugLog, HookChain, HttpRequest, Identity, Op, Purpose, Timing};
 use contract::events::CallStatus;
 use contract::events::HandoffTrigger;
 use contract::hook::{
@@ -38,6 +38,15 @@ use contract::shapes::{ContentPart, DeclaredEffects, Tokens, Usage};
 use contract::tool::Cancel;
 use extensions::SessionExtensions;
 use extensions::{RepositorySet, StateSeed};
+
+/// The provider a provider-purpose record names: provider purposes always
+/// carry one, so anything else is the test's failure.
+fn provider_of(record: &HttpRequest) -> String {
+    match record.identity.clone() {
+        Some(Identity::Provider(provider)) => provider,
+        other => panic!("provider purposes carry a provider: {other:?}"),
+    }
+}
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use serde_json::{Map, json};
@@ -1025,10 +1034,7 @@ fn provider_purposes_record_once_per_attempt() {
         .iter()
         .map(|record| {
             (
-                record
-                    .provider
-                    .clone()
-                    .expect("provider purposes carry a provider"),
+                provider_of(record),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()
@@ -1085,9 +1091,10 @@ fn two_calls_in_one_callback_emit_two_attempt_ones() {
     .expect("two HTTP calls in one callback succeed");
     assert_eq!(server.requests().len(), 2);
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 2);
     for record in &records {
-        assert_eq!(record.provider.as_deref(), Some("p"));
+        assert_eq!(record.identity, Some(Identity::Provider("p".to_owned())));
         assert_eq!(record.attempt, 1);
         assert_eq!(
             serde_json::to_value(record.purpose).unwrap(),
@@ -1259,13 +1266,13 @@ fn sign_command_and_entry_load_record_as_the_extension() {
         assert!(paths.contains(&path.to_owned()), "sent {path}: {paths:?}");
     }
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
     assert_eq!(records.len(), 3, "command, load and models each record");
-    let mut own: Vec<(Option<String>, Option<String>, String)> = records
+    let mut own: Vec<(Option<Identity>, String)> = records
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
-                record.extension.clone(),
+                record.identity.clone(),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()
@@ -1278,9 +1285,18 @@ fn sign_command_and_entry_load_record_as_the_extension() {
     assert_eq!(
         own,
         [
-            (None, Some("ext".to_owned()), "extension".to_owned()),
-            (None, Some("ext".to_owned()), "extension".to_owned()),
-            (Some("p".to_owned()), None, "model_list".to_owned()),
+            (
+                Some(Identity::Provider("p".to_owned())),
+                "model_list".to_owned()
+            ),
+            (
+                Some(Identity::Extension("ext".to_owned())),
+                "extension".to_owned()
+            ),
+            (
+                Some(Identity::Extension("ext".to_owned())),
+                "extension".to_owned()
+            ),
         ]
     );
 }
@@ -1320,14 +1336,17 @@ fn hook_http_records_as_the_extension_with_a_sink_installed() {
     );
     assert_eq!(server.requests().len(), 1);
     let records = sink.requests.lock().unwrap();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
     assert_eq!(
         records.len(),
         1,
         "the hook's request records as the extension's"
     );
     let record = &records[0];
-    assert_eq!(record.provider, None);
-    assert_eq!(record.extension.as_deref(), Some("fiber.test/one"));
+    assert_eq!(
+        record.identity,
+        Some(Identity::Extension("fiber.test/one".to_owned()))
+    );
     assert_eq!(record.purpose, Purpose::Extension);
     assert_eq!(record.status, Some(200));
     assert_eq!(record.attempt, 1);
@@ -1384,10 +1403,13 @@ fn session_load_entry_http_records_with_the_load_sink() {
     );
     assert_eq!(server.requests().len(), 1, "the entry sent its HTTP");
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1, "the entry's request records");
     let record = &records[0];
-    assert_eq!(record.provider, None);
-    assert_eq!(record.extension.as_deref(), Some("fiber.test/entry"));
+    assert_eq!(
+        record.identity,
+        Some(Identity::Extension("fiber.test/entry".to_owned()))
+    );
     assert_eq!(record.purpose, Purpose::Extension);
     assert_eq!(record.status, Some(200));
     assert_eq!(record.attempt, 1);
@@ -1439,8 +1461,12 @@ fn load_with_diagnostics_forwards_its_sink_to_entry() {
     let _session = load_with(Some(sink.clone() as Arc<dyn DebugLog>));
     assert_eq!(server.requests().len(), 1, "the entry sent its HTTP");
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1, "the entry's request records");
-    assert_eq!(records[0].extension.as_deref(), Some("fiber.test/entry"));
+    assert_eq!(
+        records[0].identity,
+        Some(Identity::Extension("fiber.test/entry".to_owned()))
+    );
     assert_eq!(records[0].purpose, Purpose::Extension);
     // `None` stays silent: the same entry sends but records nothing.
     let _session = load_with(None);
@@ -1522,6 +1548,7 @@ fn request_lines_carry_no_url_or_content() {
     .unwrap_err();
     assert_eq!(dns_err.code(), contract::ErrorCode::ExtensionFailed);
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 3);
     for record in &records[..2] {
         assert_eq!(
@@ -1586,6 +1613,7 @@ fn extension_lines_carry_the_extension_and_no_provider_or_host() {
     )
     .expect("the command succeeds");
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1);
     // The exact key set proves no `provider`, `host`, `path`, `model`
     // or `first_token_ms` key, present or null.
@@ -1602,7 +1630,10 @@ fn extension_lines_carry_the_extension_and_no_provider_or_host() {
             "total_ms",
         ]
     );
-    assert_eq!(records[0].extension.as_deref(), Some("ext"));
+    assert_eq!(
+        records[0].identity,
+        Some(Identity::Extension("ext".to_owned()))
+    );
 }
 
 /// A sink that records no debug lines: any record is a failure.
@@ -1681,8 +1712,12 @@ fn background_refresh_is_observed() {
     .expect("the background refresh succeeds");
     assert_eq!(server.requests().len(), 1);
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].provider.as_deref(), Some("p"));
+    assert_eq!(
+        records[0].identity,
+        Some(Identity::Provider("p".to_owned()))
+    );
     assert_eq!(
         serde_json::to_value(records[0].purpose).unwrap(),
         serde_json::Value::String("model_list".to_owned())
@@ -1803,13 +1838,12 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     // model-list lines for p, one quota line for q, one extension line
     // for the command. The second VM's writer holds only its provider's
     // line.
-    let mut own: Vec<(Option<String>, Option<String>, String, u32)> = sink_a
+    let mut own: Vec<(Option<Identity>, String, u32)> = sink_a
         .records()
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
-                record.extension.clone(),
+                record.identity.clone(),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()
@@ -1823,10 +1857,26 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     assert_eq!(
         own,
         [
-            (None, Some("ext".to_owned()), "extension".to_owned(), 1),
-            (Some("p".to_owned()), None, "model_list".to_owned(), 1),
-            (Some("p".to_owned()), None, "model_list".to_owned(), 1),
-            (Some("q".to_owned()), None, "quota".to_owned(), 1),
+            (
+                Some(Identity::Provider("p".to_owned())),
+                "model_list".to_owned(),
+                1
+            ),
+            (
+                Some(Identity::Provider("p".to_owned())),
+                "model_list".to_owned(),
+                1
+            ),
+            (
+                Some(Identity::Provider("q".to_owned())),
+                "quota".to_owned(),
+                1
+            ),
+            (
+                Some(Identity::Extension("ext".to_owned())),
+                "extension".to_owned(),
+                1
+            ),
         ]
     );
     let other: Vec<(String, String)> = sink_b
@@ -1834,10 +1884,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         .iter()
         .map(|record| {
             (
-                record
-                    .provider
-                    .clone()
-                    .expect("provider purposes carry a provider"),
+                provider_of(record),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()
@@ -1858,6 +1905,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         },
     )
     .expect("the following command succeeds");
+    // docs/state.md, "Diagnostic logs": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
     assert_eq!(sink_a.records().len(), 5);
 }
 
@@ -1928,13 +1976,12 @@ fn late_vm_entry_records_through_the_retained_sink() {
     // The fresh VM's entry ran with the retained sink installed: its own
     // HTTP records beside the models call's provider line.
     assert_eq!(server.requests().len(), 3, "entry, entry and models sent");
-    let mut own: Vec<(Option<String>, Option<String>, String)> = sink
+    let mut own: Vec<(Option<Identity>, String)> = sink
         .records()
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
-                record.extension.clone(),
+                record.identity.clone(),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()
@@ -1948,11 +1995,13 @@ fn late_vm_entry_records_through_the_retained_sink() {
         own,
         [
             (
-                None,
-                Some("fiber.test/late".to_owned()),
+                Some(Identity::Provider("p".to_owned())),
+                "model_list".to_owned()
+            ),
+            (
+                Some(Identity::Extension("fiber.test/late".to_owned())),
                 "extension".to_owned()
             ),
-            (Some("p".to_owned()), None, "model_list".to_owned()),
         ]
     );
 }
@@ -2312,10 +2361,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         .iter()
         .map(|record| {
             (
-                record
-                    .provider
-                    .clone()
-                    .expect("provider purposes carry a provider"),
+                provider_of(record),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()

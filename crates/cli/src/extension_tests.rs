@@ -1956,6 +1956,7 @@ fn a_debug_path_install_logs_the_binary_line() {
             line["data"].get("host").and_then(|host| host.as_str()) == Some(host.as_str())
         })
         .collect();
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
     assert_eq!(requests.len(), 1, "one line per binary: {requests:?}");
     let data = &requests[0]["data"];
     assert_eq!(data["purpose"], "extension_release", "{data}");

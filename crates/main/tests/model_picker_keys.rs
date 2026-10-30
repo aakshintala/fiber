@@ -720,6 +720,7 @@ fn tui_catalogue_records_the_entry_fetch_at_debug() {
         .iter()
         .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "model_list")
         .collect();
+    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(fetched.len(), 1, "one models fetch: {fetched:?}");
     let line = fetched[0];
     assert_eq!(line["data"]["provider"], "cat");
@@ -735,6 +736,7 @@ fn tui_catalogue_records_the_entry_fetch_at_debug() {
         .iter()
         .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "extension")
         .collect();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
     assert_eq!(entered.len(), 1, "one entry fetch: {entered:?}");
     let line = entered[0];
     assert_eq!(line["data"]["extension"], "cat");

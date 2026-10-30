@@ -888,6 +888,7 @@ fn a_store_prepare_with_a_sink_writes_the_binary_line() {
         "the refused binary fails the approval: {err:?}"
     );
     let lines = lines.lines.lock().unwrap().clone();
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
     assert_eq!(lines.len(), 1, "one line per binary: {lines:?}");
     let line = &lines[0];
     assert_eq!(
@@ -904,7 +905,6 @@ fn a_store_prepare_with_a_sink_writes_the_binary_line() {
     assert_eq!(line.attempt, 1, "{line:?}");
     assert_eq!(line.request_bytes, 0, "{line:?}");
     assert_eq!(line.response_bytes, 0, "{line:?}");
-    assert_eq!(line.provider, None, "no provider: {line:?}");
-    assert_eq!(line.extension, None, "no extension: {line:?}");
+    assert_eq!(line.identity, None, "no identity: {line:?}");
     assert_eq!(line.model, None, "no model: {line:?}");
 }

@@ -178,7 +178,7 @@ fn run(
         clock,
     };
     let tag = match channel {
-        Channel::Stable => extensions::latest_stable_tag_observed(&bases.web, clock, &observe)?,
+        Channel::Stable => extensions::latest_stable_tag_observed(&bases.web, &observe)?,
         Channel::Nightly => extensions::fetch_nightly_tag_observed(&bases.api, &observe)?,
     };
     let (target, bare) = target_key(&tag)?;
