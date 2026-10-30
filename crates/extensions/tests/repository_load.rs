@@ -23,10 +23,10 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use common::{
-    FIBER, Repos, Setup, StoreOperations, copy, install_lua, installing, manifest, named, project,
-    provider, ready, write,
+    FIBER, Repos, Setup, StoreOperations, copy, install, install_lua, installing, manifest, named,
+    project, provider, ready, write,
 };
-use config::{Config, ProjectKey, Sources};
+use config::{Config, ProjectKey, Secret, Sources, dir_name, store_credential};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{LoadedExtension, Notice, OfferedKind};
@@ -2429,4 +2429,454 @@ fn load_pinned_keeps_the_first_declared_copy_of_one_name_silently() {
     let ids: Vec<&str> = data.models.iter().map(|model| model.id.as_str()).collect();
     assert_eq!(ids, vec!["v1-model"]);
     assert!(notices.is_empty(), "{notices:?}");
+}
+
+/// Installs `fiber.test/mixed` with `init`: static `acme` data with
+/// `static_id`, a `providers/acme.lua` discovering `found_id`, and
+/// manifest-declared providers. `lazy` adds a manifest-declared lazy
+/// command. Returns the installed directory.
+fn install_mixed(
+    setup: &Setup,
+    init: &str,
+    lazy: bool,
+    static_id: &str,
+    found_id: &str,
+) -> PathBuf {
+    let name = "fiber.test/mixed";
+    let mut listed = manifest(name);
+    listed["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    if lazy {
+        listed["commands"] = json!({"lazy-cmd": {"description": "a lazy command"}});
+    }
+    let source = setup.source("mixed", &listed, &[provider("acme", &[static_id])]);
+    write(&source.join("init.lua"), init);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let dir = setup.home().join("extensions").join(dir_name(name));
+    write(
+        &dir.join("providers/acme.lua"),
+        &format!(
+            "fiber.provider(\"acme\", {{\n\
+             credential = {{ timeout = 1000, run = function() \
+             return {{ token = \"t\", expires_at = 1893456000 }} end }},\n\
+             models = {{ timeout = 1000, run = function() \
+             return {{ {{ id = \"{found_id}\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 }} }} end }},\n\
+             }})\n"
+        ),
+    );
+    dir
+}
+
+/// The mixed package's init: an eager command and a hook. Running it
+/// offers both, so their absence proves it never ran.
+fn mixed_init() -> String {
+    "fiber.command('eager-cmd', {timeout=1000, run=function() return 'eager' end})\n\
+     fiber.hook(\"after_tool\", { timeout = 1000, on_failure = \"non-blocking\", \
+     run = function(call) return { content = \"h\" } end })\n"
+        .to_owned()
+}
+
+/// Stores the `acme` login the mixed package's discovery reads.
+fn seed_acme(setup: &Setup) {
+    store_credential(&setup.home(), "acme", "default", &Secret::new("k".into())).unwrap();
+}
+
+fn disabled_mixed() -> [&'static str; 1] {
+    ["extensions.\"fiber.test/mixed\".enabled=false"]
+}
+
+#[test]
+fn a_disabled_mixed_package_keeps_provider_models_without_init_commands_or_hooks() {
+    let setup = Setup::new();
+    install_mixed(&setup, &mixed_init(), false, "static-model", "found-model");
+    seed_acme(&setup);
+    let overrides = disabled_mixed();
+    let set = RepositorySet::default();
+    // The static data resolves with no session at all.
+    let (providers, notices) = load_providers(&setup, &set, &overrides);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/static-model").is_ok());
+    assert!(providers.resolve("acme/found-model").is_err());
+    let session = load_session(&setup, set, &overrides);
+    // No non-provider activation: no commands, hooks, or loaded entry.
+    assert_eq!(command_names(&session), Vec::<String>::new());
+    assert!(!session.has_hooks());
+    assert!(session.registrations().is_empty());
+    assert!(
+        session
+            .loaded_names()
+            .iter()
+            .all(|name| name != "fiber.test/mixed")
+    );
+    assert!(
+        session
+            .lua_providers()
+            .iter()
+            .any(|(_, provider)| provider.name() == "acme"),
+        "expected the acme provider-only handle: {:?}",
+        session
+            .lua_providers()
+            .iter()
+            .map(|(_, provider)| provider.name())
+            .collect::<Vec<_>>()
+    );
+    // Uncached discovery still runs through the provider-only handles.
+    let config = session_config(&setup, &overrides);
+    let mut providers = load_providers(&setup, &RepositorySet::default(), &overrides).0;
+    let notices =
+        providers.add_session(&session, &config, &fakes::children::grouped_output, &|_| {
+            None
+        });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/found-model").is_ok());
+    // An explicit refresh starts the credentialed provider.
+    let handles: Vec<Arc<extensions::LuaProvider>> = session
+        .lua_providers()
+        .iter()
+        .map(|(_, p)| Arc::clone(p))
+        .collect();
+    let started = extensions::refresh_lists(
+        &handles,
+        &providers,
+        &config,
+        None,
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(
+        started.iter().any(|(name, _)| name == "acme"),
+        "expected the acme refresh to start: {:?}",
+        started.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    for (_, handle) in started {
+        fakes::within(
+            "handle.join",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || handle.join().unwrap(),
+        )
+        .unwrap();
+    }
+    // An age-based refresh skips the fresh cache and starts the stale one.
+    let cache = setup.home().join("cache/models/acme.json");
+    let started = extensions::refresh_lists(
+        &handles,
+        &providers,
+        &config,
+        Some(Duration::from_secs(24 * 60 * 60)),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(started.is_empty());
+    // The session runs on a fake clock at a fixed wall epoch, so the
+    // stale mark is relative to that wall, not the process clock.
+    std::fs::File::options()
+        .write(true)
+        .open(&cache)
+        .unwrap()
+        .set_modified(FakeClock::new().wall() - Duration::from_secs(2 * 24 * 60 * 60))
+        .unwrap();
+    let started = extensions::refresh_lists(
+        &handles,
+        &providers,
+        &config,
+        Some(Duration::from_secs(24 * 60 * 60)),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(
+        started.iter().any(|(name, _)| name == "acme"),
+        "expected the acme refresh to start: {:?}",
+        started.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    for (_, handle) in started {
+        fakes::within(
+            "handle.join",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || handle.join().unwrap(),
+        )
+        .unwrap();
+    }
+    let cached: Vec<config::ModelData> = config::read_model_cache(&setup.home(), "acme")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cached.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        vec!["found-model"]
+    );
+}
+
+#[test]
+fn a_credentialless_disabled_mixed_package_starts_no_provider_callback() {
+    let setup = Setup::new();
+    install_mixed(&setup, &mixed_init(), false, "static-model", "found-model");
+    let overrides = disabled_mixed();
+    let set = RepositorySet::default();
+    // The static data still resolves: data loads, discovery does not run.
+    let (providers, notices) = load_providers(&setup, &set, &overrides);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/static-model").is_ok());
+    let session = load_session(&setup, set, &overrides);
+    assert_eq!(command_names(&session), Vec::<String>::new());
+    assert!(!session.has_hooks());
+    let config = session_config(&setup, &overrides);
+    let mut providers = load_providers(&setup, &RepositorySet::default(), &overrides).0;
+    let notices =
+        providers.add_session(&session, &config, &fakes::children::grouped_output, &|_| {
+            None
+        });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/found-model").is_err());
+    let handles: Vec<Arc<extensions::LuaProvider>> = session
+        .lua_providers()
+        .iter()
+        .map(|(_, p)| Arc::clone(p))
+        .collect();
+    let started = extensions::refresh_lists(
+        &handles,
+        &providers,
+        &config,
+        None,
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(started.is_empty());
+}
+
+#[test]
+fn a_disabled_lazy_package_offers_no_lazy_commands() {
+    let setup = Setup::new();
+    install_mixed(&setup, &mixed_init(), true, "static-model", "found-model");
+    seed_acme(&setup);
+    let overrides = disabled_mixed();
+    let set = RepositorySet::default();
+    // The static data resolves with no session at all.
+    let (providers, notices) = load_providers(&setup, &set, &overrides);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/static-model").is_ok());
+    let session = load_session(&setup, set, &overrides);
+    // The manifest-declared lazy command stays unoffered.
+    assert_eq!(command_names(&session), Vec::<String>::new());
+    assert!(!session.has_hooks());
+    // Uncached discovery still runs through the provider-only handles.
+    let config = session_config(&setup, &overrides);
+    let mut providers = load_providers(&setup, &RepositorySet::default(), &overrides).0;
+    let notices =
+        providers.add_session(&session, &config, &fakes::children::grouped_output, &|_| {
+            None
+        });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/found-model").is_ok());
+}
+
+#[test]
+fn an_enabled_mixed_package_runs_init_and_offers_commands_and_hooks() {
+    let setup = Setup::new();
+    install_mixed(&setup, &mixed_init(), false, "static-model", "found-model");
+    seed_acme(&setup);
+    let set = RepositorySet::default();
+    let session = load_session(&setup, set, &[]);
+    assert!(
+        session
+            .loaded_names()
+            .iter()
+            .any(|name| name == "fiber.test/mixed")
+    );
+    assert_eq!(command_names(&session), ["eager-cmd"]);
+    assert!(session.has_hooks());
+    let config = session_config(&setup, &[]);
+    let mut providers = load_providers(&setup, &RepositorySet::default(), &[]).0;
+    let notices =
+        providers.add_session(&session, &config, &fakes::children::grouped_output, &|_| {
+            None
+        });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/found-model").is_ok());
+}
+
+#[test]
+fn a_disabled_mixed_package_with_a_trapping_init_loads_discovers_and_refreshes() {
+    let setup = Setup::new();
+    install_mixed(
+        &setup,
+        "error(\"mixed init must not run\")\n",
+        false,
+        "static-model",
+        "found-model",
+    );
+    seed_acme(&setup);
+    let overrides = disabled_mixed();
+    let set = RepositorySet::default();
+    let session = load_session(&setup, set, &overrides);
+    assert!(
+        session
+            .notices()
+            .iter()
+            .all(|notice| !notice.message.contains("must not run")),
+        "{:?}",
+        session.notices()
+    );
+    let config = session_config(&setup, &overrides);
+    let mut providers = load_providers(&setup, &RepositorySet::default(), &overrides).0;
+    let notices =
+        providers.add_session(&session, &config, &fakes::children::grouped_output, &|_| {
+            None
+        });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/found-model").is_ok());
+    let handles: Vec<Arc<extensions::LuaProvider>> = session
+        .lua_providers()
+        .iter()
+        .map(|(_, p)| Arc::clone(p))
+        .collect();
+    let started = extensions::refresh_lists(
+        &handles,
+        &providers,
+        &config,
+        None,
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert!(
+        started.iter().any(|(name, _)| name == "acme"),
+        "expected the acme refresh to start: {:?}",
+        started.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    for (_, handle) in started {
+        fakes::within(
+            "handle.join",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || handle.join().unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn a_disabled_approved_mixed_copy_serves_pinned_models_without_non_provider_activation() {
+    let setup = Setup::new();
+    // The personal install is shadowed: only the pinned copy may serve.
+    install_mixed(
+        &setup,
+        &mixed_init(),
+        true,
+        "personal-static",
+        "personal-model",
+    );
+    seed_acme(&setup);
+    let mut listed = package("mixed", "v2.0.0");
+    listed["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    listed["commands"] = json!({"lazy-cmd": {"description": "a lazy command"}});
+    let init = mixed_init();
+    let data = provider("acme", &["pinned-static"]).to_string();
+    declare_pkgs(
+        &setup,
+        &[(
+            "mixed",
+            listed,
+            &[
+                ("init.lua", init.as_str()),
+                ("providers/acme.json", data.as_str()),
+                (
+                    "providers/acme.lua",
+                    "fiber.provider(\"acme\", {\n\
+                     credential = { timeout = 1000, run = function() \
+                     return { token = \"t\", expires_at = 1893456000 } end },\n\
+                     models = { timeout = 1000, run = function() \
+                     return { { id = \"pinned-model\", protocol = \"openai-responses\", \
+                     base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 } } end },\n\
+                     })\n",
+                ),
+            ],
+            false,
+        )],
+    );
+    let clock = FakeClock::new();
+    let repos = Repos::new(&setup);
+    approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/mixed",
+    );
+    let set = repository_set(&setup, &repos, &clock, &BTreeSet::new());
+    let overrides = disabled_mixed();
+    let shadowed = Notice {
+        code: ErrorCode::ExtensionShadowed,
+        message: "The repository's approved copy of `fiber.test/mixed` v2.0.0 loads in this \
+                  project in place of your install, v1.0.0."
+            .to_owned(),
+        extension: Some("fiber.test/mixed".to_owned()),
+    };
+    let session = load_session(&setup, set, &overrides);
+    assert_eq!(session.notices(), vec![shadowed.clone()]);
+    assert_eq!(command_names(&session), Vec::<String>::new());
+    assert!(!session.has_hooks());
+    // The pinned copy's data loads, and its scripts stay eligible: the
+    // personal copy's models never appear.
+    let set = repository_set(&setup, &repos, &clock, &BTreeSet::new());
+    let (providers, notices) = load_providers(&setup, &set, &overrides);
+    assert_eq!(notices, vec![shadowed]);
+    assert!(providers.resolve("acme/pinned-static").is_ok());
+    assert!(providers.resolve("acme/personal-static").is_err());
+    assert!(providers.could_register("acme"));
+    let config = session_config(&setup, &overrides);
+    let mut providers = load_providers(&setup, &set, &overrides).0;
+    let session = load_session(&setup, set, &overrides);
+    let notices =
+        providers.add_session(&session, &config, &fakes::children::grouped_output, &|_| {
+            None
+        });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/pinned-model").is_ok());
+    assert!(providers.resolve("acme/personal-model").is_err());
+}
+
+#[test]
+fn an_ordinary_disabled_personal_package_stays_out() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "plain",
+        &json!({}),
+        "fiber.command('plain-cmd', {timeout=1000, run=function() return 'plain' end})\n",
+    );
+    let overrides = ["extensions.\"fiber.test/plain\".enabled=false"];
+    let set = RepositorySet::default();
+    let session = load_session(&setup, set, &overrides);
+    assert!(
+        session
+            .loaded_names()
+            .iter()
+            .all(|name| name != "fiber.test/plain")
+    );
+    assert_eq!(command_names(&session), Vec::<String>::new());
+    let (providers, notices) = load_providers(&setup, &RepositorySet::default(), &overrides);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(providers.names().count(), 0);
+}
+
+#[test]
+fn a_disabled_mixed_process_package_keeps_static_data_but_starts_no_child() {
+    let setup = Setup::new();
+    let name = "fiber.test/proc";
+    let mut listed = manifest(name);
+    listed["process"] = json!({"program": "run", "exit_timeout_ms": 0});
+    let source = setup.source("proc", &listed, &[provider("acme", &["static-model"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let overrides = ["extensions.\"fiber.test/proc\".enabled=false"];
+    let set = RepositorySet::default();
+    // The static data loads through `Providers`, with no session at all.
+    let (providers, notices) = load_providers(&setup, &set, &overrides);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/static-model").is_ok());
+    let session = load_session(&setup, set, &overrides);
+    assert!(
+        session
+            .loaded_names()
+            .iter()
+            .all(|name| name != "fiber.test/proc")
+    );
+    assert_eq!(command_names(&session), Vec::<String>::new());
+    assert!(session.lua_providers().is_empty());
 }

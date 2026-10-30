@@ -23,6 +23,8 @@ const DEADLINE: Duration = Duration::from_secs(20);
 
 /// Installs a data-only extension registering `name` with these model
 /// ids, each on `openai-responses` with `extra` merged into each model.
+/// A positive fixture is logged in: the presence gate needs a stored
+/// login for its models to list.
 fn install_data(home: &Path, extension: &str, name: &str, ids: &[&str], extra: &Value) {
     let models: Vec<Value> = ids
         .iter()
@@ -50,6 +52,7 @@ fn install_data(home: &Path, extension: &str, name: &str, ids: &[&str], extra: &
         }),
         &[(name, json!({"name": name, "models": models}))],
     );
+    config::store_credential(home, name, "default", &config::Secret::new("test".into())).unwrap();
 }
 
 /// Installs a data-only extension `extension` registering provider
@@ -57,7 +60,9 @@ fn install_data(home: &Path, extension: &str, name: &str, ids: &[&str], extra: &
 /// declared, the `install_data` layout with separate extension and
 /// provider names. `credential` is merged into the provider data, so a
 /// `credential_label` reads a login no `fiber login` asks for. The
-/// directory is the extension's short name, as on disk.
+/// directory is the extension's short name, as on disk. A positive
+/// fixture is logged in: the presence gate needs a stored login for
+/// discovery to run, which `credential_label` providers ignore.
 fn install_placeholder(
     home: &Path,
     extension: &str,
@@ -82,10 +87,12 @@ fn install_placeholder(
         }),
         &[(name, data)],
     );
+    config::store_credential(home, name, "default", &config::Secret::new("test".into())).unwrap();
 }
 
 /// Installs a Lua extension with this `init.lua`, the way
-/// `fiber extension install <path>` does.
+/// `fiber extension install <path>` does. A positive fixture is logged
+/// in: the presence gate needs a stored login for discovery to run.
 fn install_lua(root: &Path, home: &Path, extension: &str, init: &str, providers: &Value) {
     let source = root.join("src").join(extension);
     std::fs::create_dir_all(&source).unwrap();
@@ -109,6 +116,7 @@ fn install_lua(root: &Path, home: &Path, extension: &str, init: &str, providers:
     .unwrap()
     .commit()
     .unwrap();
+    config::store_credential(home, "acme", "default", &config::Secret::new("test".into())).unwrap();
 }
 
 /// A `models()` listing response with these ids.
@@ -301,6 +309,15 @@ fn hub_models_encodes_price_name_and_absent_fields() {
             ]}),
         )],
     );
+    // Logged in: the presence gate needs a stored login for the models
+    // to list.
+    config::store_credential(
+        &rig.home,
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let seam = Seam::new(rig.home.clone());
     let catalogue = result(&seam, "models", json!({"workspace": rig.workspace}));
     let models = catalogue["models"].as_array().unwrap();
@@ -552,6 +569,12 @@ fn hub_models_keeps_an_io_failure_code() {
 #[test]
 fn hub_models_encodes_a_group_with_no_value() {
     let rig = Rig::new("fiber-hub-models-left-out");
+    // A declared credential path switches the `credential_label`
+    // provider on; stored logins do not count for it.
+    let creds = rig.home.join("acme-creds");
+    std::fs::write(&creds, "").unwrap();
+    let credential = json!({"credential_label": {"names": "key", "default": "the environment",
+        "credential_paths": [{"path": creds.to_str().unwrap()}]}});
     install_placeholder(
         &rig.home,
         "acme-ext",
@@ -564,7 +587,7 @@ fn hub_models_encodes_a_group_with_no_value() {
             {"id": "m2", "protocol": "openai-responses",
              "base_url": "https://{api_key}/v1", "context_window": 1000},
         ]),
-        &json!({"credential_label": {"names": "key", "default": "the environment"}}),
+        &credential,
     );
     let seam = Seam::new(rig.home.clone());
     let catalogue = result(&seam, "models", json!({"workspace": rig.workspace}));

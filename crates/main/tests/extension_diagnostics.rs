@@ -88,6 +88,13 @@ fn install_test_provider(setup: &Setup, server_url: &str) {
     .unwrap()
     .commit()
     .unwrap();
+    config::store_credential(
+        &setup.home(),
+        "test",
+        "default",
+        &config::Secret::new("k-test".into()),
+    )
+    .unwrap();
 }
 
 /// Installs a second Lua extension with a hook-free `late` provider for
@@ -126,6 +133,13 @@ fn install_late_provider(setup: &Setup, server_url: &str) {
     )
     .unwrap()
     .commit()
+    .unwrap();
+    config::store_credential(
+        &setup.home(),
+        "late",
+        "default",
+        &config::Secret::new("k-late".into()),
+    )
     .unwrap();
 }
 

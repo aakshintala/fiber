@@ -39,7 +39,9 @@ fn catalogue_and_cached_model_lists_follow_project_configuration() {
             let (providers, _, notices) =
                 providers_and_config(&setup.home(), &setup.workspace()).unwrap();
             assert!(notices.is_empty());
-            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+            // Only the provider part ignores `enabled`: both logged-in
+            // providers list however the package is switched.
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other", "p"]);
             let (providers, _, notices) = crate::model_lists::model_lists(
                 &setup.home(),
                 &setup.workspace(),
@@ -50,7 +52,7 @@ fn catalogue_and_cached_model_lists_follow_project_configuration() {
             )
             .unwrap();
             assert!(notices.is_empty());
-            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other", "p"]);
             let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
             config::set(
                 &setup.home(),
@@ -67,13 +69,13 @@ fn catalogue_and_cached_model_lists_follow_project_configuration() {
             let other_workspace = setup.root.path().join("elsewhere");
             fs::create_dir(&other_workspace).unwrap();
             let (providers, _, _) = providers_and_config(&setup.home(), &other_workspace).unwrap();
-            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other", "p"]);
         },
     );
 }
 
 #[test]
-fn refresh_skips_disabled_malformed_provider_data_and_refreshes_enabled_control() {
+fn malformed_disabled_provider_data_fails_the_refresh_load() {
     fakes::within(
         "filtered background model refresh",
         Deadline::after(Duration::from_secs(20)),
@@ -93,6 +95,8 @@ fn refresh_skips_disabled_malformed_provider_data_and_refreshes_enabled_control(
             )
             .unwrap();
             let before = fs::read(setup.home().join("cache/models/bad.json")).unwrap();
+            // Malformed provider data fails the load however the package
+            // is switched, so the refresh child refreshes nothing at all.
             refresh_run(
                 &setup.home(),
                 &setup.workspace(),
@@ -101,12 +105,12 @@ fn refresh_skips_disabled_malformed_provider_data_and_refreshes_enabled_control(
                 std::sync::Arc::new(NoLock),
                 &fakes::children::grouped_output,
             );
-            let refreshed = config::read_model_cache(&setup.home(), "good")
+            let kept = config::read_model_cache(&setup.home(), "good")
                 .unwrap()
                 .unwrap();
             assert_eq!(
-                refreshed.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-                ["new"]
+                kept.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+                ["old"]
             );
             assert_eq!(
                 fs::read(setup.home().join("cache/models/bad.json")).unwrap(),
@@ -141,7 +145,8 @@ impl Setup {
 
     /// Installs the extension `extension` registering the provider `name`
     /// with these models. The manifest declares the models' distinct
-    /// `base_url`s.
+    /// `base_url`s. A positive fixture is logged in: the presence gate
+    /// needs a stored login for its models to list.
     fn install(&self, extension: &str, name: &str, models: &Value) {
         let dir = self.home().join("extensions").join(extension);
         let data = json!({
@@ -167,6 +172,13 @@ impl Setup {
         fs::create_dir_all(dir.join("providers")).unwrap();
         fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
         write_record(&dir);
+        config::store_credential(
+            &self.home(),
+            name,
+            "default",
+            &config::Secret::new("test".into()),
+        )
+        .unwrap();
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
             data.to_string(),
@@ -242,9 +254,18 @@ impl Setup {
 
     /// Installs the Lua extension `extension` registering the provider
     /// `name` whose `models()` returns the Lua list `models`. The manifest
-    /// declares `name` with every `base_url` literal the list holds.
+    /// declares `name` with every `base_url` literal the list holds. A
+    /// positive fixture is logged in: the presence gate needs a stored
+    /// login for discovery to run.
     fn install_lua(&self, extension: &str, name: &str, models: &str) {
         self.install_lua_inner(extension, name, models, true);
+        config::store_credential(
+            &self.home(),
+            name,
+            "default",
+            &config::Secret::new("test".into()),
+        )
+        .unwrap();
     }
 
     fn install_lua_inner(&self, extension: &str, name: &str, models: &str, with_credential: bool) {
@@ -492,6 +513,19 @@ fn a_default_that_does_not_resolve_marks_no_row_and_is_not_an_error() {
 }
 
 #[test]
+fn a_cacheless_logged_out_lua_provider_is_installed_without_loading_its_vm() {
+    let setup = Setup::new();
+    setup.install_lua_without_credential("only-lua", "acme", "error('must not discover')");
+    for json in [false, true] {
+        let (result, out, err) = setup.run(None, json, &no_spawn, fakes::clock::FakeClock::new());
+        result.unwrap();
+        assert_eq!(out, "");
+        assert_eq!(err, "");
+    }
+    assert!(!setup.home().join("cache/models/acme.json").exists());
+}
+
+#[test]
 fn with_no_provider_it_names_extension_install_on_stderr() {
     let setup = Setup::new();
     for json in [false, true] {
@@ -502,6 +536,36 @@ fn with_no_provider_it_names_extension_install_on_stderr() {
             err, "No provider is installed. Run `fiber extension install <name>` to install one.\n",
             "json={json}"
         );
+    }
+}
+
+#[test]
+fn an_installed_but_logged_out_provider_prints_no_models_and_no_install_notice() {
+    let setup = Setup::new();
+    setup.install(
+        "acme-ext",
+        "acme",
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 1000,
+        }]),
+    );
+    // Logged out again: installed, but switched off.
+    assert!(
+        config::delete_credential(&setup.home(), "acme", "default").unwrap(),
+        "the fixture seeds one login"
+    );
+    for json in [false, true] {
+        let (result, out, err) = setup.run(None, json, &no_spawn, fakes::clock::FakeClock::new());
+        result.unwrap();
+        assert_eq!(out, "", "json={json}");
+        assert!(
+            !err.contains("No provider is installed"),
+            "installed, only logged out: {err:?}"
+        );
+        assert_eq!(err, "", "json={json}");
     }
 }
 
@@ -1119,18 +1183,35 @@ fn a_list_exactly_refresh_after_old_spawns_nothing() {
 }
 
 #[test]
-fn stale_lists_checks_the_age_before_the_credential() {
-    // `stale_lists` checks the cache age first and asks for a credential
-    // only when the cache is over `max_age`: `fresh` has a young cache
-    // and `stale` an old one, and both hold a command credential the
-    // counting runner answers. The runner runs for `stale` only, and the
-    // returned list is unchanged.
+fn stale_lists_counts_a_configured_command_without_running_it() {
+    // `stale_lists` checks the cache age, then presence without running
+    // anything: `fresh` has a young cache and `stale` an old one, each
+    // with a marker command that would betray a run. `bed` is a
+    // `credential_label` provider with an old cache and its own marker
+    // command, which presence ignores. Only `stale` is due, and no
+    // marker is touched.
     let setup = Setup::new();
     setup.install_lua_without_credential("fresh-ext", "fresh", &lua_list("fresh-model"));
     setup.install_lua_without_credential("stale-ext", "stale", &lua_list("stale-model"));
+    setup.install_lua_without_credential("bed-ext", "bed", &lua_list("bed-model"));
+    fs::write(
+        setup.home().join("extensions/bed-ext/providers/bed.json"),
+        json!({
+            "name": "bed",
+            "credential_label": {"names": "profile", "default": "the environment",
+                                 "credential_paths": []},
+            "models": [{"id": "bed-model", "protocol": "openai-responses",
+                        "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let marker = |name: &str| setup.home().join(format!("{name}-ran"));
+    let command = |name: &str| json!({"command": ["sh", "-c", format!("touch '{}'; printf {name}-key", marker(name).display())]});
     setup.write_config(&json!({"providers": {
-        "fresh": {"credentials": {"default": {"command": ["printf", "fresh-key"]}}},
-        "stale": {"credentials": {"default": {"command": ["printf", "stale-key"]}}},
+        "fresh": {"credentials": {"default": command("fresh")}},
+        "stale": {"credentials": {"default": command("stale")}},
+        "bed": {"credentials": {"default": command("bed")}},
     }}));
     let clock = fakes::clock::FakeClock::new();
     let now = clock.wall();
@@ -1138,6 +1219,7 @@ fn stale_lists_checks_the_age_before_the_credential() {
     for (name, age) in [
         ("fresh", Duration::ZERO),
         ("stale", Duration::from_secs(25 * 60 * 60)),
+        ("bed", Duration::from_secs(25 * 60 * 60)),
     ] {
         config::write_model_cache(
             &setup.home(),
@@ -1168,28 +1250,14 @@ fn stale_lists_checks_the_age_before_the_credential() {
     providers.add_session(&loaded, &config, &fakes::children::grouped_output, &|_| {
         None
     });
-    let calls = std::cell::RefCell::new(Vec::new());
-    let run = &|command: &mut std::process::Command, timeout: Duration| {
-        calls.borrow_mut().push(
-            command
-                .get_args()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join(" "),
-        );
-        fakes::children::grouped_output(command, timeout)
-    };
-    let stale = super::stale_lists(&setup.home(), &providers, &config, max_age, now, run);
+    let stale = super::stale_lists(&setup.home(), &providers, &config, max_age, now);
     assert_eq!(stale, ["stale".to_owned()]);
-    let calls = calls.borrow();
-    assert!(
-        calls.iter().any(|call| call.contains("stale-key")),
-        "the credential runs for the stale cache: {calls:?}"
-    );
-    assert!(
-        !calls.iter().any(|call| call.contains("fresh-key")),
-        "the credential never runs for the fresh cache: {calls:?}"
-    );
+    for name in ["fresh", "stale", "bed"] {
+        assert!(
+            !marker(name).exists(),
+            "presence runs no command for {name}"
+        );
+    }
 }
 
 #[test]
@@ -1450,6 +1518,15 @@ fn repository_provider_models_list_inside_the_project_but_not_outside() {
                 &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
             );
             approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
+            // Logged in: the presence gate needs a stored login for the
+            // approved provider to list.
+            config::store_credential(
+                &setup.home(),
+                "acme",
+                "default",
+                &config::Secret::new("test".into()),
+            )
+            .unwrap();
             let (result, out, err) =
                 setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
             assert!(result.is_ok(), "{result:?} {err}");
@@ -1493,6 +1570,15 @@ fn repository_lua_provider_models_run_without_a_cached_list() {
                 &[("repo", manifest, &[("providers/acme.lua", script.as_str())])],
             );
             approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
+            // Logged in: the presence gate needs a stored login for the
+            // approved provider to list.
+            config::store_credential(
+                &setup.home(),
+                "acme",
+                "default",
+                &config::Secret::new("test".into()),
+            )
+            .unwrap();
             // No cached list: the one-shot run serves the Lua `models()`.
             assert!(
                 !setup.home().join("cache/models/acme.json").exists(),
@@ -1610,7 +1696,8 @@ const HUB_ENV_HOST: &str = "FIBER_TEST_MODELS_HUB_ENV_HOST";
 impl Setup {
     /// Installs the extension `extension` registering the provider `name`
     /// with one model whose base URL fills `{workspace}` from the
-    /// environment variable `var`.
+    /// environment variable `var`. A positive fixture is logged in: the
+    /// presence gate needs a stored login for discovery to run.
     fn install_placeholder(&self, extension: &str, name: &str, var: &str) {
         let dir = self.home().join("extensions").join(extension);
         let data = json!({
@@ -1633,6 +1720,13 @@ impl Setup {
         fs::create_dir_all(dir.join("providers")).unwrap();
         fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
         write_record(&dir);
+        config::store_credential(
+            &self.home(),
+            name,
+            "default",
+            &config::Secret::new("test".into()),
+        )
+        .unwrap();
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
             data.to_string(),
@@ -1955,4 +2049,80 @@ fn models_keeps_the_per_model_notice_for_a_value_that_is_not_a_host() {
          - The model `acme/hide-2` needs the setting `workspace` for its base URL, \
          whose value is not a host. (extension `acme-ext`)\n"
     );
+}
+
+#[test]
+fn a_search_matching_a_missing_model_prints_its_group_notice() {
+    let setup = Setup::new();
+    setup.install_templated(
+        "acme-ext",
+        "acme",
+        &json!([model_at("m", "https://{workspace}/v1")]),
+    );
+    // No value for `workspace`: the model is missing, grouped under its
+    // provider and setting. A search matching it prints its group notice
+    // with no rows; a search matching nothing prints neither.
+    let (result, out, err) = setup.run(
+        Some("acme/m"),
+        false,
+        &no_spawn,
+        fakes::clock::FakeClock::new(),
+    );
+    result.unwrap();
+    assert_eq!(out, "");
+    // The search matches the missing model, so its group notice prints;
+    // the notice names the provider and setting, not the model id.
+    assert_eq!(err, acme_notice(1));
+    let (result, out, err) = setup.run(
+        Some("nothing"),
+        false,
+        &no_spawn,
+        fakes::clock::FakeClock::new(),
+    );
+    result.unwrap();
+    assert_eq!(out, "");
+    assert_eq!(err, "");
+}
+
+#[test]
+fn a_model_less_search_keeps_cache_error_notices_and_installed_rows() {
+    let setup = Setup::new();
+    setup.install(
+        "acme",
+        "acme",
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 1000,
+        }]),
+    );
+    setup.install(
+        "bad-ext",
+        "bad",
+        &json!([model_at("m1", "http://127.0.0.1:1/v1")]),
+    );
+    config::write_model_cache(
+        &setup.home(),
+        "bad",
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 0,
+        }]),
+    )
+    .unwrap();
+    // The search names no model: the installed rows list, and the cached
+    // admission's error notice stays beside them.
+    let (result, out, err) = setup.run(
+        Some("acme"),
+        false,
+        &no_spawn,
+        fakes::clock::FakeClock::new(),
+    );
+    result.unwrap();
+    assert!(out.contains("acme/m1"), "{out:?}");
+    assert!(err.contains("bad/m1"), "{err:?}");
+    assert!(err.contains("context_window"), "{err:?}");
 }

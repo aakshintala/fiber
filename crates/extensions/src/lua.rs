@@ -293,6 +293,10 @@ pub struct LuaExtension {
     name: String,
     dir: PathBuf,
     home: PathBuf,
+    /// Whether the VM runs the entry script when it starts: a disabled
+    /// provider-only package's VM serves provider scripts but never runs
+    /// `init.lua`.
+    run_entry: bool,
     memory_cap: usize,
     /// The session, when started from one: its configuration, settings
     /// keys and per-path lock.
@@ -323,6 +327,7 @@ impl LuaExtension {
             name: name.into(),
             dir: dir.into(),
             home: home.into(),
+            run_entry: true,
             memory_cap: MEMORY_CAP,
             session: None,
             browser: Arc::new(SystemBrowser::default()),
@@ -372,6 +377,15 @@ impl LuaExtension {
     /// requires resolve.
     pub fn with_dependencies(mut self, deps: BTreeMap<String, PathBuf>) -> Self {
         self.deps = deps;
+        self
+    }
+
+    /// Skips the entry script when the VM starts: a disabled provider-only
+    /// package's VM serves its provider scripts but never runs `init.lua`.
+    /// Only entry execution is conditional, before startup: the common
+    /// setup and the declared provider loads still run.
+    pub(crate) fn without_entry(mut self) -> Self {
+        self.run_entry = false;
         self
     }
 

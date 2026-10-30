@@ -332,22 +332,16 @@ impl LuaProvider {
         )
     }
 
-    /// Whether this provider has a credential to refresh with: it registers
-    /// `credential`, or the session's key lookup finds one for `data`
+    /// Whether this provider has a credential to refresh with: the
+    /// configuration's presence check for `data`
     /// (`docs/model-routing.md`, "Model discovery"). `data` is the data
-    /// file's, else one naming only the provider: the same lookup a session
-    /// uses for its key.
-    pub fn has_credential(
-        &self,
-        config: &Config,
-        data: &ProviderData,
-        run: config::Runner<'_>,
-    ) -> bool {
-        self.registers("credential").unwrap_or(false)
-            || config
-                .credentials()
-                .credential_with(data, &config.credentials().credential_label(data), run)
-                .is_ok()
+    /// file's, else one naming only the provider. Registering `credential`
+    /// alone proves nothing, and looking never starts the VM or runs a
+    /// command: actual discovery still reads the key for real.
+    pub fn has_credential(&self, config: &Config, data: &ProviderData) -> bool {
+        config
+            .credentials()
+            .has_credential(data, &|name| std::env::var(name).ok())
     }
 
     /// Calls `models()` on its own thread, unless `max_age` names one and
