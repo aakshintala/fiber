@@ -1212,6 +1212,103 @@ fn the_model_shell_carries_no_sandbox_when_off() {
     assert!(!effects.declared.confined);
 }
 
+/// The session handle built into the tools reaches the file tools and
+/// the shell: an approved write through them advances the baseline, so
+/// a confined shell change restores to the approved content, not the
+/// original. Confinement runs only on Linux.
+#[cfg(target_os = "linux")]
+#[test]
+fn builtin_tools_carry_the_protection_handle_to_files_and_shell() {
+    let root = fakes::TempDir::new("fiber-builtin-protected");
+    let fiber = root.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).unwrap();
+    std::fs::write(fiber.join("keep.txt"), "original\n").unwrap();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    // Protection state lives under the real home, never the temp dir,
+    // in a `TempDir` so the test removes it on every path past this point.
+    let home_base = std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
+    let home_dir = fakes::TempDir::under(&home_base, "fiber-builtin-protected");
+    let fiber_home = home_dir.path().to_path_buf();
+    let handle = tools::ProtectedPaths::open(&fiber_home, root.path())
+        .expect("protection opens")
+        .0;
+    let artifacts = root.path().join("artifacts");
+    let images = super::session_images(root.path().join("fiber-stub"), &artifacts, None);
+    let (tools, _infos, _driver, _forget, _images) = super::builtin_timed(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &artifacts,
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        images,
+        None,
+        &delegates(),
+        skills(),
+        None,
+        Default::default(),
+        std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+            enabled: true,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: fiber_home.clone(),
+        })),
+        Some(Arc::clone(&handle)),
+    )
+    .unwrap();
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|(_, tool)| tool.definition().name == name)
+            .map(|(_, tool)| Arc::clone(tool))
+            .unwrap()
+    };
+    let arguments = |value: serde_json::Value| value.as_object().unwrap().clone();
+    // A quiet confined call takes the baseline; the later approved write
+    // advances it, and a second confined change restores to the approved
+    // content. Without the file-tools leg the restore would land on the
+    // original; without the shell leg nothing would restore at all.
+    let output = tool("shell").run(
+        &arguments(serde_json::json!({"command": "true"})),
+        &Never,
+        &Quiet,
+    );
+    assert!(output.error.is_none(), "the baseline call runs");
+    tool("read").run(
+        &arguments(serde_json::json!({"path": ".fiber/keep.txt"})),
+        &Never,
+        &Quiet,
+    );
+    let output = tool("write").run(
+        &arguments(serde_json::json!({"path": ".fiber/keep.txt", "content": "approved\n"})),
+        &Never,
+        &Quiet,
+    );
+    assert!(output.error.is_none(), "the approved write lands");
+    let output = tool("shell").run(
+        &arguments(serde_json::json!({"command": "tee .fiber/keep.txt < /dev/null"})),
+        &Never,
+        &Quiet,
+    );
+    assert!(output.error.is_none(), "the shell change runs");
+    let report = output.protected_paths.expect("the confined call reports");
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(fiber.join("keep.txt")).unwrap(),
+        b"approved\n",
+        "the end restores the approved write"
+    );
+}
+
 #[test]
 fn the_model_shell_marks_confined_when_on_and_available() {
     let root = fakes::TempDir::new("fiber-builtin-sandbox-on");

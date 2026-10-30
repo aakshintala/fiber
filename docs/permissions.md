@@ -232,6 +232,16 @@ off, nothing limits what it does once it runs.
 - A container protects the host from Fiber, not Fiber home from the agent.
   Fiber home inside the container is as reachable as it is outside one.
 
+A confined shell call restores the protected paths after it runs. An
+approved command can still change the shared `.git/config` and hooks, a
+worktree's `.git` pointer or workspace-local `.fiber/`, but Fiber records
+those paths before the call and restores them from the baseline after it.
+The call result carries the report of what was restored and what failed
+(`docs/sandbox.md`, "Protected paths"). Only a Fiber `write` or `edit`
+that the permission system let through moves the baseline forward, because
+each one landed with approval; an approved shell command never does.
+Unconfined and read-only calls take no protected-path transaction.
+
 An added folder changes nothing here. Were confinement implemented, its roots
 would be the workspace and the added folders, the same folded list the fast
 path above turns on; it is not implemented, so the boundary an added folder
