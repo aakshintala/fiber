@@ -7,6 +7,72 @@ fn row(text: &str) -> Row {
 }
 
 #[test]
+fn count_only_mode_is_opt_in_and_placeholders_keep_targets_and_sources() {
+    use crate::app::Target;
+    let ordinary = Rows::default();
+    assert!(!ordinary.is_count_only());
+    let mut counted = Rows::count_only();
+    assert!(counted.is_count_only());
+    counted.set_source(Some(contract::Seq(7)));
+    counted.push_counted(3, &[(1, Target::Copy { reply: 4, block: 2 })]);
+    let (rows, _, sources) = counted.into_sourced_parts();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[1].1, Some(Target::Copy { reply: 4, block: 2 }));
+    assert_eq!(sources, [Some(contract::Seq(7)); 3]);
+}
+
+#[test]
+fn row_widths_keep_span_and_grapheme_measures_separate() {
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+    let line = Line::from(vec![
+        Span::styled("e", Style::default()),
+        Span::styled(
+            "\u{301}",
+            Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+        ),
+    ]);
+    let parts: Vec<&str> = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    let (span_width, pad_width) = super::row_widths(parts);
+    let expected_spans = line.spans.iter().map(Span::width).sum::<usize>();
+    let expected_pad = line
+        .spans
+        .iter()
+        .flat_map(|span| span.styled_graphemes(Style::default()))
+        .map(|grapheme| crate::format::width(grapheme.symbol))
+        .sum::<usize>();
+    assert_eq!(span_width, expected_spans);
+    assert_eq!(pad_width, expected_pad);
+}
+
+#[test]
+fn row_widths_keep_the_ascii_fast_path_exact() {
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+    for part in [
+        "ordinary ASCII text",
+        "a\tb",
+        "a\nb",
+        "\u{1b}[31mred",
+        "界",
+        "👩‍💻",
+    ] {
+        let span = Span::raw(part);
+        let expected = (
+            span.width(),
+            span.styled_graphemes(Style::default())
+                .map(|grapheme| crate::format::width(grapheme.symbol))
+                .sum::<usize>(),
+        );
+        assert_eq!(super::row_widths([part]), expected, "{part:?}");
+    }
+}
+
+#[test]
 fn a_plain_push_is_a_break_with_no_skip() {
     let mut rows = Rows::default();
     rows.push(row("a"));
@@ -841,6 +907,7 @@ fn pad_with_a_missing_text_row_leaves_the_rows() {
         all_open: false,
         seam: None,
         session_names: Default::default(),
+        count_only: false,
     };
     out.pad(0, 1, 10);
     assert_eq!(out.rows.len(), 1);

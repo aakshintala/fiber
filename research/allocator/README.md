@@ -4,7 +4,9 @@ Whether another allocator lowers Fiber's resident memory is for the memory
 budget to measure (`docs/dependencies.md`, "Measuring memory"). This
 directory holds that one measurement: the attach timing, the attach peak
 and both retained rows (`docs/performance.md`, "Budgets") on three builds
-of the same commit, five samples each, on the same Linux x86_64 runner:
+of the same commit, five samples each, on the same Linux x86_64 runner,
+plus a fourth result rerunning the mimalloc binary with
+`MIMALLOC_PURGE_DELAY=0`:
 
 1. the musl release binary with its system allocator, the target that
    ships (`docs/releasing.md`)
@@ -12,12 +14,16 @@ of the same commit, five samples each, on the same Linux x86_64 runner:
    inside the job only and never committed
 3. an `x86_64-unknown-linux-gnu` release build, which uses glibc's
    allocator
+4. the musl-mimalloc binary of (2) through a shell wrapper exporting
+   `MIMALLOC_PURGE_DELAY=0` and forwarding every argument unchanged, with
+   no new build
 
 The manual workflow `.github/workflows/allocator-compare.yml` builds the
-three binaries, runs the full benchmark harness five times on each, and
-uploads the three result files with the commit, the runner and the
-resolved mimalloc version. The full harness runs so the attach rows keep
-their paging-jig stages; the comparison reads only the five rows below.
+three binaries, runs the full benchmark harness five times on each build
+and a fourth time on the mimalloc binary through the wrapper, and uploads
+the four result files with the commit, the runner and the resolved
+mimalloc version. The full harness runs so the attach rows keep their
+paging-jig stages; the comparison reads only the five rows below.
 It never runs on a push or a pull request: `workflow_dispatch` needs the
 file on `main`, so the first numbers arrive after this ticket merges.
 
@@ -25,6 +31,30 @@ Component-level allocator numbers, per crate rather than whole-Fiber, are
 in `research/concurrency/README.md`.
 
 ## Results
+
+Run [40994573373](https://github.com/aakshintala/fiber/actions/runs/40994573373)
+on commit `79fd929c6f9b3ddb43ec0dae704643c0c9420973`, runner `ubuntu-24.04`,
+mimalloc v0.1.52: the median of five samples per binary, with the fourth
+column rerunning the mimalloc binary under `MIMALLOC_PURGE_DELAY=0`.
+
+| Row | musl system | musl + mimalloc | musl + mimalloc, purge delay 0 | gnu |
+|---|---|---|---|---|
+| attach 10 MiB terminal ms | 29.4 | 27.1 | 31.0 | 18.4 |
+| attach peak RSS KiB | 42116 | 75716 | 51380 | 44728 |
+| attach retained RssAnon KiB | 3492 | 60404 | 10920 | 28248 |
+| busy turn retained RssAnon KiB | 6364 | 32672 | 12064 | 7440 |
+
+Run [40630772922](https://github.com/aakshintala/fiber/actions/runs/40630772922)
+on commit `691b590bb`, runner `ubuntu-24.04`, mimalloc v0.1.52: the median
+of five samples per binary, with the fourth column rerunning the mimalloc
+binary under `MIMALLOC_PURGE_DELAY=0`.
+
+| Row | musl system | musl + mimalloc | musl + mimalloc, purge delay 0 | gnu |
+|---|---|---|---|---|
+| attach 10 MiB terminal ms | 40.6 | 28.4 | 35.2 | 23.8 |
+| attach peak RSS KiB | 41544 | 79212 | 51264 | 42952 |
+| attach retained RssAnon KiB | 4068 | 26360 | 11264 | 28892 |
+| busy turn retained RssAnon KiB | 8380 | 33848 | 12796 | 7476 |
 
 Run [38139307008](https://github.com/aakshintala/fiber/actions/runs/38139307008)
 on commit `a8ae8a1d`, runner `ubuntu-24.04`, mimalloc v0.1.52: the median
