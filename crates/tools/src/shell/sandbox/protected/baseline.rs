@@ -429,6 +429,14 @@ pub(crate) fn read_baseline(path: &Path) -> Result<Baseline, io::Error> {
     Ok(baseline)
 }
 
+/// Makes the old baseline unreadable when an atomic replacement fails, so
+/// another process cannot restore stale bytes over an approved write.
+pub(crate) fn invalidate_baseline(path: &Path) -> Result<(), io::Error> {
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(0)?;
+    file.sync_all()
+}
+
 /// Records the baseline atomically: the bytes go to a temporary file in
 /// the same directory, then rename onto the baseline, so a concurrent
 /// reader never sees a half-written file.

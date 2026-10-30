@@ -24,10 +24,11 @@
 pub(crate) mod baseline;
 mod restore;
 
+use std::collections::HashMap;
 use std::fs::{File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// The marker the hub sets beside the startup snapshot in a session it
 /// spawned (`crates/hub/src/spawn.rs`, `HUB_SESSION_MARKER`): present means
@@ -36,6 +37,8 @@ use std::sync::Arc;
 /// pid reaches the filter; the hub slot then names the session host.
 const HUB_SESSION_MARKER: &str = "FIBER_HUB_SESSION";
 
+type PendingBaselines = Arc<Mutex<HashMap<PathBuf, Vec<baseline::Entry>>>>;
+
 /// One session's handle on the protected paths of its project. The handle
 /// carries only Fiber home; the project is derived from the workspace of
 /// each call, so calls from another registered worktree of the same
@@ -43,6 +46,7 @@ const HUB_SESSION_MARKER: &str = "FIBER_HUB_SESSION";
 #[derive(Debug)]
 pub struct ProtectedPaths {
     home: PathBuf,
+    pending: PendingBaselines,
 }
 
 /// What `begin` hands the call: the guard that owns the end-of-call
@@ -66,6 +70,9 @@ pub(crate) struct Guard {
     /// What a stale baseline left behind, recovered on the way in and
     /// reported with the call's own end.
     pub(crate) recovered: Report,
+    /// Approved writes whose baseline update could not be persisted. Their
+    /// in-memory entries keep active calls from restoring stale bytes.
+    pending: PendingBaselines,
 }
 
 /// What changed while a confined call ran: the shared protected-path
@@ -90,6 +97,26 @@ impl std::fmt::Display for SetupError {
 
 impl std::error::Error for SetupError {}
 
+fn pending_lock(
+    pending: &Mutex<HashMap<PathBuf, Vec<baseline::Entry>>>,
+) -> MutexGuard<'_, HashMap<PathBuf, Vec<baseline::Entry>>> {
+    pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn pending_entries(pending: &PendingBaselines, dir: &Path) -> Option<Vec<baseline::Entry>> {
+    pending_lock(pending).get(dir).cloned()
+}
+
+fn set_pending(pending: &PendingBaselines, dir: &Path, entries: Vec<baseline::Entry>) {
+    pending_lock(pending).insert(dir.to_path_buf(), entries);
+}
+
+fn clear_pending(pending: &PendingBaselines, dir: &Path) {
+    pending_lock(pending).remove(dir);
+}
+
 impl ProtectedPaths {
     /// Opens the handle for `workspace`'s project and recovers a stale
     /// baseline: when no active holder exists, compares the recorded paths
@@ -99,6 +126,7 @@ impl ProtectedPaths {
     pub fn open(home: &Path, workspace: &Path) -> Result<(Arc<Self>, Option<Report>), String> {
         let handle = Arc::new(Self {
             home: home.to_path_buf(),
+            pending: Arc::default(),
         });
         let dir = baseline::state_paths(&handle.home, workspace)?;
         if !dir.dir.exists() {
@@ -136,7 +164,15 @@ impl ProtectedPaths {
                 // session, then snapshot fresh. The recovered report joins
                 // the call's own report below. Discovery or capture that
                 // is incomplete fails before spawn.
-                let recovered = restore::compare_restore_report(&dir).map_err(setup)?;
+                let recovered = match pending_entries(&self.pending, &dir.dir) {
+                    Some(entries) => {
+                        let report = restore::compare_restore_entries(&entries);
+                        baseline::write_baseline(&dir.baseline, &entries).map_err(setup)?;
+                        clear_pending(&self.pending, &dir.dir);
+                        report
+                    }
+                    None => restore::compare_restore_report(&dir).map_err(setup)?,
+                };
                 let entries =
                     baseline::snapshot(workspace).map_err(|message| SetupError { message })?;
                 baseline::write_baseline(&dir.baseline, &entries).map_err(setup)?;
@@ -147,23 +183,35 @@ impl ProtectedPaths {
                         dir,
                         active: active_file,
                         recovered,
+                        pending: self.pending.clone(),
                     },
                 }
             }
             Err(TryLockError::WouldBlock) => {
-                // Calls are active: reuse the fixed baseline. The shared
-                // take is compatible with the ending calls' own shared
-                // holds, and the holders of a brief exclusive take never
-                // wait, so this cannot deadlock.
-                active_file.lock_shared().map_err(setup)?;
-                if !dir.baseline.exists() {
-                    return Err(SetupError {
-                        message: format!(
-                            "the protected-path baseline is missing while confined calls are active in {}",
-                            dir.dir.display()
-                        ),
-                    });
+                // Calls are active: reuse the fixed baseline. Validate its
+                // bytes too, so an approved-write persistence failure that
+                // invalidated it makes this call fail closed. The shared take
+                // is compatible with the ending calls' own shared holds, and
+                // the holders of a brief exclusive take never wait, so this
+                // cannot deadlock.
+                if let Some(entries) = pending_entries(&self.pending, &dir.dir) {
+                    baseline::write_baseline(&dir.baseline, &entries).map_err(setup)?;
+                    clear_pending(&self.pending, &dir.dir);
+                } else {
+                    match baseline::read_baseline(&dir.baseline) {
+                        Ok(_) => {}
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                            return Err(SetupError {
+                                message: format!(
+                                    "the protected-path baseline is missing while confined calls are active in {}",
+                                    dir.dir.display()
+                                ),
+                            });
+                        }
+                        Err(source) => return Err(setup(source)),
+                    }
                 }
+                active_file.lock_shared().map_err(setup)?;
                 drop(baseline_file);
                 Begin {
                     guard: Guard {
@@ -173,6 +221,7 @@ impl ProtectedPaths {
                             restored: Vec::new(),
                             failed: Vec::new(),
                         },
+                        pending: self.pending.clone(),
                     },
                 }
             }
@@ -198,13 +247,16 @@ impl ProtectedPaths {
         let baseline_file =
             baseline::open_lock(&dir.baseline_lock).map_err(|source| source.to_string())?;
         baseline_file.lock().map_err(|source| source.to_string())?;
-        let mut baseline = match baseline::read_baseline(&dir.baseline) {
-            Ok(baseline) => baseline,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error.to_string()),
+        let mut entries = match pending_entries(&self.pending, &dir.dir) {
+            Some(entries) => entries,
+            None => match baseline::read_baseline(&dir.baseline) {
+                Ok(baseline) => baseline.entries,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.to_string()),
+            },
         };
         let mut changed = false;
-        for entry in &mut baseline.entries {
+        for entry in &mut entries {
             let entry_path = Path::new(&entry.path);
             // The entry holds the path itself, or the directory holding
             // it: re-snapshotting the entry records the approved landing.
@@ -216,12 +268,21 @@ impl ProtectedPaths {
                 changed = true;
             }
         }
-        if changed && let Err(source) = baseline::write_baseline(&dir.baseline, &baseline.entries) {
-            // The old baseline would roll the approved bytes back at
-            // the holder's end: drop it, so the end reports the failure
-            // instead of restoring what the call recorded.
-            let _removed = std::fs::remove_file(&dir.baseline);
-            return Err(source.to_string());
+        if changed {
+            // Publish the new entry to in-process guards before trying disk.
+            // If persistence fails, they must not read and restore the old
+            // baseline over the approved landing.
+            set_pending(&self.pending, &dir.dir, entries.clone());
+            if let Err(source) = baseline::write_baseline(&dir.baseline, &entries) {
+                let message = match baseline::invalidate_baseline(&dir.baseline) {
+                    Ok(()) => source.to_string(),
+                    Err(invalidation) => {
+                        format!("{source}; stale baseline could not be invalidated: {invalidation}")
+                    }
+                };
+                return Err(message);
+            }
+            clear_pending(&self.pending, &dir.dir);
         }
         Ok(())
     }
@@ -239,26 +300,46 @@ impl Guard {
             dir,
             active,
             recovered,
+            pending,
         } = self;
         let end = match baseline::open_lock(&dir.baseline_lock) {
             Ok(file) => {
                 if file.lock().is_err() {
                     finish_failure("the baseline lock could not be taken")
                 } else {
-                    let report = if !dir.baseline.exists() {
-                        // No baseline while a holder exists: an approved
-                        // write dropped it after its own write failed, or
-                        // something removed it mid-call. Restoring is
-                        // impossible; the missing file is reported.
-                        finish_failure(&format!(
-                            "the protected-path baseline is missing from {}",
-                            dir.baseline.display()
-                        ))
-                    } else {
-                        match restore::compare_restore_report(&dir) {
+                    let report = match pending_entries(&pending, &dir.dir) {
+                        Some(entries) => {
+                            let mut report = restore::compare_restore_entries(&entries);
+                            match baseline::write_baseline(&dir.baseline, &entries) {
+                                Ok(()) => clear_pending(&pending, &dir.dir),
+                                Err(source) => {
+                                    let message = match baseline::invalidate_baseline(&dir.baseline)
+                                    {
+                                        Ok(()) => source.to_string(),
+                                        Err(invalidation) => format!(
+                                            "{source}; stale baseline could not be invalidated: {invalidation}"
+                                        ),
+                                    };
+                                    report.failed.push(RestoreFailure {
+                                        path: "baseline.json".to_owned(),
+                                        message,
+                                    });
+                                }
+                            }
+                            report
+                        }
+                        None if !dir.baseline.exists() => {
+                            // No baseline while a holder exists: restoring
+                            // is impossible, so report the missing state.
+                            finish_failure(&format!(
+                                "the protected-path baseline is missing from {}",
+                                dir.baseline.display()
+                            ))
+                        }
+                        None => match restore::compare_restore_report(&dir) {
                             Ok(report) => report,
                             Err(source) => finish_failure(&source.to_string()),
-                        }
+                        },
                     };
                     drop(file);
                     report

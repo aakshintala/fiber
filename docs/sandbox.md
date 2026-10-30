@@ -71,7 +71,12 @@ is one JSON file per project under Fiber home, recording the protected
 paths and their contents. When no confined call is running, the call
 compares the live paths against the baseline, restores each difference,
 folds the result into its own report, and takes a fresh snapshot. When
-other calls are running, the call reuses their baseline unchanged.
+other calls are running, the call reuses their baseline unchanged. An approved
+Fiber `write` or `edit` to a protected path advances the baseline. If that
+update cannot be written, the tool returns an error, but Fiber keeps the new
+entries in session memory so active calls in that session cannot restore stale
+bytes. Fiber refuses to start another confined call in that session until it
+can persist those entries.
 
 A session that died mid-call leaves a stale baseline behind. The next
 session's first call finds no active holder, restores what the dead session

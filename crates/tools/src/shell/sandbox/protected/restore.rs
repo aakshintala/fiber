@@ -24,11 +24,17 @@ pub(crate) fn compare_restore_report(dir: &StatePaths) -> Result<Report, std::io
         }
         Err(error) => return Err(error),
     };
+    Ok(compare_restore_entries(&baseline.entries))
+}
+
+/// Compares a supplied baseline, allowing an approved write to finish safely
+/// when its new entries are held in memory after a failed persistence.
+pub(crate) fn compare_restore_entries(entries: &[Entry]) -> Report {
     let mut report = Report {
         restored: Vec::new(),
         failed: Vec::new(),
     };
-    for entry in &baseline.entries {
+    for entry in entries {
         if let Err(source) = reconcile(entry, &mut report) {
             report.failed.push(RestoreFailure {
                 path: entry.display.clone(),
@@ -36,7 +42,7 @@ pub(crate) fn compare_restore_report(dir: &StatePaths) -> Result<Report, std::io
             });
         }
     }
-    Ok(report)
+    report
 }
 
 /// Compares one top-level entry and restores it when it differs. The

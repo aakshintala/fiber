@@ -2102,13 +2102,14 @@ fn a_baseline_read_failure_at_finish_is_reported_not_empty() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_failed_baseline_update_reaches_the_caller_and_keeps_the_approved_write() {
-    // The baseline read succeeds, but the atomic write fails with an active
-    // holder: blocking the write's temp file forces the persistence
-    // failure. The error reaches the approved-write caller, the old
-    // baseline is dropped so the holder's end cannot restore it over the
-    // approved content, and the end reports the missing baseline.
+    // The read-only state directory blocks atomic replacement but leaves the
+    // old baseline file writable. This exercises the in-memory guard path and
+    // ensures another session fails closed on the invalidated disk baseline.
+    use std::os::unix::fs::PermissionsExt as _;
+
     let workspace = fakes::TempDir::new("fiber-protected-approved-fail");
     let fiber = workspace.path().join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
@@ -2118,16 +2119,28 @@ fn a_failed_baseline_update_reaches_the_caller_and_keeps_the_approved_write() {
     let handle = open_handle(&home, workspace.path());
     let begin = handle.begin(workspace.path()).expect("begin snapshots");
     std::fs::write(&protected, b"approved").expect("approved lands");
-    let stuck = baseline_file(&home)
+    let state_dir = baseline_file(&home)
         .parent()
         .expect("the baseline has a parent")
-        .join(format!(".baseline-{}.tmp", std::process::id()));
-    std::fs::create_dir(&stuck).expect("the write's temp path is blocked");
+        .to_path_buf();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o555))
+        .expect("state directory becomes read-only");
     let error = handle
         .note_approved_write(workspace.path(), &protected)
         .expect_err("the baseline failure propagates");
-    assert!(!error.is_empty(), "the failure names its cause: {error}");
+    let other_handle = open_handle(&home, workspace.path());
+    let other_error = other_handle
+        .begin(workspace.path())
+        .expect_err("another session fails closed on the invalid baseline");
     let report = begin.guard.finish();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o755))
+        .expect("state directory becomes writable again");
+
+    assert!(!error.is_empty(), "the failure names its cause: {error}");
+    assert!(
+        !other_error.message.is_empty(),
+        "the other session fails closed with a cause"
+    );
     assert_eq!(
         std::fs::read(&protected).expect("file reads"),
         b"approved",
@@ -2144,6 +2157,16 @@ fn a_failed_baseline_update_reaches_the_caller_and_keeps_the_approved_write() {
             .any(|failure| failure.path == "baseline.json"),
         "the baseline failure is named: {report:?}"
     );
+
+    let begin = handle
+        .begin(workspace.path())
+        .expect("the pending entry is persisted before the next call");
+    assert_eq!(
+        std::fs::read(&protected).expect("file reads"),
+        b"approved",
+        "the stale on-disk baseline is never used"
+    );
+    begin.guard.finish();
 }
 
 #[test]
