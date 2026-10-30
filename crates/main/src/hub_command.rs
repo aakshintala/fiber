@@ -75,9 +75,9 @@ fn mode(installed: bool) -> hub::Mode {
 }
 
 fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
-    let home = match config::fiber_home_from_env() {
+    let home = match crate::startup::startup_home() {
         Ok(home) => home,
-        Err(error) => return fail(failure(error.code(), error.to_string())),
+        Err(error) => return fail(error),
     };
     let exe = match exe {
         Ok(exe) => exe,
@@ -86,7 +86,10 @@ fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::clock::System);
     let configure = {
         let home = home.clone();
-        move || configure(&home, std::env::current_dir())
+        move || match crate::startup::startup_workspace() {
+            Ok(workspace) => configure(&home, Ok(workspace)),
+            Err(failure) => Err(failure),
+        }
     };
     // The hub's inherited environment, read once: the login-shell capture
     // falls back to it, with `FIBER_HOME` set to the hub's own home.

@@ -128,9 +128,7 @@ pub(crate) fn parts_with_session<'a>(
     launch: SessionLaunch,
     fiber: PathBuf,
 ) -> Result<Parts, Failure> {
-    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-    let workspace = std::env::current_dir()
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+    let (home, workspace) = crate::startup::startup()?;
     parts_inner(
         home,
         workspace,

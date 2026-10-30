@@ -45,23 +45,14 @@ pub(crate) fn session_continues(
     // result; there is no worktree isolation to outlive here.
     let reads = Arc::new(crate::switch::Reads::default());
     let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
+    let (home, current) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return ask_failed(e),
     };
     // The sessions dir comes from the entered directory, as every entry
     // does; the identity compare below uses the passed-in original
     // spelling, before `set_current_dir` normalized slashes and symlinks
     // away.
-    let current = match std::env::current_dir() {
-        Ok(current) => current,
-        Err(e) => {
-            return ask_failed(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
-    };
     let sessions = log::sessions_dir(&home, &worktree::project(&current));
     let recorded = match resolve(
         &new,

@@ -49,18 +49,9 @@ fn context() -> Result<Context, i32> {
     // whatever the result.
     let reads = Arc::new(crate::switch::Reads::default());
     let cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return Err(ask_failed(failed(e.code(), e))),
-    };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return Err(ask_failed(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            )));
-        }
+    let (home, workspace) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return Err(ask_failed(e)),
     };
     let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     Ok(Context {

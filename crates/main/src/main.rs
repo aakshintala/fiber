@@ -38,6 +38,7 @@ mod session_command;
 mod session_extensions;
 mod settings;
 mod shutdown;
+mod startup;
 mod startup_log;
 mod switch;
 mod theme_setting;
@@ -1071,18 +1072,9 @@ fn terminal(
         return code;
     }
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return fail(failed(e.code(), e)),
-    };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return fail(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
+    let (home, workspace) = match startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return fail(e),
     };
     // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
     let project = match ::cli::project_of(&home, &workspace) {
@@ -1283,9 +1275,7 @@ fn connect_hub(
 }
 
 fn hub_target(named: Option<&str>) -> Result<(PathBuf, doors::hub::Target), Failure> {
-    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-    let workspace = std::env::current_dir()
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+    let (home, workspace) = startup::startup()?;
     let target =
         doors::hub::load_target(&home, &workspace, named).map_err(|e| failed(e.code(), e))?;
     Ok((home, target))

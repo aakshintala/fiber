@@ -137,18 +137,9 @@ pub(crate) fn ask_resume(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
-    };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return ask_failed(failed(
-                contract::ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
+    let (home, workspace) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return ask_failed(e),
     };
     let project = worktree::project(&workspace);
     let sessions = log::sessions_dir(&home, &project);
@@ -259,18 +250,9 @@ pub(crate) fn session_resume(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
-    };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return ask_failed(failed(
-                contract::ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
+    let (home, workspace) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return ask_failed(e),
     };
     let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     log::crash::attach(&id);

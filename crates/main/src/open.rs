@@ -66,18 +66,13 @@ pub(crate) fn resume(
     let Some(selector) = selector else {
         return crate::terminal(fiber, target, tui::OpenAt::List, None, Vec::new());
     };
-    let home = match config::fiber_home_from_env() {
+    let home = match crate::startup::startup_home() {
         Ok(home) => home,
-        Err(e) => return crate::fail(crate::failed(e.code(), e)),
+        Err(e) => return crate::fail(e),
     };
     let clock = crate::clock::System;
     let mut local = || {
-        let workspace = std::env::current_dir().map_err(|e| {
-            crate::failed(
-                contract::ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            )
-        })?;
+        let workspace = crate::startup::startup_workspace()?;
         let project = worktree::project(&workspace);
         let sessions = log::sessions_dir(&home, &project);
         let in_project = in_project(&project, &worktree::project);
@@ -117,18 +112,13 @@ pub(crate) fn continue_latest(fiber: Result<PathBuf, String>, hub: Option<String
         Ok(target) => target,
         Err(e) => return crate::fail(e),
     };
-    let home = match config::fiber_home_from_env() {
+    let home = match crate::startup::startup_home() {
         Ok(home) => home,
-        Err(e) => return crate::fail(crate::failed(e.code(), e)),
+        Err(e) => return crate::fail(e),
     };
     let clock = crate::clock::System;
     let mut local = || {
-        let workspace = std::env::current_dir().map_err(|e| {
-            crate::failed(
-                contract::ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            )
-        })?;
+        let workspace = crate::startup::startup_workspace()?;
         let project = worktree::project(&workspace);
         let sessions = log::sessions_dir(&home, &project);
         let in_project = in_project(&project, &worktree::project);
@@ -221,13 +211,7 @@ pub(crate) fn target(
     named: Option<&str>,
     layer: Vec<String>,
 ) -> Result<doors::hub::Target, Failure> {
-    let home = config::fiber_home_from_env().map_err(|e| crate::failed(e.code(), e))?;
-    let workspace = std::env::current_dir().map_err(|e| {
-        crate::failed(
-            contract::ErrorCode::IoFailed,
-            format!("the current directory: {e}"),
-        )
-    })?;
+    let (home, workspace) = crate::startup::startup()?;
     target_in(&home, &workspace, named, layer)
 }
 

@@ -300,18 +300,9 @@ pub(crate) fn new_session(
         };
     }
     // As `parts_with` would: a failure here leaves no session.
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
-    };
-    let launch = match std::env::current_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            return ask_failed(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
+    let (home, launch) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return ask_failed(e),
     };
     // Its own reads: the worktree's `git worktree add` runs through them,
     // so a signal kills git and its hook together.
