@@ -326,3 +326,15 @@ In `docs/testing/running.md`.
   (`docs/events.md`, "Versioning").
 - **A grown tool definition:** a raised size budget in the same pull request
   (`docs/tools.md`, "Size budget in CI").
+
+## Journeys
+
+A journey is a screen test that walks one path a person walks, from start to
+finish, through the release binary, and asserts what the screen shows at every
+step. Journeys live in their own test binary and run after merge (`docs/ci.md`,
+"The journey suite"), not in the gate. A bug a person finds gets a journey,
+unless its fix PR names the journey that already covers the path.
+
+The gate runs the screen journeys in `crates/main/tests/terminal.rs`,
+`crates/main/tests/journeys.rs` and `crates/main/tests/inline_images.rs`; the
+main journeys in `crates/main/tests/main_journeys.rs` run on `main`.
