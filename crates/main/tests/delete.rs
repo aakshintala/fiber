@@ -528,6 +528,21 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
     run.wait_screen("the second reply", |grid| grid.contents.contains("second."));
     let dir = session_dir(&setup, &a);
     assert!(dir.is_dir(), "the session directory stays");
+    // Rendered reply text is not proof the turn ended: `text_completed`
+    // precedes `turn_completed` in the log, so the screen can show the
+    // second reply while the second turn is still live. The two persisted
+    // `turn_completed` events are the turn-end signal; quitting before the
+    // second lands races the write the multiset below reads.
+    let second_dir = dir.clone();
+    fakes::wait_until("the second turn to complete", setup.deadline, move || {
+        fs::read_to_string(second_dir.join("events.jsonl")).is_ok_and(|events| {
+            support::complete_lines(&events)
+                .iter()
+                .filter(|line| line["kind"] == "turn_completed")
+                .count()
+                == 2
+        })
+    });
     quit_pty(run, guard);
     let events: Vec<Value> = fs::read_to_string(dir.join("events.jsonl"))
         .unwrap()

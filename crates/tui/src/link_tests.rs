@@ -306,6 +306,7 @@ fn identity(input: &Input) -> String {
         | Input::Connected(..)
         | Input::ConnectFailed(_)
         | Input::Disconnected
+        | Input::WriteFailed(_)
         | Input::Resize
         | Input::Tick
         | Input::Signal(_)

@@ -233,7 +233,14 @@ impl App {
     /// A search result tagged `generation`: shown when it is the current
     /// generation and the `@` panel is open; otherwise it is stale and
     /// changes nothing.
+    #[cfg(test)]
     pub(crate) fn on_files(&mut self, generation: u64, result: Result<Vec<String>, String>) {
+        self.on_files_inner(generation, result);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_files_inner(&mut self, generation: u64, result: Result<Vec<String>, String>) {
         if generation != self.completion.generation {
             return;
         }
@@ -242,7 +249,6 @@ impl App {
             self.completion.selected = self.completion.selected.min(len.saturating_sub(1));
             panel.result = Some(result);
         }
-        self.settle();
     }
 
     /// Keeps the panels in step with the draft after every key: the `/`
@@ -308,7 +314,7 @@ impl App {
             };
             if let Err(error) = remote.search(&workspace, &query, fresh, self.completion.generation)
             {
-                self.on_files(self.completion.generation, Err(error.to_string()));
+                self.on_files_inner(self.completion.generation, Err(error.to_string()));
             }
             Effect::None
         } else if fresh {

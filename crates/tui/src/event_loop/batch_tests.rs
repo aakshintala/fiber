@@ -46,6 +46,7 @@ fn described(inputs: &[Input]) -> Vec<String> {
             Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::WriteFailed(_)
             | Input::Resize
             | Input::Signal(_)
             | Input::Files { .. }
@@ -187,6 +188,7 @@ fn hub_lines_and_ticks_hold_and_nothing_else_does() {
     assert!(!batchable(&key()));
     assert!(!batchable(&Input::Resize));
     assert!(!batchable(&Input::Disconnected));
+    assert!(!batchable(&Input::WriteFailed(Vec::new())));
 }
 
 #[test]

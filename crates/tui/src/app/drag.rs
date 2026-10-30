@@ -30,7 +30,14 @@ impl App {
     /// Every mouse report, before clicks and selection see it: a left
     /// press on an edge starts a drag, a left drag moves it, the release
     /// ends it.
+    #[cfg(test)]
     pub(crate) fn on_drag(&mut self, mouse: &Mouse) {
+        self.on_drag_inner(mouse);
+        self.settle();
+    }
+
+    /// Handles the drag without settling; the owning input boundary settles once.
+    pub(crate) fn on_drag_inner(&mut self, mouse: &Mouse) {
         match mouse.kind {
             MouseKind::Press(Button::Left) => self.press_edge(mouse.col),
             MouseKind::Drag(Button::Left) => {
@@ -67,7 +74,6 @@ impl App {
                 below: false,
             })
         });
-        self.settle();
     }
 
     /// A left drag moves the drag to column `col`, writing the live share
@@ -78,11 +84,9 @@ impl App {
     /// runs; the release hides the rail.
     fn drag_to(&mut self, col: u16) {
         let Some(edge) = self.drag.drag.map(|drag| drag.edge) else {
-            self.settle();
             return;
         };
         let Some(layout) = self.chrome.layout() else {
-            self.settle();
             return;
         };
         let screen = self.screen.width();
@@ -114,7 +118,6 @@ impl App {
                 }
             }
         }
-        self.settle();
     }
 
     /// The release ends the drag. A rail dragged below its floor hides
@@ -127,7 +130,6 @@ impl App {
     )]
     fn end_drag(&mut self) {
         let Some(drag) = self.drag.drag.take() else {
-            self.settle();
             return;
         };
         if drag.edge == Edge::Rail && drag.below {
@@ -135,11 +137,9 @@ impl App {
             if let Some(home) = self.home.as_mut() {
                 home.launch.rail_share = drag.before;
             }
-            self.settle();
             return;
         }
         if drag.edge == Edge::Grip {
-            self.settle();
             return;
         }
         let share = match drag.edge {
@@ -156,7 +156,6 @@ impl App {
         {
             self.queue_save(key, format!("{share}"));
         }
-        self.settle();
     }
 
     /// The edge being dragged and its live share, for the pill. A grip

@@ -17,7 +17,14 @@ impl App {
     /// Folds a model-list read's answer: the catalogue's notices show
     /// grouped by code, and a read error shows once with the old
     /// catalogue kept.
+    #[cfg(test)]
     pub(crate) fn on_models(&mut self, result: Result<Catalogue, String>) {
+        self.on_models_inner(result);
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_models_inner(&mut self, result: Result<Catalogue, String>) {
         // The load landed, answered or not: its wait is over.
         self.notices
             .clear_code("models_loading", Self::MODELS_LOADING_TEXT);
@@ -115,9 +122,9 @@ impl App {
         // uses, as `take_reads` does.
         let refresh = self.take_reads().unwrap_or(Refresh::Stale);
         match read(refresh) {
-            Ok(catalogue) => self.on_models(Ok(catalogue)),
+            Ok(catalogue) => self.on_models_inner(Ok(catalogue)),
             Err(error) => {
-                self.on_models(Err(error));
+                self.on_models_inner(Err(error));
                 self.model_picker.close();
             }
         }
@@ -1057,7 +1064,15 @@ impl App {
     /// command and saving nothing, or saves the open checklist as
     /// `scoped_models`. Nothing while the picker is closed. With no row
     /// to choose the picker stays open, sending nothing.
+    #[cfg(test)]
     pub(in crate::app) fn model_picker_session_only(&mut self) -> super::Effect {
+        let effect = self.model_picker_session_only_inner();
+        self.settle();
+        effect
+    }
+
+    /// Handles the choice without settling; the caller owns the layout pass.
+    pub(in crate::app) fn model_picker_session_only_inner(&mut self) -> super::Effect {
         if !self.model_picker_open() {
             return super::Effect::None;
         }
@@ -1071,7 +1086,6 @@ impl App {
             }
         };
         self.edited();
-        self.settle();
         effect
     }
 
