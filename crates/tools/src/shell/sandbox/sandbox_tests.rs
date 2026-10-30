@@ -2280,19 +2280,36 @@ mod linux_signal {
                 }
             },
         );
-        // SIGKILL to the holder's pid: a safe standard call on the spawned
-        // child, and the wait reaps it on every path past this point.
-        support::group::signal_process(pid, rustix::process::Signal::KILL)
-            .expect("the holder dies");
+        // SIGKILL to the holder's group: the spawned child leads its own
+        // group, and flock forks the sleeper holding the inherited lock
+        // descriptor, so killing the parent alone leaves the lock held. The
+        // wait reaps the direct child on every path past this point.
+        support::group::signal(pid, rustix::process::Signal::KILL).expect("the holder dies");
         child.wait().expect("the holder reaps");
-        // Nobody holds the active lock anymore.
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&active)
-            .expect("the lock opens")
-            .try_lock()
-            .expect("the dead holder released the lock");
+        // Nobody holds the active lock anymore: the kernel frees the last
+        // descriptor at death, and the bounded probe covers delivery.
+        let released = active.clone();
+        fakes::within(
+            "the dead holder released the lock",
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || loop {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&released)
+                    .expect("the lock opens");
+                match file.try_lock() {
+                    Ok(()) => {
+                        file.unlock().expect("the probe releases");
+                        return;
+                    }
+                    Err(std::fs::TryLockError::WouldBlock) => {}
+                    Err(std::fs::TryLockError::Error(source)) => {
+                        panic!("the lock probes: {source}")
+                    }
+                }
+            },
+        );
         // The next session start restores the abandoned damage and drops
         // the stale baseline.
         let (_, startup) = ProtectedPaths::open(&home, workspace.path()).expect("open recovers");

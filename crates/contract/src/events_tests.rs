@@ -633,6 +633,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "kept": [[0, 8192], [1040384, 1048576]],
             "changes": [{"path": "/a", "added": 1, "removed": 2}],
             "control": {"handoff": "note"}, "changed_by": ["e"],
+            "protected_paths": {"restored": [".fiber"], "failed": []},
             "hosts_surfaced": ["https://example.com/"]}),
         ),
         (
@@ -962,7 +963,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "job_completed",
             json!({"job_id": "j", "status": "cancelled", "error": error,
             "process": process, "output_tail": "tail",
-            "notice": "n", "changed_by": ["e"]}),
+            "notice": "n", "changed_by": ["e"],
+            "protected_paths": {"restored": [".fiber"], "failed": []}}),
         ),
         (
             "jobs_pending_notified",
