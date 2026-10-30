@@ -1,24 +1,26 @@
-//! The `ci-needs` check (`docs/ci.md`, "The merge gate"): every job in
-//! `.github/workflows/ci.yml` but the verdict job and the jobs that report
-//! and gate nothing is in the verdict job's `needs`, and `docs/ci.md` names
-//! exactly those report jobs. It reads a fixed structural subset of the
+//! The `ci-needs` check (`docs/ci.md`, "The merge gate"): each job but `ci`
+//! and the report jobs is in the verdict job's `needs`; `docs/ci.md` names
+//! those report jobs. It reads a fixed structural subset of the
 //! workflow and fails closed on anything else.
 
 /// The workflow the check reads, relative to the working directory.
 pub(crate) const WORKFLOW: &str = ".github/workflows/ci.yml";
 /// The doc that names the report jobs, relative to the working directory.
 pub(crate) const CI_DOC: &str = "docs/ci.md";
-/// Jobs that report and gate nothing; named in docs/ci.md, "The merge gate".
-pub(crate) const REPORT_JOBS: [&str; 5] = [
+/// Jobs that report without gating `ci` directly; named in docs/ci.md,
+/// "The merge gate".
+pub(crate) const REPORT_JOBS: [&str; 7] = [
     "backstop_report",
     "bench_comment",
     "cache_prune",
     "flake_decide",
     "flake_report",
+    "bug_red_linux",
+    "bug_red_macos",
 ];
 
 /// The sentence that declares the report jobs in `docs/ci.md`.
-const PREFIX: &str = "except the jobs that report and gate nothing:";
+const PREFIX: &str = "except the jobs that report without gating it directly:";
 
 /// What an error carries after its cause.
 const HINT: &str = "the ci-needs check reads job keys and the ci job's needs as a name, a one-line [a, b] list or a block list";
@@ -300,7 +302,7 @@ fn missing_failures(jobs: &[String], needs: &[String]) -> Vec<String> {
         }
         if !needs.iter().any(|need| need == job) {
             failures.push(format!(
-                "{WORKFLOW}: job {job} is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports and gates nothing, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\""
+                "{WORKFLOW}: job {job} is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports without gating the verdict directly, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\""
             ));
         }
     }
