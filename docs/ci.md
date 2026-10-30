@@ -145,7 +145,7 @@ ships. Cargo ignores the setting when it builds the test harness.
 
 A failed binary-level test retries once. A pass on retry does not fail the
 run, except for a test the pull request touched (below): CI opens a flake
-issue naming the test, or comments on the open one
+issue for the test's binary, `Flaky tests: <binary>`, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
@@ -157,10 +157,10 @@ up the complete open and closed issues, asks
 `cargo xtask flake-report-events` which issue numbers need event fetches,
 fetches only those endpoints, and runs
 `cargo xtask flake-report --tested-commit` to decide one JSON-lines action
-per unique test title, probing ancestry itself only for each selected
+per test binary, probing ancestry itself only for each selected
 latest fix. It then runs `cargo xtask flake-classify`, which reads the
 runner lists and the two file lists git diffs from the merge base, and
-writes one classification line per unique test title: a stale base, a
+writes one classification line per test binary: a stale base, a
 file the pull request owns, or the issue lookup. It uploads one combined
 `flake-report-data` artifact carrying the decision lines plus the
 classification lines. The write-only
@@ -557,7 +557,7 @@ eviction or a `Cargo.lock` change builds cold. The median behind each bound is a
 raised in its workflow. The release gates (`release-gate` and `nightly-gate`)
 bound macOS at 50 minutes because a macOS cold build plus the full suite
 measures 24-26 minutes (runs 39679547149/39660697905), twice that per the
-cold-cache rule; Linux stays at 20.
+cold-cache rule; Linux is 30, the backstop test job's bound, because the Linux gate measures 17-20 minutes (runs 40487347149/40677917738/40865045602, the last cancelled by the earlier bound of 20).
 
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror
