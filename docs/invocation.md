@@ -1146,8 +1146,8 @@ line, and `Dropped` sends none.
 | Read or Queued | no relay is published and the open is refused | Answered | one `command_rejected` with the refusal's code |
 | Read | the write fails before the session could read a byte | Queued | nothing yet; delivered once to the resumed session |
 | Read or Queued | the write fails after the session may have read a byte; a whole JSON body without its line feed counts | Partial | one `command_rejected indeterminate`; never delivered again |
-| Read after `close`, while the session still reads | the session ends | Rerouted | nothing yet; the resumed session ends it with one `closing` |
-| Read after the session stopped reading | the clean exit | Rerouted | delivered once to the resumed session, in read order |
+| Written after `close`, while the session still reads | the session ends | Rerouted | nothing yet; the resumed session ends it with one `closing` |
+| Written after the session stopped reading | the clean exit | Rerouted | delivered once to the resumed session, in read order |
 | Written | the session answers accepted or rejected | Answered | the acknowledgement |
 | Written | the session answers `closing` while still closing | Answered | the promised `closing` answer; never stranded, never `indeterminate` |
 | Written | the session answers `closing` after the exited window | Rerouted | nothing yet; delivered once to the resumed session |

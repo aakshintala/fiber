@@ -2837,12 +2837,6 @@ fn the_command_state_table_matches_the_transition_api() {
             1,
             "each table row ends in one command state: {line}",
         );
-        // `Read after ...` rows describe when the hub read the command;
-        // the reroute they end in is claimed from `Written` once the write
-        // lands, which the bare `Written -> Rerouted` rows document.
-        if before.contains("after ") {
-            continue;
-        }
         for from in froms {
             documented.push((from, tos[0]));
         }
