@@ -683,24 +683,12 @@ impl Run {
     /// caller env, `TERM=xterm-256color`, pty stdio, run deadline), but
     /// the child binary is the given path instead of
     /// `env!("CARGO_BIN_EXE_fiber")`.
+    ///
+    /// debt: factoring the child-spawn lifecycle stays inline until the
+    /// additive-only overlap fence lifts, when the binary path folds
+    /// into the shared spawn path.
     #[track_caller]
     pub(crate) fn spawn_journey(
-        setup: &Setup,
-        cols: u16,
-        rows: u16,
-        bin: &Path,
-        args: &[&str],
-        env: &[(&str, &str)],
-    ) -> Self {
-        Self::spawn_inner_bin(setup, cols, rows, bin, args, env)
-    }
-
-    /// The `spawn_inner` shape with the child binary taken from `bin`:
-    /// no receipt seeding, cleared env plus caller env,
-    /// `TERM=xterm-256color`, pty stdio, run deadline. Kept separate so
-    /// no existing spawn wrapper changes.
-    #[track_caller]
-    fn spawn_inner_bin(
         setup: &Setup,
         cols: u16,
         rows: u16,

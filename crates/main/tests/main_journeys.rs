@@ -739,16 +739,29 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
                 shown.contents
             );
             run.turn_finished(from);
+            // The second answer drew beside the first: two turns, two
+            // answers on the grid.
+            let done = run.wait_screen("the second answer", |grid| {
+                grid.contents.matches("Hello.").count() >= 2
+            });
+            assert_eq!(
+                done.contents.matches("Hello.").count(),
+                2,
+                "both answers drawn: {}",
+                done.contents
+            );
             quit_journey(run);
         }),
     );
 }
 
-/// Installs a provider `fake` with three models in distinct states: `m-ok`
-/// is valid and configured, `m-nocontext` declares no `context_window`
-/// (`model_invalid`), and `m-host` names the `workspace` placeholder whose
-/// setting value is not a host (`model_unconfigured`, as in
-/// `model_picker_keys.rs`'s claimed test).
+/// Installs a provider `fake` with five models in distinct states: `m-ok`
+/// is valid and configured, `m-nocontext` and `m-nocontext2` declare no
+/// `context_window` (`model_invalid`, first message naming `m-nocontext`),
+/// and `m-host` and `m-host2` name the `workspace` placeholder whose
+/// setting value is not a host (`model_unconfigured`, first message naming
+/// `m-host`). Each pair groups into one notice row with its count, which
+/// is what the journey asserts (`docs/errors.md`, "Notices").
 fn install_picker_states_provider(setup: &Setup, server_url: &str) {
     let source = setup.root.path().join("src");
     // The manifest lists every base-URL pattern the models use,
@@ -767,7 +780,9 @@ fn install_picker_states_provider(setup: &Setup, server_url: &str) {
             "models": [
                 {"id": "m-ok", "protocol": "openai-responses", "base_url": format!("{server_url}/v1"), "context_window": 100000},
                 {"id": "m-nocontext", "protocol": "openai-responses", "base_url": format!("{server_url}/v1")},
+                {"id": "m-nocontext2", "protocol": "openai-responses", "base_url": format!("{server_url}/v1")},
                 {"id": "m-host", "protocol": "openai-responses", "base_url": "https://{workspace}/v1", "context_window": 100000},
+                {"id": "m-host2", "protocol": "openai-responses", "base_url": "https://{workspace}/v1", "context_window": 100000},
             ],
         }),
     );
@@ -789,23 +804,24 @@ fn install_picker_states_provider(setup: &Setup, server_url: &str) {
     );
 }
 
-/// Installs the Lua extension `badext` with provider `bad` whose models
-/// function always fails: the catalogue refresh names the extension with
-/// `extension_failed`.
-fn install_failing_lua_provider(setup: &Setup, server_url: &str) {
-    let source = setup.root.path().join("badsrc");
+/// Installs the Lua extension `extension` with provider `provider` whose
+/// models function always fails: the catalogue refresh names the
+/// extension with `extension_failed`. The journey installs two, so the
+/// pair groups into one row with its count.
+fn install_failing_lua_provider(setup: &Setup, server_url: &str, extension: &str, provider: &str) {
+    let source = setup.root.path().join(format!("{extension}src"));
     support::write_json(
         &source.join("extension.json"),
-        &json!({"name": "badext", "version": "0.1.0", "fiber": "0.1.0", "api": 1,
-                "providers": {"bad": [format!("{server_url}/v1")]}}),
+        &json!({"name": extension, "version": "0.1.0", "fiber": "0.1.0", "api": 1,
+                "providers": {provider: [format!("{server_url}/v1")]}}),
     );
     std::fs::create_dir_all(source.join("providers")).unwrap();
     std::fs::write(
-        source.join("providers/bad.lua"),
+        source.join(format!("providers/{provider}.lua")),
         format!(
-            "fiber.provider(\"bad\", {{\n\
+            "fiber.provider(\"{provider}\", {{\n\
                models = {{ timeout = 60000, run = function()\n\
-                 error(\"badext models are broken\")\n\
+                 error(\"{extension} models are broken\")\n\
                end }},\n\
                credential = {{ timeout = 60000, run = function()\n\
                  local r = host.http({{ method = \"POST\", url = \"{server_url}/lua-token\" }})\n\
@@ -834,8 +850,8 @@ fn install_failing_lua_provider(setup: &Setup, server_url: &str) {
 /// Every model-picker notice code shown as itself: the picker band carries
 /// each bad state's own code beside the model it names. Evidence for
 /// #3580, whose parent showed every picker notice as `model_invalid`.
-/// `model_invalid` itself is claimed by `model_picker_keys.rs`'s existing
-/// binary-level test, which pins the negative for its model.
+/// The journey covers `model_invalid` itself with two models declaring no
+/// `context_window`, grouped into one row with its count.
 #[test]
 fn each_model_picker_notice_code_shown_as_itself() {
     run_journey(
@@ -850,9 +866,17 @@ fn each_model_picker_notice_code_shown_as_itself() {
             })
             .unwrap();
             install_picker_states_provider(&setup, &server.url());
-            install_failing_lua_provider(&setup, &server.url());
-            std::fs::create_dir_all(setup.home().join("credentials/bad")).unwrap();
-            std::fs::write(setup.home().join("credentials/bad/work"), "test-key").unwrap();
+            install_failing_lua_provider(&setup, &server.url(), "badext", "bad");
+            install_failing_lua_provider(&setup, &server.url(), "zbadext", "zbad");
+            for provider in ["bad", "zbad"] {
+                std::fs::create_dir_all(setup.home().join(format!("credentials/{provider}")))
+                    .unwrap();
+                std::fs::write(
+                    setup.home().join(format!("credentials/{provider}/work")),
+                    "test-key",
+                )
+                .unwrap();
+            }
             support::write_json(
                 &setup.home().join("config.json"),
                 &json!({"model": "fake/m-ok", "hub": {"idle_exit_ms": 200}}),
@@ -868,11 +892,35 @@ fn each_model_picker_notice_code_shown_as_itself() {
             );
             run.ready();
             dismiss_first_run_offer(&mut run);
-            // Each wait names its code and its model, which survive the
-            // 120-column truncation that cuts the message's tail.
+            // Each wait names its code and its first model, which survive
+            // the 120-column truncation that cuts the message's tail. Each
+            // pair groups into one row: the bulk lead counts both, and the
+            // first item names the first model (`docs/errors.md`,
+            // "Notices").
             let screen = run.wait_screen("the model_unconfigured notice", |grid| {
                 shows(grid, "model_unconfigured") && shows(grid, "fake/m-host")
             });
+            let flagged: Vec<&String> = screen
+                .rows
+                .iter()
+                .filter(|row| row.contains("model_unconfigured"))
+                .collect();
+            assert_eq!(
+                flagged.len(),
+                1,
+                "one model_unconfigured row: {:?}",
+                screen.rows
+            );
+            assert!(
+                flagged[0].contains("2 models are unconfigured"),
+                "the pair's count: {:?}",
+                screen.rows
+            );
+            assert!(
+                flagged[0].contains("fake/m-host"),
+                "the first model: {:?}",
+                screen.rows
+            );
             assert!(
                 screen
                     .rows
@@ -884,6 +932,22 @@ fn each_model_picker_notice_code_shown_as_itself() {
             let screen = run.wait_screen("the model_invalid notice", |grid| {
                 shows(grid, "model_invalid") && shows(grid, "fake/m-nocontext")
             });
+            let flagged: Vec<&String> = screen
+                .rows
+                .iter()
+                .filter(|row| row.contains("model_invalid"))
+                .collect();
+            assert_eq!(flagged.len(), 1, "one model_invalid row: {:?}", screen.rows);
+            assert!(
+                flagged[0].contains("2 `model_invalid` notices"),
+                "the pair's count: {:?}",
+                screen.rows
+            );
+            assert!(
+                flagged[0].contains("fake/m-nocontext"),
+                "the first model: {:?}",
+                screen.rows
+            );
             assert!(
                 screen
                     .rows
@@ -900,6 +964,35 @@ fn each_model_picker_notice_code_shown_as_itself() {
             let screen = run.wait_screen("the extension_failed notice", |grid| {
                 shows(grid, "extension_failed") && shows(grid, "bad")
             });
+            let flagged: Vec<&String> = screen
+                .rows
+                .iter()
+                .filter(|row| row.contains("extension_failed"))
+                .collect();
+            assert_eq!(
+                flagged.len(),
+                1,
+                "one extension_failed row: {:?}",
+                screen.rows
+            );
+            assert!(
+                flagged[0].contains("2 `extension_failed` notices"),
+                "the pair's count: {:?}",
+                screen.rows
+            );
+            assert!(
+                flagged[0].contains("badext"),
+                "the first extension: {:?}",
+                screen.rows
+            );
+            assert!(
+                screen
+                    .rows
+                    .iter()
+                    .all(|row| !(row.contains("extension_failed") && row.contains("zbadext"))),
+                "the second extension is not first: {:?}",
+                screen.rows
+            );
             // No other code reaches the band: the catalogue read carries
             // only these three bad states, and every other registry code
             // belongs to another pass (login, extension load, session).
@@ -1025,9 +1118,10 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             )
             .unwrap();
             let bin = journey_bin();
-            // Tall enough that every view still draws, short enough that
-            // the context breakdown overflows: thirteen rows against ten
-            // visible, room for one full three-row step.
+            // Fourteen rows: the context breakdown still overflows its
+            // body viewport by one full three-row wheel step, while the
+            // picker stays in its full layout. At thirteen rows the picker
+            // compacts, and the wheel coordinate lands outside its list.
             let mut run = Run::spawn_journey(
                 &setup,
                 120,
