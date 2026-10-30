@@ -211,10 +211,10 @@ fn site_at(trees: &[TokenTree], i: usize, scan: &Scan, test: bool) -> Option<Sit
             what: format!("Deadline::after({spelling}) is 60 s or more"),
         });
     }
-    // Symbolic or computed: resolve a trailing known bound name, and fail
-    // closed on anything else, so an unshown bound needs its ruling.
+    // Resolve only a complete symbolic path; compound or unknown expressions
+    // fail closed so an unshown bound needs its ruling.
     let spelling: TokenStream = arg.iter().cloned().collect();
-    match trailing_ident(arg).as_deref().and_then(known_ms) {
+    match simple_path_ident(arg).as_deref().and_then(known_ms) {
         Some(false) => None,
         Some(true) => Some(Site {
             line,
@@ -298,13 +298,31 @@ fn known_ms(name: &str) -> Option<bool> {
     }
 }
 
-/// The last identifier in `tokens`, such as `BUDGET` in
-/// `fakes::deadline::BUDGET` or `MUST_SUCCEED_WITHIN` alone.
-fn trailing_ident(tokens: &[TokenTree]) -> Option<String> {
-    tokens.iter().rev().find_map(|tree| match tree {
-        TokenTree::Ident(ident) => Some(ident.to_string()),
-        TokenTree::Group(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => None,
-    })
+/// The final identifier of a complete Rust path, optionally absolute.
+/// Compound expressions and other token sequences fail closed.
+fn simple_path_ident(tokens: &[TokenTree]) -> Option<String> {
+    let tokens = match tokens {
+        [first, second, rest @ ..] if is_punct(Some(first), ':') && is_punct(Some(second), ':') => {
+            rest
+        }
+        _ => tokens,
+    };
+    let TokenTree::Ident(first) = tokens.first()? else {
+        return None;
+    };
+    let mut last = first.to_string();
+    let mut i = 1;
+    while i < tokens.len() {
+        if !is_punct(tokens.get(i), ':') || !is_punct(tokens.get(i + 1), ':') {
+            return None;
+        }
+        let TokenTree::Ident(ident) = tokens.get(i + 2)? else {
+            return None;
+        };
+        last = ident.to_string();
+        i += 3;
+    }
+    Some(last)
 }
 
 fn split_top_level(args: &[TokenTree]) -> Vec<&[TokenTree]> {

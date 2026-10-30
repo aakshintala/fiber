@@ -233,8 +233,13 @@ fn suffixed_decimal_bounds_are_read() {
 
 #[test]
 fn a_shared_bound_name_passes() {
-    let source = "fn a() { Deadline::after(fakes::deadline::WAIT); }";
-    assert!(check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]).is_empty());
+    for after in ["fakes::deadline::WAIT", "::fakes::deadline::WAIT"] {
+        let source = format!("fn a() {{ Deadline::after({after}); }}");
+        assert!(
+            check("crates/x/tests/a.rs", "tests/a.rs", &source, &[1]).is_empty(),
+            "{after} passes"
+        );
+    }
 }
 
 #[test]
@@ -277,6 +282,7 @@ fn an_unshown_after_fails_closed() {
         ("SPAN", "a bare name"),
         ("Duration::from_secs(30 + 30)", "a computed literal"),
         ("Duration::from_secs(SIXTY)", "a named literal"),
+        ("WAIT * 100", "a compound symbolic bound"),
     ] {
         let source = format!("fn a() {{ Deadline::after({after}); }}");
         let failures = check("crates/x/tests/a.rs", "tests/a.rs", &source, &[1]);
