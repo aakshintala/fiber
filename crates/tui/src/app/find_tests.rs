@@ -3356,6 +3356,7 @@ fn failed_settlement_fetch_is_a_follow_up_input_with_one_settle() {
     );
     assert_eq!(App::settle_calls(), 1, "one settle for the first input");
 
+    // The failed writer returns these lines as the follow-up input.
     app.on_write_failed(&unsent);
 
     assert_eq!(App::settle_calls(), 2, "one settle for each input");
