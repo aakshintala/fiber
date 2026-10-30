@@ -101,9 +101,34 @@ pub(crate) struct Rows {
     pub(crate) seam: Option<Bound>,
     /// Current actual session names used by message entries.
     pub(crate) session_names: Arc<HashMap<SessionId, String>>,
+    /// Count-only fold: built-in Markdown replies may insert empty row placeholders.
+    count_only: bool,
 }
 
 impl Rows {
+    /// Rows for a count-only fold.
+    pub(crate) fn count_only() -> Self {
+        Self {
+            count_only: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether this is the count-only fold path.
+    pub(crate) fn is_count_only(&self) -> bool {
+        self.count_only
+    }
+
+    /// Inserts one empty placeholder per counted Markdown row.
+    pub(crate) fn push_counted(&mut self, count: usize, targets: &[(usize, Target)]) {
+        for at in 0..count {
+            let target = targets
+                .iter()
+                .find_map(|(line, target)| (*line == at).then_some(*target));
+            self.push((Line::default(), target));
+        }
+    }
+
     /// Rows for a search draw: every collapsible body draws.
     pub(crate) fn all_open() -> Self {
         Self {
@@ -277,13 +302,7 @@ impl Rows {
             let Some(((line, target), text)) = self.take_row(at) else {
                 break;
             };
-            let total = line
-                .spans
-                .iter()
-                .flat_map(|span| span.styled_graphemes(Style::default()))
-                .fold(0usize, |total, grapheme| {
-                    total.saturating_add(crate::format::width(grapheme.symbol))
-                });
+            let (_, total) = row_widths(line.spans.iter().map(|span| span.content.as_ref()));
             let room = usize::from(inner);
             if total <= room || room == 0 {
                 let mut row = (line, target);
@@ -419,6 +438,28 @@ impl Rows {
             );
         }
     }
+}
+
+/// The draw-equivalent span width and the exact grapheme width `Rows::pad`
+/// uses for `parts`, kept separate because styled span boundaries matter.
+pub(crate) fn row_widths<'a>(parts: impl IntoIterator<Item = &'a str>) -> (usize, usize) {
+    parts
+        .into_iter()
+        .fold((0usize, 0usize), |(spans, pad), part| {
+            if part.is_ascii() && !part.bytes().any(|byte| byte.is_ascii_control()) {
+                return (
+                    spans.saturating_add(part.len()),
+                    pad.saturating_add(part.len()),
+                );
+            }
+            let span = Span::raw(part);
+            let pad = span
+                .styled_graphemes(Style::default())
+                .fold(pad, |total, grapheme| {
+                    total.saturating_add(crate::format::width(grapheme.symbol))
+                });
+            (spans.saturating_add(span.width()), pad)
+        })
 }
 
 /// How many pieces [`Rows::pad`] splits `line` into at `inner` (1 when

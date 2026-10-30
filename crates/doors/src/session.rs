@@ -119,6 +119,9 @@ pub(crate) struct Gate {
     /// unknown, as `commands` is empty until set.
     servers_refresh: OnceLock<ServersRefresh>,
     mcp_login: OnceLock<McpLogin>,
+    /// The already-read check the `import` driver command consults, wired
+    /// by the session process before the session runs.
+    pub(crate) personal_source_check: OnceLock<Arc<dyn contract::skills::PersonalSourceCheck>>,
     pub(crate) accepted: Accepted,
     /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
     /// each entry is one admitted command, a job's end or a hook's delivery,
@@ -463,6 +466,13 @@ impl Session {
     pub fn mcp_login(&self, login: McpLogin) {
         let stored = self.gate.mcp_login.set(login);
         debug_assert!(stored.is_ok(), "mcp_login is wired once");
+    }
+
+    /// Wires the already-read check the `import` driver command consults
+    /// before the session runs.
+    pub fn personal_source_check(&self, check: Arc<dyn contract::skills::PersonalSourceCheck>) {
+        let stored = self.gate.personal_source_check.set(check);
+        debug_assert!(stored.is_ok(), "personal_source_check is wired once");
     }
 
     /// Wires the credential labels reader and the admitted-provider reader
@@ -897,6 +907,13 @@ impl Gate {
         self.mcp_login.get().cloned()
     }
 
+    /// The installed already-read check, if one is wired.
+    pub(crate) fn personal_source_check(
+        &self,
+    ) -> Option<Arc<dyn contract::skills::PersonalSourceCheck>> {
+        self.personal_source_check.get().cloned()
+    }
+
     pub(crate) fn credentials_reader(&self) -> Option<CredentialsRead> {
         self.credentials.get().map(|(labels, _)| Arc::clone(labels))
     }
@@ -1053,6 +1070,7 @@ fn open_in(
         credentials: OnceLock::new(),
         servers_refresh: OnceLock::new(),
         mcp_login: OnceLock::new(),
+        personal_source_check: OnceLock::new(),
         accepted: Accepted::new(),
         inbox: Mutex::new(None),
         steering: Arc::new(Queue::new()),
