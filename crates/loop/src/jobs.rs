@@ -586,6 +586,7 @@ impl Orphans {
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             })
             .collect()
     }

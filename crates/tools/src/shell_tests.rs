@@ -760,6 +760,7 @@ fn execute_fails_when_the_program_does_not_exist() {
         None,
         &sandbox,
         &workspace,
+        None,
     );
     assert!(err.is_err());
 }

@@ -45,15 +45,12 @@ pub struct ProtectedPaths {
 }
 
 /// What `begin` hands the call: the guard that owns the end-of-call
-/// compare, restore and report, and any stale baseline the call recovered
-/// on its way in.
+/// compare, restore and report, carrying any stale baseline the call
+/// recovered on its way in.
 #[derive(Debug)]
 pub(crate) struct Begin {
     /// The active-lock owner, consumed exactly once by the call's end.
     pub guard: Guard,
-    /// What a stale baseline left behind, restored before the snapshot.
-    /// Empty when the call took or reused a live baseline.
-    pub recovered: Report,
 }
 
 /// Owns the call's active shared lock until its end. Consumed exactly once:
@@ -65,6 +62,9 @@ pub(crate) struct Guard {
     dir: StatePaths,
     /// The active lock, shared for the call's life.
     active: File,
+    /// What a stale baseline left behind, recovered on the way in and
+    /// reported with the call's own end.
+    pub(crate) recovered: Report,
 }
 
 /// What changed while a confined call ran: the paths restored to the
@@ -109,6 +109,25 @@ impl Report {
             ));
         }
         lines
+    }
+
+    /// The shared contract report, for the tool result and the completion
+    /// events: absent when nothing changed.
+    pub(crate) fn contract_paths(&self) -> Option<contract::shapes::ProtectedPaths> {
+        if self.is_empty() {
+            return None;
+        }
+        Some(contract::shapes::ProtectedPaths {
+            restored: self.restored.clone(),
+            failed: self
+                .failed
+                .iter()
+                .map(|failure| contract::shapes::ProtectedPathFailure {
+                    path: failure.path.clone(),
+                    message: failure.message.clone(),
+                })
+                .collect(),
+        })
     }
 
     /// The structured report, for the call result's `details`: absent when
@@ -168,7 +187,12 @@ impl ProtectedPaths {
             home: home.to_path_buf(),
         });
         let dir = state_paths(&handle.home, workspace);
-        create_dir(&dir.dir).map_err(to_string)?;
+        if !dir.dir.exists() {
+            // No state yet: no stale baseline can exist, and the first
+            // confined call's begin records it. A session that ends
+            // before any call leaves the home untouched.
+            return Ok((handle, None));
+        }
         let recovered = recover(&dir)?;
         Ok((handle, recovered))
     }
@@ -197,8 +221,8 @@ impl ProtectedPaths {
                     guard: Guard {
                         dir,
                         active: active_file,
+                        recovered,
                     },
-                    recovered,
                 }
             }
             Err(TryLockError::WouldBlock) => {
@@ -220,10 +244,10 @@ impl ProtectedPaths {
                     guard: Guard {
                         dir,
                         active: active_file,
-                    },
-                    recovered: Report {
-                        restored: Vec::new(),
-                        failed: Vec::new(),
+                        recovered: Report {
+                            restored: Vec::new(),
+                            failed: Vec::new(),
+                        },
                     },
                 }
             }
@@ -270,19 +294,41 @@ impl ProtectedPaths {
 impl Guard {
     /// Compares the protected paths against the baseline, restores any
     /// difference and reports it, then releases both locks. Runs once, after
-    /// the call's final output is collected.
-    pub(crate) fn finish(self, _workspace: &Path) -> Report {
-        let baseline_file = match open_lock(&self.dir.baseline_lock) {
-            Ok(file) => file,
-            Err(source) => {
-                return failed_report(&[], &source.to_string());
+    /// the call's final output is collected. The recovered stale baseline
+    /// joins the call's own end, each path named once.
+    pub(crate) fn finish(self) -> Report {
+        let Self {
+            dir,
+            active,
+            recovered,
+        } = self;
+        let end = match open_lock(&dir.baseline_lock) {
+            Ok(file) => {
+                if file.lock().is_err() {
+                    failed_report(&[], "the baseline lock could not be taken")
+                } else {
+                    let report = compare_restore_report(&dir).unwrap_or_else(failed_report_empty);
+                    drop(file);
+                    report
+                }
             }
+            Err(source) => failed_report(&[], &source.to_string()),
         };
-        if baseline_file.lock().is_err() {
-            return failed_report(&[], "the baseline lock could not be taken");
+        let mut restored = recovered.restored;
+        for path in end.restored {
+            if !restored.contains(&path) {
+                restored.push(path);
+            }
         }
-        let report = compare_restore_report(&self.dir).unwrap_or_else(failed_report_empty);
-        drop(baseline_file);
+        let mut failed = recovered.failed;
+        for failure in end.failed {
+            if !failed.iter().any(|held| held.path == failure.path) {
+                failed.push(failure);
+            }
+        }
+        let report = Report { restored, failed };
+        // Releasing the descriptor releases the shared active take.
+        drop(active);
         report
     }
 }

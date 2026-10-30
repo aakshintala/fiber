@@ -165,6 +165,9 @@ impl Tool for Edit {
             }));
         }
         self.shared.set_seen(&path, hash_bytes(&applied.bytes));
+        // The approved landing advances the baseline, so the call's end
+        // restores to this content, never to what was there before.
+        self.shared.note_approved_write(&path);
         written(&path, &text, &applied)
     }
 

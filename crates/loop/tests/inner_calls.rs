@@ -1974,6 +1974,7 @@ fn an_inner_call_settle_is_written_at_the_inner_finish_under_its_action() {
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             }),
             action: None,
         };

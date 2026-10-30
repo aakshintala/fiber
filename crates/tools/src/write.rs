@@ -126,6 +126,9 @@ impl Tool for Write {
             }));
         }
         self.shared.set_seen(&path, hash_bytes(&written));
+        // The approved landing advances the baseline, so the call's end
+        // restores to this content, never to what was there before.
+        self.shared.note_approved_write(&path);
         stored(&path, created, old.as_deref(), &written)
     }
 

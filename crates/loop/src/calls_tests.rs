@@ -805,6 +805,7 @@ fn failed_line(id: &str) -> contract::jobs::JobRecord {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     })
 }
 

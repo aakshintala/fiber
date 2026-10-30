@@ -322,9 +322,10 @@ impl HomeFixture {
             None,
             &self.settings,
             &self.workspace,
+            None,
         )
         .expect("a confined spawn succeeds");
-        let super::super::command::Ran::Finished(finished) = ran else {
+        let super::super::command::Ran::Finished(finished, _) = ran else {
             panic!("a Stay call finishes in the foreground");
         };
         finished
@@ -568,9 +569,10 @@ fn a_created_missing_deny_stays_unreadable_during_the_call() {
                 None,
                 &settings,
                 &workspace,
+                None,
             )
             .expect("a confined spawn succeeds");
-            let super::super::command::Ran::Finished(finished) = ran else {
+            let super::super::command::Ran::Finished(finished, _) = ran else {
                 panic!("a Stay call finishes in the foreground");
             };
             let _sent = tx.send(finished);
@@ -1646,7 +1648,7 @@ fn baseline_covers_shared_state_once_and_each_worktree_pointer_and_fiber() {
         2,
         "shared state is stored once, got {paths:?}"
     );
-    let report = begin.guard.finish(repo.path());
+    let report = begin.guard.finish();
     assert!(report.is_empty(), "an untouched call reports nothing");
 }
 
@@ -1662,12 +1664,12 @@ fn a_call_from_another_worktree_reuses_the_same_baseline() {
     let after = std::fs::read(baseline_file(&home)).expect("baseline reads");
     assert_eq!(before, after, "an active call fixes the baseline");
     assert!(
-        second.recovered.is_empty(),
+        second.guard.recovered.is_empty(),
         "a reused baseline recovers nothing"
     );
-    let first_report = first.guard.finish(repo.path());
+    let first_report = first.guard.finish();
     assert!(first_report.is_empty(), "an untouched call reports nothing");
-    let second_report = second.guard.finish(&other);
+    let second_report = second.guard.finish();
     assert!(
         second_report.is_empty(),
         "an untouched call reports nothing"
@@ -1700,7 +1702,7 @@ fn changed_bytes_new_entries_deletions_and_modes_are_restored() {
         )
         .expect("mode changed");
     }
-    let report = begin.guard.finish(workspace.path());
+    let report = begin.guard.finish();
     assert_eq!(
         std::fs::read(fiber.join("keep.txt")).expect("file reads"),
         b"original",
@@ -1749,7 +1751,7 @@ fn created_paths_for_missing_entries_are_removed() {
     let fiber = workspace.path().join(".fiber");
     std::fs::create_dir_all(fiber.join("made")).expect("dir created");
     std::fs::write(fiber.join("made").join("file.txt"), b"x").expect("file written");
-    let report = begin.guard.finish(workspace.path());
+    let report = begin.guard.finish();
     assert!(!fiber.exists(), "a created fiber dir is removed");
     assert_eq!(report.restored, vec![".fiber".to_owned()]);
 }
@@ -1761,7 +1763,7 @@ fn an_untouched_call_reports_nothing() {
     let home = protected_home(&workspace);
     let handle = open_handle(&home, workspace.path());
     let begin = handle.begin(workspace.path()).expect("begin snapshots");
-    let report = begin.guard.finish(workspace.path());
+    let report = begin.guard.finish();
     assert!(report.is_empty(), "no change means no report");
     assert!(
         report.notice_lines().is_empty(),
@@ -1823,7 +1825,7 @@ fn recovery_leaves_a_live_baseline_untouched() {
         b"changed",
         "a live baseline restores nothing at startup"
     );
-    let report = begin.guard.finish(workspace.path());
+    let report = begin.guard.finish();
     assert_eq!(report.restored, vec![".fiber".to_owned()]);
     assert_eq!(
         std::fs::read(fiber.join("keep.txt")).expect("file reads"),
@@ -1845,7 +1847,7 @@ fn a_stale_baseline_is_recovered_before_a_new_snapshot() {
     drop(first.guard);
     let second = handle.begin(workspace.path()).expect("begin recovers");
     assert_eq!(
-        second.recovered.restored,
+        second.guard.recovered.restored,
         vec![".fiber".to_owned()],
         "the stale change is recovered and reported"
     );
@@ -1854,8 +1856,14 @@ fn a_stale_baseline_is_recovered_before_a_new_snapshot() {
         b"original",
         "the new snapshot records the restored value"
     );
-    let report = second.guard.finish(workspace.path());
-    assert!(report.is_empty(), "nothing further changed");
+    let report = second.guard.finish();
+    // The end carries the stale recovery with the call's own changes,
+    // each path named once: nothing further changed past the recovery.
+    assert_eq!(
+        report.restored,
+        vec![".fiber".to_owned()],
+        "the end names the recovered path once"
+    );
 }
 
 /// No baseline file exists under `home`.
@@ -1892,7 +1900,7 @@ fn an_approved_write_advances_the_baseline() {
     std::fs::write(&protected, b"approved").expect("file written");
     handle.note_approved_write(workspace.path(), &protected);
     handle.note_approved_write(workspace.path(), &workspace.path().join("unrelated.txt"));
-    let report = begin.guard.finish(workspace.path());
+    let report = begin.guard.finish();
     assert!(
         report.is_empty(),
         "an approved write is never restored away"
@@ -1919,7 +1927,7 @@ fn a_shell_side_change_after_an_approved_write_still_restores() {
     // The shell then changes the same path: the approved value is what
     // the call's end compares against.
     std::fs::write(&protected, b"shell").expect("file written");
-    let report = begin.guard.finish(workspace.path());
+    let report = begin.guard.finish();
     assert_eq!(report.restored, vec![".fiber".to_owned()]);
     assert_eq!(
         std::fs::read(&protected).expect("file reads"),
@@ -1973,7 +1981,7 @@ fn symlinks_renames_and_type_swaps_are_restored() {
         std::fs::write(fiber.join("link"), b"now a file").expect("file written");
         std::os::unix::fs::symlink("moved", fiber.join("extra")).expect("link created");
     }
-    let report = begin.guard.finish(workspace.path());
+    let report = begin.guard.finish();
     assert!(
         fiber.join("dir").join("file.txt").is_file(),
         "the rename is undone"
@@ -1994,11 +2002,72 @@ fn symlinks_renames_and_type_swaps_are_restored() {
     assert_eq!(report.restored, vec![".fiber".to_owned()]);
 }
 
+#[test]
+fn overlapping_calls_share_one_baseline_and_restore_once() {
+    let repo = fakes::git::repo("fiber-protected-overlap");
+    let other = linked(repo.path(), "wt1");
+    let fiber = repo.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("note.txt"), b"original").expect("note written");
+    let home = protected_home(&repo);
+    let handle = open_handle(&home, repo.path());
+    // Plain receivers are Send but not Sync, so each one waits
+    // behind a mutex to cross the scoped-thread boundary.
+    let (a_running_tx, a_running_rx) = mpsc::channel::<()>();
+    let (b_started_tx, b_started_rx) = mpsc::channel::<()>();
+    let (a_done_tx, a_done_rx) = mpsc::channel::<()>();
+    let a_running_rx = std::sync::Mutex::new(a_running_rx);
+    let b_started_rx = std::sync::Mutex::new(b_started_rx);
+    let a_done_rx = std::sync::Mutex::new(a_done_rx);
+    let wait = |what: &str, rx: &std::sync::Mutex<mpsc::Receiver<()>>| {
+        let rx = rx.lock().expect("the rendezvous locks");
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap_or_else(|_| panic!("{what}"));
+    };
+    std::thread::scope(|scope| {
+        // B starts while A holds the baseline: it reuses the fixed
+        // snapshot and ends with nothing to restore.
+        scope.spawn(|| {
+            wait("A takes its baseline first", &a_running_rx);
+            let begin = handle.begin(&other).expect("B reuses the live baseline");
+            assert!(
+                begin.guard.recovered.is_empty(),
+                "a reused baseline recovers nothing"
+            );
+            let baseline = std::fs::read(baseline_file(&home)).expect("the baseline reads");
+            b_started_tx.send(()).expect("B signals");
+            wait("A ends first", &a_done_rx);
+            assert_eq!(
+                std::fs::read(baseline_file(&home)).expect("the baseline reads"),
+                baseline,
+                "the baseline never moves while calls hold it"
+            );
+            let report = begin.guard.finish();
+            assert!(report.is_empty(), "B restores nothing back");
+        });
+        // A runs on this thread: it restores exactly once.
+        let begin = handle.begin(repo.path()).expect("A takes the baseline");
+        a_running_tx.send(()).expect("A signals");
+        wait("B reuses the baseline", &b_started_rx);
+        std::fs::write(fiber.join("note.txt"), b"changed").expect("note changed");
+        let report = begin.guard.finish();
+        assert_eq!(report.restored, vec![".fiber".to_owned()]);
+        assert_eq!(
+            std::fs::read(fiber.join("note.txt")).expect("note reads"),
+            b"original",
+            "A restores"
+        );
+        a_done_tx.send(()).expect("A signals");
+    });
+}
+
 #[cfg(target_os = "linux")]
 mod linux_signal {
     use super::super::protected::{
-        linux_policy, supervisor, supervisor_rules, supports_signal_scope,
+        ProtectedPaths, linux_policy, supervisor, supervisor_rules, supports_signal_scope,
     };
+    use super::{open_handle, protected_home};
 
     /// The supervisor under test: distinct session and hub identities, so
     /// every rule names both.
@@ -2123,6 +2192,102 @@ mod linux_signal {
             kill.1.len(),
             3,
             "one process names three targets, got {kill:?}"
+        );
+    }
+
+    /// The project's `protected-paths` directory: the one project under `home`.
+    fn state_dir(home: &std::path::Path) -> std::path::PathBuf {
+        let mut found = Vec::new();
+        for project in std::fs::read_dir(home.join("projects")).expect("projects lists") {
+            let project = project.expect("project entry reads");
+            found.push(project.path().join("protected-paths"));
+        }
+        assert_eq!(found.len(), 1, "one project holds one state dir");
+        found.pop().expect("one state dir")
+    }
+
+    /// A foreign process holds the active lock at `lock`, then dies without
+    /// releasing it, proving the operating system releases the lock with
+    /// the dead process.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dead_holders_lock_releases_and_startup_recovers() {
+        use std::os::unix::process::CommandExt as _;
+        let workspace = fakes::TempDir::new("fiber-protected-crash");
+        let fiber = workspace.path().join(".fiber");
+        std::fs::create_dir_all(&fiber).expect("fiber dir created");
+        std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
+        let home = protected_home(&workspace);
+        let handle = open_handle(&home, workspace.path());
+        // A call takes its baseline, damages a protected path, and dies
+        // before its end: dropping the guard releases the descriptor, as
+        // the operating system releases a dead process's descriptors.
+        let begin = handle.begin(workspace.path()).expect("begin snapshots");
+        std::fs::write(fiber.join("keep.txt"), b"changed").expect("file changed");
+        let active = state_dir(&home).join("active.lock");
+        drop(begin.guard);
+        let mut child = std::process::Command::new("flock");
+        child
+            .arg("-s")
+            .arg(&active)
+            .arg("sleep")
+            .arg("30")
+            .process_group(0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut child = child
+            .spawn()
+            .expect("flock holds the active lock in a dead-end process");
+        let pid = child.id();
+        // The holder really holds it, bounded and without sleeping: the
+        // probe fails exactly while the foreign descriptor locks.
+        let held = active.clone();
+        fakes::within(
+            "the holder takes the lock",
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                loop {
+                    let file = std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&held)
+                        .expect("the lock opens");
+                    match file.try_lock() {
+                        Err(std::fs::TryLockError::WouldBlock) => return,
+                        Ok(()) => file.unlock().expect("the probe releases"),
+                        Err(std::fs::TryLockError::Error(source)) => {
+                            panic!("the lock probes: {source}")
+                        }
+                    }
+                }
+            },
+        );
+        // SIGKILL to the holder's pid: a safe standard call on the spawned
+        // child, and the wait reaps it on every path past this point.
+        support::group::signal_process(pid, rustix::process::Signal::KILL)
+            .expect("the holder dies");
+        child.wait().expect("the holder reaps");
+        // Nobody holds the active lock anymore.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&active)
+            .expect("the lock opens")
+            .try_lock()
+            .expect("the dead holder released the lock");
+        // The next session start restores the abandoned damage and drops
+        // the stale baseline.
+        let (_, startup) = ProtectedPaths::open(&home, workspace.path()).expect("open recovers");
+        let report = startup.expect("a stale baseline reports");
+        assert_eq!(report.restored, vec![".fiber".to_owned()]);
+        assert_eq!(
+            std::fs::read(fiber.join("keep.txt")).expect("file reads"),
+            b"original",
+            "startup recovery restores"
+        );
+        assert!(
+            !state_dir(&home).join("baseline.json").exists(),
+            "startup recovery drops the baseline"
         );
     }
 

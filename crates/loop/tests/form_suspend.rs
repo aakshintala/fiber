@@ -1496,6 +1496,7 @@ fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             },
             claim: contract::inbox::Claim(Box::new(move || {
                 claim_counted.fetch_add(1, Ordering::SeqCst);

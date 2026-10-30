@@ -173,6 +173,9 @@ codes! {
     PathChanged,
     /// A reply was still paused after 5 continuations in a row.
     PausedTooLong,
+    /// A protected path changed while a confined call ran; startup
+    /// recovery restored it.
+    ProtectedPathsRestored,
     /// A provider server error or overload.
     ProviderUnavailable,
     /// A quota, billing or subscription limit.

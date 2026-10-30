@@ -1152,6 +1152,7 @@ fn hosted_skill() -> Scripted {
             name: None,
         }),
         changed_by: None,
+        protected_paths: None,
         provider_item: Some(json!({"type": "server_tool_result"})),
         hosts_surfaced: Vec::new(),
         loaded: None,

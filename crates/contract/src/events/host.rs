@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::action::Progress;
 use super::context::{Outcome, SkillSource};
 use super::session::Variables;
-use crate::shapes::{Failure, Point, Process, Question, Usage, Worktree};
+use crate::shapes::{Failure, Point, Process, ProtectedPaths, Question, Usage, Worktree};
 use crate::{CommandId, Envelope, ErrorCode, JobId, SessionId};
 
 /// Why an MCP server failed.
@@ -321,6 +321,10 @@ pub struct JobCompleted {
     /// The extensions whose hooks changed the completion notice, when one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_by: Option<Vec<String>>,
+    /// The protected paths a confined call restored or failed to restore;
+    /// absent when none changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protected_paths: Option<ProtectedPaths>,
 }
 
 /// `jobs_pending_notified`.

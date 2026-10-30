@@ -205,6 +205,7 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
             changes: None,
             control: None,
             changed_by: None,
+            protected_paths: None,
             provider_item: None,
             hosts_surfaced: Vec::new(),
             loaded: None,

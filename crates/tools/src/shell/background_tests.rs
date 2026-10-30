@@ -189,6 +189,7 @@ fn hand_off_with_saved(
         },
         cap: OUTPUT_CAP,
         spill: None,
+        protection: None,
     };
     let jobs: Arc<dyn contract::jobs::Jobs> = fakes::jobs::FakeJobs::new(dir);
     let clock: Arc<dyn contract::clock::Clock> = clock;

@@ -24,6 +24,7 @@ use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
 use super::moved::Moved;
 use super::output::{JobStream, align_char_boundary};
+use super::sandbox::protected::Report as ProtectedReport;
 use super::tty;
 use super::{Limit, assemble};
 use crate::error::{ShellError, ToolError};
@@ -233,8 +234,10 @@ pub(crate) fn take(
         }
         Err(error) => {
             let line = format!("It could not move to the background: {error}.");
-            let finished = moved.resume(clock.as_ref(), cancel, emit);
-            assemble(limit, finished, Some(&line), Some(command))
+            // The failed open keeps the guard on the resumed path, so the
+            // end still compares, restores and reports exactly once.
+            let (finished, report) = moved.resume(clock.as_ref(), cancel, emit);
+            super::assemble_reported(limit, finished, Some(&line), Some(command), report)
         }
     }
 }
@@ -301,8 +304,14 @@ fn hand_off(
     // The job's thread starts before the receipt is built, so its timeout
     // and stop hold while the receipt names the saved members.
     thread::spawn(move || {
-        let finished = moved.drive_job(job_clock.as_ref(), &job_cancel, stream, feed);
-        (end.0)(to_completed(job_id, &path, finished, limit));
+        // The job's common finish consumes the guard, so the adopted end
+        // still compares, restores and reports exactly once.
+        let (finished, report) = moved.drive_job(job_clock.as_ref(), &job_cancel, stream, feed);
+        let completed = match report {
+            Some(report) => to_completed_reported(job_id, &path, finished, limit, Some(report)),
+            None => to_completed(job_id, &path, finished, limit),
+        };
+        (end.0)(completed);
     });
     // The job is recorded running and its own drive thread has been
     // spawned: the start ends here, before any receipt work. The guard
@@ -607,6 +616,18 @@ fn description_of(command: &str) -> String {
 /// The end maps as the foreground result does (`assemble`); a stop that
 /// was not indeterminate is `cancelled`.
 fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) -> JobCompleted {
+    to_completed_reported(job_id, path, finished, limit, None)
+}
+
+/// The adopted end with the protected-path report of its guard: the same
+/// outcome as [`to_completed`], carrying what the call's end restored.
+pub(super) fn to_completed_reported(
+    job_id: JobId,
+    path: &Path,
+    finished: Finished,
+    limit: Limit,
+    report: Option<ProtectedReport>,
+) -> JobCompleted {
     let capped = finished.capped;
     let flooded = finished.flooded;
     // The cap wins over every other end, a cancel included; a flood wins
@@ -614,6 +635,7 @@ fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) ->
     let stopped =
         !capped && !flooded && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
     let mut output = assemble(limit, finished, None, None);
+    output.protected_paths = report.as_ref().and_then(ProtectedReport::contract_paths);
     if capped {
         output.error = Some(Failure::from(&ToolError::from(ShellError::Capped)));
     } else if flooded {
@@ -638,6 +660,7 @@ fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) ->
 
         notice: None,
         changed_by: None,
+        protected_paths: output.protected_paths,
     }
 }
 

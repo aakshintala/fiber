@@ -20,6 +20,7 @@ mod locks;
 
 use crate::error::{InspectError, ResolveError};
 use crate::image::ImageChild;
+use crate::shell::sandbox::protected::ProtectedPaths;
 
 pub use locks::{PathGuard, PathLocks};
 
@@ -342,6 +343,10 @@ pub(crate) struct Shared {
     /// child. The first installation wins, as the renderer does; setting
     /// it after `with_images` leaves the built child unchanged.
     timing: OnceLock<Timing>,
+    /// The session's shared protection handle, set once by
+    /// [`Files::with_protection`]. A successful write or edit advances the
+    /// baseline entry its path landed in.
+    protection: OnceLock<Arc<ProtectedPaths>>,
 }
 
 struct Session {
@@ -370,8 +375,18 @@ impl Files {
                 images: OnceLock::new(),
                 renderer: OnceLock::new(),
                 timing: OnceLock::new(),
+                protection: OnceLock::new(),
             }),
         }
+    }
+
+    /// Shares the session's protection handle: a successful write or edit
+    /// advances the baseline entry it landed in, so the call's end restores
+    /// to the approved content. The first installation wins.
+    #[must_use]
+    pub fn with_protection(self, protection: Arc<ProtectedPaths>) -> Self {
+        self.shared.protection.set(protection).unwrap_or(());
+        self
     }
 
     /// Lets `read` process images: it runs `fiber image` with `fiber`, the
@@ -466,6 +481,16 @@ impl Shared {
 
     pub(crate) fn set_seen(&self, path: &Path, hash: u64) {
         session(&self.state).seen.insert(path.to_path_buf(), hash);
+    }
+
+    /// Advances the baseline entry `path` landed in after a successful
+    /// write or edit. A path no protected entry holds is a no-op, as is a
+    /// session with no protection handle. Failures leave the baseline as it
+    /// is; the call's end still compares against the recorded one.
+    pub(crate) fn note_approved_write(&self, path: &Path) {
+        if let Some(handle) = self.protection.get() {
+            handle.note_approved_write(&self.workspace, path);
+        }
     }
 }
 

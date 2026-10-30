@@ -421,6 +421,25 @@ pub struct Worktree {
     pub repository: Option<String>,
 }
 
+/// The protected-path report of a confined shell call: what changed while
+/// it ran and what a restore did not fix. Absent when nothing changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtectedPaths {
+    /// Workspace-relative paths restored to the recorded baseline.
+    pub restored: Vec<String>,
+    /// The restores that did not succeed.
+    pub failed: Vec<ProtectedPathFailure>,
+}
+
+/// One protected-path restore that did not succeed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtectedPathFailure {
+    /// The workspace-relative path.
+    pub path: String,
+    /// Why the restore failed.
+    pub message: String,
+}
+
 /// A marker key whose only value is `true`, such as `declined` or `skipped`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct True;

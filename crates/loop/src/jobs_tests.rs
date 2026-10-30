@@ -106,6 +106,7 @@ fn failed(id: &str) -> JobCompleted {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     }
 }
 
@@ -1600,6 +1601,7 @@ fn a_notice_reads_its_status_exit_signal_error_and_output() {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     };
     assert_eq!(
         notice_text(&done),
