@@ -375,3 +375,174 @@ fn update_to_nightly_from_local_stub_feed() {
         }),
     );
 }
+
+/// Says not now to the unseeded home's first-run import offer: every TUI
+/// journey starts from a plain home, since the suite never seeds import
+/// receipts.
+fn dismiss_first_run_offer(run: &mut Run) {
+    run.wait_screen("the first-run import offer", |grid| {
+        shows(grid, "Import settings")
+    });
+    run.write(b"\x1b[27u");
+    run.wait_screen("the dismissed offer", |grid| {
+        !shows(grid, "Import settings")
+    });
+}
+
+/// Quits a TUI journey's terminal and waits for it, as the quota screen
+/// tests do: the person-visible exit.
+fn quit_journey(mut run: Run) {
+    run.write(b"\x03\x03\r");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// Installs the Lua extension `test-ext` with a `test` provider whose
+/// models, credential and quota functions each make one real HTTP
+/// request: the quota-journey half of `quota_fetch_session.rs`'s
+/// installer, file-local to this binary.
+fn install_quota_provider(setup: &Setup, server_url: &str) {
+    let source = setup.root.path().join("luasrc");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": "test-ext", "version": "0.1.0", "fiber": "0.1.0", "api": 1,
+                "providers": {"test": [format!("{server_url}/v1")]}}),
+    );
+    std::fs::create_dir_all(source.join("providers")).unwrap();
+    std::fs::write(
+        source.join("providers/test.lua"),
+        format!(
+            "fiber.provider(\"test\", {{\n\
+               models = {{ timeout = 60000, run = function()\n\
+                 local r = host.http({{ url = \"{server_url}/lua-models\" }})\n\
+                 return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{server_url}/v1\", context_window = 100000 }}}}\n\
+               end }},\n\
+               credential = {{ timeout = 60000, run = function()\n\
+                 local r = host.http({{ method = \"POST\", url = \"{server_url}/lua-token\" }})\n\
+                 return {{ token = \"tok\", expires_at = 1893456000 }}\n\
+               end }},\n\
+               quota = {{ timeout = 60000, run = function(q)\n\
+                 local r = host.http({{ url = \"{server_url}/lua-quota\" }})\n\
+                 return {{ windows = {{ {{ name = \"w\", used_percent = tonumber(r.body) or 1, resets_at = nil }} }} }}\n\
+               end }},\n\
+               sign = {{ timeout = 60000, run = function(request) return {{}} end }},\n\
+             }})\n"
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// A server answering every Lua purpose plus native model calls: the
+/// quota fetch reports 90% used and signals the test when it lands.
+fn start_quota_server(hit: std::sync::mpsc::Sender<()>) -> ProviderServer {
+    ProviderServer::start_responding(move |request| match request.path.as_str() {
+        "/lua-quota" => {
+            let _sent = hit.send(());
+            fakes::Response::status(200, "90")
+        }
+        "/lua-models" | "/lua-token" => fakes::Response::status(200, "{}"),
+        "/v1/responses" => support::hello(),
+        _ => fakes::Response::status(500, "unrouted"),
+    })
+    .unwrap()
+}
+
+/// A quota notice in the middle of a conversation, then the next prompt
+/// drawn as the person's: two turns on the fake Lua provider, the quota
+/// fetch landing between them. Evidence for #3581, whose parent drew the
+/// second prompt's rows wrong after the notice.
+#[test]
+fn quota_notice_then_next_prompt_drawn_as_person() {
+    run_journey(
+        "quota_notice_then_next_prompt_drawn_as_person",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let (quota_hit, quota_rx) = std::sync::mpsc::channel();
+            let server = start_quota_server(quota_hit);
+            install_quota_provider(&setup, &server.url());
+            std::fs::create_dir_all(setup.home().join("credentials/test")).unwrap();
+            std::fs::write(setup.home().join("credentials/test/work"), "test-key").unwrap();
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "test/m1", "diagnostics": {"level": "debug"}, "hub": {"idle_exit_ms": 200}}),
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &support::TRUECOLOUR);
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            let from = run.output().len();
+            run.write(b"first\r");
+            run.wait_screen("the first answered turn", |grid| {
+                grid.contents.contains("Hello.")
+            });
+            // The fake signals when its quota response is ready, so the
+            // focus-in below runs after the fetch it started: the named
+            // screen wait then draws the fetched share.
+            setup.deadline.recv_or_fail(
+                &quota_rx,
+                "the fake quota response for the fetch the first turn starts",
+            );
+            run.write(b"\x1b[I");
+            run.wait_screen("the fetched quota share", |grid| {
+                grid.contents.contains("10%")
+            });
+            // The reply draws while the first turn is still running, so
+            // the second prompt waits for its completed card: sent
+            // earlier, it would steer the first turn instead of starting
+            // the second.
+            run.turn_finished(from);
+            let from = run.output().len();
+            run.write(b"second\r");
+            let shown = run.wait_screen("the second turn's quota notice", |grid| {
+                grid.contents.contains("Fiber")
+                    && grid.contents.contains("used 90%")
+                    && grid.contents.contains("second")
+            });
+            // Exactly one quota entry: the count the notice gives, never
+            // one row per item and never the full verbatim list.
+            assert_eq!(
+                shown
+                    .rows
+                    .iter()
+                    .filter(|row| row.contains("used 90%"))
+                    .count(),
+                1,
+                "one quota entry: {:?}",
+                shown.rows
+            );
+            // The first-item identity: the provider credential and window
+            // the quota line names.
+            assert!(
+                shown.contents.contains("w quota"),
+                "the quota window: {}",
+                shown.contents
+            );
+            // Only the person's prompt floats above its card: one `you`
+            // row per turn (`docs/tui.md`, "Turns").
+            assert_eq!(
+                shown
+                    .contents
+                    .lines()
+                    .filter(|line| line.trim_start().starts_with("you "))
+                    .count(),
+                2,
+                "one you row per turn: {}",
+                shown.contents
+            );
+            run.turn_finished(from);
+            quit_journey(run);
+        }),
+    );
+}
