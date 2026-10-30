@@ -171,15 +171,63 @@ fn a_failure_names_the_file_the_count_and_the_maximum() {
 
 #[test]
 fn the_maxima_table_parses_paths_and_counts() {
-    let parsed =
-        parse_maxima("crates/main/tests/a.rs 1\ncrates/main/tests/b.rs 7\n").unwrap_or_default();
-    assert_eq!(parsed.get("crates/main/tests/a.rs"), Some(&1));
-    assert_eq!(parsed.get("crates/main/tests/b.rs"), Some(&7));
+    let cases: &[(&str, &[(&str, usize)])] = &[
+        (
+            "crates/main/tests/a.rs 1\ncrates/main/tests/b.rs 7\n",
+            &[("crates/main/tests/a.rs", 1), ("crates/main/tests/b.rs", 7)],
+        ),
+        ("", &[]),
+        ("\n   \n# a comment\n", &[]),
+        (
+            "# leading comment\ncrates/main/tests/a.rs 1\n",
+            &[("crates/main/tests/a.rs", 1)],
+        ),
+        (
+            "  crates/main/tests/a.rs   1  \n",
+            &[("crates/main/tests/a.rs", 1)],
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            parse_maxima(input),
+            Ok(expected
+                .iter()
+                .map(|(path, maximum)| ((*path).to_owned(), *maximum))
+                .collect()),
+            "input: {input:?}"
+        );
+    }
 }
 
 #[test]
-fn the_maxima_table_rejects_a_bad_line_a_duplicate_and_a_bad_count() {
-    assert!(parse_maxima("crates/main/tests/a.rs\n").is_err());
-    assert!(parse_maxima("crates/main/tests/a.rs 1\ncrates/main/tests/a.rs 2\n").is_err());
-    assert!(parse_maxima("crates/main/tests/a.rs many\n").is_err());
+fn the_maxima_table_rejects_malformed_lines_with_exact_errors() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "crates/main/tests/a.rs\n",
+            "line 1: expected `<path> <maximum>`, got `crates/main/tests/a.rs`",
+        ),
+        (
+            "crates/main/tests/a.rs 1 extra\n",
+            "line 1: expected `<path> <maximum>`, got `crates/main/tests/a.rs 1 extra`",
+        ),
+        (
+            "crates/main/tests/a.rs many\n",
+            "line 1: maximum for crates/main/tests/a.rs: invalid digit found in string",
+        ),
+        (
+            "crates/main/tests/a.rs 1\ncrates/main/tests/a.rs 2\n",
+            "line 2: duplicate maximum for crates/main/tests/a.rs",
+        ),
+        (
+            "crates/main/tests/a.rs 1\nbadline\n",
+            "line 2: expected `<path> <maximum>`, got `badline`",
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            parse_maxima(input),
+            Err((*expected).to_owned()),
+            "input: {input:?}"
+        );
+    }
 }
