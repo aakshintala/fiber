@@ -860,6 +860,7 @@ impl SessionExtensions {
                         Arc::clone(&clock),
                         Arc::clone(&locks),
                         Arc::clone(&session.state),
+                        debug.clone(),
                     ) {
                         Ok(started) => started,
                         Err(e) => {
@@ -1269,6 +1270,7 @@ impl SessionExtensions {
                 config,
                 Arc::clone(&clock),
                 Arc::clone(&locks),
+                debug.clone(),
             ) {
                 session.failed(&s.name, &e);
                 continue;
