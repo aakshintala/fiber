@@ -3453,3 +3453,21 @@ fn value_with_equals_inside_quotes_reads() {
         vec![workspace_path(&workspace, "12")],
     );
 }
+
+#[test]
+fn rm_starts_suffix_skips_wrapped_rm_word() {
+    // `rm_starts`: the suffix starts after the `rm` word, so a wrapper
+    // such as `sudo` does not shift it.
+    let words = ["sudo", "rm", "-rf", "tmp"];
+    let suffixes: Vec<&[&str]> = super::rm_starts(&words).collect();
+    assert_eq!(suffixes, [["-rf", "tmp"].as_slice()]);
+}
+
+#[test]
+fn git_starts_suffix_skips_git_and_subcommand_words() {
+    // `git_starts`: the suffix starts after `git` and the subcommand, so
+    // a wrapper such as `sudo` does not shift it.
+    let words = ["sudo", "git", "reset", "--hard", "HEAD"];
+    let suffixes: Vec<&[&str]> = super::git_starts(&words, "reset").collect();
+    assert_eq!(suffixes, [["--hard", "HEAD"].as_slice()]);
+}
