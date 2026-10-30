@@ -1731,9 +1731,10 @@ fn shell_started_ask_steered_by_the_shell_is_refused_from_session() {
 /// A client under a root-owned `sudo` prompts a session that is not its
 /// own: the walk reads through the root ancestor, so the prompt is accepted.
 /// `sudo -n -u` the caller's own name puts root `sudo` between the test and
-/// the probe without a password; without it the test prints why and
-/// returns. With `PROC_PIDTBSDINFO` the walk fails at the sudo pid and the
-/// prompt is refused.
+/// the probe without a password; without it a local run prints why and
+/// returns, while CI fails because it must exercise the test. With
+/// `PROC_PIDTBSDINFO` the walk fails at the sudo pid and the prompt is
+/// refused.
 #[test]
 fn root_ancestor_prompt_to_another_session_is_accepted() {
     let setup = Setup::new();
@@ -1758,9 +1759,11 @@ fn root_ancestor_prompt_to_another_session_is_accepted() {
         },
     );
     if !probe_sudo.map(|status| status.success()).unwrap_or(false) {
-        eprintln!(
-            "SKIP: root_ancestor_prompt_to_another_session_is_accepted needs passwordless `sudo -n -u \"$(id -un)\"`"
-        );
+        let reason = "root_ancestor_prompt_to_another_session_is_accepted needs passwordless `sudo -n -u \"$(id -un)\"`";
+        if std::env::var_os("CI").is_some() {
+            panic!("CI prerequisite unavailable: {reason}");
+        }
+        eprintln!("SKIP: {reason}");
         return;
     }
     let server = fakes::ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
