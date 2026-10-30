@@ -70,6 +70,13 @@ fn the_bounds_match_the_shared_consts() {
 }
 
 #[test]
+fn malformed_rust_fails_closed() {
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", "fn a( {", &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].contains("does not tokenise as Rust"), "{failures:?}");
+}
+
+#[test]
 fn a_raised_guard_const_fails() {
     let failures = check(
         "crates/support/src/deadline.rs",
@@ -377,20 +384,20 @@ fn budget_bounds_probe_child() {
         .unwrap()
         .to_path_buf();
     let test_path = root.join("xtask/src/budget_bounds_tests.rs");
-    let test_source = fs::read_to_string(&test_path).unwrap();
+    let test_source = include_str!("budget_bounds_tests.rs");
     let _restore_test = RestoreFile {
         path: test_path.clone(),
-        source: test_source.clone(),
+        source: test_source.to_owned(),
     };
     let probe = "\nfn budget_bounds_probe() { Deadline::after(Duration::from_secs(60)); }\n";
     let probe_line = test_source.lines().count() + 2;
     fs::write(&test_path, format!("{test_source}{probe}")).unwrap();
 
     let docs_path = root.join("docs/testing.md");
-    let docs_source = fs::read_to_string(&docs_path).unwrap();
+    let docs_source = include_str!("../../docs/testing.md");
     let _restore_docs = RestoreFile {
         path: docs_path.clone(),
-        source: docs_source.clone(),
+        source: docs_source.to_owned(),
     };
     fs::write(
         &docs_path,
