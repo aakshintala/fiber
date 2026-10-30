@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use contract::diag::{DebugLog, PrefixHashes, HttpRequest, Purpose, Timing};
+use contract::diag::{DebugLog, HttpRequest, PrefixHashes, Purpose, Timing};
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Reply};
 use contract::shapes::Tokens;
@@ -218,24 +218,21 @@ impl ObservationFinish {
         self.done = true;
         let total = self.clock.now();
         let (host, path) = http::sanitized_target(&self.url, &self.redact);
-        self.log.http_request(&HttpRequest {
-            provider: Some(self.provider.clone()),
-            extension: None,
-            model: self.model.clone(),
-            purpose: Purpose::ModelCall,
-            host,
-            path,
-            status: self.status,
-            attempt: self.attempt.get(),
-            request_bytes: self.request_bytes,
-            response_bytes: self.bytes,
-            headers_ms: self.headers_at.map(|at| ms_since(self.start, at)),
-            first_token_ms: self.first_token_at.map(|at| ms_since(self.start, at)),
-            total_ms: ms_since(self.start, total),
-            prefix_hashes: self.hashes.clone(),
-            cache_read: self.cache_read,
-            cache_write: self.cache_write.clone(),
-        });
+        let mut request = HttpRequest::for_provider(self.provider.clone(), Purpose::ModelCall);
+        request.model = self.model.clone();
+        request.host = host;
+        request.path = path;
+        request.status = self.status;
+        request.attempt = self.attempt.get();
+        request.request_bytes = self.request_bytes;
+        request.response_bytes = self.bytes;
+        request.headers_ms = self.headers_at.map(|at| ms_since(self.start, at));
+        request.first_token_ms = self.first_token_at.map(|at| ms_since(self.start, at));
+        request.total_ms = ms_since(self.start, total);
+        request.prefix_hashes = self.hashes.clone();
+        request.cache_read = self.cache_read;
+        request.cache_write = self.cache_write.clone();
+        self.log.http_request(&request);
     }
 }
 

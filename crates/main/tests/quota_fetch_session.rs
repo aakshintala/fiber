@@ -92,7 +92,7 @@ fn start_routed() -> ProviderServer {
 }
 
 fn configure(setup: &Setup, model: &str) {
-    // Debug, so the quota fetch's `provider_request` line is written.
+    // Debug, so the quota fetch's `http_request` line is written.
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": model, "diagnostics": {"level": "debug"}}),
@@ -148,17 +148,17 @@ fn a_model_call_through_an_open_session_fetches_lua_quota() {
     let quota = loop {
         if let Some(quota) = session_lines(&setup, &session)
             .into_iter()
-            .find(|line| line["code"] == "provider_request" && line["data"]["purpose"] == "quota")
+            .find(|line| line["code"] == "http_request" && line["data"]["purpose"] == "quota")
         {
             break quota;
         }
         assert!(
             !setup.deadline.left().is_zero(),
-            "waited until the deadline for the quota provider_request record in the session log"
+            "waited until the deadline for the quota http_request record in the session log"
         );
         std::thread::yield_now();
     };
-    assert_eq!(quota["message"], "A provider request ended.");
+    assert_eq!(quota["message"], "An HTTP request ended.");
     assert_eq!(quota["data"]["provider"], "test");
     assert_eq!(quota["data"]["purpose"], "quota");
     assert_eq!(quota["data"]["attempt"], 1);
@@ -515,7 +515,7 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     // a fresh cache, so re-asking starts no new `/lua-quota` request
     // and only the view's fetch can reach the gate below. The wait is
     // the drawn value itself (`docs/testing.md`, "Waits and timeouts"),
-    // not the session-log `provider_request` record, which the fetch
+    // not the session-log `http_request` record, which the fetch
     // thread writes when the body ends
     // (`crates/extensions/src/host.rs`, `execute`), synchronously
     // before quota parsing and the store.

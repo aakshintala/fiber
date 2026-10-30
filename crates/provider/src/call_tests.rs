@@ -124,6 +124,21 @@ fn milestones_count_from_the_send_not_from_pre_send_work() {
     assert_eq!(line.status, Some(200));
 }
 
+/// A finished model call carries the provider and no other identity:
+/// the constructor fixes the wire identity, so no producer can leave a
+/// provider purpose without one.
+#[test]
+fn finish_carries_provider_and_no_extension() {
+    let log = Capture::new(true);
+    let clock = fakes::clock::FakeClock::new();
+    let mut finish = record(&log, &clock, clock.now());
+    finish.finish();
+    let lines = log.lines();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].provider.as_deref(), Some("fake"));
+    assert_eq!(lines[0].extension, None);
+}
+
 #[test]
 fn zero_ms_values_are_present_never_omitted() {
     let log = Capture::new(true);
