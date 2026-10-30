@@ -21,7 +21,7 @@ const GLOBAL: &str = "/hub/.fiber/config.json";
 /// The terminal's start bytes, before its first frame: the mode-enable
 /// sequences the test waits for before sending any input.
 const START: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[>0q\x1b[c";
 
 /// The terminal's restore bytes, after its last frame.
 const RESTORE: &[u8] =

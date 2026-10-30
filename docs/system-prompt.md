@@ -301,8 +301,8 @@ the tree below it, so the cost does not grow with the repository.
 Claude Code need no copy.
 
 When two skills share a name, the more specific source wins: the repository,
-then personal, then an extension, then built-in. A `notice` with code
-`skill_shadowed` names both paths.
+then personal, then an extension, then built-in. One `skill_shadowed` notice
+per pass names every shadowed skill with both paths.
 
 The first-party `init` extension (`docs/extensions.md`, "A fresh install") ships
 one prompt template, `init`, so `/init` works on a fresh install. It asks the
@@ -315,9 +315,8 @@ command. A person's own `init` skill or template wins under the precedence above
 
 An MCP server's prompt named like a skill is left out, whatever the skill's
 source, and of two servers' prompts with one name, the server first in name
-order wins. A `notice` with code `skill_shadowed` names the prompt left out
-and what won. A name in `skills.disabled` switches off an MCP prompt of that
-name too. An extension's command named like a skill or prompt template is left out of `commands` the same way, and a `skill_shadowed` notice names both; a driver can still run it with `command`. An MCP server's prompt named like an extension's command is left out too, with the same notice.
+order wins. A name in `skills.disabled` switches off an MCP prompt of that
+name too. An extension's command named like a skill or prompt template is left out of `commands` the same way; a driver can still run it with `command`. An MCP server's prompt named like an extension's command is left out too. One `skill_shadowed` notice per pass names every shadowed command with both paths.
 
 With `docs/` missing from Fiber home, as for a binary copied without the
 installer, there are no built-in skills.

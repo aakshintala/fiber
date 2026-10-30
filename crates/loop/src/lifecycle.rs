@@ -4,6 +4,7 @@
 
 use contract::events::{
     ContextAdded, Event, InputItem, PreambleReason, SteeringApplied, TurnCompleted, TurnOutcome,
+    group_notices, grouped_lead,
 };
 use contract::hook::{
     BeforeModelCall, CheckAnswer, CheckOutcome, ContextAnswer, ContextOutcome, SessionStart,
@@ -178,7 +179,7 @@ impl Loop {
         let _state = hooks.take_change_state();
         self.drain_state(&hooks, turn)?;
         let ContextAnswer { outcome, notices } = answer;
-        for notice in notices {
+        for notice in group_notices(notices, grouped_lead) {
             self.write(&Event::Notice(notice), turn, None)?;
         }
         // A cancel that landed while the hooks ran applies none of the
@@ -308,7 +309,7 @@ impl Loop {
         let _state = hooks.take_change_state();
         self.drain_state(&hooks, Some(turn))?;
         let contract::hook::ContextAnswer { outcome, notices } = answer;
-        for notice in notices {
+        for notice in group_notices(notices, grouped_lead) {
             self.append(&Event::Notice(notice), turn, None)?;
         }
         // A cancel that landed while the hooks ran applies none of the
@@ -390,7 +391,7 @@ impl Loop {
         });
         self.drain_state(&hooks, Some(turn))?;
         let CheckAnswer { outcome, notices } = answer;
-        for notice in notices {
+        for notice in group_notices(notices, grouped_lead) {
             self.append(&Event::Notice(notice), turn, None)?;
         }
         // A cancel that landed while the hooks ran sends nothing, whatever
@@ -461,7 +462,7 @@ impl Loop {
         let _state = hooks.take_change_state();
         self.drain_state(&hooks, Some(turn))?;
         let ContextAnswer { outcome, notices } = answer;
-        for notice in notices {
+        for notice in group_notices(notices, grouped_lead) {
             self.append(&Event::Notice(notice), turn, None)?;
         }
         // A cancel that landed while the hooks ran keeps none of the
