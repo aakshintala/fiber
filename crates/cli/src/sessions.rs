@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use contract::commands::hub::{Delete, HubCommand, HubCommandLine};
 use contract::shapes::Failure;
-use contract::{CommandId, ErrorCode, HubLine, SessionId};
-use serde_json::Value;
+use contract::{CommandId, ErrorCode, HubEventKind, HubLine, SessionId};
+use serde_json::{Map, Value};
 
 use serde::Deserialize;
 
@@ -350,42 +350,72 @@ pub(crate) fn hub_failure(error: doors::Error) -> Failure {
     Failure::from(CliError::Hub(error))
 }
 
+/// One hub line as the CLI dispatches it: the closed kind set plus the
+/// kind-specific body. It deserializes through [`HubLine`], so a line
+/// missing `kind`, `ts`, `schema_version` or `payload` is rejected there,
+/// and the envelope's `ts` and `schema_version` are checked then dropped:
+/// dispatch only reads the kind and the payload.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(from = "HubLine")]
+struct HubAnswer {
+    kind: HubEventKind,
+    payload: Map<String, Value>,
+}
+
+impl From<HubLine> for HubAnswer {
+    fn from(line: HubLine) -> Self {
+        Self {
+            kind: HubEventKind::from(line.kind),
+            payload: line.payload,
+        }
+    }
+}
+
 /// The hub's answer to `command_id`, when `line` carries it: the accepted
 /// `result`, `null` when it has none, or the rejection as a failure.
 /// `None` for any other line. A rejection without a usable code is
 /// `io_failed`; one without a message names the command.
 pub(crate) fn answer_of(line: &HubLine, id: &str, command: &str) -> Option<Result<Value, Failure>> {
     // debt: a later #923 part deletes this wrapper once hub_status returns `CliError`.
-    matched(line.clone(), id, || command.to_owned()).map(|r| r.map_err(Failure::from))
+    matched(HubAnswer::from(line.clone()), id, || command.to_owned())
+        .map(|r| r.map_err(Failure::from))
 }
 
 /// The answer body over an owned line: moves an accepted `result` out of
 /// the payload instead of cloning it. `command` runs at most once, only
 /// for a rejection with no `message`.
 fn matched(
-    mut line: HubLine,
+    mut answer: HubAnswer,
     id: &str,
     command: impl FnOnce() -> String,
 ) -> Option<Result<Value, CliError>> {
-    if line.payload.get("command_id").and_then(Value::as_str) != Some(id) {
+    if answer.payload.get("command_id").and_then(Value::as_str) != Some(id) {
         return None;
     }
-    match line.kind.as_str() {
-        "command_accepted" => Some(Ok(line.payload.remove("result").unwrap_or(Value::Null))),
-        "command_rejected" => {
-            let code = line
+    match answer.kind {
+        HubEventKind::CommandAccepted => {
+            Some(Ok(answer.payload.remove("result").unwrap_or(Value::Null)))
+        }
+        HubEventKind::CommandRejected => {
+            let code = answer
                 .payload
                 .get("code")
                 .and_then(Value::as_str)
                 .and_then(|code| serde_json::from_value(Value::String(code.to_owned())).ok())
                 .unwrap_or(ErrorCode::IoFailed);
-            let message = match line.payload.remove("message") {
+            let message = match answer.payload.remove("message") {
                 Some(Value::String(message)) => message,
                 _ => format!("the hub refused `{}`", command()),
             };
             Some(Err(CliError::Rejected { code, message }))
         }
-        _ => None,
+        HubEventKind::HubHello
+        | HubEventKind::Attention
+        | HubEventKind::DeviceChanged
+        | HubEventKind::SessionLeft
+        | HubEventKind::StreamClosed
+        | HubEventKind::StreamReopened
+        | HubEventKind::Unknown(_) => None,
     }
 }
 
@@ -427,7 +457,7 @@ pub(crate) fn request_value(
                 command: name_of(&bytes),
             });
         };
-        let Ok(answer) = serde_json::from_slice::<HubLine>(&buf) else {
+        let Ok(answer) = serde_json::from_slice::<HubAnswer>(&buf) else {
             continue;
         };
         if let Some(answered) = matched(answer, command_id, || name_of(&bytes)) {
