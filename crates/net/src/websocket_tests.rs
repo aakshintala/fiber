@@ -59,12 +59,9 @@ fn server_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
 #[track_caller]
 fn await_step<T: Send + 'static>(what: &str, step: impl FnOnce() -> T + Send + 'static) -> T {
     let (done, rx) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("websocket-test-step".into())
-        .spawn(move || {
-            done.send(step()).unwrap_or(());
-        })
-        .unwrap();
+    std::thread::spawn(move || {
+        done.send(step()).unwrap_or(());
+    });
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, what)
 }
 
@@ -116,6 +113,17 @@ fn both(rx: &Receiver<&'static str>) {
     names.sort();
     assert_eq!(names, ["net-ws-in", "net-ws-out"]);
 }
+/// Writes caller bytes to the pair: a stalled write fails at the caller naming
+/// the awaited step, and the stream returns for the next step.
+#[track_caller]
+fn caller_write(stream: UnixStream, bytes: Vec<u8>, what: &str) -> UnixStream {
+    await_step(what, move || {
+        let mut stream = stream;
+        stream.write_all(&bytes).map(|_| stream)
+    })
+    .unwrap_or_else(|error| panic!("{what}: {error}"))
+}
+
 /// Reads a stream to EOF: a missing EOF fails at the caller naming the
 /// awaited step, and the stream must carry no bytes past its last line.
 #[track_caller]
@@ -155,7 +163,7 @@ fn messages_lines_ping_pong_and_lossy_utf8_cross_the_pair() {
     });
     let mut via = direct();
     let exit = exits(&mut via);
-    let mut stream = connect_with(&endpoint, &via).unwrap();
+    let stream = connect_with(&endpoint, &via).unwrap();
     let read = BufReader::new(stream.try_clone().unwrap());
     let (read, line) = await_step(
         "client text line hello",
@@ -167,7 +175,7 @@ fn messages_lines_ping_pong_and_lossy_utf8_cross_the_pair() {
     )
     .unwrap_or_else(|error| panic!("client text line hello: {error}"));
     assert_eq!(line, "hello\n");
-    stream.write_all(b"a\xff\n").unwrap();
+    let _stream = caller_write(stream, b"a\xff\n".to_vec(), "client write lossy line");
     eof(read, "client EOF after close");
     both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN)
@@ -227,7 +235,11 @@ fn eof_after_an_unterminated_client_line_still_sends_normal_close() {
     let mut via = direct();
     let exit = exits(&mut via);
     let mut stream = connect_with(&endpoint, &via).unwrap();
-    stream.write_all(b"not a complete line").unwrap();
+    stream = caller_write(
+        stream,
+        b"not a complete line".to_vec(),
+        "client write incomplete line",
+    );
     stream.shutdown(Shutdown::Write).unwrap();
     eof(stream, "client EOF after shutdown with incomplete line");
     both(&exit);
@@ -355,7 +367,7 @@ fn tls_receive_and_shutdown_do_not_wait_for_a_held_send() {
     };
     let exit = exits(&mut via);
     let mut stream = connect_with(&endpoint, &via).unwrap();
-    stream.write_all(b"held send\n").unwrap();
+    stream = caller_write(stream, b"held send\n".to_vec(), "client write held send");
     Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&is_held, "sender encrypted and released TLS state");
     send_frame.send(()).unwrap();
@@ -406,11 +418,19 @@ fn shutdown_with_unread_caller_bytes_still_delivers_eof() {
     };
     let exit = exits(&mut via);
     let mut stream = connect_with(&endpoint, &via).unwrap();
-    stream.write_all(b"hold the sender\n").unwrap();
+    stream = caller_write(
+        stream,
+        b"hold the sender\n".to_vec(),
+        "client write hold the sender",
+    );
     Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&is_held, "out-pump held before the TCP write");
     // The out-pump cannot read these bytes: it is parked inside its send.
-    stream.write_all(b"queued caller bytes\n").unwrap();
+    stream = caller_write(
+        stream,
+        b"queued caller bytes\n".to_vec(),
+        "client write queued caller bytes",
+    );
     close_peer.send(()).unwrap();
     assert_eq!(
         Deadline::after(MUST_SUCCEED_WITHIN)
@@ -512,7 +532,11 @@ fn a_reset_peer_ends_the_pair_and_both_pumps() {
     let mut via = direct();
     let exit = exits(&mut via);
     let mut stream = connect_with(&endpoint, &via).unwrap();
-    stream.write_all(b"unread payload\n").unwrap();
+    stream = caller_write(
+        stream,
+        b"unread payload\n".to_vec(),
+        "client write unread payload",
+    );
     eof(stream, "client EOF after reset with unread bytes");
     both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "peer reset with unread bytes");
