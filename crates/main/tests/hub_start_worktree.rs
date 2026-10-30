@@ -123,12 +123,13 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
         "fiber_exited",
     ]);
     support::assert_kinds_multiset(&stream, &expected, &["clients"], None, COUNT_DOC);
-    // The hub capture above is complete through the exit. The session ran
-    // in a new worktree, so its durable log lives under that project, which
-    // the shared log helper below already walks.
-    let (continued, _) = session_log(&setup, &id);
+    // The hub capture above is complete through the exit, from
+    // `session_started` through `fiber_exited`, so the lifecycle edges are
+    // asserted on it. The durable log is not read here: the session ran in
+    // a temporary worktree, so searching `setup.home()/projects` for it
+    // fails under stress.
     support::assert_session_process_boundaries(
-        &continued,
+        &stream,
         &id,
         SESSION_FIRST_DOC,
         PROCESS_START_DOC,
