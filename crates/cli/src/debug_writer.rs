@@ -28,6 +28,29 @@ pub(crate) fn debug_writer_for(
     })
 }
 
+/// Best-effort one-shot writer for a command holding no loaded
+/// configuration: loads it from `home` and `workspace`, returning `None`
+/// when the load fails or diagnostics run below debug. The writer stamps
+/// its lines on the process clock: the operation only borrows its clock,
+/// never shares it. Building it never fails the command.
+pub(crate) fn cli_writer(
+    home: &std::path::Path,
+    workspace: &std::path::Path,
+) -> Option<Arc<dyn DebugLog>> {
+    let (_, project) = crate::project_of(home, workspace).ok()?;
+    let config = config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project,
+        overrides: Vec::new(),
+    })
+    .ok()?;
+    // The process clock stamps the lines; diagnostics stay best-effort,
+    // so a missing writer only silences them.
+    let clock: Arc<dyn Clock> = Arc::new(support::clock::System);
+    debug_writer_for(home, &config, &clock)
+}
+
 #[cfg(test)]
 #[path = "debug_writer_tests.rs"]
 mod tests;

@@ -917,7 +917,7 @@ fn home_providers_and_set(
     // resolved project holds a repository set.
     let set = project_of(&home, &workspace)
         .map(|(_, project)| {
-            RepositorySet::load_pinned(&home, &project, &workspace, Arc::clone(&clock))
+            RepositorySet::load_pinned(&home, &project, &workspace, Arc::clone(&clock), None)
         })
         .unwrap_or_default();
     let (providers, notices) = Providers::load_all_repository(&home, &set)?;

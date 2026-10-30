@@ -166,9 +166,20 @@ fn run(
     // The platform check runs before any download, even the channel tag
     // fetch, so an unlisted run fails without a single request.
     let triple = extensions::release_triple(triple)?;
+    // The channel tag, release archives and member binaries record on
+    // the one-shot writer at debug; building it is best-effort and
+    // never fails the update. Without one the observed calls stay
+    // silent, as before.
+    let writer = std::env::current_dir()
+        .ok()
+        .and_then(|workspace| crate::debug_writer::cli_writer(home, &workspace));
+    let observe = extensions::Observe {
+        debug: writer,
+        clock,
+    };
     let tag = match channel {
-        Channel::Stable => extensions::latest_stable_tag(&bases.web)?,
-        Channel::Nightly => extensions::fetch_nightly_tag(&bases.api)?,
+        Channel::Stable => extensions::latest_stable_tag_observed(&bases.web, clock, &observe)?,
+        Channel::Nightly => extensions::fetch_nightly_tag_observed(&bases.api, &observe)?,
     };
     let (target, bare) = target_key(&tag)?;
     let running = extensions::version_key(fiber_version)?;
@@ -184,7 +195,7 @@ fn run(
     // The docs stage with the rest and swap after checks and approval,
     // so a failure up to that point changes nothing.
     let stage_docs = !already || fs::symlink_metadata(config::docs_dir(home)).is_err();
-    let staged = extensions::stage_update(
+    let staged = extensions::stage_update_observed(
         home,
         &extensions::Target {
             base,
@@ -195,6 +206,7 @@ fn run(
         clock,
         stage_docs,
         (!already).then_some(binary),
+        &observe,
     )?;
     // The plan's damaged directories are named before approval, so a
     // declined or failed update still names them.

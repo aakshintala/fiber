@@ -8,6 +8,7 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use contract::clock::Clock;
 use extensions::{Origin, Provenance, Request, approved_extension, approved_extensions};
@@ -37,6 +38,7 @@ pub struct LoginNeed {
 }
 
 /// Installs the first-party package serving a provider, without asking.
+/// The plan's binary downloads record on `debug`; `None` stays silent.
 pub fn install_first_party(
     home: &Path,
     config: &config::Config,
@@ -44,6 +46,7 @@ pub fn install_first_party(
     fiber_version: &str,
     origin: &Origin,
     clock: &dyn Clock,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> Result<FirstPartyInstall, CliError> {
     let package =
         extensions::serving_package(provider).ok_or_else(|| CliError::NoFirstPartyPackage {
@@ -55,7 +58,8 @@ pub fn install_first_party(
         fiber_version,
         origin,
         clock,
-    )?;
+    )
+    .map(|plan| plan.with_diagnostics(debug))?;
     let summary = plan
         .damaged()
         .iter()
@@ -282,6 +286,12 @@ fn install(
         err,
     } = io;
     let plan = plan_request(home, request, fiber_version, origin, clock)?;
+    // The plan's binary downloads record on the one-shot writer at
+    // debug; building it is best-effort and never fails the install.
+    let writer = std::env::current_dir()
+        .ok()
+        .and_then(|workspace| crate::debug_writer::cli_writer(home, &workspace));
+    let plan = plan.with_diagnostics(writer);
     // The plan's damaged directories are named before approval, so a
     // declined or failed install still names them.
     for hit in plan.damaged() {
@@ -303,6 +313,11 @@ fn update_all(
         err,
     } = io;
     let listing = extensions::list(home, clock)?;
+    // The member binaries record on the one-shot writer at debug;
+    // building it is best-effort and never fails the update.
+    let writer = std::env::current_dir()
+        .ok()
+        .and_then(|workspace| crate::debug_writer::cli_writer(home, &workspace));
     // Each damaged directory is named once here; the per-extension
     // installs below stay silent about them.
     for hit in &listing.damaged {
@@ -315,7 +330,8 @@ fn update_all(
             fiber_version,
             origin,
             clock,
-        )?;
+        )
+        .map(|plan| plan.with_diagnostics(writer.clone()))?;
         let code = report_install(commit_plan(home, None, plan, terminal, input, err), err)?;
         if code != 0 {
             return Ok(code);

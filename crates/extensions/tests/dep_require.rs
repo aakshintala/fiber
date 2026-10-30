@@ -460,6 +460,7 @@ fn load_set(setup: &Setup, repos: &Repos) -> Arc<SessionExtensions> {
         &setup.workspace(),
         &BTreeSet::new(),
         Fetch::new(repos.origin(), "0.1.0", clock.clone()),
+        None,
     );
     let config = Config::load(Sources {
         home: setup.home(),

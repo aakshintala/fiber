@@ -13,9 +13,9 @@ use crate::git::Origin;
 use crate::install::{Scratch, io, remove, unique_name};
 use crate::installed::read;
 use crate::manage::{Adopted, Plan, plan_updates};
-use crate::prepare::prepare_binary;
+use crate::prepare::{Observe, prepare_binary};
 use crate::release::{
-    DOCS, EXTENSIONS, Release, fetch_verified, layout, stage_docs_from, swap_docs_in,
+    DOCS, EXTENSIONS, Release, fetch_verified_observed, layout, stage_docs_from, swap_docs_in,
     unpack_release_archive,
 };
 use crate::resolve::nightly_parts;
@@ -144,7 +144,9 @@ impl Drop for StagedUpdate<'_> {
 /// archive-covered members from the release, and prepares every staged
 /// member, so the commit downloads nothing. A removed first-party
 /// extension stays removed: only installed names are adopted from the
-/// archives, keeping their requested and floor.
+/// archives, keeping their requested and floor. The observed entry
+/// carries the release and member-binary downloads' lines;
+/// [`stage_update`] stays silent.
 pub fn stage_update<'c>(
     home: &Path,
     release: &Target,
@@ -152,6 +154,30 @@ pub fn stage_update<'c>(
     clock: &'c dyn Clock,
     stage_docs: bool,
     installed_binary: Option<&Path>,
+) -> Result<StagedUpdate<'c>, Error> {
+    stage_update_observed(
+        home,
+        release,
+        origin,
+        clock,
+        stage_docs,
+        installed_binary,
+        &Observe {
+            debug: None,
+            clock: &support::clock::System,
+        },
+    )
+}
+
+/// As [`stage_update`], writing the downloads' lines on `observe`.
+pub fn stage_update_observed<'c>(
+    home: &Path,
+    release: &Target,
+    origin: &Origin,
+    clock: &'c dyn Clock,
+    stage_docs: bool,
+    installed_binary: Option<&Path>,
+    observe: &Observe<'_>,
 ) -> Result<StagedUpdate<'c>, Error> {
     // Both entries map the same way: a Linux build stages its
     // architecture's musl archive, and an unlisted platform fails before
@@ -166,7 +192,7 @@ pub fn stage_update<'c>(
         commit: String::new(),
     };
     let binary_file = format!("fiber-{archive_triple}.tar.gz");
-    let binary_archive = fetch_verified(&archives, &binary_file)?;
+    let binary_archive = fetch_verified_observed(&archives, &binary_file, observe)?;
     let binary_dir = scratch.path().join("binary");
     fs::create_dir(&binary_dir).map_err(io(&binary_dir))?;
     unpack_release_archive(&binary_archive, &binary_dir, &binary_file)?;
@@ -177,7 +203,7 @@ pub fn stage_update<'c>(
             why: "holds no `fiber` binary".into(),
         });
     }
-    let extensions_archive = fetch_verified(&archives, EXTENSIONS)?;
+    let extensions_archive = fetch_verified_observed(&archives, EXTENSIONS, observe)?;
     let extensions_dir = scratch.path().join("extensions");
     fs::create_dir(&extensions_dir).map_err(io(&extensions_dir))?;
     unpack_release_archive(&extensions_archive, &extensions_dir, EXTENSIONS)?;
@@ -190,7 +216,7 @@ pub fn stage_update<'c>(
     // archive and stages none.
     let docs_fresh = stage_docs
         .then(|| {
-            let archive = fetch_verified(&archives, DOCS)?;
+            let archive = fetch_verified_observed(&archives, DOCS, observe)?;
             stage_docs_from(home, &archive, scratch.path())
         })
         .transpose()?;
@@ -213,7 +239,7 @@ pub fn stage_update<'c>(
     // Only the member binaries pre-stage, before the person's approval:
     // each member's install step runs once after approval, at the commit.
     for item in plan.items() {
-        prepare_binary(item.staged(), &item.manifest)?;
+        prepare_binary(item.staged(), &item.manifest, observe)?;
     }
     Ok(StagedUpdate {
         plan,

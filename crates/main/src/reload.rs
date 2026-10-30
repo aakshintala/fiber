@@ -410,6 +410,11 @@ impl State {
             &self.sources.workspace,
             &scope,
             &now.loader.clock,
+            // A reloaded repository copy's binary download records on
+            // the session sink; at info no writer passes.
+            self.diag
+                .debugging()
+                .then(|| self.diag.clone() as Arc<dyn contract::diag::DebugLog>),
         );
         let mut extensions = self.current.get().reload_repository(
             &self.sources.home,

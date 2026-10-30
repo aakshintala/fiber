@@ -659,6 +659,7 @@ fn deliberately_skipped_required_does_not_fail() {
             "0.0.0",
             fakes::clock::FakeClock::new(),
         ),
+        None,
     );
     let session = extensions::SessionExtensions::load_repository(
         &home,
@@ -680,6 +681,7 @@ fn deliberately_skipped_required_does_not_fail() {
             "0.0.0",
             fakes::clock::FakeClock::new(),
         ),
+        None,
     );
     let reloaded = session.reload_repository(
         &home,

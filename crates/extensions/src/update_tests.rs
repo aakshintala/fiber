@@ -15,11 +15,14 @@ use std::path::{Path, PathBuf};
 
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
 
-use super::{PUBLISHED_ARCHIVES, Target, release_triple, stage_update};
+use super::{
+    Observe, PUBLISHED_ARCHIVES, Target, release_triple, stage_update, stage_update_observed,
+};
 use crate::Error;
 use crate::manage::{Request, plan};
 use crate::release::{Release, install_release};
 use contract::ErrorCode;
+use contract::diag::{DebugLog, HttpRequest, Purpose};
 
 const RELEASE: &str = "0.2.0";
 /// A listed triple the fixture serves: [`release_triple`] maps it to
@@ -1144,4 +1147,151 @@ fn release_triple_rejects_platforms_with_no_published_archive() {
             assert!(said.contains(archive), "{said}");
         }
     }
+}
+
+/// Every `http_request` line the observed stage writes, in order.
+#[derive(Default)]
+struct Lines {
+    lines: std::sync::Mutex<Vec<HttpRequest>>,
+}
+
+impl DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+impl Lines {
+    fn recorded(&self) -> Vec<HttpRequest> {
+        self.lines.lock().unwrap().clone()
+    }
+}
+
+/// An observed stage writes one `extension_release` line per download:
+/// the binary, extensions and docs archives and their checksum files.
+/// The fixture members carry no binary, so no member line follows.
+#[test]
+fn an_observed_stage_writes_one_extension_release_line_per_archive() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.release("github.com/acme/widget", "1.1.0");
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let lines = std::sync::Arc::new(Lines::default());
+    let observe = Observe {
+        debug: Some(std::sync::Arc::clone(&lines) as std::sync::Arc<dyn DebugLog>),
+        clock: clock.as_ref(),
+    };
+    let staged = stage_update_observed(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+        &observe,
+    )
+    .unwrap();
+    let names: Vec<String> = staged
+        .plan()
+        .items()
+        .map(|item| item.name.clone())
+        .collect();
+    assert_eq!(names, ["github.com/acme/widget"]);
+    let lines = lines.recorded();
+    let host = server.url().trim_start_matches("http://").to_owned();
+    let paths = [
+        "/download/v0.2.0/fiber-x86_64-unknown-linux-musl.tar.gz",
+        "/download/v0.2.0/fiber-x86_64-unknown-linux-musl.tar.gz.sha256",
+        "/download/v0.2.0/fiber-extensions.tar.gz",
+        "/download/v0.2.0/fiber-extensions.tar.gz.sha256",
+        "/download/v0.2.0/fiber-docs.tar.gz",
+        "/download/v0.2.0/fiber-docs.tar.gz.sha256",
+    ];
+    assert_eq!(
+        lines.len(),
+        paths.len(),
+        "one line per archive and checksum: {lines:?}"
+    );
+    for (line, path) in lines.iter().zip(paths) {
+        assert_eq!(line.purpose, Purpose::ExtensionRelease, "{line:?}");
+        assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
+        assert_eq!(line.path.as_deref(), Some(path), "{line:?}");
+        assert_eq!(line.status, Some(200), "{line:?}");
+        assert_eq!(line.attempt, 1, "{line:?}");
+        assert_eq!(line.request_bytes, 0, "{line:?}");
+        assert_eq!(line.provider, None, "no provider: {line:?}");
+        assert_eq!(line.extension, None, "no extension: {line:?}");
+        assert_eq!(line.model, None, "no model: {line:?}");
+        if let Some(headers) = line.headers_ms {
+            assert!(
+                headers <= line.total_ms,
+                "headers land before the end: {line:?}"
+            );
+        }
+    }
+}
+
+/// An unlisted platform stages nothing and writes nothing: the triple
+/// check fails before any download, so the observed stage stays silent.
+/// No member installs: the check runs before any repository read.
+#[test]
+fn an_unlisted_platform_stage_writes_no_line() {
+    let setup = Setup::new();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let lines = std::sync::Arc::new(Lines::default());
+    let observe = Observe {
+        debug: Some(std::sync::Arc::clone(&lines) as std::sync::Arc<dyn DebugLog>),
+        clock: clock.as_ref(),
+    };
+    let err = match stage_update_observed(
+        &setup.home(),
+        &Target {
+            base: server.url(),
+            version: RELEASE.into(),
+            triple: "x86_64-apple-darwin".into(),
+        },
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+        &observe,
+    ) {
+        Ok(_) => panic!("an unlisted platform stages no update"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code(), ErrorCode::Usage);
+    assert!(
+        lines.recorded().is_empty(),
+        "no download ran: {:?}",
+        lines.recorded()
+    );
+    assert!(
+        server.requests().is_empty(),
+        "no download ran: {:?}",
+        server.requests()
+    );
 }

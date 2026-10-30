@@ -432,7 +432,17 @@ fn parts_inner(
         ),
         skipped: repository.skipped.clone(),
     };
-    let set = session_extensions::repository_set(&home, &project, &workspace, &repository, &clock);
+    let set = session_extensions::repository_set(
+        &home,
+        &project,
+        &workspace,
+        &repository,
+        &clock,
+        // A repository copy the load prepares records its binary
+        // download on the session sink; at info no writer passes.
+        diag.debugging()
+            .then(|| Arc::clone(&diag) as Arc<dyn contract::diag::DebugLog>),
+    );
     let (mut providers, notices) =
         Providers::load_repository(&home, &config, &set).map_err(|e| failed(e.code(), e))?;
     startup_notices.extend(notices);

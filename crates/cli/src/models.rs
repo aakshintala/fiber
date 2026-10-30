@@ -172,7 +172,7 @@ pub(crate) fn providers_config_and_set(
         project: project.clone(),
         overrides: Vec::new(),
     })?;
-    let set = RepositorySet::load_pinned(home, &project, workspace, clock);
+    let set = RepositorySet::load_pinned(home, &project, workspace, clock, None);
     let (providers, notices) = Providers::load_repository(home, &config, &set)?;
     Ok((providers, config, set, notices))
 }

@@ -236,6 +236,7 @@ fn repository_set(
         &setup.workspace(),
         skipped,
         Fetch::new(repos.origin(), FIBER, clock.clone()),
+        None,
     )
 }
 
@@ -404,6 +405,7 @@ fn approvals_do_not_cross_projects() {
         &setup.workspace(),
         &BTreeSet::new(),
         Fetch::new(repos.origin(), FIBER, clock.clone()),
+        None,
     );
     let session = load_session(&setup, set, &[]);
     assert!(session.loaded().is_empty());
@@ -493,6 +495,7 @@ fn a_missing_workspace_path_gives_an_empty_set_and_no_notice() {
         &setup.workspace().join("missing"),
         &BTreeSet::new(),
         Fetch::new(repos.origin(), FIBER, clock.clone()),
+        None,
     );
     let session = load_session(&setup, set, &[]);
     assert!(session.loaded().is_empty());
@@ -2025,8 +2028,13 @@ fn load_pinned_skips_a_missing_copy_without_building_or_writing() {
     fs::remove_dir_all(copy(&setup, &digest)).unwrap();
     fs::remove_file(ready(&setup, &digest)).unwrap();
     let before = home_files(&setup);
-    let set =
-        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let set = RepositorySet::load_pinned(
+        &setup.home(),
+        &project(),
+        &setup.workspace(),
+        clock.clone(),
+        None,
+    );
     let (providers, notices) = load_providers(&setup, &set, &[]);
     assert!(providers.names().next().is_none());
     assert!(notices.is_empty(), "{notices:?}");
@@ -2082,6 +2090,7 @@ fn load_pinned_gives_the_empty_set_when_the_marker_is_held() {
             &key,
             &workspace,
             worker_clock,
+            None,
         ))
         .unwrap();
     });
@@ -2142,8 +2151,13 @@ fn load_pinned_skips_a_copy_without_its_dependency_marker_but_expands_others() {
     // A dependency-bearing copy without its completion marker is legacy:
     // the session path would rebuild it, so the read-only load skips it.
     fs::remove_file(copy(&setup, &b_digest).join(".fiber-depends/.complete")).unwrap();
-    let set =
-        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let set = RepositorySet::load_pinned(
+        &setup.home(),
+        &project(),
+        &setup.workspace(),
+        clock.clone(),
+        None,
+    );
     let session = load_session(&setup, set, &[]);
     // The skipped copy stays silent, while the held copy's dependencies
     // still expand.
@@ -2195,8 +2209,13 @@ fn load_pinned_reads_neither_unapproved_nor_never_content_and_writes_nothing() {
     let copy = copy(&setup, &digest);
     assert!(copy.is_dir());
     let before = home_files(&setup);
-    let set =
-        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let set = RepositorySet::load_pinned(
+        &setup.home(),
+        &project(),
+        &setup.workspace(),
+        clock.clone(),
+        None,
+    );
     let (providers, notices) = load_providers(&setup, &set, &[]);
     assert!(providers.names().next().is_none());
     assert!(notices.is_empty(), "{notices:?}");
@@ -2218,8 +2237,13 @@ fn try_hold_finished_refuses_a_non_hash_and_an_empty_declaration_writes_nothing(
     assert_eq!(home_files(&setup), before);
     // A workspace declaring no extension touches nothing in Fiber home.
     declare_pkgs(&setup, &[]);
-    let set =
-        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let set = RepositorySet::load_pinned(
+        &setup.home(),
+        &project(),
+        &setup.workspace(),
+        clock.clone(),
+        None,
+    );
     let (providers, notices) = load_providers(&setup, &set, &[]);
     assert!(providers.names().next().is_none());
     assert!(notices.is_empty(), "{notices:?}");
@@ -2335,8 +2359,13 @@ fn load_pinned_skips_an_unfinished_copy_and_a_file_where_the_copy_goes() {
     fs::remove_dir_all(copy(&setup, &b_digest)).unwrap();
     write(&copy(&setup, &b_digest), "not a directory");
     let before = home_files(&setup);
-    let set =
-        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let set = RepositorySet::load_pinned(
+        &setup.home(),
+        &project(),
+        &setup.workspace(),
+        clock.clone(),
+        None,
+    );
     let (providers, notices) = load_providers(&setup, &set, &[]);
     assert!(providers.names().next().is_none());
     assert!(notices.is_empty(), "{notices:?}");
@@ -2386,8 +2415,13 @@ fn load_pinned_keeps_the_first_declared_copy_of_one_name_silently() {
         let digest = hash(&mut Index::load(&setup.home()), &item).unwrap();
         store.approve_on_worker(&item, &digest).unwrap();
     }
-    let set =
-        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let set = RepositorySet::load_pinned(
+        &setup.home(),
+        &project(),
+        &setup.workspace(),
+        clock.clone(),
+        None,
+    );
     let (providers, notices) = load_providers(&setup, &set, &[]);
     // Settling keeps the first declared copy, with no notice: the
     // read-only load never reports the set.

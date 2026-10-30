@@ -19,7 +19,7 @@ use crate::install::{
     Provenance, Record, Scratch, check, commit_all, copy, io, remove, stage, unique_name,
 };
 use crate::installed::lock;
-use crate::prepare::download;
+use crate::prepare::{Observe, download_observed};
 use unpack::{LIMITS, unpack};
 
 /// The release's docs archive.
@@ -44,9 +44,14 @@ pub struct Release {
 /// Downloads `file` from the release and its `.sha256`, checks the bytes
 /// against the checksum file, and returns the bytes. A download failure
 /// names the file; a mismatch is [`Error::ArchiveChecksum`] naming the
-/// archive.
-pub(crate) fn fetch_verified(release: &Release, file: &str) -> Result<Vec<u8>, Error> {
-    let fetched = fetch(release, file)?;
+/// archive. The observed entry writes one `extension_release` line per
+/// GET on `observe`.
+pub(crate) fn fetch_verified_observed(
+    release: &Release,
+    file: &str,
+    observe: &Observe<'_>,
+) -> Result<Vec<u8>, Error> {
+    let fetched = fetch_observed(release, file, observe)?;
     verify(release, file, &fetched)?;
     Ok(fetched.bytes)
 }
@@ -90,20 +95,57 @@ pub(crate) fn swap_docs_in(home: &Path, fresh: &Path) -> Result<(), Error> {
 
 /// Puts the release's docs at `docs/` when it is absent: downloads and
 /// checks the docs archive, unpacks it and swaps it in. A present `docs/`
-/// is left alone without any download.
+/// is left alone without any download. The observed entry carries the
+/// downloads' lines; [`install_docs_if_missing`] stays silent.
 pub fn install_docs_if_missing(home: &Path, release: &Release) -> Result<(), Error> {
+    install_docs_if_missing_observed(
+        home,
+        release,
+        &Observe {
+            debug: None,
+            clock: &support::clock::System,
+        },
+    )
+}
+
+/// As [`install_docs_if_missing`], writing the downloads' lines on
+/// `observe`.
+pub fn install_docs_if_missing_observed(
+    home: &Path,
+    release: &Release,
+    observe: &Observe<'_>,
+) -> Result<(), Error> {
     if fs::symlink_metadata(config::docs_dir(home)).is_ok() {
         return Ok(());
     }
     let scratch = Scratch::create(&std::env::temp_dir(), "fiber-release-docs", 0o700)?;
-    let archive = fetch_verified(release, DOCS)?;
+    let archive = fetch_verified_observed(release, DOCS, observe)?;
     let fresh = stage_docs_from(home, &archive, scratch.path())?;
     swap_docs_in(home, &fresh)
 }
 
 /// The newest stable release tag: the tag `releases/latest` redirects
-/// to. A fetch failure is [`Error::Download`] naming the URL.
+/// to. A fetch failure is [`Error::Download`] naming the URL. The
+/// redirect target is read, never the body. The observed entry carries
+/// the probe's line; [`latest_stable_tag`] stays silent.
 pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
+    latest_stable_tag_observed(
+        web_base,
+        &support::clock::System,
+        &Observe {
+            debug: None,
+            clock: &support::clock::System,
+        },
+    )
+}
+
+/// As [`latest_stable_tag`], writing the probe's line on `observe`.
+pub fn latest_stable_tag_observed(
+    web_base: &str,
+    clock: &dyn Clock,
+    observe: &Observe<'_>,
+) -> Result<String, Error> {
+    use contract::diag::HttpRequest;
     use ureq::ResponseExt as _;
     let url = format!("{}/releases/latest", web_base.trim_end_matches('/'));
     let fail = |why: String| Error::Download {
@@ -116,7 +158,43 @@ pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
         ureq::unversioned::resolver::DefaultResolver::default(),
         net::LIMITS,
     );
-    let response = agent.get(&url).call().map_err(|e| fail(e.to_string()))?;
+    // The send stamp: `None` when silent, so no clock is read at info.
+    let start = observe.stamp();
+    let response = match agent.get(&url).call() {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(debug) = observe.debug.as_ref()
+                && debug.debugging()
+            {
+                let end = clock.now();
+                let since = start.unwrap_or(end);
+                let total = u64::try_from(end.saturating_duration_since(since).as_millis())
+                    .unwrap_or(u64::MAX);
+                let (host, path) = crate::prepare::sanitized_url(&url);
+                let mut line = HttpRequest::for_extension_release(host, path);
+                line.attempt = 1;
+                line.total_ms = total;
+                debug.http_request(&line);
+            }
+            return Err(fail(error.to_string()));
+        }
+    };
+    if let Some(debug) = observe.debug.as_ref()
+        && debug.debugging()
+    {
+        let end = clock.now();
+        let start = start.unwrap_or(end);
+        let elapsed = |instant: std::time::Instant| {
+            u64::try_from(instant.saturating_duration_since(start).as_millis()).unwrap_or(u64::MAX)
+        };
+        let (host, path) = crate::prepare::sanitized_url(&url);
+        let mut line = HttpRequest::for_extension_release(host, path);
+        line.status = Some(response.status().as_u16());
+        line.attempt = 1;
+        line.headers_ms = Some(elapsed(end));
+        line.total_ms = elapsed(end);
+        debug.http_request(&line);
+    }
     let tag = response
         .get_uri()
         .path()
@@ -132,10 +210,23 @@ pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
 /// `draft` false. Anything else in the list is skipped; no match is
 /// [`Error::NoNightly`] naming the channel, and a list that cannot be
 /// fetched or read is [`Error::Download`] naming the nightly list's URL.
+/// The observed entry carries the list's line; [`fetch_nightly_tag`]
+/// stays silent.
 pub fn fetch_nightly_tag(api_base: &str) -> Result<String, Error> {
+    fetch_nightly_tag_observed(
+        api_base,
+        &Observe {
+            debug: None,
+            clock: &support::clock::System,
+        },
+    )
+}
+
+/// As [`fetch_nightly_tag`], writing the list's line on `observe`.
+pub fn fetch_nightly_tag_observed(api_base: &str, observe: &Observe<'_>) -> Result<String, Error> {
     use crate::resolve::nightly_parts;
     let url = format!("{}/releases?per_page=100", api_base.trim_end_matches('/'));
-    let bytes = download("nightly", &url)?;
+    let bytes = download_observed("nightly", &url, observe)?;
     let list: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|err| Error::Download {
             name: "nightly".into(),
@@ -181,7 +272,31 @@ pub fn install_release(
     release: &Release,
     clock: &dyn Clock,
 ) -> Result<Vec<String>, Error> {
-    install_release_with(home, release, clock, &|from, to| fs::rename(from, to))
+    install_release_observed(
+        home,
+        release,
+        clock,
+        &Observe {
+            debug: None,
+            clock: &support::clock::System,
+        },
+    )
+}
+
+/// As [`install_release`], writing the downloads' lines on `observe`.
+pub fn install_release_observed(
+    home: &Path,
+    release: &Release,
+    clock: &dyn Clock,
+    observe: &Observe<'_>,
+) -> Result<Vec<String>, Error> {
+    install_release_with(
+        home,
+        release,
+        clock,
+        &|from, to| fs::rename(from, to),
+        observe,
+    )
 }
 
 /// [`install_release`], with the rename the extensions commit and the docs
@@ -191,9 +306,10 @@ pub(crate) fn install_release_with(
     release: &Release,
     clock: &dyn Clock,
     rename: &dyn Fn(&Path, &Path) -> io::Result<()>,
+    observe: &Observe<'_>,
 ) -> Result<Vec<String>, Error> {
-    let docs = fetch(release, DOCS)?;
-    let extensions = fetch(release, EXTENSIONS)?;
+    let docs = fetch_observed(release, DOCS, observe)?;
+    let extensions = fetch_observed(release, EXTENSIONS, observe)?;
     verify(release, DOCS, &docs)?;
     verify(release, EXTENSIONS, &extensions)?;
     let scratch = Scratch::create(&std::env::temp_dir(), "fiber-release", 0o700)?;
@@ -254,17 +370,18 @@ impl Drop for Staging {
     }
 }
 
-/// One release file and its `.sha256` file, downloaded.
+/// One release file and its `.sha256` file, downloaded: one
+/// `extension_release` line per GET on `observe`.
 struct Fetched {
     bytes: Vec<u8>,
     sha256: Vec<u8>,
 }
 
-fn fetch(release: &Release, file: &str) -> Result<Fetched, Error> {
+fn fetch_observed(release: &Release, file: &str, observe: &Observe<'_>) -> Result<Fetched, Error> {
     let sum = format!("{file}.sha256");
     Ok(Fetched {
-        bytes: download(file, &url(&release.base, &release.version, file))?,
-        sha256: download(&sum, &url(&release.base, &release.version, &sum))?,
+        bytes: download_observed(file, &url(&release.base, &release.version, file), observe)?,
+        sha256: download_observed(&sum, &url(&release.base, &release.version, &sum), observe)?,
     })
 }
 
