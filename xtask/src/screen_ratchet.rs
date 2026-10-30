@@ -82,11 +82,16 @@ pub(crate) fn check(files: &[RustFile], maxima: &BTreeMap<String, usize>) -> Vec
 /// `// settled:` comment on the call line or the line before it.
 pub(crate) fn count_unmarked(source: &str) -> usize {
     let mut depth = 0u32;
+    let mut in_string = false;
+    let mut raw_hashes: Option<usize> = None;
     let mut previous_settled = false;
     let mut count = 0usize;
     for line in source.lines() {
-        let (has_call, has_settled, next) = scan_line(line, depth);
-        depth = next;
+        let (has_call, has_settled, next_depth, next_string, next_raw) =
+            scan_line(line, depth, in_string, raw_hashes);
+        depth = next_depth;
+        in_string = next_string;
+        raw_hashes = next_raw;
         if has_call && !has_settled && !previous_settled {
             count = count.saturating_add(1);
         }
@@ -101,15 +106,19 @@ fn is_ident_byte(byte: Option<&u8>) -> bool {
 }
 
 /// Scans one line: whether its code holds a `.screen()` call and whether
-/// its line comment holds the marker, plus the block-comment depth the next
-/// line starts in. Strings, character literals, raw strings and block
-/// comments hide both markers; a line comment ends the scan.
-fn scan_line(line: &str, mut depth: u32) -> (bool, bool, u32) {
+/// its line comment holds the marker, plus the lexer state the next line
+/// starts in (block-comment depth, open string, open raw string with its
+/// hash count). Strings, character literals, raw strings and block comments
+/// hide both markers; a line comment ends the scan.
+fn scan_line(
+    line: &str,
+    mut depth: u32,
+    mut in_string: bool,
+    mut raw_hashes: Option<usize>,
+) -> (bool, bool, u32, bool, Option<usize>) {
     let bytes = line.as_bytes();
     let mut index = 0usize;
     let mut has_call = false;
-    let mut in_string = false;
-    let mut raw_hashes: Option<usize> = None;
     while index < bytes.len() {
         if let Some(hashes) = raw_hashes {
             if bytes.get(index) == Some(&b'"') {
@@ -208,7 +217,13 @@ fn scan_line(line: &str, mut depth: u32) -> (bool, bool, u32) {
         }
         if bytes.get(index) == Some(&b'/') && bytes.get(index.saturating_add(1)) == Some(&b'/') {
             let comment = line.get(index..).unwrap_or_default();
-            return (has_call, comment.contains(MARKER), depth);
+            return (
+                has_call,
+                comment.contains(MARKER),
+                depth,
+                in_string,
+                raw_hashes,
+            );
         }
         if bytes.get(index) == Some(&b'.') {
             let end = index.saturating_add(CALL.len());
@@ -220,7 +235,7 @@ fn scan_line(line: &str, mut depth: u32) -> (bool, bool, u32) {
         }
         index = index.saturating_add(1);
     }
-    (has_call, false, depth)
+    (has_call, false, depth, in_string, raw_hashes)
 }
 
 #[cfg(test)]

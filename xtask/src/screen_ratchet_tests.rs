@@ -114,6 +114,26 @@ fn a_call_and_a_marker_inside_a_raw_string_count_for_nothing() {
 }
 
 #[test]
+fn a_multiline_raw_string_hides_a_settled_marker() {
+    assert_eq!(
+        count_unmarked(
+            "    let raw = r#\"\n    // settled: fake\"#;\n    let grid = run.screen();\n"
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_multiline_string_hides_a_settled_marker() {
+    assert_eq!(
+        count_unmarked(
+            "    let note = \"open\n    // settled: fake\";\n    let grid = run.screen();\n"
+        ),
+        1
+    );
+}
+
+#[test]
 fn support_files_are_outside_the_rule() {
     let files = [file(
         "crates/main/tests/support/pty.rs",
