@@ -67,7 +67,7 @@ impl Layout {
             .lines
             .iter()
             .enumerate()
-            .map(|(line, text)| rows(styled(panel, line, text), width))
+            .map(|(line, text)| rows(&styled(panel, line, text), width))
             .collect();
         let space = usize::from(bottom.saturating_sub(area.y));
         let total: usize = rows.iter().sum();
@@ -120,7 +120,7 @@ fn text_rows(panel: &Panel, width: u16) -> usize {
         .lines
         .iter()
         .enumerate()
-        .map(|(line, text)| rows(styled(panel, line, text), surface::inset(width)))
+        .map(|(line, text)| rows(&styled(panel, line, text), surface::inset(width)))
         .sum()
 }
 

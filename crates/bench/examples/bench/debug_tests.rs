@@ -219,6 +219,7 @@ fn debug_workloads_are_the_timing_and_busy_workloads() {
         "10 busy turns",
         "session_list",
         "paging",
+        "sandbox setup",
         "sessions list",
         "terminal attach",
         "terminal wheel",
