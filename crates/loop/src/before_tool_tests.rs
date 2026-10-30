@@ -890,6 +890,63 @@ fn notices_from_both_stages_carry_no_action_id_and_come_first() {
 }
 
 #[test]
+fn two_notices_from_one_stage_group_by_code() {
+    // One `before_tool` batch reaches the log as one notice: the count
+    // and the first item up front, with every item and its extension in
+    // the list, still before the call starts (`docs/errors.md`,
+    // "Notices": one per code; `docs/loop.md`, "One step": before_tool
+    // runs before the call is decided).
+    let tool = Arc::new(CountingTool::new("out"));
+    let mut hooks = FakeHooks::with_before(BeforeToolOutcome::Unchanged);
+    for (extension, message) in [
+        ("fiber.test/a", "extension fiber.test/a failed softly"),
+        ("fiber.test/b", "extension fiber.test/b failed softly"),
+    ] {
+        hooks
+            .notices_before
+            .get_mut()
+            .unwrap()
+            .push(contract::events::Notice {
+                code: contract::ErrorCode::HookFailed,
+                message: message.to_owned(),
+                extension: Some(extension.to_owned()),
+            });
+    }
+    hooks
+        .check_answers
+        .get_mut()
+        .unwrap()
+        .push_back(CheckOutcome::Passed);
+    let hooks = Arc::new(hooks);
+    let ran = run(
+        Arc::clone(&tool),
+        script("probe", json!({"path": "a.txt"})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    let notices = ran.streamed_of_kind("notice");
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].payload["code"], "hook_failed");
+    assert_eq!(notices[0].payload.get("extension"), None);
+    let message = notices[0].payload["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("2 hooks failed: extension fiber.test/a failed softly\n"),
+        "{message}"
+    );
+    assert!(
+        message.contains("extension fiber.test/a failed softly (extension `fiber.test/a`)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("extension fiber.test/b failed softly (extension `fiber.test/b`)"),
+        "{message}"
+    );
+    let kinds = ran.kinds();
+    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    assert!(at("notice") < at("tool_call_started"));
+}
+
+#[test]
 fn unchanged_and_passed_run_with_the_models_arguments() {
     let tool = Arc::new(CountingTool::new("out"));
     let hooks = Arc::new(FakeHooks::new());

@@ -897,6 +897,68 @@ fn a_cancel_set_before_a_session_start_chain_runs_only_its_first_hook() {
     );
 }
 
+/// Two non-blocking failures in one chain answer one grouped notice: the
+/// count and the first item up front, every item with its extension in
+/// the list, and no extension on the group itself (`docs/errors.md`,
+/// "Notices": one per code, count and first item up front).
+fn assert_grouped_pair(notices: &[contract::events::Notice]) {
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let notice = &notices[0];
+    assert_eq!(notice.code, ErrorCode::HookFailed);
+    assert_eq!(notice.extension, None);
+    assert!(
+        notice.message.starts_with("2 hooks failed: "),
+        "{}",
+        notice.message
+    );
+    assert!(
+        notice.message.contains("(extension `fiber.test/a`)"),
+        "{}",
+        notice.message
+    );
+    assert!(
+        notice.message.contains("(extension `fiber.test/b`)"),
+        "{}",
+        notice.message
+    );
+}
+
+#[test]
+fn two_non_blocking_turn_start_failures_group_by_code() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &hook("turn_start", "non-blocking", "error(\"boom-a\")"),
+    );
+    home.install(
+        "b",
+        &hook("turn_start", "non-blocking", "error(\"boom-b\")"),
+    );
+    let answer = turn_start(&home.load(&[]), Vec::new());
+    assert!(added(&answer).is_empty(), "{:?}", answer.outcome);
+    assert_grouped_pair(&answer.notices);
+}
+
+#[test]
+fn two_non_blocking_before_model_call_failures_group_by_code() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &hook("before_model_call", "non-blocking", "error(\"boom-a\")"),
+    );
+    home.install(
+        "b",
+        &hook("before_model_call", "non-blocking", "error(\"boom-b\")"),
+    );
+    let answer = model_call(&home.load(&[]), None);
+    assert!(
+        matches!(answer.outcome, CheckOutcome::Passed),
+        "{:?}",
+        answer.outcome
+    );
+    assert_grouped_pair(&answer.notices);
+}
+
 #[test]
 fn a_later_before_model_call_hook_refuses_after_an_earlier_pass() {
     let home = Home::new();
