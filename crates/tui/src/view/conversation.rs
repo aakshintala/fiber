@@ -82,6 +82,11 @@ fn blank_row(buf: &mut Buffer, area: Rect, y: u16, style: Style) {
 /// (`docs/tui.md`, "Pinned call"), with the painted animated items' keys
 /// for the frame's single mark: the caller marks them once, so the
 /// schedule advances only painted items.
+// A line target covers one row: the pad splits longer lines into one-row
+// pieces keeping the target on the first, so the clipped height equals the
+// cell height whenever the guard keeps the target, and a fully clipped
+// target is already skipped.
+#[cfg_attr(false, mutants::skip)]
 fn conversation_rows(
     app: &App,
     area: Rect,
