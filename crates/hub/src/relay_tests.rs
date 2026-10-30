@@ -1815,9 +1815,9 @@ fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
     crate::retire::enqueue_new(&order, SID, &id("c_1"), &stripped("reply"));
     assert_eq!(order.session_for("c_1").as_deref(), Some(SID));
     // Read order, and a second enqueue of the same command changes nothing.
-    order.enqueue(SID, "c_2");
-    order.enqueue(SID, "c_1");
-    order.enqueue(OTHER, "c_other");
+    order.enqueue(SID, &CommandId("c_2".to_owned()));
+    order.enqueue(SID, &CommandId("c_1".to_owned()));
+    order.enqueue(OTHER, &CommandId("c_other".to_owned()));
     assert_eq!(order.session_for("c_2").as_deref(), Some(SID));
     // Nothing re-routed: every wait returns at once, on any epoch, even
     // for a command never queued.
@@ -1850,7 +1850,7 @@ fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
     order.wait_rerouted(SID, EPOCH, "c_2");
     // A dropped handover holds back nothing behind it.
     order.mark_rerouted("c_2", SID, EPOCH);
-    order.enqueue(SID, "c_3");
+    order.enqueue(SID, &CommandId("c_3".to_owned()));
     order.drop_ids(&[(SID.to_owned(), "c_2".to_owned())]);
     order.wait_rerouted(SID, EPOCH, "c_3");
     order.done(SID, "c_3");
@@ -1870,7 +1870,7 @@ fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgemen
     let hub = Arc::new(hub(&held));
     let relays = Arc::new(Mutex::new(Relays::default()));
     let order = crate::connection::lock(&relays).order.clone();
-    order.enqueue(SID, "c_missing");
+    order.enqueue(SID, &CommandId("c_missing".to_owned()));
     let (writer, peer) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     let writer = Arc::new(Mutex::new(writer));
@@ -1994,7 +1994,7 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
             .clone(),
         CommandState::Written,
     )]));
-    order.enqueue(SID, "c_later");
+    order.enqueue(SID, &CommandId("c_later".to_owned()));
     order.mark_rerouted("c_earlier", SID, EPOCH);
     let (noticed_tx, noticed_rx) = mpsc::channel();
     *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |_, _| {
@@ -2092,11 +2092,11 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
             target: RelayTarget::LiveUnreadable,
         });
         let order = crate::connection::lock(&relays).order.clone();
-        order.enqueue(SID, "c_ack");
+        order.enqueue(SID, &CommandId("c_ack".to_owned()));
         if !expect_pop {
-            order.enqueue(SID, "c_probe");
+            order.enqueue(SID, &CommandId("c_probe".to_owned()));
         }
-        order.enqueue(SID, "c_queued");
+        order.enqueue(SID, &CommandId("c_queued".to_owned()));
         let (passed_tx, passed_rx) = mpsc::channel();
         *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {
             passed_tx.send(passed).unwrap_or(());
@@ -2193,7 +2193,7 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
         target: RelayTarget::LiveUnreadable,
     });
     let order = crate::connection::lock(&relays).order.clone();
-    order.enqueue(SID, "c_ack");
+    order.enqueue(SID, &CommandId("c_ack".to_owned()));
     let (client, client_peer) = UnixStream::pair().unwrap();
     client_peer
         .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
@@ -2260,7 +2260,7 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
         ),
     ]));
     for id in ["c_sent", "c_unsent1", "c_unsent2"] {
-        order.enqueue(SID, id);
+        order.enqueue(SID, &CommandId(id.to_owned()));
     }
     let (passed_tx, passed_rx) = mpsc::channel();
     *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {
@@ -2321,7 +2321,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
         target: RelayTarget::LiveUnreadable,
     });
     let order = crate::connection::lock(&relays).order.clone();
-    order.enqueue(SID, "c_known");
+    order.enqueue(SID, &CommandId("c_known".to_owned()));
     let (client, client_peer) = UnixStream::pair().unwrap();
     client_peer
         .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
@@ -2431,8 +2431,8 @@ fn the_relay_parses_each_session_line_once() {
         let held = crate::connection::lock(&relays);
         (held.order.clone(), held.rejoin.closed_flag())
     };
-    order.enqueue(SID, "c_1");
-    order.enqueue(SID, "c_rw");
+    order.enqueue(SID, &CommandId("c_1".to_owned()));
+    order.enqueue(SID, &CommandId("c_rw".to_owned()));
     let line = |text: &str| format!("{text}\n");
     let session_lines = [
         line(r#"{"kind":"session_status","ts":1,"schema_version":1,"payload":{}}"#),
@@ -2655,46 +2655,70 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
         )
     }
     fn stage(order: &AckOrder, from: CommandState) {
-        order.enqueue("s", "c_1");
+        order.enqueue("s", &CommandId("c_1".to_owned()));
         match from {
             Read => {}
             Queued => {
-                order.transition("c_1", Queued).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), Queued)
+                    .unwrap();
             }
             Writing => {
-                order.transition("c_1", Writing).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), Writing)
+                    .unwrap();
             }
             Written | Rerouted => {
-                order.transition("c_1", Written).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), Written)
+                    .unwrap();
                 if from == Rerouted {
-                    order.transition("c_1", Rerouted).unwrap();
+                    order
+                        .transition(&CommandId("c_1".to_owned()), Rerouted)
+                        .unwrap();
                 }
             }
             Partial => {
-                order.transition("c_1", Partial).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), Partial)
+                    .unwrap();
             }
             Answered => {
-                order.transition("c_1", Answered).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), Answered)
+                    .unwrap();
             }
             Dropped => {
-                order.transition("c_1", Queued).unwrap();
-                order.transition("c_1", Dropped).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), Queued)
+                    .unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), Dropped)
+                    .unwrap();
             }
         }
-        assert_eq!(order.state("c_1"), Some(from), "staging {from:?}");
+        assert_eq!(
+            order.state(&CommandId("c_1".to_owned())),
+            Some(from),
+            "staging {from:?}"
+        );
     }
     for from in states {
         for to in states {
             let order = AckOrder::default();
             stage(&order, from);
-            match order.transition("c_1", to) {
+            match order.transition(&CommandId("c_1".to_owned()), to) {
                 Ok(previous) => {
                     assert!(
                         allowed(from, to),
                         "the move from {from:?} to {to:?} is refused"
                     );
                     assert_eq!(previous, from, "the move reports what it moved from");
-                    assert_eq!(order.state("c_1"), Some(to), "the move lands");
+                    assert_eq!(
+                        order.state(&CommandId("c_1".to_owned())),
+                        Some(to),
+                        "the move lands"
+                    );
                 }
                 Err(IllegalTransition::Forbidden {
                     id,
@@ -2705,11 +2729,11 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
                         !allowed(from, to),
                         "the move from {from:?} to {to:?} is allowed"
                     );
-                    assert_eq!(id, "c_1");
+                    assert_eq!(id, CommandId("c_1".to_owned()));
                     assert_eq!(at, from);
                     assert_eq!(want, to);
                     assert_eq!(
-                        order.state("c_1"),
+                        order.state(&CommandId("c_1".to_owned())),
                         Some(from),
                         "a refused move changes nothing"
                     );
@@ -2723,8 +2747,10 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
     let order = AckOrder::default();
     for to in states {
         assert_eq!(
-            order.transition("c_unrecorded", to),
-            Err(IllegalTransition::Unknown("c_unrecorded".to_owned())),
+            order.transition(&CommandId("c_unrecorded".to_owned()), to),
+            Err(IllegalTransition::Unknown(CommandId(
+                "c_unrecorded".to_owned()
+            ))),
             "an unrecorded command never moves to {to:?}",
         );
     }
@@ -2763,37 +2789,53 @@ fn the_command_state_table_matches_the_transition_api() {
         false
     }
     fn stages(order: &AckOrder, from: CommandState) {
-        order.enqueue("s", "c_1");
+        order.enqueue("s", &CommandId("c_1".to_owned()));
         match from {
             CommandState::Read => {}
             CommandState::Queued => {
-                order.transition("c_1", CommandState::Queued).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), CommandState::Queued)
+                    .unwrap();
             }
             CommandState::Writing => {
-                order.transition("c_1", CommandState::Writing).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), CommandState::Writing)
+                    .unwrap();
             }
             CommandState::Written | CommandState::Rerouted => {
-                order.transition("c_1", CommandState::Written).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), CommandState::Written)
+                    .unwrap();
                 if from == CommandState::Rerouted {
-                    order.transition("c_1", CommandState::Rerouted).unwrap();
+                    order
+                        .transition(&CommandId("c_1".to_owned()), CommandState::Rerouted)
+                        .unwrap();
                 }
             }
             CommandState::Partial => {
-                order.transition("c_1", CommandState::Partial).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), CommandState::Partial)
+                    .unwrap();
             }
             CommandState::Answered => {
-                order.transition("c_1", CommandState::Answered).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), CommandState::Answered)
+                    .unwrap();
             }
             CommandState::Dropped => {
-                order.transition("c_1", CommandState::Queued).unwrap();
-                order.transition("c_1", CommandState::Dropped).unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), CommandState::Queued)
+                    .unwrap();
+                order
+                    .transition(&CommandId("c_1".to_owned()), CommandState::Dropped)
+                    .unwrap();
             }
         }
     }
     fn allows(from: CommandState, to: CommandState) -> bool {
         let order = AckOrder::default();
         stages(&order, from);
-        order.transition("c_1", to).is_ok()
+        order.transition(&CommandId("c_1".to_owned()), to).is_ok()
     }
     let text = include_str!("../../../docs/invocation.md");
     let start = text
@@ -2962,12 +3004,12 @@ impl Ended {
             queued.push(((*id).to_owned(), command(id), CommandState::Queued));
         }
         for (id, _, _) in &queued {
-            order.enqueue(END_SID, id);
+            order.enqueue(END_SID, &CommandId(id.clone()));
         }
         // The fixture stands in for `route`'s write: the relay wrote every
         // staged command, so the canonical state matches the kept one.
         for (id, _, state) in &queued {
-            order.transition(id, *state).unwrap();
+            order.transition(&CommandId(id.clone()), *state).unwrap();
         }
         let kept: Kept = Arc::new(Mutex::new(queued));
         let mut entry_peer = None;
@@ -3121,7 +3163,7 @@ fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
     ended
         .order
-        .transition("c_1", CommandState::Rerouted)
+        .transition(&CommandId("c_1".to_owned()), CommandState::Rerouted)
         .expect("the first handover claims the re-route");
     ended.close_session();
     let line = ended.line();
@@ -3136,7 +3178,7 @@ fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
     assert_eq!(ended.order.session_for("c_1"), None);
     assert_eq!(
-        ended.order.state("c_1"),
+        ended.order.state(&CommandId("c_1".to_owned())),
         None,
         "the answered id is forgotten"
     );
@@ -3151,13 +3193,17 @@ fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
     ended
         .order
-        .transition("c_1", CommandState::Rerouted)
+        .transition(&CommandId("c_1".to_owned()), CommandState::Rerouted)
         .expect("the first handover claims the re-route");
     // The resumed session's write reports `Written`: the claim holds, so
     // the report is refused and the state stays `Rerouted`.
-    report(&ended.order, "c_1", CommandState::Written);
+    report(
+        &ended.order,
+        &CommandId("c_1".to_owned()),
+        CommandState::Written,
+    );
     assert_eq!(
-        ended.order.state("c_1"),
+        ended.order.state(&CommandId("c_1".to_owned())),
         Some(CommandState::Rerouted),
         "the resumed write keeps the reroute claim"
     );
@@ -3174,7 +3220,7 @@ fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
     assert_eq!(ended.order.session_for("c_1"), None);
     assert_eq!(
-        ended.order.state("c_1"),
+        ended.order.state(&CommandId("c_1".to_owned())),
         None,
         "the answered id is forgotten"
     );
@@ -3189,14 +3235,18 @@ fn a_partial_report_after_reroute_keeps_the_canonical_claim() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
     ended
         .order
-        .transition("c_1", CommandState::Rerouted)
+        .transition(&CommandId("c_1".to_owned()), CommandState::Rerouted)
         .expect("the first handover claims the re-route");
     // The failed write's candidate outcome: the session may have read a
     // byte, but the command already moved past it, so the canonical
     // report is refused and the state stays `Rerouted`.
-    report(&ended.order, "c_1", CommandState::Partial);
+    report(
+        &ended.order,
+        &CommandId("c_1".to_owned()),
+        CommandState::Partial,
+    );
     assert_eq!(
-        ended.order.state("c_1"),
+        ended.order.state(&CommandId("c_1".to_owned())),
         Some(CommandState::Rerouted),
         "the partial candidate keeps the reroute claim"
     );
@@ -3236,15 +3286,15 @@ fn a_written_ack_before_partial_report_finishes_answered() {
         CommandState::Written,
     )]));
     let order = crate::retire::AckOrder::default();
-    order.enqueue(sid, "c_1");
+    order.enqueue(sid, &CommandId("c_1".to_owned()));
     order
-        .transition("c_1", CommandState::Written)
+        .transition(&CommandId("c_1".to_owned()), CommandState::Written)
         .expect("the write records the sent command");
     order
-        .transition("c_1", CommandState::Rerouted)
+        .transition(&CommandId("c_1".to_owned()), CommandState::Rerouted)
         .expect("the handover claims the re-route");
     assert_eq!(
-        order.state("c_1"),
+        order.state(&CommandId("c_1".to_owned())),
         Some(CommandState::Rerouted),
         "the canonical claim is rerouted before the acknowledgement"
     );
@@ -3258,15 +3308,15 @@ fn a_written_ack_before_partial_report_finishes_answered() {
         "an accepted answer to a still-written attempt settles to nothing to forward"
     );
     assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
-    report(&order, "c_1", CommandState::Partial);
+    report(&order, &CommandId("c_1".to_owned()), CommandState::Partial);
     assert_eq!(
-        order.state("c_1"),
+        order.state(&CommandId("c_1".to_owned())),
         Some(CommandState::Rerouted),
         "the partial candidate keeps the reroute claim"
     );
-    report(&order, "c_1", CommandState::Answered);
+    report(&order, &CommandId("c_1".to_owned()), CommandState::Answered);
     assert_eq!(
-        order.state("c_1"),
+        order.state(&CommandId("c_1".to_owned())),
         Some(CommandState::Answered),
         "the forwarded acknowledgement finishes answered"
     );
@@ -3278,7 +3328,7 @@ fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
     ended
         .order
-        .transition("c_1", CommandState::Rerouted)
+        .transition(&CommandId("c_1".to_owned()), CommandState::Rerouted)
         .expect("the first handover claims the re-route");
     ended.say(rejection("c_1", "closing"));
     let line = ended.line();
@@ -3367,7 +3417,7 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     }));
     // `docs/invocation.md:730`, "Lifecycle": a disconnected client gets
     // no `indeterminate` answer; the partly written command is dropped too.
-    ended.order.enqueue(END_SID, "c_p");
+    ended.order.enqueue(END_SID, &CommandId("c_p".to_owned()));
     lock(&ended.kept).push((
         "c_p".to_owned(),
         json!({"id": "c_p", "command": "reply", "args": {}})
@@ -3537,7 +3587,7 @@ fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
         None,
     );
     assert_eq!(
-        order.state("c_2"),
+        order.state(&CommandId("c_2".to_owned())),
         Some(CommandState::Partial),
         "the cut write is partial"
     );
@@ -3583,7 +3633,7 @@ fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
         "the suppressed answer is consumed"
     );
     assert_eq!(order.session_for("c_2"), None);
-    assert_eq!(order.state("c_2"), None);
+    assert_eq!(order.state(&CommandId("c_2".to_owned())), None);
     assert!(starter.resumed().is_empty(), "nothing is resumed");
     drop(park_tx);
     drop(session_peer);
@@ -3609,7 +3659,7 @@ fn a_command_read_while_closing_is_answered_closing_not_stranded() {
         "the command is never delivered again"
     );
     assert_eq!(ended.order.session_for("c_1"), None);
-    assert_eq!(ended.order.state("c_1"), None);
+    assert_eq!(ended.order.state(&CommandId("c_1".to_owned())), None);
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
@@ -3631,7 +3681,7 @@ fn a_session_read_command_in_the_exit_window_is_answered_exactly_once() {
         "the command is never delivered again"
     );
     assert_eq!(ended.order.session_for("c_1"), None);
-    assert_eq!(ended.order.state("c_1"), None);
+    assert_eq!(ended.order.state(&CommandId("c_1".to_owned())), None);
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
@@ -3880,7 +3930,7 @@ fn a_refused_admission_answers_the_pending_command() {
     let hub = Arc::new(hub(&held));
     let relays = Arc::new(Mutex::new(Relays::default()));
     let order = crate::connection::lock(&relays).order.clone();
-    order.enqueue(SID, "c_refused");
+    order.enqueue(SID, &CommandId("c_refused".to_owned()));
     // A live relay for the session, so the exclusive admission below
     // refuses: no production exclusive caller passes a command, but the
     // written one still needs its answer on this arm.
@@ -3953,7 +4003,7 @@ fn a_spawn_failure_answers_the_written_command() {
     let hub = Arc::new(hub(&held));
     let relays = Arc::new(Mutex::new(Relays::default()));
     let order = crate::connection::lock(&relays).order.clone();
-    order.enqueue(SID, "c_unspawned");
+    order.enqueue(SID, &CommandId("c_unspawned".to_owned()));
     let (writer, peer) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     let writer = Arc::new(Mutex::new(writer));
@@ -4028,7 +4078,7 @@ fn an_attach_write_failure_is_queued_when_nothing_landed_and_partial_once_bytes_
         let relays = Arc::new(Mutex::new(Relays::default()));
         let order = crate::connection::lock(&relays).order.clone();
         let id = format!("c_attach_{tag}");
-        order.enqueue(SID, &id);
+        order.enqueue(SID, &CommandId(id.clone()));
         let (writer, _peer) = UnixStream::pair().unwrap();
         let writer = Arc::new(Mutex::new(writer));
         let (session, _session_peer) = UnixStream::pair().unwrap();
@@ -4063,7 +4113,7 @@ fn an_attach_write_failure_is_queued_when_nothing_landed_and_partial_once_bytes_
                 "a zero-byte attach write goes stale for a resume and retry"
             );
             assert_eq!(
-                order.state(&id),
+                order.state(&CommandId(id.clone())),
                 Some(CommandState::Queued),
                 "nothing accepted stays unsent"
             );
@@ -4073,7 +4123,7 @@ fn an_attach_write_failure_is_queued_when_nothing_landed_and_partial_once_bytes_
                 "an attach write that accepted bytes is answered, never resumed"
             );
             assert_eq!(
-                order.state(&id),
+                order.state(&CommandId(id.clone())),
                 Some(CommandState::Partial),
                 "accepted bytes may have reached the session"
             );

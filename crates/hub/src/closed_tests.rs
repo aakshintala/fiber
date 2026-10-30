@@ -587,12 +587,17 @@ fn a_relay_that_saw_the_exited_window_sends_no_stream_closed() {
         .subscribed
         .push((SID.to_owned(), subscribe("c_sub", "full")));
     lock(&rig.kept).push(("c_x".to_owned(), tools("c_x"), CommandState::Written));
-    lock(&rig.relays).order.enqueue(SID, "c_x");
+    lock(&rig.relays)
+        .order
+        .enqueue(SID, &contract::CommandId("c_x".to_owned()));
     // The fixture stands in for `route`'s write: the relay wrote the
     // command, so the canonical state matches the kept one.
     lock(&rig.relays)
         .order
-        .transition("c_x", CommandState::Written)
+        .transition(
+            &contract::CommandId("c_x".to_owned()),
+            CommandState::Written,
+        )
         .unwrap();
     let thread = spawn(&rig, SID, reader);
     let closing = json!({"kind": "command_rejected",

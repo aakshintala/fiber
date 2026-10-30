@@ -601,7 +601,7 @@ pub(crate) fn route(
             }
             // A recovered command is already queued; a rerouted one keeps
             // its claim.
-            report(&order, &id.0, CommandState::Queued);
+            report(&order, id, CommandState::Queued);
             return true;
         }
         // Kept as `Writing` before the write, so the relay thread finds
@@ -623,7 +623,7 @@ pub(crate) fn route(
         let cap = None;
         let outcome = held.entries.get(at).map(|entry| {
             lock(&entry.kept).push((id.0.clone(), stripped.clone(), CommandState::Writing));
-            report(&order, &id.0, CommandState::Writing);
+            report(&order, id, CommandState::Writing);
             write_client_command(&entry.writer, &bytes, cap)
         });
         #[cfg(test)]
@@ -660,7 +660,7 @@ pub(crate) fn route(
             // claim through the write: a `Written` report is refused and
             // the canonical state stays `Rerouted`, so a second clean exit
             // still answers it `closing`.
-            report(&order, &id.0, state);
+            report(&order, id, state);
         }
         if matches!(outcome, Some(Ok(()))) {
             return true;
@@ -1019,7 +1019,7 @@ fn replay_exited_delegate(
     // The preloaded fold is the synthetic session's read: the replayed
     // command counts as written, so its end may still claim the one
     // re-route.
-    report(&order, &id.0, CommandState::Written);
+    report(&order, id, CommandState::Written);
     let kept: Kept = Arc::new(Mutex::new(vec![(
         id.0.clone(),
         stripped.clone(),
@@ -1476,7 +1476,7 @@ fn attach_inner_with_spawner(
             // way.
             report(
                 &lock(relays).order.clone(),
-                &id.0,
+                id,
                 if partial.written > 0 {
                     CommandState::Partial
                 } else {
@@ -1491,7 +1491,7 @@ fn attach_inner_with_spawner(
         // The whole line landed: a later `closing` answer may still claim
         // the command's one re-route. A rerouted command keeps its claim
         // through the write.
-        report(&lock(relays).order.clone(), &id.0, CommandState::Written);
+        report(&lock(relays).order.clone(), id, CommandState::Written);
     }
     let mut held = match admission {
         Some(held) => held,
@@ -1727,8 +1727,11 @@ fn relay(
                         // through to the forward below. Only the move into
                         // `Rerouted` claims the re-route: a refused claim
                         // falls through to the forward below.
-                        report(&order, &id, CommandState::Written);
-                        if order.transition(&id, CommandState::Rerouted).is_ok() {
+                        report(&order, &CommandId(id.clone()), CommandState::Written);
+                        if order
+                            .transition(&CommandId(id.clone()), CommandState::Rerouted)
+                            .is_ok()
+                        {
                             #[cfg(test)]
                             if let Some(claimed) = lock(&hub.after_reroute_claim).take() {
                                 claimed();

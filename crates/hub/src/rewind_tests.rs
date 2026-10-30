@@ -1230,18 +1230,24 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
         ),
     ]));
     let order = lock(&relays).order.clone();
-    order.enqueue(&old, "c_earlier");
-    order.enqueue(&old, "c_rw");
+    order.enqueue(&old, &CommandId("c_earlier".to_owned()));
+    order.enqueue(&old, &CommandId("c_rw".to_owned()));
     // The fixture stands in for the relay's writes and the earlier
     // handover's claim: both commands were written, and `c_earlier` was
     // already handed to the live relay, whose answer releases the queue.
     for id in ["c_earlier", "c_rw"] {
         order
-            .transition(id, crate::relay::CommandState::Written)
+            .transition(
+                &CommandId(id.to_owned()),
+                crate::relay::CommandState::Written,
+            )
             .unwrap();
     }
     order
-        .transition("c_earlier", crate::relay::CommandState::Rerouted)
+        .transition(
+            &CommandId("c_earlier".to_owned()),
+            crate::relay::CommandState::Rerouted,
+        )
         .unwrap();
     order.mark_rerouted("c_earlier", &old, epoch);
     let (waited_tx, waited_rx) = mpsc::channel();

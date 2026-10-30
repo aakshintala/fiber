@@ -109,7 +109,7 @@ struct Inner {
     /// owner of the one transition per move, including the one-time move
     /// into `Rerouted`. Separate from `rerouted`, which only withholds a
     /// retiring relay's later acknowledgements.
-    states: HashMap<String, CommandState>,
+    states: HashMap<CommandId, CommandState>,
 }
 
 /// Why [`AckOrder::transition`] refused a move: either no command with the
@@ -120,11 +120,11 @@ struct Inner {
 pub(crate) enum IllegalTransition {
     /// No command with the id was recorded: one the session answers when
     /// it ends, which is never queued, or one answered before any write.
-    Unknown(String),
+    Unknown(CommandId),
     /// The recorded state never moves that way.
     Forbidden {
         /// The command the move was requested for.
-        id: String,
+        id: CommandId,
         /// The state the command was in.
         from: CommandState,
         /// The state the move requested.
@@ -137,24 +137,17 @@ impl AckOrder {
     /// command routed again is already queued, so it is left where it was
     /// read. A newly recorded command starts in `Read`: it reached no
     /// session socket.
-    pub(crate) fn enqueue(&self, session: &str, id: &str) {
+    pub(crate) fn enqueue(&self, session: &str, id: &CommandId) {
         let mut inner = lock(&self.inner);
-        if inner
-            .pending
-            .values()
-            .any(|queued| queued.contains(&id.to_owned()))
-        {
+        if inner.pending.values().any(|queued| queued.contains(&id.0)) {
             return;
         }
         inner
             .pending
             .entry(session.to_owned())
             .or_default()
-            .push_back(id.to_owned());
-        inner
-            .states
-            .entry(id.to_owned())
-            .or_insert(CommandState::Read);
+            .push_back(id.0.clone());
+        inner.states.entry(id.clone()).or_insert(CommandState::Read);
     }
 
     /// The session whose queue holds `id`, if any: a command the session
@@ -187,7 +180,7 @@ impl AckOrder {
     /// re-route and keeps the wire shape for anything else.
     pub(crate) fn transition(
         &self,
-        id: &str,
+        id: &CommandId,
         to: CommandState,
     ) -> Result<CommandState, IllegalTransition> {
         let mut inner = lock(&self.inner);
@@ -195,15 +188,15 @@ impl AckOrder {
             .states
             .get(id)
             .copied()
-            .ok_or_else(|| IllegalTransition::Unknown(id.to_owned()))?;
+            .ok_or_else(|| IllegalTransition::Unknown(id.clone()))?;
         if !allowed(from, to) {
             return Err(IllegalTransition::Forbidden {
-                id: id.to_owned(),
+                id: id.clone(),
                 from,
                 to,
             });
         }
-        inner.states.insert(id.to_owned(), to);
+        inner.states.insert(id.clone(), to);
         Ok(from)
     }
 
@@ -211,7 +204,7 @@ impl AckOrder {
     /// moves through [`AckOrder::transition`] and never branches on a
     /// recorded state.
     #[cfg(test)]
-    pub(crate) fn state(&self, id: &str) -> Option<CommandState> {
+    pub(crate) fn state(&self, id: &CommandId) -> Option<CommandState> {
         lock(&self.inner).states.get(id).copied()
     }
 
@@ -264,7 +257,7 @@ impl AckOrder {
             return;
         }
         for (_, id) in ids {
-            report(self, id, CommandState::Dropped);
+            report(self, &CommandId(id.clone()), CommandState::Dropped);
         }
         let mut inner = lock(&self.inner);
         for (session, id) in ids {
@@ -272,7 +265,7 @@ impl AckOrder {
                 queued.retain(|queued| *queued != *id);
             }
             inner.rerouted.remove(id);
-            inner.states.remove(id);
+            inner.states.remove(&CommandId(id.clone()));
         }
         inner.pending.retain(|_, queued| !queued.is_empty());
         self.changed.notify_all();
@@ -322,7 +315,7 @@ fn allowed(from: CommandState, to: CommandState) -> bool {
 /// outcome, so a refusal changes nothing on the wire; the decision points
 /// (`relay`'s and `drain`'s re-route claims) use [`AckOrder::transition`]
 /// directly.
-pub(crate) fn report(order: &AckOrder, id: &str, to: CommandState) {
+pub(crate) fn report(order: &AckOrder, id: &CommandId, to: CommandState) {
     #[allow(
         clippy::let_underscore_must_use,
         reason = "a refused report keeps the current state by design: reporters never branch on it"
@@ -348,7 +341,7 @@ pub(crate) fn refuse(
     crate::connection::reject(writer, hub, Some(id), code, message);
     // The rejection is the command's one answer. The line is already
     // written, and an unrecorded command was never queued.
-    report(&order, &id.0, CommandState::Answered);
+    report(&order, id, CommandState::Answered);
     if let Some(queued) = order.session_for(&id.0) {
         order.done(&queued, &id.0);
     } else {
@@ -368,7 +361,7 @@ pub(crate) fn enqueue_new(
     if AckOrder::is_shell_ended(stripped) {
         return;
     }
-    order.enqueue(session, &id.0);
+    order.enqueue(session, id);
 }
 
 /// Answers a relayed command `session_not_found` in command order: the
@@ -435,12 +428,12 @@ pub(crate) fn forward(
     if let Some((session, id)) = &ordered {
         // The forwarded acknowledgement is the command's one answer: the
         // line is already written.
-        report(order, id, CommandState::Answered);
+        report(order, &CommandId(id.clone()), CommandState::Answered);
         order.done(session, id);
     } else if let Some(ack) = ack {
         // A command the session answers when it ends is never queued and
         // never recorded.
-        report(order, &ack.id, CommandState::Answered);
+        report(order, &CommandId(ack.id.clone()), CommandState::Answered);
     }
     written
 }
@@ -683,7 +676,8 @@ fn reroute_once(
         // Only the move into `Rerouted` claims the command's one permitted
         // re-route: a second clean exit without an answer refuses the
         // command `closing`, as the session would.
-        if order.transition(&id, CommandState::Rerouted).is_err() {
+        let claimed = CommandId(id.clone());
+        if order.transition(&claimed, CommandState::Rerouted).is_err() {
             refuse(
                 writer,
                 hub,
@@ -695,7 +689,7 @@ fn reroute_once(
             );
         } else if hand_over(order, relays, session, epoch, &id, &line) {
             crate::relay::route(
-                &CommandId(id),
+                &claimed,
                 session,
                 line,
                 hub,
