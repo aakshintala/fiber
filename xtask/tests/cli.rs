@@ -1158,9 +1158,9 @@ fn docs_only_reports_whether_the_files_are_docs() {
 
 #[test]
 fn ci_needs_passes_fails_and_errors() {
-    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint, stress]\n    runs-on: ubuntu-24.04\n";
-    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. Done.\n";
-    const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports and gates nothing, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
+    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bug_red_linux:\n    runs-on: ubuntu-24.04\n  bug_red_macos:\n    runs-on: macos-26\n  bug_red:\n    needs: [bug_red_linux, bug_red_macos]\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint, stress, bug_red]\n    runs-on: ubuntu-24.04\n";
+    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report without gating it directly: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `bug_red_linux`, `bug_red_macos`. Done.\n";
+    const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports without gating the verdict directly, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
     let dir = workspace();
     dir.write(".github/workflows/ci.yml", WORKFLOW);
     dir.write("docs/ci.md", DOC);
@@ -1173,7 +1173,10 @@ fn ci_needs_passes_fails_and_errors() {
     );
     dir.write(
         ".github/workflows/ci.yml",
-        &WORKFLOW.replace("needs: [select, lint, stress]", "needs: [select, stress]"),
+        &WORKFLOW.replace(
+            "needs: [select, lint, stress, bug_red]",
+            "needs: [select, stress, bug_red]",
+        ),
     );
     assert_eq!(xtask(&dir, &["ci-needs"], &[], ""), (1, FAILURE.to_owned()));
     std::fs::remove_file(dir.path().join("docs/ci.md")).unwrap();

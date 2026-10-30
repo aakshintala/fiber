@@ -72,6 +72,7 @@ impl Tool for ProbeTool {
             // Every call meets the reviewer, so the driven tests read
             // what each reviewer request carried.
             always_reviewed: true,
+            review_when_confined: false,
             hosts: None,
         })
     }
