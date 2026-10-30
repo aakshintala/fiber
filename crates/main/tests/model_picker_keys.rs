@@ -21,7 +21,7 @@ use std::fs;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::Setup;
-use support::pty::{Grid, Run};
+use support::pty::{Colour, Grid, Run};
 
 /// Installs a provider `fake` with the models `alpha`, `beta` and `gamma`
 /// on `openai-responses` at the fake server, reading its key from
@@ -323,7 +323,7 @@ fn clicking_the_model_chip_opens_the_model_picker() {
     install_picker_provider(&setup, &server);
     let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
     // The home grid above proves the chip drew before the click.
-    let (x, y) = chip_cell(&run.screen(), "[fake/alpha]");
+    let (x, y) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 home with its chips
     click(&mut run, x, y);
     run.wait_screen("the open picker with its catalogue", picker_open);
     close_and_quit(run);
@@ -341,7 +341,7 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
     // fallback draws exactly like the thinking open, so the first
     // open warms the lists: it waits for the catalogue, then closes.
     // Esc closes at once with no query typed.
-    let (x0, y0) = chip_cell(&run.screen(), "[fake/alpha]");
+    let (x0, y0) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 home with its chips
     click(&mut run, x0, y0);
     run.wait_screen("the open picker with its catalogue", picker_open);
     run.write(b"\x1b[27u");
@@ -498,6 +498,56 @@ fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
     assert_eq!(finished.status.code(), Some(0));
 }
 
+/// The dark theme's surface tint in truecolour: the background of an
+/// unfocused, unhovered chip (DARK `surface` in `crates/tui/src/theme.rs`,
+/// the same value `hover_look.rs` pins as `SURFACE`).
+const CHIP_SURFACE: Colour = Colour::Rgb(0x1a, 0x1a, 0x22);
+
+/// Whether `screen` draws the needle chip fully unhovered on exactly
+/// the `len`-cell slice `chip_cells` compares: the needle's characters
+/// after `[` plus one trailing space (whose spacer
+/// `crates/tui/src/view/home.rs` paints with `BOX_TINT`), each cell
+/// with the default pen on the surface tint and no modifiers. A
+/// text-painted but tint-stale partial redraw cannot satisfy it.
+/// False while the needle is absent, never panicking, so a wait on it
+/// only matches the settled frame.
+fn chip_unhovered(screen: &Grid, needle: &str) -> bool {
+    let Some(row) = screen.rows.iter().position(|row| row.contains(needle)) else {
+        return false;
+    };
+    let Ok(y) = u16::try_from(row) else {
+        return false;
+    };
+    let symbols: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
+    let Ok(len) = u16::try_from(symbols.len()) else {
+        return false;
+    };
+    let (cols, _) = screen.size();
+    let Some(x) = (0..=cols.saturating_sub(len)).find(|x| {
+        symbols.iter().enumerate().all(|(dx, symbol)| {
+            let Ok(dx) = u16::try_from(dx) else {
+                return false;
+            };
+            screen.cell(x.saturating_add(dx), y).symbol == *symbol
+        })
+    }) else {
+        return false;
+    };
+    let mut wanted: Vec<String> = symbols.iter().skip(1).cloned().collect();
+    wanted.push(" ".to_owned());
+    chip_cells(screen, x + 1, y, len)
+        .iter()
+        .zip(wanted.iter())
+        .all(|(cell, symbol)| {
+            cell.symbol == *symbol
+                && cell.fg == Colour::Default
+                && cell.bg == CHIP_SURFACE
+                && !cell.dim
+                && !cell.bold
+                && !cell.inverse
+        })
+}
+
 /// The chip's cells on `screen`: `len` cells from `x` on row `y`.
 fn chip_cells(screen: &Grid, x: u16, y: u16, len: u16) -> Vec<support::pty::Cell> {
     (0..len).map(|dx| screen.cell(x + dx, y)).collect()
@@ -518,7 +568,9 @@ fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
     // Both chips unfocused: nothing sent a key, so focus sits on the
     // entry bar and no focused chip keeps its highlight by spec.
     for needle in ["[fake/alpha]", "[thinking:"] {
-        let before = run.screen();
+        let before = run.wait_screen(&format!("the unhovered chip {needle}"), |screen| {
+            chip_unhovered(screen, needle)
+        });
         let (x, y) = chip_cell(&before, needle);
         let len = u16::try_from(needle.len()).expect("the chip fits its row");
         let plain = chip_cells(&before, x, y, len);
