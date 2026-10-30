@@ -108,10 +108,10 @@ fn exits(via: &mut Via) -> Receiver<&'static str> {
     via.exits = Some(tx);
     rx
 }
-fn both(deadline: fakes::Deadline, rx: &Receiver<&'static str>) {
+fn both(rx: &Receiver<&'static str>) {
     let mut names = [
-        deadline.recv_or_fail(rx, "first websocket pump exit"),
-        deadline.recv_or_fail(rx, "second websocket pump exit"),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(rx, "first websocket pump exit"),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(rx, "second websocket pump exit"),
     ];
     names.sort();
     assert_eq!(names, ["net-ws-in", "net-ws-out"]);
@@ -169,7 +169,7 @@ fn messages_lines_ping_pong_and_lossy_utf8_cross_the_pair() {
     assert_eq!(line, "hello\n");
     stream.write_all(b"a\xff\n").unwrap();
     eof(read, "client EOF after close");
-    both(Deadline::after(MUST_SUCCEED_WITHIN), &exit);
+    both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&done, "server completed the bridge exchange");
 }
@@ -185,7 +185,7 @@ fn server_close(payload: Vec<u8>) {
     let exit = exits(&mut via);
     let stream = connect_with(&endpoint, &via).unwrap();
     eof(stream, "client EOF after server close");
-    both(Deadline::after(MUST_SUCCEED_WITHIN), &exit);
+    both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "close echoed and server EOF");
 }
 #[test]
@@ -210,7 +210,7 @@ fn dropping_the_pair_sends_normal_close_and_ends_both_pumps() {
     let mut via = direct();
     let exit = exits(&mut via);
     drop(connect_with(&endpoint, &via).unwrap());
-    both(Deadline::after(MUST_SUCCEED_WITHIN), &exit);
+    both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "caller EOF closed websocket");
 }
 
@@ -230,7 +230,7 @@ fn eof_after_an_unterminated_client_line_still_sends_normal_close() {
     stream.write_all(b"not a complete line").unwrap();
     stream.shutdown(Shutdown::Write).unwrap();
     eof(stream, "client EOF after shutdown with incomplete line");
-    both(Deadline::after(MUST_SUCCEED_WITHIN), &exit);
+    both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&done, "normal close after the incomplete client line");
 }
@@ -250,7 +250,7 @@ fn line_feed_in_a_server_message_closes_1007() {
     let exit = exits(&mut via);
     let stream = connect_with(&endpoint, &via).unwrap();
     eof(stream, "client EOF after 1007 close");
-    both(Deadline::after(MUST_SUCCEED_WITHIN), &exit);
+    both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "invalid message refused");
 }
 
@@ -317,7 +317,7 @@ fn an_idle_websocket_keeps_its_read_open_after_the_upgrade() {
             let (result, text) = deadline.recv_or_fail(&lines, "line after held idle interval");
             assert_eq!(result.unwrap(), 14);
             assert_eq!(text, "after release\n");
-            both(deadline, &exit);
+            both(&exit);
             deadline.recv_or_fail(&done, "held frame sent");
         },
     );
@@ -457,7 +457,7 @@ fn a_peer_that_never_reads_expires_the_write_and_ends_both_pumps() {
     });
     Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&eof_rx, "EOF after the websocket write stalls");
-    both(Deadline::after(MUST_SUCCEED_WITHIN), &exit);
+    both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&writer_rx, "pair writer released by shutdown");
     drop(release);
@@ -482,7 +482,7 @@ fn an_unread_pair_is_bounded_and_completed_lines_stay_intact() {
     };
     let exit = exits(&mut via);
     let stream = connect_with(&endpoint, &via).unwrap();
-    both(Deadline::after(MUST_SUCCEED_WITHIN), &exit);
+    both(&exit);
     let received = await_step("client stream EOF after pair backpressure", move || {
         let mut stream = stream;
         let mut received = Vec::new();
@@ -514,6 +514,6 @@ fn a_reset_peer_ends_the_pair_and_both_pumps() {
     let mut stream = connect_with(&endpoint, &via).unwrap();
     stream.write_all(b"unread payload\n").unwrap();
     eof(stream, "client EOF after reset with unread bytes");
-    both(Deadline::after(MUST_SUCCEED_WITHIN), &exit);
+    both(&exit);
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "peer reset with unread bytes");
 }
