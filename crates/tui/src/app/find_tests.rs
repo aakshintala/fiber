@@ -3186,7 +3186,7 @@ fn pinned_search_app(
         if line.to_string().contains("needle") {
             matches.push(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let header = call_row.expect("the call row");
     assert_eq!(
@@ -3314,7 +3314,7 @@ fn no_pin_no_offset() {
             at = Some(row);
             break;
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let at = at.expect("a needle row");
     assert_eq!(
