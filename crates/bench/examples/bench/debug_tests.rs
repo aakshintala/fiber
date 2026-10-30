@@ -435,8 +435,8 @@ fn debug_pass_attach_entry_carries_per_sample_spans() {
         json!({"fixture": "10 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 13}),
     ];
     let key = |span: &Value| serde_json::to_string(span).unwrap_or_default();
-    got.sort_by(|a, b| key(a).cmp(&key(b)));
-    want.sort_by(|a, b| key(a).cmp(&key(b)));
+    got.sort_by_key(|span| key(span));
+    want.sort_by_key(|span| key(span));
     assert_eq!(got, want, "{attach}");
     assert!(attach.get("error").is_none(), "{attach}");
     // The tallied totals still stand beside the spans.

@@ -622,8 +622,8 @@ fn span_samples_emit_one_row_per_op_timing_line() {
     // still match, in any order.
     let key =
         |(_, sample): &(&str, serde_json::Value)| serde_json::to_string(sample).unwrap_or_default();
-    rows.sort_by(|a, b| key(a).cmp(&key(b)));
-    want.sort_by(|a, b| key(a).cmp(&key(b)));
+    rows.sort_by_key(|row| key(row));
+    want.sort_by_key(|row| key(row));
     assert_eq!(rows, want);
     assert_eq!(SPAN_METRIC, "attach_span_ms");
 }
