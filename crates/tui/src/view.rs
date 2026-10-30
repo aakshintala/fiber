@@ -98,6 +98,31 @@ fn focus_style(buf: &mut Buffer, rect: Rect) {
 /// shows on every theme and with no colour.
 pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERSED);
 
+/// Paints the hover tint under `hover`'s target, then the focus style on
+/// the focused target, so focus wins the cells they share. A focused link
+/// keeps the `surface_raised` look the marks pass paints, with its hint
+/// under it, so the generic focus style skips links
+/// (`docs/tui.md`, "Links").
+fn paint_tints(
+    buf: &mut Buffer,
+    targets: &[Target],
+    hover: Option<TargetId>,
+    focused: Option<TargetId>,
+) {
+    if let Some(id) = hover {
+        for target in targets.iter().filter(|target| target.id == id) {
+            lift_hover(buf, target.rect);
+        }
+    }
+    if let Some(id) = focused
+        && !matches!(id, TargetId::Link { .. })
+    {
+        for target in targets.iter().filter(|target| target.id == id) {
+            focus_style(buf, target.rect);
+        }
+    }
+}
+
 /// One line, wrapped the way it draws.
 pub(crate) fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
@@ -347,16 +372,12 @@ fn render_frame(
         draw_framed(app, area, buf, &mut targets, |targets, buf| {
             crate::import_report::draw_report(app, area, buf, targets)
         });
-        if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
-            for target in targets.iter().filter(|target| target.id == id) {
-                lift_hover(buf, target.rect);
-            }
-        }
-        if let Some(id) = app.focused() {
-            for target in targets.iter().filter(|target| target.id == id) {
-                focus_style(buf, target.rect);
-            }
-        }
+        paint_tints(
+            buf,
+            &targets,
+            pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)),
+            app.focused(),
+        );
         return (targets, painted);
     }
     if let Some(screen) = app.home_screen() {
@@ -616,21 +637,12 @@ fn render_frame(
         drop_conversation_targets(targets);
         crate::import_report::draw_report(app, conversation, buf, targets)
     });
-    if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
-        for target in targets.iter().filter(|target| target.id == id) {
-            lift_hover(buf, target.rect);
-        }
-    }
-    if let Some(id) = app.focused()
-        && !matches!(id, TargetId::Link { .. })
-    {
-        // Links draw their own focused look in the marks, on the
-        // `surface_raised` tint with the hint under them
-        // (`docs/tui.md`, "Links").
-        for target in targets.iter().filter(|target| target.id == id) {
-            focus_style(buf, target.rect);
-        }
-    }
+    paint_tints(
+        buf,
+        &targets,
+        pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)),
+        app.focused(),
+    );
     (targets, painted)
 }
 
