@@ -41,7 +41,7 @@
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
 //! - `flake-report-events`: reads one JSON object on stdin carrying the
 //!   flake titles and the complete open and closed exact-title issue
 //!   lookups with their completeness, and prints the unique closed issue
@@ -60,10 +60,6 @@
 //!   it probes ancestry itself with `git merge-base --is-ancestor`, but
 //!   only for each title's latest closed event's non-null commit; without
 //!   it every fix probes unknown
-//! - `fixture-starts`: every `mcp_fixture()` use and jig executable spawn
-//!   matches a named warmed, read, or later site, and every warmed row
-//!   still proves its helper call before the fixture execution
-//!   (`docs/testing/fakes.md`, "Jigs")
 //! - `flake-classify --flaky-dir DIR --event NAME --tested-commit SHA
 //!   [--base SHA] [--head SHA] [--compare-files FILE] [--pr-files FILE]`:
 //!   reads the `flaky-tests-<runner>.txt` files under DIR and prints one
@@ -87,7 +83,6 @@
 mod bench;
 mod ci_needs;
 mod docs;
-mod fixture_starts;
 mod flake_report;
 mod logo;
 mod models_dev;
@@ -319,11 +314,6 @@ fn run(args: &[String]) -> Result<bool, String> {
             ),
             "ok",
         ),
-        "fixture-starts" => report(
-            "fixture-starts",
-            &fixture_starts::fixture_starts(&rust_files(&workspace_members()?)?),
-            "every fixture start is a named warmed, read, or later site",
-        ),
         "site" => site::run(rest),
         "compiled-in" => {
             let members = workspace_members()?;
@@ -386,6 +376,19 @@ fn run(args: &[String]) -> Result<bool, String> {
                 failures.extend(docs::check_file(root, &path)?);
             }
             report("check-docs", &failures, "ok")
+        }
+        "kinds-ratchet" => {
+            let max: usize = flag(rest, "--max")?
+                .parse()
+                .map_err(|e| format!("--max: {e}"))?;
+            let support_max: usize = flag(rest, "--support-max")?
+                .parse()
+                .map_err(|e| format!("--support-max: {e}"))?;
+            report(
+                "kinds-ratchet",
+                &rules::kinds_ratchet(&rust_files(&workspace_members()?)?, max, support_max),
+                "ok",
+            )
         }
         "ci-needs" => report(
             "ci-needs",

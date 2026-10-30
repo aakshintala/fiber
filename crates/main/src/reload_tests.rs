@@ -254,7 +254,6 @@ impl Fixture {
     /// and `rewrite` replaces the global config before the next
     /// `prepare`, as editing the files does.
     fn with_servers(servers: &[(&str, serde_json::Value)]) -> Self {
-        crate::test_support::warm_mcp_fixture_once();
         let mut fixture = Self::new();
         let fakes: Vec<FakeServer> = servers
             .iter()
@@ -342,59 +341,6 @@ impl Fixture {
             ),
         }
     }
-}
-
-#[test]
-fn with_servers_warms_the_fixture_before_its_setup() {
-    // The first exec of a freshly linked binary can stall for seconds on
-    // macOS, so the server-starting fixture warms it through the shared
-    // once-per-process warm before `Self::new` builds its setup waits.
-    // This pins only the changed helper: it fails when the warm call is
-    // removed or moves after the setup.
-    // Ordering contract: docs/testing/fakes.md:163-165.
-    let source = include_str!("reload_tests.rs");
-    let helper = source.find("fn with_servers").expect("with_servers");
-    let warm = source
-        .match_indices("warm_mcp_fixture_once()")
-        .map(|(at, _)| at)
-        .find(|&at| at > helper)
-        .expect("with_servers warms");
-    let setup = source
-        .match_indices("Self::new()")
-        .map(|(at, _)| at)
-        .find(|&at| at > helper)
-        .expect("with_servers builds its setup");
-    assert!(warm < setup, "with_servers warms before its setup");
-}
-
-#[test]
-fn reload_routes_replacement_warms_the_fixture_before_its_setup() {
-    // The replacement test builds its fixture with `Fixture::new` and
-    // later starts the checked-in fixture through `FakeServer::entry` and
-    // `fixture.relaunch()`, so it warms once up front before any setup
-    // deadline starts. This pins only that caller: it fails when the warm
-    // call is removed or moves after the setup.
-    // Ordering contract: docs/testing/fakes.md:163-165.
-    let source = include_str!("reload_tests.rs");
-    let test = source
-        .find("\nfn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {")
-        .expect("the replacement test");
-    let end = source
-        .match_indices("\nfn ")
-        .map(|(at, _)| at)
-        .find(|&at| at > test)
-        .expect("the test ends");
-    let warm = source
-        .match_indices("crate::test_support::warm_mcp_fixture_once();")
-        .map(|(at, _)| at)
-        .find(|&at| at > test && at < end)
-        .expect("the replacement test warms");
-    let setup = source
-        .match_indices("Fixture::new()")
-        .map(|(at, _)| at)
-        .find(|&at| at > test && at < end)
-        .expect("the replacement test builds its setup");
-    assert!(warm < setup, "the replacement test warms before its setup");
 }
 
 /// The text of a caught panic payload, or a fixed line when it is not a
@@ -1703,9 +1649,6 @@ fn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {
     // preserved `/name` row through the replacement source: the row
     // keeps its metadata, but the fetch routes to the new slot, while
     // the old slot serves nothing again after the commit stops it.
-    // The fixture starts later through `FakeServer::entry` and
-    // `fixture.relaunch()`, so warm it once before the setup deadline.
-    crate::test_support::warm_mcp_fixture_once();
     let mut fixture = Fixture::new();
     let fx = FakeServer::new(&fixture.rig, "fx", &json!([{"name": "echo"}]));
     fx.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);

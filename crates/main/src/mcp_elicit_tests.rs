@@ -182,7 +182,6 @@ impl Tap {
 
 #[test]
 fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_times_out() {
-    crate::test_support::warm_mcp_fixture_once();
     let root = fakes::TempDir::new("fiber-mcp-elicit");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();

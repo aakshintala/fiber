@@ -569,9 +569,6 @@ fn no_specs_starts_nothing() {
 fn servers_stop_at_once() {
     // Each server ignores SIGTERM and outlives the end of its input, so
     // each stop waits out the grace: both are parked on the clock together.
-    // The wrappers exec the checked-in fixture, so warm it once before the
-    // direct start keeps its own deadline.
-    Setup::warm_fixture();
     let setups = [Setup::new(), Setup::new()];
     let specs = setups
         .iter()
@@ -596,6 +593,15 @@ fn servers_stop_at_once() {
             }
         })
         .collect();
+    // Warm the checked-in fixture past its first-exec stall before the
+    // start keeps its own deadline: a `fail-start` directory makes the
+    // fixture exit 1 before reading anything, so the warm-up never
+    // blocks on input.
+    let fixture = fakes::mcp_fixture();
+    let warm_dir = fakes::TempDir::new("fiber-mcp-warm");
+    std::fs::write(warm_dir.path().join("fail-start"), "").expect("warm-up dir");
+    let warm_arg = warm_dir.path().display().to_string();
+    fakes::warm_up(&fixture, &[warm_arg.as_str()], 1);
     let clock = setups[0].clock();
     let workspace = setups[0].workspace();
     let artifacts = setups[0].artifacts();
@@ -1836,9 +1842,6 @@ fn a_server_tools_info_is_a_deferred_mcp_row() {
 /// file written and executed here (see `a_non_object_initialize_reply_`
 /// `fails_the_start` in `server_tests.rs`).
 fn secret_wrapper(spec: &mut super::ServerSpec, setup: &Setup, var: &str) -> std::path::PathBuf {
-    // The wrapper execs the checked-in fixture under `/bin/bash`, so warm
-    // it once before the spec stops naming the fixture directly.
-    Setup::warm_fixture();
     let marker = setup.dir.path().join("secret-value.txt");
     let fixture = fakes::mcp_fixture()
         .display()
@@ -2113,9 +2116,6 @@ fn restart_serves_the_slot_again_and_reports_what_changed() {
 
 #[test]
 fn a_second_restart_mid_start_coalesces_on_the_first_attempt() {
-    // The `flaky.sh` wrapper execs the checked-in fixture under
-    // `/bin/bash`, so warm it once before the start keeps its deadline.
-    Setup::warm_fixture();
     let setup = Setup::with_tools(&json!([{"name": "echo"}]));
     let dir = setup.dir.path().to_path_buf();
     let spawns = dir.join("spawns");
@@ -2196,107 +2196,6 @@ fn a_second_restart_mid_start_coalesces_on_the_first_attempt() {
 }
 
 // Reload, round 23: the resources marker follows every set.
-
-#[test]
-fn specs_use_fixture_sorts_empty_remote_and_fixture_specs() {
-    // Only a stdio spec whose command is the checked-in fixture needs the
-    // shared warm: empty and remote-only starts never exec it, while a
-    // direct fixture spec does. A `/bin/bash` wrapper names the fixture in
-    // its args but not as the command, so it stays false here and warms
-    // through the explicit shared helper instead.
-    use crate::test_support::specs_use_fixture;
-    let setup = Setup::new();
-    assert!(!specs_use_fixture(&[]), "no specs starts nothing to warm");
-    assert!(
-        !specs_use_fixture(&[setup.remote_spec("remote", "http://example.com/mcp")]),
-        "a remote-only start never execs the fixture"
-    );
-    assert!(
-        specs_use_fixture(&[setup.spec("fx")]),
-        "a direct fixture spec warms"
-    );
-    assert!(
-        specs_use_fixture(&[
-            setup.remote_spec("remote", "http://example.com/mcp"),
-            setup.spec("fx"),
-        ]),
-        "one fixture spec among remotes still warms"
-    );
-    let mut wrapper = setup.spec("fx");
-    wrapper.stdio_mut().command = "/bin/bash".to_owned();
-    assert!(
-        !specs_use_fixture(&[wrapper]),
-        "a bash wrapper warms explicitly, not through the start guard"
-    );
-}
-
-#[test]
-fn every_start_helper_warms_the_fixture_before_its_deadline() {
-    // The first exec of a freshly linked binary can stall for seconds on
-    // macOS, so every helper that starts the fixture warms it through the
-    // shared once-per-process warm before any deadline-bound receive.
-    // This pins only the changed helper: it fails when the `warm_up` call
-    // is removed, when a helper stops guarding fixture-only starts, or
-    // when a helper stops warming first.
-    // Ordering contract: docs/testing/fakes.md:163-165.
-    let source = include_str!("test_support.rs");
-    let warmer = source.find("fn warm_once").expect("warm_once");
-    let warmed = source.find("impl Setup").expect("impl Setup");
-    let warm_up = source.find("fakes::warm_up").expect("warm_up");
-    assert!(warmer < warm_up, "warm_once runs fakes::warm_up");
-    assert!(warm_up < warmed, "warm_once runs fakes::warm_up");
-    let guard = source
-        .find("fn specs_use_fixture")
-        .expect("the fixture-only guard");
-    assert!(guard < warmed, "the guard lives with the warm helper");
-    // `start_with_images_within` warms only fixture specs, before its wait.
-    let defined = source.find("fn start_with_images_within").expect("start");
-    let uses_guard = source
-        .match_indices("specs_use_fixture(&specs)")
-        .map(|(at, _)| at)
-        .find(|&at| at > defined)
-        .expect("the start guards fixture-only warms");
-    let warm = source
-        .match_indices("warm_once(&fakes")
-        .map(|(at, _)| at)
-        .find(|&at| at > defined)
-        .expect("the start warms");
-    let deadline = source
-        .match_indices("Deadline::after")
-        .map(|(at, _)| at)
-        .find(|&at| at > defined)
-        .expect("the start waits");
-    assert!(uses_guard < warm, "the start guards before it warms");
-    assert!(warm < deadline, "the start warms before its deadline");
-    // `start_expect` starts the fixture directly, so it warms through the
-    // shared helper before funnelling into `start_result`.
-    let defined = source.find("fn start_expect").expect("start_expect");
-    let warm = source
-        .match_indices("warm_fixture()")
-        .map(|(at, _)| at)
-        .find(|&at| at > defined)
-        .expect("start_expect warms");
-    let funnels = source
-        .match_indices("Self::start_result")
-        .map(|(at, _)| at)
-        .find(|&at| at > defined)
-        .expect("start_expect funnels");
-    assert!(warm < funnels, "start_expect warms before it funnels");
-    // Generic `start_result` warms only when its command is the fixture,
-    // before the wait that bounds the start.
-    let defined = source.find("fn start_result").expect("start_result");
-    let warm = source
-        .match_indices("warm_once(&fakes")
-        .map(|(at, _)| at)
-        .find(|&at| at > defined)
-        .expect("start_result warms");
-    let deadline = source
-        .match_indices("Deadline::after")
-        .map(|(at, _)| at)
-        .find(|&at| at > defined)
-        .expect("start_result waits");
-    assert!(warm < deadline, "start_result warms before its deadline");
-}
 
 #[test]
 fn set_resources_declared_aligns_the_marker_both_ways() {
