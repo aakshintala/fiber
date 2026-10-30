@@ -119,6 +119,7 @@ fn the_tty_sized_backend_passes_every_call_but_the_size_through() {
         size: ratatui::layout::Size::new(40, 10),
         open: false,
         emit: Calls::emit,
+        touched: false,
     };
     let cell = ratatui::buffer::Cell::default();
     let ok = |result: Result<(), std::io::Error>| {
@@ -536,4 +537,48 @@ fn a_failed_frame_leaves_nothing_behind() {
     );
     drop(screen);
     assert!(written.bytes().ends_with(b"\x1b[?2026l"));
+}
+
+/// Repaint clears the backend and invalidates the cached frame, so the
+/// next draw rewrites whole.
+#[test]
+fn repaint_clears_the_backend_and_invalidates_the_frame() {
+    let mut screen =
+        Screen::new(TestBackend::new(40, 10), 40, 10).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_size(40, 10);
+    screen
+        .draw_with(&mut app, None, render)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+    assert!(screen.last().is_some(), "a painted screen caches its frame");
+    assert_eq!(
+        screen.backend().buffer()[(0, 0)].symbol(),
+        "h",
+        "the frame painted"
+    );
+    screen
+        .repaint()
+        .unwrap_or_else(|err| panic!("repaint: {err}"));
+    assert!(screen.last().is_none(), "the cached frame is gone");
+    assert_eq!(
+        screen.backend().buffer()[(0, 0)].symbol(),
+        " ",
+        "the backend cleared"
+    );
+}
+
+/// Take_touched consumes the mark: true once after a frame wrote,
+/// false right after, with no wait.
+#[test]
+fn take_touched_consumes_the_mark() {
+    let mut screen =
+        Screen::new(TestBackend::new(40, 10), 40, 10).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_size(40, 10);
+    assert!(!screen.take_touched(), "nothing wrote yet");
+    screen
+        .draw_with(&mut app, None, render)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+    assert!(screen.take_touched(), "the frame wrote");
+    assert!(!screen.take_touched(), "the mark is consumed");
 }
