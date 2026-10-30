@@ -247,6 +247,49 @@ fn assert_each_followed_by(kinds: &[&str], first: &str, second: &str, doc: &str)
     }
 }
 
+/// Asserts each reply's promised item order on its own span: a reply's
+/// `text_completed`, `reasoning_completed` and `tool_call_requested`
+/// lines follow that reply's `assistant_message_started`, and its
+/// `assistant_message_completed` closes it (`doc`). The
+/// `assert_each_followed_by` pins only reach the last line of a kind, so
+/// a blanket started-before-item pin cannot hold on a multi-reply
+/// stream: a later text-only reply's start has no later
+/// `tool_call_requested`. Walking each started-to-completed span pins
+/// the order per reply instead. Lines outside a reply
+/// (`usage_recorded`, step and tool lines) may sit anywhere.
+#[track_caller]
+fn assert_reply_item_order(kinds: &[&str], doc: &str) {
+    let mut open = false;
+    let mut saw_reply = false;
+    for (at, kind) in kinds.iter().enumerate() {
+        match *kind {
+            "assistant_message_started" => {
+                open = true;
+                saw_reply = true;
+            }
+            "text_completed" | "reasoning_completed" | "tool_call_requested" => {
+                assert!(
+                    open,
+                    "`{kind}` at {at} precedes its reply's `assistant_message_started` ({doc})"
+                );
+            }
+            "assistant_message_completed" => {
+                assert!(
+                    open,
+                    "`assistant_message_completed` at {at} closes no open reply ({doc})"
+                );
+                open = false;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_reply, "no reply in {kinds:?} ({doc})");
+    assert!(
+        !open,
+        "a reply never reaches `assistant_message_completed` ({doc})"
+    );
+}
+
 #[test]
 fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
     let setup = Setup::new_with_fm_root();
@@ -374,18 +417,6 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "tool_call_requested",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "tool_call_requested",
         "assistant_message_completed",
         REPLY_DOC,
@@ -396,6 +427,7 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
     assert_each_followed_by(&kinds, "reloaded", "preamble_built", RELOAD_PREAMBLE_DOC);
     assert_each_followed_by(
         &kinds,
@@ -484,18 +516,6 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "tool_call_requested",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "tool_call_requested",
         "assistant_message_completed",
         REPLY_DOC,
@@ -506,6 +526,7 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     let notices = run.all("notice");
@@ -590,16 +611,11 @@ fn no_hooks_key_loads_no_hooks_vm() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "text_completed",
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
     assert!(!loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
     assert!(run.all("notice").is_empty());
 }
@@ -639,16 +655,11 @@ fn empty_hooks_settings_load_silently() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "text_completed",
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
     assert!(run.all("notice").is_empty());
 }
@@ -751,16 +762,11 @@ fn a_removed_package_with_only_non_blocking_entries_warns_and_runs() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "text_completed",
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
 
     let notices = run.all("notice");
     assert_eq!(notices.len(), 1);
@@ -817,16 +823,11 @@ fn a_removed_package_with_watcher_only_declarations_runs_quietly() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "text_completed",
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
     assert!(
         run.all("notice").is_empty(),
         "no missing notice: {:?}",
@@ -882,16 +883,11 @@ fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "text_completed",
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     let notices = run.all("notice");
@@ -976,18 +972,6 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "tool_call_requested",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "tool_call_requested",
         "assistant_message_completed",
         REPLY_DOC,
@@ -998,6 +982,7 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     // The kinds hold as a set with counts, pinning only the reply's
@@ -1095,18 +1080,6 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "tool_call_requested",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "tool_call_requested",
         "assistant_message_completed",
         REPLY_DOC,
@@ -1117,6 +1090,7 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     // Both bad entries left one grouped notice and never ran; the good
@@ -1195,18 +1169,6 @@ fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
     );
     assert_each_followed_by(
         &kinds,
-        "assistant_message_started",
-        "tool_call_requested",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
-        "assistant_message_started",
-        "text_completed",
-        REPLY_DOC,
-    );
-    assert_each_followed_by(
-        &kinds,
         "tool_call_requested",
         "assistant_message_completed",
         REPLY_DOC,
@@ -1217,6 +1179,7 @@ fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
         "assistant_message_completed",
         REPLY_DOC,
     );
+    assert_reply_item_order(&kinds, REPLY_DOC);
 
     assert_eq!(captured(&setup, "soft.log").len(), 1);
     let failure = run
@@ -1460,5 +1423,59 @@ fn each_followed_by_pins_the_promised_pair() {
             doc,
         ))
         .is_err()
+    );
+}
+
+/// The reply-order helper pins each reply's own span: items that follow
+/// their reply's start pass across adjacent replies of different shapes,
+/// while an item before its start, a close with no open reply, an
+/// unclosed reply, or no reply at all fails.
+#[test]
+fn reply_item_order_pins_each_reply_span() {
+    assert_reply_item_order(
+        &[
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+        ],
+        REPLY_DOC,
+    );
+    // An item before its reply's start fails.
+    assert!(
+        std::panic::catch_unwind(|| assert_reply_item_order(
+            &[
+                "text_completed",
+                "assistant_message_started",
+                "assistant_message_completed",
+            ],
+            REPLY_DOC,
+        ))
+        .is_err()
+    );
+    // A close with no open reply fails.
+    assert!(
+        std::panic::catch_unwind(|| assert_reply_item_order(
+            &["assistant_message_completed"],
+            REPLY_DOC,
+        ))
+        .is_err()
+    );
+    // An unclosed reply fails.
+    assert!(
+        std::panic::catch_unwind(|| assert_reply_item_order(
+            &["assistant_message_started", "text_completed"],
+            REPLY_DOC,
+        ))
+        .is_err()
+    );
+    // No reply at all fails.
+    assert!(
+        std::panic::catch_unwind(|| assert_reply_item_order(&["turn_completed"], REPLY_DOC,))
+            .is_err()
     );
 }
