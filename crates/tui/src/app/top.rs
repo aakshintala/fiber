@@ -10,6 +10,62 @@ use crate::keyset::Context;
 use ratatui::layout::Rect;
 use std::cell::RefCell;
 
+/// A surface that draws a frame over every view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Frame {
+    /// The accepted-import report.
+    Report,
+    /// The quit question.
+    Quit,
+    /// The clear question.
+    Clear,
+    /// The hooks install offer.
+    HooksOffer,
+    /// Home's delete question.
+    DeleteQuestion,
+}
+
+impl Frame {
+    /// The surface recorded for this frame's slab.
+    pub(crate) fn surface(self) -> Surface {
+        match self {
+            Self::Report => Surface::Report,
+            Self::Quit => Surface::Quit,
+            Self::Clear => Surface::Clear,
+            Self::HooksOffer => Surface::HooksOffer,
+            Self::DeleteQuestion => Surface::DeleteQuestion,
+        }
+    }
+
+    /// The framed surface named by `surface`, if it draws a frame.
+    pub(crate) fn from_surface(surface: Surface) -> Option<Self> {
+        match surface {
+            Surface::Report => Some(Self::Report),
+            Surface::Quit => Some(Self::Quit),
+            Surface::Clear => Some(Self::Clear),
+            Surface::HooksOffer => Some(Self::HooksOffer),
+            Surface::DeleteQuestion => Some(Self::DeleteQuestion),
+            Surface::KeysScreen
+            | Surface::Keymap
+            | Surface::ReviewerSetup
+            | Surface::Picker
+            | Surface::ConfigView
+            | Surface::SessionView
+            | Surface::WorkspacePicker
+            | Surface::Panel
+            | Surface::Offer
+            | Surface::Search
+            | Surface::Results
+            | Surface::Find
+            | Surface::Focus
+            | Surface::Completion
+            | Surface::Job
+            | Surface::Notice
+            | Surface::Draft => None,
+        }
+    }
+}
+
 /// One surface that can hold the keyboard, topmost first: declaration
 /// order is the precedence, so a surface compares less than every
 /// surface below it.
@@ -203,20 +259,12 @@ impl App {
             .collect()
     }
 
-    /// The surfaces that draw a frame of their own over every view, in
-    /// the order they draw: [`Self::top_surfaces`] from the bottom up, so
-    /// the one on top draws last, as far as they are open.
-    pub(crate) fn framed_surfaces(&self) -> impl Iterator<Item = Surface> {
-        self.top_surfaces().into_iter().rev().filter(|surface| {
-            matches!(
-                surface,
-                Surface::Report
-                    | Surface::Quit
-                    | Surface::Clear
-                    | Surface::HooksOffer
-                    | Surface::DeleteQuestion
-            )
-        })
+    /// The framed surfaces open now, bottom first, as far as they are open.
+    pub(crate) fn framed_surfaces(&self) -> impl Iterator<Item = Frame> {
+        self.top_surfaces()
+            .into_iter()
+            .rev()
+            .filter_map(Frame::from_surface)
     }
 
     /// The surface on top: the head of [`Self::top_surfaces`].

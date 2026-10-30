@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::app::{App, Surface};
+use crate::app::{App, Frame, Surface};
 use crate::completion_rows::Rows;
 use crate::mouse::{self, Target, TargetId};
 use crate::text::to_u16;
@@ -132,35 +132,17 @@ pub(crate) fn rows(line: &Line<'_>, width: u16) -> usize {
 }
 
 /// The slab the quit question or the notice overlay draws now, or an
-/// empty rect when `frame` is not open: it draws that frame alone over the
-/// area the real frame gives it, into a scratch buffer, and takes the slab
-/// the draw returns. The wheel over the slab is the frame's, whatever lies
-/// beneath.
-pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
+/// empty rect when `surface` is not open: it draws that frame alone over
+/// the area the real frame gives it, into a scratch buffer, and takes the
+/// slab the draw returns. The wheel over the slab is the frame's, whatever
+/// lies beneath.
+pub(crate) fn frame_of(app: &App, surface: Surface) -> Rect {
     let (width, height) = app.screen_size();
     let screen = Rect::new(0, 0, width, height);
-    if frame == Surface::DeleteQuestion {
-        // The command's delete frame for outside-click math: nothing
-        // while no command question draws. It covers the attached
-        // conversation's column, as the frame draws there.
-        let Some((question, scroll)) = app.delete_command_frame() else {
-            return Rect::default();
-        };
-        let column = app.chrome().layout().map_or(screen, |layout| layout.column);
-        let mut buf = Buffer::empty(screen);
-        let mut targets = Vec::new();
-        return home::question::draw_command_delete_question(
-            app,
-            &question,
-            scroll,
-            column,
-            &mut buf,
-            &mut targets,
-        );
-    }
     let swapped = app.swapped_view_open();
     let column = app.chrome().layout().map_or(screen, |layout| layout.column);
-    let area = match (app.home_screen(), frame) {
+    let area = match (app.home_screen(), surface) {
+        (_, Surface::DeleteQuestion) => column,
         (Some(home), Surface::Notice) if !swapped => notice_rows_area(app, &home, screen),
         (Some(_), _) => screen,
         (None, Surface::Notice) => Rect::new(
@@ -171,24 +153,51 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
         ),
         (None, _) => column,
     };
-    let mut buf = Buffer::empty(screen);
-    let mut targets = Vec::new();
-    if frame == Surface::Quit {
-        quit::draw(app, area, &mut buf, &mut targets)
-    } else if frame == Surface::HooksOffer {
-        hooks_offer::draw(app, area, &mut buf, &mut targets)
-    } else if frame == Surface::Clear {
-        clear::draw(app, area, &mut buf, &mut targets)
-    } else if frame == Surface::Notice {
-        notice_rows::overlay(
+    if let Surface::Notice = surface {
+        let mut buf = Buffer::empty(screen);
+        let mut targets = Vec::new();
+        return notice_rows::overlay(
             app,
             area,
             &mut buf,
             &mut targets,
             &notice_rows::frame_bound(app),
-        )
-    } else {
-        Rect::default()
+        );
+    }
+    let Some(frame) = Frame::from_surface(surface) else {
+        return Rect::default();
+    };
+    if let Frame::Report = frame {
+        return Rect::default();
+    }
+    let mut buf = Buffer::empty(screen);
+    let mut targets = Vec::new();
+    let mut no_report = |_: &mut Vec<Target>, _: &mut Buffer| Rect::default();
+    draw_frame(app, frame, area, &mut buf, &mut targets, &mut no_report)
+}
+
+/// Draws one framed surface. The exhaustive match owns the drawing rule
+/// for each frame; the import report stays at its caller's chosen location.
+fn draw_frame(
+    app: &App,
+    frame: Frame,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+    report: &mut impl FnMut(&mut Vec<Target>, &mut Buffer) -> Rect,
+) -> Rect {
+    match frame {
+        Frame::Report => report(targets, buf),
+        Frame::Quit => quit::draw(app, area, buf, targets),
+        Frame::Clear => clear::draw(app, area, buf, targets),
+        Frame::HooksOffer => hooks_offer::draw(app, area, buf, targets),
+        Frame::DeleteQuestion => {
+            // This frame exists only while a command delete question is open.
+            let Some((question, scroll)) = app.delete_command_frame() else {
+                return Rect::default();
+            };
+            home::question::draw_command_delete_question(app, &question, scroll, area, buf, targets)
+        }
     }
 }
 
@@ -203,30 +212,9 @@ fn draw_framed(
     targets: &mut Vec<Target>,
     mut report: impl FnMut(&mut Vec<Target>, &mut Buffer) -> Rect,
 ) {
-    for surface in app.framed_surfaces() {
-        if surface == Surface::Report {
-            let slab = report(targets, buf);
-            app.frames().note(Surface::Report, slab);
-        } else if surface == Surface::Quit {
-            let slab = quit::draw(app, area, buf, targets);
-            app.frames().note(Surface::Quit, slab);
-        } else if surface == Surface::HooksOffer {
-            let slab = hooks_offer::draw(app, area, buf, targets);
-            app.frames().note(Surface::HooksOffer, slab);
-        } else if surface == Surface::Clear {
-            let slab = clear::draw(app, area, buf, targets);
-            app.frames().note(Surface::Clear, slab);
-        } else if surface == Surface::DeleteQuestion {
-            // The command's delete frame over the attached session: the
-            // same title, ✕, footer and wrapping home draws, with its
-            // permanence warning pinned.
-            if let Some((question, scroll)) = app.delete_command_frame() {
-                let slab = home::question::draw_command_delete_question(
-                    app, &question, scroll, area, buf, targets,
-                );
-                app.frames().note(Surface::DeleteQuestion, slab);
-            }
-        }
+    for frame in app.framed_surfaces() {
+        let slab = draw_frame(app, frame, area, buf, targets, &mut report);
+        app.frames().note(frame.surface(), slab);
     }
 }
 
