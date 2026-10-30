@@ -15,15 +15,36 @@ use std::path::{Path, PathBuf};
 
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
 
-use super::{Target, stage_update};
+use super::{PUBLISHED_ARCHIVES, Target, release_triple, stage_update};
 use crate::Error;
 use crate::manage::{Request, plan};
 use crate::release::{Release, install_release};
+use contract::ErrorCode;
 
 const RELEASE: &str = "0.2.0";
-const TRIPLE: &str = "test-triple";
+/// A listed triple the fixture serves: [`release_triple`] maps it to
+/// itself, so every existing stage test asks for the served archive.
+const TRIPLE: &str = "x86_64-unknown-linux-musl";
 /// The nightly release the fixture serves above [`RELEASE`].
 const NIGHTLY: &str = "0.2.1-nightly.20240101";
+
+#[test]
+fn published_archives_match_the_releasing_table() {
+    let table = include_str!("../../../docs/releasing.md")
+        .split("## What a release publishes\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    let documented: Vec<_> = table
+        .lines()
+        .filter(|line| line.starts_with("| "))
+        .filter_map(|line| line.split('`').nth(1))
+        .collect();
+    // `docs/releasing.md`, "What a release publishes": one archive per target.
+    assert_eq!(documented, PUBLISHED_ARCHIVES);
+}
 
 /// A fixture release served over HTTP: a binary archive holding `marker`
 /// as the top-level `fiber` file, the docs archive holding `docs`, the
@@ -963,4 +984,164 @@ fn a_binary_archive_without_fiber_errors_before_any_rename() {
     };
     assert_eq!(archive, &binary_file);
     assert_eq!(setup.installed_state(), before);
+}
+
+/// A Linux gnu build stages the musl archive: the fixture serves only
+/// the musl archive, and the stage asks for it rather than the gnu
+/// name the binary was built against.
+#[test]
+fn a_gnu_linux_build_stages_the_musl_archive() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &Target {
+            base: server.url(),
+            version: RELEASE.into(),
+            triple: "x86_64-unknown-linux-gnu".into(),
+        },
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    )
+    .unwrap();
+    let binary = staged.commit().unwrap();
+    assert_eq!(fs::read(&binary).unwrap(), b"marker");
+    // Only the musl archive is ever fetched: no request names the gnu
+    // archive the binary was built against.
+    let paths: Vec<String> = server
+        .requests()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.contains("fiber-x86_64-unknown-linux-musl.tar.gz")),
+        "the stage fetches the musl archive: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains("linux-gnu")),
+        "no request names the gnu archive: {paths:?}"
+    );
+}
+
+/// A platform with no published archive fails before any download
+/// (`docs/releasing.md`, "Updating" step 2): the error names the
+/// platform and every published target, and the fixture sees no
+/// request of any kind.
+#[test]
+fn an_unlisted_platform_fails_before_any_download() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let err = match stage_update(
+        &setup.home(),
+        &Target {
+            base: server.url(),
+            version: RELEASE.into(),
+            triple: "x86_64-apple-darwin".into(),
+        },
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        None,
+    ) {
+        Ok(_) => panic!("an unlisted platform stages no update"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code(), ErrorCode::Usage);
+    let said = err.to_string();
+    assert!(said.contains("x86_64-apple-darwin"), "{said}");
+    for archive in [
+        "fiber-aarch64-apple-darwin.tar.gz",
+        "fiber-x86_64-unknown-linux-musl.tar.gz",
+        "fiber-aarch64-unknown-linux-musl.tar.gz",
+    ] {
+        assert!(said.contains(archive), "{said}");
+    }
+    // `docs/releasing.md`, "Updating" step 2: an unlisted platform stops
+    // before any download.
+    assert!(
+        server.requests().is_empty(),
+        "no download runs: {:?}",
+        server.requests()
+    );
+}
+
+/// Both Linux gnu builds map to their own architecture's musl archive:
+/// flipping an arch maps a build at the other's archive, which the
+/// release never publishes.
+#[test]
+fn release_triple_maps_linux_gnu_builds_to_their_musl_archive() {
+    assert_eq!(
+        release_triple("x86_64-unknown-linux-gnu").unwrap(),
+        "x86_64-unknown-linux-musl"
+    );
+    assert_eq!(
+        release_triple("aarch64-unknown-linux-gnu").unwrap(),
+        "aarch64-unknown-linux-musl"
+    );
+}
+
+/// Listed triples stay themselves: both musl archives and the macOS
+/// archive pass through untouched.
+#[test]
+fn release_triple_passes_listed_triples_through() {
+    assert_eq!(
+        release_triple("x86_64-unknown-linux-musl").unwrap(),
+        "x86_64-unknown-linux-musl"
+    );
+    assert_eq!(
+        release_triple("aarch64-unknown-linux-musl").unwrap(),
+        "aarch64-unknown-linux-musl"
+    );
+    assert_eq!(
+        release_triple("aarch64-apple-darwin").unwrap(),
+        "aarch64-apple-darwin"
+    );
+}
+
+/// Platforms with no published archive fail with the platform and every
+/// published archive named: widening the match to pass one through
+/// asks for an archive the release never publishes.
+#[test]
+fn release_triple_rejects_platforms_with_no_published_archive() {
+    for unlisted in ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"] {
+        let err = release_triple(unlisted).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Usage, "{unlisted}");
+        let said = err.to_string();
+        assert!(said.contains(unlisted), "{said}");
+        for archive in [
+            "fiber-aarch64-apple-darwin.tar.gz",
+            "fiber-x86_64-unknown-linux-musl.tar.gz",
+            "fiber-aarch64-unknown-linux-musl.tar.gz",
+        ] {
+            assert!(said.contains(archive), "{said}");
+        }
+    }
 }

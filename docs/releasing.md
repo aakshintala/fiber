@@ -267,10 +267,7 @@ It:
    API's limit of 60 requests an hour for each address; on nightly from the
    release list instead, whose match rule and limit are the channel's own,
    shared with `install.sh` ("Installing" above)
-2. if that version is newer than the running one, downloads the archive for
-   the running binary's own target and its checksum file into the directory
-   that holds the binary, checks the SHA-256 and extracts the binary there,
-   and downloads and checks the same release's docs and extensions archives
+2. if that version is newer than the running one, picks the archive for the running binary's operating system and architecture from the table in "What a release publishes": a Linux build takes that architecture's musl archive, whatever libc it was built against. A platform the table does not list stops before any download, with an error naming the platform and the published targets. It downloads that archive and its checksum file into the directory that holds the binary, checks the SHA-256 and extracts the binary there, and downloads and checks the same release's docs and extensions archives
 3. stages each installed extension in a fresh directory (`docs/state.md`,
    "What each part holds"): a first-party one from the extensions archive,
    and any other at its newest version whose manifest accepts the Fiber
