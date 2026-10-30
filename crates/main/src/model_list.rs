@@ -1,5 +1,5 @@
 //! The installed models for the terminal's model picker (`docs/tui.md`,
-//! "Swapped views"): one entry per model of every installed provider,
+//! "Swapped views"): one entry per model of every credentialed provider,
 //! read the way `fiber models` reads them (`docs/model-routing.md`,
 //! "Model discovery"). A `Cached` read serves the cached lists and starts
 //! no extension; `Stale` and `Every` load the Lua providers, refresh with

@@ -7,7 +7,7 @@ mod common;
 use std::collections::HashMap;
 
 use common::{Setup, config, install, lua_named, manifest, write};
-use config::write_model_cache;
+use config::{Secret, write_model_cache};
 use contract::ErrorCode;
 use contract::events::Notice;
 use extensions::Providers;
@@ -497,6 +497,14 @@ fn lua_models_are_filled_and_the_cache_keeps_the_template() {
     install(&setup.home(), &source, "0.1.0").unwrap();
     let (mut providers, notices) = Providers::load(&setup.home()).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
+    // The presence gate needs a stored login for discovery to run.
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &Secret::new("test".into()),
+    )
+    .unwrap();
     let lua = lua_named(
         &setup,
         "ext",
