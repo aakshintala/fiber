@@ -21,6 +21,26 @@ fn authentication_answer(kind: &str) -> AuthenticationAnswer {
     AuthenticationAnswer::from(line)
 }
 
+fn authenticate_after_replies(replies: &[serde_json::Value]) -> Result<(), Error> {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let (done, done_rx) = mpsc::channel();
+    let clock = FakeClock::new();
+    thread::spawn(move || {
+        done.send(authenticate(
+            &client,
+            "box",
+            &Secret::new("device-token".into()),
+            clock.as_ref(),
+            Duration::from_secs(1),
+        ))
+        .unwrap();
+    });
+    for reply in replies {
+        writeln!(server, "{reply}").unwrap();
+    }
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "the authentication reply sequence")
+}
+
 fn authentication_error_for_wire_line(line: &[u8]) -> Error {
     let (client, mut server) = UnixStream::pair().unwrap();
     let (done, done_rx) = mpsc::channel();
@@ -73,6 +93,74 @@ fn authentication_answer_enters_with_a_typed_kind_and_exact_unknown_text() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn authentication_skips_unknown_and_hub_hello_before_refusal() {
+    let unknown = json!({
+        "ts": 1,
+        "schema_version": 1,
+        "kind": "future_kind",
+        "payload": {"command_id": "c_authenticate"},
+    });
+    let unknown_line: HubLine = serde_json::from_value(unknown.clone()).unwrap();
+    assert_eq!(
+        AuthenticationAnswer::from(unknown_line).kind,
+        HubEventKind::Unknown("future_kind".into())
+    );
+    let error = authenticate_after_replies(&[
+        unknown,
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "hub_hello",
+            "payload": {"command_id": "c_authenticate"},
+        }),
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "command_rejected",
+            "payload": {
+                "command_id": "c_authenticate",
+                "code": "unauthenticated",
+                "message": "skip probe: device-token was revoked",
+            },
+        }),
+    ])
+    .unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed);
+    let Error::Refused { hub, message } = &error else {
+        panic!("a matching command_rejected answer must refuse authentication")
+    };
+    assert_eq!(hub, "box");
+    assert_eq!(message, "skip probe: [redacted] was revoked");
+    assert!(!error.to_string().contains("device-token"));
+}
+
+#[test]
+fn authentication_skips_unknown_and_wrong_command_ack_before_acceptance() {
+    let result = authenticate_after_replies(&[
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "future_kind",
+            "payload": {"command_id": "c_authenticate"},
+        }),
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "command_accepted",
+            "payload": {"command_id": "another-command"},
+        }),
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "command_accepted",
+            "payload": {"command_id": "c_authenticate"},
+        }),
+    ]);
+    result.unwrap();
 }
 
 #[test]
