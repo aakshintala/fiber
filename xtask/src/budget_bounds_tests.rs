@@ -554,6 +554,55 @@ fn deadline_and_other_after_are_distinguished_in_one_file() {
 }
 
 #[test]
+fn a_half_colon_path_with_a_short_tail_fails_closed() {
+    // Pins the `||` in `simple_path_ident`: both colons of each `::`
+    // separator are required. `A B:WAIT` tokenises to
+    // `[A, B, ':', WAIT]`: the first expected colon is an ident, the
+    // second is a colon, so the compound sequence must fail closed
+    // ("not shown below 60 s"). With `||` loosened to `&&`, the single
+    // present colon suffices and the mutant reads the trailing `WAIT`
+    // as a short known bound, reporting no failure.
+    let source = "fn a() { Deadline::after(A B:WAIT); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].ends_with("is not shown below 60 s"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn a_colon_then_ident_path_with_a_short_tail_fails_closed() {
+    // Pins the `i + 1` second-colon index in `simple_path_ident`:
+    // `A:B WAIT` tokenises to `[A, ':', B, WAIT]`: the first expected
+    // colon is present but the second is an ident, so the compound
+    // sequence must fail closed. With `i + 1` changed to `i * 1`
+    // (that is, `i`), the check reads the first colon twice, reaches
+    // the trailing `WAIT`, and treats it as a short known bound.
+    let source = "fn a() { Deadline::after(A:B WAIT); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].ends_with("is not shown below 60 s"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn a_shifted_deadline_after_still_counts_as_a_deadline_bound() {
+    // Pins the `i - 2` predecessor index in `deadline_path`: the middle
+    // colon is two tokens before `after`, not `i / 2`. `Deadline` here
+    // sits at index 5 (`let _ = 1;` precedes it), so `after` is at
+    // index 8: `i - 2` is 6 (a colon) while `i / 2` is 4 (`;`, not a
+    // colon). The long `after` must still fail; with `-` changed to `/`
+    // the mutant misses it and reports no failure.
+    let source = "fn a() { let _ = 1; Deadline::after(Duration::from_secs(60)); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].ends_with("is 60 s or more"), "{failures:?}");
+}
+
+#[test]
 fn failure_messages_name_the_numeric_bounds() {
     // `show` renders both sides of a raised-const message: the raised
     // value and its cap. Emptying `show` blanks both, failing each
