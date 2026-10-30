@@ -546,3 +546,181 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
         }),
     );
 }
+
+/// Installs a provider `fake` with three models in distinct states: `m-ok`
+/// is valid and configured, `m-nocontext` declares no `context_window`
+/// (`model_invalid`), and `m-host` names the `workspace` placeholder whose
+/// setting value is not a host (`model_unconfigured`, as in
+/// `model_picker_keys.rs`'s claimed test).
+fn install_picker_states_provider(setup: &Setup, server_url: &str) {
+    let source = setup.root.path().join("src");
+    // The manifest lists every base-URL pattern the models use,
+    // including the placeholder one (`docs/model-routing.md`, "A
+    // per-account host").
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{server_url}/v1"), "https://{workspace}/v1"]}}),
+    );
+    support::write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "placeholders": {"workspace": {}},
+            "models": [
+                {"id": "m-ok", "protocol": "openai-responses", "base_url": format!("{server_url}/v1"), "context_window": 100000},
+                {"id": "m-nocontext", "protocol": "openai-responses", "base_url": format!("{server_url}/v1")},
+                {"id": "m-host", "protocol": "openai-responses", "base_url": "https://{workspace}/v1", "context_window": 100000},
+            ],
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    // The setting value is not a host, so the fill leaves the model out
+    // per model rather than grouping it.
+    support::write_json(
+        &setup.home().join("config/fake.json"),
+        &json!({"workspace": "x/y"}),
+    );
+}
+
+/// Installs the Lua extension `badext` with provider `bad` whose models
+/// function always fails: the catalogue refresh names the extension with
+/// `extension_failed`.
+fn install_failing_lua_provider(setup: &Setup, server_url: &str) {
+    let source = setup.root.path().join("badsrc");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": "badext", "version": "0.1.0", "fiber": "0.1.0", "api": 1,
+                "providers": {"bad": [format!("{server_url}/v1")]}}),
+    );
+    std::fs::create_dir_all(source.join("providers")).unwrap();
+    std::fs::write(
+        source.join("providers/bad.lua"),
+        format!(
+            "fiber.provider(\"bad\", {{\n\
+               models = {{ timeout = 60000, run = function()\n\
+                 error(\"badext models are broken\")\n\
+               end }},\n\
+               credential = {{ timeout = 60000, run = function()\n\
+                 local r = host.http({{ method = \"POST\", url = \"{server_url}/lua-token\" }})\n\
+                 return {{ token = \"tok\", expires_at = 1893456000 }}\n\
+               end }},\n\
+               quota = {{ timeout = 60000, run = function(q)\n\
+                 return {{ windows = {{}} }}\n\
+               end }},\n\
+               sign = {{ timeout = 60000, run = function(request) return {{}} end }},\n\
+             }})\n"
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// Every model-picker notice code shown as itself: the picker band carries
+/// each bad state's own code beside the model it names. Evidence for
+/// #3580, whose parent showed every picker notice as `model_invalid`.
+/// `model_invalid` itself is claimed by `model_picker_keys.rs`'s existing
+/// binary-level test, which pins the negative for its model.
+#[test]
+fn each_model_picker_notice_code_shown_as_itself() {
+    run_journey(
+        "each_model_picker_notice_code_shown_as_itself",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let server = ProviderServer::start_responding(|request| match request.path.as_str() {
+                "/lua-models" | "/lua-token" | "/lua-quota" => fakes::Response::status(200, "{}"),
+                _ => fakes::Response::status(500, "unrouted"),
+            })
+            .unwrap();
+            install_picker_states_provider(&setup, &server.url());
+            install_failing_lua_provider(&setup, &server.url());
+            std::fs::create_dir_all(setup.home().join("credentials/bad")).unwrap();
+            std::fs::write(setup.home().join("credentials/bad/work"), "test-key").unwrap();
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "fake/m-ok", "hub": {"idle_exit_ms": 200}}),
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            // Each wait names its code and its model, which survive the
+            // 120-column truncation that cuts the message's tail.
+            let screen = run.wait_screen("the model_unconfigured notice", |grid| {
+                shows(grid, "model_unconfigured") && shows(grid, "fake/m-host")
+            });
+            assert!(
+                screen
+                    .rows
+                    .iter()
+                    .all(|row| !(row.contains("model_invalid") && row.contains("fake/m-host"))),
+                "no model_invalid row carries it: {:?}",
+                screen.rows
+            );
+            let screen = run.wait_screen("the model_invalid notice", |grid| {
+                shows(grid, "model_invalid") && shows(grid, "fake/m-nocontext")
+            });
+            assert!(
+                screen
+                    .rows
+                    .iter()
+                    .all(|row| !(row.contains("model_unconfigured")
+                        && row.contains("fake/m-nocontext"))),
+                "no model_unconfigured row carries it: {:?}",
+                screen.rows
+            );
+            // Ctrl+L opens the picker: each open asks `Stale`, so the open
+            // runs the Lua refresh, which fails and names the extension.
+            run.write(b"\x0c");
+            run.wait_screen("the open picker", |grid| shows(grid, "Type to search"));
+            let screen = run.wait_screen("the extension_failed notice", |grid| {
+                shows(grid, "extension_failed") && shows(grid, "bad")
+            });
+            // No other code reaches the band: the catalogue read carries
+            // only these three bad states, and every other registry code
+            // belongs to another pass (login, extension load, session).
+            assert!(
+                screen
+                    .rows
+                    .iter()
+                    .filter(|row| row.contains("⚠ "))
+                    .all(|row| row.contains("model_unconfigured")
+                        || row.contains("model_invalid")
+                        || row.contains("extension_failed")),
+                "only the three bad states show: {:?}",
+                screen.rows
+            );
+            // Esc closes the picker with no query typed.
+            run.write(b"\x1b[27u");
+            run.wait_screen("home again", |grid| !shows(grid, "Type to search"));
+            quit_journey(run);
+        }),
+    );
+}
