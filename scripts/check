@@ -129,10 +129,10 @@ crates/main/tests/inline_images.rs 2
 crates/main/tests/link_look.rs 4
 crates/main/tests/look.rs 5
 crates/main/tests/look_diff.rs 2
-crates/main/tests/model_picker_keys.rs 7
-crates/main/tests/model_picker_name.rs 2
+crates/main/tests/model_picker_keys.rs 0
+crates/main/tests/model_picker_name.rs 0
 crates/main/tests/pinned_call_row.rs 1
-crates/main/tests/placeholders_picker.rs 1
+crates/main/tests/placeholders_picker.rs 0
 crates/main/tests/quota_fetch_session.rs 1
 crates/main/tests/release_notes.rs 4
 crates/main/tests/steer_drawn.rs 2
