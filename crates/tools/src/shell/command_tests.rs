@@ -2497,7 +2497,7 @@ fn an_adopted_call_ends_its_guard_exactly_once() {
     let cancel = CancelToken::new();
     let moved = fakes::within(
         "a background command moves",
-        Deadline::after(JOB_DEADLINE),
+        Deadline::after(Duration::from_secs(10)),
         {
             let clock = Arc::clone(&clock);
             let cancel = cancel.clone();
@@ -2550,12 +2550,15 @@ fn an_adopted_call_ends_its_guard_exactly_once() {
         contract::JobId("j_t".to_owned()),
         Arc::clone(&deltas) as Arc<dyn contract::emit::Emit>,
     );
-    let (finished, report) =
-        fakes::within("the adopted command ends", Deadline::after(JOB_DEADLINE), {
+    let (finished, report) = fakes::within(
+        "the adopted command ends",
+        Deadline::after(Duration::from_secs(10)),
+        {
             let clock = Arc::clone(&clock);
             let cancel = cancel.clone();
             move || moved.drive_job(clock.as_ref(), &cancel, stream, None)
-        });
+        },
+    );
     assert_eq!(
         exit_code_of(finished.status),
         0,
@@ -2602,7 +2605,7 @@ fn a_failed_job_open_preserves_the_guard_on_resume() {
     let cancel = CancelToken::new();
     let moved = fakes::within(
         "a background command moves",
-        Deadline::after(JOB_DEADLINE),
+        Deadline::after(Duration::from_secs(10)),
         {
             let clock = Arc::clone(&clock);
             let cancel = cancel.clone();
