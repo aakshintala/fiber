@@ -255,8 +255,8 @@ impl<'de> Deserialize<'de> for LenientPayload {
                     RawPayload::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
                 Ok(LenientPayload(Some(payload)))
             }
-            // Exempt: a non-map payload carries no data, matching `Default`.
-            #[cfg_attr(false, mutants::skip)]
+            // Consume and validate this payload so a malformed earlier
+            // duplicate cannot hide a later valid payload.
             fn visit_seq<A>(self, mut seq: A) -> Result<LenientPayload, A::Error>
             where
                 A: serde::de::SeqAccess<'de>,
