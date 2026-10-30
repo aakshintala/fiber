@@ -1,6 +1,6 @@
 //! Tests for the model picker's reads on the app: a read error shows
-//! once with the old catalogue kept, and each catalogue notice shows once
-//! per read.
+//! once with the old catalogue kept, and catalogue notices show grouped
+//! by code, each shown group once per terminal run.
 
 use super::super::{App, Effect};
 use crate::catalogue::{Catalogue, ModelEntry};
@@ -133,6 +133,63 @@ fn catalogue_notices_show_under_their_own_codes() {
     // text while stacked dedupes (#2843: event repeats fade as one row).
     app.on_models(Ok(catalogue));
     assert_eq!(app.notices().len(), 3);
+}
+
+#[test]
+fn catalogue_notices_group_by_code() {
+    // Two `model_invalid` notices in one catalogue read stack one grouped
+    // row; a second identical read adds none, since the run already
+    // showed it (`docs/errors.md`, "Notices": one per code;
+    // `docs/tui.md`, "Notices": no repeat in the same run).
+    let mut app = home();
+    let catalogue = Catalogue {
+        installable: Vec::new(),
+        models: vec![entry("acme/m1")],
+        notices: vec![
+            Notice {
+                code: ErrorCode::ModelInvalid,
+                message: "a first cached list is bad".to_owned(),
+                extension: None,
+            },
+            Notice {
+                code: ErrorCode::ModelInvalid,
+                message: "a second cached list is bad".to_owned(),
+                extension: None,
+            },
+        ],
+        lists: Vec::new(),
+        left_out: Vec::new(),
+    };
+    app.on_models(Ok(catalogue.clone()));
+    let rows: Vec<(String, String)> = app
+        .notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { code, text, .. } => Some((code, text)),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "model_invalid");
+    assert!(
+        rows[0]
+            .1
+            .starts_with("2 `model_invalid` notices: a first cached list is bad\n"),
+        "{}",
+        rows[0].1
+    );
+    assert!(
+        rows[0].1.contains("- a first cached list is bad"),
+        "{}",
+        rows[0].1
+    );
+    assert!(
+        rows[0].1.contains("- a second cached list is bad"),
+        "{}",
+        rows[0].1
+    );
+    app.on_models(Ok(catalogue));
+    assert_eq!(app.notices().len(), 1);
 }
 
 use std::time::Instant;

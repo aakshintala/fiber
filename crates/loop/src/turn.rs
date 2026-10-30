@@ -8,6 +8,7 @@ use std::sync::Arc;
 use contract::TurnId;
 use contract::events::{
     Event, ToolCallCompleted, ToolInfo, ToolSource, ToolState, TurnOutcome, TurnStarted,
+    group_notices, grouped_lead,
 };
 use contract::provider::Input;
 
@@ -304,25 +305,23 @@ impl Loop {
     /// notices, then `skills_changed`, then `date_changed`.
     fn check_changes(&mut self) -> Result<(), Error> {
         let out = self.changes.check(self.prompt.clock.as_ref());
-        for event in out
-            .files
-            .into_iter()
-            .map(Event::InstructionFile)
-            .chain(out.notices.into_iter().map(Event::Notice))
-        {
+        for event in out.files.into_iter().map(Event::InstructionFile) {
             self.append_early(&event)?;
         }
         let skills = self.skills.check();
-        for notice in skills.notices {
+        // One pass's notices, grouped by code: the instruction files',
+        // the skills', and the refreshed commands', so one pass raises
+        // one notice per code (`docs/errors.md`, "Notices").
+        let mut batch = out.notices;
+        batch.extend(skills.notices);
+        if skills.commands_changed {
+            batch.extend(self.refresh_commands(&skills.inputs, &skills.found));
+        }
+        for notice in group_notices(batch, grouped_lead) {
             self.append_early(&Event::Notice(notice))?;
         }
         if let Some(changed) = skills.changed {
             self.append_early(&Event::SkillsChanged(changed))?;
-        }
-        if skills.commands_changed {
-            for notice in self.refresh_commands(&skills.inputs, &skills.found) {
-                self.append_early(&Event::Notice(notice))?;
-            }
         }
         if let Some(date) = out.date {
             self.append_early(&Event::DateChanged(date))?;

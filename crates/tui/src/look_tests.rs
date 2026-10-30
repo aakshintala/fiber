@@ -884,3 +884,72 @@ fn paint_keeps_placeholder_colours_in_truecolour() {
     assert_eq!(buf[(0, 0)].fg, Color::Indexed(7));
     assert_eq!(buf[(1, 0)].fg, Color::Rgb(0x6e, 0xaa, 0xfe));
 }
+
+// The logo tint: the wave in the accent, the name stops in heading,
+// accent, string, type and keyword, over the page's background
+// (`docs/tui.md`, "The logo").
+#[test]
+fn logo_tint_reads_the_roles_over_the_page_background() {
+    let (tint, background) = look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")])
+        .logo_tint()
+        .expect("dark truecolour tints the logo");
+    assert_eq!(tint.wave, (0x6e, 0xaa, 0xfe));
+    assert_eq!(
+        tint.stops,
+        [
+            (0xff, 0x9f, 0x43),
+            (0x6e, 0xaa, 0xfe),
+            (0xce, 0x91, 0x78),
+            (0x7d, 0xd3, 0xfc),
+            (0x6e, 0xaa, 0xfe),
+        ]
+    );
+    // The dark background is the terminal's: the reported dark
+    // appearance backs the image with black.
+    assert_eq!(background, (0, 0, 0));
+    let (tint, background) = look(ThemeSetting::Light, &[("COLORTERM", "truecolor")])
+        .logo_tint()
+        .expect("light truecolour tints the logo");
+    assert_eq!(tint.wave, (0x09, 0x69, 0xda));
+    assert_eq!(background, (0xff, 0xff, 0xff));
+}
+
+// 256 colours keep their RGB: the tint reads shades, never the
+// indexed paint.
+#[test]
+fn logo_tint_keeps_rgb_at_256_colours() {
+    let (tint, background) = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")])
+        .logo_tint()
+        .expect("dark 256-colour tints the logo");
+    assert_eq!(tint.wave, (0x6e, 0xaa, 0xfe));
+    assert_eq!(background, (0, 0, 0));
+}
+
+// Without colour there is no tint: the pixel logo stays.
+#[test]
+fn logo_tint_is_none_without_colour() {
+    assert_eq!(
+        look(ThemeSetting::Dark, &[("NO_COLOR", "1")]).logo_tint(),
+        None
+    );
+    assert_eq!(
+        look(ThemeSetting::Follow, &[("NO_COLOR", "1")]).logo_tint(),
+        None
+    );
+}
+
+// Following the terminal re-tints on its reported appearance: dark
+// backs black, light backs white.
+#[test]
+fn logo_tint_follows_the_reported_appearance() {
+    let mut followed = look(ThemeSetting::Follow, &[("COLORTERM", "truecolor")]);
+    assert_eq!(
+        followed.logo_tint().map(|(_, background)| background),
+        Some((0, 0, 0))
+    );
+    assert!(followed.appearance(crate::look::Appearance::Light));
+    assert_eq!(
+        followed.logo_tint().map(|(_, background)| background),
+        Some((0xff, 0xff, 0xff))
+    );
+}
