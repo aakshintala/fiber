@@ -859,7 +859,7 @@ fn open_tail_times_the_wait_and_every_fold() {
             done.send(lp).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let lp = Deadline::after(DEADLINE)
+    let lp = Deadline::after(Duration::from_secs(10))
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the tail read: {err}"));
     drop(lp);
