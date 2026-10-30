@@ -96,19 +96,12 @@ impl Report {
     /// line says the path changed while a confined call ran; it never says
     /// this call changed it.
     pub fn notice_lines(&self) -> Vec<String> {
-        let mut lines = Vec::with_capacity(self.restored.len() + self.failed.len());
-        for path in &self.restored {
-            lines.push(format!(
-                "Protected path {path} changed while a confined call ran; Fiber restored it."
-            ));
-        }
-        for failure in &self.failed {
-            lines.push(format!(
-                "Protected path {} changed while a confined call ran; Fiber could not restore it: {}.",
-                failure.path, failure.message
-            ));
-        }
-        lines
+        // One wording for every surface: the model text, the person's
+        // warning line and the completion notice all read the shared
+        // report's lines.
+        self.contract_paths()
+            .map(|report| report.warning_lines())
+            .unwrap_or_default()
     }
 
     /// The shared contract report, for the tool result and the completion

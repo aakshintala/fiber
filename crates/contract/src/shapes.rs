@@ -431,6 +431,26 @@ pub struct ProtectedPaths {
     pub failed: Vec<ProtectedPathFailure>,
 }
 
+impl ProtectedPaths {
+    /// The person's warning lines, one per path: what changed while the
+    /// confined call ran, never which call changed it.
+    pub fn warning_lines(&self) -> Vec<String> {
+        let mut lines = Vec::with_capacity(self.restored.len() + self.failed.len());
+        for path in &self.restored {
+            lines.push(format!(
+                "Protected path {path} changed while a confined call ran; Fiber restored it."
+            ));
+        }
+        for failure in &self.failed {
+            lines.push(format!(
+                "Protected path {} changed while a confined call ran; Fiber could not restore it: {}.",
+                failure.path, failure.message
+            ));
+        }
+        lines
+    }
+}
+
 /// One protected-path restore that did not succeed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtectedPathFailure {
