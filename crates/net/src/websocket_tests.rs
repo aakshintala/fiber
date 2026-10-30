@@ -156,9 +156,16 @@ fn messages_lines_ping_pong_and_lossy_utf8_cross_the_pair() {
     let mut via = direct();
     let exit = exits(&mut via);
     let mut stream = connect_with(&endpoint, &via).unwrap();
-    let mut read = BufReader::new(stream.try_clone().unwrap());
-    let mut line = String::new();
-    read.read_line(&mut line).unwrap();
+    let read = BufReader::new(stream.try_clone().unwrap());
+    let (read, line) = await_step(
+        "client text line hello",
+        move || -> std::io::Result<(BufReader<UnixStream>, String)> {
+            let mut read = read;
+            let mut line = String::new();
+            read.read_line(&mut line).map(|_| (read, line))
+        },
+    )
+    .unwrap_or_else(|error| panic!("client text line hello: {error}"));
     assert_eq!(line, "hello\n");
     stream.write_all(b"a\xff\n").unwrap();
     eof(read, "client EOF after close");
