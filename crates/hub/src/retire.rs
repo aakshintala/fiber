@@ -293,18 +293,38 @@ impl AckOrder {
 /// `drop_ids`, without an answer and without a further move.
 fn allowed(from: CommandState, to: CommandState) -> bool {
     use CommandState::{Answered, Dropped, Partial, Queued, Read, Rerouted, Writing, Written};
-    matches!(
-        (from, to),
-        (Read, Queued | Writing | Written | Partial | Answered)
-            | (
-                Queued,
-                Queued | Writing | Written | Partial | Answered | Dropped
-            )
-            | (Writing, Written | Queued | Partial | Answered)
-            | (Written, Written | Rerouted | Answered | Dropped)
-            | (Partial, Answered | Dropped)
-            | (Rerouted, Answered | Dropped)
-    )
+    match from {
+        Read => match to {
+            Queued | Writing | Written | Partial | Answered => true,
+            Read | Rerouted | Dropped => false,
+        },
+        Queued => match to {
+            Queued | Writing | Written | Partial | Answered | Dropped => true,
+            Read | Rerouted => false,
+        },
+        Writing => match to {
+            Written | Queued | Partial | Answered => true,
+            Read | Writing | Rerouted | Dropped => false,
+        },
+        Written => match to {
+            Written | Rerouted | Answered | Dropped => true,
+            Read | Queued | Writing | Partial => false,
+        },
+        Partial => match to {
+            Answered | Dropped => true,
+            Read | Queued | Writing | Written | Partial | Rerouted => false,
+        },
+        Rerouted => match to {
+            Answered | Dropped => true,
+            Read | Queued | Writing | Written | Partial | Rerouted => false,
+        },
+        Answered => match to {
+            Read | Queued | Writing | Written | Partial | Rerouted | Answered | Dropped => false,
+        },
+        Dropped => match to {
+            Read | Queued | Writing | Written | Partial | Rerouted | Answered | Dropped => false,
+        },
+    }
 }
 
 /// Reports `to` for `id`, keeping the current state when the move is

@@ -903,6 +903,7 @@ fn a_rejected_subscribe_settles_to_nothing() {
     assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
 }
 
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
     use std::io::{BufRead, BufReader};
@@ -1295,6 +1296,8 @@ fn a_failed_transfer_leaves_a_dead_relay_that_a_route_recovers() {
     assert_eq!(got[1], ("c_1".into(), "reply".into()));
 }
 
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md:1162`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
 #[test]
 fn a_recovered_command_never_queues_behind_an_older_relay() {
     use std::io::{BufRead, BufReader};
@@ -1788,6 +1791,8 @@ fn a_transfer_registers_before_the_session_can_answer() {
     );
 }
 
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md:1162`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
 #[test]
 fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
     use std::sync::{Arc, mpsc};
@@ -2031,6 +2036,8 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
     assert!(timely, "a different epoch must not hold back this forward");
 }
 
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md:1162`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting, at its end when dead.
 #[test]
 fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
     use std::io::Write;
@@ -2397,6 +2404,8 @@ fn a_transfer_does_not_use_another_sessions_live_relay() {
     assert!(replayed.lock().unwrap().is_empty());
 }
 
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md:1160`, "What the hub speaks": the relay's thread never starts, or its admission is refused, after the write — one `command_rejected` with the refusal's code.
 #[test]
 fn the_relay_parses_each_session_line_once() {
     use std::io::{BufRead, BufReader, Write};
@@ -2629,6 +2638,79 @@ fn a_replay_that_cannot_start_is_refused_io_failed() {
     );
 }
 
+/// Stages `c_1` to `from` for the transition-table tests, shared by
+/// `transition_allows_each_documented_move_and_refuses_the_rest` and
+/// `the_command_state_table_matches_the_transition_api`: one helper so the
+/// two tests cannot drift apart.
+fn stage_command(order: &crate::retire::AckOrder, from: crate::relay::CommandState) {
+    use crate::relay::CommandState;
+    order.enqueue("s", &contract::CommandId("c_1".to_owned()));
+    match from {
+        CommandState::Read => {}
+        CommandState::Queued => {
+            order
+                .transition(&contract::CommandId("c_1".to_owned()), CommandState::Queued)
+                .unwrap();
+        }
+        CommandState::Writing => {
+            order
+                .transition(
+                    &contract::CommandId("c_1".to_owned()),
+                    CommandState::Writing,
+                )
+                .unwrap();
+        }
+        CommandState::Written | CommandState::Rerouted => {
+            order
+                .transition(
+                    &contract::CommandId("c_1".to_owned()),
+                    CommandState::Written,
+                )
+                .unwrap();
+            if from == CommandState::Rerouted {
+                order
+                    .transition(
+                        &contract::CommandId("c_1".to_owned()),
+                        CommandState::Rerouted,
+                    )
+                    .unwrap();
+            }
+        }
+        CommandState::Partial => {
+            order
+                .transition(
+                    &contract::CommandId("c_1".to_owned()),
+                    CommandState::Partial,
+                )
+                .unwrap();
+        }
+        CommandState::Answered => {
+            order
+                .transition(
+                    &contract::CommandId("c_1".to_owned()),
+                    CommandState::Answered,
+                )
+                .unwrap();
+        }
+        CommandState::Dropped => {
+            order
+                .transition(&contract::CommandId("c_1".to_owned()), CommandState::Queued)
+                .unwrap();
+            order
+                .transition(
+                    &contract::CommandId("c_1".to_owned()),
+                    CommandState::Dropped,
+                )
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        order.state(&contract::CommandId("c_1".to_owned())),
+        Some(from),
+        "staging {from:?}"
+    );
+}
+
 /// `docs/invocation.md:1142-1166`, "What the hub speaks": only the move
 /// into `Rerouted` claims a command's one permitted re-route, and only
 /// from `Written`. Every other second claim, every move out of a terminal
@@ -2656,59 +2738,10 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
                 | (Rerouted, Answered | Dropped)
         )
     }
-    fn stage(order: &AckOrder, from: CommandState) {
-        order.enqueue("s", &CommandId("c_1".to_owned()));
-        match from {
-            Read => {}
-            Queued => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), Queued)
-                    .unwrap();
-            }
-            Writing => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), Writing)
-                    .unwrap();
-            }
-            Written | Rerouted => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), Written)
-                    .unwrap();
-                if from == Rerouted {
-                    order
-                        .transition(&CommandId("c_1".to_owned()), Rerouted)
-                        .unwrap();
-                }
-            }
-            Partial => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), Partial)
-                    .unwrap();
-            }
-            Answered => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), Answered)
-                    .unwrap();
-            }
-            Dropped => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), Queued)
-                    .unwrap();
-                order
-                    .transition(&CommandId("c_1".to_owned()), Dropped)
-                    .unwrap();
-            }
-        }
-        assert_eq!(
-            order.state(&CommandId("c_1".to_owned())),
-            Some(from),
-            "staging {from:?}"
-        );
-    }
     for from in states {
         for to in states {
             let order = AckOrder::default();
-            stage(&order, from);
+            stage_command(&order, from);
             match order.transition(&CommandId("c_1".to_owned()), to) {
                 Ok(previous) => {
                     assert!(
@@ -2790,53 +2823,9 @@ fn the_command_state_table_matches_the_transition_api() {
         }
         false
     }
-    fn stages(order: &AckOrder, from: CommandState) {
-        order.enqueue("s", &CommandId("c_1".to_owned()));
-        match from {
-            CommandState::Read => {}
-            CommandState::Queued => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), CommandState::Queued)
-                    .unwrap();
-            }
-            CommandState::Writing => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), CommandState::Writing)
-                    .unwrap();
-            }
-            CommandState::Written | CommandState::Rerouted => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), CommandState::Written)
-                    .unwrap();
-                if from == CommandState::Rerouted {
-                    order
-                        .transition(&CommandId("c_1".to_owned()), CommandState::Rerouted)
-                        .unwrap();
-                }
-            }
-            CommandState::Partial => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), CommandState::Partial)
-                    .unwrap();
-            }
-            CommandState::Answered => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), CommandState::Answered)
-                    .unwrap();
-            }
-            CommandState::Dropped => {
-                order
-                    .transition(&CommandId("c_1".to_owned()), CommandState::Queued)
-                    .unwrap();
-                order
-                    .transition(&CommandId("c_1".to_owned()), CommandState::Dropped)
-                    .unwrap();
-            }
-        }
-    }
     fn allows(from: CommandState, to: CommandState) -> bool {
         let order = AckOrder::default();
-        stages(&order, from);
+        stage_command(&order, from);
         order.transition(&CommandId("c_1".to_owned()), to).is_ok()
     }
     let text = include_str!("../../../docs/invocation.md");
@@ -3576,154 +3565,87 @@ fn join_route(thread: std::thread::JoinHandle<()>, what: &str) {
 
 /// `docs/invocation.md:1153`, "What the hub speaks": a `closing` answer
 /// after the exited window arrives while the command is still `Writing`
-/// from `Read`. The acknowledgement consumes the attempt first, so the
-/// claim confirms `Written` and spends the one re-route; the late write
-/// result is skipped, the old `closing` is never forwarded, and the
-/// resumed session's answer is the client's one acknowledgement
-/// (`docs/invocation.md:1165`). The re-route keeps command order
-/// (`docs/invocation.md:1112`).
+/// from `Read` and from `Queued` (a command the retiring relay passed on).
+/// The acknowledgement consumes the attempt first, so the claim confirms
+/// `Written` and spends the one re-route; the late write result is skipped,
+/// the old `closing` is never forwarded, and the resumed session's answer
+/// is the client's one acknowledgement (`docs/invocation.md:1165`). The
+/// re-route keeps command order (`docs/invocation.md:1112`).
 #[test]
-fn a_closing_answer_consumes_an_in_flight_write_from_read() {
-    let mut harness = LiveWrite::start("rwr", false);
-    let (written_tx, written_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    crate::connection::lock(&harness.relays).after_command_write = Some(Box::new(move || {
-        written_tx.send(()).unwrap_or(());
-        release_rx.recv().unwrap_or(());
-    }));
-    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
-    *crate::connection::lock(&harness.hub.after_reroute_claim) = Some(Box::new(move || {
-        claimed_tx.send(()).unwrap_or(());
-    }));
-    // Opposite ends carry opposite directions: the thread only ever sees
-    // acknowledgements, so it can start before the command bytes are
-    // drained, and starting it here keeps it off the relays lock the
-    // paused write holds.
-    let (ack, thread) = harness.start_reader();
-    let route = harness.spawn_route();
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&written_rx)
-        .expect("the live write pauses before it publishes its outcome");
-    {
-        let kept = crate::connection::lock(&harness.kept);
-        assert_eq!(kept.len(), 1, "the in-flight attempt is kept");
+fn a_closing_answer_consumes_an_in_flight_write() {
+    for queued in [false, true] {
+        let tag = if queued { "rwq" } else { "rwr" };
+        let mut harness = LiveWrite::start(tag, queued);
+        if queued {
+            assert_eq!(
+                harness.order.state(&CommandId("c_1".to_owned())),
+                Some(CommandState::Queued),
+                "the schedule starts queued"
+            );
+        }
+        let (written_tx, written_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        crate::connection::lock(&harness.relays).after_command_write = Some(Box::new(move || {
+            written_tx.send(()).unwrap_or(());
+            release_rx.recv().unwrap_or(());
+        }));
+        let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+        *crate::connection::lock(&harness.hub.after_reroute_claim) = Some(Box::new(move || {
+            claimed_tx.send(()).unwrap_or(());
+        }));
+        // Opposite ends carry opposite directions: the thread only ever sees
+        // acknowledgements, so it can start before the command bytes are
+        // drained, and starting it here keeps it off the relays lock the
+        // paused write holds.
+        let (ack, thread) = harness.start_reader();
+        let route = harness.spawn_route();
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&written_rx)
+            .expect("the live write pauses before it publishes its outcome");
+        {
+            let kept = crate::connection::lock(&harness.kept);
+            assert_eq!(kept.len(), 1, "the in-flight attempt is kept");
+            assert_eq!(
+                kept[0].2,
+                CommandState::Writing,
+                "the live write owns the attempt"
+            );
+        }
         assert_eq!(
-            kept[0].2,
-            CommandState::Writing,
-            "the live write owns the attempt"
+            harness.order.state(&CommandId("c_1".to_owned())),
+            Some(CommandState::Writing),
+            "the canonical state is the in-flight write"
+        );
+        // The command travels hub to session and the acknowledgement travels
+        // back, so draining the command first keeps the thread's first read the
+        // acknowledgement.
+        harness.read_command(&ack);
+        harness.say(&ack, rejection("c_1", "closing"));
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&claimed_rx)
+            .expect("the closing acknowledgement claims the re-route first");
+        release_tx.send(()).unwrap();
+        join_route(route, "the paused write returns once released");
+        assert!(
+            harness.starter.await_received(1, MUST_SUCCEED_WITHIN),
+            "the command reaches the resumed session"
+        );
+        assert_eq!(
+            harness.received_ids(),
+            ["c_1"],
+            "the command is delivered exactly once"
+        );
+        let line = harness.line();
+        assert_eq!(line["kind"], "command_accepted", "{line}");
+        assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+        harness.end_reader(ack, thread);
+        assert_eq!(
+            harness.order.state(&CommandId("c_1".to_owned())),
+            None,
+            "the answered id is forgotten"
         );
     }
-    assert_eq!(
-        harness.order.state(&CommandId("c_1".to_owned())),
-        Some(CommandState::Writing),
-        "the canonical state is the in-flight write"
-    );
-    // The command travels hub to session and the acknowledgement travels
-    // back, so draining the command first keeps the thread's first read the
-    // acknowledgement.
-    harness.read_command(&ack);
-    harness.say(&ack, rejection("c_1", "closing"));
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&claimed_rx)
-        .expect("the closing acknowledgement claims the re-route first");
-    release_tx.send(()).unwrap();
-    join_route(route, "the paused write returns once released");
-    assert!(
-        harness.starter.await_received(1, MUST_SUCCEED_WITHIN),
-        "the command reaches the resumed session"
-    );
-    assert_eq!(
-        harness.received_ids(),
-        ["c_1"],
-        "the command is delivered exactly once"
-    );
-    let line = harness.line();
-    assert_eq!(line["kind"], "command_accepted", "{line}");
-    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
-    harness.end_reader(ack, thread);
-    assert_eq!(
-        harness.order.state(&CommandId("c_1".to_owned())),
-        None,
-        "the answered id is forgotten"
-    );
 }
-
-/// `docs/invocation.md:1153`, "What the hub speaks": the same race from
-/// canonical `Queued`, for a command the retiring relay passed on. The
-/// acknowledgement still consumes the `Writing` attempt first and the
-/// command is delivered exactly once, with one final acknowledgement
-/// (`docs/invocation.md:1165`).
-#[test]
-fn a_closing_answer_consumes_an_in_flight_write_from_queued() {
-    let mut harness = LiveWrite::start("rwq", true);
-    assert_eq!(
-        harness.order.state(&CommandId("c_1".to_owned())),
-        Some(CommandState::Queued),
-        "the schedule starts queued"
-    );
-    let (written_tx, written_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    crate::connection::lock(&harness.relays).after_command_write = Some(Box::new(move || {
-        written_tx.send(()).unwrap_or(());
-        release_rx.recv().unwrap_or(());
-    }));
-    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
-    *crate::connection::lock(&harness.hub.after_reroute_claim) = Some(Box::new(move || {
-        claimed_tx.send(()).unwrap_or(());
-    }));
-    // Opposite ends carry opposite directions: the thread only ever sees
-    // acknowledgements, so it can start before the command bytes are
-    // drained, and starting it here keeps it off the relays lock the
-    // paused write holds.
-    let (ack, thread) = harness.start_reader();
-    let route = harness.spawn_route();
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&written_rx)
-        .expect("the live write pauses before it publishes its outcome");
-    {
-        let kept = crate::connection::lock(&harness.kept);
-        assert_eq!(kept.len(), 1, "the in-flight attempt is kept");
-        assert_eq!(
-            kept[0].2,
-            CommandState::Writing,
-            "the live write owns the attempt"
-        );
-    }
-    assert_eq!(
-        harness.order.state(&CommandId("c_1".to_owned())),
-        Some(CommandState::Writing),
-        "the canonical state is the in-flight write"
-    );
-    // The command travels hub to session and the acknowledgement travels
-    // back, so draining the command first keeps the thread's first read the
-    // acknowledgement.
-    harness.read_command(&ack);
-    harness.say(&ack, rejection("c_1", "closing"));
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&claimed_rx)
-        .expect("the closing acknowledgement claims the re-route first");
-    release_tx.send(()).unwrap();
-    join_route(route, "the paused write returns once released");
-    assert!(
-        harness.starter.await_received(1, MUST_SUCCEED_WITHIN),
-        "the command reaches the resumed session"
-    );
-    assert_eq!(
-        harness.received_ids(),
-        ["c_1"],
-        "the command is delivered exactly once"
-    );
-    let line = harness.line();
-    assert_eq!(line["kind"], "command_accepted", "{line}");
-    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
-    harness.end_reader(ack, thread);
-    assert_eq!(
-        harness.order.state(&CommandId("c_1".to_owned())),
-        None,
-        "the answered id is forgotten"
-    );
-}
-
 /// `docs/invocation.md:1151`, "What the hub speaks": a rejected answer
 /// consumes the in-flight `Writing` attempt and settles to nothing to
 /// forward, so the ordered forward writes the session's original rejection
