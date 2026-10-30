@@ -79,8 +79,7 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
     }
     let rows = height as usize;
     let cols = width as usize;
-    let mut band = 0;
-    while band * BAND_ROWS < rows {
+    for band_start in (0..rows).step_by(BAND_ROWS) {
         for (seq, register) in registers.iter().enumerate() {
             out.extend_from_slice(format!("#{seq}").as_bytes());
             let mut run = (b'?', 0usize);
@@ -94,7 +93,7 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
             for col in 0..cols {
                 let mut cell = b'?';
                 for row in 0..BAND_ROWS {
-                    let y = band * BAND_ROWS + row;
+                    let y = band_start + row;
                     if row_is_in_image(y, rows) && at.get(y * cols + col) == Some(register) {
                         cell += 1 << row;
                     }
@@ -110,7 +109,6 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
             out.push(b'$');
         }
         out.push(b'-');
-        band += 1;
     }
     out.extend_from_slice(b"\x1b\\");
     out
