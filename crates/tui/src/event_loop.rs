@@ -576,6 +576,11 @@ impl<B: Backend> Loop<B> {
     /// quits, before any frame.
     fn handle_events(&mut self, events: Vec<Event>) -> Option<i32> {
         let result = self.handle_events_inner(events);
+        self.settle_and_send(result)
+    }
+
+    /// Settles a Loop boundary and sends the outgoing lines unless it quits.
+    fn settle_and_send(&mut self, result: Option<i32>) -> Option<i32> {
         let lines = self.app.settle_and_find_outgoing();
         if result.is_none() {
             self.hub.send(&lines, &mut self.app);
@@ -775,11 +780,7 @@ impl<B: Backend> Loop<B> {
     /// frame, as handling every input in `step` did.
     fn handle(&mut self, input: Input) -> Option<i32> {
         let result = self.handle_inner(input);
-        let lines = self.app.settle_and_find_outgoing();
-        if result.is_none() {
-            self.hub.send(&lines, &mut self.app);
-        }
-        result
+        self.settle_and_send(result)
     }
 
     /// Dispatches one input without settling; the input boundary owns the layout pass.
@@ -902,11 +903,7 @@ impl<B: Backend> Loop<B> {
     /// when the terminal cannot be drawn.
     fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
         let result = self.frame_inner(rx);
-        let lines = self.app.settle_and_find_outgoing();
-        if result.is_none() {
-            self.hub.send(&lines, &mut self.app);
-        }
-        result
+        self.settle_and_send(result)
     }
 
     /// Runs the frame without settling; the frame boundary owns the layout pass.

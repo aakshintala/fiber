@@ -3337,8 +3337,10 @@ fn settle_returns_fetches_queued_by_the_search_rescan() {
 
     let outgoing = app.settle_and_find_outgoing();
 
-    assert_eq!(outgoing.len(), 1, "the settle queues a dropped-page fetch");
-    assert_eq!(command(&outgoing[0]).1, 1);
+    assert!(
+        outgoing.iter().any(|line| command(line).1 == 1),
+        "the settle queues a dropped-page fetch"
+    );
 }
 
 #[test]

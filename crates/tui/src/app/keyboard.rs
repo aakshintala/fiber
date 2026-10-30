@@ -351,13 +351,8 @@ impl App {
                 Context::Input | Context::Steering | Context::Conversation
             ) && !self.keys().person_bound(&stroke, context)
             {
-                return (
-                    {
-                        *routed = true;
-                        self.on_edit_inner(edit)
-                    },
-                    false,
-                );
+                *routed = true;
+                return (self.on_edit_inner(edit), false);
             }
         }
         if self.home_owns_arrows()
@@ -369,22 +364,12 @@ impl App {
         {
             match default_event(&stroke) {
                 Some(Event::Key(key)) => {
-                    return (
-                        {
-                            *routed = true;
-                            self.on_key_inner(key, now)
-                        },
-                        false,
-                    );
+                    *routed = true;
+                    return (self.on_key_inner(key, now), false);
                 }
                 Some(Event::Edit(edit)) => {
-                    return (
-                        {
-                            *routed = true;
-                            self.on_edit_inner(edit)
-                        },
-                        false,
-                    );
+                    *routed = true;
+                    return (self.on_edit_inner(edit), false);
                 }
                 Some(Event::Stroke(_) | Event::Mouse(_) | Event::Reply(_) | Event::Focus(_))
                 | None => {
@@ -393,20 +378,14 @@ impl App {
             }
         }
         match self.keys().resolve(&stroke, self.key_context()) {
-            Resolved::Key(key) => (
-                {
-                    *routed = true;
-                    self.on_key_inner(key, now)
-                },
-                false,
-            ),
-            Resolved::Edit(edit) => (
-                {
-                    *routed = true;
-                    self.on_edit_inner(edit)
-                },
-                false,
-            ),
+            Resolved::Key(key) => {
+                *routed = true;
+                (self.on_key_inner(key, now), false)
+            }
+            Resolved::Edit(edit) => {
+                *routed = true;
+                (self.on_edit_inner(edit), false)
+            }
             Resolved::Action(id) => (self.on_action(id), true),
             Resolved::Nothing => (Effect::None, false),
         }
