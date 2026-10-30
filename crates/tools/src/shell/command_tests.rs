@@ -2481,11 +2481,16 @@ fn an_adopted_call_ends_its_guard_exactly_once() {
     std::fs::write(fiber.join("note.txt"), b"original").expect("note written");
     let release = dir.path().join("release");
     let (sandbox, handle) = protected_pair(home_dir.path(), &work, true);
-    // The command damages a protected path, then holds until the test
-    // observes the move, so the move always wins the race with the end. The
-    // loop is bounded, so a failure before the release still ends the child.
+    std::process::Command::new("mkfifo")
+        .arg(&release)
+        .status()
+        .expect("the release FIFO is created");
+    // The command damages a protected path, then blocks reading the FIFO
+    // until the test releases it, so the move always wins the race with
+    // the end. `timeout` bounds the hold, so a failure before the release
+    // still ends the child (`docs/testing.md`, "Waits and timeouts").
     let held = format!(
-        "echo changed > .fiber/note.txt\ni=0\nwhile test \"$i\" -lt 600; do\ntest -e '{}' && exit 0\ni=$((i + 1))\nsleep 0.1\ndone\n",
+        "echo changed > .fiber/note.txt\ntimeout 60 sh -c 'read line < '{}''\n",
         release.display()
     );
     let clock = FakeClock::new();
@@ -2525,7 +2530,19 @@ fn an_adopted_call_ends_its_guard_exactly_once() {
             }
         },
     );
-    std::fs::write(&release, b"go\n").expect("release the command");
+    // Opened read-write, the FIFO never blocks on open; the write releases
+    // the command's blocked read. Held until the end, the writer keeps the
+    // release from being discarded before the child opens it.
+    let mut releaser = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&release)
+        .expect("the release FIFO opens");
+    {
+        use std::io::Write as _;
+        releaser.write_all(b"go\n").expect("release the command");
+        releaser.flush().expect("release flushes");
+    }
     // The job's common finish consumes the guard: the adopted end restores
     // and reports exactly once.
     let deltas = Arc::new(fakes::jobs::JobDeltas::default());
@@ -2569,8 +2586,16 @@ fn a_failed_job_open_preserves_the_guard_on_resume() {
     std::fs::write(fiber.join("note.txt"), b"original").expect("note written");
     let release = dir.path().join("release");
     let (sandbox, handle) = protected_pair(home_dir.path(), &work, true);
+    std::process::Command::new("mkfifo")
+        .arg(&release)
+        .status()
+        .expect("the release FIFO is created");
+    // The command damages a protected path, then blocks reading the FIFO
+    // until the test releases it. `timeout` bounds the hold, so a failure
+    // before the release still ends the child (`docs/testing.md`, "Waits
+    // and timeouts").
     let held = format!(
-        "echo changed > .fiber/note.txt\ni=0\nwhile test \"$i\" -lt 600; do\ntest -e '{}' && exit 0\ni=$((i + 1))\nsleep 0.1\ndone\n",
+        "echo changed > .fiber/note.txt\ntimeout 60 sh -c 'read line < '{}''\n",
         release.display()
     );
     let clock: Arc<dyn Clock> = FakeClock::new();
@@ -2610,7 +2635,18 @@ fn a_failed_job_open_preserves_the_guard_on_resume() {
             }
         },
     );
-    std::fs::write(&release, b"go\n").expect("release the command");
+    // Opened read-write, the FIFO never blocks on open; the write releases
+    // the command's blocked read and stays held until the end.
+    let mut releaser = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&release)
+        .expect("the release FIFO opens");
+    {
+        use std::io::Write as _;
+        releaser.write_all(b"go\n").expect("release the command");
+        releaser.flush().expect("release flushes");
+    }
     // The job cannot open: the resumed foreground path still ends the guard.
     let jobs: Arc<dyn contract::jobs::Jobs> = fakes::jobs::FakeJobs::failing();
     let output = super::super::background::take(

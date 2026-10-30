@@ -206,6 +206,8 @@ fn a_completed_open_job_keeps_its_output_with_the_protected_warning() {
         .iter()
         .position(|row| row.contains(warning))
         .expect("warns under it");
+    // `docs/events.md:697-701`: the terminal folds the warning under the
+    // open job's output.
     assert!(warned_at > done_at, "the warning follows the output");
 }
 

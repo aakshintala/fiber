@@ -166,8 +166,15 @@ impl Tool for Edit {
         }
         self.shared.set_seen(&path, hash_bytes(&applied.bytes));
         // The approved landing advances the baseline, so the call's end
-        // restores to this content, never to what was there before.
-        self.shared.note_approved_write(&path);
+        // restores to this content, never to what was there before. A
+        // baseline failure fails the tool, so the approved write is never
+        // silently restored away.
+        if let Err(cause) = self.shared.note_approved_write(&path) {
+            return errored(EditError::from(FileError::CouldNotWrite {
+                path: path.to_path_buf(),
+                source: std::io::Error::other(cause),
+            }));
+        }
         written(&path, &text, &applied)
     }
 

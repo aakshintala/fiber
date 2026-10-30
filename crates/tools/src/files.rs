@@ -484,12 +484,15 @@ impl Shared {
     }
 
     /// Advances the baseline entry `path` landed in after a successful
-    /// write or edit. A path no protected entry holds is a no-op, as is a
-    /// session with no protection handle. Failures leave the baseline as it
-    /// is; the call's end still compares against the recorded one.
-    pub(crate) fn note_approved_write(&self, path: &Path) {
+    /// write or edit. A path no protected entry holds, or a project with
+    /// no baseline yet, is a no-op, as is a session with no protection
+    /// handle. Any other failure reaches the caller, so the approved write
+    /// is never silently restored away.
+    pub(crate) fn note_approved_write(&self, path: &Path) -> Result<(), String> {
         if let Some(handle) = self.protection.get() {
-            handle.note_approved_write(&self.workspace, path);
+            handle.note_approved_write(&self.workspace, path)
+        } else {
+            Ok(())
         }
     }
 }
