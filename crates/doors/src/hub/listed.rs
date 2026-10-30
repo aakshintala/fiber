@@ -1,8 +1,9 @@
 use super::Address;
 use crate::Error;
 use contract::Secret;
-use contract::{HubLine, clock::Clock};
+use contract::{HubEventKind, HubLine, clock::Clock};
 use net::websocket::Via;
+use serde_json::{Map, Value};
 use std::io::{self, Read};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -163,6 +164,21 @@ fn connect_listed_with(
     })
 }
 
+#[derive(Debug)]
+struct AuthenticationAnswer {
+    kind: HubEventKind,
+    payload: Map<String, Value>,
+}
+
+impl From<HubLine> for AuthenticationAnswer {
+    fn from(line: HubLine) -> Self {
+        Self {
+            kind: HubEventKind::from(line.kind),
+            payload: line.payload,
+        }
+    }
+}
+
 pub(crate) fn authenticate(
     mut stream: &UnixStream,
     name: &str,
@@ -238,28 +254,33 @@ pub(crate) fn authenticate(
                 "invalid authentication answer",
             ))
         })?;
-        if line
-            .payload
-            .get("command_id")
-            .and_then(serde_json::Value::as_str)
-            != Some("c_authenticate")
-        {
+        let answer = AuthenticationAnswer::from(line);
+        if answer.payload.get("command_id").and_then(Value::as_str) != Some("c_authenticate") {
             continue;
         }
-        if line.kind == "command_accepted" {
-            super::set_read_timeout(stream, None).map_err(hello_error)?;
-            return Ok(());
-        }
-        if line.kind == "command_rejected" {
-            let message = line
-                .payload
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("authentication refused");
-            return Err(Error::Refused {
-                hub: name.into(),
-                message: message.replace(token.expose(), "[redacted]"),
-            });
+        match answer.kind {
+            HubEventKind::CommandAccepted => {
+                super::set_read_timeout(stream, None).map_err(hello_error)?;
+                return Ok(());
+            }
+            HubEventKind::CommandRejected => {
+                let message = answer
+                    .payload
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("authentication refused");
+                return Err(Error::Refused {
+                    hub: name.into(),
+                    message: message.replace(token.expose(), "[redacted]"),
+                });
+            }
+            HubEventKind::HubHello
+            | HubEventKind::Attention
+            | HubEventKind::DeviceChanged
+            | HubEventKind::SessionLeft
+            | HubEventKind::StreamClosed
+            | HubEventKind::StreamReopened
+            | HubEventKind::Unknown(_) => continue,
         }
     }
 }
