@@ -2238,6 +2238,7 @@ fn every_start_helper_warms_the_fixture_before_its_deadline() {
     // This pins only the changed helper: it fails when the `warm_up` call
     // is removed, when a helper stops guarding fixture-only starts, or
     // when a helper stops warming first.
+    // Ordering contract: docs/testing/fakes.md:163-165.
     let source = include_str!("test_support.rs");
     let warmer = source.find("fn warm_once").expect("warm_once");
     let warmed = source.find("impl Setup").expect("impl Setup");

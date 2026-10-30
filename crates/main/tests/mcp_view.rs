@@ -413,6 +413,7 @@ fn new_with_mcp_fixture_warms_before_the_deadline_starts() {
     // shared once-per-process warm before `Setup::new` starts the test's
     // deadline. This pins only the changed helper: it fails when the
     // `warm_up` call is removed or when the warm moves after the setup.
+    // Ordering contract: docs/testing/fakes.md:163-165.
     let source = include_str!("support/mod.rs");
     let warmer = source.find("fn warm_once").expect("warm_once");
     let warmed = source.find("impl Setup").expect("impl Setup");

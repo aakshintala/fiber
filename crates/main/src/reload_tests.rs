@@ -351,6 +351,7 @@ fn with_servers_warms_the_fixture_before_its_setup() {
     // once-per-process warm before `Self::new` builds its setup waits.
     // This pins only the changed helper: it fails when the warm call is
     // removed or moves after the setup.
+    // Ordering contract: docs/testing/fakes.md:163-165.
     let source = include_str!("reload_tests.rs");
     let helper = source.find("fn with_servers").expect("with_servers");
     let warm = source
@@ -373,6 +374,7 @@ fn reload_routes_replacement_warms_the_fixture_before_its_setup() {
     // `fixture.relaunch()`, so it warms once up front before any setup
     // deadline starts. This pins only that caller: it fails when the warm
     // call is removed or moves after the setup.
+    // Ordering contract: docs/testing/fakes.md:163-165.
     let source = include_str!("reload_tests.rs");
     let test = source
         .find("\nfn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {")
