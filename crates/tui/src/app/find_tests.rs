@@ -3344,6 +3344,26 @@ fn settle_returns_fetches_queued_by_the_search_rescan() {
 }
 
 #[test]
+fn failed_settlement_fetch_is_a_follow_up_input_with_one_settle() {
+    let (mut app, _, _) = dropped_fetch();
+    app.find_lost();
+    App::reset_settle_calls();
+
+    let unsent = app.settle_and_find_outgoing_if_up();
+    assert!(
+        unsent.iter().any(|line| command(line).1 == 1),
+        "the first input's settle queues the search fetch"
+    );
+    assert_eq!(App::settle_calls(), 1, "one settle for the first input");
+
+    app.on_write_failed(&unsent);
+
+    assert_eq!(App::settle_calls(), 2, "one settle for each input");
+    assert!(!app.outbox.is_up(), "the failed send marks the link down");
+    assert_eq!(app.notice(), Some("Connection lost."));
+}
+
+#[test]
 fn a_completed_rescan_clears_the_search_text() {
     let (mut app, log, _) = dropped_fetch();
     app.find_lost();

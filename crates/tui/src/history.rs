@@ -4,7 +4,7 @@
 //! the hub's `prompt_history`, page by page (`docs/state.md`, "Prompt
 //! history").
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -23,6 +23,11 @@ use crate::slash::{SHOWN, window_start};
 #[cfg(debug_assertions)]
 std::thread_local! {
     static SETTLE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SETTLE_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(debug_assertions)]
@@ -293,6 +298,18 @@ impl History {
 }
 
 impl App {
+    /// Resets the per-thread settle counter for a boundary-counting test.
+    #[cfg(test)]
+    pub(crate) fn reset_settle_calls() {
+        SETTLE_CALLS.with(|calls| calls.set(0));
+    }
+
+    /// Returns the number of settled passes on this test thread.
+    #[cfg(test)]
+    pub(crate) fn settle_calls() -> usize {
+        SETTLE_CALLS.with(Cell::get)
+    }
+
     /// Names home's project for `prompt_history`: set at `set_home` and
     /// at each workspace choice.
     pub(crate) fn sync_project(&mut self) {
@@ -575,6 +592,8 @@ impl App {
     /// a page it notes what covers the input box; once that differs,
     /// whatever opened or closed a panel, the recall waits no more.
     pub(crate) fn settle(&mut self) {
+        #[cfg(test)]
+        SETTLE_CALLS.with(|calls| calls.set(calls.get() + 1));
         #[cfg(debug_assertions)]
         let _depth = SettleDepth::enter();
         self.relayout();

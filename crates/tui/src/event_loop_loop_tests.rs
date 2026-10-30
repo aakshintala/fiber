@@ -1152,6 +1152,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::WriteFailed(_)
             | Input::FindDue(_)
             | Input::Tick
             | Input::Signal(_)
@@ -3169,7 +3170,7 @@ fn an_empty_send_keeps_the_connection_and_writes_nothing() {
     let mut hub = Connection::new(super::tests::idle_retry());
     hub.store(ours);
     let mut app = App::new(PathBuf::from("/w"));
-    hub.send(&[], &mut app);
+    assert!(hub.send(&[], &mut app).is_none());
     assert!(hub.has_stream(), "an empty send keeps the stream");
     // Nothing reached the hub: the peer reads nothing, without waiting.
     let mut byte = [0u8; 1];
@@ -3178,6 +3179,34 @@ fn an_empty_send_keeps_the_connection_and_writes_nothing() {
         Ok(_) => panic!("the empty send wrote a line"),
         Err(err) => panic!("the empty send's read failed: {err}"),
     }
+}
+
+#[test]
+fn send_reports_failed_lines_without_changing_app_state() {
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    drop(theirs);
+    let mut hub = Connection::new(super::tests::idle_retry());
+    hub.store(ours);
+    let mut app = App::new(PathBuf::from("/w"));
+    assert!(
+        app.on_line(Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }))
+        .is_empty()
+    );
+    let lines = vec![json!({"command": "history"}).to_string()];
+
+    let unsent = hub.send(&lines, &mut app).expect("the peer is closed");
+
+    assert_eq!(unsent, lines);
+    assert!(!hub.has_stream(), "the failed connection is hung up");
+    assert!(
+        app.outbox.is_up(),
+        "the loop applies failure as a new input"
+    );
 }
 
 #[test]
@@ -3344,6 +3373,7 @@ fn hooks_results_waiting_on_history_are_stashed_then_folded_stale() {
             | Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::WriteFailed(_)
             | Input::Resize
             | Input::Files { .. }
             | Input::FindDue(_)

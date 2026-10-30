@@ -771,6 +771,16 @@ impl App {
         lines
     }
 
+    /// Settles the app and returns search commands only while the hub is up.
+    pub(crate) fn settle_and_find_outgoing_if_up(&mut self) -> Vec<String> {
+        self.settle();
+        if self.outbox.is_up() {
+            self.find_outgoing()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Settles the app and returns any search commands the settle queued.
     pub(crate) fn settle_and_find_outgoing(&mut self) -> Vec<String> {
         self.settle();
@@ -1531,17 +1541,22 @@ impl App {
         self.abandon_copy();
     }
 
-    /// Writing `unsent`, command lines this app made, to the hub failed:
-    /// the connection is lost, and the commands never written fail as if
-    /// rejected, so a draft they carried returns to an empty draft. A line
-    /// already written and kept for resending keeps its pending entry and
-    /// leaves the draft alone, so the next connection sends it again
-    /// (`docs/invocation.md`, "The command line"). A close from the
-    /// quit question that was never written keeps its resume line.
-    #[cfg(test)]
-    pub(crate) fn write_failed(&mut self, unsent: &[String]) {
+    /// Applies a failed command write as its own input and settles once:
+    /// commands never written fail as if rejected, so a draft they carried
+    /// returns to an empty draft. A line already written and kept for
+    /// resending keeps its pending entry and leaves the draft alone, so
+    /// the next connection sends it again (`docs/invocation.md`, "The
+    /// command line"). A close from the quit question that was never
+    /// written keeps its resume line.
+    pub(crate) fn on_write_failed(&mut self, unsent: &[String]) {
         self.write_failed_inner(unsent);
         self.settle();
+    }
+
+    /// Test entry point for a failed write.
+    #[cfg(test)]
+    pub(crate) fn write_failed(&mut self, unsent: &[String]) {
+        self.on_write_failed(unsent);
     }
 
     /// Handles the route without settling; the caller owns the layout pass.
