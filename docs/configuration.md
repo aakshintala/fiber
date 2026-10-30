@@ -132,7 +132,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
 | `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
 | `cache.warm_cap` | `2` | yes | How many cache lifetimes after the last turn warming stops, an integer; less than 12 (`docs/prompt-cache.md`, "Warming while idle"). |
-| `cache.diagnostics` | false | yes | Whether a debug `provider_request` line for a model call also carries redacted prefix hashes and the reported cache use (`docs/prompt-cache.md`, "Cache diagnostics"). |
+| `cache.diagnostics` | false | yes | Whether a debug `http_request` line for a model call also carries redacted prefix hashes and the reported cache use (`docs/prompt-cache.md`, "Cache diagnostics"). |
 | `keys."<action>"` | the binding in `docs/tui.md` | no | A key, or a list of keys, for a terminal action; `[]` unbinds it (`docs/tui.md`, "Bindings"). |
 | `retry.attempts` | 3 | yes | Retries of a failed model call (`docs/model-routing.md`, "When a model call fails"). |
 | `retry.initial_delay_ms` | 2000 | yes | The first backoff, doubling each retry. |

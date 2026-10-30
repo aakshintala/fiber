@@ -5677,12 +5677,12 @@ fn breakdown() -> Value {
                 "tool.run": {"count": 429, "ms": 512},
                 "log.append": {"count": 862, "ms": 40}
             },
-            "provider_request": {"count": 430, "total_ms": 2210},
+            "http_request": {"count": 430, "total_ms": 2210},
             "notes": []
         },
         {
             "workload": "paging", "ms": 1234.0, "ops": {},
-            "provider_request": {"count": 0, "total_ms": 0},
+            "http_request": {"count": 0, "total_ms": 0},
             "notes": []
         }
     ])
@@ -5722,7 +5722,7 @@ fn the_debug_run_section_lists_each_operation_next_to_its_workload() {
     let mut want = vec![
         "| busy turn | 81234.5 | log.append | 862 | 40 |",
         "| busy turn | 81234.5 | tool.run | 429 | 512 |",
-        "| busy turn | 81234.5 | provider_request total_ms | 430 | 2210 |",
+        "| busy turn | 81234.5 | http_request total_ms | 430 | 2210 |",
         "| paging | 1234.0 | none recorded | — | — |",
     ];
     want.sort_unstable();
@@ -5733,7 +5733,7 @@ fn the_debug_run_section_lists_each_operation_next_to_its_workload() {
 fn a_failed_or_noted_workload_adds_bullets_and_no_failure() {
     let metric = json!([{
         "workload": "busy turn", "ms": 5.0, "ops": {},
-        "provider_request": {"count": 0, "total_ms": 0},
+        "http_request": {"count": 0, "total_ms": 0},
         "notes": ["n1"], "error": "boom"
     }]);
     let with = judge(
@@ -5760,7 +5760,7 @@ fn a_malformed_breakdown_says_it_could_not_be_read_and_adds_no_failure() {
     let without = judge(&head(), Some(&base()), Event::PullRequest);
     let nameless = json!([{
         "ms": 1.0, "ops": {},
-        "provider_request": {"count": 0, "total_ms": 0}, "notes": []
+        "http_request": {"count": 0, "total_ms": 0}, "notes": []
     }]);
     for (metric, why) in [
         (json!("oops"), "op_breakdown is not a list"),
@@ -6679,10 +6679,10 @@ fn unknown_rows_fail_with_the_exact_table_error() {
 }
 
 #[test]
-fn a_single_provider_request_is_recorded_not_none_recorded() {
+fn a_single_http_request_is_recorded_not_none_recorded() {
     let metric = json!([{
         "workload": "web_fetch", "ms": 2.0, "ops": {},
-        "provider_request": {"count": 1, "total_ms": 7},
+        "http_request": {"count": 1, "total_ms": 7},
         "notes": []
     }]);
     let out = judge(
@@ -6692,7 +6692,7 @@ fn a_single_provider_request_is_recorded_not_none_recorded() {
     );
     assert!(
         out.comment
-            .contains("| web_fetch | 2.0 | provider_request total_ms | 1 | 7 |"),
+            .contains("| web_fetch | 2.0 | http_request total_ms | 1 | 7 |"),
         "{}",
         out.comment
     );

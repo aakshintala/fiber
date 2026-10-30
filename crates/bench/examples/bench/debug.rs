@@ -44,11 +44,16 @@ pub(crate) fn debug_workloads(args: &crate::Args) -> Vec<&'static idle::Workload
         .collect()
 }
 
-/// Tallies the diagnostic-log lines in `logs` into `(ops, provider_request,
+/// Tallies the diagnostic-log lines in `logs` into `(ops, http_request,
 /// notes)`: `ops` maps each `op_timing` operation to `{"count", "ms"}`, and
-/// `provider_request` is `{"count", "total_ms"}`. Other codes are not
-/// counted. A line that cannot be read is a note and is not counted.
+/// `http_request` is `{"count", "total_ms"}` over provider purposes
+/// only (`model_call`, `model_list`, `quota`, `token_refresh`, `cost`),
+/// so the overhead metric stays comparable across purposes. Other codes
+/// and non-provider purposes are not counted. A line that cannot be
+/// read is a note and is not counted.
 fn tally(logs: &[Result<String, String>]) -> (Value, Value, Vec<String>) {
+    const PROVIDER_PURPOSES: [&str; 5] =
+        ["model_call", "model_list", "quota", "token_refresh", "cost"];
     let mut ops: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     let (mut requests, mut total_ms) = (0_u64, 0_u64);
     let mut notes = Vec::new();
@@ -81,7 +86,13 @@ fn tally(logs: &[Result<String, String>]) -> (Value, Value, Vec<String>) {
                         ),
                     }
                 }
-                Some("provider_request") => {
+                Some("http_request") => {
+                    let purpose = data
+                        .and_then(|data| data.get("purpose"))
+                        .and_then(Value::as_str);
+                    if purpose.is_none_or(|purpose| !PROVIDER_PURPOSES.contains(&purpose)) {
+                        continue;
+                    }
                     match data
                         .and_then(|data| data.get("total_ms"))
                         .and_then(Value::as_u64)
@@ -90,8 +101,9 @@ fn tally(logs: &[Result<String, String>]) -> (Value, Value, Vec<String>) {
                             requests = requests.saturating_add(1);
                             total_ms = total_ms.saturating_add(ms);
                         }
-                        None => notes
-                            .push("a provider_request line has no whole data.total_ms".to_owned()),
+                        None => {
+                            notes.push("an http_request line has no whole data.total_ms".to_owned())
+                        }
                     }
                 }
                 _ => {}
@@ -110,17 +122,17 @@ fn tally(logs: &[Result<String, String>]) -> (Value, Value, Vec<String>) {
 }
 
 /// One workload's `op_breakdown` entry: its name, its run's wall-clock
-/// time, the tallied operations and provider requests, and its notes. An
+/// time, the tallied operations and HTTP requests, and its notes. An
 /// `error` key is added when the workload erred.
 fn entry(workload: &str, run: Run) -> Value {
-    let (ops, provider_request, tallied) = tally(&run.logs);
+    let (ops, http_request, tallied) = tally(&run.logs);
     let mut notes = run.notes;
     notes.extend(tallied);
     let mut entry = json!({
         "workload": workload,
         "ms": run.ms,
         "ops": ops,
-        "provider_request": provider_request,
+        "http_request": http_request,
         "notes": notes
     });
     if let (Err(err), Some(fields)) = (run.result, entry.as_object_mut()) {

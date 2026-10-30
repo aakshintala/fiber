@@ -135,7 +135,7 @@ fn every_operation_serializes_to_its_wire_name() {
 }
 
 #[test]
-fn a_provider_request_writes_present_fields_in_order_and_leaves_absent_ones_out() {
+fn an_http_request_writes_present_fields_in_order_and_leaves_absent_ones_out() {
     assert_eq!(
         serde_json::to_string(&full()).unwrap(),
         "{\"provider\":\"fake\",\"model\":\"m\",\"purpose\":\"model_call\",\
