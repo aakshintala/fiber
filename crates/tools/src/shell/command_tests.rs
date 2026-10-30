@@ -2342,6 +2342,60 @@ fn baseline_of(home: &std::path::Path) -> std::path::PathBuf {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn an_unchanged_command_reports_a_transaction_only_with_enabled_protection() {
+    for (enabled, installed, expected) in [
+        (
+            true,
+            true,
+            Some(contract::shapes::ProtectedPaths {
+                restored: Vec::new(),
+                failed: Vec::new(),
+            }),
+        ),
+        (false, true, None),
+        (true, false, None),
+    ] {
+        let dir = fakes::TempDir::new("fiber-command-empty-protection");
+        let home = fakes::TempDir::under(&real_home(), "fiber-command-empty-protection-home");
+        let work = dir.path().to_path_buf();
+        let (sandbox, handle) = protected_pair(home.path(), &work, enabled);
+        let ran = fakes::within(
+            "the unchanged command finishes",
+            Deadline::after(Duration::from_secs(10)),
+            move || {
+                super::execute(
+                    std::path::Path::new("/bin/sh"),
+                    "printf unchanged",
+                    &work,
+                    Duration::from_secs(60),
+                    FakeClock::new().as_ref(),
+                    &CancelToken::new(),
+                    &Recorder::default(),
+                    MovePolicy::Stay,
+                    None,
+                    None,
+                    None,
+                    &sandbox,
+                    &work,
+                    installed.then_some(handle.as_ref()),
+                )
+                .expect("the command starts")
+            },
+        );
+        let super::Ran::Finished(finished, report) = ran else {
+            panic!("a Stay call finishes in the foreground");
+        };
+        assert_eq!(exit_code_of(finished.status), 0);
+        let super::Kept::Whole(bytes) = finished.output else {
+            panic!("short output stays whole");
+        };
+        assert_eq!(bytes, b"unchanged");
+        assert_eq!(report, expected, "enabled={enabled}, installed={installed}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn a_confined_call_restores_its_protected_paths_and_reports() {
     let dir = fakes::TempDir::new("fiber-protected-exec");
     let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-exec-home");

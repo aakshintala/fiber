@@ -224,6 +224,8 @@ fn acquire_protection(
 }
 
 /// No guard off Linux: no confined call runs there.
+// Mutants run on Linux, where this stub is not compiled.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(not(target_os = "linux"))]
 fn acquire_protection(
     sandbox_settings: &super::sandbox::Settings,

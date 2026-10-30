@@ -164,6 +164,7 @@ impl ProtectedPaths {
     /// `workspace` and returns the guard that owns the call's end. Fails
     /// before spawn when protection cannot be established, so the call
     /// never runs unprotected.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn begin(&self, workspace: &Path) -> Result<Begin, SetupError> {
         let dir = baseline::state_paths(&self.home, workspace)
             .map_err(|message| SetupError { message })?;
@@ -420,6 +421,7 @@ fn finish_failure(cause: &str) -> Report {
 }
 
 /// A setup failure naming what could not be read or recorded.
+#[cfg(any(target_os = "linux", test))]
 fn setup(source: io::Error) -> SetupError {
     SetupError {
         message: source.to_string(),
@@ -461,7 +463,7 @@ pub(crate) struct LinuxPolicy {
 /// the sandbox setup, keeping every other policy behavior unchanged.
 #[cfg(target_os = "linux")]
 pub(crate) fn linux_policy() -> Result<LinuxPolicy, String> {
-    if supports_signal_scope() {
+    if supports_signal_scope(signal_scope_probe) {
         return Ok(LinuxPolicy {
             signal_scope: true,
             supervisor_rules: Vec::new(),
@@ -476,13 +478,20 @@ pub(crate) fn linux_policy() -> Result<LinuxPolicy, String> {
 /// Whether the kernel honours Landlock ABI 6: a version-6 ruleset creates
 /// only there. Probed, never assumed.
 #[cfg(target_os = "linux")]
-pub(crate) fn supports_signal_scope() -> bool {
+pub(crate) fn signal_scope_probe() -> bool {
     use landlock::{Access as _, Compatible as _, RulesetAttr as _};
     landlock::Ruleset::default()
         .set_compatibility(landlock::CompatLevel::HardRequirement)
         .handle_access(landlock::AccessFs::from_all(landlock::ABI::V6))
         .and_then(|ruleset| ruleset.create())
         .is_ok()
+}
+
+/// Resolves the capability probe; keeping the result injectable covers both
+/// policy branches without depending on the test kernel's ABI.
+#[cfg(target_os = "linux")]
+pub(crate) fn supports_signal_scope(probe: impl FnOnce() -> bool) -> bool {
+    probe()
 }
 
 /// Collects the supervisor pids: the session host itself, and the spawning
@@ -514,7 +523,7 @@ pub(crate) fn supervisor() -> Supervisor {
 
 /// The process group of `pid`, or of this process when absent.
 #[cfg(target_os = "linux")]
-fn process_group(pid: Option<u32>) -> Option<u32> {
+pub(crate) fn process_group(pid: Option<u32>) -> Option<u32> {
     let raw = match pid {
         Some(pid) => Some(rustix::process::Pid::from_raw(i32::try_from(pid).ok()?)?),
         None => None,
@@ -525,7 +534,7 @@ fn process_group(pid: Option<u32>) -> Option<u32> {
 
 /// This process's parent pid.
 #[cfg(target_os = "linux")]
-fn parent_pid() -> Option<u32> {
+pub(crate) fn parent_pid() -> Option<u32> {
     let parent = rustix::process::getppid()?;
     u32::try_from(parent.as_raw_pid()).ok()
 }

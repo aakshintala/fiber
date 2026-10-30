@@ -3,6 +3,30 @@
 use super::*;
 
 #[test]
+fn protected_paths_are_empty_only_without_restored_or_failed_paths() {
+    let mut report = ProtectedPaths {
+        restored: Vec::new(),
+        failed: Vec::new(),
+    };
+    assert!(report.is_empty(), "no changed paths means no report");
+
+    report.restored.push(".fiber".to_owned());
+    assert!(!report.is_empty(), "a restored path must be reported");
+
+    report.failed.push(ProtectedPathFailure {
+        path: ".git/config".to_owned(),
+        message: "denied".to_owned(),
+    });
+    assert!(
+        !report.is_empty(),
+        "restored and failed paths must be reported"
+    );
+
+    report.restored.clear();
+    assert!(!report.is_empty(), "a failed-only restore must be reported");
+}
+
+#[test]
 fn protected_warning_lines_name_each_path_once() {
     let report = ProtectedPaths {
         restored: vec![".fiber".to_owned()],

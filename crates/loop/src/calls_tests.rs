@@ -2171,6 +2171,66 @@ fn searched_completed(ran: &Ran) -> &Envelope {
 }
 
 #[test]
+fn a_completed_call_preserves_its_protected_paths_report() {
+    let ran = search_turn(
+        Output {
+            content: vec![ContentPart::Text {
+                text: "Protected paths checked.".into(),
+            }],
+            protected_paths: Some(contract::shapes::ProtectedPaths {
+                restored: vec![".fiber/config.json".into()],
+                failed: vec![contract::shapes::ProtectedPathFailure {
+                    path: ".git/config".into(),
+                    message: "permission denied".into(),
+                }],
+            }),
+            ..Output::default()
+        },
+        false,
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+
+    // docs/loop.md, "One step": one call, then a reply without calls ends
+    // the turn. Compare kinds with counts, without imposing an order.
+    let mut actual = kinds(&ran.lines);
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+
+    // docs/events.md, "tool_call_completed": the report survives into
+    // the durable completion, including a restore that failed.
+    let completed = searched_completed(&ran);
+    assert_eq!(completed.payload["status"], "completed");
+    assert_eq!(
+        completed.payload["protected_paths"],
+        json!({
+            "restored": [".fiber/config.json"],
+            "failed": [{"path": ".git/config", "message": "permission denied"}],
+        })
+    );
+}
+
+#[test]
 fn a_completed_search_carries_its_loaded_names() {
     let ran = search_turn(
         Output {

@@ -20,6 +20,7 @@ pub(crate) struct Identity {
     /// The identity path.
     pub(crate) path: PathBuf,
     /// Whether `git rev-parse` found a repository.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) in_repository: bool,
 }
 
@@ -43,6 +44,7 @@ pub(crate) fn identity(workspace: &Path) -> Result<Identity, String> {
             let path = PathBuf::from(raw);
             Ok(Identity {
                 path: path.canonicalize().unwrap_or(path),
+                #[cfg(any(target_os = "linux", test))]
                 in_repository: true,
             })
         }
@@ -64,6 +66,7 @@ fn fallback_or_fail(workspace: &Path, cause: &str) -> Result<Identity, String> {
         path: workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf()),
+        #[cfg(any(target_os = "linux", test))]
         in_repository: false,
     })
 }
@@ -152,6 +155,7 @@ pub(crate) fn state_paths(home: &Path, workspace: &Path) -> Result<StatePaths, S
 }
 
 /// One registered worktree: its root, and whether git lists it first.
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug)]
 pub(crate) struct Worktree {
     /// The worktree's root.
@@ -165,6 +169,7 @@ pub(crate) struct Worktree {
 /// `identity` is listed completely or not at all: a failure, or a listing
 /// that names no checkout, fails instead of leaving registered checkouts
 /// unprotected.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn enumerate(workspace: &Path) -> Result<Vec<Worktree>, String> {
     let out = support::git::command("git")
         .arg("-C")
@@ -191,6 +196,7 @@ pub(crate) fn enumerate(workspace: &Path) -> Result<Vec<Worktree>, String> {
 /// names a checkout, the first one the main checkout. A listing that names
 /// none fails, so a repository git proved never snapshots a single
 /// checkout as its whole project.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn parse_worktrees(workspace: &Path, stdout: &[u8]) -> Result<Vec<Worktree>, String> {
     let mut worktrees = Vec::new();
     for line in String::from_utf8_lossy(stdout).lines() {
@@ -264,6 +270,7 @@ pub(crate) struct Baseline {
 /// here and never re-read while calls are active. A protected entry that
 /// cannot be read or recorded fails closed with its cause, and incomplete
 /// discovery fails the same way, so the call never runs unprotected.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn snapshot(workspace: &Path) -> Result<Vec<Entry>, String> {
     let found = identity(workspace)?;
     let worktrees = if found.in_repository {
@@ -311,6 +318,7 @@ pub(crate) fn snapshot(workspace: &Path) -> Result<Vec<Entry>, String> {
 }
 
 /// The report name: relative to the owning worktree, else absolute.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn display(root: &Path, path: &Path) -> String {
     if let Ok(relative) = path.strip_prefix(root) {
         let text = relative.to_string_lossy().into_owned();
@@ -377,6 +385,7 @@ pub(crate) fn snapshot_kind(path: &Path) -> Result<EntryKind, String> {
 }
 
 /// The canonical path, when it resolves.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn canonical(path: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(path).ok()
 }
@@ -395,6 +404,7 @@ pub(crate) fn unix_mode(_meta: &std::fs::Metadata) -> u32 {
 }
 
 /// Creates the state directory and its parents.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn create_dir(dir: &Path) -> Result<(), io::Error> {
     std::fs::create_dir_all(dir)
 }
