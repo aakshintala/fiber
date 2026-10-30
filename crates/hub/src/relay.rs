@@ -622,18 +622,19 @@ pub(crate) fn route(
         // The write failed: the session is gone. Only the write half
         // shuts, so every answer already in the kernel buffer is still
         // read. A write that accepted bytes may still have reached the
-        // session, so the command stays kept as partial: the drain
-        // answers it `indeterminate` however the session ends, and never
-        // routes it again. A write that accepted nothing keeps the
-        // command unsent, as when a live relay's socket closes.
+        // session: when its kept entry is still present it is marked
+        // `Partial`, and only a still-kept unanswered `Partial` is
+        // settled `indeterminate` at drain, never routed again. An
+        // acknowledgement that consumes the entry first while it is still
+        // `Written` is forwarded normally. A write that accepted nothing
+        // keeps the command unsent, as when a live relay's socket closes.
         // One candidate outcome for the kept attempt and the canonical
         // report: the kept entry takes it first, then the same value is
         // reported to `AckOrder`. The canonical claim wins when the two
         // differ: a report the command already moved past is refused and
         // keeps its state, so a `Partial` candidate after the
         // `Written -> Rerouted` claim leaves the canonical state
-        // `Rerouted` while the kept attempt still settles `indeterminate`
-        // once and is never replayed.
+        // `Rerouted`.
         let state = match &outcome {
             Some(Err(partial)) if partial.written > 0 => CommandState::Partial,
             _ => CommandState::Queued,

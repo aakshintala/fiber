@@ -3167,9 +3167,8 @@ fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
 
 /// `docs/invocation.md:1166`, "What the hub speaks": a `Partial` candidate
 /// reported after the `Written -> Rerouted` claim is refused, so the
-/// canonical state stays `Rerouted`; the kept attempt still settles
-/// `indeterminate` once and is never replayed, and the wire answer is the
-/// same `closing` rejection a second clean exit earns.
+/// canonical state stays `Rerouted`; the wire answer is the same `closing`
+/// rejection a second clean exit earns.
 #[test]
 fn a_partial_report_after_reroute_keeps_the_canonical_claim() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -3193,6 +3192,69 @@ fn a_partial_report_after_reroute_keeps_the_canonical_claim() {
     assert_eq!(line["payload"]["code"], "closing", "{line}");
     assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
+}
+
+/// `docs/invocation.md:1151`, "What the hub speaks": a `Written` command the
+/// session answers accepted finishes `Answered` with the acknowledgement;
+/// `docs/invocation.md:1165`: a `Rerouted` command the resumed session
+/// answers finishes `Answered` with the acknowledgement. An accepted
+/// acknowledgement that consumes the kept attempt while it is still
+/// `Written` is forwarded even when a later flush-failure candidate reports
+/// `Partial`: the `Partial` report is refused and the canonical state stays
+/// `Rerouted` until the forwarded acknowledgement reports `Answered`. A
+/// full write followed by a failed flush is the candidate
+/// `the_command_writer_counts_accepted_bytes_before_its_failure` proves; an
+/// unanswered kept `Partial` settling `indeterminate` once is what
+/// `a_reply_cut_before_its_line_feed_is_answered_indeterminate_once` proves.
+#[test]
+fn a_written_ack_before_partial_report_finishes_answered() {
+    let held = fakes::TempDir::new("ra");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let command = json!({"id": "c_1", "command": "prompt", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let kept: Kept = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "c_1".to_owned(),
+        command,
+        CommandState::Written,
+    )]));
+    let order = crate::retire::AckOrder::default();
+    order.enqueue(sid, "c_1");
+    order
+        .transition("c_1", CommandState::Written)
+        .expect("the write records the sent command");
+    order
+        .transition("c_1", CommandState::Rerouted)
+        .expect("the handover claims the re-route");
+    assert_eq!(
+        order.state("c_1"),
+        Some(CommandState::Rerouted),
+        "the canonical claim is rerouted before the acknowledgement"
+    );
+    let ack = serde_json::to_vec(&json!({
+        "kind": "command_accepted",
+        "payload": {"command_id": "c_1"},
+    }))
+    .unwrap();
+    assert!(
+        settle(acknowledgement(&ack).as_ref(), &kept, &hub, sid, false).is_none(),
+        "an accepted answer to a still-written attempt settles to nothing to forward"
+    );
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+    report(&order, "c_1", CommandState::Partial);
+    assert_eq!(
+        order.state("c_1"),
+        Some(CommandState::Rerouted),
+        "the partial candidate keeps the reroute claim"
+    );
+    report(&order, "c_1", CommandState::Answered);
+    assert_eq!(
+        order.state("c_1"),
+        Some(CommandState::Answered),
+        "the forwarded acknowledgement finishes answered"
+    );
 }
 
 /// `docs/invocation.md:1154`, "What the hub speaks" (#2054): a command is delivered once; a `closing` answer to it after it already rerouted once is rejected `closing`, never routed again.
