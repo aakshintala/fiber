@@ -16,7 +16,8 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    reason = "test helpers; a failure is the test's"
+    clippy::print_stderr,
+    reason = "test helpers; a failure is the test's; a failed journey prints its name"
 )]
 
 mod support;
@@ -1052,7 +1053,7 @@ fn install_many_models_provider(setup: &Setup, server_url: &str) {
 fn find_grid_row(rows: &[String], needle: &str) -> Option<u16> {
     rows.iter()
         .position(|row| row.contains(needle))
-        .map(|y| y as u16)
+        .and_then(|y| u16::try_from(y).ok())
 }
 
 /// One wheel step down at `coord`: SGR button 65.
@@ -1095,7 +1096,7 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             let server = ProviderServer::start(script).unwrap();
             install_many_models_provider(&setup, &server.url());
             for (n, size) in [100usize, 200, 300, 400, 500].iter().enumerate() {
-                let letter = (b'a' + n as u8) as char;
+                let letter = (b'a' + u8::try_from(n).unwrap()) as char;
                 std::fs::write(
                     setup.workspace().join(format!("c{}.txt", n + 1)),
                     format!("{letter}\n").repeat(*size),
@@ -1139,9 +1140,19 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             });
             run.turn_finished(from);
             // The tall turn scrolled the prompt off the top: the marker
-            // is the transcript's bottom-anchored answer row.
-            let mark_row = find_grid_row(&run.screen().rows, "Hello.").expect("the marker row");
-            let mark_text = run.screen().rows[usize::from(mark_row)].clone();
+            // is the transcript's bottom-anchored answer row. The turn is
+            // over and no input falls between, so the frame the wait below
+            // matches is settled; the predicate captures the row itself,
+            // and no bare screen read follows any wait.
+            let mut mark: Option<(u16, String)> = None;
+            run.wait_screen("the settled answer row", |grid| {
+                find_grid_row(&grid.rows, "Hello.")
+                    .map(|row| {
+                        mark = Some((row, grid.rows[usize::from(row)].clone()));
+                    })
+                    .is_some()
+            });
+            let (mark_row, mark_text) = mark.expect("the marker row");
             // One wheel step down inside every view, at the same fixed
             // coordinate in the conversation area, clear of the rail and
             // the panel.
