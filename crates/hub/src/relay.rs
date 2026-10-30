@@ -91,6 +91,10 @@ pub(crate) enum CommandState {
     Answered,
     /// Ended with no answer: the client disconnected, or the session was
     /// rewound or moved.
+    #[allow(
+        dead_code,
+        reason = "production cleanup removes state without publishing Dropped, while the transition stays in the tested lifecycle contract"
+    )]
     Dropped,
 }
 

@@ -102,7 +102,7 @@ pub(crate) struct AckOrder {
 /// refused, or it is dropped without one.
 #[derive(Default)]
 struct Inner {
-    pending: HashMap<String, VecDeque<String>>,
+    pending: HashMap<String, VecDeque<CommandId>>,
     rerouted: HashMap<String, (String, u64)>,
     /// Each recorded command's delivery state
     /// (`docs/invocation.md`, "What the hub speaks"): the canonical
@@ -139,14 +139,14 @@ impl AckOrder {
     /// session socket.
     pub(crate) fn enqueue(&self, session: &str, id: &CommandId) {
         let mut inner = lock(&self.inner);
-        if inner.pending.values().any(|queued| queued.contains(&id.0)) {
+        if inner.pending.values().any(|queued| queued.contains(id)) {
             return;
         }
         inner
             .pending
             .entry(session.to_owned())
             .or_default()
-            .push_back(id.0.clone());
+            .push_back(id.clone());
         inner.states.entry(id.clone()).or_insert(CommandState::Read);
     }
 
@@ -156,7 +156,7 @@ impl AckOrder {
         lock(&self.inner)
             .pending
             .iter()
-            .find(|(_, queued)| queued.contains(&id.to_owned()))
+            .find(|(_, queued)| queued.iter().any(|queued| queued.0 == *id))
             .map(|(session, _)| session.clone())
     }
 
@@ -250,19 +250,16 @@ impl AckOrder {
     /// Drops every `(session, id)` without an acknowledgement, unrecording
     /// it as re-routed and forgetting its delivery state, and wakes every
     /// waiter: an unanswered command at a relay thread's end holds back
-    /// nothing behind it. A disconnect, rewind or move records the drop
-    /// first; an already answered command stays answered.
+    /// nothing behind it. A disconnect, rewind or move drops it with no
+    /// answer and no state move; an already answered command stays answered.
     pub(crate) fn drop_ids(&self, ids: &[(String, String)]) {
         if ids.is_empty() {
             return;
         }
-        for (_, id) in ids {
-            report(self, &CommandId(id.clone()), CommandState::Dropped);
-        }
         let mut inner = lock(&self.inner);
         for (session, id) in ids {
             if let Some(queued) = inner.pending.get_mut(session) {
-                queued.retain(|queued| *queued != *id);
+                queued.retain(|queued| queued.0 != *id);
             }
             inner.rerouted.remove(id);
             inner.states.remove(&CommandId(id.clone()));
