@@ -385,7 +385,6 @@ pub(crate) fn snapshot_kind(path: &Path) -> Result<EntryKind, String> {
 }
 
 /// The canonical path, when it resolves.
-#[cfg(any(target_os = "linux", test))]
 pub(crate) fn canonical(path: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(path).ok()
 }

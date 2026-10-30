@@ -273,14 +273,17 @@ impl ProtectedPaths {
                 Err(error) => return Err(error.to_string()),
             },
         };
+        let path = baseline::canonical(path).unwrap_or_else(|| path.to_path_buf());
         let mut changed = false;
         for entry in &mut entries {
             let entry_path = Path::new(&entry.path);
+            let comparable_entry =
+                baseline::canonical(entry_path).unwrap_or_else(|| entry_path.to_path_buf());
             // The entry holds the path itself, or the directory holding
             // it: re-snapshotting the entry records the approved landing.
-            if entry_path == path
+            if comparable_entry == path
                 || (matches!(entry.kind, baseline::EntryKind::Dir { .. })
-                    && path.starts_with(entry_path))
+                    && path.starts_with(&comparable_entry))
             {
                 *entry = baseline::snapshot_entry(entry_path, &entry.display)?;
                 changed = true;

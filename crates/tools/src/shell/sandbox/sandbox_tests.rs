@@ -1668,8 +1668,14 @@ fn baseline_covers_shared_state_once_and_each_worktree_pointer_and_fiber() {
         .iter()
         .filter_map(|entry| entry.get("path").and_then(|path| path.as_str()))
         .collect();
-    let main_git = repo.path().join(".git");
-    let other_git = other.join(".git");
+    let main_git = std::fs::canonicalize(repo.path().join(".git")).expect("main git dir resolves");
+    let other_git = std::fs::canonicalize(other.join(".git")).expect("linked git pointer resolves");
+    let main_fiber = std::fs::canonicalize(repo.path())
+        .expect("main worktree resolves")
+        .join(".fiber");
+    let other_fiber = std::fs::canonicalize(&other)
+        .expect("linked worktree resolves")
+        .join(".fiber");
     assert!(
         paths.iter().any(|path| path.ends_with("/config")),
         "the shared config is recorded, got {paths:?}"
@@ -1687,15 +1693,11 @@ fn baseline_covers_shared_state_once_and_each_worktree_pointer_and_fiber() {
         "the linked worktree's pointer is recorded, got {paths:?}"
     );
     assert!(
-        paths
-            .iter()
-            .any(|path| Path::new(path) == repo.path().join(".fiber")),
+        paths.iter().any(|path| Path::new(path) == main_fiber),
         "the main checkout's fiber dir is recorded, got {paths:?}"
     );
     assert!(
-        paths
-            .iter()
-            .any(|path| Path::new(path) == other.join(".fiber")),
+        paths.iter().any(|path| Path::new(path) == other_fiber),
         "the linked worktree's fiber dir is recorded, got {paths:?}"
     );
     let shared: Vec<&&str> = paths
@@ -2874,6 +2876,38 @@ mod protected_mutant_regressions {
         active.guard.finish();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn approved_writes_match_paths_resolved_through_a_workspace_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = fakes::TempDir::new("fiber-protected-approved-alias");
+        let workspace = dir.path().join("workspace");
+        let fiber = workspace.join(".fiber");
+        std::fs::create_dir_all(&fiber).expect("fiber dir");
+        let protected = fiber.join("keep.txt");
+        std::fs::write(&protected, b"original").expect("protected file");
+        let alias = dir.path().join("workspace-alias");
+        symlink(&workspace, &alias).expect("workspace alias");
+        let home = home(&dir);
+        let handle = open(&home, &alias);
+        let active = handle.begin(&alias).expect("call begins through alias");
+
+        std::fs::write(&protected, b"approved").expect("approved write");
+        let resolved = std::fs::canonicalize(&protected).expect("file resolves through alias");
+        handle
+            .note_approved_write(&alias, &resolved)
+            .expect("the resolved spelling advances its entry");
+        std::fs::write(&protected, b"shell").expect("shell changes the file");
+        let report = active.guard.finish();
+        assert_eq!(report.restored, vec![".fiber".to_owned()]);
+        assert_eq!(
+            std::fs::read(&protected).expect("protected file restored"),
+            b"approved",
+            "canonical and lexical workspace spellings identify one protected entry"
+        );
+    }
+
     #[test]
     fn an_approved_descendant_does_not_replace_a_baseline_file_with_a_directory() {
         let workspace = fakes::TempDir::new("fiber-protected-approved-descendant");
@@ -3214,9 +3248,11 @@ mod protected_mutant_regressions {
         std::fs::create_dir(&pointer).expect("replacement directory pointer");
         std::fs::write(pointer.join("marker"), b"keep me").expect("pointer content");
         let entries = baseline::snapshot(repo.path()).expect("repository snapshot");
-        let pointer = pointer.to_string_lossy();
+        let pointer = std::fs::canonicalize(&pointer).expect("pointer path resolves");
         assert!(
-            entries.iter().any(|entry| entry.path == pointer.as_ref()),
+            entries
+                .iter()
+                .any(|entry| Path::new(&entry.path) == pointer),
             "a non-shared directory pointer is protected"
         );
     }
