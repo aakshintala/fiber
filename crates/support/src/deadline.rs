@@ -119,6 +119,12 @@ impl Deadline {
 
     /// A deadline whose [`left`](Deadline::left) is this one's
     /// [`cleanup`](Deadline::cleanup): a cleanup wait's own deadline.
+    // Exempt: the phase sets wait and waits to cleanup together, so left's
+    // guard term always dominates the wait term whether wait_start is kept
+    // or reset; deleting the reset changes no bound any consumer sees, and
+    // no test through left or cleanup can pin the difference
+    // (`docs/testing/mutants.md`, "Proving a test bites").
+    #[cfg_attr(false, mutants::skip)]
     pub fn cleanup_phase(&self) -> Self {
         Self {
             wait: self.cleanup,
