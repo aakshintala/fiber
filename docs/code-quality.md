@@ -143,6 +143,8 @@ whose fields can contradict each other: `done: bool` beside
 `enum Status { Open, Done { at: Timestamp } }` cannot. A runtime check for a
 combination "that cannot happen" marks a type that is too loose.
 
+A closed set of named cases that crosses a crate boundary, such as a notice code, a view, a version format or a prompt's source, is an enum, never a `String` or `&str`, so the wildcard lints (`docs/code-quality/lints.md`) make every consumer handle a new case. Text stays only at the process boundary, and a JSON name is parsed into the enum where it enters. A reader that must ignore what it does not know, as an event or notice consumer does (`docs/events.md`, "Versioning"), parses an unknown name into its own case, keeping the text, never one of the known cases. A command's arguments refuse an unknown name as `invalid_arguments`.
+
 ## Visibility
 
 An item is private, or `pub(crate)`, unless another crate uses it. rustc's
@@ -233,6 +235,7 @@ Only what no tool can:
   mode or a state, is a variant or a table entry, not one more branch on an
   existing `if`/`else` chain or a second flag that must stay in step with a
   first
+- a pull request that adds a member to a closed set lists in its body every consumer of that set, found by searching for the type, and what each does with the new member
 - code that works around its doc is reported as a doc finding that cites
   the doc rule and the code, for `docs/workflow.md`, "When a doc should
   change", not as a code fix

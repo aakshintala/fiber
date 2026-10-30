@@ -322,6 +322,7 @@ In `docs/testing/running.md`.
   sits inside a crate and the shipped binary takes no test-only switch, is
   reproduced at crate level through that pause point ("Waits and timeouts").
 - **A new event kind:** a binary-level test in which a consumer sees it.
+- **A new member of a closed set a person sees,** such as a view or a notice code: a screen or binary-level test in which the person-facing consumer shows it.
 - **A breaking log format change:** its migration and the migration's test
   (`docs/events.md`, "Versioning").
 - **A grown tool definition:** a raised size budget in the same pull request
