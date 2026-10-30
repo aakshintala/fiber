@@ -3340,10 +3340,21 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
     // A valid config the discovery reads: the baseline records the shared
     // config and hooks through git, never as a fallback directory.
     fakes::git::git(&workspace, &["config", "fiber.probe", "config baseline"]);
+    fakes::git::git(
+        &workspace,
+        &["commit", "-q", "--allow-empty", "-m", "baseline"],
+    );
+    let linked = root.path().join("linked");
+    let linked_arg = linked.to_string_lossy().into_owned();
+    fakes::git::git(&workspace, &["worktree", "add", "--detach", &linked_arg]);
     std::fs::create_dir_all(workspace.join(".git/hooks")).unwrap();
     std::fs::create_dir_all(workspace.join(".fiber")).unwrap();
+    std::fs::create_dir_all(linked.join(".fiber")).unwrap();
     std::fs::write(workspace.join(".git/hooks/pre-commit"), "hook baseline\n").unwrap();
     std::fs::write(workspace.join(".fiber/state"), "fiber baseline\n").unwrap();
+    std::fs::write(linked.join(".fiber/state"), "linked fiber baseline\n").unwrap();
+    std::fs::write(linked.join("mutation.txt"), "gitdir: /evil\n").unwrap();
+    let linked_pointer = std::fs::read(linked.join(".git")).unwrap();
     let sandbox = sandbox_settings_for_integration("protected");
     let fiber_home = sandbox.fiber_home.clone();
     let (protection, recovery) =
@@ -3357,7 +3368,7 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
         .with_protection(protection);
 
     let arguments = args(
-        "printf changed > .git/config && printf changed > .git/hooks/pre-commit && printf changed > .fiber/state",
+        "tee .git/config .git/hooks/pre-commit .fiber/state ../linked/.git ../linked/.fiber/state < ../linked/mutation.txt",
     );
     assert!(
         shell.effects(&arguments).unwrap().declared.confined,
@@ -3389,11 +3400,20 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
         std::fs::read_to_string(workspace.join(".fiber/state")).unwrap(),
         "fiber baseline\n"
     );
+    assert_eq!(std::fs::read(linked.join(".git")).unwrap(), linked_pointer);
+    assert_eq!(
+        std::fs::read_to_string(linked.join(".fiber/state")).unwrap(),
+        "linked fiber baseline\n"
+    );
     let report = output
         .protected_paths
         .as_ref()
         .expect("the restore is in the result");
-    assert_eq!(report.restored, vec![".git/config", ".git/hooks", ".fiber"]);
+    let restored: BTreeSet<&str> = report.restored.iter().map(String::as_str).collect();
+    assert_eq!(
+        restored,
+        BTreeSet::from_iter([".git", ".git/config", ".git/hooks", ".fiber"])
+    );
     assert!(report.failed.is_empty());
     assert!(text(&output).contains(".git/config"));
 }

@@ -17,7 +17,7 @@ use contract::events::{
 use contract::inbox::{Delivery, JobNotice, Message};
 use contract::jobs::{JobRecord, Jobs, Taken};
 use contract::provider::Input;
-use contract::shapes::{ContentPart, Failure, Origin, ProtectedPaths, Sender};
+use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, ErrorCode, JobId, Seq, TurnId};
 use support::lock;
 
@@ -696,18 +696,12 @@ pub(crate) fn notice_text(completed: &JobCompleted) -> String {
         text.push_str(tail.trim_end());
     }
     if let Some(paths) = &completed.protected_paths {
-        for line in protected_lines(paths) {
+        for line in paths.warning_lines() {
             text.push('\n');
             text.push_str(&line);
         }
     }
     text
-}
-
-/// The adopted call's protected-path warning lines, one per path, in the
-/// shell result's own words.
-fn protected_lines(paths: &ProtectedPaths) -> Vec<String> {
-    paths.warning_lines()
 }
 
 #[cfg(test)]

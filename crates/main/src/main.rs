@@ -907,12 +907,6 @@ fn drain_exit_code(exited: i32, stopped: bool, code: Option<i32>) -> i32 {
     }
 }
 
-/// Runs one turn of the session `session` writes to `log`, once its log,
-/// model and prompt are known, shared by new and resumed sessions: sends
-/// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
-/// what ran. `run` writes the session's first lines through
-/// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
-/// nothing was written to the session log for this process, and `run_turn` returns `code`
 /// The headless person's protected-path warnings for one appended event:
 /// the warning lines of a foreground or adopted completion that changed
 /// a path, else nothing. The terminal UI draws its own warning from the
@@ -937,10 +931,16 @@ fn headless_protected_lines(event: &Event) -> Vec<String> {
         .collect()
 }
 
-/// with no `quiesce`, no `fiber_exited` and no stderr line. One cancel
-/// signal, `cancel`, serves the door and the loop, so
-/// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
-/// the exit code.
+/// Runs one turn of the session `session` writes to `log`, once its log,
+/// model and prompt are known, shared by new and resumed sessions: sends
+/// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
+/// what ran. `run` writes the session's first lines through
+/// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
+/// nothing was written to the session log for this process, and `run_turn`
+/// returns `code` with no `quiesce`, no `fiber_exited` and no stderr line.
+/// One cancel signal, `cancel`, serves the door and the loop, so a `cancel`
+/// ends the turn the prompt starts; a shutdown's code on it is the exit
+/// code.
 #[allow(
     clippy::too_many_arguments,
     reason = "one hand-off of the turn's end: the session, log, prompt, mode, cancel, diagnostics and runner"

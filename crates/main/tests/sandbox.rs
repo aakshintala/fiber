@@ -591,13 +591,27 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
     use support::{function_call, hello, stream};
 
     let setup = Setup::new_with_sandbox_root();
-    let fiber = setup.root.path().join("w").join(".fiber");
+    let workspace = setup.root.path().join("w");
+    fakes::git::git(&workspace, &["init", "-q"]);
+    fakes::git::git(
+        &workspace,
+        &["commit", "-q", "--allow-empty", "-m", "baseline"],
+    );
+    let linked = setup.root.path().join("linked");
+    let linked_arg = linked.to_string_lossy().into_owned();
+    fakes::git::git(&workspace, &["worktree", "add", "--detach", &linked_arg]);
+    let fiber = workspace.join(".fiber");
     fs::create_dir_all(&fiber).unwrap();
+    fs::create_dir_all(linked.join(".fiber")).unwrap();
     fs::write(fiber.join("note.txt"), "original\n").unwrap();
-    // One simple command on purpose: a redirect writes the protected file
-    // while the call keeps a subject the standing rule can match
-    // (`docs/permissions.md`, "What a rule matches").
-    let command = "tee .fiber/note.txt < /dev/null";
+    fs::write(linked.join(".fiber/note.txt"), "linked original\n").unwrap();
+    fs::write(linked.join("mutation.txt"), "gitdir: /evil\n").unwrap();
+    let linked_pointer = fs::read(linked.join(".git")).unwrap();
+    // The command keeps a subject the standing rule can match
+    // (`docs/permissions.md`, "What a rule matches") while changing the
+    // linked pointer's gitdir target and both worktrees' `.fiber/` paths.
+    let command =
+        "tee .fiber/note.txt ../linked/.git ../linked/.fiber/note.txt < ../linked/mutation.txt";
 
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -613,7 +627,10 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         setup.home().join("config.json"),
         serde_json::to_string(&json!({
             "model": "fake/m",
-            "sandbox": {"enabled": true}
+            "sandbox": {
+                "enabled": true,
+                "allow_write": [linked.display().to_string()]
+            }
         }))
         .unwrap(),
     )
@@ -654,10 +671,18 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         started["payload"]["confined"], true,
         "the change runs confined"
     );
+    let restored: std::collections::BTreeSet<&str> =
+        completed["payload"]["details"]["protected_paths"]["restored"]
+            .as_array()
+            .expect("the completion carries restored paths")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
     assert_eq!(
-        completed["payload"]["details"]["protected_paths"]["restored"],
-        json!([".fiber"]),
-        "the completion carries the report"
+        restored,
+        std::collections::BTreeSet::from_iter([".git", ".fiber"]),
+        "the completion carries the worktree pointer and `.fiber/` report; pointer after call: {:?}",
+        fs::read(linked.join(".git"))
     );
     let text = completed["payload"]["content"]
         .as_array()
@@ -684,6 +709,17 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         fs::read(fiber.join("note.txt")).unwrap(),
         b"original\n",
         "the call's end restores the change"
+    );
+    assert_eq!(fs::read(linked.join(".git")).unwrap(), linked_pointer);
+    assert_eq!(
+        fs::read(linked.join(".fiber/note.txt")).unwrap(),
+        b"linked original\n"
+    );
+    assert!(
+        run.stderr
+            .contains("fiber: Protected path .git changed while a confined call ran;"),
+        "headless warns about the linked pointer: {}",
+        run.stderr
     );
 }
 

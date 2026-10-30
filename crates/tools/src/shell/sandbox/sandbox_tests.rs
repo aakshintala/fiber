@@ -2248,7 +2248,10 @@ fn setup_fails_closed_when_the_state_cannot_be_recorded() {
     let file = workspace.path().join("file-home");
     std::fs::write(&file, b"x").expect("file written");
     let error = ProtectedPaths::open(&file, workspace.path()).expect_err("no state is recorded");
-    assert!(!error.is_empty(), "the failure names its cause: {error}");
+    assert!(
+        !error.to_string().is_empty(),
+        "the failure names its cause: {error}"
+    );
 }
 
 #[test]
@@ -2464,7 +2467,7 @@ mod linux_signal {
             .find(|(syscall, _)| *syscall == libc::SYS_kill)
             .expect("kill is filtered");
         // Five distinct targets: the two processes, the two groups as
-        // negative pids, and -1 for every process (`docs/sandbox.md:91-94`,
+        // negative pids, and -1 for every process (`docs/sandbox.md:94-100`,
         // the below-ABI-6 target set).
         assert_eq!(kill.1.len(), 5, "kill names five targets, got {kill:?}");
         let debug = format!("{kill:?}");
@@ -2514,7 +2517,7 @@ mod linux_signal {
             .iter()
             .find(|(syscall, _)| *syscall == libc::SYS_tgkill)
             .expect("tgkill is filtered");
-        // `docs/sandbox.md:91-94`: tgkill covers both args, pidfd_open covers
+        // `docs/sandbox.md:94-100`: tgkill covers both args, pidfd_open covers
         // only pids, tkill covers tids.
         assert_eq!(tgkill.1.len(), 4, "tgkill names both args, got {tgkill:?}");
         let pidfd = rules
@@ -2542,7 +2545,7 @@ mod linux_signal {
             .iter()
             .find(|(syscall, _)| *syscall == libc::SYS_kill)
             .expect("kill is filtered");
-        // `docs/sandbox.md:91-94`: one process collapses the hub slot, so
+        // `docs/sandbox.md:94-100`: one process collapses the hub slot, so
         // kill names three targets.
         assert_eq!(
             kill.1.len(),
@@ -2667,7 +2670,7 @@ mod linux_signal {
             );
         } else {
             assert!(!policy.signal_scope, "below ABI 6 uses the seccomp rule");
-            // `docs/sandbox.md:91-94`: below ABI 6 the policy denies kill,
+            // `docs/sandbox.md:94-100`: below ABI 6 the policy denies kill,
             // tkill, tgkill and pidfd_open.
             assert_eq!(syscalls(&policy.supervisor_rules).len(), 4);
         }

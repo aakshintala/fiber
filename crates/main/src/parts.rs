@@ -364,8 +364,23 @@ fn parts_inner(
     // The protected paths' baseline: opening recovers a stale baseline when
     // no confined call holds it, and reports what it restored. A baseline
     // that cannot be recorded fails composition before any call runs.
-    let (protection, startup) = tools::ProtectedPaths::open(&home, &workspace)
-        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
+    let (protection, startup) =
+        tools::ProtectedPaths::open(&home, &workspace).map_err(|error| match error {
+            tools::ProtectedPathsOpenError::Project(message) => {
+                failed(ErrorCode::IoFailed, message)
+            }
+            tools::ProtectedPathsOpenError::HomeNotDirectory { path } => failed(
+                ErrorCode::IoFailed,
+                format!(
+                    "{} is not a directory, so protected-path state cannot be recorded",
+                    path.display()
+                ),
+            ),
+            tools::ProtectedPathsOpenError::Recovery(source) => failed(
+                ErrorCode::IoFailed,
+                format!("protected-path recovery failed: {source}"),
+            ),
+        })?;
     if let Some(report) = startup {
         startup_notices.extend(report.warning_lines().into_iter().map(|message| {
             contract::events::Notice {

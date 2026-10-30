@@ -30,13 +30,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// The marker the hub sets beside the startup snapshot in a session it
-/// spawned (`crates/hub/src/spawn.rs`, `HUB_SESSION_MARKER`): present means
-/// this process's parent is the hub that spawned it, so the parent pid below
-/// names the hub. An in-process `fiber ask` carries no marker, and no hub
-/// pid reaches the filter; the hub slot then names the session host.
-const HUB_SESSION_MARKER: &str = "FIBER_HUB_SESSION";
-
 type PendingBaselines = Arc<Mutex<HashMap<PathBuf, Vec<baseline::Entry>>>>;
 
 /// One session's handle on the protected paths of its project. The handle
@@ -97,6 +90,23 @@ impl std::fmt::Display for SetupError {
 
 impl std::error::Error for SetupError {}
 
+/// Why session startup could not open protected-path state.
+#[derive(Debug, thiserror::Error)]
+pub enum ProtectedPathsOpenError {
+    /// The project's identity or state key could not be resolved.
+    #[error("{0}")]
+    Project(String),
+    /// Fiber home exists but cannot hold protected-path state.
+    #[error("{path} is not a directory, so protected-path state cannot be recorded")]
+    HomeNotDirectory {
+        /// The Fiber home path that is not a directory.
+        path: PathBuf,
+    },
+    /// A stale protected-path baseline could not be recovered.
+    #[error("protected-path recovery failed: {0}")]
+    Recovery(#[source] io::Error),
+}
+
 fn pending_lock(
     pending: &Mutex<HashMap<PathBuf, Vec<baseline::Entry>>>,
 ) -> MutexGuard<'_, HashMap<PathBuf, Vec<baseline::Entry>>> {
@@ -123,12 +133,16 @@ impl ProtectedPaths {
     /// against the baseline, restores any difference, reports it and drops
     /// the baseline. A live baseline is left untouched. Returns the handle
     /// and the startup report, when a stale baseline changed a path.
-    pub fn open(home: &Path, workspace: &Path) -> Result<(Arc<Self>, Option<Report>), String> {
+    pub fn open(
+        home: &Path,
+        workspace: &Path,
+    ) -> Result<(Arc<Self>, Option<Report>), ProtectedPathsOpenError> {
         let handle = Arc::new(Self {
             home: home.to_path_buf(),
             pending: Arc::default(),
         });
-        let dir = baseline::state_paths(&handle.home, workspace)?;
+        let dir = baseline::state_paths(&handle.home, workspace)
+            .map_err(ProtectedPathsOpenError::Project)?;
         if !dir.dir.exists() {
             // No state yet: no stale baseline can exist, and the first
             // confined call's begin records it. A session that ends
@@ -136,14 +150,13 @@ impl ProtectedPaths {
             // exists but is no directory can never hold state, so
             // opening fails closed instead of deferring the failure.
             if std::fs::metadata(&handle.home).is_ok_and(|meta| !meta.is_dir()) {
-                return Err(format!(
-                    "{} is not a directory, so protected-path state cannot be recorded",
-                    handle.home.display()
-                ));
+                return Err(ProtectedPathsOpenError::HomeNotDirectory {
+                    path: handle.home.clone(),
+                });
             }
             return Ok((handle, None));
         }
-        let recovered = recover(&dir)?;
+        let recovered = recover(&dir).map_err(ProtectedPathsOpenError::Recovery)?;
         Ok((handle, recovered))
     }
 
@@ -369,16 +382,16 @@ impl Guard {
 /// A stale-baseline recovery at session start: with no active holder,
 /// compares, restores, reports and drops the baseline. With holders, or
 /// with no baseline, recovers nothing.
-fn recover(dir: &baseline::StatePaths) -> Result<Option<Report>, String> {
-    let baseline_file = baseline::open_lock(&dir.baseline_lock).map_err(to_string)?;
-    baseline_file.lock().map_err(to_string)?;
-    let active_file = baseline::open_lock(&dir.active_lock).map_err(to_string)?;
+fn recover(dir: &baseline::StatePaths) -> Result<Option<Report>, io::Error> {
+    let baseline_file = baseline::open_lock(&dir.baseline_lock)?;
+    baseline_file.lock()?;
+    let active_file = baseline::open_lock(&dir.active_lock)?;
     match active_file.try_lock() {
         Ok(()) => {
             // No holder: the last call died before its end ran.
-            let report = restore::compare_restore_report(dir).map_err(to_string)?;
+            let report = restore::compare_restore_report(dir)?;
             if dir.baseline.exists() {
-                std::fs::remove_file(&dir.baseline).map_err(to_string)?;
+                std::fs::remove_file(&dir.baseline)?;
             }
             drop(baseline_file);
             drop(active_file);
@@ -390,7 +403,7 @@ fn recover(dir: &baseline::StatePaths) -> Result<Option<Report>, String> {
             drop(active_file);
             Ok(None)
         }
-        Err(TryLockError::Error(source)) => Err(to_string(source)),
+        Err(TryLockError::Error(source)) => Err(source),
     }
 }
 
@@ -413,10 +426,6 @@ fn setup(source: io::Error) -> SetupError {
     }
 }
 
-/// An I/O failure as text.
-fn to_string(source: io::Error) -> String {
-    source.to_string()
-}
 /// The processes a confined call must not signal below Landlock ABI 6:
 /// the session host, whose death would skip the end-of-call restore, and
 /// the hub that spawned it, when one did. The pids are known when the
@@ -484,7 +493,7 @@ pub(crate) fn supports_signal_scope() -> bool {
 pub(crate) fn supervisor() -> Supervisor {
     let session_pid = std::process::id();
     let session_pgid = process_group(None).unwrap_or(session_pid);
-    if std::env::var_os(HUB_SESSION_MARKER).is_some() {
+    if std::env::var_os(contract::HUB_SESSION_MARKER).is_some() {
         let hub_pid = parent_pid().unwrap_or(session_pid);
         let hub_pgid = process_group(Some(hub_pid)).unwrap_or(hub_pid);
         Supervisor {
