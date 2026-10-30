@@ -45,8 +45,8 @@ pub(crate) mod steering_queue;
 pub(crate) mod working_line;
 
 pub(crate) use home::list_window;
-pub(crate) use home::max_question_scroll;
 use home::notice_rows_area;
+pub(crate) use home::question::max_question_scroll;
 
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = " ↓ New messages below · End ";
@@ -155,7 +155,7 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
         let column = app.chrome().layout().map_or(screen, |layout| layout.column);
         let mut buf = Buffer::empty(screen);
         let mut targets = Vec::new();
-        return home::draw_command_delete_question(
+        return home::question::draw_command_delete_question(
             app,
             &question,
             scroll,
@@ -227,8 +227,9 @@ fn draw_framed(
             // same title, ✕, footer and wrapping home draws, with its
             // permanence warning pinned.
             if let Some((question, scroll)) = app.delete_command_frame() {
-                let slab =
-                    home::draw_command_delete_question(app, &question, scroll, area, buf, targets);
+                let slab = home::question::draw_command_delete_question(
+                    app, &question, scroll, area, buf, targets,
+                );
                 app.frames().note(Surface::DeleteQuestion, slab);
             }
         }

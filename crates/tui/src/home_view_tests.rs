@@ -1865,7 +1865,7 @@ fn the_delete_question_scrolls_past_the_screen() {
     ask_cascade(&mut app, "s_0123456789abcdef", &dependents);
     let area = Rect::new(0, 0, 80, 14);
     let drawn = app.home_screen().unwrap_or_else(|| panic!("home draws"));
-    let max = super::max_question_scroll(&app, &drawn, area);
+    let max = super::question::max_question_scroll(&app, &drawn, area);
     assert!(max > 0, "the body runs past the frame");
     // The first window shows the first id, not the last body row.
     let first = screen(&app, 80, 14);
@@ -2005,7 +2005,7 @@ fn max_question_scroll_is_body_rows_minus_capacity() {
     stop_first(&mut app);
     let max = |app: &App, width: u16, height: u16| {
         let drawn = app.home_screen().unwrap_or_else(|| panic!("home draws"));
-        super::max_question_scroll(app, &drawn, Rect::new(0, 0, width, height))
+        super::question::max_question_scroll(app, &drawn, Rect::new(0, 0, width, height))
     };
     assert_eq!(max(&app, 80, 12), 0, "three body rows in four fit");
     assert_eq!(max(&app, 80, 11), 0, "three body rows in three fit");
@@ -2021,7 +2021,7 @@ fn max_question_scroll_is_body_rows_minus_capacity() {
     let plain = home(80, 24);
     let drawn = plain.home_screen().unwrap_or_else(|| panic!("home draws"));
     assert_eq!(
-        super::max_question_scroll(&plain, &drawn, Rect::new(0, 0, 80, 10)),
+        super::question::max_question_scroll(&plain, &drawn, Rect::new(0, 0, 80, 10)),
         0,
         "no question scrolls nothing"
     );
@@ -3831,7 +3831,7 @@ fn a_picker_one_row_taller_than_the_room_above_the_box_stays_centred() {
 #[test]
 fn import_rows_lists_both_sources_with_their_keys() {
     let area = Rect::new(0, 0, 80, 24);
-    let rows = super::import_rows(&crate::home::import_head(), area);
+    let rows = super::question::import_rows(&crate::home::import_head(), area);
     let text: Vec<String> = rows
         .iter()
         .map(|row| {
@@ -3889,7 +3889,7 @@ fn the_import_offer_swallow_target_needs_a_drawn_slab() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    super::draw_import_question(&question, area, &mut buf, &mut targets);
+    super::question::draw_import_question(&question, area, &mut buf, &mut targets);
     assert!(
         targets
             .iter()
@@ -3899,7 +3899,7 @@ fn the_import_offer_swallow_target_needs_a_drawn_slab() {
     let area = Rect::new(0, 0, 80, 0);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    super::draw_import_question(&question, area, &mut buf, &mut targets);
+    super::question::draw_import_question(&question, area, &mut buf, &mut targets);
     assert!(
         !targets
             .iter()
