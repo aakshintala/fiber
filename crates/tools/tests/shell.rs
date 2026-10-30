@@ -3409,12 +3409,25 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
         .protected_paths
         .as_ref()
         .expect("the restore is in the result");
+    // `docs/sandbox.md:64-73` promises restoration and reporting for the
+    // shared Git paths and every registered worktree's pointer and `.fiber/`;
+    // `docs/events.md:683` defines restored paths as workspace-relative.
     let restored: BTreeSet<&str> = report.restored.iter().map(String::as_str).collect();
     assert_eq!(
         restored,
-        BTreeSet::from_iter([".git", ".git/config", ".git/hooks", ".fiber"])
+        BTreeSet::from_iter([
+            ".git/config",
+            ".git/hooks",
+            ".fiber",
+            "../linked/.git",
+            "../linked/.fiber",
+        ])
     );
+    // `docs/sandbox.md:100-102` promises an unsuccessful restore appears in
+    // the report's failed list.
     assert!(report.failed.is_empty());
+    // `docs/events.md:697-701` carries warning lines from the report into the
+    // model result, and `docs/sandbox.md:64-73` includes `.git/config`.
     assert!(text(&output).contains(".git/config"));
 }
 

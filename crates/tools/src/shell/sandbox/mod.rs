@@ -527,7 +527,11 @@ pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupE
         .map_err(|cause| SetupError::Ruleset {
             detail: format!("{cause:?}"),
         })?;
-    let builder = if policy.signal_scope {
+    let supervisor_rules = match &policy {
+        protected::LinuxPolicy::LandlockSignalScope => &[][..],
+        protected::LinuxPolicy::SupervisorSeccomp(rules) => rules,
+    };
+    let builder = if matches!(&policy, protected::LinuxPolicy::LandlockSignalScope) {
         builder
             .scope(landlock::Scope::Signal)
             .map_err(|cause| SetupError::Ruleset {
@@ -547,7 +551,7 @@ pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupE
                 detail: format!("{cause:?}"),
             })?;
     }
-    let program = compile_seccomp(&policy.supervisor_rules)?;
+    let program = compile_seccomp(supervisor_rules)?;
     Ok(Prepared {
         ruleset: Some(created),
         program,

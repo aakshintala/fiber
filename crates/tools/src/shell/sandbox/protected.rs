@@ -453,16 +453,15 @@ pub(crate) struct Supervisor {
     pub hub_pgid: u32,
 }
 
-/// The Linux signal policy: Landlock signal scoping from ABI 6, or the
-/// narrow seccomp supervisor rule below it. Existing socket and
+/// The mutually exclusive Linux signal policies. Existing socket and
 /// `io_uring_setup` denials stay in both cases.
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LinuxPolicy {
-    /// Request Landlock signal scope; no seccomp signal rule is added.
-    pub signal_scope: bool,
-    /// The supervisor rules to deny with `EPERM`, empty under scope.
-    pub supervisor_rules: Vec<(i64, Vec<seccompiler::SeccompRule>)>,
+pub(crate) enum LinuxPolicy {
+    /// Landlock signal scoping from ABI 6; no seccomp signal rule is added.
+    LandlockSignalScope,
+    /// Deny signals to the supervisor with `EPERM` below ABI 6.
+    SupervisorSeccomp(Vec<(i64, Vec<seccompiler::SeccompRule>)>),
 }
 
 /// Selects the Linux signal policy: the seccomp supervisor rule when the
@@ -470,31 +469,18 @@ pub(crate) struct LinuxPolicy {
 /// the sandbox setup, keeping every other policy behavior unchanged.
 #[cfg(target_os = "linux")]
 pub(crate) fn linux_policy() -> Result<LinuxPolicy, String> {
-    if supports_signal_scope(|| {
-        use landlock::{Access as _, Compatible as _, RulesetAttr as _};
-        landlock::Ruleset::default()
-            .set_compatibility(landlock::CompatLevel::HardRequirement)
-            .handle_access(landlock::AccessFs::from_all(landlock::ABI::V6))
-            .and_then(|ruleset| ruleset.create())
-            .is_ok()
-    }) {
-        return Ok(LinuxPolicy {
-            signal_scope: true,
-            supervisor_rules: Vec::new(),
-        });
+    use landlock::{Access as _, Compatible as _, RulesetAttr as _};
+    if landlock::Ruleset::default()
+        .set_compatibility(landlock::CompatLevel::HardRequirement)
+        .handle_access(landlock::AccessFs::from_all(landlock::ABI::V6))
+        .and_then(|ruleset| ruleset.create())
+        .is_ok()
+    {
+        return Ok(LinuxPolicy::LandlockSignalScope);
     }
-    Ok(LinuxPolicy {
-        signal_scope: false,
-        supervisor_rules: supervisor_rules(&supervisor())?,
-    })
-}
-
-/// Resolves the Landlock ABI 6 capability probe; keeping the result
-/// injectable covers both policy branches without depending on the test
-/// kernel's ABI.
-#[cfg(target_os = "linux")]
-pub(crate) fn supports_signal_scope(probe: impl FnOnce() -> bool) -> bool {
-    probe()
+    Ok(LinuxPolicy::SupervisorSeccomp(supervisor_rules(
+        &supervisor(),
+    )?))
 }
 
 /// Collects the supervisor pids: the session host itself, and the spawning

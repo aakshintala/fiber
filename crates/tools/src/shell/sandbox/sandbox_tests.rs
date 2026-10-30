@@ -2728,16 +2728,18 @@ mod linux_signal {
             .is_ok();
         let policy = linux_policy().expect("policy selects");
         if supported {
-            assert!(policy.signal_scope, "ABI 6 and above uses signal scope");
-            assert!(
-                policy.supervisor_rules.is_empty(),
-                "scope adds no seccomp rule"
+            assert_eq!(
+                policy,
+                super::super::protected::LinuxPolicy::LandlockSignalScope,
+                "ABI 6 and above uses Landlock signal scope"
             );
         } else {
-            assert!(!policy.signal_scope, "below ABI 6 uses the seccomp rule");
+            let super::super::protected::LinuxPolicy::SupervisorSeccomp(rules) = policy else {
+                panic!("below ABI 6 uses the supervisor seccomp policy");
+            };
             // `docs/sandbox.md:94-100`: below ABI 6 the policy denies kill,
             // tkill, tgkill and pidfd_open.
-            assert_eq!(syscalls(&policy.supervisor_rules).len(), 4);
+            assert_eq!(syscalls(&rules).len(), 4);
         }
     }
 
@@ -3045,7 +3047,7 @@ mod protected_mutant_regressions {
             "persisted pending state must not hide newly discovered worktrees"
         );
         assert!(
-            report.restored.iter().any(|path| path == ".git"),
+            report.restored.iter().any(|path| path == "wt1/.git"),
             "new pointer is reported: {report:?}"
         );
     }
@@ -3177,18 +3179,6 @@ mod protected_mutant_regressions {
         assert_eq!(report.failed.len(), 1, "inspection failure is reported");
         assert_eq!(report.failed[0].path, ".fiber");
         assert!(extra.exists(), "the uninspected child remains");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn signal_scope_capability_keeps_both_probe_outcomes() {
-        use super::super::protected::supports_signal_scope;
-
-        assert!(
-            !supports_signal_scope(|| false),
-            "unsupported remains false"
-        );
-        assert!(supports_signal_scope(|| true), "supported remains true");
     }
 
     #[cfg(target_os = "linux")]

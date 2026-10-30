@@ -215,8 +215,8 @@ pub(crate) fn parse_worktrees(workspace: &Path, stdout: &[u8]) -> Result<Vec<Wor
     Ok(worktrees)
 }
 
-/// One protected path: where it is, how the report names it, and what the
-/// baseline recorded.
+/// One protected path: where it is, how the report names it relative to
+/// the project's main checkout, and what the baseline recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Entry {
     /// The absolute path.
@@ -306,28 +306,59 @@ pub(crate) fn snapshot(workspace: &Path) -> Result<Vec<Entry>, String> {
         let is_shared_dir = pointer.is_dir()
             && canonical(&pointer).is_some_and(|resolved| Some(resolved) == canonical(&found.path));
         if !is_shared_dir {
-            entries.push(snapshot_entry(
-                &pointer,
-                &display(&worktree.root, &pointer),
-            )?);
+            entries.push(snapshot_entry(&pointer, &display(&main_root, &pointer))?);
         }
         let fiber = worktree.root.join(".fiber");
-        entries.push(snapshot_entry(&fiber, &display(&worktree.root, &fiber))?);
+        entries.push(snapshot_entry(&fiber, &display(&main_root, &fiber))?);
     }
     Ok(entries)
 }
 
-/// The report name: relative to the owning worktree, else absolute.
+/// The report name: relative to the project's main checkout, else absolute.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn display(root: &Path, path: &Path) -> String {
-    if let Ok(relative) = path.strip_prefix(root) {
-        let text = relative.to_string_lossy().into_owned();
-        if text.is_empty() {
-            return path.to_string_lossy().into_owned();
-        }
-        return text;
+    let root = absolute(root);
+    let path = absolute(path);
+    if root.components().next() != path.components().next() {
+        return path.to_string_lossy().into_owned();
     }
-    path.to_string_lossy().into_owned()
+    let root_components: Vec<_> = root.components().collect();
+    let path_components: Vec<_> = path.components().collect();
+    let common = root_components
+        .iter()
+        .zip(&path_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = PathBuf::new();
+    for component in root_components.iter().skip(common) {
+        match component {
+            std::path::Component::Normal(_) | std::path::Component::ParentDir => {
+                relative.push("..");
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                return path.to_string_lossy().into_owned();
+            }
+        }
+    }
+    for component in path_components.iter().skip(common) {
+        relative.push(component.as_os_str());
+    }
+    if relative.as_os_str().is_empty() {
+        ".".to_owned()
+    } else {
+        relative.to_string_lossy().into_owned()
+    }
+}
+
+/// Makes a path absolute so reports can include registered worktrees outside
+/// the main checkout without losing their workspace-relative name.
+fn absolute(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+    }
 }
 
 /// Snapshots one path: file bytes and mode, directory mode and recursive

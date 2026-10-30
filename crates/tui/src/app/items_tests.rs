@@ -1017,6 +1017,36 @@ fn a_completed_job_folds_its_protected_paths_report() {
 }
 
 #[test]
+fn a_closed_completed_job_shows_its_protected_paths_warning_when_opened() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    job_started(
+        &mut app,
+        "j_2",
+        "build the workspace",
+        wall_ms(&clock),
+        "a_1",
+    );
+    app.on_line(session_line(
+        "job_completed",
+        json!({"job_id": "j_2", "status": "completed",
+            "protected_paths": {"restored": [".fiber"], "failed": []}}),
+    ));
+    open(&mut app, "j_2");
+    app.set_size(120, 32);
+    let (rows, _) = rendered(&app, 120, 32);
+    // `docs/events.md:699-701`: the adopted report's warning line renders
+    // under the open job's output, including after the job has completed.
+    assert!(
+        rows.iter().any(|row| row.contains("Protected path .fiber")),
+        "the closed job's report is visible when opened"
+    );
+    insta::assert_snapshot!("closed_job_protected_warning", rows.join("\n"));
+}
+
+#[test]
 fn completed_job_keeps_its_output_and_loses_its_stop() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = home();
