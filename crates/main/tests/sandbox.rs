@@ -842,6 +842,100 @@ fn a_killed_call_leaves_a_stale_baseline_the_next_session_recovers() {
     );
 }
 
+/// An `openai-responses` stream answering `allow` in one fragment: the
+/// reviewer's stage-1 verdict, so a call with no matchable subject still
+/// runs reviewed.
+fn allow_verdict() -> fakes::Response {
+    use serde_json::json;
+    let events = [
+        json!({"type": "response.output_text.delta", "delta": "allow"}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": "allow"}]}}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    fakes::Response::stream(body)
+}
+
+/// A confined call cannot open a socket: bash's `/dev/tcp` needs
+/// `socket`, which the filter denies with EPERM beside the supervisor
+/// signal rules, on every Landlock ABI.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_call_cannot_open_a_socket() {
+    use fakes::ProviderServer;
+    use serde_json::{Value, json};
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let command = "cat < /dev/tcp/127.0.0.1/9";
+
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "socket_1",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        allow_verdict(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // The reviewer allows the call, which names no subject for a rule.
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&json!({
+            "model": "fake/m",
+            "reviewer": {"model": "fake/m"},
+            "sandbox": {"enabled": true}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let run = setup.fiber_run(&["ask", "open a socket"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let resolved = lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the socket call resolves");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    let completed = lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_completed"
+                && line["payload"]["details"]["command"] == command
+        })
+        .unwrap_or_else(|| panic!("a completion for the socket call"));
+    let text = completed["payload"]["content"]
+        .as_array()
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    // The filter refuses with EPERM, which bash reports as its word for
+    // the denied socket, not a refused connection.
+    assert!(
+        text.contains("Operation not permitted"),
+        "the socket stays denied: {text}"
+    );
+}
+
 #[test]
 fn a_repository_sandbox_key_is_ignored_through_the_binary() {
     let setup = Setup::new_with_sandbox_root();

@@ -2336,6 +2336,40 @@ mod linux_signal {
     fn the_compiled_filter_keeps_socket_denials_beside_supervisor_rules() {
         let rules = supervisor_rules(&two_process()).expect("rules build");
         let program = super::super::compile_seccomp(&rules).expect("filter compiles");
-        let _ = program;
+        // Instruction classes from the kernel's filter header: the low
+        // three bits name the class, so a jump comparing a number keeps
+        // working whatever addressing the compiler chose.
+        const JUMP: u16 = 0x05;
+        const RETURN: u16 = 0x06;
+        // Every denied call is compared by number: a jump on the syscall
+        // number reaches the refusal below, so a dropped entry with no
+        // comparison to make cannot deny.
+        for denied in [
+            libc::SYS_socket,
+            libc::SYS_connect,
+            libc::SYS_bind,
+            libc::SYS_listen,
+            libc::SYS_accept,
+            libc::SYS_accept4,
+            libc::SYS_io_uring_setup,
+        ] {
+            assert!(
+                program
+                    .iter()
+                    .any(|instruction| instruction.code & 0x07 == JUMP
+                        && instruction.k == denied as u32),
+                "the filter compares {denied}"
+            );
+        }
+        // The refusal the comparisons reach: EPERM, the errno the sandbox
+        // promises for denied calls.
+        const EPERM_RETURN: u32 = 0x0005_0000 | libc::EPERM as u32;
+        assert!(
+            program
+                .iter()
+                .any(|instruction| instruction.code & 0x07 == RETURN
+                    && instruction.k == EPERM_RETURN),
+            "the filter returns EPERM"
+        );
     }
 }
