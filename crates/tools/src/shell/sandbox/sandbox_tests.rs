@@ -774,6 +774,65 @@ fn errno_of_names_the_syscall_errno() {
     assert_eq!(super::errno_of(&std::fmt::Error), libc::EIO);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn setup_error_maps_each_case_to_its_code() {
+    use super::SetupError;
+    // An unavailable policy keeps its own code: off is a tool error,
+    // while a deny inside a writable grant is a bad configuration. A
+    // mutant replacing the delegation with one fixed code fails one side.
+    let off = SetupError::Unavailable(Unavailable::Off);
+    assert_eq!(off.code(), contract::ErrorCode::ToolError);
+    let overlap = SetupError::Unavailable(Unavailable::DenyInsideWrite {
+        configured: PathBuf::from("/work/secret"),
+        overlapping: PathBuf::from("/work/secret"),
+        root: PathBuf::from("/work"),
+    });
+    assert_eq!(overlap.code(), contract::ErrorCode::InvalidArguments);
+    // Every setup failure is a tool error: a mutant mapping one case
+    // elsewhere fails its line below.
+    let resolve = SetupError::Resolve {
+        label: "the workspace",
+        path: PathBuf::from("/work"),
+        source: std::io::Error::from_raw_os_error(libc::ENOENT),
+    };
+    assert_eq!(resolve.code(), contract::ErrorCode::ToolError);
+    assert!(
+        resolve.to_string().contains("/work"),
+        "the resolve message names the root: {resolve}"
+    );
+    let open = SetupError::Open {
+        path: PathBuf::from("/work/grant"),
+        source: std::io::Error::from_raw_os_error(libc::ENOENT),
+    };
+    assert_eq!(open.code(), contract::ErrorCode::ToolError);
+    assert!(
+        open.to_string().contains("/work/grant"),
+        "the open message names the file: {open}"
+    );
+    let list = SetupError::List {
+        path: PathBuf::from("/work/ancestor"),
+        source: std::io::Error::from_raw_os_error(libc::ENOENT),
+    };
+    assert_eq!(list.code(), contract::ErrorCode::ToolError);
+    assert!(
+        list.to_string().contains("/work/ancestor"),
+        "the list message names the directory: {list}"
+    );
+    let ruleset = SetupError::Ruleset {
+        detail: "landlock failed".to_owned(),
+    };
+    assert_eq!(ruleset.code(), contract::ErrorCode::ToolError);
+    let grant = SetupError::AddGrant {
+        detail: "landlock failed".to_owned(),
+    };
+    assert_eq!(grant.code(), contract::ErrorCode::ToolError);
+    let seccomp = SetupError::Seccomp {
+        detail: "unknown architecture for seccomp".to_owned(),
+    };
+    assert_eq!(seccomp.code(), contract::ErrorCode::ToolError);
+}
+
 /// Walks `denied` under `root` with `clock` and returns the grant count and
 /// the walk time. Fixtures pass their own root, so the count depends only
 /// on the fixture; production passes `/`. Reports the time to the caller
@@ -1045,7 +1104,7 @@ fn macos_prepare_failure_names_the_unresolvable_root() {
     fixture.settings.allow_write.push(missing.clone());
     let error = prepare(&fixture.settings, &fixture.workspace).expect_err("no grant is missing");
     assert!(
-        error.contains(&*missing.to_string_lossy()),
+        error.to_string().contains(&*missing.to_string_lossy()),
         "the setup error names the root: {error}"
     );
 }

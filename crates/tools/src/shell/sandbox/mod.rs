@@ -116,6 +116,8 @@ impl std::fmt::Display for Unavailable {
     }
 }
 
+impl std::error::Error for Unavailable {}
+
 impl Unavailable {
     /// The code from `docs/errors.md`: deny/write overlap is a bad
     /// configuration, every other unavailable case is a tool error, matching
@@ -133,11 +135,86 @@ impl Unavailable {
     }
 }
 
+/// Why `prepare` could not build the sandbox policy. A setup error aborts
+/// spawn; the call fails and never runs unconfined.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Debug, thiserror::Error)]
+pub enum SetupError {
+    /// The sandbox is unavailable for this session.
+    #[error(transparent)]
+    Unavailable(#[from] Unavailable),
+    /// A writable root could not be resolved through symlinks.
+    #[error("sandbox setup failed resolving {label} {}: {source}", path.display())]
+    Resolve {
+        /// Which root failed, such as the workspace or the temp directory.
+        label: &'static str,
+        /// The root that failed to resolve.
+        path: PathBuf,
+        /// The filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// A grant file could not be opened without following symlinks.
+    #[error("sandbox setup failed opening {}: {source}", path.display())]
+    Open {
+        /// The file that failed to open.
+        path: PathBuf,
+        /// The filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// A directory listing for the ancestor grants failed.
+    #[error("sandbox setup failed listing {}: {source}", path.display())]
+    List {
+        /// The directory that failed to list.
+        path: PathBuf,
+        /// The filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The Landlock ruleset could not be built.
+    #[error("sandbox setup failed: {detail}")]
+    Ruleset {
+        /// What the Landlock call reported.
+        detail: String,
+    },
+    /// A grant could not be added to the ruleset.
+    #[error("sandbox setup failed adding a grant: {detail}")]
+    AddGrant {
+        /// What the Landlock call reported.
+        detail: String,
+    },
+    /// The seccomp filter could not be compiled.
+    #[error("sandbox setup failed compiling seccomp: {detail}")]
+    Seccomp {
+        /// What the compiler reported.
+        detail: String,
+    },
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl SetupError {
+    /// The code from `docs/errors.md`: an unavailable policy keeps its
+    /// own code, every setup failure is a tool error. One fixed code per
+    /// case, with no wildcard arm.
+    pub fn code(&self) -> contract::ErrorCode {
+        match self {
+            Self::Unavailable(error) => error.code(),
+            Self::Resolve { .. }
+            | Self::Open { .. }
+            | Self::List { .. }
+            | Self::Ruleset { .. }
+            | Self::AddGrant { .. }
+            | Self::Seccomp { .. } => contract::ErrorCode::ToolError,
+        }
+    }
+}
+
 /// A prepared policy, built before fork and installed in the child. The
 /// ruleset rides `Some` until `install` takes it; the seccomp program is
 /// only borrowed, never moved or freed, in the child.
 #[cfg(target_os = "linux")]
-pub(crate) struct Prepared {
+pub struct Prepared {
     /// The Landlock ruleset with every grant added, ready to restrict.
     /// Taken by `install`, which consumes it through `restrict_self`.
     ruleset: Option<landlock::RulesetCreated>,
@@ -390,33 +467,35 @@ fn unresolvable(configured: &Path) -> Unavailable {
 /// Prepares the Landlock grants and the seccomp program. A setup error
 /// aborts spawn; the call fails and never runs unconfined.
 #[cfg(target_os = "linux")]
-pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
+pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupError> {
     use landlock::{Access as _, Compatible as _, RulesetAttr as _, RulesetCreatedAttr as _};
-    check_available(settings, workspace).map_err(|unavailable| unavailable.to_string())?;
+    check_available(settings, workspace)?;
     let selected = landlock::ABI::V2;
     let mut rules: Vec<landlock::PathBeneath<OwnedFd>> = Vec::new();
     let temp = std::env::temp_dir();
     // Grant the resolved writable roots, so an aliased workspace stays
     // writable through its alias.
-    let mut roots: Vec<&Path> = vec![workspace, &temp];
-    roots.extend(settings.allow_write.iter().map(PathBuf::as_path));
-    for root in roots {
-        let resolved = std::fs::canonicalize(root).map_err(|cause| {
-            format!("sandbox setup failed resolving {}: {cause}", root.display())
+    let mut roots: Vec<(&'static str, &Path)> =
+        vec![("the workspace", workspace), ("the temp directory", &temp)];
+    roots.extend(
+        settings
+            .allow_write
+            .iter()
+            .map(|root| ("an allow_write path", root.as_path())),
+    );
+    for (label, root) in roots {
+        let resolved = std::fs::canonicalize(root).map_err(|source| SetupError::Resolve {
+            label,
+            path: root.to_path_buf(),
+            source,
         })?;
-        let rule_fd = open_nofollow(&resolved).map_err(|cause| {
-            format!(
-                "sandbox setup failed opening {}: {cause}",
-                resolved.display()
-            )
-        })?;
+        let rule_fd = open_nofollow(&resolved)?;
         let access = landlock::AccessFs::from_all(selected);
         rules.push(landlock::PathBeneath::new(rule_fd, access));
     }
     // Deny every configured path and every resolved target, skipping no
     // entry that leads to any of them.
-    let resolved_denies =
-        resolve_denies(settings).map_err(|unavailable| unavailable.to_string())?;
+    let resolved_denies = resolve_denies(settings)?;
     let mut exclusions: Vec<PathBuf> = Vec::new();
     for deny in &resolved_denies {
         exclusions.push(normalize_absolute(&deny.configured));
@@ -439,14 +518,20 @@ pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared,
     let created = landlock::Ruleset::default()
         .set_compatibility(landlock::CompatLevel::BestEffort)
         .handle_access(landlock::AccessFs::from_all(selected))
-        .map_err(|cause| format!("sandbox setup failed: {cause:?}"))?
+        .map_err(|cause| SetupError::Ruleset {
+            detail: format!("{cause:?}"),
+        })?
         .create()
-        .map_err(|cause| format!("sandbox setup failed: {cause:?}"))?;
+        .map_err(|cause| SetupError::Ruleset {
+            detail: format!("{cause:?}"),
+        })?;
     let mut created = created;
     for rule in rules {
         created = created
             .add_rule(rule)
-            .map_err(|cause| format!("sandbox setup failed adding a grant: {cause:?}"))?;
+            .map_err(|cause| SetupError::AddGrant {
+                detail: format!("{cause:?}"),
+            })?;
     }
     let program = compile_seccomp()?;
     Ok(Prepared {
@@ -498,7 +583,7 @@ pub(crate) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// the profile source, the command text, or a shell fragment.
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
-pub(crate) struct Prepared {
+pub struct Prepared {
     /// The inline Seatbelt source, with fixed parameter names only.
     pub(crate) profile: String,
     /// The `(name, path)` bindings passed as `-Dname=path` argv entries.
@@ -510,8 +595,8 @@ pub(crate) struct Prepared {
 #[cfg(target_os = "macos")]
 // mutants run on Linux, where it is not compiled.
 #[cfg_attr(false, mutants::skip)]
-pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
-    check_available(settings, workspace).map_err(|unavailable| unavailable.to_string())?;
+pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupError> {
+    check_available(settings, workspace)?;
     build_profile(settings, workspace)
 }
 
@@ -523,7 +608,7 @@ pub(crate) fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared,
 #[cfg(target_os = "macos")]
 // mutants run on Linux, where it is not compiled.
 #[cfg_attr(false, mutants::skip)]
-fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, String> {
+fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupError> {
     let workspace = canonicalize_root("the workspace", workspace)?;
     let temp = canonicalize_root("the temp directory", &std::env::temp_dir())?;
     let slash_tmp = canonicalize_root("the temp directory", Path::new("/tmp"))?;
@@ -572,7 +657,7 @@ fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, Stri
          (allow file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/logs\")))\n",
     );
     let mut deny_index = 0;
-    for deny in resolve_denies(settings).map_err(|unavailable| unavailable.to_string())? {
+    for deny in resolve_denies(settings)? {
         // Both the lexical path and its resolved target: Seatbelt judges
         // the access by the resolved vnode, so a symlink deny must bind
         // where the link leads as well as where it is configured.
@@ -615,12 +700,11 @@ fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, Stri
 #[cfg(target_os = "macos")]
 // mutants run on Linux, where it is not compiled.
 #[cfg_attr(false, mutants::skip)]
-fn canonicalize_root(label: &str, root: &Path) -> Result<PathBuf, String> {
-    std::fs::canonicalize(root).map_err(|cause| {
-        format!(
-            "sandbox setup failed resolving {label} {}: {cause}",
-            root.display()
-        )
+fn canonicalize_root(label: &'static str, root: &Path) -> Result<PathBuf, SetupError> {
+    std::fs::canonicalize(root).map_err(|source| SetupError::Resolve {
+        label,
+        path: root.to_path_buf(),
+        source,
     })
 }
 
@@ -1017,7 +1101,7 @@ fn add_ancestor_grants(
     abi: landlock::ABI,
     root: &Path,
     rules: &mut Vec<landlock::PathBeneath<OwnedFd>>,
-) -> Result<(), String> {
+) -> Result<(), SetupError> {
     let absolute = normalize_absolute(denied);
     let relative = match absolute.strip_prefix(root) {
         Ok(relative) => relative.to_path_buf(),
@@ -1039,18 +1123,14 @@ fn add_ancestor_grants(
     for name in components {
         let ancestor = prefix.clone();
         let next_path = ancestor.join(&name);
-        let entries = std::fs::read_dir(&ancestor).map_err(|cause| {
-            format!(
-                "sandbox setup failed listing {}: {cause}",
-                ancestor.display()
-            )
+        let entries = std::fs::read_dir(&ancestor).map_err(|source| SetupError::List {
+            path: ancestor.clone(),
+            source,
         })?;
         for entry in entries {
-            let entry = entry.map_err(|cause| {
-                format!(
-                    "sandbox setup failed listing {}: {cause}",
-                    ancestor.display()
-                )
+            let entry = entry.map_err(|source| SetupError::List {
+                path: ancestor.clone(),
+                source,
             })?;
             // Skip every entry leading to any denied path, not only the
             // current one: Landlock unions grants across denies.
@@ -1085,14 +1165,16 @@ fn add_ancestor_grants(
 /// `union`, not `|`, so no mutant can swap the operator
 /// (`docs/testing/mutants.md`).
 #[cfg(target_os = "linux")]
-fn open_nofollow(path: &Path) -> Result<OwnedFd, String> {
+fn open_nofollow(path: &Path) -> Result<OwnedFd, SetupError> {
     use rustix::fs::OFlags;
     let flags = OFlags::RDONLY
         .union(OFlags::PATH)
         .union(OFlags::NOFOLLOW)
         .union(OFlags::CLOEXEC);
-    rustix::fs::open(path, flags, rustix::fs::Mode::empty())
-        .map_err(|cause| format!("opening {}: {cause}", path.display()))
+    rustix::fs::open(path, flags, rustix::fs::Mode::empty()).map_err(|cause| SetupError::Open {
+        path: path.to_path_buf(),
+        source: std::io::Error::from_raw_os_error(cause.raw_os_error()),
+    })
 }
 
 /// Compiles the seccomp filter denying sockets and `io_uring_setup` with
@@ -1100,7 +1182,7 @@ fn open_nofollow(path: &Path) -> Result<OwnedFd, String> {
 /// An empty rule vector matches only on the syscall number, denying the
 /// call unconditionally.
 #[cfg(target_os = "linux")]
-fn compile_seccomp() -> Result<seccompiler::BpfProgram, String> {
+fn compile_seccomp() -> Result<seccompiler::BpfProgram, SetupError> {
     use seccompiler::{SeccompAction, SeccompFilter};
     use std::collections::BTreeMap;
     let mut map: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
@@ -1121,12 +1203,16 @@ fn compile_seccomp() -> Result<seccompiler::BpfProgram, String> {
         SeccompAction::Errno(libc::EPERM as u32),
         std::env::consts::ARCH
             .try_into()
-            .map_err(|_| "sandbox setup failed: unknown architecture for seccomp".to_owned())?,
+            .map_err(|_| SetupError::Seccomp {
+                detail: "unknown architecture for seccomp".to_owned(),
+            })?,
     )
-    .map_err(|cause| format!("sandbox setup failed compiling seccomp: {cause:?}"))?;
-    filter
-        .try_into()
-        .map_err(|cause| format!("sandbox setup failed compiling seccomp: {cause:?}"))
+    .map_err(|cause| SetupError::Seccomp {
+        detail: format!("{cause:?}"),
+    })?;
+    filter.try_into().map_err(|cause| SetupError::Seccomp {
+        detail: format!("{cause:?}"),
+    })
 }
 
 /// Makes `path` absolute and normalizes `.` and `..` lexically, without

@@ -124,13 +124,14 @@ fn model_advisory(cpu: Option<&str>, info: &ModelInfo) -> String {
 
 /// The class ceilings and tolerances from a budget row's appended cells:
 /// fast, middle and slow ceilings in ms, then fast and slow tolerances
-/// in percent. Middle has no tolerance because no middle model gates.
+/// in percent. `None` is a documented `—` and leaves that class advisory.
+/// Middle has no tolerance because no middle model gates.
 struct ClassGates {
-    fast_ceiling: f64,
-    middle_ceiling: f64,
-    slow_ceiling: f64,
-    fast_tolerance: f64,
-    slow_tolerance: f64,
+    fast_ceiling: Option<f64>,
+    middle_ceiling: Option<f64>,
+    slow_ceiling: Option<f64>,
+    fast_tolerance: Option<f64>,
+    slow_tolerance: Option<f64>,
 }
 
 /// A class ceiling cell such as `16 ms`.
@@ -179,9 +180,28 @@ fn budget_row<'a>(budget: &str, rows: &'a [Vec<String>]) -> Result<&'a [String],
         .ok_or_else(|| format!("{budget}: no budget row holds its class gates"))
 }
 
+/// A timing-gate cell is either a calibration number or `—` while the
+/// class lacks stored evidence. Other malformed cells are configuration
+/// failures, never implicit advisory.
+fn parse_ms_gate(cell: &str, what: &str) -> Result<Option<f64>, String> {
+    if cell.trim() == "—" {
+        Ok(None)
+    } else {
+        parse_ms_cell(cell, what).map(Some)
+    }
+}
+
+fn parse_pct_gate(cell: &str, what: &str) -> Result<Option<f64>, String> {
+    if cell.trim() == "—" {
+        Ok(None)
+    } else {
+        parse_pct_cell(cell, what).map(Some)
+    }
+}
+
 /// The class gates for `budget` from its row in `rows`: every gate number
-/// comes from the doc, so there is no code mirror to drift. A malformed
-/// calibration cell is a configuration failure, never implicit advisory.
+/// comes from the doc, so there is no code mirror to drift. `—` leaves its
+/// class advisory until stored evidence populates the cell.
 fn class_gates(budget: &str, rows: &[Vec<String>]) -> Result<ClassGates, String> {
     let row = budget_row(budget, rows)?;
     let cell = |index: usize, what: &str| {
@@ -190,20 +210,20 @@ fn class_gates(budget: &str, rows: &[Vec<String>]) -> Result<ClassGates, String>
         })
     };
     Ok(ClassGates {
-        fast_ceiling: parse_ms_cell(cell(4, "fast ceiling")?, budget)?,
-        middle_ceiling: parse_ms_cell(cell(5, "middle ceiling")?, budget)?,
-        slow_ceiling: parse_ms_cell(cell(6, "slow ceiling")?, budget)?,
-        fast_tolerance: parse_pct_cell(cell(7, "fast tolerance")?, budget)?,
-        slow_tolerance: parse_pct_cell(cell(8, "slow tolerance")?, budget)?,
+        fast_ceiling: parse_ms_gate(cell(4, "fast ceiling")?, budget)?,
+        middle_ceiling: parse_ms_gate(cell(5, "middle ceiling")?, budget)?,
+        slow_ceiling: parse_ms_gate(cell(6, "slow ceiling")?, budget)?,
+        fast_tolerance: parse_pct_gate(cell(7, "fast tolerance")?, budget)?,
+        slow_tolerance: parse_pct_gate(cell(8, "slow tolerance")?, budget)?,
     })
 }
 
-/// The class ceiling and tolerance for `class` from `gates`.
-fn class_limit(gates: &ClassGates, class: SpeedClass) -> (f64, Option<f64>) {
+/// The class ceiling and required tolerance for `class` from `gates`.
+fn class_limit(gates: &ClassGates, class: SpeedClass) -> (Option<f64>, Option<f64>) {
     match class {
-        SpeedClass::Fast => (gates.fast_ceiling, Some(gates.fast_tolerance)),
+        SpeedClass::Fast => (gates.fast_ceiling, gates.fast_tolerance),
         SpeedClass::Middle => (gates.middle_ceiling, None),
-        SpeedClass::Slow => (gates.slow_ceiling, Some(gates.slow_tolerance)),
+        SpeedClass::Slow => (gates.slow_ceiling, gates.slow_tolerance),
     }
 }
 
@@ -626,6 +646,10 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
         "Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48",
         Check::Timing("wheel_read_ms"),
     ),
+    (
+        "Sandbox setup for one confined shell call",
+        Check::Timing("sandbox_setup_ms"),
+    ),
 ];
 
 /// Each selectable timing row with the result-file metric ids its budgets
@@ -662,6 +686,7 @@ pub(super) const ROW_METRICS: &[(&str, &[&str])] = &[
             "paging_scale16_search_ms",
         ],
     ),
+    ("sandbox setup", &["sandbox_setup_ms"]),
 ];
 
 /// Extra samples per side when a gated timing row breaches: 3 + 4 = 7 is
@@ -683,6 +708,7 @@ pub(super) const TIMING_WORKLOADS: &[&str] = &[
     "paging",
     "terminal wheel",
     "session_list",
+    "sandbox setup",
 ];
 
 /// The `ROW_METRICS` row a breach of metric `id` remeasures, when
@@ -1590,14 +1616,21 @@ pub(super) fn judge(
                             line.result = "advisory";
                             let why = model_advisory(head_cpu, &info);
                             let (recorded, _) = class_limit(&gates, class);
-                            // The advisory line names the same effective
-                            // ceiling the gate judges: a recorded ceiling
-                            // under 2 ms shows the 2.0 ms floor.
-                            let ceil = recorded.max(2.0);
-                            line.head = format!(
-                                "{head_value:.1} ms ({} ceiling {ceil:.1} ms; {why})",
-                                class_name(class)
-                            );
+                            if let Some(recorded) = recorded {
+                                // The advisory line names the same effective
+                                // ceiling the gate judges: a recorded ceiling
+                                // under 2 ms shows the 2.0 ms floor.
+                                let ceil = recorded.max(2.0);
+                                line.head = format!(
+                                    "{head_value:.1} ms ({} ceiling {ceil:.1} ms; {why})",
+                                    class_name(class)
+                                );
+                            } else {
+                                line.head = format!(
+                                    "{head_value:.1} ms ({} class gate unavailable; {why})",
+                                    class_name(class)
+                                );
+                            }
                         }
                         ModelInfo::Advisory { .. } => {
                             line.result = "advisory";
@@ -1606,79 +1639,90 @@ pub(super) fn judge(
                         }
                         ModelInfo::Eligible { class } => {
                             let (recorded, tolerance) = class_limit(&gates, class);
-                            let tolerance = tolerance.unwrap_or(0.0);
-                            // A recorded class ceiling under 2 ms gates on
-                            // an effective 2.0 ms ceiling with a 1.0 ms
-                            // absolute allowance over the base, so one tick
-                            // of runner jitter on a 1 ms row passes while a
-                            // real regression still fails both strictly-over
-                            // legs. No other row takes this path.
-                            let quantum = recorded < 2.0;
-                            let ceiling = recorded.max(2.0);
-                            line.head = if quantum {
-                                format!(
-                                    "{head_value:.1} ms ({} ceiling {ceiling:.1} ms, +1.0 ms absolute over base)",
-                                    class_name(class)
-                                )
-                            } else {
-                                gated_shown(head_value, class, ceiling, tolerance)
+                            let gate = match class {
+                                SpeedClass::Middle => recorded.map(|ceiling| (ceiling, 0.0)),
+                                SpeedClass::Fast | SpeedClass::Slow => recorded.zip(tolerance),
                             };
-                            let base_value = match base {
-                                Base::Ok(results)
-                                    if results.metrics.contains_key(id)
-                                        && timing_median(Some(results), id).is_ok()
-                                        && base_cpu_comparable(head_cpu, base) =>
-                                {
-                                    timing_median(Some(results), id).ok()
-                                }
-                                Base::None | Base::Failed(_) | Base::Ok(_) => None,
-                            };
-                            match (base, base_value) {
-                                // A failed base never reaches this arm: its own
-                                // arm below matches first, so no guard is needed.
-                                (Base::None, _) | (Base::Ok(_), None) => {
-                                    line.result = "advisory";
-                                    line.head.push_str(&format!("; {NO_BASE_REASON}"));
-                                }
-                                (Base::Failed(_), _) => {
-                                    line.result = "advisory";
-                                }
-                                _ => {
-                                    let base_median = base_value.unwrap_or(0.0);
-                                    if quantum {
-                                        let bound = base_median + 1.0;
-                                        if !bound.is_finite() {
-                                            failures.push(format!(
+                            if let Some((recorded, tolerance)) = gate {
+                                // A recorded class ceiling under 2 ms gates on
+                                // an effective 2.0 ms ceiling with a 1.0 ms
+                                // absolute allowance over the base, so one tick
+                                // of runner jitter on a 1 ms row passes while a
+                                // real regression still fails both strictly-over
+                                // legs. No other row takes this path.
+                                let quantum = recorded < 2.0;
+                                let ceiling = recorded.max(2.0);
+                                line.head = if quantum {
+                                    format!(
+                                        "{head_value:.1} ms ({} ceiling {ceiling:.1} ms, +1.0 ms absolute over base)",
+                                        class_name(class)
+                                    )
+                                } else {
+                                    gated_shown(head_value, class, ceiling, tolerance)
+                                };
+                                let base_value = match base {
+                                    Base::Ok(results)
+                                        if results.metrics.contains_key(id)
+                                            && timing_median(Some(results), id).is_ok()
+                                            && base_cpu_comparable(head_cpu, base) =>
+                                    {
+                                        timing_median(Some(results), id).ok()
+                                    }
+                                    Base::None | Base::Failed(_) | Base::Ok(_) => None,
+                                };
+                                match (base, base_value) {
+                                    // A failed base never reaches this arm: its own
+                                    // arm below matches first, so no guard is needed.
+                                    (Base::None, _) | (Base::Ok(_), None) => {
+                                        line.result = "advisory";
+                                        line.head.push_str(&format!("; {NO_BASE_REASON}"));
+                                    }
+                                    (Base::Failed(_), _) => {
+                                        line.result = "advisory";
+                                    }
+                                    _ => {
+                                        let base_median = base_value.unwrap_or(0.0);
+                                        if quantum {
+                                            let bound = base_median + 1.0;
+                                            if !bound.is_finite() {
+                                                failures.push(format!(
                                                 "{id}: relative bound 1 ms over base {base_median} overflows: cannot judge the timing"
                                             ));
-                                        } else if head_value > ceiling && head_value > bound {
-                                            failures.push(format!(
+                                            } else if head_value > ceiling && head_value > bound {
+                                                failures.push(format!(
                                         "{OVER}median {head_value:.1} ms of {id} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than 1 ms absolute allowance",
                                         class_name(class)
                                     ));
-                                            line.breached_row = remeasured_row(id);
-                                        }
-                                    } else {
-                                        match timing_fails(
-                                            head_value,
-                                            base_median,
-                                            ceiling,
-                                            tolerance,
-                                        ) {
-                                            Err(e) => {
-                                                failures.push(format!("{id}: {e}"));
+                                                line.breached_row = remeasured_row(id);
                                             }
-                                            Ok(true) => {
-                                                failures.push(format!(
+                                        } else {
+                                            match timing_fails(
+                                                head_value,
+                                                base_median,
+                                                ceiling,
+                                                tolerance,
+                                            ) {
+                                                Err(e) => {
+                                                    failures.push(format!("{id}: {e}"));
+                                                }
+                                                Ok(true) => {
+                                                    failures.push(format!(
                                             "{OVER}median {head_value:.1} ms of {id} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than {tolerance}%",
                                             class_name(class)
                                         ));
-                                                line.breached_row = remeasured_row(id);
+                                                    line.breached_row = remeasured_row(id);
+                                                }
+                                                Ok(false) => {}
                                             }
-                                            Ok(false) => {}
                                         }
                                     }
                                 }
+                            } else {
+                                line.result = "advisory";
+                                line.head = format!(
+                                    "{head_value:.1} ms ({} class gate unavailable)",
+                                    class_name(class)
+                                );
                             }
                         }
                     }

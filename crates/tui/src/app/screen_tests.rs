@@ -576,7 +576,7 @@ fn page_rows(screen: &Screen) -> (Vec<usize>, Vec<Option<Target>>) {
     let mut row = 0usize;
     for (line, target) in &rows {
         out.push((row, *target));
-        row += crate::view::rows(line.clone(), screen.pages().wrap_width());
+        row += crate::view::rows(line, screen.pages().wrap_width());
     }
     let (starts, targets) = out.into_iter().unzip();
     (starts, targets)
@@ -599,7 +599,7 @@ fn opened_rows(screen: &Screen, call: Target) -> Vec<usize> {
     let mut out = Vec::new();
     let mut row = 0usize;
     for ((line, _), text) in rows.iter().zip(&texts) {
-        let count = crate::view::rows(line.clone(), width);
+        let count = crate::view::rows(line, width);
         if text
             .scopes
             .iter()
@@ -822,7 +822,7 @@ fn an_opened_thought_with_no_ledger_does_not_pin() {
     let mut row = 0usize;
     let mut inside = None;
     for ((line, _), text) in rows.iter().zip(&texts) {
-        let count = crate::view::rows(line.clone(), width);
+        let count = crate::view::rows(line, width);
         if text.scopes.contains(&thought) && inside.is_none() {
             inside = Some(row + 1);
         }
@@ -922,7 +922,7 @@ fn a_top_row_on_a_call_image_row_pins_the_group() {
     let mut row = 0usize;
     let mut image_row = None;
     for ((line, _), text) in drawn.iter().zip(&texts) {
-        let count = crate::view::rows(line.clone(), width);
+        let count = crate::view::rows(line, width);
         let scopes = &text.scopes;
         if scopes
             == &vec![Target::Group(match group {
@@ -1093,7 +1093,7 @@ fn land_without_a_pin_jumps_to_the_row() {
     let mut row = 0usize;
     let mut reply = None;
     for (line, _) in &drawn {
-        let count = crate::view::rows(line.clone(), width);
+        let count = crate::view::rows(line, width);
         if line.to_string().contains("reply 0") {
             reply = Some(row);
             break;

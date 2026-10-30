@@ -872,7 +872,7 @@ impl Run {
         self.shared.lock().unwrap().grid.clone()
     }
 
-    /// Waits under one named deadline for the whole wait until the grid
+    /// Waits under one bound fixed when the wait starts until the grid
     /// matches, however many frames arrive, and returns the matching
     /// grid. A completed wait records the output through its grid, and
     /// when `LOOK_DIFF_GRID` names a path rewrites the dump with the
@@ -882,7 +882,7 @@ impl Run {
     /// the panic names the wait and shows the last grid, so a stall says
     /// how far the journey got. A deadline expiry panics with the grid
     /// the last check saw, never a fresh read, and names how much of the
-    /// deadline remained when the wait began.
+    /// wait's own bound remained when the wait began.
     #[track_caller]
     pub(crate) fn wait_screen(&mut self, what: &str, done: impl FnMut(&Grid) -> bool) -> Grid {
         self.wait_screen_leading(what, done, String::new)
@@ -901,7 +901,8 @@ impl Run {
         mut done: impl FnMut(&Grid) -> bool,
         lead: impl FnOnce() -> String,
     ) -> Grid {
-        let start_left = self.deadline.left();
+        let wait = self.deadline.start_wait();
+        let start_left = wait.left();
         loop {
             let (grid, ended, snapshot_len) = {
                 let shared = self.shared.lock().unwrap();
@@ -927,7 +928,7 @@ impl Run {
                     grid.contents
                 );
             }
-            if self.deadline.recv(&self.wakes).is_err() {
+            if wait.recv(&self.wakes).is_err() {
                 panic!(
                     "{}waited until the deadline for {what} (deadline had {start_left:?} left when the wait began); screen:\n{}",
                     lead(),
@@ -975,9 +976,9 @@ impl Run {
         }
     }
 
-    /// Waits under the run's one deadline until the output at or after
-    /// `from` holds `needle` as exact bytes, and returns where the match
-    /// ends. The search starts at the caller's offset, never at an
+    /// Waits under one bound fixed when the wait starts until the output
+    /// at or after `from` holds `needle` as exact bytes, and returns where
+    /// the match ends. The search starts at the caller's offset, never at an
     /// earlier match, so two markers arriving in either order both
     /// finish. Bytes that never reach the cells, such as the window
     /// title, the OSC 9 desktop notification, a bell and the
@@ -986,6 +987,7 @@ impl Run {
     #[track_caller]
     pub(crate) fn wait_bytes(&mut self, from: usize, needle: &[u8], what: &str) -> usize {
         assert!(!needle.is_empty(), "a byte wait names its bytes");
+        let wait = self.deadline.start_wait();
         loop {
             let (output, ended) = {
                 let shared = self.shared.lock().unwrap();
@@ -997,7 +999,7 @@ impl Run {
             if ended {
                 panic!("the terminal ended while waiting for {what}");
             }
-            if self.deadline.recv(&self.wakes).is_err() {
+            if wait.recv(&self.wakes).is_err() {
                 panic!(
                     "waited until the deadline for {what}; output: {:?}",
                     String::from_utf8_lossy(&self.output())

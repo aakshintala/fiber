@@ -94,7 +94,7 @@ impl Row {
         if self.clip {
             1
         } else {
-            crate::view::rows(self.line.clone(), width)
+            crate::view::rows(&self.line, width)
         }
     }
 }

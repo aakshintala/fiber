@@ -157,7 +157,7 @@ fn a_breached_timing_row_writes_the_remeasure_skip_list() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(
         std::fs::read_to_string(dir.path().join("skip.txt")).unwrap(),
-        "session start,terminal first frame,sessions list,terminal attach,terminal wheel,session_list\n",
+        "session start,terminal first frame,sessions list,terminal attach,terminal wheel,session_list,sandbox setup\n",
     );
 }
 

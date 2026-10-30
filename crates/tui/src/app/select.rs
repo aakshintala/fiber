@@ -893,7 +893,7 @@ impl App {
                     })
                     .collect();
                 placed.push((row, cells));
-                row = row.saturating_add(crate::view::rows(line.clone(), width));
+                row = row.saturating_add(crate::view::rows(line, width));
             }
             for line in logical::logical(&rows, &texts) {
                 let under = |from: &Option<(usize, usize)>| -> Under {

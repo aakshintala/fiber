@@ -1730,7 +1730,7 @@ fn an_item_views_transcript_draws_no_pin() {
         if first.is_none() && text.scopes.last() == Some(&call) {
             first = Some(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let first = first.expect("opened rows");
     app.jump(first + 2);
@@ -1745,7 +1745,7 @@ fn an_item_views_transcript_draws_no_pin() {
     let mut row = 0usize;
     let mut covered = None;
     for (line, _) in &page {
-        let height = crate::view::rows(line.clone(), width);
+        let height = crate::view::rows(line, width);
         if row + height > top && covered.is_none() {
             covered = Some(line.to_string());
         }
