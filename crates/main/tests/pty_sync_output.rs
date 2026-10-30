@@ -347,7 +347,10 @@ fn image_read_script() -> [fakes::Response; 2] {
 /// the first chunk's control data carries the PNG format, every chunk
 /// but the last says more follow, and the last says none.
 fn transmit_payloads(wire: &str) -> Vec<&str> {
-    let first = wire.find("Ga=t,").expect("the transmit went out");
+    // The logo's own transmit (`f=32`, id 30) shares the wire: select the
+    // inline PNG transmit (`f=100`) by format, so the chunk walk and the
+    // payload comparison below cover the image's bytes.
+    let first = wire.find("Ga=t,f=100,").expect("the transmit went out");
     assert!(
         wire[first..].starts_with("Ga=t,f=100,"),
         "the transmit carries the PNG format: {wire:?}"
@@ -433,8 +436,9 @@ fn an_inline_image_transmits_places_and_draws_placeholders() {
         "the caption names the logged size"
     );
     // The place follows the whole transmit out of the post-draw drain, so
-    // waiting for it sees every chunk.
-    run.wait_bytes(from, b"Ga=p,", "the display place");
+    // waiting for the image's place sees every chunk: the logo's earlier
+    // place (id 30) would end the wait before the image transmits.
+    run.wait_bytes(from, b"Ga=p,U=1,i=1,", "the display place");
     let wire = String::from_utf8_lossy(&run.output()).into_owned();
     // The transmit payload is the stored artifact's bytes in base64,
     // chunked at 4096: reassemble the wire chunks and compare.
@@ -456,8 +460,8 @@ fn an_inline_image_transmits_places_and_draws_placeholders() {
     // The transmit and the place go out, the place bound to the
     // placeholders under the image's id: a 56-column conversation at a
     // 10 by 20 cell grids 640 by 160 at 22 by 2.
-    wire.find("Ga=t,").expect("the transmit went out");
-    let placed = wire.find("Ga=p,").expect("the place went out");
+    wire.find("Ga=t,f=100,").expect("the transmit went out");
+    let placed = wire.find("Ga=p,U=1,i=1,").expect("the place went out");
     assert!(
         wire[placed..].starts_with("Ga=p,U=1,i=1,c=22,r=2"),
         "the place binds the placeholders: {wire:?}"

@@ -11,6 +11,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use super::{App, Effect, Kind, mint};
+use crate::graphics::logo::Shown;
 use crate::home::{
     Chip, Header, HomeScreen, Launch, Left, ListLine, Section, Sessions, Spot, State, cascade_line,
     delete_line, from_status, import_head, line, recent_rows,
@@ -325,6 +326,31 @@ impl App {
     }
 
     /// What home draws, or `None` unless [`App::on_home`] holds.
+    /// What draws in the logo's cells: the image form for a known
+    /// protocol at colour depth, never flat, never after a rejection or a
+    /// cell-gate failure, else the pixel logo (`docs/tui.md`, "The logo").
+    fn logo_shown(&self) -> Shown {
+        if self.logo_depth == crate::look::Depth::NoColour {
+            return Shown::Pixels;
+        }
+        if self.screen.pages().ext.flat {
+            return Shown::Pixels;
+        }
+        if self.logo_rejected {
+            return Shown::Pixels;
+        }
+        if self.graphics {
+            return Shown::Kitty;
+        }
+        if self.iterm {
+            return Shown::Blank;
+        }
+        if self.sixel && self.logo_cell_ok {
+            return Shown::Blank;
+        }
+        Shown::Pixels
+    }
+
     pub(crate) fn home_screen(&self) -> Option<HomeScreen> {
         let home = self.home.as_ref().filter(|_| self.on_home())?;
         // The workspace in use: the picked one, else the launch
@@ -571,6 +597,7 @@ impl App {
             // shortcuts"; no session exists before Enter, so opening the
             // terminal, glancing at home and leaving creates nothing.
             placeholder: self.draft.is_empty() && !home.prompted,
+            logo: self.logo_shown(),
         })
     }
 

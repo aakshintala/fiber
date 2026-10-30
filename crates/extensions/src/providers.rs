@@ -386,7 +386,9 @@ impl Providers {
         }
         // An approved repository copy replaces the personal install of
         // the same name: the merged list carries both in slug order, with
-        // one notice per shadowed install.
+        // one notice per shadowed install, grouped by code with the
+        // pass's other notices before it is written (`docs/errors.md`,
+        // "Notices").
         let (merged, mut shadows) =
             crate::repository::candidates(entries.found, repository, &enabled);
         notices.append(&mut shadows);

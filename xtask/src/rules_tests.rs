@@ -2807,6 +2807,94 @@ fn owned_tool_definition_and_unrecognized_forms_need_name_and_colon() {
     assert!(!unrecognized_tool_definition(&tokens, name_positions[1]));
 }
 
+/// The committed maxima beside the `scripts/check` kinds-ratchet step: the
+/// occurrence counts at the merge base. Lower them with the conversions,
+/// never raise them for a new ordered site.
+const COMMITTED_KINDS_MAX: usize = 246;
+const COMMITTED_SUPPORT_KINDS_MAX: usize = 37;
+
+fn kinds_tree(kinds: usize, support: usize) -> Vec<RustFile> {
+    // Exactly `kinds` and `support` occurrences, with two literal sites
+    // sharing one line whenever the count allows, so the shared-line case
+    // is always exercised.
+    let mut literal = String::new();
+    let mut remaining = kinds;
+    if remaining >= 2 {
+        literal.push_str("assert_eq!(kinds(&a), A); assert_eq!(kinds(&b), B);\n");
+        remaining -= 2;
+    }
+    for _ in 0..remaining {
+        literal.push_str("assert_eq!(kinds(&lines), EXPECTED);\n");
+    }
+    let mut direct = String::new();
+    let mut remaining = support;
+    if remaining >= 2 {
+        direct.push_str("assert_eq!(support::kinds(&a), A); assert_eq!(support::kinds(&b), B);\n");
+        remaining -= 2;
+    }
+    for _ in 0..remaining {
+        direct.push_str("assert_eq!(support::kinds(&lines), EXPECTED);\n");
+    }
+    vec![
+        file("main", "tests/sites.rs", literal),
+        file("main", "tests/more.rs", direct),
+    ]
+}
+
+#[test]
+fn the_kinds_ratchet_passes_at_and_below_both_maxima() {
+    for (kinds, support) in [
+        (COMMITTED_KINDS_MAX, COMMITTED_SUPPORT_KINDS_MAX),
+        (COMMITTED_KINDS_MAX - 1, COMMITTED_SUPPORT_KINDS_MAX - 1),
+    ] {
+        let files = kinds_tree(kinds, support);
+        assert_eq!(kinds_counts(&files), (kinds, support));
+        assert!(kinds_ratchet(&files, COMMITTED_KINDS_MAX, COMMITTED_SUPPORT_KINDS_MAX).is_empty());
+    }
+}
+
+#[test]
+fn the_kinds_ratchet_fails_one_added_occurrence_of_each_literal() {
+    // One added occurrence over the maximum fails, naming the count and the
+    // maximum; two call sites on one line both count.
+    let failures = kinds_ratchet(
+        &kinds_tree(COMMITTED_KINDS_MAX + 1, COMMITTED_SUPPORT_KINDS_MAX),
+        COMMITTED_KINDS_MAX,
+        COMMITTED_SUPPORT_KINDS_MAX,
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains(&format!("{}", COMMITTED_KINDS_MAX + 1))
+            && failures[0].contains(&format!("{COMMITTED_KINDS_MAX}")),
+        "{}",
+        failures[0]
+    );
+    let failures = kinds_ratchet(
+        &kinds_tree(COMMITTED_KINDS_MAX, COMMITTED_SUPPORT_KINDS_MAX + 1),
+        COMMITTED_KINDS_MAX,
+        COMMITTED_SUPPORT_KINDS_MAX,
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains(&format!("{}", COMMITTED_SUPPORT_KINDS_MAX + 1))
+            && failures[0].contains(&format!("{COMMITTED_SUPPORT_KINDS_MAX}")),
+        "{}",
+        failures[0]
+    );
+}
+
+#[test]
+fn the_kinds_ratchet_ignores_files_outside_crates() {
+    let mut files = kinds_tree(COMMITTED_KINDS_MAX, COMMITTED_SUPPORT_KINDS_MAX);
+    files.push(file(
+        "xtask",
+        "src/sites.rs",
+        "assert_eq!(kinds(&lines), EXPECTED);\nassert_eq!(support::kinds(&lines), EXPECTED);\n"
+            .to_owned(),
+    ));
+    assert!(kinds_ratchet(&files, COMMITTED_KINDS_MAX, COMMITTED_SUPPORT_KINDS_MAX).is_empty());
+}
+
 #[test]
 fn unrecognized_tool_names_reject_nearby_owned_string_spellings() {
     let source = "name: Other::from(\"x\"); name: String X: from(\"x\"); name: String::to_owned(\"x\"); name: Other . to_string(); name: \"x\": to_string(); name String::from(\"wrong\"); other: String::from(\"wrong\");";

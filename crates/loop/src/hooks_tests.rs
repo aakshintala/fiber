@@ -1264,6 +1264,114 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
     assert_eq!(streamed[1].payload["code"], "repository_code_skipped");
 }
 
+/// Streams a fresh session log's remaining lines after `write` appends to
+/// it: the watcher drains on the log's close, within the test's deadline.
+fn streamed_startup(write: impl FnOnce(&Log) + Send + 'static) -> Vec<Envelope> {
+    let home = fakes::TempDir::new("fiber-startup-grouped");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Log::create(home.path(), SessionId("s_test".into()), clock).unwrap();
+    let mut watcher = log.watch();
+    write(&log);
+    drop(log);
+    fakes::within(
+        "the log's remaining startup lines",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let mut streamed = Vec::new();
+            loop {
+                match watcher.recv() {
+                    Ok(Some(line)) => streamed.push(line),
+                    Ok(None) => break,
+                    Err(e) => panic!("the startup watcher failed: {e}"),
+                }
+            }
+            streamed
+        },
+    )
+}
+
+#[test]
+fn extensions_loaded_groups_notices_by_code() {
+    // One pass's startup notices reach the log grouped by code in
+    // first-seen code order: the two `extension_shadowed` notices become
+    // one naming both installs, and the singleton passes through
+    // (`docs/errors.md`, "Notices": one per code in first-seen order).
+    let streamed = streamed_startup(|log| {
+        crate::extensions_loaded(
+            log,
+            Vec::new(),
+            vec![
+                Notice {
+                    code: ErrorCode::ExtensionShadowed,
+                    message: "The repository's approved copy of `a` loads in place of the personal install.".into(),
+                    extension: Some("a".into()),
+                },
+                Notice {
+                    code: ErrorCode::ExtensionFailed,
+                    message: "Extension `b` failed to start.".into(),
+                    extension: Some("b".into()),
+                },
+                Notice {
+                    code: ErrorCode::ExtensionShadowed,
+                    message: "The repository's approved copy of `c` loads in place of the personal install.".into(),
+                    extension: Some("c".into()),
+                },
+            ],
+        )
+        .unwrap();
+    });
+    let kinds: Vec<&str> = streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(kinds, ["extensions_loaded", "notice", "notice"]);
+    assert_eq!(streamed[1].payload["code"], "extension_shadowed");
+    assert_eq!(streamed[1].payload.get("extension"), None);
+    let message = streamed[1].payload["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("2 extensions are shadowed: "),
+        "{message}"
+    );
+    assert!(message.contains("`a` loads in place"), "{message}");
+    assert!(message.contains("`c` loads in place"), "{message}");
+    assert!(message.contains("(extension `a`)"), "{message}");
+    assert_eq!(streamed[2].payload["code"], "extension_failed");
+    assert_eq!(streamed[2].payload["extension"], "b");
+}
+
+#[test]
+fn mcp_servers_started_groups_notices_by_code() {
+    // Failures still write first in order; the two notices behind them
+    // arrive as one group (`docs/errors.md`, "Notices": one per code).
+    let streamed = streamed_startup(|log| {
+        crate::mcp_servers_started(
+            log,
+            Vec::new(),
+            vec![
+                Notice {
+                    code: ErrorCode::RepositoryCodeSkipped,
+                    message: "The MCP server `one` was skipped.".into(),
+                    extension: None,
+                },
+                Notice {
+                    code: ErrorCode::RepositoryCodeSkipped,
+                    message: "The MCP server `two` was skipped.".into(),
+                    extension: None,
+                },
+            ],
+        )
+        .unwrap();
+    });
+    let kinds: Vec<&str> = streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(kinds, ["notice"]);
+    assert_eq!(streamed[0].payload["code"], "repository_code_skipped");
+    assert_eq!(streamed[0].payload.get("extension"), None);
+    let message = streamed[0].payload["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("2 `repository_code_skipped` notices: "),
+        "{message}"
+    );
+    assert!(message.contains("`one` was skipped"), "{message}");
+    assert!(message.contains("`two` was skipped"), "{message}");
+}
+
 /// Runs one `probe` call that starts a shutdown while it runs and returns
 /// `output`, cut to 4 + 4 bytes, under hooks that would rewrite it.
 #[track_caller]
