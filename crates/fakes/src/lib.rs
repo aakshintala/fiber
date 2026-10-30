@@ -151,7 +151,7 @@ pub fn lua_fixture() -> PathBuf {
 /// caller executes.
 pub fn mcp_fixture() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mcp-fixture/server.sh");
-    warm_once(&MCP_WARMED, || warm_up(&path, &[], 1));
+    MCP_WARMED.get_or_init(|| warm_up(&path, &[], 1));
     path
 }
 
@@ -159,12 +159,6 @@ pub fn mcp_fixture() -> PathBuf {
 /// process: nextest runs a test binary in one process, so the first lookup
 /// warms and later lookups skip it.
 static MCP_WARMED: OnceLock<()> = OnceLock::new();
-
-/// Runs `warm` once, skipping later calls: the once-only seam behind the
-/// fixture path accessor, split out so tests prove it without execing.
-fn warm_once(cell: &OnceLock<()>, warm: impl FnOnce()) {
-    cell.get_or_init(warm);
-}
 
 #[cfg(test)]
 mod fixture_tests;

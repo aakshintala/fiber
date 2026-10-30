@@ -1349,6 +1349,10 @@ fn a_list_changed_notice_changes_nothing_until_the_next_session() {
 /// (required) and `tone`: `prompt` files hold one `prompts/get` result
 /// each, written as extra `(name, body)` pairs.
 fn prompt_fixture(extra: &[(&str, &str)]) -> (Setup, PathBuf) {
+    // Look up the shared MCP fixture before the deadline starts: the
+    // lookup warms the script past its first-exec stall under its own
+    // bound, so the stall never eats this test's wait margin.
+    fakes::mcp_fixture();
     let setup = Setup::new();
     let mut calls = vec![
         (
@@ -1367,10 +1371,6 @@ fn prompt_fixture(extra: &[(&str, &str)]) -> (Setup, PathBuf) {
 
 #[test]
 fn fiber_ask_runs_a_servers_prompt_with_its_arguments() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
     let (setup, dir) = prompt_fixture(&[]);
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
@@ -1405,10 +1405,6 @@ fn fiber_ask_runs_a_servers_prompt_with_its_arguments() {
 
 #[test]
 fn a_cached_servers_prompt_starts_it_when_run() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
     let (setup, dir) = prompt_fixture(&[]);
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
@@ -1444,10 +1440,6 @@ fn a_cached_servers_prompt_starts_it_when_run() {
 
 #[test]
 fn fiber_ask_with_a_missing_required_argument_exits_1_without_calling_the_model() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
     let (setup, dir) = prompt_fixture(&[]);
     let server = ProviderServer::start(Vec::<Response>::new()).unwrap();
     setup.provider(&server);
@@ -1524,10 +1516,6 @@ fn fiber_ask_whose_prompt_the_server_refuses_exits_1() {
 
 #[test]
 fn a_slash_name_neither_a_skill_nor_a_prompt_is_sent_as_written_with_a_server_configured() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
     let (setup, dir) = prompt_fixture(&[]);
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
