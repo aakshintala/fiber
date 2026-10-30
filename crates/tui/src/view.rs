@@ -45,8 +45,8 @@ pub(crate) mod steering_queue;
 pub(crate) mod working_line;
 
 pub(crate) use home::list_window;
-pub(crate) use home::max_question_scroll;
 use home::notice_rows_area;
+pub(crate) use home::question::max_question_scroll;
 
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = " ↓ New messages below · End ";
@@ -98,6 +98,31 @@ fn focus_style(buf: &mut Buffer, rect: Rect) {
 /// shows on every theme and with no colour.
 pub(crate) const FOCUS_STYLE: Style = Style::new().add_modifier(Modifier::REVERSED);
 
+/// Paints the hover tint under `hover`'s target, then the focus style on
+/// the focused target, so focus wins the cells they share. A focused link
+/// keeps the `surface_raised` look the marks pass paints, with its hint
+/// under it, so the generic focus style skips links
+/// (`docs/tui.md`, "Links").
+fn paint_tints(
+    buf: &mut Buffer,
+    targets: &[Target],
+    hover: Option<TargetId>,
+    focused: Option<TargetId>,
+) {
+    if let Some(id) = hover {
+        for target in targets.iter().filter(|target| target.id == id) {
+            lift_hover(buf, target.rect);
+        }
+    }
+    if let Some(id) = focused
+        && !matches!(id, TargetId::Link { .. })
+    {
+        for target in targets.iter().filter(|target| target.id == id) {
+            focus_style(buf, target.rect);
+        }
+    }
+}
+
 /// One line, wrapped the way it draws.
 pub(crate) fn paragraph(line: Line<'_>) -> Paragraph<'_> {
     Paragraph::new(line).wrap(Wrap { trim: false })
@@ -105,11 +130,11 @@ pub(crate) fn paragraph(line: Line<'_>) -> Paragraph<'_> {
 
 /// How many rows `line` takes at `width`: one when it fits, without
 /// wrapping it.
-pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
+pub(crate) fn rows(line: &Line<'_>, width: u16) -> usize {
     if line.width() <= usize::from(width) {
         return 1;
     }
-    paragraph(line).line_count(width).max(1)
+    paragraph(line.clone()).line_count(width).max(1)
 }
 
 /// The slab the quit question or the notice overlay draws now, or an
@@ -130,7 +155,7 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
         let column = app.chrome().layout().map_or(screen, |layout| layout.column);
         let mut buf = Buffer::empty(screen);
         let mut targets = Vec::new();
-        return home::draw_command_delete_question(
+        return home::question::draw_command_delete_question(
             app,
             &question,
             scroll,
@@ -202,8 +227,9 @@ fn draw_framed(
             // same title, ✕, footer and wrapping home draws, with its
             // permanence warning pinned.
             if let Some((question, scroll)) = app.delete_command_frame() {
-                let slab =
-                    home::draw_command_delete_question(app, &question, scroll, area, buf, targets);
+                let slab = home::question::draw_command_delete_question(
+                    app, &question, scroll, area, buf, targets,
+                );
                 app.frames().note(Surface::DeleteQuestion, slab);
             }
         }
@@ -347,16 +373,12 @@ fn render_frame(
         draw_framed(app, area, buf, &mut targets, |targets, buf| {
             crate::import_report::draw_report(app, area, buf, targets)
         });
-        if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
-            for target in targets.iter().filter(|target| target.id == id) {
-                lift_hover(buf, target.rect);
-            }
-        }
-        if let Some(id) = app.focused() {
-            for target in targets.iter().filter(|target| target.id == id) {
-                focus_style(buf, target.rect);
-            }
-        }
+        paint_tints(
+            buf,
+            &targets,
+            pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)),
+            app.focused(),
+        );
         return (targets, painted);
     }
     if let Some(screen) = app.home_screen() {
@@ -616,21 +638,12 @@ fn render_frame(
         drop_conversation_targets(targets);
         crate::import_report::draw_report(app, conversation, buf, targets)
     });
-    if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
-        for target in targets.iter().filter(|target| target.id == id) {
-            lift_hover(buf, target.rect);
-        }
-    }
-    if let Some(id) = app.focused()
-        && !matches!(id, TargetId::Link { .. })
-    {
-        // Links draw their own focused look in the marks, on the
-        // `surface_raised` tint with the hint under them
-        // (`docs/tui.md`, "Links").
-        for target in targets.iter().filter(|target| target.id == id) {
-            focus_style(buf, target.rect);
-        }
-    }
+    paint_tints(
+        buf,
+        &targets,
+        pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)),
+        app.focused(),
+    );
     (targets, painted)
 }
 

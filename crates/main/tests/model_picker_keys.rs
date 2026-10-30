@@ -21,7 +21,7 @@ use std::fs;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::Setup;
-use support::pty::{Grid, Run};
+use support::pty::{Colour, Grid, Run};
 
 /// Installs a provider `fake` with the models `alpha`, `beta` and `gamma`
 /// on `openai-responses` at the fake server, reading its key from
@@ -98,19 +98,24 @@ fn session_model_changed(setup: &Setup) -> String {
 }
 
 /// Waits for the open picker to show its answered catalogue with
-/// `gamma`: `gamma` present and the `Reading the model lists` stall
-/// text gone. It reports through the shared `wait_screen_reporting`
-/// helper: on expiry the panic names the catalogue stage and carries
-/// the grid plus the session log, so the next sighting of the stall
-/// says whether the picker opened and whether a switch already
-/// landed.
+/// `gamma`: the filter row drawn, `gamma` present and the `Reading
+/// the model lists` stall text gone. It reports through the shared
+/// `wait_screen_reporting` helper: on expiry the panic names the
+/// catalogue stage and carries the grid plus the session log, so the
+/// next sighting of the stall says whether the picker opened and
+/// whether a switch already landed. Returns the matched grid, so a
+/// caller asserts on the frame the wait settled.
 #[track_caller]
-fn wait_picker_catalogue(run: &mut Run, setup: &Setup) {
+fn wait_picker_catalogue(run: &mut Run, setup: &Setup) -> Grid {
     run.wait_screen_reporting(
         "the picker catalogue with gamma",
-        |screen| shows(screen, "gamma") && !shows(screen, "Reading the model lists"),
+        |screen| {
+            shows(screen, "Type to search")
+                && shows(screen, "gamma")
+                && !shows(screen, "Reading the model lists")
+        },
         || session_model_changed(setup),
-    );
+    )
 }
 
 #[test]
@@ -149,8 +154,8 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
         |screen| shows(screen, "Type to search"),
         || session_model_changed(&setup),
     );
-    wait_picker_catalogue(&mut run, &setup);
-    let opened = run.screen().rows.clone();
+    let opened_grid = wait_picker_catalogue(&mut run, &setup);
+    let opened = opened_grid.rows.clone();
     assert!(
         opened.iter().any(|row| row.contains("Type to search")),
         "the picker shows its filter: {opened:?}"
@@ -159,10 +164,10 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     // three installed models, and `gamma` drops out. The open picker's
     // catalogue above proves the filter is taken.
     run.write(b"bet");
-    run.wait_screen("the filtered list", |screen| {
+    let filtered_grid = run.wait_screen("the filtered list", |screen| {
         shows(screen, "1 of 3 models") && !shows(screen, "gamma")
     });
-    let filtered = run.screen().rows.clone();
+    let filtered = filtered_grid.rows.clone();
     assert!(
         filtered.iter().any(|row| row.contains("1 of 3 models")),
         "the count names one of three: {filtered:?}"
@@ -175,10 +180,10 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     // the panel names the session's new model. The filtered list above
     // proves the choice is taken.
     run.write(b"\x13");
-    run.wait_screen("the session on fake/beta", |screen| {
+    let switched_grid = run.wait_screen("the session on fake/beta", |screen| {
         shows(screen, "fake/beta") && !shows(screen, "Type to search")
     });
-    let switched = run.screen().rows.clone();
+    let switched = switched_grid.rows.clone();
     assert!(
         switched.iter().any(|row| row.contains("fake/beta")),
         "the panel names the session model: {switched:?}"
@@ -216,8 +221,11 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
 /// Spawns home at 120x32 with the picker provider installed and `env`
 /// in the child's environment: the fake server answers no turn, since
 /// no prompt goes out. Returns the run once the first frame drew and
-/// the chip row names the configured model, so a click never lands
-/// before its target draws.
+/// the chip row names the configured model and the default level, so
+/// a click never lands before its target draws. The exact strings are
+/// final at launch (`home.launch` in `crates/tui/src/app/home.rs`):
+/// a local home owes no hub chip read, so nothing in the background
+/// moves the row after the first frame.
 #[track_caller]
 fn home_run(setup: &Setup, env: &[(&str, &str)]) -> Run {
     let mut full = vec![("FIBER_TEST_FAKE_KEY", "sk-test")];
@@ -225,39 +233,36 @@ fn home_run(setup: &Setup, env: &[(&str, &str)]) -> Run {
     let mut run = Run::spawn(setup, 120, 32, &[], &full);
     run.ready();
     run.wait_screen("home with its chips", |screen| {
-        shows(screen, "[fake/alpha]") && shows(screen, "[thinking:")
+        shows(screen, "[fake/alpha]") && shows(screen, "[thinking: default]")
     });
     run
 }
 
-/// The chip row's cell just inside `needle`'s opening bracket on
-/// `screen`: the coordinates come from the drawn grid, never from a
+/// The chip's origin on `screen`: the cell just inside `needle`'s
+/// opening bracket, or `None` while the needle is absent or past the
+/// row's end. The coordinates come from the drawn grid, never from a
 /// hard-coded column, so the centred box may sit anywhere.
+fn chip_origin(screen: &Grid, needle: &str) -> Option<(u16, u16)> {
+    let y = u16::try_from(screen.rows.iter().position(|row| row.contains(needle))?).ok()?;
+    let symbols: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
+    let len = u16::try_from(symbols.len()).ok()?;
+    let (cols, _) = screen.size();
+    let x = (0..=cols.saturating_sub(len)).find(|x| {
+        symbols.iter().enumerate().all(|(dx, symbol)| {
+            let Ok(dx) = u16::try_from(dx) else {
+                return false;
+            };
+            screen.cell(x.saturating_add(dx), y).symbol == *symbol
+        })
+    })?;
+    Some((x + 1, y))
+}
+
+/// The chip row's cell just inside `needle`'s opening bracket on
+/// `screen`.
 #[track_caller]
 fn chip_cell(screen: &Grid, needle: &str) -> (u16, u16) {
-    let y = screen
-        .rows
-        .iter()
-        .position(|row| row.contains(needle))
-        .unwrap_or_else(|| panic!("no chip {needle} in {:?}", screen.rows));
-    let y = u16::try_from(y).expect("the chip fits the screen");
-    let symbols: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
-    let len = u16::try_from(symbols.len()).expect("the chip fits its row");
-    let (cols, _) = screen.size();
-    let x = (0..=cols.saturating_sub(len))
-        .find(|x| {
-            symbols.iter().enumerate().all(|(dx, symbol)| {
-                screen
-                    .cell(
-                        x.saturating_add(u16::try_from(dx).expect("the chip fits its row")),
-                        y,
-                    )
-                    .symbol
-                    == *symbol
-            })
-        })
-        .expect("the chip's cells on its row");
-    (x + 1, y)
+    chip_origin(screen, needle).unwrap_or_else(|| panic!("no chip {needle} in {:?}", screen.rows))
 }
 
 /// Clicks the cell at `(x, y)`: an SGR press then its release on the
@@ -318,7 +323,7 @@ fn clicking_the_model_chip_opens_the_model_picker() {
     install_picker_provider(&setup, &server);
     let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
     // The home grid above proves the chip drew before the click.
-    let (x, y) = chip_cell(&run.screen(), "[fake/alpha]");
+    let (x, y) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 run.ready() + home with its chips
     click(&mut run, x, y);
     run.wait_screen("the open picker with its catalogue", picker_open);
     close_and_quit(run);
@@ -336,7 +341,7 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
     // fallback draws exactly like the thinking open, so the first
     // open warms the lists: it waits for the catalogue, then closes.
     // Esc closes at once with no query typed.
-    let (x0, y0) = chip_cell(&run.screen(), "[fake/alpha]");
+    let (x0, y0) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 run.ready() + home with its chips
     click(&mut run, x0, y0);
     run.wait_screen("the open picker with its catalogue", picker_open);
     run.write(b"\x1b[27u");
@@ -351,7 +356,7 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
     // touched (`model_picker::open`), saving only the default
     // level; an ordinary choose would save only the model and write
     // no level, failing the config read below.
-    let (x, y) = chip_cell(&home, "[thinking:");
+    let (x, y) = chip_cell(&home, "[thinking:"); // settled: case 1 run.ready() + home again (exact text per home with its chips)
     click(&mut run, x, y);
     run.wait_screen("the picker on alpha's level chips", |screen| {
         picker_open(screen) && thinking_focused(screen)
@@ -468,10 +473,15 @@ fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
     // The empty catalogue proves the read answered with nothing
     // listed and nothing grouped: the value stayed per-model instead
     // of becoming a count row.
-    run.wait_screen("the answered empty catalogue", |screen| {
+    let counted_grid = run.wait_screen("the answered empty catalogue", |screen| {
         shows(screen, "No models. Install")
+            && !shows(screen, "models need")
+            && screen
+                .rows
+                .iter()
+                .all(|row| !(row.contains("model_invalid") && row.contains("fake/alpha")))
     });
-    let counted = run.screen().rows.clone();
+    let counted = counted_grid.rows.clone();
     assert!(
         counted.iter().all(|row| !row.contains("models need")),
         "no count row groups the not-a-host model: {counted:?}"
@@ -486,6 +496,42 @@ fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
     });
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
+}
+
+/// The dark theme's surface tint in truecolour: the background of an
+/// unfocused, unhovered chip (DARK `surface` in `crates/tui/src/theme.rs`,
+/// the same value `hover_look.rs` pins as `SURFACE`).
+const CHIP_SURFACE: Colour = Colour::Rgb(0x1a, 0x1a, 0x22);
+
+/// Whether `screen` draws the needle chip fully unhovered on exactly
+/// the `len`-cell slice `chip_cells` compares: the needle's characters
+/// after `[` plus one trailing space (whose spacer
+/// `crates/tui/src/view/home.rs` paints with `BOX_TINT`), each cell
+/// with the default pen on the surface tint and no modifiers. A
+/// text-painted but tint-stale partial redraw cannot satisfy it.
+/// False while the needle is absent, never panicking, so a wait on it
+/// only matches the settled frame.
+fn chip_unhovered(screen: &Grid, needle: &str) -> bool {
+    let Some((x, y)) = chip_origin(screen, needle) else {
+        return false;
+    };
+    let symbols: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
+    let Ok(len) = u16::try_from(symbols.len()) else {
+        return false;
+    };
+    let mut wanted: Vec<String> = symbols.iter().skip(1).cloned().collect();
+    wanted.push(" ".to_owned());
+    chip_cells(screen, x, y, len)
+        .iter()
+        .zip(wanted.iter())
+        .all(|(cell, symbol)| {
+            cell.symbol == *symbol
+                && cell.fg == Colour::Default
+                && cell.bg == CHIP_SURFACE
+                && !cell.dim
+                && !cell.bold
+                && !cell.inverse
+        })
 }
 
 /// The chip's cells on `screen`: `len` cells from `x` on row `y`.
@@ -508,8 +554,10 @@ fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
     // Both chips unfocused: nothing sent a key, so focus sits on the
     // entry bar and no focused chip keeps its highlight by spec.
     for needle in ["[fake/alpha]", "[thinking:"] {
-        let before = run.screen();
-        let (x, y) = chip_cell(&before, needle);
+        let before = run.wait_screen(&format!("the unhovered chip {needle}"), |screen| {
+            chip_unhovered(screen, needle)
+        });
+        let (x, y) = chip_cell(&before, needle); // settled: case 1 run.ready() + the unhovered chip wait
         let len = u16::try_from(needle.len()).expect("the chip fits its row");
         let plain = chip_cells(&before, x, y, len);
         hover(&mut run, x, y);

@@ -375,7 +375,7 @@ impl App {
         let width = self.screen.pages().wrap_width();
         let mut at = index.start(page);
         for (line, _) in &rows {
-            let end = at.saturating_add(crate::view::rows(line.clone(), width));
+            let end = at.saturating_add(crate::view::rows(line, width));
             if row < end {
                 return Some((at, end));
             }
@@ -429,7 +429,7 @@ impl App {
             let start = index.start(*page);
             let mut grow = start;
             for ((line, _), text) in rows.iter().zip(texts) {
-                let count = crate::view::rows(line.clone(), area_width);
+                let count = crate::view::rows(line, area_width);
                 let line_end = grow.saturating_add(count);
                 let from = grow.max(top);
                 let to = line_end.min(end);
@@ -544,7 +544,7 @@ impl App {
         let mut at = start;
         for (line, _) in rows {
             first.push(at);
-            at = at.saturating_add(crate::view::rows(line.clone(), area_width));
+            at = at.saturating_add(crate::view::rows(line, area_width));
         }
         // The placed cells of each page row a URL touches, on demand.
         let mut placed: Vec<Option<Vec<crate::cells::Placed>>> = vec![None; rows.len()];
