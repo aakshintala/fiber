@@ -339,7 +339,12 @@ fn hooks_that_do_not_register_or_fail_softly_leave_the_output_with_a_notice() {
         })
         .collect();
     // The two `extension_failed` notices group by code: the count and
-    // the first item up front, both items with their extension listed.
+    // the first item up front, both items with their extension listed
+    // (`docs/errors.md`, "Notices": one notice per code;
+    // `docs/extensions.md`, "Hooks declared in configuration": an entry
+    // missing `timeout` or `on_failure` is not registered, and a `notice`
+    // names the entry and the missing field). The notice lands in the
+    // loading batch, after `extensions_loaded`.
     let failed = registered
         .iter()
         .find(|(code, _, _)| *code == "extension_failed")

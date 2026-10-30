@@ -542,7 +542,11 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
     );
 
     // Both gone: no line, one grouped notice naming both skills, and the
-    // handoff still completes.
+    // handoff still completes (`docs/errors.md`, "Notices": one notice per
+    // code; `docs/handoff.md`, "What the model sees after a handoff": a
+    // skill left out at the handoff gets a `notice` naming it and the
+    // reason). The notice lands at the opening flush, after the new
+    // `opening_message`.
     let skill = Skill::named();
     *skill.after.lock().unwrap() = Some(Box::new(|_, file| {
         std::fs::remove_dir_all(file.parent().unwrap()).unwrap();

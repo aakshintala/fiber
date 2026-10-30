@@ -828,7 +828,11 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     // Both bad entries left one grouped notice and never ran; the good
-    // one ran.
+    // one ran (`docs/errors.md`, "Notices": one notice per code;
+    // `docs/extensions.md`, "Hooks declared in configuration": a hook
+    // entry names its `command`, and a `notice` names the entry that
+    // cannot register). The notice lands right after
+    // `extensions_loaded`.
     let notices = run.all("notice");
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0]["payload"]["code"], "extension_failed");
