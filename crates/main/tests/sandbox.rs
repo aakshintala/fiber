@@ -580,6 +580,268 @@ fn an_explicit_unconfined_retry_reads_the_denied_path() {
     assert_eq!(lines[resolved]["payload"]["decision"], "allow");
 }
 
+/// A confined call that changes a protected path restores it by the
+/// call's end: the completion carries the report, and headless names
+/// the path on stderr with the call's other lines.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_call_restores_the_protected_path_it_changed() {
+    use fakes::ProviderServer;
+    use serde_json::{Value, json};
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let fiber = setup.root.path().join("w").join(".fiber");
+    fs::create_dir_all(&fiber).unwrap();
+    fs::write(fiber.join("note.txt"), "original\n").unwrap();
+    // One simple command on purpose: a redirect writes the protected file
+    // while the call keeps a subject the standing rule can match
+    // (`docs/permissions.md`, "What a rule matches").
+    let command = "tee .fiber/note.txt < /dev/null";
+
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "change_1",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&json!({
+            "model": "fake/m",
+            "sandbox": {"enabled": true}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // A standing rule allows the shell command, so review approves it.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "tee"})
+        ),
+    )
+    .unwrap();
+
+    let run = setup.fiber_run(&["ask", "change the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    assert!(!lines.is_empty(), "the session writes event lines");
+    let completed = lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_completed"
+                && line["payload"]["details"]["command"] == command
+        })
+        .unwrap_or_else(|| panic!("a completion for the change"));
+    let action = completed["action_id"]
+        .as_str()
+        .expect("a completion names its call");
+    let started = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
+        .unwrap_or_else(|| panic!("a start for the change"));
+    assert_eq!(
+        started["payload"]["confined"], true,
+        "the change runs confined"
+    );
+    assert_eq!(
+        completed["payload"]["details"]["protected_paths"]["restored"],
+        json!([".fiber"]),
+        "the completion carries the report"
+    );
+    let text = completed["payload"]["content"]
+        .as_array()
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    assert!(
+        text.contains("Protected path .fiber changed while a confined call ran;"),
+        "the result names the change: {text}"
+    );
+    assert!(
+        run.stderr.contains(
+            "fiber: Protected path .fiber changed while a confined call ran; Fiber restored it."
+        ),
+        "headless warns on stderr: {}",
+        run.stderr
+    );
+    assert_eq!(
+        fs::read(fiber.join("note.txt")).unwrap(),
+        b"original\n",
+        "the call's end restores the change"
+    );
+}
+
+/// A session killed mid-call leaves its baseline stale: the next session
+/// start restores the abandoned change and reports it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_killed_call_leaves_a_stale_baseline_the_next_session_recovers() {
+    use fakes::ProviderServer;
+    use serde_json::{Value, json};
+    use std::io::BufRead;
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let workspace = setup.root.path().join("w");
+    let fiber = workspace.join(".fiber");
+    fs::create_dir_all(&fiber).unwrap();
+    fs::write(fiber.join("note.txt"), "original\n").unwrap();
+    // The sleep keeps the call alive to be killed; the note changes while
+    // the call runs, and the guard restores whatever changed it without
+    // naming a writer.
+    let command = "sleep 120 < /dev/null";
+
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "sleep_1",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&json!({
+            "model": "fake/m",
+            "sandbox": {"enabled": true}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // A standing rule allows the shell command, so review approves it.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sleep"})
+        ),
+    )
+    .unwrap();
+
+    // Spawn the session by hand: the turn never ends on its own, so the
+    // test reads for the confined start, then kills the session dead.
+    let mut spawned = Command::new(env!("CARGO_BIN_EXE_fiber"));
+    spawned
+        .args(["ask", "take a nap"])
+        .current_dir(&workspace)
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", setup.root.path())
+        .env("FIBER_HOME", setup.home())
+        .env("FIBER_TEST_FAKE_KEY", "sk-test")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (mut child, watchdog) = spawn_watched(&mut spawned);
+    let group = child.id();
+    let stdout = child.stdout.take().expect("piped stdout");
+    let (lines_tx, lines_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if lines_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let deadline = support::Deadline::start();
+    loop {
+        let line = deadline.recv_or_fail(&lines_rx, "the confined start");
+        let value: Value = serde_json::from_str(&line).unwrap_or(json!({}));
+        if value["kind"] == "tool_call_started" && value["payload"]["confined"] == true {
+            break;
+        }
+    }
+    // The note changes only once the baseline records the original: the
+    // baseline file's existence proves the snapshot read already happened,
+    // since the same call writes it after.
+    let home = setup.home().to_path_buf();
+    fakes::within(
+        "the baseline lands",
+        support::Deadline::start(),
+        move || {
+            loop {
+                let projects = home.join("projects");
+                let ready = fs::read_dir(&projects).is_ok_and(|entries| {
+                    entries.flatten().any(|project| {
+                        project
+                            .path()
+                            .join("protected-paths")
+                            .join("baseline.json")
+                            .is_file()
+                    })
+                });
+                if ready {
+                    break;
+                }
+            }
+        },
+    );
+    fs::write(fiber.join("note.txt"), "changed\n").unwrap();
+    // SIGKILL the whole session, then reap it on every path past this point.
+    fakes::kill_group(group, "KILL").expect("the session dies");
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || done_tx.send(child.wait()).unwrap());
+    match deadline.recv(&done_rx) {
+        Ok(exit) => {
+            let status = exit.expect("the killed session reaps");
+            assert!(!status.success(), "the kill ends the session: {status:?}");
+        }
+        Err(_) => support::expired(deadline, group, &done_rx, "`fiber ask` to die"),
+    }
+    assert!(!fakes::group_alive(group), "`fiber` left a process behind");
+    watchdog.stand_down(deadline.cleanup_phase());
+
+    // The next session start recovers the abandoned change and reports it.
+    let run = setup.fiber_run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        fs::read(fiber.join("note.txt")).unwrap(),
+        b"original\n",
+        "startup recovery restores the abandoned change"
+    );
+    let lines: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let notice = lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "notice" && line["payload"]["code"] == "protected_paths_restored"
+        })
+        .unwrap_or_else(|| panic!("a startup recovery notice"));
+    assert!(
+        notice["payload"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(".fiber"),
+        "the notice names the path: {}",
+        notice["payload"]
+    );
+}
+
 #[test]
 fn a_repository_sandbox_key_is_ignored_through_the_binary() {
     let setup = Setup::new_with_sandbox_root();
