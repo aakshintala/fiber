@@ -127,7 +127,7 @@ impl Peer {
         let (sub_tx, subscribed) = mpsc::channel();
         let (end_tx, ended) = mpsc::channel();
         thread::spawn(move || {
-            let deadline = Deadline::after(fakes::deadline::WAITS);
+            let deadline = Deadline::after(fakes::deadline::WAIT);
             listener.set_nonblocking(true).unwrap();
             let mut fds = [PollFd::new(&listener, PollFlags::IN)];
             let bound = rustix::event::Timespec::try_from(deadline.left()).unwrap();
@@ -233,7 +233,7 @@ fn only_valid_session_names_are_connected_and_stale_paths_are_omitted() {
     fs::write(home.run().join("s_0000000000000003"), "not a socket").unwrap();
     let s = status("answer");
     let peer = Peer::answer(&home, ID, s.clone());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let result = deadline
         .recv_or_fail(&home.start(Arc::new(CancelToken::new())), "listing")
         .unwrap();
@@ -262,7 +262,7 @@ fn every_answer_is_returned_in_id_order_without_advancing_time() {
         .iter()
         .map(|id| Peer::answer(&home, id, status(id)))
         .collect();
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let result = deadline
         .recv_or_fail(&home.start(Arc::new(CancelToken::new())), "all answers")
         .unwrap();
@@ -286,7 +286,7 @@ fn a_silent_peer_does_not_delay_an_answers_close_and_is_listed_at_cutoff() {
     let mut hold = Peer::hold(&home, OTHER, false);
     let s = status("ready");
     let answer = Peer::answer(&home, ID, s.clone());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let result = home.start(Arc::new(CancelToken::new()));
     hold.subscribed(&deadline);
     answer.ended(&deadline);
@@ -312,7 +312,7 @@ fn a_silent_peer_does_not_delay_an_answers_close_and_is_listed_at_cutoff() {
 fn an_unfinished_status_is_not_an_answer() {
     let home = Home::new();
     let mut peer = Peer::hold(&home, ID, true);
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let result = home.start(Arc::new(CancelToken::new()));
     peer.subscribed(&deadline);
     home.advance(&deadline);
@@ -350,7 +350,7 @@ fn the_first_json_line_must_accept_our_command_at_our_version() {
                 stream.shutdown(std::net::Shutdown::Write).unwrap();
             }
         });
-        let deadline = Deadline::after(fakes::deadline::WAITS);
+        let deadline = Deadline::after(fakes::deadline::WAIT);
         let result = deadline
             .recv_or_fail(
                 &home.start(Arc::new(CancelToken::new())),
@@ -384,7 +384,7 @@ fn unrelated_and_non_json_lines_are_skipped_after_the_ack() {
         writeln!(stream, "not JSON either").unwrap();
         writeln!(stream, "{}", summary(&status("ready"))).unwrap();
     });
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     assert_eq!(
         deadline
             .recv_or_fail(
@@ -419,12 +419,12 @@ fn cancellation_wakes_the_poll_without_advancing_time() {
     let home = Home::new();
     let mut peer = Peer::hold(&home, ID, false);
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let result = home.start(cancel.clone());
     peer.subscribed(&deadline);
     assert!(home.clock.await_parked(
         home.clock.origin() + LIST_DEADLINE.checked_sub(CLEANUP_MARGIN).unwrap(),
-        fakes::Deadline::after(fakes::deadline::WAITS)
+        fakes::Deadline::after(fakes::deadline::WAIT)
     ));
     cancel.cancel();
     assert_eq!(
@@ -438,7 +438,7 @@ fn cancellation_wakes_the_poll_without_advancing_time() {
 #[test]
 fn each_subscription_uses_a_fresh_command_id() {
     let home = Home::new();
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let first = Peer::answer(&home, ID, status("first"));
     let result = home.start(Arc::new(CancelToken::new()));
     let a = first.subscribed(&deadline);
@@ -480,7 +480,7 @@ fn the_line_cap_allows_the_boundary_and_rejects_one_more_unterminated_byte() {
                 stream.write_all(b"\n").unwrap();
             }
         });
-        let deadline = Deadline::after(fakes::deadline::WAITS);
+        let deadline = Deadline::after(fakes::deadline::WAIT);
         let result = deadline
             .recv_or_fail(&home.start(Arc::new(CancelToken::new())), "line cap")
             .unwrap();
@@ -572,7 +572,7 @@ fn a_literal_sized_split_summary_survives_below_one_mib() {
             });
         done.send(answer).unwrap();
     });
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     deadline.recv_or_fail(&next_poll, "prefix processed and next poll entered");
     release.send(()).unwrap();
     let entries = deadline
@@ -606,7 +606,7 @@ fn would_block_after_readiness_preserves_the_subscription() {
             });
         done.send((injected, answer)).unwrap();
     });
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let (injected, answer) = deadline.recv_or_fail(&result, "summary after WouldBlock");
     assert!(injected);
     assert_eq!(
@@ -644,7 +644,7 @@ fn a_hard_read_error_closes_the_peer_without_advancing_time() {
             });
         done.send((injected, answer)).unwrap();
     });
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     peer.ended(&deadline);
     let (injected, answer) = deadline.recv_or_fail(&result, "hard read error closes listing");
     assert!(injected);
@@ -703,14 +703,14 @@ fn unending_short_lines_cannot_outlive_the_cutoff_or_cancellation() {
             sent.send(()).unwrap();
             while stream.write_all(line).is_ok() {}
         });
-        let deadline = Deadline::after(fakes::deadline::WAITS);
+        let deadline = Deadline::after(fakes::deadline::WAIT);
         let cancel = Arc::new(CancelToken::new());
         let result = home.start(cancel.clone());
         deadline.recv_or_fail(&written, "first 1000 flood lines written");
         if cancel_call {
             assert!(home.clock.await_parked(
                 home.clock.origin() + LIST_DEADLINE.checked_sub(CLEANUP_MARGIN).unwrap(),
-                fakes::Deadline::after(fakes::deadline::WAITS)
+                fakes::Deadline::after(fakes::deadline::WAIT)
             ));
             cancel.cancel();
             assert_eq!(
@@ -738,7 +738,7 @@ fn a_full_backlog_is_not_an_accepted_connection() {
     let listener = home.listener(ID);
     let address = rustix::net::SocketAddrUnix::new(home.run().join(ID)).unwrap();
     let mut filled = Vec::new();
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     loop {
         assert!(!deadline.left().is_zero(), "backlog filled within deadline");
         let socket = crate::hub::nonblocking_socket().unwrap();
@@ -811,7 +811,7 @@ fn send_ignored(stream: &mut UnixStream, line: &str) {
 fn message_write_error_is_unreachable_not_retried() {
     let home = Home::new();
     let path = home.run().join(ID);
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let (client, mut peer) = exchange_pair(&deadline);
     let result = spawn_message_exchange(
         home.client(),
@@ -866,7 +866,7 @@ fn message_write_error_is_unreachable_not_retried() {
 fn message_read_error_is_unreachable_not_retried() {
     let home = Home::new();
     let path = home.run().join(ID);
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let (client, mut peer) = exchange_pair(&deadline);
     let result = spawn_message_exchange(
         home.client(),
@@ -914,7 +914,7 @@ fn message_prefix_at_the_cap_completes() {
     for size in [MAX_LINE - 1, MAX_LINE] {
         let home = Home::new();
         let path = home.run().join(ID);
-        let deadline = Deadline::after(fakes::deadline::WAITS);
+        let deadline = Deadline::after(fakes::deadline::WAIT);
         let (client, mut peer) = exchange_pair(&deadline);
         let (sig_tx, sig_rx) = mpsc::channel();
         let fired = Arc::new(AtomicBool::new(false));
@@ -965,7 +965,7 @@ fn message_prefix_over_the_cap_is_unreachable() {
     // peer holds its side open: no later answer can rescue it.
     let home = Home::new();
     let path = home.run().join(ID);
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let (client, mut peer) = exchange_pair(&deadline);
     let result = spawn_message_exchange(
         home.client(),
@@ -1075,7 +1075,7 @@ fn assert_closed(stream: &UnixStream) {
 fn message_delivers_past_noise_and_closes_at_once() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "the parser is fixed".into(), cancel);
     let mut stream = accept_message_peer(listener, &deadline);
@@ -1105,7 +1105,7 @@ fn message_rejections_pass_through_unchanged() {
     ] {
         let home = Home::new();
         let cancel = Arc::new(CancelToken::new());
-        let deadline = Deadline::after(fakes::deadline::WAITS);
+        let deadline = Deadline::after(fakes::deadline::WAIT);
         let listener = home.listener(ID);
         let result = send_message(&home, ID, FROM, "hello".into(), cancel);
         let mut stream = accept_message_peer(listener, &deadline);
@@ -1131,7 +1131,7 @@ fn message_rejections_pass_through_unchanged() {
 fn a_rejected_subscribe_then_an_accepted_message_is_delivered() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
     let mut stream = accept_message_peer(listener, &deadline);
@@ -1255,7 +1255,7 @@ fn message_closing_before_the_answer_is_unreachable() {
     // End of file before any answer.
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
     let stream = accept_message_peer(listener, &deadline);
@@ -1268,7 +1268,7 @@ fn message_closing_before_the_answer_is_unreachable() {
     // End of file after the subscribe ack only.
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
     let mut stream = accept_message_peer(listener, &deadline);
@@ -1285,7 +1285,7 @@ fn message_closing_before_the_answer_is_unreachable() {
 fn a_line_over_the_cap_is_unreachable() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
     let mut stream = accept_message_peer(listener, &deadline);
@@ -1303,7 +1303,7 @@ fn a_line_over_the_cap_is_unreachable() {
 fn a_mibibyte_of_text_arrives_whole() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let text = "y".repeat(1024 * 1024);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, text.clone(), cancel);
@@ -1338,7 +1338,7 @@ fn a_mibibyte_of_text_arrives_whole() {
 fn message_waits_for_the_answer_until_cancelled() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), Arc::clone(&cancel));
     let stream = accept_message_peer(listener, &deadline);
@@ -1347,7 +1347,7 @@ fn message_waits_for_the_answer_until_cancelled() {
     // turn is cancelled, then the listener reads end of file.
     assert!(
         home.clock
-            .await_parked_unbounded(fakes::Deadline::after(fakes::deadline::WAITS))
+            .await_parked_unbounded(fakes::Deadline::after(fakes::deadline::WAIT))
     );
     cancel.cancel();
     assert_eq!(
@@ -1384,7 +1384,7 @@ fn a_cancelled_call_connects_nowhere() {
 fn the_sender_checks_no_schema_version() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
     let mut stream = accept_message_peer(listener, &deadline);
@@ -1401,7 +1401,7 @@ fn the_sender_checks_no_schema_version() {
 fn answers_for_another_command_are_skipped() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
-    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let deadline = Deadline::after(fakes::deadline::WAIT);
     let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
     let mut stream = accept_message_peer(listener, &deadline);

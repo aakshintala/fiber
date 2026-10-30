@@ -150,7 +150,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `quota.notice_at` | 80 | yes | The percent used of a quota window at which the model gets a notice (`docs/tools.md`, "Provider quota"). |
 | `mcp.servers."<name>"` | none | yes, with approval | An MCP server ("MCP servers"). |
 | `repository_extensions` | none | yes, with approval | The extension packages the repository ships: a list of objects with `path`, inside the repository, and `required`, default false (`docs/extensions.md`, "Code a repository ships"). Set anywhere but the repository's file, it is ignored with a `notice`. |
-| `extensions."<name>".enabled` | true | no | Whether an installed extension loads; `false` globally and `true` in a project's file scopes it to that project (`docs/extensions.md`, "Code a repository ships"). |
+| `extensions."<name>".enabled` | true | no | Whether an installed extension's non-provider parts load; `false` globally and `true` in a project's file scopes those parts to that project (`docs/extensions.md`, "Code a repository ships"). Provider data and discovery ignore this key: credential presence is their switch. In a mixed package, `false` still suppresses init, commands and hooks. |
 | `extensions."<name>".startup_timeout_ms` | 5000 | yes | A process extension's startup deadline. |
 | `extensions."<name>".commands."<command>"` | none | yes | A new name for one of the extension's commands, when two extensions clash. |
 | `extensions."<name>".tools.enabled`, `extensions."<name>".tools.disabled` | none | yes | Lists of the extension's tool names to declare or leave out, as an MCP server's `tools.enabled` and `tools.disabled` do ("MCP servers"); the terminal's `/tools` switch writes them (`docs/tui.md`, "Swapped views"). |
@@ -634,7 +634,16 @@ declares") lists:
   `HOME`; `env`, when that variable is set and not empty, replaces `path`;
   `join`, one name, is appended after that choice, such as a file in a
   directory the variable moves. `env` and `join` may be left out. A
-  relative path is read from the workspace.
+  relative path is read from the workspace. Optional `credential_env` is a
+  list of environment variable names. Any listed variable set to a nonempty
+  value, or any resolved declared path, switches this provider on; stored
+  credentials and configured key sources do not count for it. Bedrock lists
+  `AWS_BEARER_TOKEN_BEDROCK` and `AWS_ACCESS_KEY_ID`; Vertex lists none and
+  relies on paths. A regular file counts even when empty. A directory needs
+  one entry, checked with one directory read without opening the entry.
+  Declared-path symlinks are followed; failed checks do not prove presence.
+  These checks never run `credential()` or a command and do not validate a
+  credential. `credential_env` is invalid outside `credential_label`.
 - `compat` is a flat object of the flags the protocol reads. Fiber never
   guesses a flag, and a flag that is absent is not set:
 
@@ -733,6 +742,8 @@ suffixed and reported, while a colliding instruction target is never
 suffixed, since a suffixed fixed name is never read — the existing file
 stands and the item goes to left-behind with the occupied target as its
 reason. Identical bytes are skipped without error.
+
+A skill Fiber already reads from another source, such as a Claude Code skill whose directory is a link into `~/.agents/skills/` or one whose name is already in `~/.agents/skills/`, is not copied: it goes to left-behind with "already read from <path>", whatever other reason would also leave it behind. Here "already read" means that discovery would load it.
 
 One receipt file per source sits at the top of Fiber home,
 `import-claude-code.json` and `import-codex.json`, each holding its source,

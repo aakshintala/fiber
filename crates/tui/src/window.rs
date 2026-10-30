@@ -256,6 +256,8 @@ pub(crate) type AnimMark = (usize, crate::ext::anim::AnimKey);
 pub(crate) enum Draw {
     /// As shown: a closed section draws its own line only.
     Shown,
+    /// Count built-in Markdown rows without constructing them.
+    Count,
     /// Every collapsible body draws, open or not.
     AllOpen,
 }
@@ -644,7 +646,7 @@ impl Pages {
         // is closed and never folds another line, so whether its last
         // piece drew is final here.
         let before_drew = before.turns.last().map(|card| {
-            let mut scratch = Rows::default();
+            let mut scratch = Rows::count_only();
             card.rows(
                 self.wrap_width(),
                 &self.zone,
@@ -655,7 +657,7 @@ impl Pages {
             .last
         });
         let next_drew = next.turns.first().map(|card| {
-            let mut scratch = Rows::default();
+            let mut scratch = Rows::count_only();
             card.rows(
                 self.wrap_width(),
                 &self.zone,
@@ -709,7 +711,7 @@ impl Pages {
             return;
         }
         let drew = self.open.turns.first().map(|card| {
-            let mut scratch = Rows::default();
+            let mut scratch = Rows::count_only();
             card.rows(
                 self.wrap_width(),
                 &self.zone,
@@ -1490,7 +1492,7 @@ impl Pages {
                             }
                         }
                         lines.extend(rows.into_iter().map(|(line, target)| {
-                            let count = crate::view::rows(line.clone(), self.width);
+                            let count = crate::view::rows(&line, self.width);
                             (line, count, target)
                         }));
                         // A line past the viewport exposes no tag: its
@@ -1549,7 +1551,7 @@ impl Pages {
         let mut offset = top.saturating_sub(page_start);
         let mut line_at = None;
         for (at, (line, _)) in rows.iter().enumerate() {
-            let count = crate::view::rows(line.clone(), self.width);
+            let count = crate::view::rows(line, self.width);
             if offset < count {
                 line_at = Some(at);
                 break;
@@ -1589,7 +1591,7 @@ impl Pages {
         let (header_at, line) = header?;
         let mut row = page_start;
         for (line, _) in rows.iter().take(header_at) {
-            row = row.saturating_add(crate::view::rows(line.clone(), self.width));
+            row = row.saturating_add(crate::view::rows(line, self.width));
         }
         Some(Pin { line, target, row })
     }
@@ -1849,6 +1851,7 @@ impl Pages {
         };
         let mut out = match mode {
             Draw::Shown => Rows::default(),
+            Draw::Count => Rows::count_only(),
             Draw::AllOpen => Rows::all_open(),
         }
         .with_seam(seam);
@@ -1913,7 +1916,7 @@ impl Pages {
         let mut row = 0usize;
         for (line, _) in out.iter() {
             starts.push(row);
-            row = row.saturating_add(crate::view::rows(line.clone(), self.width));
+            row = row.saturating_add(crate::view::rows(line, self.width));
         }
         let mut focus: FocusItems = turns
             .iter()
@@ -1921,7 +1924,7 @@ impl Pages {
                 let line = range.start;
                 Some((
                     *starts.get(line)?,
-                    crate::view::rows(out.get(line)?.0.clone(), self.width),
+                    crate::view::rows(&out.get(line)?.0, self.width),
                     TargetId::Turn(*turn),
                 ))
             })
@@ -1930,7 +1933,7 @@ impl Pages {
             let target = (*target)?;
             Some((
                 *starts.get(line)?,
-                crate::view::rows(out.get(line)?.0.clone(), self.width),
+                crate::view::rows(&out.get(line)?.0, self.width),
                 TargetId::Line(target),
             ))
         }));
@@ -1956,6 +1959,12 @@ impl Pages {
     }
 
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
+    /// No test pins the `!open || narrow` cache gate below against `&&`,
+    /// `open`, or `>`: both arms compute the same count through
+    /// `crate::view::rows` at one width (`set_width` clears `wrapped`, which
+    /// only this function reads), so those mutants only choose whether to
+    /// memoize, never the rows a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
     fn count(&mut self, at: usize) {
         crate::work::add(|work| work.page_counts += 1);
         let Some(part) = self.part(at) else {
@@ -1968,7 +1977,7 @@ impl Pages {
         // so no session-size-dependent walk hides here.
         let (page_table, sources) = classify(part);
         crate::work::add(|work| work.search_order_pages += sources);
-        let ((lines, _, focus, _), sources) = self.draw_sourced(at, part, Draw::Shown);
+        let ((lines, _, focus, _), sources) = self.draw_sourced(at, part, Draw::Count);
         let width = self.width;
         let open = at == self.residency.len();
         let mut wrapped = HashMap::new();
@@ -1983,14 +1992,14 @@ impl Pages {
                 runs.push((if runs.is_empty() { 0 } else { rows }, seq));
             }
             let count = if !open || line.width() <= usize::from(width) {
-                crate::view::rows(line.clone(), width)
+                crate::view::rows(line, width)
             } else {
                 let text = line.to_string();
                 let count = self
                     .wrapped
                     .get(&text)
                     .copied()
-                    .unwrap_or_else(|| crate::view::rows(line.clone(), width));
+                    .unwrap_or_else(|| crate::view::rows(line, width));
                 wrapped.insert(text, count);
                 count
             };

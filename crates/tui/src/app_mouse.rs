@@ -19,7 +19,22 @@ impl App {
     /// and the pointer in order; a click's effect wins, then the wheel's,
     /// then the selection's (`docs/tui.md`, "Mouse and hover", "Getting
     /// the person's attention").
+    #[cfg(test)]
     pub(crate) fn on_mouse(
+        &mut self,
+        mouse: &Mouse,
+        targets: &[crate::mouse::Target],
+        pointer: &mut Pointer,
+        hover: bool,
+        now: Instant,
+    ) -> Effect {
+        let result = self.on_mouse_inner(mouse, targets, pointer, hover, now);
+        self.settle();
+        result
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_mouse_inner(
         &mut self,
         mouse: &Mouse,
         targets: &[crate::mouse::Target],
@@ -38,12 +53,12 @@ impl App {
                 return effect;
             }
         }
-        self.on_drag(mouse);
-        let wheel = self.on_wheel(mouse);
+        self.on_drag_inner(mouse);
+        let wheel = self.on_wheel_inner(mouse);
         let selected = self.on_select(mouse, targets);
         let clicked = pointer.on_mouse(mouse, targets, hover);
         // A click's effect wins, then the wheel's, then the selection's.
-        let effect = clicked.map_or(Effect::None, |target| self.on_click(target));
+        let effect = clicked.map_or(Effect::None, |target| self.on_click_inner(target));
         if effect != Effect::None {
             effect
         } else if wheel != Effect::None {
@@ -119,7 +134,7 @@ impl App {
         // clear it first and leave a completion panel open, so the
         // click clears it before closing through the Esc path.
         self.clear_selection();
-        Some(self.on_key(Key::Esc, now))
+        Some(self.on_key_inner(Key::Esc, now))
     }
 
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
@@ -129,7 +144,15 @@ impl App {
     /// it, a notice opens whole, its ✕ dismisses it, "+N more" lists the
     /// notices, and a paste token opens in the editor as Ctrl+G on it does.
     /// A recall waiting for a page waits no more. A click clears "Copied".
+    #[cfg(test)]
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
+        let result = self.on_click_inner(target);
+        self.settle();
+        result
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_click_inner(&mut self, target: TargetId) -> Effect {
         // A click drops the rail's focus, except the ✕ that dismisses:
         // the dismiss keeps the focus until its hub answer arrives.
         if !matches!(target, TargetId::Rail(Spot::Dismiss(_))) {
@@ -137,7 +160,7 @@ impl App {
         }
         self.history.cancel();
         self.copied = false;
-        let effect = match target {
+        match target {
             TargetId::Badge => self.next_request(),
             TargetId::Link { .. } => self.follow_link(target),
             TargetId::FindCount => {
@@ -163,13 +186,13 @@ impl App {
                 // scrolls the closed row to the top; any other line
                 // click only opens or closes.
                 if let Some(pin) = self.pinned_row().filter(|pin| pin.target == line) {
-                    self.open(line);
+                    self.open_inner(line);
                     // The covered row is gone with the closed output:
                     // the closed header keeps its focus stop, so land it
                     // on the top row.
-                    self.jump(pin.row);
+                    self.jump_inner(pin.row);
                 } else {
-                    self.open(line);
+                    self.open_inner(line);
                 }
                 Effect::None
             }
@@ -206,16 +229,14 @@ impl App {
             TargetId::View(spot) if self.session_view_open() => self.session_view_click(spot),
             TargetId::View(spot) => self.config_view_click(spot),
             TargetId::Panel(spot) => self.panel_click(spot),
-            TargetId::Item(spot) => self.item_click(spot),
+            TargetId::Item(spot) => self.item_click_inner(spot),
             TargetId::Rail(spot) => self.rail_click(spot),
             TargetId::Token(number) => self.open_token(number),
             TargetId::Turn(_) => Effect::None,
             // The working line's interrupt clicks like Esc: `cancel`,
             // only when busy and connected.
             TargetId::Interrupt => self.on_esc(),
-        };
-        self.settle();
-        effect
+        }
     }
 
     /// Puts the request the panel shows aside, as Esc does, so it waits on
@@ -235,7 +256,15 @@ impl App {
     /// rows, but only while a session is on screen. Over the header or
     /// below the conversation it scrolls not at all. The one send a
     /// paged view asks for comes back for the loop to send.
+    #[cfg(test)]
     pub(crate) fn on_wheel(&mut self, mouse: &Mouse) -> Effect {
+        let result = self.on_wheel_inner(mouse);
+        self.settle();
+        result
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(crate) fn on_wheel_inner(&mut self, mouse: &Mouse) -> Effect {
         let up = match mouse.kind {
             MouseKind::WheelUp => true,
             MouseKind::WheelDown => false,
@@ -292,9 +321,9 @@ impl App {
             && !covered(&[Surface::Keymap])
             && self.over_conversation(at)
         {
-            self.scroll_conversation(up);
+            self.scroll_conversation_inner(up);
         } else if self.on_home() && !covered(&[Surface::DeleteQuestion, Surface::WorkspacePicker]) {
-            self.wheel_home(up, at);
+            self.wheel_home_inner(up, at);
         }
         let over_rail = self
             .chrome()
@@ -398,7 +427,6 @@ impl App {
             } else {
                 return None;
             };
-            self.settle();
             return Some(effect);
         }
         // The item view lies below swapped views in the draw stack. Its
@@ -415,7 +443,7 @@ impl App {
                 return Some(Effect::None);
             }
             if self.item_transcript() {
-                self.scroll_conversation(up);
+                self.scroll_conversation_inner(up);
             }
             return Some(Effect::None);
         }
@@ -453,10 +481,9 @@ impl App {
     /// following, down resumes it at the bottom, and past the top the next
     /// frame pages history in, as `settle` and `needs` already do for a
     /// page (`docs/tui.md`, "History and paging").
-    fn scroll_conversation(&mut self, up: bool) {
+    fn scroll_conversation_inner(&mut self, up: bool) {
         let height = self.conversation_height();
         self.screen.scroll_rows(up, WHEEL_ROWS, height);
-        self.settle();
     }
 
     /// Scrolls home's session list by [`WHEEL_ROWS`] rows when `at` is
@@ -464,7 +491,7 @@ impl App {
     /// question or picker winning over the list (`docs/tui.md`,
     /// "The session list"). The focus stays where it is: the frame
     /// pulls a focused row outside the window into view.
-    fn wheel_home(&mut self, up: bool, at: Position) {
+    fn wheel_home_inner(&mut self, up: bool, at: Position) {
         let Some(screen) = self.home_screen() else {
             return;
         };
@@ -479,6 +506,5 @@ impl App {
             self.home_list_scroll().saturating_add(WHEEL_ROWS).min(max)
         };
         self.set_home_list_scroll(next);
-        self.settle();
     }
 }

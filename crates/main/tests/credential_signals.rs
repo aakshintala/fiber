@@ -177,8 +177,8 @@ fn picker_query_shown(screen: &Grid, query: &str) -> bool {
     screen.rows.iter().any(|row| row.contains(&needle))
 }
 
-/// Installs the ruling-4 fixture under `home`: a provider `acme` serving
-/// `m1` from its data file, with a Lua handle registering no `credential`
+/// Installs a command-credential fixture under `home`: provider `acme` serving
+/// `m1` from its data file and refresh callback, with no `credential`
 /// (so the read falls through to the command source), a cached list dated
 /// just past the epoch (stale under any clock), and a `command` credential
 /// source running `script`.
@@ -202,7 +202,7 @@ fn install(home: &Path, script: &str) {
     .unwrap();
     fs::write(
         dir.join("providers").join("acme.lua"),
-        "fiber.provider(\"acme\", {})\n",
+        "fiber.provider(\"acme\", { models = { timeout = 1000, run = function() return {{id='m1', protocol='openai-responses', base_url='http://127.0.0.1:1/v1', context_window=1000}} end } })\n",
     )
     .unwrap();
     let cache = home.join("cache/models/acme.json");
@@ -414,13 +414,13 @@ fn sigint_to_fiber_models_during_a_credential_fork_loop_leaves_no_group_member_f
                 fifo.display()
             ),
         );
-        let (fiber_pid, child, watchdog) = setup.start(&["models"]);
+        let (fiber_pid, child, watchdog) = setup.start(&["refresh-model-lists", "acme"]);
         // The first line proves the command ran: the signal below lands
         // while the command forks on every run.
         let pgid = ready.wait(setup.deadline)[0];
         let group = Watchdog::group(pgid);
         fakes::kill_pid(fiber_pid, "INT").unwrap();
-        let output = setup.finish("`fiber models` to exit", fiber_pid, child);
+        let output = setup.finish("`fiber refresh-model-lists` to exit", fiber_pid, child);
         assert_eq!(
             output.status.code(),
             Some(130),
@@ -460,13 +460,13 @@ fn sigint_to_fiber_models_while_a_credential_command_runs_exits_130_and_kills_it
         &setup.home(),
         &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
-    let (fiber_pid, child, watchdog) = setup.start(&["models"]);
+    let (fiber_pid, child, watchdog) = setup.start(&["refresh-model-lists", "acme"]);
     // The ready line proves the descendant started before the signal: the
     // sleep forks before the echo, and the shell waits for it.
     let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     fakes::kill_pid(fiber_pid, "INT").unwrap();
-    let output = setup.finish("`fiber models` to exit", fiber_pid, child);
+    let output = setup.finish("`fiber refresh-model-lists` to exit", fiber_pid, child);
     assert_eq!(
         output.status.code(),
         Some(130),
@@ -489,11 +489,11 @@ fn sighup_to_fiber_models_while_a_credential_command_runs_exits_129_and_kills_it
         &setup.home(),
         &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
-    let (fiber_pid, child, watchdog) = setup.start(&["models"]);
+    let (fiber_pid, child, watchdog) = setup.start(&["refresh-model-lists", "acme"]);
     let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     fakes::kill_pid(fiber_pid, "HUP").unwrap();
-    let output = setup.finish("`fiber models` to exit", fiber_pid, child);
+    let output = setup.finish("`fiber refresh-model-lists` to exit", fiber_pid, child);
     assert_eq!(
         output.status.code(),
         Some(129),
@@ -531,6 +531,33 @@ fn sigterm_to_refresh_model_lists_while_a_credential_command_runs_exits_143_and_
     group.stand_down(setup.deadline.cleanup_phase());
     watchdog.stand_down(setup.deadline.cleanup_phase());
     matching.stand_down(setup.deadline.cleanup_phase());
+}
+
+#[test]
+fn cached_models_check_presence_without_running_the_credential_command() {
+    let setup = Setup::new();
+    let marker = setup.root.path().join("command-ran");
+    install(
+        &setup.home(),
+        &format!("echo ran >> '{}'; printf key", marker.display()),
+    );
+    // A future cache timestamp is fresh without reading the real clock.
+    fs::File::options()
+        .write(true)
+        .open(setup.home().join("cache/models/acme.json"))
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(4_102_444_800))
+        .unwrap();
+    let (pid, child, watchdog) = setup.start(&["models"]);
+    let output = setup.finish("cached models to exit", pid, child);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("acme/m1")
+    );
+    assert!(!marker.exists());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -576,25 +603,17 @@ fn fiber_models_returning_normally_kills_what_its_credential_command_left() {
         ),
     );
     let (fiber_pid, child, watchdog) = setup.start(&["models"]);
-    // The first line proves the credential command ran.
-    let first = ready.wait(setup.deadline)[0];
-    let first_group = Watchdog::group(first);
     let output = setup.finish("`fiber models` to exit", fiber_pid, child);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
-    // The list is stale, so `fiber models` starts its detached refresh
-    // child, which runs the command again: the second line.
+    // Presence runs no command. Only the stale-list refresh child reads
+    // the key, and its one ready line identifies that command's group.
     let second = ready.wait(setup.deadline)[0];
     let second_group = Watchdog::group(second);
     await_refresh_exit(setup.deadline, &setup.refresh_pattern());
     assert!(
-        fakes::group_empties(first, setup.deadline),
-        "the normal return killed what the command left"
-    );
-    assert!(
         fakes::group_empties(second, setup.deadline),
         "the refresh child is gone with its group"
     );
-    first_group.stand_down(setup.deadline.cleanup_phase());
     second_group.stand_down(setup.deadline.cleanup_phase());
     watchdog.stand_down(setup.deadline.cleanup_phase());
     matching.stand_down(setup.deadline.cleanup_phase());

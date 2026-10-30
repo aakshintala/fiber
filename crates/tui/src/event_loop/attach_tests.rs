@@ -269,6 +269,7 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
             Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::WriteFailed(_)
             | Input::Resize
             | Input::Signal(_)
             | Input::Files { .. }
@@ -5268,7 +5269,7 @@ fn press(lp: &mut super::super::Loop<ratatui::backend::TestBackend>, bytes: &[u8
             }
         };
         if let Effect::Send(lines) = effect {
-            lp.hub.send(&lines, &mut lp.app);
+            assert!(lp.hub.send(&lines, &mut lp.app).is_none());
         } else if !matches!(effect, Effect::None) {
             panic!("a typed key sends at most its prompt");
         }

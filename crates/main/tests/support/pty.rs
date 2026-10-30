@@ -677,6 +677,68 @@ impl Run {
         Self::spawn_inner(setup, cols, rows, Some((xpixel, ypixel)), args, env, true)
     }
 
+    /// Spawns the binary at `bin` with `args` on a `cols` by `rows` pty:
+    /// the journey suite's run, which the gate never builds. Same shape
+    /// as [`Run::spawn_unseeded`] (no receipt seeding, cleared env plus
+    /// caller env, `TERM=xterm-256color`, pty stdio, run deadline), but
+    /// the child binary is the given path instead of
+    /// `env!("CARGO_BIN_EXE_fiber")`.
+    ///
+    /// debt: factoring the child-spawn lifecycle stays inline until the
+    /// additive-only overlap fence lifts, when the binary path folds
+    /// into the shared spawn path.
+    #[track_caller]
+    pub(crate) fn spawn_journey(
+        setup: &Setup,
+        cols: u16,
+        rows: u16,
+        bin: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
+        let terminal = open_with_pixels(cols, rows, 0, 0);
+        let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
+        let mut command = Command::new(bin);
+        command
+            .current_dir(setup.workspace())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", setup.root.path())
+            .env("FIBER_HOME", setup.home())
+            .env("TERM", "xterm-256color");
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command.args(args);
+        command
+            .stdin(terminal.stdio())
+            .stdout(terminal.stdio())
+            .stderr(terminal.stdio());
+        let (child, watchdog) = spawn_watched(&mut command);
+        drop(terminal.terminal);
+        let deadline = setup.deadline;
+        let main = fs::File::from(terminal.main);
+        let shared = Arc::new(Mutex::new(Shared::new(cols, rows)));
+        let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
+        let (reader, wakes) =
+            Reader::start(main, Arc::clone(&shared), Arc::clone(&writer), deadline);
+        Self {
+            child: Some(child),
+            hub_socket: setup.home().join("run").join("hub"),
+            hub_home: setup.home().to_path_buf(),
+            watchdog: Some(watchdog),
+            sessions: Some((sessions, setup.workspace().to_string_lossy().into_owned())),
+            shared,
+            writer,
+            reader: Some(reader),
+            wakes,
+            cols,
+            rows,
+            deadline,
+        }
+    }
+
     /// Spawns `fiber` with `args` on a `cols` by `rows` pty: standard
     /// input, output and error all on the terminal side, as on a real
     /// terminal. Each run starts from a cleared environment with only
@@ -810,7 +872,7 @@ impl Run {
         self.shared.lock().unwrap().grid.clone()
     }
 
-    /// Waits under one named deadline for the whole wait until the grid
+    /// Waits under one bound fixed when the wait starts until the grid
     /// matches, however many frames arrive, and returns the matching
     /// grid. A completed wait records the output through its grid, and
     /// when `LOOK_DIFF_GRID` names a path rewrites the dump with the
@@ -820,7 +882,7 @@ impl Run {
     /// the panic names the wait and shows the last grid, so a stall says
     /// how far the journey got. A deadline expiry panics with the grid
     /// the last check saw, never a fresh read, and names how much of the
-    /// deadline remained when the wait began.
+    /// wait's own bound remained when the wait began.
     #[track_caller]
     pub(crate) fn wait_screen(&mut self, what: &str, done: impl FnMut(&Grid) -> bool) -> Grid {
         self.wait_screen_leading(what, done, String::new)
@@ -839,7 +901,8 @@ impl Run {
         mut done: impl FnMut(&Grid) -> bool,
         lead: impl FnOnce() -> String,
     ) -> Grid {
-        let start_left = self.deadline.left();
+        let wait = self.deadline.start_wait();
+        let start_left = wait.left();
         loop {
             let (grid, ended, snapshot_len) = {
                 let shared = self.shared.lock().unwrap();
@@ -865,7 +928,7 @@ impl Run {
                     grid.contents
                 );
             }
-            if self.deadline.recv(&self.wakes).is_err() {
+            if wait.recv(&self.wakes).is_err() {
                 panic!(
                     "{}waited until the deadline for {what} (deadline had {start_left:?} left when the wait began); screen:\n{}",
                     lead(),
@@ -913,9 +976,9 @@ impl Run {
         }
     }
 
-    /// Waits under the run's one deadline until the output at or after
-    /// `from` holds `needle` as exact bytes, and returns where the match
-    /// ends. The search starts at the caller's offset, never at an
+    /// Waits under one bound fixed when the wait starts until the output
+    /// at or after `from` holds `needle` as exact bytes, and returns where
+    /// the match ends. The search starts at the caller's offset, never at an
     /// earlier match, so two markers arriving in either order both
     /// finish. Bytes that never reach the cells, such as the window
     /// title, the OSC 9 desktop notification, a bell and the
@@ -924,6 +987,7 @@ impl Run {
     #[track_caller]
     pub(crate) fn wait_bytes(&mut self, from: usize, needle: &[u8], what: &str) -> usize {
         assert!(!needle.is_empty(), "a byte wait names its bytes");
+        let wait = self.deadline.start_wait();
         loop {
             let (output, ended) = {
                 let shared = self.shared.lock().unwrap();
@@ -935,7 +999,7 @@ impl Run {
             if ended {
                 panic!("the terminal ended while waiting for {what}");
             }
-            if self.deadline.recv(&self.wakes).is_err() {
+            if wait.recv(&self.wakes).is_err() {
                 panic!(
                     "waited until the deadline for {what}; output: {:?}",
                     String::from_utf8_lossy(&self.output())

@@ -243,7 +243,7 @@ over a channel, and the test takes them with one receive through `fakes::Deadlin
 code a `contract::clock::Clock` uses `fakes::clock::SystemClock`, the process clock, or `StretchedClock`
 in `crates/main/tests/support/mod.rs`, which runs it slower so a product deadline spans the test's own.
 
-A test receives from a channel through `fakes::Deadline`, never with a raw `recv_timeout`: `recv` takes what remains of the deadline, and `recv_or_fail` fails naming what the test waited for, at the caller's line, as does any helper that fails a test on a receive. A wait's deadline is made once, before its first receive. A loop that takes the parts of one wait, consecutive receives that drain one stream, and a helper that receives on its caller's behalf all take that one deadline, never a fresh one per receive. Receives separated by an action whose answer the next one awaits are separate waits. A poll pause inside a loop is not a deadline. `clippy.toml` disallows `std::sync::mpsc::Receiver::recv_timeout`; product code whose receive is bounded by an injected clock's wait, or is a poll pause, turns the lint off for that statement with its reason (`docs/code-quality.md`, "Lints").
+A test receives from a channel through `fakes::Deadline`, never with a raw `recv_timeout`: `recv` takes what remains of the deadline, and `recv_or_fail` fails naming what the test waited for, at the caller's line, as does any helper that fails a test on a receive. A wait's deadline is made once, before its first receive. A loop that takes the parts of one wait, consecutive receives that drain one stream, and a helper that receives on its caller's behalf all take that one deadline, never a fresh one per receive. Receives separated by an action whose answer the next one awaits are separate waits. Each such wait gets its own bound, made when it starts; one slow step does not use up a later step's time. The test's overall budget is only the guard against a hang under nextest's kill. A poll pause inside a loop is not a deadline. `clippy.toml` disallows `std::sync::mpsc::Receiver::recv_timeout`; product code whose receive is bounded by an injected clock's wait, or is a poll pause, turns the lint off for that statement with its reason (`docs/code-quality.md`, "Lints").
 
 A test advances a fake clock only after a signal that the code under test is
 waiting on that clock (past its own clock check); a parked caller alone is not
@@ -330,3 +330,15 @@ In `docs/testing/running.md`.
   (`docs/events.md`, "Versioning").
 - **A grown tool definition:** a raised size budget in the same pull request
   (`docs/tools.md`, "Size budget in CI").
+
+## Journeys
+
+A journey is a screen test that walks one path a person walks, from start to
+finish, through the release binary, and asserts what the screen shows at every
+step. Journeys live in their own test binary and run after merge (`docs/ci.md`,
+"The journey suite"), not in the gate. A bug a person finds gets a journey,
+unless its fix PR names the journey that already covers the path.
+
+The gate runs the screen journeys in `crates/main/tests/terminal.rs`,
+`crates/main/tests/journeys.rs` and `crates/main/tests/inline_images.rs`; the
+main journeys in `crates/main/tests/main_journeys.rs` run on `main`.

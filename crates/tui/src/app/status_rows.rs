@@ -76,7 +76,6 @@ impl App {
     /// so the pages settle before the next frame.
     pub(super) fn toggle_widget_row(&mut self) -> Effect {
         self.status_rows.widget_open = !self.status_rows.widget_open;
-        self.settle();
         Effect::None
     }
 

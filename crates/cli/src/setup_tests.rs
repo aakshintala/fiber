@@ -1,6 +1,6 @@
 //! The read/filter path behind the setup questions
 //! (`docs/user/install.md`, "Setup"): signed-in marking at any label,
-//! model choices from signed-in providers only, empty providers skipping
+//! model choices from the filtered catalogue only, empty providers skipping
 //! steps 1 and 3, receipt short-circuiting, and the shell mapping.
 
 #![allow(
@@ -77,6 +77,10 @@ impl Setup {
         assert!(notices.is_empty(), "{notices:?}");
         providers
     }
+
+    fn write_config(&self, value: &Value) {
+        fs::write(self.home().join("config.json"), value.to_string()).unwrap();
+    }
 }
 
 fn models(id: &str) -> Value {
@@ -124,27 +128,31 @@ fn signed_in_marks_any_stored_label() {
 }
 
 #[test]
-fn model_choices_come_from_signed_in_providers_only() {
+fn model_choices_come_from_the_filtered_catalogue() {
     let setup = Setup::new();
     setup.install("fake", thinking_models());
     setup.install("other", models("o1"));
-    let providers = setup.providers();
-    assert!(model_offers(&setup.home(), &providers).unwrap().is_empty());
+    // Logged out: the filtered catalogue holds no models, so the model
+    // question has no choice.
+    let (providers, config, _) =
+        crate::models::providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+    let mut filtered = providers.clone();
+    filtered.retain_credentialed(&config);
+    assert!(model_offers(&filtered).unwrap().is_empty());
+    // A stored login switches the provider on: the rebuilt catalogue
+    // offers its models, and the other provider stays out.
     store_credential(&setup.home(), "fake", "default", &Secret::new("k".into())).unwrap();
+    let (providers, config, _) =
+        crate::models::providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+    let mut filtered = providers;
+    filtered.retain_credentialed(&config);
     assert_eq!(
-        model_offers(&setup.home(), &providers).unwrap(),
+        model_offers(&filtered).unwrap(),
         vec![super::ModelOffer {
             reference: "fake/m".to_owned(),
             levels: vec!["low".to_owned(), "high".to_owned()],
         }]
     );
-    store_credential(&setup.home(), "other", "default", &Secret::new("k".into())).unwrap();
-    let references: Vec<String> = model_offers(&setup.home(), &providers)
-        .unwrap()
-        .into_iter()
-        .map(|offer| offer.reference)
-        .collect();
-    assert_eq!(references, vec!["fake/m", "other/o1"]);
 }
 
 #[test]
@@ -156,7 +164,7 @@ fn empty_providers_offer_nothing() {
             .unwrap()
             .is_empty()
     );
-    assert!(model_offers(&setup.home(), &providers).unwrap().is_empty());
+    assert!(model_offers(&providers).unwrap().is_empty());
 }
 
 #[test]
@@ -551,7 +559,15 @@ fn steps_without_an_answer_print_their_skip_lines() {
     );
     let mut err = Vec::new();
     assert_eq!(
-        step_import(&setup.home(), &flags, &test_clock(), None, &mut err).unwrap(),
+        step_import(
+            &setup.home(),
+            &flags,
+            &config::no_personal_sources,
+            &test_clock(),
+            None,
+            &mut err
+        )
+        .unwrap(),
         0
     );
     assert_eq!(
@@ -902,6 +918,7 @@ fn setup_import_flag_and_answers_run_and_report() {
         let code = step_import(
             &home,
             &flags,
+            &config::no_personal_sources,
             &test_clock(),
             Some(&mut stdin),
             &mut std::io::stderr(),
@@ -913,7 +930,15 @@ fn setup_import_flag_and_answers_run_and_report() {
             ..Default::default()
         };
         child_case_marker("flags");
-        let code = step_import(&home, &flags, &test_clock(), None, &mut std::io::stderr()).unwrap();
+        let code = step_import(
+            &home,
+            &flags,
+            &config::no_personal_sources,
+            &test_clock(),
+            None,
+            &mut std::io::stderr(),
+        )
+        .unwrap();
         child_report("flags", code);
         // The receipt landed: nothing pends, so the no answer is only shown done.
         child_case_marker("terminal-no");
@@ -922,6 +947,7 @@ fn setup_import_flag_and_answers_run_and_report() {
         let code = step_import(
             &home,
             &flags,
+            &config::no_personal_sources,
             &test_clock(),
             Some(&mut stdin),
             &mut std::io::stderr(),
@@ -984,6 +1010,7 @@ fn setup_import_terminal_reports_done_and_skips_when_nothing_pends() {
         let code = step_import(
             &home,
             &flags,
+            &config::no_personal_sources,
             &test_clock(),
             Some(&mut stdin),
             &mut std::io::stderr(),
@@ -1000,6 +1027,7 @@ fn setup_import_terminal_reports_done_and_skips_when_nothing_pends() {
         let code = step_import(
             &home,
             &flags,
+            &config::no_personal_sources,
             &test_clock(),
             Some(&mut stdin),
             &mut std::io::stderr(),
@@ -1047,7 +1075,15 @@ fn setup_import_flag_failure_without_a_home_names_the_step() {
             ..Default::default()
         };
         child_case_marker("flags");
-        let code = step_import(&home, &flags, &test_clock(), None, &mut std::io::stderr()).unwrap();
+        let code = step_import(
+            &home,
+            &flags,
+            &config::no_personal_sources,
+            &test_clock(),
+            None,
+            &mut std::io::stderr(),
+        )
+        .unwrap();
         child_report("flags", code);
         return;
     }
@@ -1365,6 +1401,7 @@ fn setup_hub_failures_name_the_step() {
 fn child_setup(flags: &SetupFlags) -> i32 {
     setup(
         flags,
+        &config::no_personal_sources,
         test_clock(),
         test_locks(),
         &fakes::children::grouped_output,
@@ -1536,6 +1573,7 @@ fn child_run_terminal(flags: &SetupFlags, stdin: &mut dyn BufRead) -> i32 {
         &child_home(),
         &child_workspace(),
         flags,
+        &config::no_personal_sources,
         &test_clock(),
         &test_locks(),
         &fakes::children::grouped_output,
@@ -1769,4 +1807,100 @@ fn setup_terminal_run_prints_other_notices_but_no_model_unconfigured() {
     assert!(!segment.contains("acme/m"), "{segment:?}");
     assert!(!segment.contains(UNCONFIGURED_HOST), "{segment:?}");
     assert!(!segment.contains("the setting `"), "{segment:?}");
+}
+
+/// A variable name no test process sets: the child reads it from its own
+/// environment.
+const ENV_KEY: &str = "FIBER_TEST_SETUP_ENV_KEY";
+
+#[test]
+fn model_choices_trust_env_backed_presence_without_a_stored_label() {
+    if child_case().as_deref() == Some("offers-env-key") {
+        let home = child_home();
+        // The key lives only in the child's process environment: no
+        // stored label exists, yet the provider is switched on.
+        assert!(
+            std::env::var_os(ENV_KEY).is_some(),
+            "the parent sets {ENV_KEY}"
+        );
+        let (providers, config, _) = crate::models::providers_and_config(&home, &child_workspace())
+            .expect("the parent installed one provider");
+        let mut filtered = providers;
+        filtered.retain_credentialed(&config);
+        let offers = model_offers(&filtered).expect("offers read");
+        let references: Vec<String> = offers.into_iter().map(|offer| offer.reference).collect();
+        child_dump("offers-env-key", &references.join("\n"));
+        return;
+    }
+    let setup = Setup::new();
+    setup.install("envacme", models("m"));
+    setup.write_config(
+        &json!({"providers": {"envacme": {"credentials": {"default": {"env": ENV_KEY}}}}}),
+    );
+    let output = spawn_child(
+        &setup,
+        "model_choices_trust_env_backed_presence_without_a_stored_label",
+        "offers-env-key",
+        &[
+            ("FIBER_HOME", setup.home().to_str().unwrap()),
+            ("WORKSPACE", setup.workspace().to_str().unwrap()),
+            (ENV_KEY, "test-key"),
+        ],
+        &[],
+        None,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("### dump offers-env-key\nenvacme/m"),
+        "{stderr:?}"
+    );
+}
+
+#[test]
+fn setup_terminal_run_offers_a_login_then_its_model() {
+    if child_case().as_deref() == Some("runterm-login-model") {
+        child_case_marker("login-model");
+        let flags = SetupFlags::default();
+        // Pick `fake`, enter its key, skip import, pick its model, skip
+        // the rest.
+        let mut stdin = Cursor::new("1\nk1\n1\n\n".to_owned());
+        let code = child_run_terminal(&flags, &mut stdin);
+        child_report("login-model", code);
+        return;
+    }
+    let setup = Setup::new();
+    setup.install("fake", models("m"));
+    let output = spawn_child(
+        &setup,
+        "setup_terminal_run_offers_a_login_then_its_model",
+        "runterm-login-model",
+        &[
+            ("FIBER_HOME", setup.home().to_str().unwrap()),
+            ("HOME", setup.root.path().join("person").to_str().unwrap()),
+            ("WORKSPACE", setup.workspace().to_str().unwrap()),
+        ],
+        &["SHELL"],
+        None,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(child_result(&stdout, "login-model"), 0, "{stderr:?}");
+    let segment = child_segment(&stderr, "### case login-model\n");
+    // The logged-out provider is offered for login ...
+    assert!(segment.contains("  1) fake\n"), "{segment:?}");
+    assert!(!segment.contains("(signed in)"), "{segment:?}");
+    // ... the login stores its key ...
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/fake/default")).unwrap(),
+        "k1"
+    );
+    // ... and the rebuilt catalogue offers its model in the same run.
+    assert!(segment.contains("  1) fake/m\n"), "{segment:?}");
+    assert!(!segment.contains("skipped model"), "{segment:?}");
+    assert_eq!(
+        config::get_global(&setup.home(), "model").unwrap(),
+        Some(json!("fake/m"))
+    );
 }

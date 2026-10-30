@@ -7,7 +7,7 @@
 use contract::{ActionId, Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
-use super::Pages;
+use super::{Draw, Pages};
 use crate::app::App;
 use crate::link::Line;
 
@@ -106,10 +106,8 @@ fn folding_a_session_does_the_same_work_for_each_line() {
             let lines = session(turns, shared);
             let (work, pages) = fold_work(&lines);
             let case = format!("{turns} turns, shared ids {shared}: {work:?}");
-            // Each reply draws once for its page's count, and a page
-            // cut draws one reply again on its scratch pad.
-            assert!(work.reply_renders >= turns, "{case}");
-            assert!(work.reply_renders <= turns + pages, "{case}");
+            // Count-only folding constructs no built-in Markdown reply renders.
+            assert_eq!(work.reply_renders, 0, "{case}");
             // Each turn draws once for its page's count, and a cut
             // draws the cards on either side of it on scratch pads.
             assert!(work.turn_rows >= turns, "{case}");
@@ -218,8 +216,8 @@ fn folding_one_turn_counts_each_step_once() {
     let (work, pages) = fold_work(&lines);
     assert_eq!(pages, 1);
     let case = format!("{work:?}");
-    // The reply draws once, for the batch-end count.
-    assert_eq!(work.reply_renders, 1, "{case}");
+    // Count-only folding constructs no built-in Markdown reply render.
+    assert_eq!(work.reply_renders, 0, "{case}");
     // The turn draws once, for the batch-end count.
     assert_eq!(work.turn_rows, 1, "{case}");
     // The open page counts once, at the batch's end.
@@ -229,6 +227,34 @@ fn folding_one_turn_counts_each_step_once() {
     assert_eq!(work.index_pages, 1, "{case}");
     // The usage line looks its turn up once.
     assert_eq!(work.usage_summaries, 1, "{case}");
+}
+
+#[test]
+fn a_shown_page_still_records_its_reply_render() {
+    let lines = session(1, false);
+    let pages = folded(&lines, 60);
+    let part = pages.part(0).expect("the open page").clone();
+    crate::work::take();
+    let _ = pages.draw_data(0, &part, Draw::Shown);
+    assert_eq!(crate::work::take().reply_renders, 1);
+}
+
+#[test]
+fn counted_pages_keep_shown_rows_sources_focus_and_turn_ranges() {
+    let lines = session(32, false);
+    let pages = folded(&lines, 40);
+    for at in 0..pages.index().pages().len() {
+        let part = pages.part(at).expect("resident page").clone();
+        let (counted, count_sources) = pages.draw_sourced(at, &part, Draw::Count);
+        let (shown, shown_sources) = pages.draw_sourced(at, &part, Draw::Shown);
+        assert_eq!(count_sources, shown_sources, "page {at} source rows");
+        assert_eq!(counted.2, shown.2, "page {at} focus targets");
+        assert_eq!(counted.3, shown.3, "page {at} turn ranges");
+        let shown_rows = shown.0.iter().fold(0usize, |total, (line, _)| {
+            total.saturating_add(crate::view::rows(line, pages.width))
+        });
+        assert_eq!(pages.index().pages()[at].rows, shown_rows, "page {at}");
+    }
 }
 
 #[test]
@@ -289,7 +315,7 @@ fn a_late_usage_line_on_a_dropped_page_counts_the_padded_closing_rows() {
     let head = pages.summaries.first().expect("the first turn's totals");
     let closing = head.closing().expect("a closing line");
     assert_eq!(closing.to_string(), "▣ completed · 1 call");
-    assert_eq!(crate::view::rows(closing.clone(), 20), 1);
+    assert_eq!(crate::view::rows(&closing, 20), 1);
     assert_eq!(crate::rows::fitted(&closing, crate::surface::inset(20)), 2);
     pages.residency.drop_slot_for_test(0);
     lines.push(Envelope {

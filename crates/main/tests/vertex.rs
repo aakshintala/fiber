@@ -86,6 +86,9 @@ fn vertex<const N: usize>(
     let installed = run(setup, &["extension", "install", to.to_str().unwrap()], &[]);
     assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
 
+    let credentials = setup.root.path().join(".config/gcloud/credentials.db");
+    std::fs::create_dir_all(credentials.parent().unwrap()).unwrap();
+    std::fs::write(credentials, "fixture credential source").unwrap();
     let ran = setup.root.path().join("gcloud-ran");
     let mut paths = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gcloud")];
     paths.extend(std::env::split_paths(

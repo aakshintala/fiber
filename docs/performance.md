@@ -71,12 +71,14 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |
 | Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |
 | Terminal attaching, to the end of the opening pass | 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | — | — | — | — | — |
+| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |
 | Terminal, attaching a 10 MiB session | 45,512 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |
 | `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |
+| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | — | — | — | — | — |
 | `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |
 | `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured | 8 ms | 5 ms | 10 ms | 16 % | 4 % |
@@ -230,7 +232,9 @@ pass end. The same run records the attaching terminal's
 peak RSS and its RssAnon 10 s after the last reply appears, for the 10 MiB
 session; the busy turn records its session's RssAnon 10 s after the turn
 completes. The same run splits each attach into stages,
-reported as `attach_stage_ms` but never gated. `terminal` is the spawn-to-tail
+reported as `attach_stage_ms`: the `fold` stage feeds the fold-per-MiB
+budget above, and every other stage stays diagnostic, never gating.
+`terminal` is the spawn-to-tail
 time above; `hub_replay` replays it with no terminal, timing a `subscribe` at
 `full` over a raw hub-socket client from the send to its acknowledgement.
 `parse`, `fold` and `frames_1`, `frames_4096` and `frames_64` run in the

@@ -14,14 +14,22 @@ use crate::{CliError, finish, write_line};
 /// Copies another harness's configuration into Fiber home once, printing
 /// what landed and what was left behind with reasons: names only, never
 /// secret values.
-pub fn import(source: ImportSource, clock: &dyn Clock) -> i32 {
-    finish(run(source, clock))
+pub fn import(
+    source: ImportSource,
+    check: &dyn contract::skills::PersonalSourceCheck,
+    clock: &dyn Clock,
+) -> i32 {
+    finish(run(source, check, clock))
 }
 
 /// Resolves Fiber home and the person's home from the environment, runs
 /// the import against those paths, and prints what landed and what was
 /// left behind with reasons.
-fn run(source: ImportSource, clock: &dyn Clock) -> Result<(), CliError> {
+fn run(
+    source: ImportSource,
+    check: &dyn contract::skills::PersonalSourceCheck,
+    clock: &dyn Clock,
+) -> Result<(), CliError> {
     let home = config::fiber_home_from_env()?;
     let Some(home_env) = std::env::var_os("HOME") else {
         return Err(CliError::Forwarded(doors::failure(
@@ -33,6 +41,7 @@ fn run(source: ImportSource, clock: &dyn Clock) -> Result<(), CliError> {
         &home,
         &config::source_home(Path::new(&home_env), source),
         source,
+        check,
         clock,
     )?;
     let mut out = io::stdout();
@@ -93,7 +102,11 @@ mod tests {
     fn import_without_a_home_dir_exits_nonzero() {
         if std::env::var_os(CHILD).is_some() {
             let clock = FakeClock::new();
-            std::process::exit(import(ImportSource::Codex, clock.as_ref()));
+            std::process::exit(import(
+                ImportSource::Codex,
+                &config::no_personal_sources,
+                clock.as_ref(),
+            ));
         }
         let fixture = TempDir::new("fiber-import-cli");
         let output = fakes::rerun_prepared(
@@ -121,7 +134,11 @@ mod tests {
     fn import_success_exits_zero() {
         if std::env::var_os(CHILD_SUCCESS).is_some() {
             let clock = FakeClock::new();
-            std::process::exit(import(ImportSource::Codex, clock.as_ref()));
+            std::process::exit(import(
+                ImportSource::Codex,
+                &config::no_personal_sources,
+                clock.as_ref(),
+            ));
         }
         let fixture = TempDir::new("fiber-import-cli");
         let output = fakes::rerun_prepared(

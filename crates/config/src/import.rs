@@ -15,6 +15,8 @@ use contract::clock::Clock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use contract::skills::PersonalSourceCheck;
+
 use crate::error::ConfigError;
 use crate::home::{plain, read, read_bytes};
 use crate::keys;
@@ -88,6 +90,13 @@ impl ImportSource {
     }
 }
 
+/// The finds-nothing check: no directory is already read. The doors socket
+/// drive defaults to it when no session wired a real one, and tests that
+/// need no check pass it.
+pub fn no_personal_sources(_dirs: &[PathBuf]) -> BTreeMap<PathBuf, PathBuf> {
+    BTreeMap::new()
+}
+
 /// What the import copied, by final name in Fiber home.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Imported {
@@ -159,13 +168,14 @@ pub fn import_source(
     home: &Path,
     source_home: &Path,
     source: ImportSource,
+    check: &dyn PersonalSourceCheck,
     clock: &dyn Clock,
 ) -> Result<ImportReport, ConfigError> {
     let receipt_file = home.join(source.receipt_name());
     if let Some(report) = read_receipt(&receipt_file, source)? {
         return Ok(report);
     }
-    let mut planned = classify(home, source_home, source)?;
+    let mut planned = classify(home, source_home, source, check)?;
     write_all(home, &mut planned)?;
     let report = planned.report();
     write_receipt(&receipt_file, source, clock, &report)?;
@@ -243,7 +253,12 @@ impl Planned {
 
 /// Reads the source and Fiber home's current state, planning every write
 /// and every left-behind entry. Reads only; writes nothing.
-fn classify(home: &Path, source_home: &Path, source: ImportSource) -> Result<Planned, ConfigError> {
+fn classify(
+    home: &Path,
+    source_home: &Path,
+    source: ImportSource,
+    check: &dyn PersonalSourceCheck,
+) -> Result<Planned, ConfigError> {
     let mut left_behind = Vec::new();
     let mut skills = Vec::new();
     let mut commands = Vec::new();
@@ -251,7 +266,13 @@ fn classify(home: &Path, source_home: &Path, source: ImportSource) -> Result<Pla
     // keeps, so the worst case retained is one cap plus one in-flight file.
     let mut budget = Budget::default();
     if plain(source_home, true)? {
-        read_skills(source_home, &mut skills, &mut left_behind, &mut budget)?;
+        read_skills(
+            source_home,
+            &mut skills,
+            &mut left_behind,
+            &mut budget,
+            check,
+        )?;
         read_flat(
             source,
             source_home,
@@ -293,10 +314,26 @@ fn read_skills(
     skills: &mut Vec<PlannedFile>,
     left_behind: &mut Vec<LeftBehind>,
     budget: &mut Budget,
+    check: &dyn PersonalSourceCheck,
 ) -> Result<(), ConfigError> {
     let dir = source_home.join("skills");
-    for name in read_source_dir(&dir, "skills", left_behind)? {
-        let entry = dir.join(&name);
+    let names = read_source_dir(&dir, "skills", left_behind)?;
+    // The already-read consult runs once for every kept entry directory,
+    // before any read: a hit joins left-behind with its reason only, with
+    // no copy-path read and no budget charge. Past-512 entries were never
+    // enumerated, so they stay unchecked and keep the overflow accounting
+    // above.
+    let entries: Vec<PathBuf> = names.iter().map(|name| dir.join(name)).collect();
+    let already = check.check(&entries);
+    for name in &names {
+        let entry = dir.join(name);
+        if let Some(logged) = already.get(&entry) {
+            left_behind.push(LeftBehind {
+                item: format!("skills/{name}/SKILL.md"),
+                reason: format!("already read from {}", logged.display()),
+            });
+            continue;
+        }
         if !entry.is_dir() {
             left_behind.push(LeftBehind {
                 item: format!("skills/{name}"),
@@ -1654,7 +1691,13 @@ mod tests {
 
         /// Runs the import for `source` against this fixture.
         fn run(&self, source: ImportSource) -> Result<ImportReport, ConfigError> {
-            import_source(&self.home(), &self.source(), source, self.clock.as_ref())
+            import_source(
+                &self.home(),
+                &self.source(),
+                source,
+                &no_personal_sources,
+                self.clock.as_ref(),
+            )
         }
 
         /// Every file under Fiber home holding `needle`.

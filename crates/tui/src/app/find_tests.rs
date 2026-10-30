@@ -3186,7 +3186,7 @@ fn pinned_search_app(
         if line.to_string().contains("needle") {
             matches.push(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let header = call_row.expect("the call row");
     assert_eq!(
@@ -3314,7 +3314,7 @@ fn no_pin_no_offset() {
             at = Some(row);
             break;
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let at = at.expect("a needle row");
     assert_eq!(
@@ -3328,6 +3328,40 @@ fn no_pin_no_offset() {
 /// The search-incomplete notice's identity: the text `find_lost` pushes.
 fn search_text() -> String {
     "Could not search all of history: connection lost".to_owned()
+}
+
+#[test]
+fn settle_returns_fetches_queued_by_the_search_rescan() {
+    let (mut app, _, _) = dropped_fetch();
+    app.find_lost();
+
+    let outgoing = app.settle_and_find_outgoing();
+
+    assert!(
+        outgoing.iter().any(|line| command(line).1 == 1),
+        "the settle queues a dropped-page fetch"
+    );
+}
+
+#[test]
+fn failed_settlement_fetch_is_a_follow_up_input_with_one_settle() {
+    let (mut app, _, _) = dropped_fetch();
+    app.find_lost();
+    App::reset_settle_calls();
+
+    let unsent = app.settle_and_find_outgoing_if_up();
+    assert!(
+        unsent.iter().any(|line| command(line).1 == 1),
+        "the first input's settle queues the search fetch"
+    );
+    assert_eq!(App::settle_calls(), 1, "one settle for the first input");
+
+    // The failed writer returns these lines as the follow-up input.
+    app.on_write_failed(&unsent);
+
+    assert_eq!(App::settle_calls(), 2, "one settle for each input");
+    assert!(!app.outbox.is_up(), "the failed send marks the link down");
+    assert_eq!(app.notice(), Some("Connection lost."));
 }
 
 #[test]

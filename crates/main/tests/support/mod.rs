@@ -65,14 +65,26 @@ fn timed_out(what: &str) -> io::Error {
     )
 }
 
-/// One line from `reader`, with its newline, bounded as a whole by
-/// `deadline.left()`. A full line already buffered is returned without
-/// reading. Otherwise every read takes what remains, and at zero it returns
-/// a `TimedOut` error naming `what` without reading. `Ok(None)` is the end
-/// of the stream before any byte; a partial line at the end is a line.
+/// One line from `reader`, with its newline, bounded as a whole by one
+/// wait started at entry. A full line already buffered is returned without
+/// reading. Otherwise every read subdivides that wait, and at zero it
+/// returns a `TimedOut` error naming `what` without reading. `Ok(None)` is
+/// the end of the stream before any byte; a partial line at the end is a
+/// line.
 pub(crate) fn read_line(
     reader: &mut BufReader<UnixStream>,
     deadline: Deadline,
+    what: &str,
+) -> io::Result<Option<String>> {
+    let wait = deadline.start_wait();
+    read_line_through(reader, &wait, what)
+}
+
+/// One line from `reader` through one started wait's bound: a loop helper's
+/// socket reads subdivide the wait it started at entry.
+pub(crate) fn read_line_through(
+    reader: &mut BufReader<UnixStream>,
+    wait: &Deadline,
     what: &str,
 ) -> io::Result<Option<String>> {
     let mut line = Vec::new();
@@ -86,7 +98,7 @@ pub(crate) fn read_line(
         let taken = buffered.len();
         line.extend_from_slice(buffered);
         reader.consume(taken);
-        let left = deadline.left();
+        let left = wait.left();
         if left.is_zero() {
             return Err(timed_out(what));
         }
@@ -116,8 +128,8 @@ pub(crate) fn read_line(
 }
 
 /// Writes all of `bytes` to `stream` in chunks of at most 4 KiB, each
-/// bounded by what remains of `deadline.left()`. At zero it returns a
-/// `TimedOut` error naming `what` without writing.
+/// bounded by one wait started at entry. At zero it returns a `TimedOut`
+/// error naming `what` without writing.
 #[track_caller]
 pub(crate) fn write_line(
     stream: &mut UnixStream,
@@ -125,9 +137,10 @@ pub(crate) fn write_line(
     bytes: &[u8],
     what: &str,
 ) -> io::Result<()> {
+    let wait = deadline.start_wait();
     let mut rest = bytes;
     while !rest.is_empty() {
-        let left = deadline.left();
+        let left = wait.left();
         if left.is_zero() {
             return Err(timed_out(what));
         }
@@ -374,20 +387,22 @@ impl HubLogWatch {
         })
     }
 
-    /// Blocks until `ready` holds for a reread of the log, or `deadline`
-    /// expires: each wake rereads, and expiry fails naming `what`.
+    /// Blocks until `ready` holds for a reread of the log, or the wait
+    /// started at entry expires: each wake rereads and re-parks under the
+    /// wait's remainder, and expiry fails naming `what`.
     pub(crate) fn wait_until(
         &self,
         deadline: Deadline,
         what: &str,
         ready: impl Fn(&str) -> bool,
     ) -> io::Result<()> {
+        let wait = deadline.start_wait();
         loop {
             let text = fs::read_to_string(&self.log).unwrap_or_default();
             if ready(&text) {
                 return Ok(());
             }
-            let left = deadline.left();
+            let left = wait.left();
             if left.is_zero() {
                 return Err(timed_out(what));
             }
@@ -979,11 +994,24 @@ impl Socket {
     /// socket. Neither by the deadline panics naming `what`, with the lines
     /// before it.
     pub(crate) fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
+        self.next_through(&self.deadline, what, got)
+    }
+
+    /// Fixes one wait's bound now on this socket's deadline: a loop helper
+    /// takes every line of its wait through the result.
+    pub(crate) fn start_wait(&self) -> Deadline {
+        self.deadline.start_wait()
+    }
+
+    /// One socket line through one started wait's bound instead of the
+    /// root's: a loop helper takes every line of its wait through the wait
+    /// it started at entry.
+    pub(crate) fn next_through(&self, wait: &Deadline, what: &str, got: &[Value]) -> Option<Value> {
         if let Some(line) = self.kept.lock().unwrap().pop_front() {
             return Some(line);
         }
         if let Some(pump) = &self.pump {
-            return match self.deadline.recv(&pump.lock().unwrap()) {
+            return match wait.recv(&pump.lock().unwrap()) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => match &self.diag {
                     Some(diag) => panic!("{}", diag.report(what, got)),
@@ -992,7 +1020,7 @@ impl Socket {
                 Err(mpsc::RecvTimeoutError::Disconnected) => None,
             };
         }
-        match read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
+        match read_line_through(&mut self.read.lock().unwrap(), wait, what) {
             Ok(None) => None,
             Ok(Some(buf)) => {
                 let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
@@ -1015,12 +1043,13 @@ pub(crate) fn recv(client: &Socket, what: &str) -> Value {
 }
 
 /// The next socket line that is not an `attention` hub line: a turn can
-/// end between a command and its acknowledgement. Each line takes what
-/// remains of the test's deadline, like [`recv`].
+/// end between a command and its acknowledgement. Every line takes one
+/// wait started at entry, like [`recv`].
 pub(crate) fn recv_reply(client: &Socket, what: &str) -> Value {
+    let wait = client.deadline.start_wait();
     let mut got = Vec::new();
     loop {
-        match client.next(what, &got) {
+        match client.next_through(&wait, what, &got) {
             Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {
                 got.push(line);
             }
@@ -1037,9 +1066,10 @@ pub(crate) fn recv_reply(client: &Socket, what: &str) -> Value {
 /// too.
 #[track_caller]
 pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
+    let wait = client.deadline.start_wait();
     let mut passed = Vec::new();
     let answer = loop {
-        match client.next(what, &passed) {
+        match client.next_through(&wait, what, &passed) {
             Some(line) if line["payload"]["command_id"] == id => break line,
             Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {}
             Some(line) => passed.push(line),
@@ -1053,17 +1083,18 @@ pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
     answer
 }
 
-/// Collects socket lines until `done`, each taking what remains of the
-/// test's deadline: expiry panics naming `what`, and the socket closing
+/// Collects socket lines until `done`, every line through one wait
+/// started at entry: expiry panics naming `what`, and the socket closing
 /// first panics too.
 pub(crate) fn until(
     client: &Socket,
     what: &str,
     mut done: impl FnMut(&Value) -> bool,
 ) -> Vec<Value> {
+    let wait = client.deadline.start_wait();
     let mut lines = Vec::new();
     loop {
-        let line = match client.next(what, &lines) {
+        let line = match client.next_through(&wait, what, &lines) {
             Some(line) => line,
             None => match &client.diag {
                 Some(diag) => panic!("{}", diag.report_closed(what, &lines)),
@@ -1078,11 +1109,12 @@ pub(crate) fn until(
     }
 }
 
-/// Collects socket lines until the far end closes the socket, each taking
-/// what remains of the test's deadline.
+/// Collects socket lines until the far end closes the socket, every line
+/// through one wait started at entry.
 pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
+    let wait = client.deadline.start_wait();
     let mut lines = Vec::new();
-    while let Some(line) = client.next("the socket to close", &lines) {
+    while let Some(line) = client.next_through(&wait, "the socket to close", &lines) {
         lines.push(line);
     }
     lines

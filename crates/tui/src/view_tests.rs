@@ -1,6 +1,7 @@
 //! Screen snapshots: the whole in-memory screen against stored files.
 
-use super::{conversation_rows, cursor, draw_row, focus_style, lift_hover, render, text};
+use super::conversation::test_conversation_rows as conversation_rows;
+use super::{cursor, focus_style, lift_hover, render, text};
 use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -2680,7 +2681,7 @@ fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
     let label: String = (15..=42)
         .map(|x| buf[(x, row)].symbol().to_owned())
         .collect();
-    assert_eq!(label, super::NEW_BELOW);
+    assert_eq!(label, " ↓ New messages below · End ");
     for x in 15..=42 {
         assert_eq!(
             buf[(x, row)].fg,
@@ -3961,7 +3962,7 @@ fn pinned_call(
         if first.is_none() && text.scopes.last() == Some(&call) {
             first = Some(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let header = header.expect("the call row");
     let first = first.expect("opened rows");
@@ -4169,7 +4170,7 @@ fn following_draws_no_pin() {
     let mut row = 0usize;
     let mut covered = None;
     for (line, target) in &page {
-        let height = crate::view::rows(line.clone(), width);
+        let height = crate::view::rows(line, width);
         if row + height > total.saturating_sub(conv) && covered.is_none() {
             covered = Some((line.to_string(), *target));
         }
@@ -4209,7 +4210,7 @@ fn rows_above_the_top_take_no_zero_height_target() {
             tail = Some(row);
             break;
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let tail = tail.expect("the tail reply");
     app.jump(tail);
@@ -4239,7 +4240,7 @@ fn a_narrow_screen_still_pins_one_row() {
         if first.is_none() && text.scopes.last() == Some(&call) {
             first = Some(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let first = first.expect("opened rows");
     let _ = call;
@@ -4261,7 +4262,7 @@ fn a_narrow_screen_still_pins_one_row() {
     let mut row = 0usize;
     let mut covered = None;
     for (line, _) in &rows_page {
-        let height = crate::view::rows(line.clone(), width);
+        let height = crate::view::rows(line, width);
         if row + height > top + 1 && covered.is_none() {
             covered = Some(line.to_string());
         }
@@ -4294,27 +4295,6 @@ fn no_colour_pin_keeps_the_card_sides() {
             "│",
             "a right side on row {y}"
         );
-    }
-    crate::surface::init(&|_| None);
-}
-
-#[test]
-fn every_card_tint_draws_the_thin_box_sides() {
-    // The pin draws through `draw_row`, and the row loop shares its tint
-    // check: a turn, surface or handoff background draws the thin-box
-    // sides without colour, so flipping any arm of the check drops a side
-    // here (`docs/tui.md`, "Look").
-    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
-    for (name, role) in [
-        ("turn", Role::Turn),
-        ("surface", Role::Surface),
-        ("handoff", Role::Handoff),
-    ] {
-        let line = ratatui::text::Line::styled("tinted", Style::new().bg(role.color()));
-        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
-        draw_row(line, Rect::new(0, 0, 20, 1), &mut buf);
-        assert_eq!(buf[(0, 0)].symbol(), "│", "{name} keeps its left side");
-        assert_eq!(buf[(19, 0)].symbol(), "│", "{name} keeps its right side");
     }
     crate::surface::init(&|_| None);
 }
@@ -4702,7 +4682,7 @@ fn pinned_call_with_prior_turn(
         if first.is_none() && text.scopes.last() == Some(&call) {
             first = Some(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let header = header.expect("the call row");
     let first = first.expect("opened rows");

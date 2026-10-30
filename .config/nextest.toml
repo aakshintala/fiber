@@ -39,3 +39,10 @@ success-output = "immediate"
 [[profile.default.overrides]]
 filter = 'package(main) & test(=images_past_the_placeholder_range_keep_a_unique_viewer_target)'
 slow-timeout = { period = "30s", terminate-after = 12 }
+
+# docs/testing.md, "Journeys": the journey binary's kill bound is twice the
+# longest single deadline plus run time; it carries only slow-timeout, so a
+# hang fails once under the default profile.
+[[profile.default.overrides]]
+filter = 'package(main) & binary(=main_journeys)'
+slow-timeout = { period = "30s", terminate-after = 6 }

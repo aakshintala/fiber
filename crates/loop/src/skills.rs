@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::events::{CommandInfo, Notice, SkillInfo, SkillListed, SkillSource};
@@ -497,6 +498,77 @@ fn info(
 /// One listing line.
 pub(crate) fn entry(skill: &SkillListed) -> String {
     format!("- {}: {} ({})", skill.name, skill.description, skill.path)
+}
+
+/// Which source skill directories discovery would already load from a
+/// personal source other than Fiber home (`docs/configuration.md`,
+/// "Importing"): for each checked directory whose `SKILL.md` parses to
+/// a header whose name a valid personal-place skill outside Fiber home
+/// shares, the checked directory maps to the `SKILL.md` path discovery
+/// logged. Everything else is absent. The check runs discovery's own
+/// code — the source list, `read_place` and `skill_header::parse` —
+/// unbounded, exactly as discovery reads: the import caps bound only
+/// what the import copies, and discovery already performs these reads
+/// at every session start.
+pub fn personal_source_paths(
+    fiber_home: &Path,
+    agents_home: Option<&Path>,
+    dirs: &[PathBuf],
+    clock: Arc<dyn contract::clock::Clock>,
+) -> BTreeMap<PathBuf, PathBuf> {
+    // Only the home, the person's home and the extension directories
+    // reach the source list: the shell, the session log and the context
+    // window below are fillers the verdict never reads.
+    let mut inputs = PromptInputs::new(
+        fiber_home.to_path_buf(),
+        String::new(),
+        String::new(),
+        clock,
+        0,
+    );
+    if let Some(home) = agents_home {
+        inputs.agents_home = Some(home.to_path_buf());
+    }
+    let fiber_skills = canonical(&fiber_home.join("skills"));
+    // Each valid personal-place skill outside Fiber home by header name,
+    // first in read order wins, mirroring `discover_cached`.
+    let mut names: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut cache = Cache::default();
+    let mut read: Vec<PathBuf> = Vec::new();
+    for place in places(&inputs, fiber_home) {
+        if place.source != SkillSource::Personal {
+            continue;
+        }
+        let dir = canonical(&place.dir);
+        if dir == fiber_skills || read.contains(&dir) {
+            continue;
+        }
+        let mut notices = Vec::new();
+        let mut unread = Vec::new();
+        for found in read_place(&dir, &mut notices, &mut unread, &mut cache) {
+            if let Ok(header) = found.header {
+                names.entry(header.name).or_insert(found.path);
+            }
+        }
+        read.push(dir);
+    }
+    let mut out = BTreeMap::new();
+    for dir in dirs {
+        // A check-side read or parse failure diverts nothing and fails
+        // nothing: the entry follows the existing read path instead.
+        let bytes = match std::fs::read(dir.join("SKILL.md")) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let header = match skill_header::parse(&String::from_utf8_lossy(&bytes)) {
+            Ok(header) => header,
+            Err(_) => continue,
+        };
+        if let Some(logged) = names.get(&header.name) {
+            out.insert(dir.clone(), logged.clone());
+        }
+    }
+    out
 }
 
 /// The `skills_large` notice, when the rendered listing of `listed`

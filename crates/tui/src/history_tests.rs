@@ -1042,3 +1042,13 @@ fn a_project_change_rebuilds_the_list_without_the_old_projects_lines() {
     assert_eq!(drafts(&mut app, &[Key::Up]), [""]);
     assert_eq!(recall_builds(), 1);
 }
+
+#[cfg(debug_assertions)]
+#[test]
+fn settle_rejects_reentrant_calls() {
+    let mut app = app();
+    let outer = super::SettleDepth::enter();
+    let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.settle()));
+    drop(outer);
+    assert!(nested.is_err());
+}

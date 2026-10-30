@@ -104,9 +104,9 @@ pub(crate) fn startup(
     };
     let mut notices: Vec<contract::events::Notice> = config.notices().to_vec();
     // The unfiltered inventory is display only; the enabled path below
-    // decides the blockers, as the session starts from it. A disabled
-    // package's malformed provider JSON loads here and not there, so
-    // its failure is an informational line, never the exit.
+    // decides the blockers, as the session starts from it. Both loads
+    // read the same disabled provider data and secrets, so a malformed
+    // provider file fails either one the same way.
     let inventory = Providers::load(home);
     let mut enabled = match Providers::load_enabled(home, &config) {
         Ok((providers, loaded)) => {
