@@ -791,7 +791,7 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
 #[test]
 fn hello_slice_timeout_reports_bounds_and_hub_state() {
     let setup = support::Setup::new();
-    let mut spawn_live = || {
+    let spawn_live = || {
         let mut command = Command::new("sleep");
         command.arg("30");
         support::HubProc::spawn_command(setup.deadline, &mut command)
