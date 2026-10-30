@@ -694,32 +694,21 @@ jobs:
                 [ -n "$line" ] || continue
                 name=${line%%$'\t'*}
                 # Legacy `Flaky test: <binary> <test>` tickets are never matched.
-                # The per-file key mirrors flake_title in xtask/src/flake_report.rs; scripts/test-flake-report checks the two agree.
+                # The aggregate main key mirrors flake_title in xtask/src/flake_report.rs; scripts/test-flake-report checks the two agree.
                 binary=${name%% *}
                 case $binary in
-                  *::*)
-                    title="Flaky tests: $binary" ;;
-                  *)
+                  main)
                     case $name in
                       *' '*) tname=${name#* } ;;
                       *) tname= ;;
                     esac
-                    key=
-                    rest=$tname
-                    while :; do
-                      seg=${rest%%::*}
-                      case $seg in
-                        *_tests)
-                          stem=${seg%_tests}
-                          if [ -n "$stem" ]; then key=$stem; fi
-                          break ;;
-                      esac
-                      case $rest in
-                        *::*) rest=${rest#*::} ;;
-                        *) break ;;
-                      esac
-                    done
-                    if [ -n "$key" ]; then title="Flaky tests: $binary $key"; else title="Flaky tests: $binary"; fi ;;
+                    case $tname in
+                      *::*)
+                        seg=${tname%%::*}
+                        if [ -n "$seg" ]; then title="Flaky tests: main::$seg"; else title="Flaky tests: main"; fi ;;
+                      *) title="Flaky tests: main" ;;
+                    esac ;;
+                  *) title="Flaky tests: $binary" ;;
                 esac
                 grep -Fxq "$title" "$titles" || printf '%s\n' "$title" >> "$titles"
               done < "$file"

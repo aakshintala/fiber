@@ -491,25 +491,24 @@ impl Classified {
     }
 }
 
-/// The issue title for one flake line: a binary id with `::` keeps its
-/// binary title, while a unit-test binary id is keyed by its test file,
-/// the first `*_tests` module segment of the test name with one suffix
-/// removed. A test name with no such segment, or one whose stem is
-/// empty, falls back to the binary id.
+/// The issue title for one flake line: the aggregate `main` integration
+/// binary is keyed by its first test-module segment, `Flaky tests:
+/// main::{module}`; a root-level `main` test or an empty first segment
+/// falls back to `Flaky tests: main`. Every other binary id keeps its
+/// binary title, including single-file integration ids such as
+/// `main::hub_exit_window` and unit-test ids such as `fakes`, which are
+/// not parsed specially.
 /// Mirrors the Collate step in .github/workflows/ci.yml; scripts/test-flake-report checks the two agree.
 fn flake_title(binary: &str, test: &str) -> String {
-    if binary.contains("::") {
+    if binary != "main" {
         return format!("Flaky tests: {binary}");
     }
-    for segment in test.split("::") {
-        if let Some(stem) = segment.strip_suffix("_tests") {
-            if !stem.is_empty() {
-                return format!("Flaky tests: {binary} {stem}");
-            }
-            break;
-        }
+    if let Some((first, _)) = test.split_once("::")
+        && !first.is_empty()
+    {
+        return format!("Flaky tests: main::{first}");
     }
-    format!("Flaky tests: {binary}")
+    "Flaky tests: main".to_owned()
 }
 
 /// One classification per distinct title, in first-seen order across

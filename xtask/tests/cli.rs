@@ -1371,19 +1371,19 @@ fn flake_classify_files_two_tests_of_one_binary_once() {
 }
 
 #[test]
-fn flake_classify_keys_unit_flakes_by_file() {
-    // A unit-test binary yields one record per test file, while an
-    // integration binary and a unit test with no `*_tests` module keep
-    // the binary title. File-name byte order reads the arm list first,
-    // so its occurrence wins the dedupe.
-    let dir = TempDir::new("xtask-flake-classify-unit-key");
+fn flake_classify_keys_main_modules_by_file() {
+    // The aggregate `main` binary yields one record per test-module file,
+    // while a root-level `main` test falls back to the binary title and a
+    // single-file integration binary keeps its title. File-name byte order
+    // reads the arm list first, so its occurrence wins the dedupe.
+    let dir = TempDir::new("xtask-flake-classify-main-key");
     dir.write(
         "flaky/flaky-tests-linux.txt",
-        "fakes process_group_tests::reaps_children\tthread reaps_children panicked at crates/fakes/tests/process_group.rs:10\nfakes tests::helper\tthread helper panicked at crates/fakes/tests/helper.rs:5\nmain::hub_exit_window helper_tests::case\tthread case panicked at crates/main/tests/hub_exit_window.rs:7\n",
+        "main reviewer_setup::the_setup_saves\tthread the_setup_saves panicked at crates/main/tests/reviewer_setup.rs:10\nmain root_level_test\tthread root_level_test panicked at crates/main/tests/main.rs:5\nmain::hub_exit_window helper_tests::case\tthread case panicked at crates/main/tests/hub_exit_window.rs:7\n",
     );
     dir.write(
         "flaky/flaky-tests-arm.txt",
-        "fakes signal_tests::delivers\tthread delivers panicked at crates/fakes/tests/signal.rs:3\n",
+        "main reload_tests::some_test\tthread some_test panicked at crates/main/tests/reload_tests.rs:3\n",
     );
     let flaky = dir.path().join("flaky");
     let (code, out) = xtask(
@@ -1408,11 +1408,10 @@ fn flake_classify_keys_unit_flakes_by_file() {
     // docs/testing/running.md, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     // docs/ci.md, "On every pull request that changes code": "writes one
-    // classification line per unique title": two files give two titles plus
-    // the fallback and integration titles.
-    // docs/testing/running.md, "Flaky tests": "The issue's title is `Flaky
-    // tests: ` followed by the binary and the test file: a unit test names
-    // its file from the first `*_tests` module in its test name".
+    // classification line per unique title": two modules give two titles plus
+    // the root fallback and integration titles.
+    // docs/testing/running.md, "Flaky tests": "the aggregate `main`
+    // integration binary names its first test-module segment".
     assert_eq!(records.len(), 4, "{out}");
     let by_title = |title: &str| {
         records
@@ -1420,27 +1419,24 @@ fn flake_classify_keys_unit_flakes_by_file() {
             .find(|record| record["title"] == title)
             .unwrap_or_else(|| panic!("no record titled {title}: {out}"))
     };
-    let process_group = by_title("Flaky tests: fakes process_group");
-    assert_eq!(process_group["action"], "lookup");
-    assert_eq!(process_group["runner"], "linux");
+    let reviewer = by_title("Flaky tests: main::reviewer_setup");
+    assert_eq!(reviewer["action"], "lookup");
+    assert_eq!(reviewer["runner"], "linux");
+    assert_eq!(reviewer["name"], "main reviewer_setup::the_setup_saves");
     assert_eq!(
-        process_group["name"],
-        "fakes process_group_tests::reaps_children"
+        reviewer["detail"],
+        "thread the_setup_saves panicked at crates/main/tests/reviewer_setup.rs:10"
     );
     assert_eq!(
-        process_group["detail"],
-        "thread reaps_children panicked at crates/fakes/tests/process_group.rs:10"
-    );
-    assert_eq!(
-        process_group["tested"],
+        reviewer["tested"],
         "tested 1111111111111111111111111111111111111111"
     );
-    let signal = by_title("Flaky tests: fakes signal");
-    assert_eq!(signal["action"], "lookup");
-    assert_eq!(signal["runner"], "arm");
-    let fallback = by_title("Flaky tests: fakes");
+    let reload = by_title("Flaky tests: main::reload_tests");
+    assert_eq!(reload["action"], "lookup");
+    assert_eq!(reload["runner"], "arm");
+    let fallback = by_title("Flaky tests: main");
     assert_eq!(fallback["action"], "lookup");
-    assert_eq!(fallback["name"], "fakes tests::helper");
+    assert_eq!(fallback["name"], "main root_level_test");
     assert_eq!(fallback["runner"], "linux");
     let integration = by_title("Flaky tests: main::hub_exit_window");
     assert_eq!(integration["action"], "lookup");

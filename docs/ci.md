@@ -148,9 +148,10 @@ ships. Cargo ignores the setting when it builds the test harness.
 A failed binary-level test retries once. A pass on retry does not fail the
 run, except for a test the pull request touched (below): CI opens a flake
 issue for the test's file, or comments on the open one
-(`docs/testing.md`, "Flaky tests"). A unit test names its file after the
-binary, as in `Flaky tests: fakes process_group`; an integration binary,
-or a unit test with no `*_tests` module, keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
+(`docs/testing.md`, "Flaky tests"). The aggregate `main` integration binary
+is keyed by its first test-module segment, as in `Flaky tests:
+main::reviewer_setup`; a root-level `main` test falls back to `Flaky tests:
+main`, while every other binary keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
