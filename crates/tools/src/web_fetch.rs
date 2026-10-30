@@ -65,6 +65,9 @@ pub struct WebFetch {
     /// during an artifact's save, cannot be made from outside the process, so
     /// tests set this field.
     wrap: Option<Wrap>,
+    /// The diagnostic sink, when debugging: each actual request writes one
+    /// `web_fetch` line. `None` stays silent.
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 }
 
 impl WebFetch {
@@ -81,7 +84,17 @@ impl WebFetch {
             }),
             proxy: None,
             wrap: None,
+            debug: None,
         }
+    }
+
+    /// Observes each actual request as `web_fetch` on `debug`, mirroring
+    /// the timing the session installs: the installed sink reaches this
+    /// fetch through the session's tools.
+    #[must_use]
+    pub fn with_diagnostics(mut self, debug: Arc<dyn contract::diag::DebugLog>) -> Self {
+        self.debug = Some(debug);
+        self
     }
 
     /// Fixes the proxy, `None` meaning a direct connection, so the proxy
@@ -266,6 +279,10 @@ impl WebFetch {
             uri,
             pinned: (!via_proxy).then_some(addresses.as_slice()),
             proxy: proxy.cloned(),
+            observe: self.debug.as_ref().map(|debug| http::Observe {
+                debug: Arc::clone(debug),
+                clock: Arc::clone(&self.clock),
+            }),
         };
         let stopped = || hop.stopped().is_some();
         hop.get(&request, |head, body| self.read_reply(head, body, &stopped))

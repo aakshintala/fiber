@@ -332,6 +332,8 @@ pub(crate) fn start_session_tools(
 /// driver shell, with the failures for the log and the running servers for
 /// the session's end. `timing` times every MCP connection attempt the
 /// session starts, now and in the post-offer load; `None` stays untimed.
+/// `debug` observes each `web_fetch` request the session makes; `None`
+/// stays silent.
 #[allow(
     clippy::type_complexity,
     reason = "one session's tools, as builtin's tuple carries them"
@@ -355,6 +357,7 @@ pub(crate) fn session_tools(
     skills: Arc<dyn contract::skills::Skills>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
 ) -> Result<
@@ -381,6 +384,7 @@ pub(crate) fn session_tools(
         delegates,
         skills,
         timing.clone(),
+        debug,
         shell_read_only,
         sandbox,
     )?;

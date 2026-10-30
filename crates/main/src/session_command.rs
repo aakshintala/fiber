@@ -565,6 +565,11 @@ pub(crate) fn run_new(
     } else {
         None
     };
+    // The session's sink observes each `web_fetch` request at debug; at
+    // any other level the fetch stays silent.
+    let debug = diag
+        .debugging()
+        .then(|| Arc::clone(&diag) as Arc<dyn DebugLog>);
     // The create line's writer opens here, before the session file
     // attaches: its `ts` is the writer's open time, its `ms` the stamped
     // creation. At `info` there is no timing, so nothing opens.
@@ -598,6 +603,7 @@ pub(crate) fn run_new(
         skills,
         extensions.tools(),
         timing.clone(),
+        debug,
         shell_read_only.clone(),
         sandbox.clone(),
     ) {

@@ -1171,6 +1171,7 @@ fn wired(
                 skills,
                 extension_tools,
                 None,
+                None,
                 Default::default(),
                 std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
                     enabled: false,
@@ -1292,6 +1293,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
                 &delegates,
                 skills(),
                 Vec::new(),
+                None,
                 None,
                 Default::default(),
                 std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {

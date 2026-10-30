@@ -1248,6 +1248,7 @@ fn the_model_shell_marks_confined_when_on_and_available() {
         &delegates(),
         skills(),
         None,
+        None,
         Default::default(),
         sandbox,
     )

@@ -316,6 +316,79 @@ fn write(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
+/// Every diagnostic line under the home's `logs/`, parsed.
+fn log_lines(setup: &Setup) -> Vec<Value> {
+    let mut lines = Vec::new();
+    let logs = setup.home().join("logs");
+    for entry in fs::read_dir(&logs).unwrap() {
+        let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+        for line in text.lines() {
+            lines.push(serde_json::from_str(line).unwrap());
+        }
+    }
+    lines
+}
+
+/// At `debug` one `web_fetch` call writes one `web_fetch` line: the
+/// single hop's status and consumed body bytes, with the headers time at
+/// or before the total, and none of the identity fields other purposes
+/// carry.
+#[test]
+fn a_debug_fetch_writes_one_web_fetch_line() {
+    let setup = Setup::new_with_started_deadline();
+    let page = ProviderServer::start([Response {
+        status: 200,
+        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+        body: b"fetched".to_vec(),
+        drop_connection: false,
+        stall: false,
+    }])
+    .unwrap();
+    let model = ProviderServer::start([
+        stream(&[function_call(
+            "call_fetch",
+            "web_fetch",
+            &json!({"url": page.url()}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&model);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "diagnostics": {"level": "debug"}}),
+    );
+    // The URL rides the prompt, so the host is known and the fetch
+    // takes the network fast path (`docs/permissions.md`, "Fast paths").
+    let run = setup.run(&["ask", &format!("fetch {}", page.url())]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        model.await_requests(2, setup.deadline),
+        "the model was asked, then answered: a passing test really fetched"
+    );
+    assert!(
+        page.await_requests(1, setup.deadline),
+        "the fetch reached the page: a passing test really fetched"
+    );
+    let lines = log_lines(&setup);
+    let fetched: Vec<_> = lines
+        .iter()
+        .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "web_fetch")
+        .collect();
+    assert_eq!(fetched.len(), 1, "{lines:?}");
+    let data = &fetched[0]["data"];
+    assert_eq!(data["status"], 200);
+    assert_eq!(data["response_bytes"], 7);
+    assert_eq!(data["request_bytes"], 0);
+    assert_eq!(data["attempt"], 1);
+    for key in ["provider", "extension", "model", "host", "path"] {
+        assert!(data.get(key).is_none(), "no {key}: {data}");
+    }
+    let headers_ms = data["headers_ms"].as_u64().expect("headers_ms is set");
+    let total_ms = data["total_ms"].as_u64().expect("total_ms is set");
+    assert!(headers_ms <= total_ms, "{data}");
+}
+
 impl StdoutRun {
     /// The session's directory, from its id.
     fn session_dir(&self, setup: &Setup) -> PathBuf {
