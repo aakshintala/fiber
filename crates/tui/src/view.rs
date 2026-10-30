@@ -131,7 +131,7 @@ pub(crate) fn rows(line: &Line<'_>, width: u16) -> usize {
     paragraph(line.clone()).line_count(width).max(1)
 }
 
-/// The slab the quit question or the notice overlay draws now, or an
+/// The slab a framed surface or the notice overlay draws now, or an
 /// empty rect when `surface` is not open: it draws that frame alone over
 /// the area the real frame gives it, into a scratch buffer, and takes the
 /// slab the draw returns. The wheel over the slab is the frame's, whatever
@@ -167,9 +167,6 @@ pub(crate) fn frame_of(app: &App, surface: Surface) -> Rect {
     let Some(frame) = Frame::from_surface(surface) else {
         return Rect::default();
     };
-    if let Frame::Report = frame {
-        return Rect::default();
-    }
     let mut buf = Buffer::empty(screen);
     let mut targets = Vec::new();
     let mut no_report = |_: &mut Vec<Target>, _: &mut Buffer| Rect::default();

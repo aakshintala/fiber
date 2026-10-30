@@ -259,7 +259,8 @@ impl App {
             .collect()
     }
 
-    /// The framed surfaces open now, bottom first, as far as they are open.
+    /// The framed surfaces open now, bottom first: the reverse of
+    /// [`Self::top_surfaces`].
     pub(crate) fn framed_surfaces(&self) -> impl Iterator<Item = Frame> {
         self.top_surfaces()
             .into_iter()
