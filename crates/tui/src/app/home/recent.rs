@@ -244,8 +244,13 @@ impl Recent {
     /// nothing: paging is not a re-trigger, so it marks nothing dirty.
     /// Nothing goes out with no home, with the link down, or for an
     /// empty project.
-    fn scoped_page(&mut self, project: &str, before: Option<&str>) -> Option<String> {
-        if project.is_empty() {
+    fn scoped_page(
+        &mut self,
+        project: &str,
+        before: Option<&str>,
+        connected: bool,
+    ) -> Option<String> {
+        if project.is_empty() || !connected {
             return None;
         }
         if self.scoped_asks.values().any(|pending| pending == project) {
@@ -258,10 +263,16 @@ impl Recent {
 
     /// Asks the next `recent` page past the focused last row. When the
     /// focused row is its project's last loaded row and the held total
-    /// says more, the page is scoped to that project; else the unscoped
-    /// path asks past the unscoped cursor. `None` unless the focused row
-    /// ends the list and a page may exist, with nothing in flight.
-    pub(super) fn page_recent(&mut self, focused: u64, sessions: &mut Sessions) -> Option<String> {
+    /// says more, the page is scoped to that project and needs the link;
+    /// else the unscoped path asks past the unscoped cursor with no link
+    /// check. `None` unless the focused row ends the list and a page may
+    /// exist, with nothing in flight.
+    pub(super) fn page_recent(
+        &mut self,
+        focused: u64,
+        sessions: &mut Sessions,
+        connected: bool,
+    ) -> Option<String> {
         // The scoped page wins while the project holds more: the held
         // total is that count's source of truth.
         let scoped = sessions.by_key(focused).and_then(|row| {
@@ -276,7 +287,7 @@ impl Recent {
                 .then(|| (project, Some(last.id.0.clone())))
         });
         if let Some((project, before)) = scoped {
-            return self.scoped_page(&project, before.as_deref());
+            return self.scoped_page(&project, before.as_deref(), connected);
         }
         if !sessions.more() || self.recent_ask.is_some() {
             return None;
@@ -337,14 +348,12 @@ impl App {
     /// Asks the next scoped page for a project, without marking an
     /// in-flight ask dirty.
     pub(super) fn scoped_page(&mut self, project: &str, before: Option<&str>) -> Vec<String> {
-        if !self.outbox.is_up() {
-            return Vec::new();
-        }
+        let connected = self.outbox.is_up();
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
         home.recent
-            .scoped_page(project, before)
+            .scoped_page(project, before, connected)
             .into_iter()
             .collect()
     }
@@ -460,15 +469,16 @@ impl App {
 
     /// Asks the next `recent` page past the focused last row. When the
     /// focused row is its project's last loaded row and the held total
-    /// says more, the page is scoped to that project; else the unscoped
-    /// path asks past the unscoped cursor. `None` unless the focused row
-    /// ends the list and a page may exist, with nothing in flight.
+    /// says more, the page is scoped to that project and needs the link;
+    /// else the unscoped path asks past the unscoped cursor with no link
+    /// check. `None` unless the focused row ends the list and a page may
+    /// exist, with nothing in flight.
     pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
-        if !self.outbox.is_up() {
-            return None;
-        }
+        let connected = self.outbox.is_up();
         let home = self.home.as_mut()?;
-        let line = home.recent.page_recent(focused, &mut home.sessions)?;
+        let line = home
+            .recent
+            .page_recent(focused, &mut home.sessions, connected)?;
         Some(Effect::Send(vec![line]))
     }
 }
