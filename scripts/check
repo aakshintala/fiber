@@ -106,6 +106,8 @@ if [ "$scope" != platform ]; then
     cargo xtask loop-tool-names
     echo "== must-succeed bounds"
     cargo xtask must-succeed
+    echo "== budget bounds"
+    cargo xtask budget-bounds --base "$base"
     echo "== bare screen-call ratchet"
     # A `.screen()` call outside a wait reads a grid no wait settled, so
     # the frame it observes can differ from the waited one
@@ -208,10 +210,31 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   # it for every selection, since any crate's tests may use ProcessFixture.
   echo "== build the process-extension example"
   cargo build -q -p fakes --example process-extension
+  # One thread per CPU the host has free, from the load when the run
+  # starts: a loaded host runs fewer tests at once rather than starving
+  # each of them. CI runners keep their own counts.
+  threads=
+  if [ -n "${GITHUB_ACTIONS-}" ]; then
+    echo "== nextest threads: keeping the runner's own count (GITHUB_ACTIONS is set)"
+  else
+    if [ "$(uname -s)" = Darwin ]; then
+      cpus=$(getconf _NPROCESSORS_ONLN)
+      load=$(sysctl -n vm.loadavg | tr -d '{}' | awk '{print $1}')
+    else
+      cpus=$(getconf _NPROCESSORS_ONLN)
+      load=$(awk '{print $1}' /proc/loadavg)
+    fi
+    threads=$(cargo xtask threads "$cpus" "$load")
+    echo "== nextest threads: $threads ($cpus cpus, load $load)"
+  fi
   echo "== cargo nextest run"
   # One timing flake must not hide the other tests' results: a failed run
   # reports every failure, so a rerun is not needed to see them.
-  cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet "${package_spec_args[@]}" 2>&1 | tee "$log"
+  if [ -n "$threads" ]; then
+    cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet --test-threads "$threads" "${package_spec_args[@]}" 2>&1 | tee "$log"
+  else
+    cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet "${package_spec_args[@]}" 2>&1 | tee "$log"
+  fi
   nextest=$(count '[0-9]+ tests? run')
   case " $packages " in
     *" main "*)

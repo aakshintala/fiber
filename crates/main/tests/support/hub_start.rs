@@ -66,21 +66,23 @@ fn give_up(setup: &Setup, mut process: HubProc, why: &str) -> ! {
 /// Waits for the hub's `hub_hello` in slices of
 /// [`MUST_SUCCEED_WITHIN`], looking at the hub's exit between them. `Ok`
 /// is the hello and the live hub; `Err` is the status of a hub that
-/// exited, already reaped. The deadline is the test's own, never renewed:
-/// a slice ends [`REPORT_MARGIN`] before it, so the report and the
-/// cleanup run first.
+/// exited, already reaped. The wait starts at entry, never renewed: a
+/// slice ends [`REPORT_MARGIN`] before it, while the give-up keeps its
+/// margin against the test's guard, so the report and the cleanup run
+/// first.
 fn await_hello(
     setup: &Setup,
     mut process: HubProc,
 ) -> Result<(doors::hub::Hub, HubProc), ExitStatus> {
+    let wait = setup.deadline.start_wait();
     loop {
-        let left = setup.deadline.left();
-        if left <= REPORT_MARGIN {
+        if setup.deadline.left() <= REPORT_MARGIN {
             give_up(setup, process, "waited for the installed hub's hello");
         }
+        let left = wait.left();
         let until = SystemClock.now() + left.saturating_sub(REPORT_MARGIN).min(MUST_SUCCEED_WITHIN);
         let home = setup.home();
-        let slice = bounded(setup.deadline, "the installed hub's hello", move || {
+        let slice = bounded(wait, "the installed hub's hello", move || {
             doors::hub::connect_until(&home, &mut || Ok(()), &SystemClock, until, &mut || {})
         });
         let error = match slice {

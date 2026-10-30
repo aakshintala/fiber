@@ -8,6 +8,9 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::time::Duration;
+
+use crate::clock::FakeClock;
 use crate::deadline::Deadline;
 use crate::{ProcessFixture, warm_up};
 
@@ -103,6 +106,30 @@ fn a_protocol_peer_acknowledges_each_hold_before_release() {
 #[test]
 fn the_fixture_usage_error_names_its_modes() {
     warm_up(&super::example_path(), &["bogus-mode"], 2);
+}
+
+/// A `wait_for` started after the guard is partly consumed still drains
+/// through its started bound: the line sent before the wait arrives.
+#[test]
+fn wait_for_started_late_still_drains_through_its_started_bound() {
+    let clock: &'static std::sync::Arc<FakeClock> = Box::leak(Box::new(FakeClock::new()));
+    let guard = Deadline::on(&**clock);
+    // Part of the guard is gone before the wait starts. No code under test
+    // parks on this clock (receives wait on the wall clock), so time moves
+    // here by hand.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_secs(60));
+    let mut fixture = ProcessFixture::spawn("echo");
+    let line = r#"{"id":"c_1","command":"ready"}"#;
+    fixture.send(line);
+    assert_eq!(
+        fixture.wait_for(guard, "the echoed line", |got| got == line),
+        line,
+    );
+    fixture.finish(guard);
 }
 
 #[test]

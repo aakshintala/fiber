@@ -102,7 +102,7 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
             session.close(log);
             done.send(()).unwrap();
         });
-        Deadline::after(fakes::deadline::WAITS).recv_or_fail(&started, "session serving");
+        Deadline::after(fakes::deadline::WAIT).recv_or_fail(&started, "session serving");
         opened.push((release, finished));
     }
     let client = SessionSockets::new(&home, timed);
@@ -116,7 +116,7 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
             },
         );
         assert_eq!(
-            Deadline::after(fakes::deadline::WAITS)
+            Deadline::after(fakes::deadline::WAIT)
                 .recv_or_fail(&rx, "real summaries")
                 .unwrap(),
             expected
@@ -124,7 +124,7 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
     }
     for (release, finished) in opened {
         drop(release);
-        Deadline::after(fakes::deadline::WAITS).recv_or_fail(&finished, "session closed");
+        Deadline::after(fakes::deadline::WAIT).recv_or_fail(&finished, "session closed");
     }
 }
 
@@ -150,7 +150,7 @@ fn message_on(
 }
 
 fn delivered(rx: &Receiver<Result<(), contract::sessions::MessageError>>) {
-    Deadline::after(fakes::deadline::WAITS)
+    Deadline::after(fakes::deadline::WAIT)
         .recv(rx)
         .expect("the message answered")
         .expect("the message delivered");
@@ -170,7 +170,7 @@ fn a_served_session_takes_the_message_into_its_inbox() {
     opened
         .session
         .run(Vec::new(), Arc::new(|| false), |inbox| {
-            let Delivery::Message(message, ack) = Deadline::after(fakes::deadline::WAITS)
+            let Delivery::Message(message, ack) = Deadline::after(fakes::deadline::WAIT)
                 .recv(&inbox)
                 .expect("the message is delivered")
             else {
@@ -223,7 +223,7 @@ fn a_send_leaves_clients_and_the_status_count_unchanged() {
             // The inbox holds the message; the loop is this closure, so it
             // is taken and answered here, and only then is the sender
             // answered.
-            let Delivery::Message(_, ack) = Deadline::after(fakes::deadline::WAITS)
+            let Delivery::Message(_, ack) = Deadline::after(fakes::deadline::WAIT)
                 .recv(&inbox)
                 .expect("the message is delivered")
             else {
@@ -251,14 +251,14 @@ fn a_send_after_close_is_rejected_closing() {
             support::send(&closer, r#"{"id":"c_close","command":"close"}"#);
             // The close is answered only once the inbox takes it, so the
             // take proves `mark_closed` ran before the send below.
-            let Delivery::Close(_) = Deadline::after(fakes::deadline::WAITS)
+            let Delivery::Close(_) = Deadline::after(fakes::deadline::WAIT)
                 .recv(&inbox)
                 .expect("the close is delivered")
             else {
                 panic!("a close is delivered");
             };
             let answered = message_on(&opened.home, &opened.clock, &target, &from, "too late");
-            match Deadline::after(fakes::deadline::WAITS)
+            match Deadline::after(fakes::deadline::WAIT)
                 .recv(&answered)
                 .expect("the send answered")
             {
@@ -286,7 +286,7 @@ fn a_fiber_ask_session_is_closing_from_its_start() {
         .session
         .ask("hi".to_owned(), Arc::new(|| false), |_inbox| {
             let answered = message_on(&opened.home, &opened.clock, &target, &from, "too late");
-            match Deadline::after(fakes::deadline::WAITS)
+            match Deadline::after(fakes::deadline::WAIT)
                 .recv(&answered)
                 .expect("the send answered")
             {
