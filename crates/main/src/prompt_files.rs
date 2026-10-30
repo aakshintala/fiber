@@ -5,6 +5,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The website's docs address for a stable build
 /// (`docs/ci.md`, "The user docs site").
@@ -34,6 +35,26 @@ pub(crate) fn agents_home(home_env: Option<OsString>) -> Option<PathBuf> {
     home_env
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
+}
+
+/// The already-read check the import runs
+/// (`docs/configuration.md`, "Importing"): discovery's own code over
+/// Fiber home and the person's home, so a skill discovery would load
+/// from another personal source is left behind instead of copied. This
+/// module owns the person's-home rule above, so it builds the check.
+pub(crate) fn personal_source_check(
+    fiber_home: PathBuf,
+    agents_home: Option<PathBuf>,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> Arc<dyn contract::skills::PersonalSourceCheck> {
+    Arc::new(move |dirs: &[PathBuf]| {
+        r#loop::personal_source_paths(
+            &fiber_home,
+            agents_home.as_deref(),
+            dirs,
+            Arc::clone(&clock),
+        )
+    })
 }
 
 #[cfg(test)]

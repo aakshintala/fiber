@@ -130,6 +130,7 @@ pub use rewind::{
 };
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
+pub use skills::personal_source_paths;
 pub use slash::{FetchPrompt, ServerPrompts};
 pub use switch::{Hosted, NO_SWITCH, Prepare, Prepared, Switchable};
 pub use usage::extension_line;
