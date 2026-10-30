@@ -1882,6 +1882,59 @@ fn turn_end_clears_switch_pending_notices() {
 }
 
 #[test]
+fn one_frames_queued_notices_group_by_code() {
+    // Two queued `io_failed` notices in one frame batch stack one
+    // grouped row: the count and the first item up front, every item
+    // listed (`docs/errors.md`, "Notices": one per code).
+    let mut app = groups(1, 80, 24);
+    app.screen
+        .pages()
+        .ext
+        .cache
+        .queue_notice(("io_failed".to_owned(), "a first read failed".to_owned()));
+    app.screen
+        .pages()
+        .ext
+        .cache
+        .queue_notice(("io_failed".to_owned(), "a second read failed".to_owned()));
+    assert!(app.drain_renderer_failures());
+    let rows: Vec<(String, String)> = app
+        .notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { code, text, .. } => Some((code, text)),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "io_failed");
+    assert!(
+        rows[0]
+            .1
+            .starts_with("2 reads failed: a first read failed\n"),
+        "{}",
+        rows[0].1
+    );
+    assert!(rows[0].1.contains("- a first read failed"), "{}", rows[0].1);
+    assert!(
+        rows[0].1.contains("- a second read failed"),
+        "{}",
+        rows[0].1
+    );
+}
+
+#[test]
+fn a_notice_undrawn_at_a_session_switch_still_shows() {
+    // Notices belong to the terminal run, not the session: attaching
+    // another session keeps the undrawn row, which has had no display
+    // yet and so marks nothing seen.
+    let mut app = groups(1, 80, 24);
+    app.push_notice("skill_shadowed", "gone".to_owned());
+    app.attach(contract::SessionId("s_other".to_owned()));
+    assert_eq!(app.notices().len(), 1);
+}
+
+#[test]
 fn loaded_history_clears_its_loading_notice() {
     let (mut app, envelopes, _) = pending_copy();
     assert_eq!(app.notice(), Some("Loading history…"));

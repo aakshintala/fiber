@@ -1289,6 +1289,11 @@ one row each until dismissed with ✕, oldest first: "  ⚠ " and the code in
 `attention`, " · " and the message dim, cut with "…", and a dim "✕"
 right-aligned. Clicking a notice shows the whole text in an overlay.
 
+One pass stacks one notice per code: a pass that finds the same failure
+many times stacks one grouped row, whose message names the count and the
+first item and lists every item. In one terminal run, a notice whose code
+and text match one already shown does not show again.
+
 - At most 3 show, then "+N more", which lists them.
 - The "N approvals waiting" row (see "An approval") sits above the notices, and on a screen too short for both it drops first.
 - A notice that arrives during a drag waits for the release.
