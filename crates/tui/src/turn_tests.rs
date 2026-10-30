@@ -317,6 +317,43 @@ fn completed_calls_count_their_result_lines_and_exits() {
 }
 
 #[test]
+fn a_restored_protected_path_draws_its_warning_under_the_call() {
+    let mut app = app();
+    start(&mut app, "go", 0);
+    request(&mut app, "a_1", "shell", json!({"command": "cargo t"}), 0);
+    feed(
+        &mut app,
+        "tool_call_completed",
+        Some("a_1"),
+        0,
+        json!({"status": "completed",
+            "process": {"exit_code": 0, "timed_out": false},
+            "content": [{"type": "text", "text": "ok"}],
+            "protected_paths": {"restored": [".fiber"], "failed": []}}),
+    );
+    text(&mut app, "a_m", "Done.", 0);
+    app.open(group(&app));
+    let lines = texts(&app);
+    // The ledger fits the warning to the width, so the test names the
+    // unfitted prefix a narrower terminal would cut.
+    let warning = "Protected path .fiber changed";
+    let at = lines
+        .iter()
+        .position(|line| line.contains(warning))
+        .unwrap_or_else(|| panic!("the warning draws: {lines:?}"));
+    assert!(
+        lines[at].starts_with("    "),
+        "the warning sits under the call: {:?}",
+        lines[at]
+    );
+    assert!(
+        lines[at - 1].contains("cargo t"),
+        "the call's row is directly above: {:?}",
+        lines[at - 1]
+    );
+}
+
+#[test]
 fn edited_files_count_distinct_paths_and_sum_their_lines() {
     let mut app = app();
     start(&mut app, "edit", 0);

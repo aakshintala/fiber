@@ -984,6 +984,39 @@ fn ordinary_job_shows_the_tail_of_its_output() {
 }
 
 #[test]
+fn a_completed_job_folds_its_protected_paths_report() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    job_started(
+        &mut app,
+        "j_2",
+        "build the workspace",
+        wall_ms(&clock),
+        "a_1",
+    );
+    app.on_line(session_line(
+        "job_completed",
+        json!({"job_id": "j_2", "status": "completed",
+            "protected_paths": {"restored": [".fiber"], "failed": []}}),
+    ));
+    let record = app
+        .items
+        .jobs
+        .get(&JobId("j_2".to_owned()))
+        .expect("a record");
+    assert_eq!(
+        record.protected,
+        vec![
+            "Protected path .fiber changed while a confined call ran; Fiber restored it."
+                .to_owned()
+        ],
+        "the fold keeps the warning lines"
+    );
+}
+
+#[test]
 fn completed_job_keeps_its_output_and_loses_its_stop() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = home();

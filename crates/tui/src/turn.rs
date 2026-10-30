@@ -482,6 +482,11 @@ impl Turn {
                         .and_then(|process| process.signal.clone()),
                     headline: format::headline(done),
                     content,
+                    protected: done
+                        .protected_paths
+                        .as_ref()
+                        .map(|report| report.warning_lines())
+                        .unwrap_or_default(),
                 }));
                 call.exit = done.process.as_ref().and_then(|process| process.exit_code);
                 if let group::Timing::Started(started) = call.timing {

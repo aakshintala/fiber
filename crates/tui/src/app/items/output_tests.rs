@@ -183,6 +183,32 @@ fn complete(app: &mut App, job: &str) {
     ));
 }
 
+#[test]
+fn a_completed_open_job_keeps_its_output_with_the_protected_warning() {
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1", "a_1");
+    delta(&mut app, "j_1", "done\n");
+    open_job(&mut app, "j_1");
+    app.on_line(line(
+        "job_completed",
+        json!({"job_id": "j_1", "status": "completed",
+            "protected_paths": {"restored": [".fiber"], "failed": []}}),
+        None,
+    ));
+    let rows = app.item_output_rows(80, 24);
+    let warning = "Protected path .fiber changed while a confined call ran; Fiber restored it.";
+    let done_at = rows
+        .iter()
+        .position(|row| row.contains("done"))
+        .expect("keeps output");
+    let warned_at = rows
+        .iter()
+        .position(|row| row.contains(warning))
+        .expect("warns under it");
+    assert!(warned_at > done_at, "the warning follows the output");
+}
+
 /// A `shell` call's request with `arguments`, from tool call `action`.
 fn request(app: &mut App, action: &str, name: &str, arguments: Value) {
     app.on_line(line(

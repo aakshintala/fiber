@@ -51,6 +51,43 @@ fn a_tool_call_completed_and_a_permission_resolved_omit_their_new_keys_when_empt
 }
 
 #[test]
+fn both_completions_carry_an_optional_protected_paths_report() {
+    let report =
+        json!({"restored":[".fiber"], "failed":[{"path":".git/config","message":"denied"}]});
+    for (kind, base) in [
+        (
+            "tool_call_completed",
+            json!({"status":"completed", "content":[]}),
+        ),
+        (
+            "job_completed",
+            json!({"job_id":"j_1", "status":"completed"}),
+        ),
+    ] {
+        // Absent stays absent.
+        let event = Event::from_envelope(&line(kind, base.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(event.payload().unwrap()).unwrap(),
+            base,
+            "{kind} omits the report when none changed"
+        );
+        // Present round-trips on the same key in both payloads.
+        let mut populated = base;
+        populated["protected_paths"] = report.clone();
+        let event = Event::from_envelope(&line(kind, populated.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(event.payload().unwrap()).unwrap(),
+            populated,
+            "{kind} keeps the report"
+        );
+    }
+}
+
+#[test]
 fn an_extensions_loaded_entry_omits_replaces_when_empty() {
     let empty = LoadedExtension {
         name: "e".into(),

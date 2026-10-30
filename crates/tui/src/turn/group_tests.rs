@@ -525,6 +525,15 @@ fn with_headline(mut call: Call, headline: &str) -> Call {
     call
 }
 
+/// `call` with its result's protected-path warning lines replaced.
+fn with_protected(mut call: Call, warnings: &[&str]) -> Call {
+    let result = call
+        .result
+        .get_or_insert_with(|| Box::new(CallResult::default()));
+    result.protected = warnings.iter().map(ToString::to_string).collect();
+    call
+}
+
 /// `call` with its result's details replaced by `details` JSON text.
 fn with_details(mut call: Call, details: serde_json::Value) -> Call {
     let result = call
@@ -825,6 +834,40 @@ fn ledger_results_name_what_each_call_did() {
     assert_eq!(
         rows[11].spans[6].style.fg,
         crate::theme::style(Role::Attention).fg
+    );
+}
+
+#[test]
+fn a_protected_restore_draws_a_warning_row_under_its_call() {
+    let warning = "Protected path .fiber changed while a confined call ran; Fiber restored it.";
+    let group = Group {
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![with_protected(
+                shell_call(1, "cargo t", Some(0), 1, "ok"),
+                &[warning],
+            )],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 100);
+    assert_eq!(rows.len(), 2, "the call's row, then its warning: {rows:?}");
+    assert!(
+        rows[0].to_string().contains("cargo t"),
+        "the call's row comes first: {:?}",
+        rows[0].to_string()
+    );
+    assert_eq!(
+        rows[1].to_string(),
+        format!("    {warning}"),
+        "the warning sits indented beneath the call"
+    );
+    assert_eq!(
+        rows[1].spans[1].style,
+        crate::theme::style(Role::Warning),
+        "the warning warns"
     );
 }
 

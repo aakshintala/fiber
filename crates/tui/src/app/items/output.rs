@@ -71,6 +71,15 @@ impl App {
                         && open.as_ref() != Some(&done.job_id)
                     {
                         record.output = None;
+                    } else if let Some(record) = self.items.jobs.get_mut(&done.job_id)
+                        && let Some(report) = done.protected_paths.as_ref()
+                        && let Some(output) = record.output.as_mut()
+                    {
+                        // The open job keeps its output: the report's
+                        // warning lands under it.
+                        for line in report.warning_lines() {
+                            output.feed(&format!("\n{line}\n"));
+                        }
                     }
                 }
             }
