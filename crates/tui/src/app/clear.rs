@@ -3,7 +3,9 @@
 use contract::SessionId;
 use serde_json::json;
 
-use super::{App, Effect, Kind, mint};
+use super::{App, Effect, Kind, mint, session_command};
+use crate::home::Level;
+use crate::input::Draft;
 
 /// A `/clear` start waiting for its answer: the cleared session, the
 /// start's id, the credential its args named, and whether its close goes
@@ -131,5 +133,124 @@ impl App {
     /// Whether `/clear` has a start waiting for its answer.
     pub(super) fn clear_pending(&self) -> bool {
         self.clear.pending.is_some()
+    }
+
+    /// Accepts the matching clear start and sends its follow-up commands.
+    /// Another start's answer leaves the clear pending untouched.
+    pub(super) fn clear_start_accepted(
+        &mut self,
+        id: &str,
+        session: SessionId,
+    ) -> Option<Vec<String>> {
+        let pending = self
+            .clear
+            .pending
+            .take_if(|pending| pending.command_id == id)?;
+        Some(self.clear_started(pending, session))
+    }
+
+    /// A clear `start` was accepted: the old session's rail number moves
+    /// to the new id before any later row folds, the screen clears to an
+    /// empty conversation, and the old session is sent `close` only now.
+    /// The pending draft is empty, so no first prompt goes out.
+    fn clear_started(&mut self, pending: ClearPending, session: SessionId) -> Vec<String> {
+        self.model_picker.start_model = None;
+        self.rail_state
+            .replace(pending.old.clone(), session.clone());
+        self.panel_state.reset();
+        self.panel_state.carry_clear_credential(pending.credential);
+        self.attached_screen_mut().clear();
+        self.attach(session.clone());
+        let id = mint();
+        let close = session_command(
+            &id,
+            "close",
+            &pending.old,
+            Some(json!({"now": pending.now})),
+        )
+        .to_string();
+        self.outbox
+            .insert(id.clone(), Kind::Command, Draft::default());
+        self.clear.close = Some(id);
+        vec![
+            self.subscribe(&session, Level::Full),
+            self.ask_commands(&session),
+            close,
+        ]
+    }
+
+    /// Forgets a clear `close` once the hub answers it, whatever the
+    /// answer says: the notice already names a refusal, and an accept
+    /// needs no mark.
+    pub(super) fn clear_close_settled(&mut self, id: &str) {
+        if self.clear.close.as_deref() == Some(id) {
+            self.clear.close = None;
+        }
+    }
+
+    /// A refused clear `start`: one notice with its code and message,
+    /// the phase staying attached to the old session, its draft
+    /// untouched, and no `close` sent. True when `id` was the clear
+    /// `start`.
+    pub(super) fn clear_rejected(&mut self, id: &str, code: &str, message: &str) -> bool {
+        let Some(pending) = self.clear.pending.take() else {
+            return false;
+        };
+        if pending.command_id != id {
+            self.clear.pending = Some(pending);
+            return false;
+        }
+        self.outbox.answered(id);
+        self.notices.push(code, message.to_owned());
+        true
+    }
+
+    /// A clear line lost before it was written. A lost `start` drops
+    /// its intent, the phase staying attached to the old session for
+    /// the retry; a lost `close` keeps the old session running, named
+    /// by one notice. True when `id` was either.
+    pub(super) fn clear_lost(&mut self, id: &str) -> bool {
+        if let Some(pending) = self.clear.pending.take() {
+            if pending.command_id == id {
+                self.outbox.answered(id);
+                return true;
+            }
+            self.clear.pending = Some(pending);
+        }
+        if self.clear.close.as_deref() == Some(id) {
+            self.clear.close = None;
+            self.notices.push(
+                "connection_failed",
+                "The link to the old session was lost before its `close` went out.".to_owned(),
+            );
+            return true;
+        }
+        false
+    }
+
+    /// Settles the clear-staged start without its refusal notice when
+    /// the hooks offer takes ownership of that refusal.
+    pub(super) fn settle_clear_hooks_start(&mut self, id: &str) -> bool {
+        let Some(pending) = self.clear.pending.take() else {
+            return false;
+        };
+        if pending.command_id != id {
+            self.clear.pending = Some(pending);
+            return false;
+        }
+        self.outbox.answered(id);
+        true
+    }
+
+    /// Updates the clear's pending start id when the hooks offer resends
+    /// it. Returns whether a clear start is still pending.
+    pub(super) fn retry_clear_start(&mut self, refused_id: &str, retry_id: String) -> bool {
+        let Some(pending) = self.clear.pending.as_mut() else {
+            return false;
+        };
+        if pending.command_id == refused_id {
+            pending.command_id = retry_id;
+        }
+        true
     }
 }

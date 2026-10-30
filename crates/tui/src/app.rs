@@ -18,7 +18,7 @@ use contract::shapes::ContentPart;
 use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::layout::Rect;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::approvals::{self, Panel, Queue};
 use crate::ext::{Handle, Renderer};
@@ -96,7 +96,6 @@ mod status_rows;
 pub(crate) mod testkit;
 mod top;
 
-use clear::ClearPending;
 use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
@@ -1589,16 +1588,11 @@ impl App {
                     .map(|id| SessionId(id.to_owned()));
                 match (self.outbox.answered(&id), session) {
                     (Some((Kind::Start, draft)), Some(session)) => {
-                        match self
-                            .clear
-                            .pending
-                            .take_if(|pending| pending.command_id == id)
-                        {
-                            Some(pending) => self.clear_started(pending, session),
-                            None => {
-                                self.model_picker.start_model = None;
-                                self.started(session, draft)
-                            }
+                        if let Some(lines) = self.clear_start_accepted(&id, session.clone()) {
+                            lines
+                        } else {
+                            self.model_picker.start_model = None;
+                            self.started(session, draft)
                         }
                     }
                     _ => Vec::new(),
@@ -1682,85 +1676,6 @@ impl App {
             self.ask_commands(&session),
             self.first_prompt(&session, draft),
         ]
-    }
-
-    /// A clear `start` was accepted: the old session's rail number moves
-    /// to the new id before any later row folds, the screen clears to an
-    /// empty conversation, and the old session is sent `close` only now.
-    /// The pending draft is empty, so no first prompt goes out.
-    fn clear_started(&mut self, pending: ClearPending, session: SessionId) -> Vec<String> {
-        self.model_picker.start_model = None;
-        self.rail_state
-            .replace(pending.old.clone(), session.clone());
-        self.panel_state.reset();
-        self.panel_state.carry_clear_credential(pending.credential);
-        self.attached_screen_mut().clear();
-        self.attach(session.clone());
-        let id = mint();
-        let close = session_command(
-            &id,
-            "close",
-            &pending.old,
-            Some(json!({"now": pending.now})),
-        )
-        .to_string();
-        self.outbox
-            .insert(id.clone(), Kind::Command, Draft::default());
-        self.clear.close = Some(id);
-        vec![
-            self.subscribe(&session, Level::Full),
-            self.ask_commands(&session),
-            close,
-        ]
-    }
-
-    /// Forgets a clear `close` once the hub answers it, whatever the
-    /// answer says: the notice already names a refusal, and an accept
-    /// needs no mark.
-    fn clear_close_settled(&mut self, id: &str) {
-        if self.clear.close.as_deref() == Some(id) {
-            self.clear.close = None;
-        }
-    }
-
-    /// A refused clear `start`: one notice with its code and message,
-    /// the phase staying attached to the old session, its draft
-    /// untouched, and no `close` sent. True when `id` was the clear
-    /// `start`.
-    fn clear_rejected(&mut self, id: &str, code: &str, message: &str) -> bool {
-        let Some(pending) = self.clear.pending.take() else {
-            return false;
-        };
-        if pending.command_id != id {
-            self.clear.pending = Some(pending);
-            return false;
-        }
-        self.outbox.answered(id);
-        self.notices.push(code, message.to_owned());
-        true
-    }
-
-    /// A clear line lost before it was written. A lost `start` drops
-    /// its intent, the phase staying attached to the old session for
-    /// the retry; a lost `close` keeps the old session running, named
-    /// by one notice. True when `id` was either.
-    fn clear_lost(&mut self, id: &str) -> bool {
-        if let Some(pending) = self.clear.pending.take() {
-            if pending.command_id == id {
-                self.outbox.answered(id);
-                return true;
-            }
-            self.clear.pending = Some(pending);
-        }
-        if self.clear.close.as_deref() == Some(id) {
-            self.clear.close = None;
-            self.notices.push(
-                "connection_failed",
-                "The link to the old session was lost before its `close` went out.".to_owned(),
-            );
-            return true;
-        }
-        false
     }
 
     /// A command the terminal sent was rejected: a notice, and its draft
