@@ -811,7 +811,8 @@ fn logo_no_colour_draws_pixels() {
 }
 
 /// Kitty needs no measured geometry: the flags reply is enough for
-/// placeholders, one transmit, and the place bytes.
+/// placeholders, one transmit, and the place bytes (`docs/tui.md`,
+/// "The logo", "Images"). Its 32-by-4 cells give the placeholder count.
 #[test]
 fn logo_kitty_swap_transmits_once() {
     let (mut lp, tty, rx) = logo_loop();
@@ -989,7 +990,8 @@ fn logo_iterm_writes_positioned_after_the_frame() {
     assert_eq!(&sent[sent.len() - 2..], b"\x1b8", "the cursor restores");
 }
 
-/// A scrolled frame rewrites the iTerm2 image: one File per touch.
+/// A scrolled frame rewrites the iTerm2 image: one File per touch
+/// (`docs/tui.md`, "Images": the logo is drawn once using iTerm2).
 #[test]
 fn logo_iterm_rewrites_after_touch() {
     let (mut lp, tty, rx) = logo_loop();
@@ -1088,7 +1090,8 @@ fn logo_cell_bound_rows_body() {
     );
 }
 
-/// Re-tinting re-emits: a new theme's bytes differ from the old.
+/// Re-tinting re-emits: a new theme's bytes differ from the old
+/// (`docs/tui.md`, "The logo", "Images").
 #[test]
 fn logo_retints_with_the_theme() {
     let (mut lp, tty, rx) = logo_loop();
@@ -1166,7 +1169,7 @@ fn logo_leave_home_repaints_then_redraws() {
 }
 
 /// A session that never showed the logo clears nothing on any frame
-/// (`docs/tui.md`, "The logo", "Images").
+/// (`docs/tui.md`, "The input box", "The logo", "Images").
 #[test]
 fn logo_non_home_never_clears() {
     let (mut lp, mut tty, rx) = logo_loop();
@@ -1175,6 +1178,13 @@ fn logo_non_home_never_clears() {
         assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
     }
     assert!(
+        buffer_of(&lp)
+            .content
+            .iter()
+            .any(|cell| cell.symbol() == "›"),
+        "the session input box is drawn"
+    );
+    assert!(
         !drain_tty(&mut tty)
             .windows(4)
             .any(|window| window == b"\x1b[2J"),
@@ -1182,7 +1192,8 @@ fn logo_non_home_never_clears() {
     );
 }
 
-/// A flat home keeps pixels, and unflattening re-emits the image.
+/// A flat home keeps pixels, and unflattening re-emits the image
+/// (`docs/tui.md`, "The logo", "Images").
 #[test]
 fn logo_flat_home_keeps_pixels_then_reemits() {
     let (mut lp, tty, rx) = logo_loop();
