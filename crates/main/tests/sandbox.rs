@@ -882,6 +882,7 @@ fn a_killed_call_leaves_a_stale_baseline_the_next_session_recovers() {
 /// An `openai-responses` stream answering `allow` in one fragment: the
 /// reviewer's stage-1 verdict, so a call with no matchable subject still
 /// runs reviewed.
+#[cfg(target_os = "linux")]
 fn allow_verdict() -> fakes::Response {
     use serde_json::json;
     let events = [
