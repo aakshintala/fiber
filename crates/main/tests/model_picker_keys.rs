@@ -98,19 +98,24 @@ fn session_model_changed(setup: &Setup) -> String {
 }
 
 /// Waits for the open picker to show its answered catalogue with
-/// `gamma`: `gamma` present and the `Reading the model lists` stall
-/// text gone. It reports through the shared `wait_screen_reporting`
-/// helper: on expiry the panic names the catalogue stage and carries
-/// the grid plus the session log, so the next sighting of the stall
-/// says whether the picker opened and whether a switch already
-/// landed.
+/// `gamma`: the filter row drawn, `gamma` present and the `Reading
+/// the model lists` stall text gone. It reports through the shared
+/// `wait_screen_reporting` helper: on expiry the panic names the
+/// catalogue stage and carries the grid plus the session log, so the
+/// next sighting of the stall says whether the picker opened and
+/// whether a switch already landed. Returns the matched grid, so a
+/// caller asserts on the frame the wait settled.
 #[track_caller]
-fn wait_picker_catalogue(run: &mut Run, setup: &Setup) {
+fn wait_picker_catalogue(run: &mut Run, setup: &Setup) -> Grid {
     run.wait_screen_reporting(
         "the picker catalogue with gamma",
-        |screen| shows(screen, "gamma") && !shows(screen, "Reading the model lists"),
+        |screen| {
+            shows(screen, "Type to search")
+                && shows(screen, "gamma")
+                && !shows(screen, "Reading the model lists")
+        },
         || session_model_changed(setup),
-    );
+    )
 }
 
 #[test]
@@ -149,8 +154,8 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
         |screen| shows(screen, "Type to search"),
         || session_model_changed(&setup),
     );
-    wait_picker_catalogue(&mut run, &setup);
-    let opened = run.screen().rows.clone();
+    let opened_grid = wait_picker_catalogue(&mut run, &setup);
+    let opened = opened_grid.rows.clone();
     assert!(
         opened.iter().any(|row| row.contains("Type to search")),
         "the picker shows its filter: {opened:?}"
@@ -159,10 +164,10 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     // three installed models, and `gamma` drops out. The open picker's
     // catalogue above proves the filter is taken.
     run.write(b"bet");
-    run.wait_screen("the filtered list", |screen| {
+    let filtered_grid = run.wait_screen("the filtered list", |screen| {
         shows(screen, "1 of 3 models") && !shows(screen, "gamma")
     });
-    let filtered = run.screen().rows.clone();
+    let filtered = filtered_grid.rows.clone();
     assert!(
         filtered.iter().any(|row| row.contains("1 of 3 models")),
         "the count names one of three: {filtered:?}"
@@ -175,10 +180,10 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     // the panel names the session's new model. The filtered list above
     // proves the choice is taken.
     run.write(b"\x13");
-    run.wait_screen("the session on fake/beta", |screen| {
+    let switched_grid = run.wait_screen("the session on fake/beta", |screen| {
         shows(screen, "fake/beta") && !shows(screen, "Type to search")
     });
-    let switched = run.screen().rows.clone();
+    let switched = switched_grid.rows.clone();
     assert!(
         switched.iter().any(|row| row.contains("fake/beta")),
         "the panel names the session model: {switched:?}"
@@ -468,10 +473,15 @@ fn an_unset_host_notice_shows_model_unconfigured_not_model_invalid() {
     // The empty catalogue proves the read answered with nothing
     // listed and nothing grouped: the value stayed per-model instead
     // of becoming a count row.
-    run.wait_screen("the answered empty catalogue", |screen| {
+    let counted_grid = run.wait_screen("the answered empty catalogue", |screen| {
         shows(screen, "No models. Install")
+            && !shows(screen, "models need")
+            && screen
+                .rows
+                .iter()
+                .all(|row| !(row.contains("model_invalid") && row.contains("fake/alpha")))
     });
-    let counted = run.screen().rows.clone();
+    let counted = counted_grid.rows.clone();
     assert!(
         counted.iter().all(|row| !row.contains("models need")),
         "no count row groups the not-a-host model: {counted:?}"
