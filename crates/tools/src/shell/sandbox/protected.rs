@@ -45,6 +45,7 @@ pub struct ProtectedPaths {
 /// What `begin` hands the call: the guard that owns the end-of-call
 /// compare, restore and report, carrying any stale baseline the call
 /// recovered on its way in.
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug)]
 pub(crate) struct Begin {
     /// The active-lock owner, consumed exactly once by the call's end.
@@ -76,18 +77,21 @@ pub use contract::shapes::{ProtectedPathFailure as RestoreFailure, ProtectedPath
 
 /// Why a confined command never started: the baseline could not be read or
 /// recorded. The caller fails the call closed with this cause before spawn.
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SetupError {
     /// What could not be read or recorded.
     pub message: String,
 }
 
+#[cfg(any(target_os = "linux", test))]
 impl std::fmt::Display for SetupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.message)
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 impl std::error::Error for SetupError {}
 
 /// Why session startup could not open protected-path state.
@@ -463,7 +467,14 @@ pub(crate) struct LinuxPolicy {
 /// the sandbox setup, keeping every other policy behavior unchanged.
 #[cfg(target_os = "linux")]
 pub(crate) fn linux_policy() -> Result<LinuxPolicy, String> {
-    if supports_signal_scope(signal_scope_probe) {
+    if supports_signal_scope(|| {
+        use landlock::{Access as _, Compatible as _, RulesetAttr as _};
+        landlock::Ruleset::default()
+            .set_compatibility(landlock::CompatLevel::HardRequirement)
+            .handle_access(landlock::AccessFs::from_all(landlock::ABI::V6))
+            .and_then(|ruleset| ruleset.create())
+            .is_ok()
+    }) {
         return Ok(LinuxPolicy {
             signal_scope: true,
             supervisor_rules: Vec::new(),
@@ -475,20 +486,9 @@ pub(crate) fn linux_policy() -> Result<LinuxPolicy, String> {
     })
 }
 
-/// Whether the kernel honours Landlock ABI 6: a version-6 ruleset creates
-/// only there. Probed, never assumed.
-#[cfg(target_os = "linux")]
-pub(crate) fn signal_scope_probe() -> bool {
-    use landlock::{Access as _, Compatible as _, RulesetAttr as _};
-    landlock::Ruleset::default()
-        .set_compatibility(landlock::CompatLevel::HardRequirement)
-        .handle_access(landlock::AccessFs::from_all(landlock::ABI::V6))
-        .and_then(|ruleset| ruleset.create())
-        .is_ok()
-}
-
-/// Resolves the capability probe; keeping the result injectable covers both
-/// policy branches without depending on the test kernel's ABI.
+/// Resolves the Landlock ABI 6 capability probe; keeping the result
+/// injectable covers both policy branches without depending on the test
+/// kernel's ABI.
 #[cfg(target_os = "linux")]
 pub(crate) fn supports_signal_scope(probe: impl FnOnce() -> bool) -> bool {
     probe()

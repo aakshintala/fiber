@@ -2477,10 +2477,7 @@ fn overlapping_calls_share_one_baseline_and_restore_once() {
 
 #[cfg(target_os = "linux")]
 mod linux_signal {
-    use super::super::protected::{
-        ProtectedPaths, linux_policy, signal_scope_probe, supervisor, supervisor_rules,
-        supports_signal_scope,
-    };
+    use super::super::protected::{ProtectedPaths, linux_policy, supervisor, supervisor_rules};
     use super::{open_handle, protected_home};
 
     /// The supervisor under test: distinct session and hub identities, so
@@ -2720,9 +2717,15 @@ mod linux_signal {
     }
 
     #[test]
-    fn the_policy_matches_the_probe() {
+    fn the_policy_matches_the_kernel_capability() {
+        use landlock::{Access as _, Compatible as _, RulesetAttr as _};
+        let supported = landlock::Ruleset::default()
+            .set_compatibility(landlock::CompatLevel::HardRequirement)
+            .handle_access(landlock::AccessFs::from_all(landlock::ABI::V6))
+            .and_then(|ruleset| ruleset.create())
+            .is_ok();
         let policy = linux_policy().expect("policy selects");
-        if supports_signal_scope(signal_scope_probe) {
+        if supported {
             assert!(policy.signal_scope, "ABI 6 and above uses signal scope");
             assert!(
                 policy.supervisor_rules.is_empty(),
@@ -2917,32 +2920,42 @@ mod protected_mutant_regressions {
         let workspace = fakes::TempDir::new("fiber-protected-duplicate-failure");
         let fiber = workspace.path().join(".fiber");
         std::fs::create_dir(&fiber).expect("fiber dir");
-        let protected = fiber.join("keep.txt");
-        std::fs::write(&protected, b"original").expect("protected file");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o555))
+            .expect("baseline is not writable");
         let home = home(&workspace);
-        let first = open(&home, workspace.path())
-            .begin(workspace.path())
-            .expect("first call begins");
+        let handle = open(&home, workspace.path());
+        let first = handle.begin(workspace.path()).expect("first call begins");
         drop(first.guard);
-        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o000))
-            .expect("file unreadable");
-        if std::fs::read(&protected).is_ok() {
-            std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o644))
-                .expect("restore file mode");
+
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o755))
+            .expect("allow unexpected child creation");
+        let extra = fiber.join("extra");
+        std::fs::write(&extra, b"unexpected").expect("extra child");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o555))
+            .expect("make directory non-writable");
+        if std::fs::remove_file(&extra).is_ok() {
+            // A privileged runner can remove a child from a read-only
+            // directory; it cannot exercise this recovery failure.
+            std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o755))
+                .expect("restore directory mode");
             return;
         }
-        let (handle, recovered) =
-            ProtectedPaths::open(&home, workspace.path()).expect("stale baseline recovers");
-        let recovered = recovered.expect("recovery reports the unreadable entry");
-        assert_eq!(recovered.failed.len(), 1, "recovery has one failure");
-        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o644))
-            .expect("make file readable for snapshot");
-        let active = handle.begin(workspace.path()).expect("new call begins");
-        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o000))
-            .expect("file unreadable again");
+
+        let active = handle
+            .begin(workspace.path())
+            .expect("stale recovery fails, then fresh snapshot succeeds");
+        assert_eq!(
+            active.guard.recovered.failed.len(),
+            1,
+            "the start failure joins this call's report"
+        );
+        std::fs::set_permissions(&extra, std::fs::Permissions::from_mode(0o000))
+            .expect("make the newly snapshotted child unreadable");
         let report = active.guard.finish();
-        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o644))
-            .expect("restore file mode");
+        std::fs::set_permissions(&extra, std::fs::Permissions::from_mode(0o644))
+            .expect("restore child mode");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o755))
+            .expect("restore directory mode");
         assert_eq!(report.failed.len(), 1, "duplicate failure is merged");
         assert_eq!(report.failed[0].path, ".fiber");
     }

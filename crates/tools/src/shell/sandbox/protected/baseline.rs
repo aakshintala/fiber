@@ -398,6 +398,8 @@ pub(crate) fn unix_mode(meta: &std::fs::Metadata) -> u32 {
 }
 
 /// No permission bits off Unix.
+// Mutants run on Linux, where this definition is not compiled.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(not(unix))]
 pub(crate) fn unix_mode(_meta: &std::fs::Metadata) -> u32 {
     0
