@@ -1,6 +1,6 @@
 //! Screen snapshots: the whole in-memory screen against stored files.
 
-use super::conversation::{test_conversation_rows as conversation_rows, test_draw_row as draw_row};
+use super::conversation::test_conversation_rows as conversation_rows;
 use super::{cursor, focus_style, lift_hover, render, text};
 use crate::app::App;
 use crate::keys::{Edit, Key};
@@ -4295,27 +4295,6 @@ fn no_colour_pin_keeps_the_card_sides() {
             "│",
             "a right side on row {y}"
         );
-    }
-    crate::surface::init(&|_| None);
-}
-
-#[test]
-fn every_card_tint_draws_the_thin_box_sides() {
-    // The pin draws through `draw_row`, and the row loop shares its tint
-    // check: a turn, surface or handoff background draws the thin-box
-    // sides without colour, so flipping any arm of the check drops a side
-    // here (`docs/tui.md`, "Look").
-    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
-    for (name, role) in [
-        ("turn", Role::Turn),
-        ("surface", Role::Surface),
-        ("handoff", Role::Handoff),
-    ] {
-        let line = ratatui::text::Line::styled("tinted", Style::new().bg(role.color()));
-        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
-        draw_row(line, Rect::new(0, 0, 20, 1), &mut buf);
-        assert_eq!(buf[(0, 0)].symbol(), "│", "{name} keeps its left side");
-        assert_eq!(buf[(19, 0)].symbol(), "│", "{name} keeps its right side");
     }
     crate::surface::init(&|_| None);
 }

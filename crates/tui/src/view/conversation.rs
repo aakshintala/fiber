@@ -356,6 +356,27 @@ pub(super) fn test_conversation_rows(
 }
 
 #[cfg(test)]
-pub(super) fn test_draw_row(line: Line<'_>, rect: Rect, buf: &mut Buffer) {
-    draw_row(line, rect, buf);
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_card_tint_draws_the_thin_box_sides() {
+        // The pin draws through `draw_row`, and the row loop shares its tint
+        // check: a turn, surface or handoff background draws the thin-box
+        // sides without colour, so flipping any arm of the check drops a side
+        // here (`docs/tui.md`, "Look").
+        crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+        for (name, role) in [
+            ("turn", Role::Turn),
+            ("surface", Role::Surface),
+            ("handoff", Role::Handoff),
+        ] {
+            let line = ratatui::text::Line::styled("tinted", Style::new().bg(role.color()));
+            let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+            draw_row(line, Rect::new(0, 0, 20, 1), &mut buf);
+            assert_eq!(buf[(0, 0)].symbol(), "│", "{name} keeps its left side");
+            assert_eq!(buf[(19, 0)].symbol(), "│", "{name} keeps its right side");
+        }
+        crate::surface::init(&|_| None);
+    }
 }
