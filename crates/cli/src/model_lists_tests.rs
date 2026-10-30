@@ -1205,82 +1205,47 @@ fn model_lists_grouped_separates_missing_groups_from_not_a_host_notices() {
     );
 }
 
-/// Process variables for one test: `retain_credentialed` reads the
-/// process environment, and nextest runs each test in its own process,
-/// so setting them here touches no other test. Every touched variable is
-/// restored on drop, and the ambient credential variables are cleared
-/// first, so the test reads only what it sets.
-struct EnvGuard {
-    saved: Vec<(&'static str, Option<String>)>,
-}
-
-impl EnvGuard {
-    fn set(home: &Path, vars: &[(&'static str, &str)]) -> Self {
-        let mut touched: Vec<&'static str> = vec![
-            "HOME",
-            "AWS_BEARER_TOKEN_BEDROCK",
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-            "AWS_REGION",
-            "AWS_SHARED_CREDENTIALS_FILE",
-            "GOOGLE_CLOUD_PROJECT",
-        ];
-        for (key, _) in vars {
-            if !touched.contains(key) {
-                touched.push(key);
+/// Re-runs one environment-backed display case in a child. Its environment
+/// is injected before startup, never mutated while Rust threads are running.
+fn with_environment(function: &str, vars: &[(&str, &str)], check: impl FnOnce(&Path)) {
+    const CHILD: &str = "FIBER_TEST_MODEL_LIST_ENV_CASE";
+    let case = serde_json::to_string(vars).unwrap();
+    if let Ok(selected) = std::env::var(CHILD) {
+        if selected == case {
+            let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+            check(&home);
+        }
+        return;
+    }
+    let root = fakes::TempDir::new("fiber-model-list-env");
+    let name = format!("{}::{function}", module_path!().split_once("::").unwrap().1);
+    let output = fakes::rerun_prepared(
+        &name,
+        &[(CHILD, &case)],
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        |command| {
+            for key in [
+                "AWS_BEARER_TOKEN_BEDROCK",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_REGION",
+                "AWS_SHARED_CREDENTIALS_FILE",
+                "AWS_CONFIG_FILE",
+                "CLOUDSDK_CONFIG",
+                "GOOGLE_CLOUD_PROJECT",
+                "FIBER_TEST_SHARED_LOGIN",
+            ] {
+                command.env_remove(key);
             }
-        }
-        let saved = touched
-            .iter()
-            .map(|key| (*key, std::env::var(key).ok()))
-            .collect();
-        apply_env(home, &touched, vars);
-        Self { saved }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        restore_env(&self.saved);
-    }
-}
-
-/// Sets one test's process variables: only the listed keys change, and the
-/// guard restores every one on drop.
-#[allow(
-    unsafe_code,
-    reason = "each cli test owns its process; drop restores every key"
-)]
-fn apply_env(home: &std::path::Path, touched: &[&str], vars: &[(&str, &str)]) {
-    // SAFETY: no other thread in the test process reads these keys while
-    // the guard lives, and `restore_env` runs at the end of the same test.
-    unsafe {
-        std::env::set_var("HOME", home);
-        for key in touched {
-            if *key != "HOME" {
-                std::env::remove_var(key);
-            }
-        }
-        for (key, value) in vars {
-            std::env::set_var(key, value);
-        }
-    }
-}
-
-/// Restores what `apply_env` changed, nothing else.
-#[allow(unsafe_code, reason = "restores the exact keys `apply_env` saved")]
-fn restore_env(saved: &[(&str, Option<String>)]) {
-    // SAFETY: the guard kept these keys untouched since `apply_env`, so
-    // restoring them returns the process to its earlier state.
-    unsafe {
-        for (key, value) in saved {
-            match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
+            command.env("HOME", root.path()).envs(vars.iter().copied());
+        },
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Installs the real first-party `providers/<package>` data as extension
@@ -1340,13 +1305,6 @@ fn cached_list(setup: &Setup) -> Listed {
     catalogue
 }
 
-/// An empty declared home for `HOME`: no declared path exists under it.
-fn declared_home(setup: &Setup) -> PathBuf {
-    let home = setup.root.path().join("declared-home");
-    std::fs::create_dir_all(&home).unwrap();
-    home
-}
-
 #[test]
 fn bedrock_lists_with_either_declared_environment_variable() {
     for vars in [
@@ -1358,22 +1316,19 @@ fn bedrock_lists_with_either_declared_environment_variable() {
     ] {
         let setup = Setup::new("fiber-model-list-bedrock-on");
         install_bedrock(&setup);
-        let home = declared_home(&setup);
-        let _guard = EnvGuard::set(&home, &vars);
-        let catalogue = cached_list(&setup);
-        assert!(
-            references(&catalogue)
-                .iter()
-                .any(|model| model.starts_with("bedrock/")),
-            "{vars:?}: {:?}",
-            catalogue.models
+        with_environment(
+            "bedrock_lists_with_either_declared_environment_variable",
+            &vars,
+            |_| {
+                let catalogue = cached_list(&setup);
+                assert!(
+                    references(&catalogue).contains(&"bedrock/amazon.nova-2-lite-v1:0"),
+                    "{:?}",
+                    catalogue.models
+                );
+                assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+            },
         );
-        assert!(
-            references(&catalogue).contains(&"bedrock/amazon.nova-2-lite-v1:0"),
-            "{:?}",
-            catalogue.models
-        );
-        assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
     }
 }
 
@@ -1389,13 +1344,18 @@ fn bedrock_stays_off_without_a_declared_credential_source() {
     ] {
         let setup = Setup::new("fiber-model-list-bedrock-off");
         install_bedrock(&setup);
-        let home = declared_home(&setup);
-        let _guard = EnvGuard::set(&home, &vars);
-        let catalogue = cached_list(&setup);
-        assert!(
-            catalogue.models.is_empty(),
-            "{vars:?}: {:?}",
-            catalogue.models
+        with_environment(
+            "bedrock_stays_off_without_a_declared_credential_source",
+            &vars,
+            |_| {
+                let catalogue = cached_list(&setup);
+                assert!(
+                    catalogue.models.is_empty(),
+                    "{vars:?}: {:?}",
+                    catalogue.models
+                );
+                assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+            },
         );
     }
 }
@@ -1404,33 +1364,40 @@ fn bedrock_stays_off_without_a_declared_credential_source() {
 fn vertex_project_settings_leave_it_off() {
     let setup = Setup::new("fiber-model-list-vertex-off");
     install_vertex(&setup);
-    let home = declared_home(&setup);
-    let _guard = EnvGuard::set(&home, &[("GOOGLE_CLOUD_PROJECT", "example-project")]);
-    let catalogue = cached_list(&setup);
-    assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+    with_environment(
+        "vertex_project_settings_leave_it_off",
+        &[("GOOGLE_CLOUD_PROJECT", "example-project")],
+        |_| {
+            let catalogue = cached_list(&setup);
+            assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+            assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+        },
+    );
 }
 
 #[test]
 fn bedrock_empty_declared_file_switches_it_on() {
     let setup = Setup::new("fiber-model-list-bedrock-file");
     install_bedrock(&setup);
-    let home = declared_home(&setup);
-    let _guard = EnvGuard::set(&home, &[("AWS_REGION", "us-east-1")]);
-    assert!(cached_list(&setup).models.is_empty());
-    // An empty file counts: presence is not validity.
-    let credentials = home.join(".aws/credentials");
-    std::fs::create_dir_all(credentials.parent().unwrap()).unwrap();
-    std::fs::write(&credentials, "").unwrap();
-    let catalogue = cached_list(&setup);
-    assert!(
-        references(&catalogue)
-            .iter()
-            .any(|model| model.starts_with("bedrock/")),
-        "{:?}",
-        catalogue.models
+    with_environment(
+        "bedrock_empty_declared_file_switches_it_on",
+        &[("AWS_REGION", "us-east-1")],
+        |home| {
+            assert!(cached_list(&setup).models.is_empty());
+            // An empty file counts: presence is not validity.
+            let credentials = home.join(".aws/credentials");
+            std::fs::create_dir_all(credentials.parent().unwrap()).unwrap();
+            std::fs::write(&credentials, "").unwrap();
+            let catalogue = cached_list(&setup);
+            assert!(
+                references(&catalogue).contains(&"bedrock/amazon.nova-2-lite-v1:0"),
+                "{:?}",
+                catalogue.models
+            );
+            std::fs::remove_file(&credentials).unwrap();
+            assert!(cached_list(&setup).models.is_empty());
+        },
     );
-    std::fs::remove_file(&credentials).unwrap();
-    assert!(cached_list(&setup).models.is_empty());
 }
 
 #[test]
@@ -1471,12 +1438,21 @@ fn configured_overlapping_logins_switch_both_providers_on() {
         "one": {"credentials": {"default": {"env": "FIBER_TEST_SHARED_LOGIN"}}},
         "two": {"credentials": {"default": {"env": "FIBER_TEST_SHARED_LOGIN"}}},
     }}));
-    // No login anywhere: neither lists.
-    assert!(cached_list(&setup).models.is_empty());
-    let home = declared_home(&setup);
-    let _guard = EnvGuard::set(&home, &[("FIBER_TEST_SHARED_LOGIN", "k")]);
-    let catalogue = cached_list(&setup);
-    assert_eq!(references(&catalogue), ["one/m1", "two/m2"]);
+    for vars in [vec![], vec![("FIBER_TEST_SHARED_LOGIN", "k")]] {
+        with_environment(
+            "configured_overlapping_logins_switch_both_providers_on",
+            &vars,
+            |_| {
+                let catalogue = cached_list(&setup);
+                let expected = if vars.is_empty() {
+                    vec![]
+                } else {
+                    vec!["one/m1", "two/m2"]
+                };
+                assert_eq!(references(&catalogue), expected);
+            },
+        );
+    }
 }
 
 #[test]

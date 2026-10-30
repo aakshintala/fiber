@@ -3645,6 +3645,13 @@ fn a_credential_label_ignores_stored_origins_even_without_a_callback() {
 #[test]
 fn a_sign_error_keeps_the_token_out_of_every_line() {
     let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let server = ProviderServer::start([]).unwrap();
     let base_url = format!("{}/v1", server.url());
     inline_extension(
