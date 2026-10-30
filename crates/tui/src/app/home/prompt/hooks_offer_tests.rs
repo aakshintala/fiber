@@ -743,6 +743,11 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
         Some(new.as_str()),
         "the clear follows the retry"
     );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(old_session),
+        "the staged clear stays attached until the retry answers"
+    );
     let out = app.on_line(accepted(&new, "s_bbbbbbbbbbbbbbbb"));
     // The accepted retry closes the old session: the close goes out
     // with the lines, with no promised count or order.

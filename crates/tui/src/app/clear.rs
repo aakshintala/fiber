@@ -193,14 +193,9 @@ impl App {
     /// untouched, and no `close` sent. True when `id` was the clear
     /// `start`.
     pub(super) fn clear_rejected(&mut self, id: &str, code: &str, message: &str) -> bool {
-        let Some(pending) = self.clear.pending.take() else {
-            return false;
-        };
-        if pending.command_id != id {
-            self.clear.pending = Some(pending);
+        if !self.settle_clear_start(id) {
             return false;
         }
-        self.outbox.answered(id);
         self.notices.push(code, message.to_owned());
         true
     }
@@ -210,12 +205,8 @@ impl App {
     /// the retry; a lost `close` keeps the old session running, named
     /// by one notice. True when `id` was either.
     pub(super) fn clear_lost(&mut self, id: &str) -> bool {
-        if let Some(pending) = self.clear.pending.take() {
-            if pending.command_id == id {
-                self.outbox.answered(id);
-                return true;
-            }
-            self.clear.pending = Some(pending);
+        if self.settle_clear_start(id) {
+            return true;
         }
         if self.clear.close.as_deref() == Some(id) {
             self.clear.close = None;
@@ -231,13 +222,18 @@ impl App {
     /// Settles the clear-staged start without its refusal notice when
     /// the hooks offer takes ownership of that refusal.
     pub(super) fn settle_clear_hooks_start(&mut self, id: &str) -> bool {
-        let Some(pending) = self.clear.pending.take() else {
+        self.settle_clear_start(id)
+    }
+
+    /// Removes the matching pending clear start and its outbox entry.
+    fn settle_clear_start(&mut self, id: &str) -> bool {
+        let Some(_) = self
+            .clear
+            .pending
+            .take_if(|pending| pending.command_id == id)
+        else {
             return false;
         };
-        if pending.command_id != id {
-            self.clear.pending = Some(pending);
-            return false;
-        }
         self.outbox.answered(id);
         true
     }
@@ -254,3 +250,7 @@ impl App {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "clear_tests.rs"]
+mod clear_tests;
