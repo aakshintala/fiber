@@ -1092,7 +1092,10 @@ fn a_swapped_view_on_home_tints_the_focused_row_and_lifts_the_hovered_row() {
     use crate::theme::hover_bg;
     use ratatui::style::Modifier;
     // The `/keys` screen on home draws through the swapped-view early
-    // return, with one target per row (`docs/tui.md`, "Swapped views").
+    // return, with one target per row (`docs/tui.md`, "Swapped views")
+    // and one row per action (`docs/tui.md`, "Bindings": every action
+    // with its keys, id and description — the table lists dozens, so at
+    // least two rows exist to focus one and hover another).
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
