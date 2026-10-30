@@ -89,6 +89,14 @@ pub(crate) fn provider_offers(
     home: &Path,
     providers: &Providers,
 ) -> Result<Vec<ProviderOffer>, CliError> {
+    let workspace = std::env::current_dir().map_err(CliError::CurrentDirectory)?;
+    let (_, project) = crate::project_of(home, &workspace)?;
+    let config = Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace,
+        project,
+        overrides: Vec::new(),
+    })?;
     let mut offers = Vec::new();
     for target in login_targets(home)? {
         let name = match target {
@@ -102,29 +110,28 @@ pub(crate) fn provider_offers(
         };
         offers.push(ProviderOffer {
             name,
-            signed_in: crate::login::signed_in(home, data).map_err(CliError::Config)?,
+            signed_in: config
+                .credentials()
+                .has_credential(data, &|name| std::env::var(name).ok()),
         });
     }
     Ok(offers)
 }
 
-/// The models of the signed-in providers only, as references, in the same
-/// row order with each provider's model order.
-pub(crate) fn model_offers(
-    home: &Path,
-    providers: &Providers,
-) -> Result<Vec<ModelOffer>, CliError> {
+/// The models of the providers given, as references, in the same row
+/// order with each provider's model order. The caller passes the
+/// filtered presentation catalogue, so every provider here is switched
+/// on; this trusts that catalogue instead of rechecking stored labels,
+/// which environment- and path-backed credentials never have.
+pub(crate) fn model_offers(providers: &Providers) -> Result<Vec<ModelOffer>, CliError> {
     let mut offers = Vec::new();
-    for offer in provider_offers(home, providers)? {
-        if !offer.signed_in {
-            continue;
-        }
-        let Some(data) = providers.get(&offer.name) else {
+    for name in providers.names() {
+        let Some(data) = providers.get(name) else {
             continue;
         };
         for model in &data.models {
             offers.push(ModelOffer {
-                reference: format!("{}/{}", offer.name, model.id),
+                reference: format!("{}/{}", name, model.id),
                 levels: model
                     .thinking_levels
                     .iter()
@@ -268,7 +275,13 @@ fn run_terminal(
     let load = |config: &Config| {
         SessionExtensions::load(home, config, Arc::clone(clock), Arc::clone(locks), None)
     };
-    let (providers, _config, notices, _unconfigured) =
+    // Provider-login offers come from the unfiltered installed
+    // inventory: a logged-out provider stays available to log in. The
+    // model-choice catalogue below is filtered, and is read after the
+    // login step so a newly stored credential applies in the same run.
+    let (installed, _, _, _) =
+        crate::models::providers_config_and_set(home, workspace, Arc::clone(clock))?;
+    let (_, _, notices, _) =
         model_lists_apart(home, workspace, ModelLists::Cached, &load, run, &**clock).map_err(
             |error| match error {
                 ModelListsError::Load(error) => error,
@@ -279,7 +292,7 @@ fn run_terminal(
     for notice in &notices {
         writeln!(err, "{}", notice.message).map_err(CliError::StandardError)?;
     }
-    let code = step_providers(home, Some(&providers), flags, clock, Some(&mut *stdin), err)?;
+    let code = step_providers(home, Some(&installed), flags, clock, Some(&mut *stdin), err)?;
     if code != 0 {
         return Ok(code);
     }
@@ -287,6 +300,16 @@ fn run_terminal(
     if code != 0 {
         return Ok(code);
     }
+    // Rebuilt after login: the catalogue above may miss a provider the
+    // login step just switched on. Its notices already printed.
+    let (providers, _, _, _) =
+        model_lists_apart(home, workspace, ModelLists::Cached, &load, run, &**clock).map_err(
+            |error| match error {
+                ModelListsError::Load(error) => error,
+                ModelListsError::Config(error) => CliError::Config(error),
+                ModelListsError::Placeholders(error) => CliError::Extensions(error),
+            },
+        )?;
     let code = step_model(home, Some(&providers), flags, Some(&mut *stdin), err)?;
     if code != 0 {
         return Ok(code);
@@ -467,7 +490,7 @@ fn step_model(
         skipped_to(err, "model", "run fiber setup --model <model>");
         return Ok(0);
     };
-    let models = model_offers(home, providers)?;
+    let models = model_offers(providers)?;
     if models.is_empty() {
         skipped_to(err, "model", "run fiber setup --model <model>");
         return Ok(0);

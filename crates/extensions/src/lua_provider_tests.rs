@@ -634,7 +634,7 @@ fn credentialless_data() -> config::ProviderData {
 }
 
 #[test]
-fn has_credential_needs_a_registered_credential_or_a_stored_key() {
+fn has_credential_counts_a_stored_key_but_no_registration() {
     let root = fakes::TempDir::new("fiber-has-credential");
     let workspace = root.path().join("workspace");
     fs::create_dir_all(&workspace).unwrap();
@@ -650,19 +650,11 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
     let data = credentialless_data();
     // No `credential` function and no key source: nothing to refresh with.
     assert!(
-        !fakes::within(
-            "has_credential",
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            {
-                let provider = Arc::clone(&bare);
-                let config = config.clone();
-                let data = data.clone();
-                move || provider.has_credential(&config, &data, &fakes::children::grouped_output)
-            }
-        ),
+        !bare.has_credential(&config, &data),
         "a provider with no credential and no stored key has none"
     );
-    // A registered `credential` is one whatever the session stores.
+    // A registered `credential` alone proves nothing: only a stored key
+    // does, and looking never starts the VM.
     let dir = root.path().join("ext-cred");
     fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
@@ -671,20 +663,24 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
          return { token = \"tok-1\", expires_at = 4102444800 } end } })",
     )
     .unwrap();
-    let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        home.clone(),
+        FakeClock::new(),
+    ));
     let credentialed = LuaProvider::new(extension, "p");
     assert!(
-        fakes::within(
-            "has_credential",
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            {
-                let config = config.clone();
-                let data = data.clone();
-                move || {
-                    credentialed.has_credential(&config, &data, &fakes::children::grouped_output)
-                }
-            }
-        ),
-        "a provider registering credential has one"
+        !credentialed.has_credential(&config, &data),
+        "a registered credential without a stored key has none"
+    );
+    config::store_credential(&home, "p", "default", &Secret::new("k".into())).unwrap();
+    assert!(
+        credentialed.has_credential(&config, &data),
+        "a stored key switches the provider on"
+    );
+    assert!(
+        bare.has_credential(&config, &data),
+        "the key counts without any registration"
     );
 }

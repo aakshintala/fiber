@@ -1594,7 +1594,12 @@ use loads the file into the extension's running VM, or creates one when none
 runs. Providers in one extension share that VM. Model discovery on a missing
 or stale list uses the same path; its VM is dropped after discovery unless
 another provider or the extension's hooks, tools or commands still hold it.
-Fresh cached lists are read without loading provider Lua.
+Fresh cached lists are read without loading provider Lua and show models
+only for providers with credential presence (`docs/model-routing.md`,
+"Credentials"). Providers without presence never run discovery. Provider data
+and credentialed discovery ignore `extensions."<name>".enabled`; in a disabled
+mixed package, init, commands and hooks still stay off, even when its provider
+Lua starts later.
 
 A provider file runs at most once per VM, including when it fails. A load that
 expires while still queued has not run and can be retried. Pending loads run
@@ -1891,6 +1896,14 @@ installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run n
 recorded under their full names: nothing is compiled in, and
 `fiber extension remove <name>` removes any of them.
 
+Installed is not switched on. A provider is switched on exactly when it has
+credential presence (`docs/model-routing.md`, "Credentials"). Without it,
+the provider shows no models and never refreshes its list. Login supplies a
+stored credential; removing the last one switches the provider off unless
+another source remains. Logout leaves the extension and model cache installed.
+External-source providers use their declared environment variables or paths,
+not `fiber login`. Presence checks do not validate or acquire credentials.
+
 A provider, `hooks`, `init`, `memory` or `export` costs nothing in a session that does not use it. A
 provider that is pure data is only read, a Lua provider runs only to refresh a
 stale model list or when a session uses one of its models, and `hooks` loads only when configuration has
@@ -2060,7 +2073,10 @@ cached lists.
 
 **An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions
-and no others. The scope is the person's `extensions."<name>".enabled` key:
+and no others, except for provider data and discovery, whose switch is
+credential presence. In a mixed package, its non-provider init, commands and
+hooks remain project-scoped. Approved repository copies retain their existing
+project scope. The personal-install scope is the person's `extensions."<name>".enabled` key:
 `false` in the global configuration and `true` in the project's, both in Fiber
 home (`docs/configuration.md`). A repository cannot set it. For each
 extension the command installs for the first time, its dependencies included,
