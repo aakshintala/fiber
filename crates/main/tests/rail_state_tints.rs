@@ -102,6 +102,8 @@ fn rail_cards_tint_by_state() {
             && grid.contents.contains("retry work")
             && grid.contents.contains("WORKING")
             && grid.contents.contains("RETRYING")
+            && card_bg(grid, "steady work") == Some(SURFACE_256)
+            && card_bg(grid, "retry work") == Some(RETRYING_256)
     });
     let steady = tint(&grid, "steady work");
     let retry = tint(&grid, "retry work");

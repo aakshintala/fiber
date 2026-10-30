@@ -440,8 +440,15 @@ fn the_shell_schema_is_closed_and_excludes_deadline_ms() {
     );
     assert!(schema["properties"].get("timeout_ms").is_some(), "{schema}");
     assert_eq!(schema["additionalProperties"], serde_json::json!(false));
+    assert!(schema["properties"].get("unconfined").is_some(), "{schema}");
+    assert_eq!(
+        schema["properties"]["unconfined"]["type"],
+        serde_json::json!(["boolean", "null"]),
+        "{schema}"
+    );
     let required = schema["required"].as_array().expect("required names");
     assert!(required.iter().any(|name| name == "timeout_ms"), "{schema}");
+    assert!(required.iter().any(|name| name == "unconfined"), "{schema}");
     assert!(
         !required.iter().any(|name| name == "deadline_ms"),
         "{schema}"
@@ -1225,14 +1232,18 @@ fn the_model_shell_marks_confined_when_on_and_available() {
         deny_read: Vec::new(),
         fiber_home,
     }));
+    let fiber = root.path().join("fiber-stub");
+    let artifacts = root.path().join("artifacts");
+    let images = super::session_images(fiber.clone(), &artifacts, None);
     let (tools, _infos, _driver, _forget, _images) = super::builtin_timed(
-        root.path().join("fiber-stub"),
+        fiber,
         &root.path().join("home"),
         root.path(),
-        &root.path().join("artifacts"),
+        &artifacts,
         &clock,
         &jobs,
         &Arc::new(tools::PathLocks::new()),
+        images,
         None,
         &delegates(),
         skills(),

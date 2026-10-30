@@ -14,10 +14,10 @@ use contract::ErrorCode;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 
-use contract::HubLine;
+use contract::{HubEventKind, HubLine};
 use serde_json::{Map, Value, json};
 
-use super::{Ask, delete, delete_listed, delete_run, export, matched, run};
+use super::{Ask, HubAnswer, delete, delete_listed, delete_run, export, matched, run};
 use crate::CliError;
 use fakes::Deadline;
 
@@ -350,17 +350,25 @@ impl FakeHub {
                 if let Some(tx) = first.take() {
                     tx.send(line.clone()).unwrap();
                 }
-                // Answers queued lines until the command just read is
-                // answered, so a stray line for another command is skipped
-                // as `request_value` skips it; an empty queue ends the
-                // connection, as a dropped hub end does.
+                // Answers queued lines until an accepted or rejected line
+                // for the command just read, so a future kind with the same
+                // command id is emitted but never ends the batch, as
+                // `request_value` skips it and reads on; a stray line for
+                // another command is skipped the same way. An empty queue
+                // ends the connection, as a dropped hub end does.
                 let want = request_id(&line);
                 loop {
                     let Some(answer) = answers.lock().unwrap().pop_front() else {
                         break;
                     };
                     let done = match (want.as_deref(), answer_command_id(&answer)) {
-                        (Some(want), Some(got)) => want == got,
+                        (Some(want), Some(got)) => {
+                            want == got
+                                && matches!(
+                                    answer_kind(&answer).as_deref(),
+                                    Some("command_accepted" | "command_rejected")
+                                )
+                        }
                         _ => true,
                     };
                     if (&hub).write_all(answer.as_bytes()).is_err() {
@@ -424,6 +432,13 @@ fn answer_command_id(answer: &str) -> Option<String> {
                 .as_str()
                 .map(str::to_owned)
         })
+}
+
+/// The `kind` of a queued answer line, when it parses.
+fn answer_kind(answer: &str) -> Option<String> {
+    serde_json::from_str::<Value>(answer)
+        .ok()
+        .and_then(|answer| answer.get("kind")?.as_str().map(str::to_owned))
 }
 
 fn accepted() -> Value {
@@ -769,11 +784,9 @@ fn an_unknown_selector_is_not_found_and_never_connects() {
     assert_eq!(connects, 0);
 }
 
-fn hub_answer(kind: &str, payload: Value) -> HubLine {
-    HubLine {
-        kind: kind.into(),
-        ts: 1,
-        schema_version: 1,
+fn hub_answer(kind: HubEventKind, payload: Value) -> HubAnswer {
+    HubAnswer {
+        kind,
         payload: payload.as_object().unwrap().clone(),
     }
 }
@@ -781,7 +794,7 @@ fn hub_answer(kind: &str, payload: Value) -> HubLine {
 #[test]
 fn an_answer_for_another_command_id_is_no_answer() {
     let line = hub_answer(
-        "command_accepted",
+        HubEventKind::CommandAccepted,
         json!({"command_id": "c_other", "result": 1}),
     );
     assert!(matched(line, "c_1", || "delete".to_owned()).is_none());
@@ -790,7 +803,7 @@ fn an_answer_for_another_command_id_is_no_answer() {
 #[test]
 fn an_accepted_answer_carries_its_result() {
     let line = hub_answer(
-        "command_accepted",
+        HubEventKind::CommandAccepted,
         json!({"command_id": "c_1", "result": {"token": "t"}}),
     );
     assert_eq!(
@@ -801,7 +814,7 @@ fn an_accepted_answer_carries_its_result() {
 
 #[test]
 fn an_accepted_answer_without_a_result_is_null() {
-    let line = hub_answer("command_accepted", json!({"command_id": "c_1"}));
+    let line = hub_answer(HubEventKind::CommandAccepted, json!({"command_id": "c_1"}));
     assert_eq!(
         matched(line, "c_1", || "refresh".to_owned())
             .unwrap()
@@ -813,7 +826,7 @@ fn an_accepted_answer_without_a_result_is_null() {
 #[test]
 fn a_rejected_answer_carries_its_code_and_message() {
     let line = hub_answer(
-        "command_rejected",
+        HubEventKind::CommandRejected,
         json!({"command_id": "c_1", "code": "busy", "message": "run"}),
     );
     let error = matched(line, "c_1", || "delete".to_owned())
@@ -836,7 +849,7 @@ fn a_rejected_answer_carries_its_code_and_message() {
 #[test]
 fn an_unknown_rejection_code_is_other() {
     let line = hub_answer(
-        "command_rejected",
+        HubEventKind::CommandRejected,
         json!({"command_id": "c_1", "code": "future", "message": "m"}),
     );
     let error = matched(line, "c_1", || "delete".to_owned())
@@ -855,9 +868,11 @@ fn a_rejection_without_a_usable_code_is_io_failed() {
         json!({"command_id": "c_1", "message": "m"}),
         json!({"command_id": "c_1", "code": 7, "message": "m"}),
     ] {
-        let error = matched(hub_answer("command_rejected", payload), "c_1", || {
-            "delete".to_owned()
-        })
+        let error = matched(
+            hub_answer(HubEventKind::CommandRejected, payload),
+            "c_1",
+            || "delete".to_owned(),
+        )
         .unwrap()
         .unwrap_err();
         assert!(
@@ -878,7 +893,7 @@ fn a_rejection_without_a_usable_code_is_io_failed() {
 #[test]
 fn a_rejection_without_a_message_names_the_command() {
     let line = hub_answer(
-        "command_rejected",
+        HubEventKind::CommandRejected,
         json!({"command_id": "c_1", "code": "busy"}),
     );
     let error = matched(line, "c_1", || "delete".to_owned())
@@ -897,10 +912,178 @@ fn a_rejection_without_a_message_names_the_command() {
     assert_eq!(error.to_string(), "the hub refused `delete`");
 }
 
+/// One complete hub JSON line enters as its typed kind.
+fn entered(kind: &str, payload: Value) -> HubAnswer {
+    serde_json::from_value(json!({"kind": kind, "ts": 1, "schema_version": 1, "payload": payload}))
+        .unwrap()
+}
+
 #[test]
-fn another_kind_with_the_matching_id_is_no_answer() {
-    let line = hub_answer("session_left", json!({"command_id": "c_1"}));
+fn hub_json_enters_as_its_typed_kind() {
+    for (name, expected) in [
+        ("hub_hello", HubEventKind::HubHello),
+        ("attention", HubEventKind::Attention),
+        ("device_changed", HubEventKind::DeviceChanged),
+        ("session_left", HubEventKind::SessionLeft),
+        ("stream_closed", HubEventKind::StreamClosed),
+        ("stream_reopened", HubEventKind::StreamReopened),
+        ("command_accepted", HubEventKind::CommandAccepted),
+        ("command_rejected", HubEventKind::CommandRejected),
+    ] {
+        let line = entered(name, json!({}));
+        assert_eq!(line.kind, expected, "{name}");
+    }
+}
+
+#[test]
+fn an_unfamiliar_wire_kind_keeps_its_text_at_entry_and_answers_nothing() {
+    let line: HubAnswer = serde_json::from_str(
+        r#"{"kind":"future_kind","ts":1,"schema_version":1,"payload":{"command_id":"c_1","result":1}}"#,
+    )
+    .unwrap();
+    assert_eq!(line.kind, HubEventKind::Unknown("future_kind".into()));
     assert!(matched(line, "c_1", || "delete".to_owned()).is_none());
+}
+
+#[test]
+fn a_typed_answer_keeps_the_wire_shape_validation() {
+    for line in [
+        json!({"ts": 1, "schema_version": 1, "payload": {}}),
+        json!({"kind": "command_accepted", "schema_version": 1, "payload": {}}),
+        json!({"kind": "command_accepted", "ts": 1, "payload": {}}),
+        json!({"kind": "command_accepted", "ts": 1, "schema_version": 1}),
+        json!({"kind": 7, "ts": 1, "schema_version": 1, "payload": {}}),
+        json!({"kind": "command_accepted", "ts": 1, "schema_version": 1, "payload": null}),
+        json!({"kind": "command_accepted", "ts": 1, "schema_version": 1, "payload": []}),
+    ] {
+        assert!(
+            serde_json::from_value::<HubAnswer>(line.clone()).is_err(),
+            "{line}"
+        );
+    }
+    let line: HubAnswer = serde_json::from_value(
+        json!({"kind": "command_accepted", "ts": 1, "schema_version": 1, "payload": {}, "future": true}),
+    )
+    .unwrap();
+    assert_eq!(line.kind, HubEventKind::CommandAccepted);
+}
+
+#[test]
+fn every_known_non_answer_kind_with_the_matching_id_is_no_answer() {
+    for (name, kind) in [
+        ("hub_hello", HubEventKind::HubHello),
+        ("attention", HubEventKind::Attention),
+        ("device_changed", HubEventKind::DeviceChanged),
+        ("session_left", HubEventKind::SessionLeft),
+        ("stream_closed", HubEventKind::StreamClosed),
+        ("stream_reopened", HubEventKind::StreamReopened),
+    ] {
+        let line = hub_answer(kind, json!({"command_id": "c_1"}));
+        assert!(
+            matched(line, "c_1", || "delete".to_owned()).is_none(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn an_accepted_answer_never_runs_the_fallback() {
+    let line = hub_answer(
+        HubEventKind::CommandAccepted,
+        json!({"command_id": "c_1", "result": 1}),
+    );
+    assert_eq!(
+        matched(line, "c_1", || panic!(
+            "an accepted answer names no command"
+        ),)
+        .unwrap()
+        .unwrap(),
+        json!(1)
+    );
+}
+
+#[test]
+fn an_unknown_line_before_an_accepted_answer_reads_the_answer() {
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    // Per docs/events.md:56-57 a consumer skips any kind it does not
+    // recognise, so the unknown line is skipped and the real answer is read.
+    let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
+        "command_id": "c_delete", "result": {"token": "wrong"},
+    }});
+    assert_eq!(
+        serde_json::from_value::<HubAnswer>(unknown.clone())
+            .unwrap()
+            .kind,
+        HubEventKind::Unknown("future_kind".into()),
+    );
+    let (out, _, got, _, _) = run_delete(
+        &setup,
+        &[unknown, accepted()],
+        ROOT,
+        false,
+        true,
+        false,
+        Unread,
+    );
+    got.unwrap();
+    assert_eq!(out, format!("{ROOT}\n"));
+}
+
+#[test]
+fn an_unknown_line_before_a_rejection_reads_the_refusal() {
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    // Per docs/events.md:56-57 a consumer skips any kind it does not
+    // recognise, so the unknown line is skipped and the refusal is read.
+    let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
+        "command_id": "c_delete", "code": "session_held", "message": "held",
+    }});
+    assert_eq!(
+        serde_json::from_value::<HubAnswer>(unknown.clone())
+            .unwrap()
+            .kind,
+        HubEventKind::Unknown("future_kind".into()),
+    );
+    let (out, _, got, _, _) = run_delete(
+        &setup,
+        &[unknown, refused("c_delete", "busy", "run")],
+        ROOT,
+        false,
+        true,
+        false,
+        Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::Busy,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "run");
+    assert_eq!(out, "", "nothing is printed as deleted");
+}
+
+#[test]
+fn an_unknown_line_then_a_close_is_io_failed() {
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
+        "command_id": "c_delete", "result": 1,
+    }});
+    let (out, _, got, _, _) = run_delete(&setup, &[unknown], ROOT, false, true, false, Unread);
+    let error = got.unwrap_err();
+    assert!(
+        matches!(&error, CliError::HubClosed { command } if command == "delete"),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert_eq!(out, "");
 }
 
 /// A writer that always fails.

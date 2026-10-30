@@ -13,7 +13,8 @@
 //! generation cancels everything pending and bumps the generation, so no
 //! id resolves across generations and a late reply or call changes
 //! nothing. No registry, state or emitter lock is held over pipe I/O or
-//! callback waits; the table is a leaf lock.
+//! callback waits. A live reply queues its acceptance before publishing
+//! settlement, so teardown cannot overtake that line.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex};
@@ -157,7 +158,9 @@ struct Inner {
 }
 
 /// The request table: one generation of pending requests and the stream
-/// gate. The lock is a leaf: no callback runs under it.
+/// gate. Its lock is a leaf except for `settle_with_before_wake`: that
+/// callback may only queue one outbound line and must never block or
+/// re-enter the table.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) struct Table {
     inner: Mutex<Inner>,
@@ -336,25 +339,36 @@ impl Table {
     /// its waiter: a waiter that answers from its own release cannot
     /// deadlock on the gate.
     pub(crate) fn settle(&self, id: &RequestId, outcome: Outcome) -> Settled {
+        self.settle_with_before_wake(id, outcome, || {})
+    }
+
+    /// Completes `id` after `before_wake` has queued any response to the
+    /// child. A stale id never runs the callback. The callback must only
+    /// queue and must not wait or re-enter this table: it runs while the
+    /// table excludes timeout and cancellation, then the outcome and
+    /// released stream gate become visible together.
+    pub(crate) fn settle_with_before_wake(
+        &self,
+        id: &RequestId,
+        outcome: Outcome,
+        before_wake: impl FnOnce(),
+    ) -> Settled {
         let wait = {
             let mut inner = support::lock(&self.inner);
-            let wait = match inner.pending.get_mut(id) {
-                Some(pending) if !pending.done => {
-                    pending.done = true;
-                    Arc::clone(&pending.wait)
-                }
+            let pending = match inner.pending.get_mut(id) {
+                Some(pending) if !pending.done => pending,
                 _ => return Settled::Stale,
             };
+            let wait = Arc::clone(&pending.wait);
+            before_wake();
+            pending.done = true;
             if inner.stream_held.as_ref() == Some(id) {
                 inner.stream_held = None;
             }
+            *support::lock(&wait.mutex) = Some(outcome);
             wait
         };
         self.stream_gate.notify_all();
-        {
-            let mut guard = support::lock(&wait.mutex);
-            *guard = Some(outcome);
-        }
         wait.changed.notify_all();
         Settled::Completed
     }
@@ -527,6 +541,41 @@ impl Table {
     }
 }
 
+/// Stops the dispatch: cancellation and a gone or finishing owner end
+/// the callback this way, before anything mints and mid-request alike.
+/// One constructor shares the owner's clone across every stop.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+fn stopped(shared: &Shared) -> Error {
+    Error::Stopped {
+        extension: shared.owner.clone(),
+    }
+}
+
+/// Fails the dispatch on its own timeout: a missed restart deadline
+/// and a missed reply alike read as the callback's timeout, never the
+/// restart's. One constructor shares the owner's clone and the
+/// timeout's narrowing across both.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+fn timed_out(shared: &Shared, key: &str, timeout: Duration) -> Error {
+    Error::Timeout {
+        extension: shared.owner.clone(),
+        callback: key.to_owned(),
+        timeout_ms: timeout.as_millis().try_into().unwrap_or(u64::MAX),
+    }
+}
+
+/// Refuses the dispatch before any line leaves: what never serialized
+/// or never fit the wire cap fails here, with the caller's words. One
+/// constructor shares the owner's and callback's clones across both.
+#[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
+fn bad_request(shared: &Shared, key: &str, why: String) -> Error {
+    Error::BadReturn {
+        extension: shared.owner.clone(),
+        callback: key.to_owned(),
+        why,
+    }
+}
+
 /// Sends one request and waits for its answer: the stream gate first
 /// for stream items, then the line, then the reply, the deadline, the
 /// cancel or the hang guard, whichever is first. The request settles
@@ -551,36 +600,27 @@ pub(crate) fn run_request(
         // A missed restart deadline fails as the callback's own timeout;
         // cancellation and a gone owner stop it, as they do mid-request.
         if code == contract::ErrorCode::Timeout {
-            return Err(Error::Timeout {
-                extension: shared.owner.clone(),
-                callback: dispatch.key,
-                timeout_ms: dispatch.timeout.as_millis().try_into().unwrap_or(u64::MAX),
-            });
+            return Err(timed_out(shared, &dispatch.key, dispatch.timeout));
         }
-        return Err(Error::Stopped {
-            extension: shared.owner.clone(),
-        });
+        return Err(stopped(shared));
     }
-    // No dispatcher behind the package seam runs a provider's
-    // `credential()`: dispatches carry no credential scope, and a
-    // `host.oauth.refresh` under them is refused. The session sets the
-    // scope when it dispatches provider functions.
+    // Only the dispatcher that runs a provider's `credential()` sets a
+    // scope: every other dispatch carries `None`, and a
+    // `host.oauth.refresh` under it is refused.
     let minted = shared.table.mint(
         dispatch.kind,
         &shared.owner,
         dispatch.ran_by,
         deadline,
         dispatch.state_call,
-        None,
+        dispatch.credential,
     );
     let id = minted.id;
     if dispatch.kind == RequestKind::Stream {
         let generation = shared.table.generation();
         if !shared.table.acquire_stream(&id, generation) {
             shared.table.cancel(&id);
-            return Err(Error::Stopped {
-                extension: shared.owner.clone(),
-            });
+            return Err(stopped(shared));
         }
     }
     shared.table.watch_caller(caller, &id);
@@ -590,10 +630,12 @@ pub(crate) fn run_request(
         key: dispatch.key.clone(),
         args: dispatch.args,
     })
-    .map_err(|error| Error::BadReturn {
-        extension: shared.owner.clone(),
-        callback: dispatch.key.clone(),
-        why: format!("the request never serialized: {error}"),
+    .map_err(|error| {
+        bad_request(
+            shared,
+            &dispatch.key,
+            format!("the request never serialized: {error}"),
+        )
     })?;
     let line = envelope_line(
         shared,
@@ -604,17 +646,15 @@ pub(crate) fn run_request(
         Ok(()) => {}
         Err(transport::SendError::TooLarge) => {
             shared.table.cancel(&id);
-            return Err(Error::BadReturn {
-                extension: shared.owner.clone(),
-                callback: dispatch.key.clone(),
-                why: "the request does not fit the 64 MiB wire cap".to_owned(),
-            });
+            return Err(bad_request(
+                shared,
+                &dispatch.key,
+                "the request does not fit the 64 MiB wire cap".to_owned(),
+            ));
         }
         Err(transport::SendError::Gone) => {
             shared.table.cancel(&id);
-            return Err(Error::Stopped {
-                extension: shared.owner.clone(),
-            });
+            return Err(stopped(shared));
         }
     }
     let hang = hang_guard(clock, deadline);
@@ -634,14 +674,8 @@ pub(crate) fn run_request(
                 key = dispatch.key
             ),
         }),
-        Outcome::TimedOut => Err(Error::Timeout {
-            extension: shared.owner.clone(),
-            callback: dispatch.key,
-            timeout_ms: dispatch.timeout.as_millis().try_into().unwrap_or(u64::MAX),
-        }),
-        Outcome::Cancelled => Err(Error::Stopped {
-            extension: shared.owner.clone(),
-        }),
+        Outcome::TimedOut => Err(timed_out(shared, &dispatch.key, dispatch.timeout)),
+        Outcome::Cancelled => Err(stopped(shared)),
     }
 }
 
@@ -666,10 +700,17 @@ pub(crate) struct Dispatch {
     /// The hook state transaction the call's writes join, when the
     /// request is a hook delivery.
     pub state_call: Option<u64>,
+    /// What a `host.oauth.refresh` under this request refreshes: set
+    /// only by the dispatcher that runs a provider's `credential()`.
+    pub credential: Option<crate::lua::CredentialFor>,
 }
 
 impl Dispatch {
     /// One ordered stream item: a hook, a watcher delivery or a command.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn stream(
         func: &FunctionRef,
         ran_by: String,
@@ -685,10 +726,15 @@ impl Dispatch {
             args: wire_args(args),
             timeout,
             state_call,
+            credential: None,
         }
     }
 
     /// One tool call: concurrent with everything.
+    #[allow(
+        dead_code,
+        reason = "the admission test seam; the session dispatches through its installed runtime handlers"
+    )]
     pub(crate) fn tool(func: &FunctionRef, ran_by: String, args: Value, timeout: Duration) -> Self {
         Self {
             kind: RequestKind::Tool,
@@ -698,6 +744,7 @@ impl Dispatch {
             args: wire_args(args),
             timeout,
             state_call: None,
+            credential: None,
         }
     }
 }

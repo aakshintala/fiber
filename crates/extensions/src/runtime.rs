@@ -32,6 +32,7 @@ use contract::hook::{HookFailure, StateLine};
 use contract::tool::{Cancel, InnerCalls};
 use serde_json::Value;
 
+use crate::lua::CredentialFor;
 use crate::{Error, LuaExtension};
 
 mod queued;
@@ -220,10 +221,13 @@ impl Runtime {
     /// [`LuaExtension::hook_with`] does: the state lines a hook queued and
     /// whether the decoded answer changed anything. A process handler
     /// answering nothing fails the hook, as an empty hook answer would.
+    /// `scope` is the invocation's credential, carried to the process
+    /// handler; hooks never refresh, so callers pass `None`.
     pub(crate) fn hook_with<T>(
         &self,
         func: &FunctionRef,
         arg: Value,
+        scope: Option<CredentialFor>,
         accept: impl FnOnce(Value) -> Result<(T, bool), Error>,
     ) -> Result<(T, Vec<StateLine>, bool), Error> {
         let resolved = self.resolve(func)?;
@@ -242,18 +246,21 @@ impl Runtime {
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
                 let returned =
-                    invoke(arg, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))?;
+                    invoke(arg, scope, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))?;
                 accept(returned).map(|(value, changed)| (value, Vec::new(), changed))
             }
         }
     }
 
     /// Runs the tool behind `func` on `args`, as `LuaTool` does: the
-    /// handler's answer, or nothing when it answered nothing.
+    /// handler's answer, or nothing when it answered nothing. `scope` is
+    /// the invocation's credential, carried to the process handler;
+    /// ordinary tool calls pass `None`.
     pub(crate) fn tool_run(
         &self,
         func: &FunctionRef,
         args: Value,
+        scope: Option<CredentialFor>,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, Error> {
         let resolved = self.resolve(func)?;
@@ -269,18 +276,20 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
         }
     }
 
     /// Runs the tool behind `func` as [`Runtime::tool_run`] does, with
     /// `runner` for the inner calls the callback makes. A process callback
     /// has no inner-call runner yet, so the runner is the model's path
-    /// alone and the call runs anyway.
+    /// alone and the call runs anyway. `scope` is the invocation's
+    /// credential, carried to the process handler.
     pub(crate) fn tool_run_asking(
         &self,
         func: &FunctionRef,
         args: Value,
+        scope: Option<CredentialFor>,
         cancel: &dyn Cancel,
         runner: Option<Arc<dyn InnerCalls>>,
     ) -> Result<Option<Value>, Error> {
@@ -297,12 +306,19 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
         }
     }
 
     /// Runs the tool's computed `effects` behind `func` on `args`.
-    pub(crate) fn tool_effects(&self, func: &FunctionRef, args: Value) -> Result<Value, Error> {
+    /// `scope` is the invocation's credential, carried to the process
+    /// handler; effects never refresh, so callers pass `None`.
+    pub(crate) fn tool_effects(
+        &self,
+        func: &FunctionRef,
+        args: Value,
+        scope: Option<CredentialFor>,
+    ) -> Result<Value, Error> {
         let resolved = self.resolve(func)?;
         match resolved.target {
             FunctionTarget::Lua(binding) => {
@@ -318,16 +334,19 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(args, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))
+                invoke(args, scope, &cancel)?.ok_or_else(|| no_answer(func, &resolved.owner))
             }
         }
     }
 
-    /// Runs the search backend behind `func` on `args`.
+    /// Runs the search backend behind `func` on `args`. `scope` is the
+    /// invocation's credential, carried to the process handler; search
+    /// never refreshes, so callers pass `None`.
     pub(crate) fn search_run(
         &self,
         func: &FunctionRef,
         args: Value,
+        scope: Option<CredentialFor>,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, Error> {
         let resolved = self.resolve(func)?;
@@ -343,7 +362,7 @@ impl Runtime {
                     Err(unknown(func, Some(resolved.owner.as_str())))
                 }
             }
-            FunctionTarget::Process(invoke) => invoke(args, cancel),
+            FunctionTarget::Process(invoke) => invoke(args, scope, cancel),
         }
     }
 
@@ -372,7 +391,7 @@ impl Runtime {
                 }
             }
             FunctionTarget::Process(invoke) => Ok(CommandWait::Process(Arc::new(
-                ProcessQueued::new(resolved.owner, invoke, Value::String(text.to_owned())),
+                ProcessQueued::new(resolved.owner, invoke, Value::String(text.to_owned()), None),
             ))),
         }
     }
@@ -398,8 +417,15 @@ impl Runtime {
 
     /// Offers one event to the watcher behind `func`: a queued offer
     /// advances the fan-out cursor. A process handler runs at once and the
-    /// offer counts as queued.
-    pub(crate) fn push_watcher(&self, func: &FunctionRef, arg: Value) -> Option<(u64, Instant)> {
+    /// offer counts as queued. `scope` is the invocation's credential,
+    /// carried to the process handler; watchers never refresh, so callers
+    /// pass `None`.
+    pub(crate) fn push_watcher(
+        &self,
+        func: &FunctionRef,
+        arg: Value,
+        scope: Option<CredentialFor>,
+    ) -> Option<(u64, Instant)> {
         let resolved = self.resolve(func).ok()?;
         match resolved.target {
             FunctionTarget::Lua(binding) => {
@@ -412,15 +438,22 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(arg, &cancel).ok()??;
+                invoke(arg, scope, &cancel).ok()??;
                 Some((0, lock(&self.inner).clock.now()))
             }
         }
     }
 
     /// Runs the watcher behind `func` on one drained log line at session
-    /// end, as the fan-out does.
-    pub(crate) fn drain_watcher(&self, func: &FunctionRef, arg: Value) -> Result<(), Error> {
+    /// end, as the fan-out does. `scope` is the invocation's credential,
+    /// carried to the process handler; watchers never refresh, so callers
+    /// pass `None`.
+    pub(crate) fn drain_watcher(
+        &self,
+        func: &FunctionRef,
+        arg: Value,
+        scope: Option<CredentialFor>,
+    ) -> Result<(), Error> {
         let resolved = self.resolve(func)?;
         match resolved.target {
             FunctionTarget::Lua(binding) => {
@@ -436,7 +469,7 @@ impl Runtime {
             }
             FunctionTarget::Process(invoke) => {
                 let cancel = support::cancel::Token::new();
-                invoke(arg, &cancel).map(|_| ())
+                invoke(arg, scope, &cancel).map(|_| ())
             }
         }
     }

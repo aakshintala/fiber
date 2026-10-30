@@ -3,7 +3,7 @@
 //! fails"): what each hook is shown, and what its answer decides.
 
 use contract::ErrorCode;
-use contract::events::Notice;
+use contract::events::{Notice, group_notices, grouped_lead};
 use contract::hook::{
     BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall,
     BeforeToolOutcome, CheckAnswer, CheckOutcome, Context, HookFailure, Refusal, Replaced,
@@ -23,6 +23,13 @@ mod tests;
 #[path = "keys_tests.rs"]
 mod keys_tests;
 
+/// Groups one chain's notice batch by code, so a pass with several
+/// non-blocking failures answers one notice per code; the loop groups the
+/// batch again at its event flush (`docs/errors.md`, "Notices").
+fn grouped(notices: Vec<Notice>) -> Vec<Notice> {
+    group_notices(notices, grouped_lead)
+}
+
 /// Runs the `sanitize` and `transform` `before_tool` hooks on `call`, in
 /// order: a `check` hook judges what will actually run, so it runs later,
 /// in [`check_tool`].
@@ -41,13 +48,13 @@ pub(super) fn before_tool(
         if let Some(failure) = session.runtime.runs_own_command(&entry.hook, BEFORE_TOOL) {
             return BeforeToolAnswer {
                 outcome: BeforeToolOutcome::Failed(failure),
-                notices,
+                notices: grouped(notices),
             };
         }
         let arg = shown(call, &arguments);
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg, |value| {
+            .hook_with(&entry.hook, arg, None, |value| {
                 let change = decode_tool(&name, value)?;
                 let changed = matches!(&change, ToolReturn::Rewrite(_));
                 Ok((change, changed))
@@ -72,7 +79,7 @@ pub(super) fn before_tool(
                         extension: name.to_owned(),
                         reason,
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) if entry.blocking => {
@@ -81,7 +88,7 @@ pub(super) fn before_tool(
                         extension: name.to_owned(),
                         message: error.to_string(),
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) => notices.push(failed_notice(BEFORE_TOOL, &name, &error)),
@@ -97,7 +104,7 @@ pub(super) fn before_tool(
                 changed_by,
             }
         },
-        notices,
+        notices: grouped(notices),
     }
 }
 
@@ -111,13 +118,13 @@ pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>)
         if let Some(failure) = session.runtime.runs_own_command(&entry.hook, BEFORE_TOOL) {
             return CheckAnswer {
                 outcome: CheckOutcome::Failed(failure),
-                notices,
+                notices: grouped(notices),
             };
         }
         let arg = shown(call, call.arguments);
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg, |value| {
+            .hook_with(&entry.hook, arg, None, |value| {
                 decode_check(&name, value).map(|change| (change, false))
             })
             .map(|(change, lines, _)| {
@@ -132,7 +139,7 @@ pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>)
                         extension: name.to_owned(),
                         reason,
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) if entry.blocking => {
@@ -141,7 +148,7 @@ pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>)
                         extension: name.to_owned(),
                         message: error.to_string(),
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) => notices.push(failed_notice(BEFORE_TOOL, &name, &error)),
@@ -149,7 +156,7 @@ pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>)
     }
     CheckAnswer {
         outcome: CheckOutcome::Passed,
-        notices,
+        notices: grouped(notices),
     }
 }
 
@@ -171,7 +178,7 @@ pub(super) fn before_message(
         let arg = shown_message(current, message);
         let returned = session
             .runtime
-            .hook_with(&entry.hook, arg, |value| {
+            .hook_with(&entry.hook, arg, None, |value| {
                 let change = decode_message(&name, current, value, entry.check)?;
                 let changed = matches!(&change, MessageReturn::Change { .. });
                 Ok((change, changed))
@@ -207,7 +214,7 @@ pub(super) fn before_message(
                         extension: name.to_owned(),
                         reason,
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) if entry.blocking => {
@@ -216,7 +223,7 @@ pub(super) fn before_message(
                         extension: name.to_owned(),
                         message: error.to_string(),
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) => notices.push(failed_notice(BEFORE_MESSAGE, &name, &error)),
@@ -233,7 +240,7 @@ pub(super) fn before_message(
             }),
             context,
         },
-        notices,
+        notices: grouped(notices),
     }
 }
 

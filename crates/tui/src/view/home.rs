@@ -11,6 +11,7 @@ use crate::app::App;
 use crate::app::Surface;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
+use crate::graphics::logo::{COLS, ROWS, Shown};
 use crate::home::{HomeScreen, ListLine, Spot, TypedScreen};
 use crate::mouse::{self, Target, TargetId};
 use crate::text::to_u16;
@@ -109,6 +110,20 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
         list_top,
         list_end,
     }
+}
+
+/// The logo image's 32-by-4 cells, while the image form draws, else
+/// none: the event loop positions the image write here (`docs/tui.md`,
+/// "The logo").
+pub(super) fn logo_rect(app: &App, screen: &HomeScreen, area: Rect) -> Option<Rect> {
+    if screen.logo == Shown::Pixels {
+        return None;
+    }
+    let placed = layout(app, screen, area);
+    if placed.logo_rows != 4 {
+        return None;
+    }
+    Some(Rect::new(placed.x, placed.logo, COLS, ROWS))
 }
 
 /// The input text's first column inside the box.
@@ -801,7 +816,41 @@ pub(super) fn render(
     let mut targets = Vec::new();
     let placed = layout(app, screen, area);
     if placed.logo_rows == 4 {
-        logo::draw(buf, placed.x, placed.logo);
+        // The image form keeps the pixel logo's cells: kitty's
+        // placeholders move with the text, iTerm2's and Sixel's blank
+        // cells sit under the positioned write. The dim version beside
+        // the cells never moves (`docs/tui.md`, "The logo").
+        match screen.logo {
+            Shown::Pixels => logo::draw(buf, placed.x, placed.logo),
+            Shown::Kitty => {
+                let style = crate::look::placeholder_style(crate::graphics::logo::ID);
+                for row in 0..usize::from(ROWS) {
+                    for col in 0..usize::from(COLS) {
+                        let span = crate::graphics::cell(row, col, style);
+                        if let Some(into) = buf.cell_mut((
+                            placed.x.saturating_add(to_u16(col)),
+                            placed.logo.saturating_add(to_u16(row)),
+                        )) {
+                            into.set_symbol(span.content.as_ref());
+                            into.set_style(span.style);
+                        }
+                    }
+                }
+            }
+            Shown::Blank => {
+                for row in 0..usize::from(ROWS) {
+                    for col in 0..usize::from(COLS) {
+                        if let Some(into) = buf.cell_mut((
+                            placed.x.saturating_add(to_u16(col)),
+                            placed.logo.saturating_add(to_u16(row)),
+                        )) {
+                            into.set_symbol(" ");
+                            into.set_style(Style::default());
+                        }
+                    }
+                }
+            }
+        }
         let x = placed.x.saturating_add(35);
         let dim = Style::new().add_modifier(Modifier::DIM);
         put(

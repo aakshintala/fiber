@@ -54,6 +54,7 @@ impl FakeTool {
                 subject: Some("x".into()),
                 prefix: None,
                 always_reviewed: false,
+                review_when_confined: false,
                 hosts: None,
             },
             effects_error: None,

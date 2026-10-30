@@ -1161,9 +1161,9 @@ fn docs_only_reports_whether_the_files_are_docs() {
 
 #[test]
 fn ci_needs_passes_fails_and_errors() {
-    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint, stress]\n    runs-on: ubuntu-24.04\n";
-    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. Done.\n";
-    const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports and gates nothing, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
+    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bug_red_linux:\n    runs-on: ubuntu-24.04\n  bug_red_macos:\n    runs-on: macos-26\n  bug_red:\n    needs: [bug_red_linux, bug_red_macos]\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint, stress, bug_red]\n    runs-on: ubuntu-24.04\n";
+    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report without gating it directly: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `bug_red_linux`, `bug_red_macos`. Done.\n";
+    const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports without gating the verdict directly, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
     let dir = workspace();
     dir.write(".github/workflows/ci.yml", WORKFLOW);
     dir.write("docs/ci.md", DOC);
@@ -1176,7 +1176,10 @@ fn ci_needs_passes_fails_and_errors() {
     );
     dir.write(
         ".github/workflows/ci.yml",
-        &WORKFLOW.replace("needs: [select, lint, stress]", "needs: [select, stress]"),
+        &WORKFLOW.replace(
+            "needs: [select, lint, stress, bug_red]",
+            "needs: [select, stress, bug_red]",
+        ),
     );
     assert_eq!(xtask(&dir, &["ci-needs"], &[], ""), (1, FAILURE.to_owned()));
     std::fs::remove_file(dir.path().join("docs/ci.md")).unwrap();
@@ -1188,12 +1191,12 @@ fn ci_needs_passes_fails_and_errors() {
 #[test]
 fn flake_report_prints_one_json_line_per_unmatched_title() {
     let dir = TempDir::new("xtask-flake-report");
-    const INPUT: &str = "{\"flakes\": [{\"title\": \"Flaky test: a\"}, {\"title\": \"Flaky test: b\"}, {\"title\": \"Flaky test: a\"}], \"open\": {\"ok\": true, \"issues\": [{\"number\": 7, \"title\": \"Flaky test: b\"}]}, \"closed\": {\"ok\": true, \"issues\": [{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}]}, \"events\": {\"9\": {\"ok\": true, \"events\": [{\"event\": \"closed\", \"id\": 1, \"commit_id\": null, \"created_at\": \"2026-10-24T11:00:00Z\"}]}}, \"ancestry\": {}}";
+    const INPUT: &str = "{\"flakes\": [{\"title\": \"Flaky tests: a\"}, {\"title\": \"Flaky tests: b\"}, {\"title\": \"Flaky tests: a\"}], \"open\": {\"ok\": true, \"issues\": [{\"number\": 7, \"title\": \"Flaky tests: b\"}]}, \"closed\": {\"ok\": true, \"issues\": [{\"number\": 9, \"title\": \"Flaky tests: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}]}, \"events\": {\"9\": {\"ok\": true, \"events\": [{\"event\": \"closed\", \"id\": 1, \"commit_id\": null, \"created_at\": \"2026-10-24T11:00:00Z\"}]}}, \"ancestry\": {}}";
     assert_eq!(
         xtask(&dir, &["flake-report"], &[], INPUT),
         (
             0,
-            "{\"action\":\"reopen\",\"issue\":9,\"title\":\"Flaky test: a\"}\n".to_owned()
+            "{\"action\":\"reopen\",\"issue\":9,\"title\":\"Flaky tests: a\"}\n".to_owned()
         )
     );
     assert_eq!(xtask(&dir, &["flake-report"], &[], "{}").0, 2);
@@ -1211,7 +1214,7 @@ fn flake_report_tested_commit_reopens_when_the_latest_fix_is_an_ancestor() {
     git(&dir, &["commit", "-qm", "fix"]);
     let fix = common::git(&dir, &["rev-parse", "HEAD"]);
     let input = format!(
-        "{{\"flakes\": [{{\"title\": \"Flaky test: a\"}}], \"open\": {{\"ok\": true, \"issues\": []}}, \"closed\": {{\"ok\": true, \"issues\": [{{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}}]}}, \"events\": {{\"9\": {{\"ok\": true, \"events\": [{{\"event\": \"closed\", \"id\": 1, \"commit_id\": \"{fix}\", \"created_at\": \"2026-10-24T11:00:00Z\"}}]}}}}}}"
+        "{{\"flakes\": [{{\"title\": \"Flaky tests: a\"}}], \"open\": {{\"ok\": true, \"issues\": []}}, \"closed\": {{\"ok\": true, \"issues\": [{{\"number\": 9, \"title\": \"Flaky tests: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}}]}}, \"events\": {{\"9\": {{\"ok\": true, \"events\": [{{\"event\": \"closed\", \"id\": 1, \"commit_id\": \"{fix}\", \"created_at\": \"2026-10-24T11:00:00Z\"}}]}}}}}}"
     );
     assert_eq!(
         xtask(
@@ -1222,7 +1225,7 @@ fn flake_report_tested_commit_reopens_when_the_latest_fix_is_an_ancestor() {
         ),
         (
             0,
-            "{\"action\":\"reopen\",\"issue\":9,\"title\":\"Flaky test: a\"}\n".to_owned()
+            "{\"action\":\"reopen\",\"issue\":9,\"title\":\"Flaky tests: a\"}\n".to_owned()
         )
     );
 }
@@ -1239,7 +1242,7 @@ fn flake_report_tested_commit_is_unknown_when_the_fix_object_is_missing() {
     let tested = common::git(&dir, &["rev-parse", "HEAD"]);
     let missing = "0123456789012345678901234567890123456789";
     let input = format!(
-        "{{\"flakes\": [{{\"title\": \"Flaky test: a\"}}], \"open\": {{\"ok\": true, \"issues\": []}}, \"closed\": {{\"ok\": true, \"issues\": [{{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}}]}}, \"events\": {{\"9\": {{\"ok\": true, \"events\": [{{\"event\": \"closed\", \"id\": 1, \"commit_id\": \"{missing}\", \"created_at\": \"2026-10-24T11:00:00Z\"}}]}}}}}}"
+        "{{\"flakes\": [{{\"title\": \"Flaky tests: a\"}}], \"open\": {{\"ok\": true, \"issues\": []}}, \"closed\": {{\"ok\": true, \"issues\": [{{\"number\": 9, \"title\": \"Flaky tests: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}}]}}, \"events\": {{\"9\": {{\"ok\": true, \"events\": [{{\"event\": \"closed\", \"id\": 1, \"commit_id\": \"{missing}\", \"created_at\": \"2026-10-24T11:00:00Z\"}}]}}}}}}"
     );
     assert_eq!(
         xtask(
@@ -1250,7 +1253,7 @@ fn flake_report_tested_commit_is_unknown_when_the_fix_object_is_missing() {
         ),
         (
             0,
-            "{\"action\":\"unknown\",\"issue\":9,\"source\":\"ancestry\",\"title\":\"Flaky test: a\"}\n"
+            "{\"action\":\"unknown\",\"issue\":9,\"source\":\"ancestry\",\"title\":\"Flaky tests: a\"}\n"
                 .to_owned()
         )
     );
@@ -1259,7 +1262,7 @@ fn flake_report_tested_commit_is_unknown_when_the_fix_object_is_missing() {
 #[test]
 fn flake_report_events_prints_only_numbers_needing_event_fetches() {
     let dir = TempDir::new("xtask-flake-report-events");
-    const INPUT: &str = "{\"flakes\": [{\"title\": \"Flaky test: a\"}, {\"title\": \"Flaky test: b\"}], \"open\": {\"ok\": true, \"issues\": [{\"number\": 7, \"title\": \"Flaky test: b\"}]}, \"closed\": {\"ok\": true, \"issues\": [{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}]}}";
+    const INPUT: &str = "{\"flakes\": [{\"title\": \"Flaky tests: a\"}, {\"title\": \"Flaky tests: b\"}], \"open\": {\"ok\": true, \"issues\": [{\"number\": 7, \"title\": \"Flaky tests: b\"}]}, \"closed\": {\"ok\": true, \"issues\": [{\"number\": 9, \"title\": \"Flaky tests: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}]}}";
     assert_eq!(
         xtask(&dir, &["flake-report-events"], &[], INPUT),
         (0, "9\n".to_owned())
@@ -1299,7 +1302,7 @@ fn flake_classify_prints_one_record_per_unique_title() {
         .collect();
     // Records are matched by title: their order is not part of this
     // test's contract. The count holds docs/testing/running.md, "Flaky
-    // tests": "Within one report job a test title files or comments once;
+    // tests": "Within one report job a file's title files or comments once;
     // a repeat is skipped".
     assert_eq!(records.len(), 2, "{out}");
     let by_title = |title: &str| {
@@ -1308,18 +1311,65 @@ fn flake_classify_prints_one_record_per_unique_title() {
             .find(|record| record["title"] == title)
             .unwrap_or_else(|| panic!("no record titled {title}: {out}"))
     };
-    let b = by_title("Flaky test: main::b");
+    let b = by_title("Flaky tests: main::b");
     assert_eq!(b["action"], "lookup");
     assert_eq!(b["runner"], "arm");
     assert_eq!(b["detail"], "");
     assert!(b.get("failing").is_none(), "{out}");
-    let a = by_title("Flaky test: main::a");
+    let a = by_title("Flaky tests: main::a");
     assert_eq!(a["action"], "lookup");
     assert_eq!(a["failing"], "crates/a.rs");
     assert_eq!(a["runner"], "linux");
     assert_eq!(
         a["tested"],
         "tested 1111111111111111111111111111111111111111"
+    );
+}
+
+#[test]
+fn flake_classify_files_two_tests_of_one_binary_once() {
+    // Two tests of one binary across two lists: file-name byte order reads
+    // the arm list first, so one record carries the arm occurrence.
+    let dir = TempDir::new("xtask-flake-classify-one-binary");
+    dir.write(
+        "flaky/flaky-tests-linux.txt",
+        "main::a second\tthread second panicked at crates/a.rs:10\n",
+    );
+    dir.write(
+        "flaky/flaky-tests-arm.txt",
+        "main::a first\tthread first panicked at crates/a.rs:10\n",
+    );
+    let flaky = dir.path().join("flaky");
+    let (code, out) = xtask(
+        &dir,
+        &[
+            "flake-classify",
+            "--flaky-dir",
+            flaky.to_str().unwrap(),
+            "--event",
+            "push",
+            "--tested-commit",
+            "1111111111111111111111111111111111111111",
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    let records: Vec<serde_json::Value> = out
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // title files or comments once; a repeat is skipped".
+    // docs/testing/running.md, "Flaky tests": "a repeated title takes its
+    // runner and detail from its first occurrence in file-name byte order".
+    assert_eq!(records.len(), 1, "{out}");
+    assert_eq!(records[0]["title"], "Flaky tests: main::a", "{out}");
+    assert_eq!(records[0]["name"], "main::a first", "{out}");
+    assert_eq!(records[0]["runner"], "arm", "{out}");
+    assert_eq!(
+        records[0]["detail"], "thread first panicked at crates/a.rs:10",
+        "{out}"
     );
 }
 
@@ -1388,10 +1438,10 @@ fn flake_classify_skips_directories_named_like_lists() {
     assert_eq!(code, 0, "{out}");
     for line in out.lines() {
         let record: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(record["title"], "Flaky test: main::a", "{out}");
+        assert_eq!(record["title"], "Flaky tests: main::a", "{out}");
         assert_eq!(record["runner"], "linux", "{out}");
     }
-    assert!(out.contains("Flaky test: main::a"), "{out}");
+    assert!(out.contains("Flaky tests: main::a"), "{out}");
 }
 
 #[test]
@@ -1472,4 +1522,47 @@ fn an_unknown_or_missing_command_is_an_error() {
         (2, "xtask: unknown command nope\n".to_owned())
     );
     assert_eq!(xtask(&dir, &[], &[], "").0, 2);
+}
+
+#[test]
+fn kinds_ratchet_passes_at_both_caps_and_fails_above_them() {
+    let dir = workspace();
+    // Two literal sites on one line plus one direct-support site: both
+    // occurrences on the shared line count.
+    dir.write(
+        "crates/a/src/lib.rs",
+        "fn check() {\nassert_eq!(kinds(&a), A); assert_eq!(kinds(&b), B);\nassert_eq!(support::kinds(&c), C);\n}\n",
+    );
+    let (code, out) = xtask(
+        &dir,
+        &["kinds-ratchet", "--max", "2", "--support-max", "1"],
+        &[],
+        "",
+    );
+    assert_eq!((code, out.as_str()), (0, "kinds-ratchet: ok\n"));
+    let (code, out) = xtask(
+        &dir,
+        &["kinds-ratchet", "--max", "1", "--support-max", "1"],
+        &[],
+        "",
+    );
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("2 `assert_eq!(kinds(` occurrences") && out.contains("committed maximum 1"),
+        "{out}"
+    );
+    let (code, out) = xtask(
+        &dir,
+        &["kinds-ratchet", "--max", "2", "--support-max", "0"],
+        &[],
+        "",
+    );
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("1 `assert_eq!(support::kinds` occurrences")
+            && out.contains("committed maximum 0"),
+        "{out}"
+    );
+    // A missing flag is a usage error, proving argument parsing.
+    assert_eq!(xtask(&dir, &["kinds-ratchet", "--max", "2"], &[], "").0, 2);
 }

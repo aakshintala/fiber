@@ -200,7 +200,7 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 >
 > A bytes position that is not valid base64 is rejected `invalid_arguments`, naming the call and the argument.
 >
-> **Functions are requests.** A function passed as a value, whether a key such as `run`, `sign`, `cost` or a computed `effects`, or a positional argument such as `host.oauth.refresh`'s, is sent as `true`. Fiber calls it with an `extension_request`. Its `key` is the key's name or, for a positional argument, its 1-based position as a string, such as `"1"`. `host.after`, `host.every`, `host.drive` and `json` are not calls (above).
+> **Functions are requests.** A function passed as a value, whether a key such as `run`, `sign`, `cost` or a computed `effects`, or a positional argument such as `host.oauth.refresh`'s, is sent as `true`. Fiber calls it with an `extension_request`. Its `key` is the key's name or, for a positional argument, its 1-based position as a string, such as `"1"`. `host.after`, `host.every` and `host.drive` are not calls (above). The `json` helpers are available, but are not host calls.
 >
 > **JSON is exact.** Lua cannot tell an empty object from an empty list (an empty table), and the rule that settles it in Lua ("`json.encode({})` is `{}`") does not apply on the wire. What the extension sends is read as sent, and what Fiber sends is the value as recorded, so `{}` and `[]` stay distinct. A whole number Lua requires, such as a `timeout`, must be a JSON integer, and a fraction there is rejected as it is in Lua.
 >
@@ -208,7 +208,7 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 >
 > **Fiber's requests are lines the extension answers with `reply`.** Each is an ephemeral line of kind `extension_request`, whose payload holds `request_id`, `registration` (the `id` of the `call` command that registered it), `key` (the function's key, such as `run`) and `args` (the arguments the Lua function receives, as a JSON array). The extension answers with `reply`: `request_id` and `result` (what the Lua function returns), or `request_id` and `error`, `{ code, message }`, which fails the call as a Lua error does. Stream items, meaning hooks, watcher deliveries and commands, are sent one at a time, each after the reply to the last one. Tool calls are sent as they arrive, so several can be outstanding. A reply to a request that is no longer pending, such as one past its timeout, is rejected `stale_request` and changes nothing. That is how a late reply is dropped.
 >
-> **`extension_hello`** is the first line Fiber sends, ephemeral, with payload keys `session_id`, `reason` (`new`, `resume`, `fork`, `rewind` or `handoff`), `workspace` (the workspace root), `data_dirs` (`{ machine, project }`, the paths `host.data_dir` returns) and `state` (the extension's folded state, as `state.get` reads it). After a restart it is sent again, with the state as it stands in the session.
+> **`extension_hello`** is the first line Fiber sends, ephemeral, with payload keys `session_id`, `reason` (`new`, `resume`, `fork`, `rewind`, `handoff`, or `call` for a provider call outside a session, such as a call case or the credential precheck), `workspace` (the workspace root), `data_dirs` (`{ machine, project }`, the paths `host.data_dir` returns) and `state` (the extension's folded state, as `state.get` reads it). After a restart it is sent again, with the state as it stands in the session. With reason `call`, `session_id` is absent and `state` is `{}`. The extension has `host.http`, `host.exec`, `host.oauth`, `host.secret`, `host.data_dir`, `host.log`, `host.fs` reads, the hashes and `json`; any other host call raises `invalid_arguments` (`<call>: not available here`).
 
 Every session starts its own process extensions, a delegate included, as it
 starts its own MCP servers. Nothing is shared between sessions
@@ -2043,7 +2043,9 @@ the personal install loads everywhere else. The order is the one skills use:
 repository before personal ("Skills" in `docs/system-prompt.md`). It holds for
 first-party extensions too. A `notice` with code `extension_shadowed` names both
 versions, so a personal install that is newer than the repository's copy is
-visible. Two repository copies of one name load the same way: the first
+visible. When one load shadows several installs, the pass raises one grouped
+notice: its message gives the count and lists each install with both versions.
+Two repository copies of one name load the same way: the first
 declared loads, and the same notice names both versions.
 
 **Commands that read an approved copy.** A session loads its project's

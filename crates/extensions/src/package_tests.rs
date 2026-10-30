@@ -38,6 +38,66 @@ fn package_dir(extra: Value) -> fakes::TempDir {
     dir
 }
 
+/// A sessionless provider's declarations name its registered functions,
+/// and reading them starts the process: the hello marker proves it ran.
+#[test]
+fn sessionless_provider_declarations_list_registered_functions() {
+    let dir = fakes::TempDir::new("fiber-process-sessionless");
+    let marker = dir.path().join("hello.json");
+    let script = json!([
+        {"read": {}},
+        {"write_file": {"path": marker, "value": true}},
+        {"send": {"id": "c-reg", "command": "call", "args": {"call": "fiber.provider", "args": ["p", {"credential": {"timeout": 5000, "run": true}}]}}},
+        {"read_until": {"path": "payload.command_id", "equals": "c-reg"}},
+        {"send": {"id": "ready", "command": "ready"}},
+        {"loop": [{"read": {}}]},
+    ]);
+    let (program, args) = fakes::ProcessFixture::command("peer", Some(&script));
+    let manifest = json!({
+        "name": "fiber.test/proc",
+        "version": "v1.2.3",
+        "fiber": "0.1.0",
+        "api": 1,
+        "providers": {"p": []},
+        "process": {"program": program, "args": args, "exit_timeout_ms": 1000},
+    });
+    std::fs::write(dir.path().join("extension.json"), manifest.to_string()).unwrap();
+    let declarations = Package::load_process_provider(PackageOptions {
+        dir: dir.path().to_path_buf(),
+        clock: fakes::clock::FakeClock::new(),
+    })
+    .unwrap();
+    assert_eq!(
+        declarations,
+        vec![("p".to_owned(), vec!["credential".to_owned()])]
+    );
+    assert!(marker.is_file(), "reading declarations starts the process");
+}
+
+/// A manifest without a process section declares nothing and starts
+/// nothing: there is no child to reap.
+#[test]
+fn sessionless_non_process_manifest_returns_no_declarations() {
+    let dir = fakes::TempDir::new("fiber-process-lua-package");
+    std::fs::write(
+        dir.path().join("extension.json"),
+        json!({
+            "name": "fiber.test/lua",
+            "version": "v1.2.3",
+            "fiber": "0.1.0",
+            "api": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let declarations = Package::load_process_provider(PackageOptions {
+        dir: dir.path().to_path_buf(),
+        clock: fakes::clock::FakeClock::new(),
+    })
+    .unwrap();
+    assert!(declarations.is_empty());
+}
+
 /// Loads the package in `extra`, keeping its directory alive.
 fn load(extra: Value) -> (fakes::TempDir, Arc<Package>) {
     let dir = package_dir(extra);
@@ -179,72 +239,14 @@ fn package_undeclared_provider_fails_the_package() {
     assert_eq!(again, message);
 }
 
-/// A `commands` key makes the package lazy-only: declared commands
-/// register, and anything else fails the package.
-/// Fake host/state services behind the seam: records each operation's
-/// variant, answering nothing. The package tests prove dispatch reaches
-/// the injected services; the services' own behavior rides their tests.
-struct FakeServices {
-    calls: std::sync::Mutex<Vec<String>>,
-}
-
-/// The operation's variant, naming which host or state call ran.
-fn service_variant(operation: &super::process::context::HostOperation) -> &'static str {
-    use super::process::context::HostOperation as Op;
-    match operation {
-        Op::Http { .. } => "http",
-        Op::Exec { .. } => "exec",
-        Op::FsRead { .. } => "fs.read",
-        Op::FsWrite { .. } => "fs.write",
-        Op::FsList { .. } => "fs.list",
-        Op::FsStat { .. } => "fs.stat",
-        Op::FsMkdir { .. } => "fs.mkdir",
-        Op::FsRemove { .. } => "fs.remove",
-        Op::FsRename { .. } => "fs.rename",
-        Op::ConfigGet { .. } => "config.get",
-        Op::ConfigSet { .. } => "config.set",
-        Op::Secret { .. } => "secret",
-        Op::DataDir { .. } => "data_dir",
-        Op::Sha256 { .. } => "sha256",
-        Op::HmacSha256 { .. } => "hmac_sha256",
-        Op::Status { .. } => "status",
-        Op::Widget { .. } => "widget",
-        Op::Emit { .. } => "emit",
-        Op::Log { .. } => "log",
-        Op::Tool { .. } => "tool",
-        Op::Model { .. } => "model",
-        Op::Delegate { .. } => "delegate",
-        Op::OAuthCallback { .. } => "oauth.callback",
-        Op::OAuthOpen { .. } => "oauth.open",
-        Op::OAuthShow { .. } => "oauth.show",
-        Op::OAuthPkcs => "oauth.pkce",
-        Op::OAuthPoll { .. } => "oauth.poll",
-        Op::StateGet { .. } => "state.get",
-        Op::StateKeys => "state.keys",
-        Op::StateSet { .. } => "state.set",
-        Op::StateUnset { .. } => "state.unset",
-    }
-}
-
-impl super::process::context::ProcessHostServices for FakeServices {
-    fn perform(
-        &self,
-        _context: &super::process::context::ProcessContext,
-        _callback: &crate::host::admission::CallbackContext,
-        operation: super::process::context::HostOperation,
-        _cancel: &dyn contract::tool::Cancel,
-    ) -> Result<Option<Value>, (contract::ErrorCode, String)> {
-        support::lock(&self.calls).push(service_variant(&operation).to_owned());
-        Ok(None)
-    }
-}
-
 /// The process context behind the seam: the session's identity, the
 /// package directory as its workspace and home, and empty folded state.
 fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessContext {
     super::process::context::ProcessContext {
-        session_id: contract::SessionId("s_test".into()),
-        reason: contract::events::ExtensionReason::New,
+        run: super::process::context::ProcessRun::Session {
+            session_id: contract::SessionId("s_test".into()),
+            reason: contract::events::SessionReason::New,
+        },
         workspace: dir.path().to_path_buf(),
         data_dirs: contract::events::ExtensionDataDirs {
             machine: dir.path().join("machine").display().to_string(),
@@ -256,13 +258,59 @@ fn process_context(dir: &fakes::TempDir) -> super::process::context::ProcessCont
     }
 }
 
+/// The host bundle the shared session constructor needs: the test
+/// package's directory anchors home and cwd, and nothing scripted
+/// runs, so the browser never opens.
+fn test_host(dir: &fakes::TempDir) -> super::package::ProcessProviderHost {
+    super::package::ProcessProviderHost {
+        home: dir.path().to_path_buf(),
+        cwd: dir.path().to_path_buf(),
+        browser: Arc::new(super::SystemBrowser::default()),
+        host_script: None,
+        session: None,
+    }
+}
+
+/// The session bundle the shared session constructor needs: the
+/// session's runtime, hello context, folded state store and driver, as
+/// the session loader passes them.
+fn test_session(
+    dir: &fakes::TempDir,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> super::package::ProcessProviderSession {
+    super::package::ProcessProviderSession {
+        runtime: super::runtime::Runtime::new(Arc::clone(&clock)),
+        context: process_context(dir),
+        state: super::host::state::StateRegistry::new(contract::hook::StateSeed::new())
+            .store("fiber.test/proc"),
+        drive: None,
+        clock,
+        startup_timeout: super::package::Package::DEFAULT_STARTUP_TIMEOUT,
+    }
+}
+
+/// One emitted ephemeral event log, as the runtime's emitter captures
+/// it: the child's `host.log` lands here through the real services.
+#[derive(Default)]
+struct LoggedCalls {
+    messages: std::sync::Mutex<Vec<String>>,
+}
+
+impl contract::emit::Emit for LoggedCalls {
+    fn emit(&self, event: &contract::events::Event) {
+        if let contract::events::Event::ExtensionLog(log) = event {
+            support::lock(&self.messages).push(log.message.clone());
+        }
+    }
+}
+
 /// Loads the package with `script` as its manifest-declared program:
 /// the script reads its hello, registers, answers and exits, while the
 /// test pumps the owner to its close.
 fn load_process(
     script: &str,
     script_args: &[&str],
-) -> (fakes::TempDir, Arc<Package>, Arc<FakeServices>) {
+) -> (fakes::TempDir, Arc<Package>, Arc<LoggedCalls>) {
     let mut argv = vec!["python3".to_owned(), "-c".to_owned(), script.to_owned()];
     argv.extend(script_args.iter().map(|arg| (*arg).to_owned()));
     let dir = package_dir(json!({"process": {
@@ -271,19 +319,21 @@ fn load_process(
         "exit_timeout_ms": 1000,
     }}));
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let services = Arc::new(FakeServices {
-        calls: std::sync::Mutex::new(Vec::new()),
-    });
-    let package = Package::load_process_with(
+    let logged: Arc<LoggedCalls> = Arc::new(LoggedCalls::default());
+    let session = test_session(&dir, Arc::clone(&clock));
+    session
+        .runtime
+        .set_emit(Arc::clone(&logged) as Arc<dyn contract::emit::Emit>);
+    let started = Package::load_process_provider_with(
         PackageOptions {
             dir: dir.path().to_path_buf(),
-            clock: Arc::clone(&clock),
+            clock,
         },
-        super::runtime::Runtime::new(clock),
-        process_context(&dir),
-        services.clone(),
+        super::package::ProcessProviderMode::Session(session),
+        Some(test_host(&dir)),
     )
     .expect("the manifest program starts");
+    let package = started.package;
     // A watcher stops and kills a wedged peer once the bound passes,
     // so the test fails instead of hanging it.
     let watched = Arc::clone(&package);
@@ -301,7 +351,7 @@ fn load_process(
             }
         }
     });
-    (dir, package, services)
+    (dir, package, logged)
 }
 
 /// The bound a stuck child runs before the watchdog kills it: fast on
@@ -340,7 +390,7 @@ open(sys.argv[2], "w").write(json.dumps(answers))"#;
     let out = fakes::TempDir::new("fiber-package-process");
     let out_path = out.path().join("answers.json");
     let tool = tool_spec().to_string();
-    let (_dir, package, services) = load_process(script, &[&tool, out_path.to_str().unwrap()]);
+    let (_dir, package, logged) = load_process(script, &[&tool, out_path.to_str().unwrap()]);
     assert!(package.is_process());
     assert!(package.extension().is_some());
     drain(&package);
@@ -354,9 +404,9 @@ open(sys.argv[2], "w").write(json.dumps(answers))"#;
         );
     }
     assert_eq!(
-        support::lock(&services.calls).clone(),
-        vec!["log".to_owned()],
-        "the child's host call reaches the injected services"
+        support::lock(&logged.messages).clone(),
+        vec!["hi".to_owned()],
+        "the child's host call reaches the services"
     );
     let answers: Value =
         serde_json::from_str(&std::fs::read_to_string(&out_path).expect("the peer writes answers"))
@@ -370,6 +420,8 @@ open(sys.argv[2], "w").write(json.dumps(answers))"#;
     }
 }
 
+/// A `commands` key makes the package lazy-only: declared commands
+/// register, and anything else fails the package.
 #[test]
 fn package_lazy_commands_restrict_registrations() {
     let (_dir, package) = load(json!({"commands": {"cmd": {"description": "Runs it."}}}));
@@ -396,28 +448,38 @@ fn package_lazy_commands_restrict_registrations() {
     );
 }
 
-/// A missing program leaves an optional extension out: the package
-/// loads with no owner for the session to start.
+/// Starts `dir` through the shared session constructor, as the session
+/// loader does: the same runtime, context, services, state and driver
+/// the old constructor threaded through.
+fn load_session(
+    dir: &fakes::TempDir,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> Result<super::package::StartedProcessProvider, (contract::ErrorCode, String)> {
+    Package::load_process_provider_with(
+        PackageOptions {
+            dir: dir.path().to_path_buf(),
+            clock: Arc::clone(&clock),
+        },
+        super::package::ProcessProviderMode::Session(test_session(dir, clock)),
+        Some(test_host(dir)),
+    )
+}
+
+/// A missing program fails the package load, required or not: the
+/// session loader leaves an optional extension out with this failure's
+/// notice instead of loading an ownerless package.
 #[test]
-fn load_process_without_a_program_leaves_an_optional_extension_out() {
+fn load_process_without_a_program_fails_the_package_load() {
     let dir = package_dir(json!({"process": {
         "program": "fiber-definitely-missing-program",
         "exit_timeout_ms": 1000,
     }}));
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let package = Package::load_process_with(
-        PackageOptions {
-            dir: dir.path().to_path_buf(),
-            clock: Arc::clone(&clock),
-        },
-        super::runtime::Runtime::new(clock),
-        process_context(&dir),
-        Arc::new(FakeServices {
-            calls: std::sync::Mutex::new(Vec::new()),
-        }),
-    )
-    .expect("an optional extension loads without its program");
-    assert!(package.extension().is_none());
+    let outcome = load_session(&dir, clock);
+    let Err((code, _)) = outcome else {
+        panic!("a missing program fails the package load");
+    };
+    assert_eq!(code, contract::ErrorCode::IoFailed);
 }
 
 /// A missing program fails a required extension: the package never
@@ -430,19 +492,35 @@ fn load_process_without_a_program_fails_a_required_extension() {
         "exit_timeout_ms": 1000,
     }}));
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let outcome = Package::load_process_with(
+    let outcome = load_session(&dir, clock);
+    let Err((code, _)) = outcome else {
+        panic!("a required extension loads without its program");
+    };
+    assert_eq!(code, contract::ErrorCode::IoFailed);
+}
+
+/// A sessionless start whose workspace keys to no valid project fails
+/// closed instead of writing another project's data: the child never
+/// spawns, so there is nothing to reap.
+#[test]
+fn sessionless_start_without_a_valid_project_key_fails_closed() {
+    let dir = package_dir(json!({"process": {
+        "program": "fiber-definitely-missing-program",
+        "exit_timeout_ms": 1000,
+    }}));
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let mut host = test_host(&dir);
+    host.cwd = std::path::PathBuf::new();
+    let outcome = Package::load_process_provider_with(
         PackageOptions {
             dir: dir.path().to_path_buf(),
-            clock: Arc::clone(&clock),
+            clock,
         },
-        super::runtime::Runtime::new(clock),
-        process_context(&dir),
-        Arc::new(FakeServices {
-            calls: std::sync::Mutex::new(Vec::new()),
-        }),
+        super::package::ProcessProviderMode::Sessionless,
+        Some(host),
     );
-    assert!(
-        outcome.is_err(),
-        "a required extension loads without its program"
-    );
+    let Err((code, _)) = outcome else {
+        panic!("an unkeyable workspace fails the sessionless start");
+    };
+    assert_eq!(code, contract::ErrorCode::InvalidArguments);
 }

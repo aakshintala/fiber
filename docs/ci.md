@@ -39,11 +39,13 @@ job reports as `CI (draft)`, so the required `CI` check stays pending until
 the pull request is marked ready, which starts the full run.
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
-verdict job's `needs`, except the jobs that report and gate nothing:
-`backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. They run outside the verdict, so their
-result never decides `CI`. The docs check fails when any other job is
-missing from `needs`, so a new job, such as a new shard, cannot run
-without gating the merge.
+verdict job's `needs`, except the jobs that report without gating it
+directly: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`,
+`flake_report`, `bug_red_linux`, `bug_red_macos`. The bug-red legs report
+nextest's status to the `bug_red` collector, which is in the verdict's
+`needs`; their raw results are not selection entries. The docs check fails
+when any other job is missing from `needs`, so a new job, such as a new
+shard, cannot run without gating the merge.
 
 The selection is one job that every other job waits for, so it does as
 little as it can: it works out the selection and, on a pull request, runs
@@ -145,7 +147,7 @@ ships. Cargo ignores the setting when it builds the test harness.
 
 A failed binary-level test retries once. A pass on retry does not fail the
 run, except for a test the pull request touched (below): CI opens a flake
-issue naming the test, or comments on the open one
+issue for the test's binary, `Flaky tests: <binary>`, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
@@ -157,10 +159,10 @@ up the complete open and closed issues, asks
 `cargo xtask flake-report-events` which issue numbers need event fetches,
 fetches only those endpoints, and runs
 `cargo xtask flake-report --tested-commit` to decide one JSON-lines action
-per unique test title, probing ancestry itself only for each selected
+per test binary, probing ancestry itself only for each selected
 latest fix. It then runs `cargo xtask flake-classify`, which reads the
 runner lists and the two file lists git diffs from the merge base, and
-writes one classification line per unique test title: a stale base, a
+writes one classification line per test binary: a stale base, a
 file the pull request owns, or the issue lookup. It uploads one combined
 `flake-report-data` artifact carrying the decision lines plus the
 classification lines. The write-only
@@ -304,15 +306,18 @@ On Linux x86_64 alone:
   no pull request or merge.
 - for a pull request where any issue its body resolves is labelled
   `bug`, the tests its first commit, the red commit, adds or changes run
-  at the red commit, and every test the pull request adds or changes runs at
-  its head: the red commit must build, at least one of its tests must fail
-  there, and all of them must pass at the head (`docs/workflow.md`, "The pull
-  request"). A pull request whose every changed file is a docs file, as
-  "Selection" defines it, passes the check with a message saying so: the
-  doc was wrong and the code was right, so no test can show the bug. The
-  label is read when the run's selection job runs, so a relabel takes effect
-  at the next push or a whole-run rerun; rerunning only the failed job keeps
-  the old reading.
+  at the red commit on Linux x86_64 and macOS arm64. Each leg must build
+  the red commit. The check passes only when at least one test fails on at
+  least one leg; a test may pass or have no match on the other. Every test
+  the pull request adds or changes must pass at its head on both platforms.
+  The two red-test legs report nextest's status class to a collector, which
+  keeps one required check named `Bug fix fails at the red commit`
+  (`docs/workflow.md`, "The pull request"). A pull request whose every
+  changed file is a docs file, as "Selection" defines it, passes the check
+  with a message saying so: the doc was wrong and the code was right, so no
+  test can show the bug. The label is read when the run's selection job
+  runs, so a relabel takes effect at the next push or a whole-run rerun;
+  rerunning only the failed job keeps the old reading.
 - each profiling feature built once, without running it:
   `cargo check -p main --bins --tests --features alloc-stats` and
   `cargo check -p main --bins --tests --features dhat-heap`, so neither
@@ -557,7 +562,7 @@ eviction or a `Cargo.lock` change builds cold. The median behind each bound is a
 raised in its workflow. The release gates (`release-gate` and `nightly-gate`)
 bound macOS at 50 minutes because a macOS cold build plus the full suite
 measures 24-26 minutes (runs 39679547149/39660697905), twice that per the
-cold-cache rule; Linux stays at 20.
+cold-cache rule; Linux is 30, the backstop test job's bound, because the Linux gate measures 17-20 minutes (runs 40487347149/40677917738/40865045602, the last cancelled by the earlier bound of 20).
 
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror

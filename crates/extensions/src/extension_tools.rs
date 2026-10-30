@@ -124,6 +124,7 @@ impl Tool for LuaTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts,
         })
     }
@@ -195,7 +196,7 @@ impl Tool for ProcessTool {
                 };
                 let value = self
                     .runtime
-                    .tool_effects(reference, Value::Object(arguments.clone()))
+                    .tool_effects(reference, Value::Object(arguments.clone()), None)
                     .map_err(|e| {
                         EffectsError::Tool(format!(
                             "the effects function of the tool `{name}` failed: {e}"
@@ -214,6 +215,7 @@ impl Tool for ProcessTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts,
         })
     }
@@ -221,9 +223,9 @@ impl Tool for ProcessTool {
     /// Runs `run` behind the runtime: a callback past its timeout fails
     /// `timeout`, and any other failure fails `tool_error`.
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
-        let returned = self
-            .runtime
-            .tool_run(&self.run, Value::Object(arguments.clone()), cancel);
+        let returned =
+            self.runtime
+                .tool_run(&self.run, Value::Object(arguments.clone()), None, cancel);
         self.output(returned)
     }
 
@@ -240,6 +242,7 @@ impl Tool for ProcessTool {
         let returned = self.runtime.tool_run_asking(
             &self.run,
             Value::Object(arguments.clone()),
+            None,
             cancel,
             ask.inner_calls(),
         );

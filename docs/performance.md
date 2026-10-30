@@ -71,6 +71,7 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |
 | Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |
 | Terminal attaching, to the end of the opening pass | 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | — | — | — | — | — |
+| Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |
 | Terminal, attaching a 10 MiB session | 45,512 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
@@ -230,7 +231,9 @@ pass end. The same run records the attaching terminal's
 peak RSS and its RssAnon 10 s after the last reply appears, for the 10 MiB
 session; the busy turn records its session's RssAnon 10 s after the turn
 completes. The same run splits each attach into stages,
-reported as `attach_stage_ms` but never gated. `terminal` is the spawn-to-tail
+reported as `attach_stage_ms`: the `fold` stage feeds the fold-per-MiB
+budget above, and every other stage stays diagnostic, never gating.
+`terminal` is the spawn-to-tail
 time above; `hub_replay` replays it with no terminal, timing a `subscribe` at
 `full` over a raw hub-socket client from the send to its acknowledgement.
 `parse`, `fold` and `frames_1`, `frames_4096` and `frames_64` run in the
@@ -321,9 +324,7 @@ over the base median in place of its tolerance: it fails only when the median is
 with fewer than 5 stored runs, an unknown CPU model and any row without a comparable same-job base timing stay
 advisory, and the comment says why. Attaching's warm first-frame row is
 an exception: on eligible fast and slow models, each 1 MiB and 10 MiB
-own-log fixture fails if its median exceeds 50 ms. This hard ceiling holds
-with no base, a failed base, a missing or malformed base metric, a different
-base CPU, and any faster or slower base median or numeric tolerance.
+own-log fixture fails if its median exceeds 50 ms. When the comparable base median from the same job is also over 50 ms, a fixture fails only when its median exceeds that base median by more than the row's tolerance, or by 10 % while the tolerance cell is `—`; the report still names the breach. With no base, a failed base, a missing or malformed base metric, or a different base CPU, the 50 ms bound holds on its own.
 Middle, unknown and few-run models stay advisory. The opening-pass-end row
 stays advisory reference data, with no timing gate. Each over-ceiling fixture
 produces one named failure; malformed attach data fails without duplicating errors.

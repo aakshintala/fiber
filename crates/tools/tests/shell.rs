@@ -2809,6 +2809,139 @@ fn effects_of(shell: &Shell, command: &str) -> contract::tool::Effects {
     shell.effects(&args(command)).expect("effects")
 }
 
+/// The destructive-command guard (`docs/tools.md`, "What a tool declares"):
+/// the shell declares `review_when_confined` when any component of a
+/// multi-part command holds a built-in destructive form, matched by command
+/// text at any word offset within the component, so a wrapper such as
+/// `sudo` does not hide it. Each of the six forms stands alone below so
+/// deleting one matcher predicate fails this test.
+#[test]
+fn the_destructive_guard_matches_each_form_in_every_placement() {
+    let dir = fakes::TempDir::new("fiber-shell-destructive-guard");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    let guarded = [
+        "rm -r tmp",
+        "rm -rf tmp",
+        "git reset --hard",
+        "git clean -fd",
+        "git checkout -- README.md",
+        "git restore README.md",
+    ];
+    let mut cases: Vec<String> = Vec::new();
+    for form in guarded {
+        cases.push(form.to_owned());
+        for sep in ["&&", "||", ";", "|"] {
+            cases.push(format!("{form} {sep} echo hi"));
+            cases.push(format!("echo hi {sep} {form} {sep} echo hi"));
+            cases.push(format!("echo hi {sep} {form}"));
+        }
+    }
+    cases.push("/usr/bin/rm -rf tmp".to_owned());
+    cases.push("/usr/bin/git reset --hard".to_owned());
+    cases.push("/usr/bin/git clean -fd && echo hi".to_owned());
+    // A wrapper before the form does not hide it: each form guarded above
+    // stays guarded under `sudo`, standalone and in multi-part placements.
+    let wrapped = [
+        "sudo rm -r tmp",
+        "sudo rm -rf tmp",
+        "sudo git reset --hard",
+        "sudo git clean -fd",
+        "sudo git checkout -- README.md",
+        "sudo git restore README.md",
+    ];
+    for form in wrapped {
+        cases.push(form.to_owned());
+        cases.push(format!("echo hi && {form}"));
+        cases.push(format!("{form} && echo hi"));
+    }
+    cases.push("sudo /usr/bin/rm -rf tmp".to_owned());
+    cases.push("echo hi && sudo /usr/bin/git clean -fd".to_owned());
+    // Long and quoted spellings take the same matcher paths: `--recursive`
+    // is the long form of `-r`, and quotes around the command name do not
+    // hide it.
+    cases.push("rm --recursive tmp".to_owned());
+    cases.push("'rm' -rf tmp".to_owned());
+    cases.push("'git' clean -fd".to_owned());
+    // Best-effort text matching over-matches: a quoted or echoed form still
+    // counts, since only review is at stake.
+    cases.push("echo rm -rf tmp".to_owned());
+    cases.push("echo \"rm -rf tmp\"".to_owned());
+    for command in cases {
+        let effects = effects_of(&shell, &command);
+        assert!(
+            effects.review_when_confined,
+            "a guarded component stays reviewed: {command}"
+        );
+        assert!(
+            !effects.always_reviewed,
+            "the guard is not a full review: {command}"
+        );
+    }
+}
+
+/// Near-misses and benign commands declare no guard: the flag stays false
+/// and the call keeps its ordinary `always_reviewed` answer.
+#[test]
+fn the_destructive_guard_ignores_near_misses() {
+    let dir = fakes::TempDir::new("fiber-shell-destructive-guard-benign");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    for command in [
+        "rm tmp",
+        "rm -f tmp",
+        "git reset",
+        "git reset --soft HEAD",
+        "git checkout main",
+        "git checkout -b feature",
+        "git status",
+        "echo hi",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert!(
+            !effects.review_when_confined,
+            "no guarded form appears: {command}"
+        );
+        assert!(
+            !effects.always_reviewed,
+            "the guard changes nothing benign: {command}"
+        );
+    }
+}
+
+/// The guard reads the raw command text, so it holds where the parser
+/// gives up: a newline the recogniser refuses, an opaque grouped stage,
+/// and a command past the parser's length limit.
+#[test]
+fn the_destructive_guard_covers_text_the_parser_rejects() {
+    let dir = fakes::TempDir::new("fiber-shell-destructive-guard-raw");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    let long = format!("{} && git restore f", "true ".repeat(3_000));
+    assert!(
+        long.len() > 10_000,
+        "the long case stays past the parser limit"
+    );
+    for command in [
+        "echo hi\ngit clean -fd".to_owned(),
+        "true && (git clean -fd)".to_owned(),
+        long,
+    ] {
+        let effects = effects_of(&shell, &command);
+        assert!(
+            effects.review_when_confined,
+            "raw text still guards: {command:?}"
+        );
+        assert!(
+            !effects.always_reviewed,
+            "the guard is not a full review: {command:?}"
+        );
+    }
+}
+
 fn jq_r() -> Vec<(String, Vec<String>)> {
     vec![("jq".to_owned(), vec!["-r".to_owned()])]
 }
@@ -3222,6 +3355,112 @@ fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
     assert!(
         !effects.declared.confined,
         "an unavailable sandbox leaves the call on the reviewed path"
+    );
+}
+
+/// Through the loop's seam, an unconfined call reads what a confined call
+/// is refused: the declaration leaves the sandbox and the run follows it.
+#[test]
+fn an_unconfined_call_reads_what_a_confined_call_is_refused() {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home, "fiber-tools-shell-unconfined");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let secret = root.path().join("secret");
+    std::fs::write(&secret, "shh").unwrap();
+    let sandbox = Arc::new(Mutex::new(tools::SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: vec![secret.clone()],
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox);
+    // The confined call is refused the denied file.
+    let refused_args = args(&format!("cat {}", quote(&secret)));
+    let refused_effects = shell
+        .effects(&refused_args)
+        .expect("the shell command classifies");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert!(refused_effects.declared.confined);
+    let refused = run_prepared(
+        &shell,
+        &refused_args,
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        assert!(
+            refused.error.is_some(),
+            "a confined read of the denied file fails"
+        );
+        assert!(
+            !text(&refused).contains("shh"),
+            "no denied byte reaches the caller"
+        );
+    }
+    // The explicit unconfined call declares reviewed and reads it.
+    let mut unconfined_args = args(&format!("cat {}", quote(&secret)));
+    unconfined_args.insert("unconfined".into(), json!(true));
+    let unconfined_effects = shell
+        .effects(&unconfined_args)
+        .expect("the shell command classifies");
+    assert!(
+        !unconfined_effects.declared.confined,
+        "an unconfined call is reviewed as with the sandbox off"
+    );
+    let read = run_prepared(
+        &shell,
+        &unconfined_args,
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        read.error.is_none(),
+        "an unconfined read succeeds: {}",
+        text(&read)
+    );
+    assert!(
+        text(&read).contains("shh"),
+        "the denied file stays readable outside the sandbox"
+    );
+}
+
+/// A confined spawn failure fails once: the call ends with the sandbox
+/// error and its command never runs, so no unconfined retry happens.
+#[test]
+fn a_confined_spawn_failure_fails_once_without_an_unconfined_retry() {
+    let dir = fakes::TempDir::new("fiber-tools-shell-fail-once");
+    let workspace = dir.path().to_path_buf();
+    let sandbox = Arc::new(Mutex::new(sandbox_settings_for_integration("fail-once")));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
+    let marker = workspace.join("marker");
+    let command = format!("touch {} && echo hi", quote(&marker));
+    let effects = shell
+        .effects(&args(&command))
+        .expect("the shell command classifies");
+    // The reload turns the sandbox off between the declaration and the run.
+    sandbox.lock().unwrap().enabled = false;
+    let output = shell.run_with_effects(
+        &args(&command),
+        &effects,
+        &CancelToken::new(),
+        &Recorder::default(),
+        &NoAsk,
+    );
+    assert_eq!(
+        code(&output),
+        Some(ErrorCode::ToolError),
+        "the failed spawn fails with a tool error"
+    );
+    assert!(
+        text(&output).contains("The sandbox could not be applied"),
+        "the failure names the sandbox: {}",
+        text(&output)
+    );
+    assert!(
+        !marker.exists(),
+        "the failed call ran nothing once, and never reran unconfined"
     );
 }
 

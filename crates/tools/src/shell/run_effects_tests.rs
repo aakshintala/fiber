@@ -20,7 +20,7 @@ use contract::emit::Emit;
 use contract::events::Event;
 use contract::shapes::{ContentPart, DeclaredEffects};
 use contract::tool::{Answered, Ask, Asking, Cancel, Effects, Output, Tool};
-use serde_json::Map;
+use serde_json::{Map, json};
 
 use super::Shell;
 use super::sandbox::Settings;
@@ -68,6 +68,7 @@ fn effects_with(confined: bool) -> Effects {
         subject: Some(String::new()),
         prefix: None,
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     }
 }
@@ -152,6 +153,155 @@ fn a_declared_confined_call_disabled_before_run_fails_without_running() {
     assert!(
         !workspace.join("marker").exists(),
         "the command never runs, so no unconfined retry happens"
+    );
+}
+
+#[test]
+fn an_unconfined_call_ignores_a_newly_enabled_policy() {
+    let dir = fixture("fiber-run-effects-unconfined-on");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    std::fs::write(workspace.join("secret"), "shh").expect("write the secret");
+    let settings = Arc::new(Mutex::new(Settings {
+        enabled: false,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: dir.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), fakes::clock::FakeClock::new())
+        .with_sandbox(Arc::clone(&settings));
+    let mut args = arguments("cat secret", &workspace);
+    args.insert("unconfined".into(), json!(true));
+    // The decision is taken while the sandbox is off: the call declares
+    // reviewed, as an unconfined call does with the sandbox on.
+    let declared = shell.effects(&args).expect("valid shell arguments");
+    assert!(!declared.declared.confined);
+    // The reload turns the sandbox on with a deny over the secret after the
+    // decision: the declared-not-confined call must still read it.
+    *support::lock(&settings) = Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: vec![workspace.join("secret")],
+        fiber_home: dir.path().join("fiber-home"),
+    };
+    let output = shell.run_with_effects(&args, &declared, &NeverCancelled, &NoEmit, &NoAsk);
+    assert!(output.error.is_none(), "an unconfined call succeeds");
+    assert!(
+        matches!(output.content.first(), Some(ContentPart::Text { text }) if text.starts_with("shh")),
+        "the newly denied file stays readable"
+    );
+}
+
+#[test]
+fn a_failed_confined_call_is_not_retried_but_an_explicit_unconfined_call_succeeds() {
+    let dir = fixture("fiber-run-effects-retry");
+    let home = dir.path().join("home");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    std::fs::write(home.join("secret"), "shh").expect("write the secret");
+    let settings = Arc::new(Mutex::new(Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: dir.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), fakes::clock::FakeClock::new())
+        .with_sandbox(Arc::clone(&settings));
+    // The confined call is declared, then the policy disappears before the
+    // run: it fails with the sandbox error and nothing runs, so nothing
+    // reruns it unconfined.
+    let marker = workspace.join("marker");
+    let failed_args = arguments("touch marker", &workspace);
+    *support::lock(&settings) = Settings {
+        enabled: false,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: PathBuf::new(),
+    };
+    let failed = shell.run_with_effects(
+        &failed_args,
+        &effects_with(true),
+        &NeverCancelled,
+        &NoEmit,
+        &NoAsk,
+    );
+    assert_eq!(
+        sandbox_disabled_error(&failed),
+        "The sandbox could not be applied: the sandbox is off."
+    );
+    assert!(
+        !marker.exists(),
+        "the command never runs, so no unconfined retry happens"
+    );
+    // The model retries explicitly with `unconfined: true`: the declaration
+    // leaves the sandbox even though the reloaded policy denies the secret,
+    // and the retry reads it.
+    *support::lock(&settings) = Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: vec![home.join("secret")],
+        fiber_home: dir.path().join("fiber-home"),
+    };
+    let mut retry = arguments("cat secret", &home);
+    retry.insert("unconfined".into(), json!(true));
+    let declared = shell.effects(&retry).expect("valid shell arguments");
+    assert!(
+        !declared.declared.confined,
+        "the explicit unconfined retry declares reviewed, not confined"
+    );
+    let output = shell.run_with_effects(&retry, &declared, &NeverCancelled, &NoEmit, &NoAsk);
+    assert!(output.error.is_none(), "the explicit retry succeeds");
+    assert!(
+        matches!(output.content.first(), Some(ContentPart::Text { text }) if text.starts_with("shh")),
+        "the retry reads the denied file outside the sandbox"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn an_unconfined_direct_run_reads_a_denied_path_while_a_confined_one_is_refused() {
+    let dir = fixture("fiber-run-effects-direct");
+    let home = dir.path().join("home");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    std::fs::write(home.join("secret"), "shh").expect("write the secret");
+    let settings = Arc::new(Mutex::new(Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: vec![home.join("secret")],
+        fiber_home: dir.path().join("fiber-home"),
+    }));
+    let shell = Shell::new(workspace.clone(), fakes::clock::FakeClock::new())
+        .with_sandbox(Arc::clone(&settings));
+    // The confined direct run is refused the denied file.
+    let confined_args = arguments("cat secret", &home);
+    let declared = shell
+        .effects(&confined_args)
+        .expect("valid shell arguments");
+    assert!(declared.declared.confined);
+    let refused = shell.run(&confined_args, &NeverCancelled, &NoEmit);
+    assert!(
+        refused.error.is_some(),
+        "a confined read of the denied file fails"
+    );
+    assert!(
+        !matches!(&refused.content.first(), Some(ContentPart::Text { text }) if text.contains("shh")),
+        "no denied byte reaches the caller"
+    );
+    // The unconfined direct run reads it with the sandbox on.
+    let mut unconfined_args = arguments("cat secret", &home);
+    unconfined_args.insert("unconfined".into(), json!(true));
+    let declared = shell
+        .effects(&unconfined_args)
+        .expect("valid shell arguments");
+    assert!(!declared.declared.confined);
+    let read = shell.run(&unconfined_args, &NeverCancelled, &NoEmit);
+    assert!(read.error.is_none(), "an unconfined read succeeds");
+    assert!(
+        matches!(read.content.first(), Some(ContentPart::Text { text }) if text.starts_with("shh")),
+        "the denied file stays readable outside the sandbox"
     );
 }
 

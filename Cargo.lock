@@ -3476,6 +3476,7 @@ dependencies = [
  "pulldown-cmark",
  "ratatui",
  "rustix",
+ "serde",
  "serde_json",
  "signal-hook",
  "similar",

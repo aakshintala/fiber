@@ -21,7 +21,7 @@ impl ProcessExtension {
         let live = Arc::clone(&support::lock(&self.shared.transport));
         match live.recv() {
             transport::Incoming::Line(bytes) => {
-                self.handle_line(&bytes);
+                self.handle_line(&bytes, &live);
                 Pumped::Handled
             }
             transport::Incoming::Closed(reason) => {
@@ -32,7 +32,7 @@ impl ProcessExtension {
     }
 
     /// Handles one complete child line, answering it.
-    fn handle_line(&self, bytes: &[u8]) {
+    fn handle_line(&self, bytes: &[u8], live: &transport::Transport) {
         match transport::parse_line(bytes) {
             transport::ParsedLine::Call {
                 id,
@@ -41,12 +41,12 @@ impl ProcessExtension {
                 request_id,
             } => self.handle_call(id, call, args, request_id),
             transport::ParsedLine::Ready { id } => {
+                self.answer_accepted_on(live, &id, None);
                 self.shared
                     .ready
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 lifecycle::note_ready(&self.shared);
                 self.shared.ready_park.bump();
-                self.answer_accepted(&id, None);
             }
             transport::ParsedLine::Reply {
                 id,
@@ -61,8 +61,14 @@ impl ProcessExtension {
                         requests::Outcome::Answered(requests::Answer::Failure { code, message })
                     }
                 };
-                match self.shared.table.settle(&request_id, outcome) {
-                    requests::Settled::Completed => self.answer_accepted(&id, None),
+                let accepted = self.accepted_line(&id, None, live.max_line());
+                match self
+                    .shared
+                    .table
+                    .settle_with_before_wake(&request_id, outcome, || match live.send(accepted) {
+                        Ok(()) | Err(_) => {}
+                    }) {
+                    requests::Settled::Completed => {}
                     requests::Settled::Stale => self.answer_stale(&id),
                 }
             }
@@ -121,6 +127,13 @@ impl ProcessExtension {
             },
             None => self.call_context(),
         };
+        // A run outside a session carries reason `call`: the driver
+        // refuses without a session, and only the Call-case set runs.
+        if support::lock(&self.shared.context).is_call() && call == "host.drive" {
+            let (code, message) = calls::not_available(&call);
+            self.answer_rejected(&id, code, message);
+            return;
+        }
         match calls::route_call(&call, args) {
             Ok(calls::Route::Register { call, args }) => {
                 if !context.registration_allowed() {
@@ -184,6 +197,14 @@ impl ProcessExtension {
             self.answer_rejected(&id, code, message);
             return;
         }
+        // Outside a session only the Call-case set runs: a state write,
+        // a host.fs write or host.config rejects here, naming the call,
+        // before decoding touches it.
+        if support::lock(&self.shared.context).is_call() && !calls::sessionless_allowed(call) {
+            let (code, message) = calls::not_available(call);
+            self.answer_rejected(&id, code, message);
+            return;
+        }
         let decoded = match calls::decode_host(call, &args) {
             Ok(decoded) => decoded,
             Err((code, message)) => {
@@ -204,6 +225,25 @@ impl ProcessExtension {
         }
     }
 
+    /// Runs one host-call worker on its own thread: every host call
+    /// parks on the pump thread's behalf, so the pump never blocks on
+    /// the host. A worker that never starts answers `IoFailed`, as a
+    /// call the worker never ran.
+    fn spawn_host_task(
+        &self,
+        id: &contract::CommandId,
+        task: &str,
+        cant_start: String,
+        run: Box<dyn FnOnce() + Send + 'static>,
+    ) {
+        let spawned = std::thread::Builder::new()
+            .name(format!("process {task} {}", self.shared.owner))
+            .spawn(run);
+        if spawned.is_err() {
+            self.answer_rejected(id, ErrorCode::IoFailed, cant_start);
+        }
+    }
+
     /// Runs one decoded host operation on a worker, answering accepted
     /// with its value or rejected with its code and sentence.
     fn serve_host(
@@ -218,9 +258,11 @@ impl ProcessExtension {
         // holds the owner lock while it runs.
         let context = support::lock(&shared.context).clone();
         let answer_id = id.clone();
-        let spawned = std::thread::Builder::new()
-            .name(format!("process host {}", shared.owner))
-            .spawn(move || {
+        self.spawn_host_task(
+            &id,
+            "host",
+            format!("{call}: Fiber could not start the host call"),
+            Box::new(move || {
                 let id = answer_id;
                 let cancel = callback.cancel.clone();
                 match shared
@@ -240,14 +282,8 @@ impl ProcessExtension {
                         answer_off(&shared, &id, contract::inbox::Rejection { code, message })
                     }
                 }
-            });
-        if spawned.is_err() {
-            self.answer_rejected(
-                &id,
-                ErrorCode::IoFailed,
-                format!("{call}: Fiber could not start the host call"),
-            );
-        }
+            }),
+        );
     }
 
     /// Answers one `host.oauth.refresh`: without a credential scope the
@@ -272,19 +308,15 @@ impl ProcessExtension {
         };
         let shared = Arc::clone(&self.shared);
         let answer_id = id.clone();
-        let spawned = std::thread::Builder::new()
-            .name(format!("process refresh {}", shared.owner))
-            .spawn(move || {
+        self.spawn_host_task(
+            &id,
+            "refresh",
+            "host.oauth.refresh: Fiber could not start the host call".to_owned(),
+            Box::new(move || {
                 let id = answer_id;
                 oauth::refresh_continue(&shared, &id, callback, scope, &shared.oauth);
-            });
-        if spawned.is_err() {
-            self.answer_rejected(
-                &id,
-                ErrorCode::IoFailed,
-                "host.oauth.refresh: Fiber could not start the host call".to_owned(),
-            );
-        }
+            }),
+        );
     }
 
     /// Answers one `host.ask`: at once when no request is answered, and
@@ -308,20 +340,16 @@ impl ProcessExtension {
         };
         let shared = Arc::clone(&self.shared);
         let answer_id = id.clone();
-        let spawned = std::thread::Builder::new()
-            .name(format!("process ask {}", shared.owner))
-            .spawn(move || {
+        self.spawn_host_task(
+            &id,
+            "ask",
+            "host.ask: Fiber could not start the host call".to_owned(),
+            Box::new(move || {
                 let id = answer_id;
                 shared.table.wait_end(&request, shared.clock.as_ref());
                 answer_on(&shared, &id, Some(declined()));
-            });
-        if spawned.is_err() {
-            self.answer_rejected(
-                &id,
-                ErrorCode::IoFailed,
-                "host.ask: Fiber could not start the host call".to_owned(),
-            );
-        }
+            }),
+        );
     }
 
     /// The context one `call` with no `request_id` runs under: the entry
@@ -349,6 +377,13 @@ impl ProcessExtension {
         }
     }
 
+    /// What one installed key runs as: the registration kind and name in
+    /// the Lua callback's words. One site shares the formatting across
+    /// every registration kind the spec below matches.
+    fn ran_by(kind: &str, name: &str) -> String {
+        format!("{kind} {name}")
+    }
+
     /// What one installed key dispatches as: its kind, what the callback
     /// runs as, and the timeout it counts against. `None` when the
     /// registry does not show the key, so the handler never installs.
@@ -366,7 +401,11 @@ impl ProcessExtension {
                 let tool = registry.tools().get(name)?;
                 let timeout = tool.declared.timeout;
                 if key == "run" {
-                    Some((requests::RequestKind::Tool, format!("tool {name}"), timeout))
+                    Some((
+                        requests::RequestKind::Tool,
+                        Self::ran_by("tool", name),
+                        timeout,
+                    ))
                 } else {
                     Some((
                         requests::RequestKind::Function,
@@ -380,7 +419,7 @@ impl ProcessExtension {
                 let timeout = hooks.last()?.timeout;
                 Some((
                     requests::RequestKind::Stream,
-                    format!("hook {name}"),
+                    Self::ran_by("hook", name),
                     timeout,
                 ))
             }
@@ -399,7 +438,7 @@ impl ProcessExtension {
                 let timeout = registry.commands().get(name)?.timeout;
                 Some((
                     requests::RequestKind::Stream,
-                    format!("command {name}"),
+                    Self::ran_by("command", name),
                     timeout,
                 ))
             }
@@ -407,7 +446,7 @@ impl ProcessExtension {
                 let (timeout, _) = registry.search().get(name)?;
                 Some((
                     requests::RequestKind::Function,
-                    format!("search {name}"),
+                    Self::ran_by("search", name),
                     *timeout,
                 ))
             }
@@ -433,7 +472,9 @@ impl ProcessExtension {
     }
 
     /// The invoker the registry resolves one installed key through: sends
-    /// the request and waits for its answer, as `run_request` does.
+    /// the request and waits for its answer, as `run_request` does. The
+    /// invocation's scope rides into the dispatch, so only the
+    /// dispatcher that runs a provider's `credential()` refreshes.
     fn invoke_for(
         &self,
         registration: contract::CommandId,
@@ -443,21 +484,26 @@ impl ProcessExtension {
         timeout: Duration,
     ) -> crate::runtime::ProcessInvoke {
         let shared = Arc::clone(&self.shared);
-        Arc::new(move |args: Value, caller: &dyn contract::tool::Cancel| {
-            requests::run_request(
-                &shared,
-                requests::Dispatch {
-                    kind,
-                    registration: registration.clone(),
-                    key: key.clone(),
-                    ran_by: ran_by.clone(),
-                    args: requests::wire_args(args),
-                    timeout,
-                    state_call: None,
-                },
-                caller,
-            )
-        })
+        Arc::new(
+            move |args: Value,
+                  scope: Option<crate::lua::CredentialFor>,
+                  caller: &dyn contract::tool::Cancel| {
+                requests::run_request(
+                    &shared,
+                    requests::Dispatch {
+                        kind,
+                        registration: registration.clone(),
+                        key: key.clone(),
+                        ran_by: ran_by.clone(),
+                        args: requests::wire_args(args),
+                        timeout,
+                        state_call: None,
+                        credential: scope,
+                    },
+                    caller,
+                )
+            },
+        )
     }
 }
 

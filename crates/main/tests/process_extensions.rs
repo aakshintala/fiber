@@ -1,0 +1,1057 @@
+//! Binary-level tests of process extensions in real sessions
+//! (`docs/extensions.md`, "Process extensions"): the built `fiber` runs
+//! in its own process group with its own `FIBER_HOME`, holding a process
+//! extension driven by the shared peer fixture, and an ordinary provider
+//! whose base URL is the fake server.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+mod support;
+
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+
+use fakes::{ProviderServer, Watchdog};
+use serde_json::{Value, json};
+use support::{Setup, StdoutRun, function_call, hello_single_delta as hello, outputs_sent, stream};
+
+/// One finished `fiber ask`: its exit code, its stdout lines parsed (less
+/// `session_status`, which an observer thread writes), its raw stdout and
+/// its stderr.
+impl StdoutRun {
+    fn payload(&self, kind: &str) -> &Value {
+        &self
+            .lines
+            .iter()
+            .find(|line| line["kind"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} line"))["payload"]
+    }
+}
+
+/// Runs `fiber` with `args` in the workspace, in its own process group,
+/// waits for it under the test's deadline, and asserts that nothing it
+/// started is left in the group. A watchdog kills the group if this
+/// process dies first.
+#[track_caller]
+fn run_fiber(setup: &Setup, args: &[&str], what: &str) -> StdoutRun {
+    let mut command = setup.fiber(args);
+    command.current_dir(setup.workspace());
+    let child = command.spawn().unwrap();
+    let group = child.id();
+    let watchdog = Watchdog::group(group);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match setup.deadline.recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(setup.deadline, group, &finished, what),
+    };
+    assert!(
+        !fakes::group_alive(group),
+        "`fiber` left a process in its group behind"
+    );
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    StdoutRun::from(output)
+}
+
+/// Runs `fiber ask <prompt>` through [`run_fiber`], asserting success.
+#[track_caller]
+fn ask(setup: &Setup, prompt: &str) -> StdoutRun {
+    let run = run_ask(setup, prompt);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    run
+}
+
+/// As [`ask`], without asserting the exit code: a required startup
+/// failure exits nonzero, and the test reads its lines itself.
+#[track_caller]
+fn run_ask(setup: &Setup, prompt: &str) -> StdoutRun {
+    run_fiber(setup, &["ask", prompt], "`fiber ask` to exit")
+}
+
+/// A server whose model makes `calls` in one step, then answers `Hello.`.
+fn calling(calls: &[Value]) -> ProviderServer {
+    ProviderServer::start([stream(calls), hello()]).unwrap()
+}
+
+/// Installs `fiber.test/<short>` as a process extension running the
+/// shared peer fixture with `plan`, with `extra` merged into its
+/// manifest's `process` table.
+fn process_with(setup: &Setup, short: &str, extra: &Value, plan: &Value) {
+    let (program, argv) = fakes::ProcessFixture::command("peer", Some(plan));
+    let mut args = vec![argv[0].clone()];
+    args.extend(argv[1..].iter().cloned());
+    let mut process = serde_json::Map::new();
+    process.insert("program".to_owned(), json!(program.display().to_string()));
+    process.insert(
+        "args".to_owned(),
+        Value::Array(args.into_iter().map(Value::String).collect()),
+    );
+    process.insert("exit_timeout_ms".to_owned(), json!(1000));
+    if let Some(table) = extra.as_object() {
+        for (key, value) in table {
+            process.insert(key.clone(), value.clone());
+        }
+    }
+    let source = setup.root.path().join("src").join(short);
+    std::fs::create_dir_all(&source).unwrap();
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({
+            "name": format!("fiber.test/{short}"),
+            "version": "v1",
+            "fiber": "0.1.0",
+            "api": 1,
+            "process": process,
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// A valid `fiber.tool` spec with `run`, as JSON.
+fn tool_spec() -> Value {
+    json!({
+        "description": "Probes the session.",
+        "input_schema": {"type": "object"},
+        "effects": {"effects": [], "reversible": true},
+        "timeout": 5000,
+        "run": true,
+    })
+}
+
+/// A valid `after_tool` hook spec with `run`, as JSON.
+fn hook_spec() -> Value {
+    json!({
+        "phase": "transform",
+        "timeout": 5000,
+        "on_failure": "blocking",
+        "run": true,
+    })
+}
+
+/// A valid `fiber.watch` spec with `run`, as JSON.
+fn watcher_spec() -> Value {
+    json!({"timeout": 5000, "run": true})
+}
+
+/// Sends one registration call, then waits for its answer.
+fn register(action: &str, id: &str, args: Value) -> Value {
+    json!([
+        {"send": {"id": id, "command": "call", "args": {"call": action, "args": args}}},
+        {"read_until": {"path": "payload.command_id", "equals": id}},
+    ])
+}
+
+/// The peer plan registering a tool and a transforming `after_tool`
+/// hook, then answering both: the tool answers `probe-ok`, the hook
+/// replaces the content with `probe-ok|p`. The hello is written to
+/// `hello_marker` before anything else, so the test reads the exact
+/// session identity the owner was spawned under.
+fn tool_hook_plan(hello_marker: &str) -> Value {
+    let tool_branch = json!([
+        {"send": {"id": "a-tool", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "probe-ok"}}},
+    ]);
+    let hook_branch = json!([
+        {"send": {"id": "a-hook", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": {"content": "probe-ok|p"}}}},
+    ]);
+    let dispatch = json!([
+        {"if": {"path": "req.payload.registration", "equals": "t1", "then": tool_branch, "else": [
+            {"if": {"path": "req.payload.registration", "equals": "h1", "then": hook_branch}},
+        ]}},
+    ]);
+    let serve = json!([
+        {"read": {"as": "req"}},
+        {"if": {"path": "req.kind", "equals": "extension_request", "then": dispatch}},
+    ]);
+    let mut plan = vec![
+        json!({"read": {"as": "hello"}}),
+        json!({"append_file": {"path": hello_marker, "value": {"$ref": "hello"}}}),
+    ];
+    for action in register("fiber.tool", "t1", json!(["probe", tool_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    for action in register("fiber.hook", "h1", json!(["after_tool", hook_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
+    plan.push(json!({"loop": serve}));
+    Value::Array(plan)
+}
+
+/// A process extension's tool runs through the model and its
+/// `after_tool` hook visibly changes the outcome, as a Lua extension's do.
+#[test]
+fn process_tool_runs_and_its_after_tool_hook_changes_the_outcome() {
+    let setup = Setup::new();
+    let server = calling(&[function_call("call_probe", "probe", &json!({}))]);
+    setup.provider(&server);
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "probe",
+        &json!({}),
+        &tool_hook_plan(hello_marker.to_str().unwrap()),
+    );
+    let run = ask(&setup, "probe the session");
+    let completed = run.payload("tool_call_completed");
+    assert_eq!(completed["status"], "completed");
+    assert_eq!(
+        completed["content"],
+        json!([{"type": "text", "text": "probe-ok|p"}])
+    );
+    assert_eq!(completed["changed_by"], json!(["fiber.test/probe"]));
+    assert_eq!(outputs_sent(&server), ["probe-ok|p"]);
+}
+
+/// The hello a process extension receives carries the session's real
+/// identity, why it started, its workspace and the extension's data
+/// directories, with the folded state it was spawned under.
+#[test]
+fn process_hello_carries_session_identity_workspace_and_data_dirs() {
+    let setup = Setup::new();
+    let server = calling(&[function_call("call_probe", "probe", &json!({}))]);
+    setup.provider(&server);
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "probe",
+        &json!({}),
+        &tool_hook_plan(hello_marker.to_str().unwrap()),
+    );
+    let run = ask(&setup, "probe the session");
+    let hello: Value = serde_json::from_str(
+        &std::fs::read_to_string(&hello_marker).expect("the peer writes its hello"),
+    )
+    .expect("the hello is one JSON object");
+    assert_eq!(hello["kind"], json!("extension_hello"));
+    let payload = &hello["payload"];
+    assert_eq!(
+        payload["session_id"], run.lines[0]["session_id"],
+        "the hello names the session that spawned the owner"
+    );
+    assert_eq!(payload["reason"], json!("new"));
+    assert_eq!(
+        std::fs::canonicalize(payload["workspace"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(setup.workspace()).unwrap()
+    );
+    let machine = payload["data_dirs"]["machine"].as_str().unwrap();
+    let project = payload["data_dirs"]["project"].as_str().unwrap();
+    assert!(
+        machine.starts_with(setup.home().to_str().unwrap())
+            && machine.ends_with("fiber.test-probe"),
+        "the machine directory lives under Fiber home: {machine}"
+    );
+    assert!(
+        project.contains("projects") && project.ends_with("fiber.test-probe"),
+        "the project directory lives under the session's project: {project}"
+    );
+}
+
+/// Configures one fixture MCP server `fx` in `dir` behind a rendezvous
+/// wrapper: setup creates the `gate` FIFO before either owner starts; the
+/// wrapper opens it for writing, records `mcp-started`, then execs the real
+/// fixture server. The MCP handshake cannot complete before the peer
+/// arrives, and the peer's `wait_fifo` cannot pass before this wrapper
+/// starts: only a concurrent start opens both ends.
+fn configure_gated_fx(setup: &Setup, dir: &Path) {
+    let gate = dir.join("gate");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&gate)
+            .status()
+            .unwrap()
+            .success(),
+        "the gate FIFO is created before session startup"
+    );
+    let wrapper = dir.join("gate-wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf started > \"$dir/gate\"\nprintf started > \"$dir/mcp-started\"\nexec /bin/bash \"$fixture\" \"$dir\"\n",
+    )
+    .unwrap();
+    let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(mode | 0o111)).unwrap();
+    // A test-scale bound, well under the test's own deadline: a
+    // serialized start fails here instead of hanging to the deadline.
+    let server = json!({
+        "command": "/bin/bash",
+        "args": [
+            wrapper.display().to_string(),
+            dir.display().to_string(),
+            fakes::mcp_fixture().display().to_string(),
+        ],
+        "startup_timeout_ms": 30000,
+    });
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {"fx": server}}}),
+    );
+}
+
+fn configure_plain_fx(setup: &Setup, dir: &Path) -> (PathBuf, PathBuf) {
+    std::fs::create_dir_all(dir).unwrap();
+    let wrapper = dir.join("fx-wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf '%s\\n' \"$$\" > \"$dir/mcp-pid\"\nprintf started > \"$dir/mcp-started\"\nexec /bin/bash \"$fixture\" \"$dir\"\n",
+    )
+    .unwrap();
+    let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(mode | 0o111)).unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "fake/m",
+            "mcp": {"servers": {"fx": {
+                "command": "/bin/bash",
+                "args": [wrapper.display().to_string(), dir.display().to_string(), fakes::mcp_fixture().display().to_string()]
+            }}}
+        }),
+    );
+    (dir.join("mcp-started"), dir.join("mcp-pid"))
+}
+
+/// The peer plan that rendezvouses with the MCP wrapper before
+/// registering: hello, then `wait_fifo` on the gate, then the probe
+/// tool and the serve loop.
+fn gated_plan(gate: &str, hello_marker: &str) -> Value {
+    let serve = json!([
+        {"read": {"as": "req"}},
+        {"if": {"path": "req.kind", "equals": "extension_request", "then": [
+            {"send": {"id": "a-tool", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "gated-ok"}}},
+        ]}},
+    ]);
+    let mut plan = vec![
+        json!({"read": {"as": "hello"}}),
+        json!({"write_file": {"path": hello_marker, "value": {"$ref": "hello"}}}),
+        json!({"wait_fifo": {"path": gate}}),
+    ];
+    for action in register("fiber.tool", "t1", json!(["probe", tool_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
+    plan.push(json!({"loop": serve}));
+    Value::Array(plan)
+}
+
+/// Installs a silent `fiber.test/<short>` and bounds its startup miss:
+/// the configured allowance is already past, so the session misses the
+/// child at once instead of waiting out the real startup deadline.
+fn silent_with_immediate_deadline(setup: &Setup, short: &str, extra: &Value) {
+    process_with(
+        setup,
+        short,
+        extra,
+        &json!([
+            {"read": {"as": "hello"}},
+            {"hold": {"release_on": "never"}},
+        ]),
+    );
+    let path = setup.home().join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("the provider wrote config"))
+            .expect("config is JSON");
+    config["extensions"][format!("fiber.test/{short}")] = json!({"startup_timeout_ms": 0});
+    support::write_json(&path, &config);
+}
+
+/// A silent child never readies: the immediate deadline passes and the
+/// session continues without it, with the miss noticed under the
+/// extension's name and its tool absent from the preamble.
+#[test]
+fn optional_process_miss_leaves_a_notice_and_starts_without_it() {
+    let setup = Setup::new();
+    let server = calling(&[]);
+    setup.provider(&server);
+    silent_with_immediate_deadline(&setup, "silent", &json!({}));
+    let run = ask(&setup, "say hi");
+    let notices: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice["payload"]["extension"] == json!("fiber.test/silent")),
+        "the silent miss is noticed: {notices:?}"
+    );
+    let tools = run.payload("preamble_built")["tools"].as_array().unwrap();
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool["registered_by"] != json!("fiber.test/silent")),
+        "no tool of the missed extension is declared"
+    );
+}
+
+/// The peer plan answering one tool call per generation, then dying:
+/// every generation reads hello, appends it to the marker, registers
+/// the `flaky` tool, readies, answers one request and exits. The first
+/// death restarts on the next call; the second leaves the tool
+/// unavailable, with no third spawn.
+fn flaky_plan(hello_marker: &str) -> Value {
+    let mut plan = vec![
+        json!({"read": {"as": "hello"}}),
+        json!({"append_file": {"path": hello_marker, "value": {"$ref": "hello"}}}),
+    ];
+    for action in register("fiber.tool", "t1", json!(["flaky", tool_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
+    plan.push(json!({"read": {"as": "req"}}));
+    plan.push(json!({"send": {"id": "a-tool", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "flaky-ok"}}}));
+    plan.push(json!({"exit": {}}));
+    Value::Array(plan)
+}
+
+/// The peer plan for the timeout test: the tool answers `late-ok`,
+/// the `after_tool` hook request is met with silence, and the next
+/// hook request — `turn_end`, which fires when the turn completes —
+/// carries the first hook's late reply with it. The late reply names
+/// the retired request, so it drops; the turn-end reply is normal,
+/// and answering it writes `alive_marker`, proving the child was not
+/// stopped by the timeout it missed.
+fn late_plan(alive_marker: &str, hello_marker: &str) -> Value {
+    let tool = json!({"send": {"id": "a-tool", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "late-ok"}}});
+    let mut plan = vec![
+        json!({"read": {"as": "hello"}}),
+        json!({"append_file": {"path": hello_marker, "value": {"$ref": "hello"}}}),
+    ];
+    for action in register("fiber.tool", "t1", json!(["late", tool_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    let after_tool = json!({
+        "phase": "transform",
+        "timeout": 5000,
+        "on_failure": "blocking",
+        "run": true,
+    });
+    for action in register("fiber.hook", "h1", json!(["after_tool", after_tool]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    let turn_end = json!({
+        "phase": "transform",
+        "timeout": 5000,
+        "on_failure": "non-blocking",
+        "run": true,
+    });
+    for action in register("fiber.hook", "h2", json!(["turn_end", turn_end]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
+    // The tool call answers; its hook stays silent and times out.
+    // The owner answers every reply with a `command_accepted` ack, so
+    // each reply is followed by a `read_until` consuming its ack before
+    // the next `read` names the request it must answer. Without those
+    // the next `read` would catch the ack instead of the hook request.
+    plan.push(json!({"read": {"as": "req"}}));
+    plan.push(tool);
+    plan.push(json!({"read_until": {"path": "payload.command_id", "equals": "a-tool"}}));
+    plan.push(json!({"read": {"as": "first"}}));
+    // The turn's end carries the first hook's late reply, then answers
+    // the turn-end hook normally.
+    plan.push(json!({"read": {"as": "req"}}));
+    plan.push(json!({"send": {"id": "a-late", "command": "reply", "args": {"request_id": {"$ref": "first.payload.request_id"}, "result": {"content": "too-late"}}}}));
+    plan.push(json!({"read_until": {"path": "payload.command_id", "equals": "a-late"}}));
+    plan.push(json!({"send": {"id": "a-turn", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": {"content": "te-ok"}}}}));
+    plan.push(json!({"read_until": {"path": "payload.command_id", "equals": "a-turn"}}));
+    plan.push(json!({"write_file": {"path": alive_marker, "value": "answered"}}));
+    plan.push(json!({"loop": [
+        {"read": {"as": "req"}},
+        {"if": {"path": "req.kind", "equals": "extension_request", "then": [
+            {"send": {"id": "a-rest", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": null}}},
+        ]}},
+    ]}));
+    Value::Array(plan)
+}
+
+/// Resuming a session recomposes its extensions under the resume
+/// reason: the resumed run's hello carries `resume` for the same
+/// session id that started `new`.
+#[test]
+fn process_resume_recomposes_under_the_resume_reason() {
+    let setup = Setup::new();
+    let first_server = calling(&[function_call("call_probe_1", "probe", &json!({}))]);
+    setup.provider(&first_server);
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "probe",
+        &json!({}),
+        &tool_hook_plan(hello_marker.to_str().unwrap()),
+    );
+    let first = ask(&setup, "probe the session");
+    let id = first.lines[0]["session_id"].as_str().unwrap().to_owned();
+    let second_server = calling(&[function_call("call_probe_2", "probe", &json!({}))]);
+    setup.provider(&second_server);
+    let run = run_fiber(
+        &setup,
+        &["ask", "--resume", &id, "probe again"],
+        "`fiber ask --resume` to exit",
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let hellos: Vec<Value> = std::fs::read_to_string(&hello_marker)
+        .expect("the peer writes one hello per run")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each hello is one JSON object"))
+        .collect();
+    // docs/extensions.md:211 (`extension_hello` reasons) and :215 (every
+    // session starts its own process extensions at session start): the
+    // first run hellos once as `new`, the resume run hellos once as
+    // `resume`, each carrying the resumed session's id.
+    assert_eq!(hellos.len(), 2, "one hello per run: {hellos:?}");
+    assert_eq!(hellos[0]["payload"]["reason"], json!("new"));
+    assert_eq!(hellos[1]["payload"]["reason"], json!("resume"));
+    assert_eq!(hellos[0]["payload"]["session_id"], json!(id));
+    assert_eq!(hellos[1]["payload"]["session_id"], json!(id));
+}
+
+/// A hook past its timeout fails as its `on_failure` says, the child
+/// is not stopped, and the reply that arrives late changes nothing.
+#[test]
+fn process_hook_timeout_applies_on_failure_and_drops_the_late_reply() {
+    let setup = Setup::new();
+    let server = calling(&[function_call("call_late_1", "late", &json!({}))]);
+    setup.provider(&server);
+    let alive_marker = setup.workspace().join("alive.marker");
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "late",
+        &json!({}),
+        &late_plan(
+            alive_marker.to_str().unwrap(),
+            hello_marker.to_str().unwrap(),
+        ),
+    );
+    let run = ask(&setup, "run the late tool");
+    assert!(
+        alive_marker.is_file(),
+        "the child answers the turn-end hook after its missed timeout"
+    );
+    let completed: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    // docs/extensions.md:209 (every request is answered once; a reply to
+    // a request that is no longer pending is rejected `stale_request` and
+    // changes nothing): the fixture's single call completes exactly once,
+    // and the late reply changes nothing.
+    assert_eq!(completed.len(), 1, "the tool call completes: {completed:?}");
+    assert_eq!(completed[0]["payload"]["status"], json!("completed"));
+    let withheld = completed[0]["payload"]["content"].to_string();
+    assert!(
+        withheld.contains("withheld") && !withheld.contains("too-late"),
+        "the timed-out hook withholds the output and the late reply changes nothing: {withheld}"
+    );
+}
+
+/// A killed child restarts on its next call and the new generation
+/// answers; killed twice, its tool calls fail while its declarations
+/// stay put and no third child spawns.
+#[test]
+fn process_death_restarts_once_then_leaves_the_tool_unavailable() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[function_call("call_flaky_1", "flaky", &json!({}))]),
+        stream(&[function_call("call_flaky_2", "flaky", &json!({}))]),
+        stream(&[function_call("call_flaky_3", "flaky", &json!({}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "flaky",
+        &json!({}),
+        &flaky_plan(hello_marker.to_str().unwrap()),
+    );
+    let run = ask(&setup, "run the flaky tool");
+    let completed: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    // docs/extensions.md:209 (tool calls are sent as they arrive, so
+    // several can be outstanding, and every request is answered): the
+    // fixture's three calls each complete once, the last one failing
+    // after the restart (docs/extensions.md:222, a twice-dead extension
+    // stays dead and its calls fail).
+    assert_eq!(
+        completed.len(),
+        3,
+        "three tool calls complete: {completed:?}"
+    );
+    assert_eq!(completed[0]["payload"]["status"], json!("completed"));
+    assert_eq!(
+        completed[0]["payload"]["content"],
+        json!([{"type": "text", "text": "flaky-ok"}])
+    );
+    assert_eq!(completed[1]["payload"]["status"], json!("completed"));
+    assert_eq!(
+        completed[1]["payload"]["content"],
+        json!([{"type": "text", "text": "flaky-ok"}])
+    );
+    assert_eq!(completed[2]["payload"]["status"], json!("failed"));
+    // Exactly two generations spawned: one restart, never a third
+    // (docs/extensions.md:211, the hello is sent again after a restart;
+    // :222, one that dies is restarted once, and a second death stays
+    // dead).
+    let hellos = std::fs::read_to_string(&hello_marker).expect("the peer appends two hellos");
+    assert_eq!(hellos.lines().count(), 2, "one restart, no third spawn");
+    // The declarations the model saw never move across the deaths.
+    let tool_lists: Vec<Value> = server
+        .requests()
+        .iter()
+        .filter_map(|request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("tools").cloned())
+        })
+        .collect();
+    // docs/extensions.md:222 (a dead extension's tools stay declared, so
+    // the prompt cache holds): the declarations never move across the
+    // deaths; three listings come from the fixture's three model steps.
+    assert!(
+        tool_lists.len() >= 3,
+        "the model lists tools on every step: {}",
+        tool_lists.len()
+    );
+    for list in &tool_lists {
+        assert_eq!(list, &tool_lists[0], "stable declarations across deaths");
+    }
+    assert!(
+        tool_lists[0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == json!("flaky")),
+        "the flaky tool stays declared"
+    );
+}
+
+/// A required silent child fails the session start: the run exits
+/// nonzero, the required miss is reported under the extension's name,
+/// and no session is committed to the log.
+#[test]
+fn required_process_miss_fails_the_session_start() {
+    let setup = Setup::new();
+    let server = calling(&[]);
+    setup.provider(&server);
+    silent_with_immediate_deadline(&setup, "silent", &json!({"required": true}));
+    let run = run_ask(&setup, "say hi");
+    assert_ne!(run.code, Some(0), "the required miss fails the start");
+    assert!(
+        run.stderr.contains("fiber.test/silent"),
+        "the miss names the extension: {}",
+        run.stderr
+    );
+    let sessions = setup.home().join("projects");
+    let committed = std::fs::read_dir(&sessions)
+        .map(|entries| {
+            entries.filter_map(Result::ok).any(|entry| {
+                entry
+                    .path()
+                    .join("sessions")
+                    .read_dir()
+                    .map(|mut inner| inner.next().is_some())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    assert!(!committed, "no session is committed");
+}
+
+/// Process startup and MCP startup overlap: the peer cannot ready
+/// before the MCP wrapper starts, and the MCP handshake cannot finish
+/// before the peer arrives. A serialized start fails this test, in
+/// either order, instead of merely running slower.
+#[test]
+fn process_and_mcp_start_in_parallel() {
+    let setup = Setup::new();
+    // Armed before any start: the gated wrapper names the root in its
+    // command line, so a failing exit still kills it with the setup.
+    let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
+    let fx = setup.workspace().join("fx");
+    std::fs::create_dir_all(&fx).unwrap();
+    let server = calling(&[function_call("call_probe", "probe", &json!({}))]);
+    setup.provider(&server);
+    configure_gated_fx(&setup, &fx);
+    let gate = fx.join("gate");
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "probe",
+        &json!({}),
+        &gated_plan(gate.to_str().unwrap(), hello_marker.to_str().unwrap()),
+    );
+    let run = ask(&setup, "probe the session");
+    let completed = run.payload("tool_call_completed");
+    assert_eq!(completed["status"], "completed");
+    assert!(fx.join("mcp-started").is_file(), "the MCP wrapper started");
+}
+
+/// A required process startup failure drops its pending MCP owner: the
+/// start joins, then stops and reaps the MCP server before the session fails.
+#[test]
+fn required_process_failure_stops_pending_mcp() {
+    let setup = Setup::new();
+    let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
+    let provider = calling(&[]);
+    setup.provider(&provider);
+    let (started, pid_file) = configure_plain_fx(&setup, &setup.workspace().join("fx"));
+    silent_with_immediate_deadline(&setup, "required", &json!({"required": true}));
+
+    let run = run_ask(&setup, "say hi");
+    assert_ne!(run.code, Some(0), "the required process miss fails start");
+    assert!(
+        started.is_file(),
+        "MCP started before process loading failed"
+    );
+    let pid: u32 = std::fs::read_to_string(pid_file)
+        .expect("the wrapper records its pid")
+        .trim()
+        .parse()
+        .expect("the pid is numeric");
+    assert!(!fakes::pid_alive(pid), "the pending MCP server was reaped");
+    assert!(
+        fakes::matching_exits(
+            &setup.root.path().display().to_string(),
+            setup.deadline.cleanup_phase()
+        ),
+        "all startup children are gone"
+    );
+}
+
+/// The peer plan recording every `tool_call_completed` watcher delivery:
+/// the tool answers `probe-ok`, each watcher request is appended to the
+/// marker and answered null, and the hello is written before anything
+/// else so the test reads the exact session identity.
+fn envelope_plan(hello_marker: &str, watch_marker: &str) -> Value {
+    let tool_branch = json!([
+        {"send": {"id": "a-tool", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "probe-ok"}}},
+    ]);
+    let watch_branch = json!([
+        {"append_file": {"path": watch_marker, "value": {"$ref": "req"}}},
+        {"send": {"id": "a-watch", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": null}}},
+    ]);
+    let dispatch = json!([
+        {"if": {"path": "req.payload.registration", "equals": "t1", "then": tool_branch, "else": [
+            {"if": {"path": "req.payload.registration", "equals": "w1", "then": watch_branch}},
+        ]}},
+    ]);
+    let serve = json!([
+        {"read": {"as": "req"}},
+        {"if": {"path": "req.kind", "equals": "extension_request", "then": dispatch}},
+    ]);
+    let mut plan = vec![
+        json!({"read": {"as": "hello"}}),
+        json!({"append_file": {"path": hello_marker, "value": {"$ref": "hello"}}}),
+    ];
+    for action in register("fiber.tool", "t1", json!(["probe", tool_spec()]))
+        .as_array()
+        .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    for action in register(
+        "fiber.watch",
+        "w1",
+        json!([["tool_call_completed"], watcher_spec()]),
+    )
+    .as_array()
+    .unwrap()
+    {
+        plan.push(action.clone());
+    }
+    plan.push(json!({"send": {"id": "ready1", "command": "ready"}}));
+    plan.push(json!({"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "ready1"}}}}));
+    plan.push(json!({"loop": serve}));
+    Value::Array(plan)
+}
+
+/// A process watcher receives the original session envelope — its kind,
+/// session id, schema version, durable seq and payload — rather than the
+/// filtered watcher argument Lua watchers receive.
+#[test]
+fn process_watcher_receives_original_session_envelopes() {
+    let setup = Setup::new();
+    let server = calling(&[function_call("call_probe", "probe", &json!({}))]);
+    setup.provider(&server);
+    let hello_marker = setup.workspace().join("hello.json");
+    let watch_marker = setup.workspace().join("watch.jsonl");
+    process_with(
+        &setup,
+        "probe",
+        &json!({}),
+        &envelope_plan(
+            hello_marker.to_str().unwrap(),
+            watch_marker.to_str().unwrap(),
+        ),
+    );
+    let run = ask(&setup, "probe the session");
+    let completed = run.payload("tool_call_completed");
+    assert_eq!(completed["status"], "completed");
+    let text =
+        std::fs::read_to_string(&watch_marker).expect("the peer records its watcher deliveries");
+    let deliveries: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one watcher request per line"))
+        .collect();
+    assert!(
+        !deliveries.is_empty(),
+        "the watcher saw the tool call complete"
+    );
+    for delivery in &deliveries {
+        let envelope = &delivery["payload"]["args"][0];
+        assert_eq!(
+            envelope["kind"],
+            json!("tool_call_completed"),
+            "the delivery carries the event kind: {delivery:?}"
+        );
+        assert_eq!(
+            envelope["session_id"], run.lines[0]["session_id"],
+            "the delivery names the session that spawned the owner: {delivery:?}"
+        );
+        assert_eq!(
+            envelope["schema_version"],
+            json!(contract::SCHEMA_VERSION),
+            "the delivery carries the session schema version: {delivery:?}"
+        );
+        assert!(
+            envelope.get("seq").and_then(|seq| seq.as_u64()).is_some(),
+            "durable lines carry their seq: {delivery:?}"
+        );
+        assert_eq!(
+            envelope["payload"]["status"],
+            json!("completed"),
+            "the delivery carries the event payload: {delivery:?}"
+        );
+    }
+}
+
+/// Configures one fixture MCP server `fx` in `dir` behind a held startup:
+/// setup creates the `release` FIFO before either owner starts; the
+/// wrapper records its pid, then blocks reading the FIFO, then execs the
+/// real fixture server once the test releases it. The wrapper's read-only
+/// open waits for the test's writer, and the test's write-only open waits
+/// for the wrapper's reader, so the kernel holds the release until the
+/// wrapper has arrived at its blocking read: completion of the release
+/// proves the hold was established, with no signal file in between.
+fn configure_held_fx(setup: &Setup, dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let release = dir.join("release");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&release)
+            .status()
+            .unwrap()
+            .success(),
+        "the release FIFO is created before session startup"
+    );
+    let wrapper = dir.join("fx-wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/bash\ndir=\"$1\"\nfixture=\"$2\"\nprintf '%s\\n' \"$$\" > \"$dir/mcp-pid\"\nread _ < \"$dir/release\"\nexec /bin/bash \"$fixture\" \"$dir\"\n",
+    )
+    .unwrap();
+    let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(mode | 0o111)).unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "fake/m",
+            "mcp": {"servers": {"fx": {
+                "command": "/bin/bash",
+                "args": [wrapper.display().to_string(), dir.display().to_string(), fakes::mcp_fixture().display().to_string()]
+            }}}
+        }),
+    );
+    dir.join("mcp-pid")
+}
+
+/// A required process spawn failure joins the pending MCP start before it
+/// stops its servers: the MCP server is held in startup, the spawned
+/// session fails at once on the missing program, and the test only then
+/// releases the hold — so the join the drop performs returns the started
+/// servers instead of abandoning them, and the failed session stops every
+/// one. No sleeps: the release write blocks until the wrapper's
+/// read-only open arrives, so its completion proves the hold was
+/// established, and the deadline bounds every wait.
+#[test]
+fn required_process_spawn_failure_joins_then_stops_held_mcp() {
+    let setup = Setup::new();
+    let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
+    let provider = calling(&[]);
+    setup.provider(&provider);
+    let pid_file = configure_held_fx(&setup, &setup.workspace().join("fx"));
+    process_with(
+        &setup,
+        "broken",
+        &json!({
+            "program": "fiber-definitely-missing-program",
+            "required": true,
+        }),
+        &json!([]),
+    );
+    // `fiber ask` cannot exit before the hold releases: the pending MCP
+    // owner joins its start on the failure path.
+    let mut command = setup.fiber(&["ask", "say hi"]);
+    command.current_dir(setup.workspace());
+    let child = command.spawn().unwrap();
+    let group = child.id();
+    let watchdog = Watchdog::group(group);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    // The wrapper records its pid before it blocks, so this wait proves
+    // the wrapper started; the release write below blocks in its
+    // write-only open until the wrapper's read-only open arrives, so its
+    // completion proves the hold was established before the release.
+    let pid_seen = pid_file.clone();
+    fakes::wait_until("the wrapper to start", setup.deadline, move || {
+        pid_seen.is_file()
+    });
+    // Release the hold so the joined start returns its servers.
+    let release = pid_file.parent().unwrap().join("release");
+    let (wrote, wrote_rx) = mpsc::channel();
+    thread::spawn(move || {
+        std::fs::write(&release, "go\n").unwrap();
+        wrote.send(()).unwrap();
+    });
+    match setup.deadline.recv(&wrote_rx) {
+        Ok(()) => {}
+        Err(_) => support::expired(
+            setup.deadline,
+            group,
+            &finished,
+            "the wrapper to take the release",
+        ),
+    }
+    let output = match setup.deadline.recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(setup.deadline, group, &finished, "`fiber ask` to exit"),
+    };
+    assert!(
+        !fakes::group_alive(group),
+        "`fiber` left a process in its group behind"
+    );
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    let run = StdoutRun::from(output);
+    assert_ne!(
+        run.code,
+        Some(0),
+        "the required spawn failure fails the start"
+    );
+    assert!(
+        run.stderr.contains("fiber.test/broken"),
+        "the failure names the extension: {}",
+        run.stderr
+    );
+    let pid: u32 = std::fs::read_to_string(&pid_file)
+        .expect("the wrapper records its pid")
+        .trim()
+        .parse()
+        .expect("the pid is numeric");
+    assert!(
+        !fakes::pid_alive(pid),
+        "the held MCP server was reaped after the join"
+    );
+    assert!(
+        fakes::matching_exits(
+            &setup.root.path().display().to_string(),
+            setup.deadline.cleanup_phase()
+        ),
+        "all startup children are gone"
+    );
+}
+
+/// A required MCP failure after process activation finishes the process
+/// owner before returning, so neither startup side survives the rejection.
+#[test]
+fn required_mcp_failure_finishes_process_owner() {
+    let setup = Setup::new();
+    let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
+    let provider = calling(&[]);
+    setup.provider(&provider);
+    let missing = setup.workspace().join("missing-mcp-server");
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "fake/m",
+            "mcp": {"servers": {"broken": {
+                "command": missing.display().to_string(),
+                "required": true
+            }}}
+        }),
+    );
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "ready",
+        &json!({}),
+        &tool_hook_plan(hello_marker.to_str().unwrap()),
+    );
+
+    let run = run_ask(&setup, "say hi");
+    assert_ne!(run.code, Some(0), "the required MCP miss fails start");
+    assert!(
+        run.stderr.contains("MCP server `broken`"),
+        "the failure names the required server: {}",
+        run.stderr
+    );
+    assert!(
+        hello_marker.is_file(),
+        "the process owner started and readied"
+    );
+    assert!(
+        fakes::matching_exits(
+            &setup.root.path().display().to_string(),
+            setup.deadline.cleanup_phase()
+        ),
+        "all startup children are gone"
+    );
+}

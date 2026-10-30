@@ -220,6 +220,55 @@ fn find_at(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .map(|at| from + at)
 }
 
+/// The logo's reserved image id (`crates/tui/src/graphics/logo.rs`, `ID`):
+/// its kitty transmit names the RGBA raster (`f=32`) and its place its
+/// cells, both under `i=30`, while inline images transmit PNG (`f=100`)
+/// under registry ids. A pixel-reporting pty answers the graphics probe,
+/// so the logo's controls share the stream with the image's; the helpers
+/// below select only the image's.
+const LOGO_ID_TAG: &[u8] = b"i=30,";
+
+/// The end of a kitty graphics escape.
+const ESCAPE_END: &[u8] = b"\x1b\\";
+
+/// Whether the `a=t,`, `a=p,` or `a=d,` control at `at` names the logo:
+/// the id tag sits inside the control data, well before any payload, so
+/// a bounded window past the match covers it, cut at the escape's end so
+/// it never reaches a later control's id. The tag's comma is outside the
+/// base64 alphabet, so payload bytes cannot match it.
+fn is_logo_control(haystack: &[u8], at: usize) -> bool {
+    let window_end = haystack.len().min(at.saturating_add(64));
+    let end = find_at(haystack, at, ESCAPE_END).map_or(window_end, |found| found.min(window_end));
+    haystack[at..end]
+        .windows(LOGO_ID_TAG.len())
+        .any(|window| window == LOGO_ID_TAG)
+}
+
+/// Counts `needle` controls outside the logo's reserved id.
+fn count_inline(haystack: &[u8], needle: &[u8]) -> usize {
+    let mut count = 0;
+    let mut at = 0;
+    while let Some(found) = find_at(haystack, at, needle) {
+        if !is_logo_control(haystack, found) {
+            count += 1;
+        }
+        at = found + 1;
+    }
+    count
+}
+
+/// The first offset of a non-logo `needle` control at or after `from`.
+fn find_inline_at(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    let mut at = from;
+    while let Some(found) = find_at(haystack, at, needle) {
+        if !is_logo_control(haystack, found) {
+            return Some(found);
+        }
+        at = found + 1;
+    }
+    None
+}
+
 /// The logged tool image's path and size, read under the setup's
 /// deadline: the hub writes the log after the turn's close paints. The
 /// read pipeline stores the image under a fresh stem, so the test
@@ -446,20 +495,24 @@ fn an_inline_image_transmits_once_then_deletes_on_session_change() {
     // transmit and place before the session-change delete, then no more
     // image writes.
     let terminal = output.terminal;
-    assert_eq!(count(&terminal, b"a=t,"), 1, "one transmit");
-    assert_eq!(count(&terminal, b"a=p,"), 1, "one place");
-    assert_eq!(count(&terminal, b"a=d,"), 1, "one delete");
-    let transmit = find_at(&terminal, 0, b"a=t,").expect("the transmit");
-    let placed = find_at(&terminal, transmit, b"a=p,").expect("the place");
-    let deleted = find_at(&terminal, placed, b"a=d,").expect("the delete");
+    assert_eq!(count_inline(&terminal, b"a=t,"), 1, "one transmit");
+    assert_eq!(count_inline(&terminal, b"a=p,"), 1, "one place");
+    assert_eq!(count_inline(&terminal, b"a=d,"), 1, "one delete");
+    let transmit = find_inline_at(&terminal, 0, b"a=t,").expect("the transmit");
+    let placed = find_inline_at(&terminal, transmit, b"a=p,").expect("the place");
+    let deleted = find_inline_at(&terminal, placed, b"a=d,").expect("the delete");
     assert!(transmit < placed && placed < deleted);
     let after = &terminal[deleted..];
     assert_eq!(
-        count(after, b"a=t,"),
+        count_inline(after, b"a=t,"),
         0,
         "nothing transmits after the delete"
     );
-    assert_eq!(count(after, b"a=p,"), 0, "nothing places after the delete");
+    assert_eq!(
+        count_inline(after, b"a=p,"),
+        0,
+        "nothing places after the delete"
+    );
 }
 
 #[test]
@@ -495,7 +548,11 @@ fn the_same_image_stays_one_line_with_the_flag_off() {
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(count(&output.terminal, b"a=t,"), 0, "nothing transmits");
+    assert_eq!(
+        count_inline(&output.terminal, b"a=t,"),
+        0,
+        "nothing transmits"
+    );
 }
 
 #[test]

@@ -210,6 +210,17 @@ fn owned_kinds(lines: &[Value]) -> Vec<String> {
         .collect()
 }
 
+/// The durable lines of `lines`: ask stdout and socket captures carry
+/// ephemeral lines (message deltas, acknowledgements, queue notices)
+/// without `seq`, which the durable log never holds.
+fn durable_lines(lines: &[Value]) -> Vec<Value> {
+    lines
+        .iter()
+        .filter(|line| line.get("seq").is_some())
+        .cloned()
+        .collect()
+}
+
 #[test]
 fn ordered_projections_set_aside_exactly_the_independent_kinds() {
     let lines = support::expected(&[
@@ -335,46 +346,662 @@ fn event_windows_reject_missing_extra_duplicate_and_invalid_anchors() {
     );
 }
 
-/// The cancelled call's usage and finish share a bounded window; the
-/// finish still precedes the job end (`docs/delegates.md`, "Events").
-fn cancellation_kinds(lines: &[Value], lo: usize, hi: usize) -> Vec<&str> {
+/// The cancellation window holds one usage and one finish, in either
+/// order; the turn end, the finish and the job end after it hold
+/// `expected` as a set. The window's finish names its job, which the
+/// caller checks against the cited delegate relations
+/// (`docs/events.md`, "Jobs").
+fn cancellation_kinds<'a>(lines: &'a [Value], lo: usize, hi: usize, expected: &[&str]) -> &'a str {
+    // docs/events.md, "Usage and notices": one copied usage and one finish
+    // per run, in either order within the window; the turn end and the job
+    // end bound it.
     support::assert_set_between(lines, lo, hi, &["usage_recorded", "delegate_finished"]);
-    let mut ordered = support::kinds(&lines[..=lo]);
-    ordered.push("delegate_finished");
-    ordered.extend(support::kinds(&lines[hi..]));
-    ordered
+    let finish = lines[lo + 1..hi]
+        .iter()
+        .find(|line| line["kind"] == "delegate_finished")
+        .expect("the window holds the delegate finish");
+    let job = finish
+        .get("payload")
+        .and_then(|payload| payload.get("job_id"))
+        .and_then(Value::as_str)
+        .expect("the finish names its job");
+    let mut outer: Vec<Value> = lines[..=lo].to_vec();
+    outer.extend(lines[hi..].to_vec());
+    outer.push(finish.clone());
+    support::assert_kinds_multiset(&outer, expected, &[], None, COUNT_DOC);
+    job
 }
 
 #[test]
 fn cancellation_windows_allow_both_usage_positions_but_require_one_call() {
+    // One complete delegate run around the window: the usage and the
+    // finish float within it, while the cited finish relation is pinned.
     for interior in [
         vec!["usage_recorded", "delegate_finished"],
         vec!["delegate_finished", "usage_recorded"],
     ] {
-        let mut kinds = vec!["turn_completed"];
+        let usage_first = interior[0] == "usage_recorded";
+        let mut kinds = vec!["job_started", "delegate_started", "turn_completed"];
         kinds.extend(interior);
         kinds.extend(["job_completed", "fiber_exited"]);
-        let lines = support::expected(&kinds);
-        assert_eq!(
-            cancellation_kinds(&lines, 0, 3),
-            [
+        let mut lines = support::expected(&kinds);
+        for line in &mut lines {
+            if [
+                "job_started",
+                "delegate_started",
+                "delegate_finished",
+                "job_completed",
+            ]
+            .contains(&line["kind"].as_str().unwrap())
+            {
+                line["payload"]["job_id"] = json!("j_cancel");
+            }
+        }
+        // The window's run keeps the cited start relation in both orders;
+        // the outer set counts the run's start kinds too.
+        let job = cancellation_kinds(
+            &lines,
+            2,
+            5,
+            &[
+                "job_started",
+                "delegate_started",
                 "turn_completed",
                 "delegate_finished",
                 "job_completed",
-                "fiber_exited"
-            ]
+                "fiber_exited",
+            ],
         );
+        support::assert_promised_order(
+            &lines,
+            job,
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            DELEGATE_START_DOC,
+        );
+        // Only usage-before-finish keeps the cited end relation: the finish
+        // is written just before its completion with no yield between
+        // (`crates/loop/src/jobs.rs`, `write_end`), so an ordered line after
+        // the finish breaks adjacency in the full stream.
+        if usage_first {
+            support::assert_promised_order(
+                &lines,
+                job,
+                ("delegate_finished", "job_completed"),
+                support::Relation::JustBefore,
+                DELEGATE_END_DOC,
+            );
+        } else {
+            assert!(
+                std::panic::catch_unwind(|| support::assert_promised_order(
+                    &lines,
+                    job,
+                    ("delegate_finished", "job_completed"),
+                    support::Relation::JustBefore,
+                    DELEGATE_END_DOC,
+                ))
+                .is_err(),
+                "accepted usage between a just-before pair"
+            );
+        }
     }
     for interior in [
         vec!["delegate_finished"],
         vec!["delegate_finished", "usage_recorded", "usage_recorded"],
     ] {
-        let mut kinds = vec!["turn_completed"];
+        let mut kinds = vec!["job_started", "delegate_started", "turn_completed"];
         kinds.extend(interior);
         kinds.push("job_completed");
         let lines = support::expected(&kinds);
         assert!(
-            std::panic::catch_unwind(|| cancellation_kinds(&lines, 0, lines.len() - 1)).is_err()
+            std::panic::catch_unwind(|| cancellation_kinds(
+                &lines,
+                2,
+                lines.len() - 1,
+                &[
+                    "turn_completed",
+                    "delegate_finished",
+                    "job_completed",
+                    "fiber_exited",
+                ],
+            ))
+            .is_err()
+        );
+    }
+}
+
+/// The verbatim count rule the multiset calls cite
+/// (`docs/testing.md`, "Event streams").
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+
+/// The combined citation the `job_delta` exclusion carries: the narrow
+/// exception (`docs/testing.md`, "Event streams") and the ephemeral-progress
+/// definition it names (`docs/events.md:1333`).
+const IGNORE_JOB_DELTA_DOC: &str = "docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta`, may be excluded from the multiset only when its count is not under test.; docs/events.md:1333: Ephemeral. Progress for clients, paced as `tool_call_delta` is.";
+
+/// The verbatim source promise the delegate-start assertions cite
+/// (`docs/events.md`, "Jobs").
+const DELEGATE_START_DOC: &str =
+    "docs/events.md:1319: Durable. Written after `job_started`, for each run.";
+
+/// The verbatim source promise the delegate-end assertions cite
+/// (`docs/events.md`, "Jobs").
+const DELEGATE_END_DOC: &str = "docs/events.md:1354: Durable. Written just before `job_completed`.";
+
+/// Verbatim lifecycle sources for the session-boundary assertions below.
+const SESSION_FIRST_DOC: &str =
+    "docs/events.md:339: Durable. The first line of every session's log.";
+const PROCESS_START_DOC: &str = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+const PROCESS_END_DOC: &str =
+    "docs/events.md:296: Durable. The last line a process writes for a session.";
+
+#[test]
+fn multiset_passes_reordered_and_catches_duplicate_missing_extra() {
+    let lines = support::expected(&["turn_started", "usage_recorded", "turn_completed"]);
+    support::assert_kinds_multiset(
+        &lines,
+        &["turn_completed", "turn_started", "usage_recorded"],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    let mut duplicated = lines.clone();
+    duplicated.push(json!({"kind": "usage_recorded"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &duplicated,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a duplicated ordered kind"
+    );
+    let missing = lines[..2].to_vec();
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &missing,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a missing ordered kind"
+    );
+    let mut extra = lines.clone();
+    extra.push(json!({"kind": "step_started"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &extra,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted an extra ordered kind"
+    );
+}
+
+#[test]
+fn multiset_counts_fixed_set_aside_and_ignores_the_rest() {
+    // One `clients` line per attach is fixed, so it is counted; the other
+    // set-aside lines hold no position and are ignored.
+    let lines = support::expected(&[
+        "clients",
+        "turn_started",
+        "session_status",
+        "attention",
+        "turn_completed",
+        "date_changed",
+    ]);
+    support::assert_kinds_multiset(
+        &lines,
+        &["clients", "turn_started", "turn_completed"],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+    let mut two = lines.clone();
+    two.push(json!({"kind": "clients"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &two,
+            &["clients", "turn_started", "turn_completed"],
+            &["clients"],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted two `clients` lines against one fixed"
+    );
+    let none: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["kind"] != "clients")
+        .cloned()
+        .collect();
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &none,
+            &["clients", "turn_started", "turn_completed"],
+            &["clients"],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted no `clients` line against one fixed"
+    );
+    // An unlisted set-aside kind never fails the multiset, however many
+    // lines it holds.
+    let mut dates = lines.clone();
+    dates.push(json!({"kind": "date_changed"}));
+    support::assert_kinds_multiset(
+        &dates,
+        &["clients", "turn_started", "turn_completed"],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+}
+
+#[test]
+fn multiset_counts_a_set_aside_line_under_test() {
+    // Naming a set-aside kind makes its count exact: a duplicate, a miss
+    // and an extra each fail.
+    let lines = support::expected(&["turn_started", "session_status", "turn_completed"]);
+    support::assert_kinds_multiset(
+        &lines,
+        &["turn_started", "session_status", "turn_completed"],
+        &["session_status"],
+        None,
+        COUNT_DOC,
+    );
+    let mut duplicated = lines.clone();
+    duplicated.push(json!({"kind": "session_status"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &duplicated,
+            &["turn_started", "session_status", "turn_completed"],
+            &["session_status"],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a duplicated line under test"
+    );
+    let missing: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status")
+        .cloned()
+        .collect();
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &missing,
+            &["turn_started", "session_status", "turn_completed"],
+            &["session_status"],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a missing line under test"
+    );
+}
+
+#[test]
+fn multiset_excludes_job_delta_only_when_uncounted() {
+    let kinds: Vec<&str> = ["turn_started", "usage_recorded", "turn_completed"]
+        .into_iter()
+        .chain(["job_delta"; 3])
+        .collect();
+    let lines = support::expected(&kinds);
+    // Zero, one and several deltas all pass while excluded ...
+    for deltas in [0, 1, 3] {
+        let kinds: Vec<&str> = ["turn_started", "usage_recorded", "turn_completed"]
+            .into_iter()
+            .chain(std::iter::repeat_n("job_delta", deltas))
+            .collect();
+        let lines = support::expected(&kinds);
+        support::assert_kinds_multiset(
+            &lines,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            Some(IGNORE_JOB_DELTA_DOC),
+            COUNT_DOC,
+        );
+    }
+    // ... without weakening the other counts.
+    let mut duplicated = lines.clone();
+    duplicated.push(json!({"kind": "usage_recorded"}));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &duplicated,
+            &["turn_started", "usage_recorded", "turn_completed"],
+            &[],
+            Some(IGNORE_JOB_DELTA_DOC),
+            COUNT_DOC
+        ))
+        .is_err(),
+        "excluded deltas weakened another count"
+    );
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &lines,
+            &[
+                "turn_started",
+                "usage_recorded",
+                "turn_completed",
+                "job_delta"
+            ],
+            &[],
+            Some(IGNORE_JOB_DELTA_DOC),
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted `job_delta` expected while excluded"
+    );
+}
+
+#[test]
+fn multiset_rejects_set_aside_expected_but_uncounted() {
+    let lines = support::expected(&["turn_started", "clients", "turn_completed"]);
+    assert!(
+        std::panic::catch_unwind(|| support::assert_kinds_multiset(
+            &lines,
+            &["turn_started", "clients", "turn_completed"],
+            &[],
+            None,
+            COUNT_DOC
+        ))
+        .is_err(),
+        "accepted a set-aside kind expected but not counted"
+    );
+    // A counted set-aside kind may be absent from `expected` to assert its
+    // expected count is zero.
+    let lines = support::expected(&["turn_started", "turn_completed"]);
+    support::assert_kinds_multiset(
+        &lines,
+        &["turn_started", "turn_completed"],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+}
+
+/// A line of kind `kind` for delegate job `job`.
+fn job_line(kind: &str, job: &str) -> Value {
+    json!({"kind": kind, "payload": {"job_id": job}})
+}
+
+/// A line of kind `kind` in session `session`.
+fn session_line(kind: &str, session: &str) -> Value {
+    json!({"kind": kind, "session_id": session, "payload": {}})
+}
+
+#[test]
+fn promised_order_checks_every_run_with_the_cited_line() {
+    let start_doc = "docs/events.md:1319: Durable. Written after `job_started`, for each run.";
+    let end_doc = "docs/events.md:1354: Durable. Written just before `job_completed`.";
+    let run = |job: &str| {
+        vec![
+            job_line("job_started", job),
+            job_line("turn_started", job),
+            job_line("delegate_started", job),
+            job_line("delegate_finished", job),
+            job_line("job_completed", job),
+        ]
+    };
+    let mut lines = run("j1");
+    lines.extend(run("j1"));
+    support::assert_promised_order(
+        &lines,
+        "j1",
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        start_doc,
+    );
+    support::assert_promised_order(
+        &lines,
+        "j1",
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        end_doc,
+    );
+    // A reversal in the second run fails, and the failure names the doc line.
+    let mut reversed = run("j1");
+    let mut second = run("j1");
+    second.swap(0, 2);
+    reversed.extend(second);
+    let failure = std::panic::catch_unwind(|| {
+        support::assert_promised_order(
+            &reversed,
+            "j1",
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            start_doc,
+        )
+    });
+    let message = failure
+        .unwrap_err()
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains(start_doc),
+        "reversal failure does not cite its doc line: {message}"
+    );
+    // An absence in one run fails even when the other run holds the pair.
+    let mut absent = run("j1");
+    absent.extend(vec![
+        job_line("job_started", "j1"),
+        job_line("turn_started", "j1"),
+        job_line("job_completed", "j1"),
+    ]);
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &absent,
+            "j1",
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            start_doc
+        ))
+        .is_err(),
+        "accepted a run missing its delegate start"
+    );
+    // Another job cannot supply the pair: its lines interleave freely but
+    // never satisfy this job's assertion.
+    let mut crossed = run("j2");
+    crossed.extend(run("j1")[1..].to_vec());
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &crossed,
+            "j1",
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            start_doc
+        ))
+        .is_err(),
+        "accepted another job's pair"
+    );
+    let mut interleaved = vec![job_line("job_started", "j1")];
+    interleaved.extend(run("j2"));
+    interleaved.push(job_line("delegate_started", "j1"));
+    interleaved.push(job_line("delegate_finished", "j1"));
+    interleaved.extend(run("j2"));
+    interleaved.push(job_line("job_completed", "j1"));
+    support::assert_promised_order(
+        &interleaved,
+        "j1",
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        start_doc,
+    );
+    // Another job's ordered lines between the finish and its completion
+    // fail `JustBefore`: adjacency is checked in the full ordered stream,
+    // after removing only the set-aside kinds.
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &interleaved,
+            "j1",
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            end_doc
+        ))
+        .is_err(),
+        "accepted another job's lines between a just-before pair"
+    );
+    // A set-aside kind between the pair is ignored, so adjacency still
+    // holds.
+    let mut set_aside = vec![
+        job_line("job_started", "j1"),
+        job_line("delegate_started", "j1"),
+        job_line("delegate_finished", "j1"),
+    ];
+    set_aside.push(json!({"kind": "clients"}));
+    set_aside.push(job_line("job_completed", "j1"));
+    support::assert_promised_order(
+        &set_aside,
+        "j1",
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        end_doc,
+    );
+    // An ordered kind with no job between the pair fails it too.
+    let mut jobless = vec![
+        job_line("job_started", "j1"),
+        job_line("delegate_started", "j1"),
+        job_line("delegate_finished", "j1"),
+    ];
+    jobless.push(json!({"kind": "turn_completed"}));
+    jobless.push(job_line("job_completed", "j1"));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &jobless,
+            "j1",
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            end_doc
+        ))
+        .is_err(),
+        "accepted an ordered line between a just-before pair"
+    );
+    // A same-job line between the finish and its completion fails only
+    // `JustBefore`: the weaker relation still allows the interleaving.
+    let middle = vec![
+        job_line("job_started", "j1"),
+        job_line("usage_recorded", "j1"),
+        job_line("delegate_started", "j1"),
+        job_line("delegate_finished", "j1"),
+        job_line("usage_recorded", "j1"),
+        job_line("job_completed", "j1"),
+    ];
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &middle,
+            "j1",
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            end_doc
+        ))
+        .is_err(),
+        "accepted a same-job line between a just-before pair"
+    );
+    support::assert_promised_order(
+        &middle,
+        "j1",
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        start_doc,
+    );
+}
+
+#[test]
+fn lifecycle_edges_accept_complete_logs_and_reject_broken_ones() {
+    let first_doc = "docs/events.md:339: Durable. The first line of every session's log.";
+    let start_doc = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+    let end_doc = "docs/events.md:296: Durable. The last line a process writes for a session.";
+    let complete: Vec<Value> = ["s1", "s2"]
+        .iter()
+        .flat_map(|session| {
+            [
+                session_line("session_started", session),
+                session_line("fiber_started", session),
+                session_line("clients", session),
+                session_line("turn_started", session),
+                session_line("fiber_exited", session),
+                session_line("fiber_started", session),
+                session_line("attention", session),
+                session_line("turn_completed", session),
+                session_line("fiber_exited", session),
+            ]
+        })
+        .collect();
+    support::assert_session_process_boundaries(&complete, "s1", first_doc, start_doc, end_doc);
+    support::assert_session_process_boundaries(&complete, "s2", first_doc, start_doc, end_doc);
+    let broken: Vec<(&str, Vec<Value>)> = vec![
+        ("displaced first kind", {
+            let mut lines = complete.clone();
+            lines.swap(0, 3);
+            lines
+                .into_iter()
+                .filter(|line| line["session_id"] == "s1")
+                .collect()
+        }),
+        ("early process start", {
+            ["fiber_started", "session_started", "fiber_exited"]
+                .iter()
+                .map(|kind| session_line(kind, "s1"))
+                .collect()
+        }),
+        ("absent process start", {
+            ["session_started", "turn_started", "fiber_exited"]
+                .iter()
+                .map(|kind| session_line(kind, "s1"))
+                .collect()
+        }),
+        ("missing process exit", {
+            [
+                "session_started",
+                "fiber_started",
+                "turn_started",
+                "fiber_started",
+                "fiber_exited",
+            ]
+            .iter()
+            .map(|kind| session_line(kind, "s1"))
+            .collect()
+        }),
+        ("non-final process exit", {
+            [
+                "session_started",
+                "fiber_started",
+                "fiber_exited",
+                "turn_started",
+            ]
+            .iter()
+            .map(|kind| session_line(kind, "s1"))
+            .collect()
+        }),
+        ("stray process exit", {
+            [
+                "session_started",
+                "fiber_exited",
+                "fiber_started",
+                "fiber_exited",
+            ]
+            .iter()
+            .map(|kind| session_line(kind, "s1"))
+            .collect()
+        }),
+    ];
+    for (case, lines) in &broken {
+        assert!(
+            std::panic::catch_unwind(|| support::assert_session_process_boundaries(
+                lines, "s1", first_doc, start_doc, end_doc
+            ))
+            .is_err(),
+            "accepted a log with {case}"
         );
     }
 }
@@ -663,6 +1290,268 @@ fn job_id(text: &str) -> String {
         .to_owned()
 }
 
+/// The nested-budget child's provider route trace: at most 8 entries of at
+/// most 256 bytes each, mirrored in the stderr snapshot's trace section
+/// (likewise the latest 8 lines, overflow markers included). The responder
+/// records only route fields (session versus reviewer, the `Started
+/// delegate` and `scan deep` markers, the stage before and after, and the
+/// selected branch), never request bodies, so the timeout dump keeps the
+/// route visible under the output cap.
+const NESTED_TRACE_CAP: usize = 8;
+const NESTED_ENTRY_CAP: usize = 256;
+/// A compact summary of a socket line seen while waiting for the child jobs
+/// wait: only the kind and the routing field, never the whole body, so the
+/// failure dump names the wait's progress without reprinting large
+/// `session_status` lines. Kept as a ring of at most 8 summaries.
+const CHILD_WAIT_SUMMARY_CAP: usize = 8;
+const CHILD_WAIT_SUMMARY_LEN: usize = 128;
+
+/// Truncates `entry` to at most `cap` bytes on a character boundary,
+/// marking the cut so a longer route still reads as truncated.
+fn truncate_bounded(mut entry: String, cap: usize) -> String {
+    if entry.len() <= cap {
+        return entry;
+    }
+    const MARK: &str = "...[truncated]";
+    let mut end = cap.saturating_sub(MARK.len()).min(entry.len());
+    while !entry.is_char_boundary(end) {
+        end -= 1;
+    }
+    entry.truncate(end);
+    entry.push_str(MARK);
+    entry
+}
+
+/// Appends one trace line (and its overflow marker, when `dropped`) to
+/// `snapshot`, then drops the oldest `nested route:` lines past the cap, so
+/// the snapshot's trace section holds the latest 8 lines including markers.
+/// Other stderr text is left alone; entries are already byte-capped.
+fn append_nested_route_to_snapshot(snapshot: &mut String, entry: &str, dropped: bool) {
+    snapshot.push_str("nested route: ");
+    snapshot.push_str(entry);
+    snapshot.push('\n');
+    if dropped {
+        snapshot.push_str("nested route: ...[truncated]\n");
+    }
+    let trace_lines = snapshot
+        .lines()
+        .filter(|line| line.starts_with("nested route: "))
+        .count();
+    if trace_lines <= NESTED_TRACE_CAP {
+        return;
+    }
+    let mut skip = trace_lines - NESTED_TRACE_CAP;
+    let mut kept = String::with_capacity(snapshot.len());
+    for piece in snapshot.split_inclusive('\n') {
+        let line = piece.strip_suffix('\n').unwrap_or(piece);
+        if line.starts_with("nested route: ") && skip > 0 {
+            skip -= 1;
+            continue;
+        }
+        kept.push_str(piece);
+    }
+    *snapshot = kept;
+}
+
+/// Records one responder route in `trace` (dropping the oldest past the
+/// cap) and in the stderr snapshot's bounded trace section, so a missing
+/// child jobs wait still shows which branch answered each request.
+/// The sink links the responder to the running session's snapshot once the
+/// session starts; routes recorded before the link stay in `trace`.
+fn record_nested_route(
+    trace: &Mutex<Vec<String>>,
+    sink: &Mutex<Option<Arc<Mutex<String>>>>,
+    entry: String,
+) {
+    let entry = truncate_bounded(entry, NESTED_ENTRY_CAP);
+    let mut trace = trace.lock().unwrap();
+    let dropped = trace.len() >= NESTED_TRACE_CAP;
+    if dropped {
+        trace.remove(0);
+    }
+    trace.push(entry.clone());
+    if let Some(snapshot) = sink.lock().unwrap().as_ref() {
+        let mut snapshot = snapshot.lock().unwrap();
+        append_nested_route_to_snapshot(&mut snapshot, &entry, dropped);
+    }
+}
+
+/// One-line summary of a line seen while waiting for the child jobs wait.
+fn child_wait_summary(line: &Value) -> String {
+    let kind = line
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let payload = line.get("payload");
+    let detail = match kind {
+        "tool_call_requested" | "tool_call_started" | "tool_call_completed" => payload
+            .and_then(|payload| payload.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_owned(),
+        "session_status" => {
+            let state = payload
+                .and_then(|payload| payload.get("state"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let step = payload
+                .and_then(|payload| payload.get("step"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    payload
+                        .and_then(|payload| payload.get("tool"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("-");
+            format!("{state}/{step}")
+        }
+        "delegate_started" => "started".to_owned(),
+        "fiber_exited" => payload
+            .and_then(|payload| payload.get("exit_code"))
+            .map(|code| code.to_string())
+            .unwrap_or("?".to_owned()),
+        _ => payload
+            .and_then(|payload| payload.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_owned(),
+    };
+    truncate_bounded(format!("{kind} {detail}"), CHILD_WAIT_SUMMARY_LEN)
+}
+
+/// Pushes one summary onto the bounded ring, dropping the oldest past the cap.
+fn push_child_wait_summary(summaries: &mut Vec<String>, line: &Value) {
+    if summaries.len() >= CHILD_WAIT_SUMMARY_CAP {
+        summaries.remove(0);
+    }
+    summaries.push(child_wait_summary(line));
+}
+
+#[test]
+fn nested_route_trace_keeps_only_route_fields_within_bounds() {
+    let trace = Mutex::new(Vec::new());
+    let snapshot = Arc::new(Mutex::new(String::new()));
+    let sink: Mutex<Option<Arc<Mutex<String>>>> = Mutex::new(Some(Arc::clone(&snapshot)));
+    for n in 0..NESTED_TRACE_CAP {
+        record_nested_route(
+            &trace,
+            &sink,
+            format!(
+                "session=1 started=0 deep=0 stage={n}->{} branch=c_spawn",
+                n + 1
+            ),
+        );
+    }
+    // At the cap nothing drops: the first route is still kept in the trace
+    // and in the snapshot, and nothing is marked.
+    assert!(
+        trace
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.contains("stage=0->1 branch=c_spawn"))
+    );
+    assert!(!snapshot.lock().unwrap().contains("...[truncated]"));
+    assert!(
+        snapshot
+            .lock()
+            .unwrap()
+            .contains("nested route: session=1 started=0 deep=0 stage=0->1 branch=c_spawn")
+    );
+    record_nested_route(
+        &trace,
+        &sink,
+        "session=1 started=1 deep=0 stage=0->1 branch=c_wait".to_owned(),
+    );
+    // Past the cap the oldest drops, the latest stays, and the cut is marked.
+    let kept = trace.lock().unwrap().clone();
+    assert!(kept.iter().any(|entry| entry.contains("branch=c_wait")));
+    assert!(
+        !kept
+            .iter()
+            .any(|entry| entry.contains("stage=0->1 branch=c_spawn"))
+    );
+    assert!(
+        snapshot
+            .lock()
+            .unwrap()
+            .contains("nested route: ...[truncated]")
+    );
+    // The snapshot's trace section stays bounded too: the latest route is
+    // visible while the oldest route has scrolled out, markers included.
+    let dump = snapshot.lock().unwrap().clone();
+    assert!(dump.contains("branch=c_wait"), "{dump}");
+    assert!(!dump.contains("stage=0->1 branch=c_spawn"), "{dump}");
+    for entry in &kept {
+        assert!(entry.len() <= NESTED_ENTRY_CAP, "{entry}");
+    }
+}
+
+#[test]
+fn nested_route_trace_truncates_a_long_entry_and_marks_it() {
+    let short = truncate_bounded("a".repeat(NESTED_ENTRY_CAP - 1), NESTED_ENTRY_CAP);
+    assert_eq!(short.len(), NESTED_ENTRY_CAP - 1);
+    assert!(!short.contains("...[truncated]"));
+    let exact = truncate_bounded("a".repeat(NESTED_ENTRY_CAP), NESTED_ENTRY_CAP);
+    assert_eq!(exact.len(), NESTED_ENTRY_CAP);
+    assert!(!exact.contains("...[truncated]"));
+    let long = truncate_bounded("a".repeat(NESTED_ENTRY_CAP + 1), NESTED_ENTRY_CAP);
+    assert_eq!(long.len(), NESTED_ENTRY_CAP);
+    assert!(long.contains("...[truncated]"));
+    // The cut lands on a character boundary: a multi-byte run truncates
+    // without splitting a character.
+    let wide = truncate_bounded("é".repeat(NESTED_ENTRY_CAP), NESTED_ENTRY_CAP);
+    assert!(wide.len() <= NESTED_ENTRY_CAP);
+    assert!(wide.contains("...[truncated]"));
+}
+
+#[test]
+fn child_wait_summaries_stay_compact_and_bounded() {
+    let requested = json!({"kind": "tool_call_requested", "payload": {"name": "jobs"}});
+    assert_eq!(child_wait_summary(&requested), "tool_call_requested jobs");
+    let status = json!({"kind": "session_status", "payload": {"state": "streaming", "step": "delegate_spawn"}});
+    assert_eq!(
+        child_wait_summary(&status),
+        "session_status streaming/delegate_spawn"
+    );
+    let started = json!({"kind": "delegate_started", "payload": {}});
+    assert_eq!(child_wait_summary(&started), "delegate_started started");
+    // A large session_status body compacts to one short line.
+    let big = json!({"kind": "session_status", "payload": {"state": "streaming", "step": "x".repeat(500).as_str(), "extra": "y".repeat(500).as_str()}});
+    let summary = child_wait_summary(&big);
+    assert!(summary.len() <= CHILD_WAIT_SUMMARY_LEN, "{summary}");
+    assert!(
+        summary.starts_with("session_status streaming/"),
+        "{summary}"
+    );
+    // Distinct names make eviction visible: each summary names its line.
+    let mut ring: Vec<String> = Vec::new();
+    for n in 0..CHILD_WAIT_SUMMARY_CAP {
+        let line = json!({"kind": "tool_call_requested", "payload": {"name": format!("job{n}")}});
+        push_child_wait_summary(&mut ring, &line);
+    }
+    // Before overflow the earliest summary is still present.
+    assert!(ring.iter().any(|entry| entry == "tool_call_requested job0"));
+    let other = json!({"kind": "fiber_exited", "payload": {"exit_code": 143}});
+    push_child_wait_summary(&mut ring, &other);
+    // Past the cap the latest summary stays while the stalest drops.
+    assert_eq!(ring.last().unwrap(), "fiber_exited 143");
+    assert!(!ring.iter().any(|entry| entry == "tool_call_requested job0"));
+    assert!(ring.iter().any(|entry| entry == "tool_call_requested job1"));
+    assert!(
+        ring.iter()
+            .all(|entry| entry.len() <= CHILD_WAIT_SUMMARY_LEN)
+    );
+}
+
+#[test]
+fn child_wait_summary_without_a_sink_still_keeps_the_trace() {
+    let trace = Mutex::new(Vec::new());
+    let sink: Mutex<Option<Arc<Mutex<String>>>> = Mutex::new(None);
+    record_nested_route(&trace, &sink, "session=0 branch=c_allow".to_owned());
+    assert_eq!(trace.lock().unwrap().len(), 1);
+}
+
 /// Answers the parent's requests by their content: `first` answers the
 /// first session request, `reviewer` every reviewer request, `after` the
 /// request carrying the spawn receipt (built with its job id), and `rest`
@@ -810,7 +1699,7 @@ fn assert_depth_refusal(lines: &[Value], resumed: bool, forked: bool, tool: &str
         expected.remove(4);
         expected.remove(0);
     }
-    assert_eq!(owned_kinds(lines), expected);
+    support::assert_kinds_multiset(lines, &expected, &[], None, COUNT_DOC);
     let completed = completed_for(lines, tool);
     assert_eq!(completed["payload"]["status"], "failed");
     assert_eq!(completed["payload"]["error"]["code"], "depth_exceeded");
@@ -903,16 +1792,15 @@ fn isolated_delegate_outside_a_repository_is_an_argument_error_without_a_child()
     providers(&setup, &parent, &child);
     let (status, lines, stderr) = Running::spawn(&setup, &["ask", "scan"]).wait();
     assert_eq!(status.code(), Some(0), "{stderr}");
-    // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening message":
-    // the startup prefix precedes the first turn (docs/loop.md, "Starting a
-    // turn"); docs/loop.md, "One step": stream the reply, decide permission,
-    // run the call; "Tool calls that do not run": bad arguments fail the call
-    // with invalid_arguments and the turn continues. The scripted provider
-    // fixes the replies, so the failed validation run holds exactly this
-    // durable order (docs/events.md: the durable lines, in order, are the log).
-    assert_eq!(
-        durable_kinds(&without_copies(&lines)),
-        [
+    // The scripted provider fixes the replies, so the failed validation
+    // run holds exactly these durable kinds as a set: no doc promises the
+    // turn's kind order, and "Tool calls that do not run" only names the
+    // failed call's invalid_arguments error and the continuing turn. Ask
+    // stdout carries ephemeral deltas without `seq`, so the set runs over
+    // the durable lines.
+    support::assert_kinds_multiset(
+        &durable_lines(&without_copies(&lines)),
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -935,7 +1823,10 @@ fn isolated_delegate_outside_a_repository_is_an_argument_error_without_a_child()
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
     let completed = one(&lines, "tool_call_completed");
     assert_eq!(completed["status"], "failed");
@@ -1054,24 +1945,45 @@ fn isolated_delegate_spawn_runs_cleans_up_and_reports_the_selected_workspace() {
         child.release();
         let (status, lines, stderr) = running.wait();
         assert_eq!(status.code(), Some(0), "{mode}: {stderr}");
-        // docs/loop.md, "Starting a turn"/"One step"/"Ending a turn": the
-        // spawn turn, the ending-notice turn, then the wake turn;
-        // docs/delegates.md, "Events": job_started precedes delegate_started,
-        // delegate_finished lands just before job_completed; "Streams": the
-        // delegate's lines stay on its stream, so the parent's own lines are
-        // the role run's order (docs/events.md: the durable lines, in order,
-        // are the log). The scripted providers fix the replies.
-        assert_eq!(
-            durable_kinds(&without_copies(&lines)),
+        // The scripted providers fix the replies, so the spawn turn, the
+        // ending-notice turn and the wake turn hold exactly these durable
+        // kinds as a set; the delegate pair keeps its cited order below
+        // (docs/events.md, "Jobs").
+        support::assert_kinds_multiset(
+            &durable_lines(&without_copies(&lines)),
             ROLE_PARENT_DURABLE,
-            "{mode}"
+            &[],
+            None,
+            COUNT_DOC,
+        );
+        let role_started = one(&lines, "delegate_started");
+        let role_job = role_started["job_id"].as_str().unwrap();
+        support::assert_promised_order(
+            &lines,
+            role_job,
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            DELEGATE_START_DOC,
+        );
+        support::assert_promised_order(
+            &lines,
+            role_job,
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            DELEGATE_END_DOC,
         );
         let child_lines = read_lines(&child_log);
         // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening
-        // message": the startup prefix precedes the first turn (docs/loop.md,
-        // "Starting a turn"); the held child answers once, so its run holds
-        // exactly this durable order.
-        assert_eq!(durable_kinds(&child_lines), ROLE_CHILD_DURABLE, "{mode}");
+        // message": the startup prefix precedes the first turn; the held
+        // child answers once, so its run holds exactly these durable kinds
+        // as a set.
+        support::assert_kinds_multiset(
+            &durable_lines(&child_lines),
+            ROLE_CHILD_DURABLE,
+            &[],
+            None,
+            COUNT_DOC,
+        );
         let child_started = one(&child_lines, "session_started");
         assert_eq!(child_started["workspace"], started["worktree"]["path"]);
         assert_eq!(child_started["worktree"]["branch"], branch);
@@ -1140,14 +2052,24 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
         .unwrap();
     assert_eq!(completed["payload"]["status"], "completed");
     let receipt = completed["payload"]["content"][0]["text"].as_str().unwrap();
-    // One job, one delegate: the log holds each exactly once, in order.
-    let kinds = owned_kinds(&ask.lines);
-    let at = |kind: &str| kinds.iter().position(|got| got == kind).unwrap();
-    assert!(at("job_started") < at("delegate_started"));
-    assert!(at("delegate_started") < at("delegate_finished"));
-    assert!(at("delegate_finished") < at("job_completed"));
+    // One job, one delegate: the start follows its job's start, and the
+    // finish sits just before its completion (docs/events.md, "Jobs").
     let started = one(&ask.lines, "job_started");
     let job_id = started["job_id"].as_str().unwrap();
+    support::assert_promised_order(
+        &ask.lines,
+        job_id,
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        DELEGATE_START_DOC,
+    );
+    support::assert_promised_order(
+        &ask.lines,
+        job_id,
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        DELEGATE_END_DOC,
+    );
     assert!(receipt.contains(job_id), "{receipt}");
     assert!(
         receipt.contains("events.jsonl"),
@@ -1673,16 +2595,13 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
 /// order is the contract's: `session_started` first with `fiber_started`
 /// after it, `extensions_loaded` before the first model request and
 /// `preamble_built` before the next one (`docs/events.md`, "Process
-/// boundary", "Extensions" and "Preamble"); each step opened by
-/// `step_started`, with the next step taken after the last call's result
-/// (`docs/loop.md`, "One step"); each reply's items in the order the model
-/// produced them, closed by `assistant_message_completed`
-/// (`docs/events.md`, "Actions"); `delegate_started` after its
-/// `job_started` (`docs/delegates.md`, "Events"). The two
+/// boundary", "Extensions" and "Preamble"); each reply's items closed by
+/// `assistant_message_completed` (`docs/events.md`, "Actions"). The two
 /// `assistant_message_delta` lines per text reply are the scripted fake's
 /// two fragments (`fakes::wire::hello`), pinned as the complete list
 /// against the fake provider per `docs/testing/fakes.md` ("Live calls and
-/// evals"); a real model's chunking varies.
+/// evals"); a real model's chunking varies. The turn and step interiors
+/// hold no promised order: the multiset pins their membership.
 const CRASH_PREFIX: &[&str] = &[
     "session_started",
     "fiber_started",
@@ -1721,16 +2640,17 @@ const CRASH_PREFIX: &[&str] = &[
     "assistant_message_completed",
 ];
 
-/// The crash boundary's open turn pair: a finish notice waiting in the inbox
-/// joins the running turn at its next step (`docs/loop.md`, "One step"), so
-/// the crashed finish either joins the still-running prompt turn or opens
-/// its own wake turn. The pair is taken only whole, and only here: every
-/// later boundary is held by a wait, so its turns are fixed.
+/// The crash boundary's open turn pair: a turn's end immediately before
+/// the next turn's start. The crashed finish either joins the
+/// still-running prompt turn or opens its own wake turn, so the pair is
+/// taken only whole, and only here: every later boundary is held by a
+/// wait, so its turns are fixed. A half-taken or reversed pair is not a
+/// turn edge and fails the boundary shape.
 const CRASH_TURN_PAIR: &[&str] = &["turn_completed", "turn_started"];
 
 /// The crashed delegate's end: the notice joins at a step boundary, and its
 /// `delegate_finished` is written just before its `job_completed`
-/// (`docs/delegates.md`, "Events"). Its position against the rest is open:
+/// (`docs/events.md:1354`). Its position against the rest is open:
 /// the sibling's completion has no promised order against the parent's turn
 /// edges, so the helper compares the end with the rest as a set.
 const CRASH_END: &[&str] = &["step_started", "delegate_finished", "job_completed"];
@@ -1798,134 +2718,109 @@ const CRASH_REST: &[&str] = &[
     "fiber_exited",
 ];
 
-/// Asserts `actual` holds `expected` in order at `offset` without dumping
-/// either list on failure: the lengths first, then the first differing index
-/// with the neighbouring kinds on each side (`docs/testing.md`,
-/// "Event streams"). A kind missing from a short stream reports as `<end>`
-/// at the first position beyond its end.
-#[track_caller]
-fn crash_segment(actual: &[&str], expected: &[&str], offset: usize, what: &str) {
-    let first = (0..expected.len()).find(|&i| actual.get(offset + i).copied() != Some(expected[i]));
-    if let Some(i) = first {
-        let at = offset + i;
-        let actual_lo = at.saturating_sub(3);
-        let actual_hi = (at + 4).min(actual.len());
-        let expected_lo = i.saturating_sub(3);
-        let expected_hi = (i + 4).min(expected.len());
-        panic!(
-            "crash stream {what} differs at index {at}: actual len {}, {what} len {}; actual[{at}] = {:?}, expected[{at}] = {:?}; actual[{actual_lo}..{actual_hi}] = {:?}, expected[{expected_lo}..{expected_hi}] = {:?}",
-            actual.len(),
-            expected.len(),
-            actual.get(at).copied().unwrap_or("<end>"),
-            Some(expected[i]),
-            actual.get(actual_lo..actual_hi).unwrap_or(&[]),
-            &expected[expected_lo..expected_hi],
-        );
-    }
-}
-
-/// Asserts `actual` holds `expected` as a multiset without dumping either
-/// list on failure: the lengths first, then the first differing index of the
-/// sorted lists with the neighbouring kinds on each side (`docs/testing.md`,
-/// "Event streams"). A kind missing from a short stream reports as `<end>`
-/// at the first position beyond its end.
-#[track_caller]
-fn crash_set(actual: &[&str], expected: &[&str], what: &str) {
-    assert_eq!(
-        actual.len(),
-        expected.len(),
-        "crash stream {what} length differs: actual len {}, {what} len {}",
-        actual.len(),
-        expected.len(),
-    );
-    let mut sorted_actual = actual.to_vec();
-    sorted_actual.sort_unstable();
-    let mut sorted_expected = expected.to_vec();
-    sorted_expected.sort_unstable();
-    crash_segment(&sorted_actual, &sorted_expected, 0, "sorted remainder");
-}
-
-/// The delegate job an event line belongs to (`docs/events.md`, "Jobs").
-fn crash_job(line: &Value) -> &str {
-    line["payload"]["job_id"].as_str().unwrap()
-}
-
-/// Asserts the crash stream's order and per-delegate identity: the fixed
-/// prefix in order, the open turn pair whole or absent at the boundary, the
-/// racing remainder as a set with multiplicity, and the documented
-/// per-delegate sequencing by job (`docs/delegates.md`, "Events"): each
-/// `job_started` precedes its matching `delegate_started`, with no promise
-/// of adjacency, and each `delegate_finished` sits immediately before its
-/// matching `job_completed`. The pair is never half-taken, and the stream
-/// ends at the process exit (`docs/events.md`, "Process boundary"). The
-/// caller counts the starts and finishes; this helper checks only their
-/// order and identity.
+/// Asserts the crash stream's promised order and per-delegate identity:
+/// the fixed prefix, the open turn pair and the racing remainder as one
+/// multiset, with the turn pair whole or absent at the boundary; the
+/// lifecycle edges of the one session the stream logs; and the documented
+/// per-delegate relations by job (`docs/events.md`, "Jobs"): each
+/// `job_started` precedes its matching `delegate_started`, and each
+/// `delegate_finished` sits immediately before its matching
+/// `job_completed`. The pair is never half-taken. The caller counts the
+/// starts and finishes; this helper checks only their order and identity.
 #[track_caller]
 fn assert_crash_ordered(lines: &[Value]) {
     let kinds: Vec<&str> = support::kinds(lines);
-    crash_segment(&kinds, CRASH_PREFIX, 0, "prefix");
-    let mut at = CRASH_PREFIX.len();
-    if kinds.get(at..at + 2) == Some(CRASH_TURN_PAIR) {
-        at += CRASH_TURN_PAIR.len();
+    let mut expected: Vec<&str> = CRASH_PREFIX.to_vec();
+    if kinds.get(CRASH_PREFIX.len()..CRASH_PREFIX.len() + 2) == Some(CRASH_TURN_PAIR) {
+        expected.extend(CRASH_TURN_PAIR);
     }
-    let expected_remainder: Vec<&str> = [CRASH_END, CRASH_REST].concat();
-    crash_set(&kinds[at..], &expected_remainder, "remainder");
-    assert_eq!(
-        kinds.last(),
-        Some(&"fiber_exited"),
-        "crash stream ends with {:?}, not the process exit",
-        kinds.last().copied().unwrap_or("<end>"),
-    );
-    // The identity check runs on the same ordered view the kind checks use:
-    // lines the contract writes on their own trigger hold no position in it
-    // (`docs/testing.md`, "Event streams").
-    let kept: Vec<&Value> = lines
+    expected.extend(CRASH_END.iter().chain(CRASH_REST));
+    // The unpromised prefix, pair and remainder hold exactly these kinds
+    // as a set: a duplicated, missing or extra kind fails here, while any
+    // unpromised order passes.
+    support::assert_kinds_multiset(lines, &expected, &[], None, COUNT_DOC);
+    // The stream logs one session: its first line opens the session, each
+    // process run closes, and its last line exits it
+    // (docs/events.md, "Process boundary").
+    let session = lines
         .iter()
-        .filter(|line| {
-            !matches!(
-                line["kind"].as_str(),
-                Some("clients" | "session_status" | "attention" | "date_changed")
-            )
-        })
-        .collect();
-    let job_of = crash_job;
-    for (i, line) in kept.iter().enumerate() {
-        let kind = line["kind"].as_str().unwrap();
-        if kind == "job_started" {
-            let id = job_of(line);
-            assert!(
-                kept[i + 1..]
-                    .iter()
-                    .any(|later| later["kind"] == "delegate_started" && job_of(later) == id),
-                "job start for job {id} at index {i} has no later delegate start",
+        .find(|line| line["kind"] == "session_started")
+        .and_then(|line| line.get("session_id"))
+        .and_then(Value::as_str)
+        .expect("the crash stream opens its session");
+    support::assert_session_process_boundaries(
+        lines,
+        session,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+    // Each started job keeps its cited start pair; each started job with
+    // an end event keeps its cited end pair. A crashed run holds neither
+    // end event, so only its start is checked, and a later run cannot
+    // borrow an earlier run's events.
+    fn job_id(line: &Value) -> Option<&str> {
+        line.get("payload")
+            .and_then(|payload| payload.get("job_id"))
+            .and_then(Value::as_str)
+    }
+    let mut jobs: Vec<&str> = Vec::new();
+    for line in lines.iter().filter(|line| line["kind"] == "job_started") {
+        let job = line["payload"]["job_id"].as_str().unwrap();
+        if !jobs.contains(&job) {
+            jobs.push(job);
+        }
+    }
+    for job in jobs {
+        support::assert_promised_order(
+            lines,
+            job,
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            DELEGATE_START_DOC,
+        );
+        let ended = lines.iter().any(|line| {
+            job_id(line) == Some(job)
+                && (line["kind"] == "delegate_finished" || line["kind"] == "job_completed")
+        });
+        if ended {
+            support::assert_promised_order(
+                lines,
+                job,
+                ("delegate_finished", "job_completed"),
+                support::Relation::JustBefore,
+                DELEGATE_END_DOC,
             );
         }
-        if kind == "delegate_started" {
-            let id = job_of(line);
+    }
+    // An end pair without a start holds no run: the finish still sits
+    // immediately before its completion, and vice versa, with nothing
+    // between (docs/events.md, "Jobs").
+    let started = |id: &str| {
+        lines
+            .iter()
+            .any(|line| line["kind"] == "job_started" && job_id(line) == Some(id))
+    };
+    for (i, line) in lines.iter().enumerate() {
+        let Some(id) = job_id(line) else { continue };
+        if started(id) {
+            continue;
+        }
+        if line["kind"] == "delegate_finished" {
             assert!(
-                kept[..i]
-                    .iter()
-                    .any(|earlier| earlier["kind"] == "job_started" && job_of(earlier) == id),
-                "delegate start for job {id} at index {i} has no earlier job start",
+                lines.get(i + 1).is_some_and(
+                    |done| done["kind"] == "job_completed" && job_id(done) == Some(id)
+                ),
+                "start-less finish for job {id} at index {i} is not immediately followed by its completion",
             );
         }
-        if kind == "delegate_finished" {
-            let id = job_of(line);
-            assert!(
-                kept.get(i + 1)
-                    .is_some_and(|done| done["kind"] == "job_completed" && job_of(done) == id),
-                "delegate finish for job {id} at index {i} is not immediately followed by its completion",
-            );
-        }
-        if kind == "job_completed" {
-            let id = job_of(line);
+        if line["kind"] == "job_completed" {
             assert!(
                 i.checked_sub(1)
-                    .and_then(|prev| kept.get(prev))
-                    .is_some_and(
-                        |finish| finish["kind"] == "delegate_finished" && job_of(finish) == id
-                    ),
-                "job completion for job {id} at index {i} is not immediately preceded by its delegate finish",
+                    .and_then(|prev| lines.get(prev))
+                    .is_some_and(|finish| finish["kind"] == "delegate_finished"
+                        && job_id(finish) == Some(id)),
+                "start-less completion for job {id} at index {i} is not immediately preceded by its finish",
             );
         }
     }
@@ -1934,16 +2829,18 @@ fn assert_crash_ordered(lines: &[Value]) {
 /// Builds crash-shaped lines from kinds, one line per kind in order, giving
 /// each `job_started` run a fresh job that its `delegate_started` joins and
 /// its `delegate_finished` and `job_completed` close, so the per-delegate
-/// identity the helper checks holds by construction. A finish or completion
-/// with no run pending takes a fresh job instead, so the broken shape
-/// reaches the helper as a mismatched pair rather than a builder panic.
+/// identity the helper checks holds by construction. Every line logs the
+/// one synthetic session, so the lifecycle helper can filter the stream.
+/// A finish or completion with no run pending takes a fresh job instead,
+/// so the broken shape reaches the helper as a mismatched pair rather
+/// than a builder panic.
 fn crash_lines(kinds: &[&str]) -> Vec<Value> {
     let mut lines = Vec::with_capacity(kinds.len());
     let mut open: Vec<String> = Vec::new();
     let mut next = 0;
     let mut finishing: Option<String> = None;
     for kind in kinds {
-        let mut line = json!({"kind": kind, "payload": {}});
+        let mut line = json!({"kind": kind, "payload": {}, "session_id": "s_crash"});
         let id = match *kind {
             "job_started" => {
                 let id = format!("j{next}");
@@ -1981,14 +2878,13 @@ fn crash_lines(kinds: &[&str]) -> Vec<Value> {
 /// `assert_crash_ordered` pins only promised order and identity: both
 /// crash-boundary shapes pass, unpromised remainder orders pass, and a
 /// missing or reordered promised event, or a mismatched job, fails. The
-/// joined shape holds the crashed end inside the still-running prompt turn
-/// because a waiting finish notice joins that turn at its next step
-/// (`docs/loop.md`, "One step"); the split shape holds the same end inside
-/// its own wake turn. The crashed end has no promised position against the
-/// rest, so the remainder is a set; both shapes keep each `delegate_finished`
-/// just before its matching `job_completed` (`docs/delegates.md`, "Events").
-/// A start needs no adjacency: the remainder's start still passes pushed one
-/// line later.
+/// joined shape holds the crashed end inside the still-running prompt
+/// turn, where the waiting finish notice arrives; the split shape holds
+/// the same end inside its own wake turn. The crashed end has no promised
+/// position against the rest, so the prefix, pair and remainder form one
+/// set; both shapes keep each `delegate_finished` just before its matching
+/// `job_completed` (`docs/events.md`, "Jobs"). A start needs no adjacency:
+/// the remainder's start still passes pushed one line later.
 #[test]
 fn assert_crash_ordered_pins_only_promised_order() {
     let kinds_split: Vec<&str> = [CRASH_PREFIX, CRASH_TURN_PAIR, CRASH_END, CRASH_REST].concat();
@@ -2041,7 +2937,7 @@ fn assert_crash_ordered_pins_only_promised_order() {
     // kind, a half-taken or reversed turn pair, a missing or reordered
     // finish, a reordered start, a mismatched job, and a truncation or a
     // trailing line. The reorder and mismatch flips keep the multiset, so
-    // only the identity check rejects them.
+    // only the promised-order check rejects them.
     let mut prefix_flip = split.clone();
     prefix_flip[0]["kind"] = json!("fiber_exited");
     let mut rest_flip = split.clone();
@@ -2400,19 +3296,44 @@ fn assert_escalation_stream(lines: &[Value], expected: &[&str]) {
         .position(|kind| *kind == "fiber_exited")
         .unwrap();
     support::assert_set_between(lines, lo, hi, &expected[first + 1..last]);
-    let ordered: Vec<_> = support::kinds(lines)
-        .into_iter()
-        .filter(|kind| *kind != "usage_recorded")
+    // The window pins every interior kind exactly; the rest is a set: no
+    // doc promises the turn's kind order. `usage_recorded` is ignored on
+    // both sides: one per fixture model call, with no order against turn
+    // end. The delegate pair keeps its cited order (docs/events.md,
+    // "Jobs"); a stream without a delegate start holds no pair to check.
+    let ours: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["kind"] != "usage_recorded")
+        .cloned()
         .collect();
-    let skeleton: Vec<_> = expected
+    let theirs: Vec<_> = expected
         .iter()
         .copied()
         .filter(|kind| *kind != "usage_recorded")
         .collect();
-    // docs/loop.md, "One step": reply, permission, then tool execution.
-    // docs/delegates.md, "Events": job start precedes delegate start;
-    // delegate finish precedes job completion. Usage has no position here.
-    assert_eq!(ordered, skeleton);
+    support::assert_kinds_multiset(&ours, &theirs, &[], None, COUNT_DOC);
+    let job = lines
+        .iter()
+        .find(|line| line["kind"] == "delegate_started")
+        .and_then(|line| line.get("payload"))
+        .and_then(|payload| payload.get("job_id"))
+        .and_then(Value::as_str);
+    if let Some(job) = job {
+        support::assert_promised_order(
+            lines,
+            job,
+            ("job_started", "delegate_started"),
+            support::Relation::After,
+            DELEGATE_START_DOC,
+        );
+        support::assert_promised_order(
+            lines,
+            job,
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            DELEGATE_END_DOC,
+        );
+    }
 }
 
 /// Count the session's own calls by action, and reviewer calls by purpose.
@@ -2474,8 +3395,28 @@ fn assert_escalation_calls(lines: &[Value], purposes: &[&str]) {
 #[test]
 fn escalation_copy_can_precede_the_independent_parent_turn_end() {
     let mut lines = support::expected(ESC_PARENT_ORDERED);
+    for line in &mut lines {
+        if [
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed",
+        ]
+        .contains(&line["kind"].as_str().unwrap())
+        {
+            line["payload"]["job_id"] = json!("j_esc");
+        }
+    }
     lines.swap(34, 35);
     assert_escalation_stream(&lines, ESC_PARENT_ORDERED);
+    // A reversed delegate pair fails: exact membership is not permission
+    // to reverse the cited start relation.
+    let mut reversed = lines.clone();
+    reversed.swap(14, 15);
+    assert!(
+        std::panic::catch_unwind(|| assert_escalation_stream(&reversed, ESC_PARENT_ORDERED))
+            .is_err()
+    );
     for usage in [9, 11, 22, 32, 34, 36, 37, 38, 47] {
         let mut missing = lines.clone();
         assert_eq!(missing.remove(usage)["kind"], "usage_recorded");
@@ -2817,34 +3758,27 @@ fn assert_tree_stop(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
     );
     window.push(lines[hi].clone());
     // docs/delegates.md, "Streams"/"Events": one copied usage and one
-    // finish/completion per run; docs/loop.md, "Spending budget": the
-    // selected turn fails on that spend, without ordering it against fanout.
+    // finish/completion per run. The spend's arrival holds no promised
+    // order against the turn end; the finish keeps its cited order below
+    // (docs/events.md, "Jobs"). The window is a turn-scoped slice, so
+    // the relation runs over the whole log, where the pair's run is
+    // complete.
     support::assert_set_between(&window, 0, window.len() - 1, expected);
-    let ordered = support::kinds(&window);
-    let usage = ordered
-        .iter()
-        .position(|kind| *kind == "usage_recorded")
-        .unwrap();
-    let turn = ordered
-        .iter()
-        .position(|kind| *kind == "turn_completed")
-        .unwrap();
-    // docs/loop.md, "Spending budget": the received spend trips the turn.
-    assert!(
-        usage < turn,
-        "the spend precedes the budget end: {ordered:?}"
-    );
     if expected.contains(&"delegate_finished") {
-        let finish = ordered
+        let job = window
             .iter()
-            .position(|kind| *kind == "delegate_finished")
-            .unwrap();
-        let job = ordered
-            .iter()
-            .position(|kind| *kind == "job_completed")
-            .unwrap();
-        // docs/delegates.md, "Events": finish is just before job completion.
-        assert!(finish < job, "finish precedes job completion: {ordered:?}");
+            .find(|line| line["kind"] == "delegate_finished")
+            .and_then(|line| line.get("payload"))
+            .and_then(|payload| payload.get("job_id"))
+            .and_then(Value::as_str)
+            .expect("the window holds the delegate finish");
+        support::assert_promised_order(
+            lines,
+            job,
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            DELEGATE_END_DOC,
+        );
     }
 }
 
@@ -2865,33 +3799,58 @@ fn tree_stop_does_not_order_the_turn_end_against_job_fanout() {
             "turn_completed",
         ],
     ] {
-        let mut kinds = vec!["turn_started"];
+        // One complete delegate run around the turn: the spend and the
+        // turn end float, while the cited finish relation is pinned.
+        let mut kinds = vec!["job_started", "delegate_started", "turn_started"];
         kinds.extend(members);
         kinds.push("fiber_exited");
         let mut lines = support::expected(&kinds);
-        lines[1]["payload"] =
-            json!({"generation_id": "g_cost", "origin_session_id": "s_grandchild"});
-        lines[0]["turn_id"] = json!("t_budget");
+        for line in &mut lines {
+            if [
+                "job_started",
+                "delegate_started",
+                "delegate_finished",
+                "job_completed",
+            ]
+            .contains(&line["kind"].as_str().unwrap())
+            {
+                line["payload"]["job_id"] = json!("j_tree");
+            }
+        }
+        lines[3]["payload"] = json!({"generation_id": "g_cost", "origin_session_id": "s_grandchild", "job_id": "j_tree"});
+        lines[2]["turn_id"] = json!("t_budget");
         for line in lines
             .iter_mut()
             .filter(|line| line["kind"] == "turn_completed")
         {
             line["turn_id"] = json!("t_budget");
         }
-        assert_tree_stop(&lines, 0, 5, &expected);
+        assert_tree_stop(&lines, 2, 7, &expected);
         let mut extra_turn = lines.clone();
-        extra_turn.insert(5, json!({"kind": "turn_completed", "turn_id": "t_notice"}));
-        assert_tree_stop(&extra_turn, 0, 6, &expected);
-        for missing in 1..=4 {
+        extra_turn.insert(7, json!({"kind": "turn_completed", "turn_id": "t_notice"}));
+        assert_tree_stop(&extra_turn, 2, 8, &expected);
+        // A line between the finish and its completion breaks the cited
+        // relation, while the window and the set still pass.
+        let mut gapped = lines.clone();
+        let finish = gapped
+            .iter()
+            .position(|line| line["kind"] == "delegate_finished")
+            .unwrap();
+        gapped.insert(
+            finish + 1,
+            json!({"kind": "usage_recorded", "payload": {"job_id": "j_tree"}}),
+        );
+        assert!(std::panic::catch_unwind(|| assert_tree_stop(&gapped, 2, 8, &expected)).is_err());
+        for missing in 3..=6 {
             let mut broken = lines.clone();
             broken.remove(missing);
             assert!(
-                std::panic::catch_unwind(|| assert_tree_stop(&broken, 0, 4, &expected)).is_err()
+                std::panic::catch_unwind(|| assert_tree_stop(&broken, 2, 6, &expected)).is_err()
             );
             let mut duplicate = lines.clone();
             duplicate.insert(missing, lines[missing].clone());
             assert!(
-                std::panic::catch_unwind(|| assert_tree_stop(&duplicate, 0, 6, &expected)).is_err()
+                std::panic::catch_unwind(|| assert_tree_stop(&duplicate, 2, 8, &expected)).is_err()
             );
         }
     }
@@ -2947,19 +3906,45 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     // the server rebuilds the wait call from the receipt it sees. Held
     // until the root parks in the wait: the grandchild's reply then lands
     // while both ancestors wait, whatever the scheduling.
+    let nested_trace: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let nested_sink: Arc<Mutex<Option<Arc<Mutex<String>>>>> = Arc::new(Mutex::new(None));
     let child = ProviderServer::start_responding({
         let stage = std::sync::atomic::AtomicUsize::new(0);
+        let nested_trace = Arc::clone(&nested_trace);
+        let nested_sink = Arc::clone(&nested_sink);
         move |request: &Request| {
             let text = String::from_utf8_lossy(&request.body);
             // Session requests declare tools; reviewer requests carry the
             // call in history but declare none.
-            if !text.contains(r#""tools":[{"#) {
+            let session = text.contains(r#""tools":[{"#);
+            let started = text.contains("Started delegate");
+            let deep = text.contains("scan deep");
+            // The route records which branch answers each request; the
+            // answers below are unchanged.
+            let route = |before: usize, after: usize, branch: &str| {
+                record_nested_route(
+                    &nested_trace,
+                    &nested_sink,
+                    format!(
+                        "session={} started={} deep={} stage={before}->{after} branch={branch}",
+                        u8::from(session),
+                        u8::from(started),
+                        u8::from(deep),
+                    ),
+                );
+            };
+            if !session {
+                let at = stage.load(std::sync::atomic::Ordering::SeqCst);
+                route(at, at, "c_allow");
                 return cstream(&[ctext_id("c_allow", "allow"), cusage_id("c_allow", 0.0)]);
             }
             // The receipt names the delegate the wait then names; it
             // carries the spawn call too, so it comes before the prompt.
-            if text.contains("Started delegate") {
-                return match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            if started {
+                let before = stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let branch = if before == 0 { "c_wait" } else { "c_done" };
+                route(before, before + 1, branch);
+                return match before {
                     0 => cstream(&[
                         ccall_id(
                             "c_wait",
@@ -2972,12 +3957,16 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
                 };
             }
             // The grandchild's reply costs past the budget on its own.
-            if text.contains("scan deep") {
+            if deep {
+                let at = stage.load(std::sync::atomic::Ordering::SeqCst);
+                route(at, at, "g_cost");
                 return cstream(&[
                     ctext_id("g_cost", "deep scan done"),
                     cusage_id("g_cost", 100.0),
                 ]);
             }
+            let at = stage.load(std::sync::atomic::Ordering::SeqCst);
+            route(at, at, "c_spawn");
             cstream(&[
                 ccall_id(
                     "c_spawn",
@@ -3006,6 +3995,14 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         &id,
         &["--model", "pa/m", "--prompt", "scan the tree"],
     );
+    // Link the responder's route trace to the session's stderr snapshot:
+    // routes recorded from here append to the dump the waits read. Routes
+    // recorded before the link stay in the trace, so replay them once.
+    *nested_sink.lock().unwrap() = Some(Arc::clone(&running.stderr_snapshot));
+    for entry in nested_trace.lock().unwrap().iter() {
+        let mut snapshot = running.stderr_snapshot.lock().unwrap();
+        append_nested_route_to_snapshot(&mut snapshot, entry, false);
+    }
     let mut parked = running.wait_line("the root parked in jobs wait", |line| {
         line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
     });
@@ -3046,10 +4043,37 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .as_str()
         .unwrap()
         .to_owned();
-    let child_wait = support::until(&child_socket, "the child jobs wait is requested", |line| {
-        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
-    });
-    let child_wait_action = child_wait.last().unwrap()["action_id"].clone();
+    // The failure dump shows compact summaries, not whole lines: the full
+    // session_status bodies would push the live trace and log tail past the
+    // output cap. The wait still reads every line through `Socket::next`
+    // under the test's deadline and returns them all on success.
+    let child_diag_dir = sessions_in(&setup.home(), &setup.workspace()).join(&live_child);
+    child_socket.set_diag(support::Diag::new(
+        Arc::clone(&running.stderr_snapshot),
+        child_diag_dir.clone(),
+    ));
+    let child_close_diag = support::Diag::new(Arc::clone(&running.stderr_snapshot), child_diag_dir);
+    let child_wait_what = "the child jobs wait is requested";
+    let mut child_wait: Vec<Value> = Vec::new();
+    let mut child_wait_summaries: Vec<String> = Vec::new();
+    let child_wait_action = loop {
+        let got: Vec<Value> = child_wait_summaries
+            .iter()
+            .map(|summary| json!(summary))
+            .collect();
+        match child_socket.next(child_wait_what, &got) {
+            Some(line) => {
+                let done =
+                    line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs";
+                push_child_wait_summary(&mut child_wait_summaries, &line);
+                child_wait.push(line);
+                if done {
+                    break child_wait.last().unwrap()["action_id"].clone();
+                }
+            }
+            None => panic!("{}", child_close_diag.report_closed(child_wait_what, &got)),
+        }
+    };
     observed_child.extend(child_wait);
     observed_child.extend(support::until(
         &child_socket,
@@ -3687,7 +4711,13 @@ fn a_delegate_spawn_without_a_model_lists_the_roles_and_references() {
         "stderr: {}",
         String::from_utf8(output.stderr).unwrap()
     );
-    assert_eq!(durable_kinds(&lines), REFUSED_MODEL_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&lines),
+        REFUSED_MODEL_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     let actions: Vec<&str> = lines
         .iter()
         .filter(|line| {
@@ -3756,15 +4786,9 @@ fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_nei
     );
     // A reads-only call then the final text: no reviewer, no permission
     // line, exactly as for a reads-only workspace call. `session_status`
-    // lines are ephemeral observer output, never pinned.
-    assert_eq!(
-        lines
-            .iter()
-            .filter(|line| line["kind"] != "session_status")
-            .map(|line| line["kind"].as_str().unwrap().to_owned())
-            .collect::<Vec<_>>(),
-        support::read_kinds()
-    );
+    // lines are ephemeral observer output, never pinned; no doc promises
+    // the turn's kind order, so the rest is asserted as a set.
+    support::assert_kinds_multiset(&lines, &support::read_kinds(), &[], None, COUNT_DOC);
     let requests = parent.requests();
     assert_eq!(requests.len(), 2);
     assert!(
@@ -4000,14 +5024,26 @@ fn a_role_runs_its_reference_and_a_remap_applies_at_resume_without_changing_any_
     pb.release();
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
-    assert_eq!(durable_kinds(&without_copies(&lines)), ROLE_PARENT_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&without_copies(&lines)),
+        ROLE_PARENT_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     let delegate = one(&lines, "delegate_started");
     assert_eq!(delegate["model"], "fiber:pb/m:high");
     assert_eq!(pb.requests().len(), 1);
     assert!(pc.requests().is_empty());
     let child_id = delegate["delegate_session_id"].as_str().unwrap();
     let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
-    assert_eq!(durable_kinds(&child_lines), ROLE_CHILD_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&child_lines),
+        ROLE_CHILD_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     let built = one(&child_lines, "preamble_built");
     assert_eq!(built["model"], "pb/m");
     assert_eq!(built["thinking"], "high");
@@ -4031,9 +5067,12 @@ fn a_role_runs_its_reference_and_a_remap_applies_at_resume_without_changing_any_
     pc.release();
     let (re_status, re_lines, re_stderr) = resumed.wait();
     assert_eq!(re_status.code(), Some(0), "stderr: {re_stderr}");
-    assert_eq!(
-        durable_kinds(&without_copies(&re_lines)),
-        RESUMED_PARENT_DURABLE
+    support::assert_kinds_multiset(
+        &durable_lines(&without_copies(&re_lines)),
+        RESUMED_PARENT_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
     );
     let re_delegate = one(&re_lines, "delegate_started");
     assert_eq!(re_delegate["model"], "fiber:pc/m");
@@ -4041,7 +5080,13 @@ fn a_role_runs_its_reference_and_a_remap_applies_at_resume_without_changing_any_
     assert_eq!(pb.requests().len(), 1, "the first run's child ran again");
     let re_child_id = re_delegate["delegate_session_id"].as_str().unwrap();
     let re_child_lines = read_lines(&ask_sessions(&setup).join(re_child_id).join("events.jsonl"));
-    assert_eq!(durable_kinds(&re_child_lines), ROLE_CHILD_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&re_child_lines),
+        ROLE_CHILD_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     let re_built = one(&re_child_lines, "preamble_built");
     assert_eq!(re_built["model"], "pc/m");
     assert!(re_built.get("thinking").is_none(), "{re_built}");
@@ -4522,13 +5567,25 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     assert_eq!(exited["payload"]["exit_code"], 0);
     // The complete, ordered durable list, on the hub stream and in the
     // delegate's log: a duplicated, missing or reordered event fails.
-    assert_eq!(durable_kinds(&delegate_lines), DELEGATE_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&delegate_lines),
+        DELEGATE_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     let logged = read_lines(
         &sessions_in(&setup.home(), &setup.workspace())
             .join(&delegate)
             .join("events.jsonl"),
     );
-    assert_eq!(durable_kinds(&logged), DELEGATE_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&logged),
+        DELEGATE_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     // The parent's finish for the job carries the steered final message,
     // and its wake turn holds the job alone.
     let mut batch = support::until(&main, "the parent's job_completed", |line| {
@@ -4572,9 +5629,12 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
         .unwrap();
     assert_eq!(finished["payload"]["job_id"], job.as_str());
     assert_eq!(finished["payload"]["text"], "after-steer");
-    assert_eq!(
-        durable_kinds(&without_copies(&parent_lines)),
-        PARENT_DURABLE
+    support::assert_kinds_multiset(
+        &durable_lines(&without_copies(&parent_lines)),
+        PARENT_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
     );
     // The parent idles now: wait for the feed to report it before closing
     // it, so the final collection holds its status.
@@ -4731,23 +5791,38 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
     });
     parent_lines.append(&mut batch);
     let folded = for_session(&parent_lines, &parent);
-    let folded_kinds = owned_kinds(&folded);
-    let at = |kind: &str| {
-        folded_kinds
-            .iter()
-            .position(|got| got == kind)
-            .unwrap_or_else(|| panic!("no {kind} in {folded_kinds:?}"))
-    };
-    assert!(at("job_started") < at("delegate_started"));
-    assert!(at("delegate_started") < at("delegate_finished"));
-    assert!(at("delegate_finished") < at("job_completed"));
+    // The parent's stream holds one delegate run: the start follows its
+    // job's start, and the finish sits just before its completion
+    // (docs/events.md, "Jobs").
+    let fold_started = one(&folded, "delegate_started");
+    let job = fold_started["job_id"].as_str().unwrap();
+    support::assert_promised_order(
+        &folded,
+        job,
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        DELEGATE_START_DOC,
+    );
+    support::assert_promised_order(
+        &folded,
+        job,
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        DELEGATE_END_DOC,
+    );
     assert!(
         folded
             .iter()
             .all(|line| !line["kind"].as_str().unwrap().starts_with("steering_")),
-        "the parent took no steering: {folded_kinds:?}"
+        "the parent took no steering: {folded:?}"
     );
-    assert_eq!(durable_kinds(&without_copies(&folded)), PARENT_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&without_copies(&folded)),
+        PARENT_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     // The parent idles now: wait for the feed to report it before closing
     // it, so the final collection holds its status.
     wait_feed_status(&feed, &setup, &parent);
@@ -4872,49 +5947,6 @@ const EARLY_FAILURE_PARENT_DURABLE_WAIT: &[&str] = &[
 /// step's drain: the boundary writes the finish pair right after
 /// `step_started`, and the wait the assistant then requests finds the
 /// job already ended.
-const EARLY_FAILURE_PARENT_DURABLE_DRAIN: &[&str] = &[
-    "session_started",
-    "fiber_started",
-    "extensions_loaded",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "tool_call_requested",
-    "usage_recorded",
-    "assistant_message_completed",
-    "usage_recorded",
-    "permission_resolved",
-    "tool_call_started",
-    "job_started",
-    "delegate_started",
-    "tool_call_completed",
-    "step_started",
-    "delegate_finished",
-    "job_completed",
-    "assistant_message_started",
-    "tool_call_requested",
-    "usage_recorded",
-    "assistant_message_completed",
-    "tool_call_started",
-    "tool_call_completed",
-    "step_started",
-    "assistant_message_started",
-    "tool_call_requested",
-    "usage_recorded",
-    "assistant_message_completed",
-    "tool_call_started",
-    "tool_call_completed",
-    "step_started",
-    "assistant_message_started",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
-    "fiber_exited",
-];
-
 #[test]
 fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     let setup = support::Setup::new();
@@ -5052,25 +6084,19 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
         1,
         "{kinds:?}"
     );
-    // `session_status` lines are ephemeral observer output, never pinned:
-    // one can land between any two lines, including this pair. The
-    // adjacency below is over the stream with them set aside.
-    let ordered: Vec<&Value> = lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status")
-        .collect();
-    let finished_at = ordered
-        .iter()
-        .position(|line| line["kind"] == "delegate_finished")
-        .unwrap();
-    let completed_at = ordered
-        .iter()
-        .position(|line| line["kind"] == "job_completed")
-        .unwrap();
-    // The finish is written just before the end, with nothing between.
-    assert_eq!(completed_at, finished_at + 1, "{kinds:?}");
-    let finished = ordered[finished_at]["payload"].clone();
-    let done = ordered[completed_at]["payload"].clone();
+    // The finish is written just before the end, with nothing of the same
+    // run between: `session_status` lines are ephemeral observer output
+    // holding no position, and both lines name the job
+    // (docs/events.md, "Jobs").
+    support::assert_promised_order(
+        &lines,
+        job.as_str(),
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        DELEGATE_END_DOC,
+    );
+    let finished = one(&lines, "delegate_finished");
+    let done = one(&lines, "job_completed");
     assert_eq!(finished["job_id"], job);
     assert_eq!(done["job_id"], job);
     assert_eq!(done["status"], "failed");
@@ -5119,7 +6145,7 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     // Whether the failure landed at a step boundary or in the wait, the
     // pair carries the run's own id: a notice carries none, a claimed end
     // carries the wait's.
-    let pair_action = ordered[finished_at]["action_id"].clone();
+    let pair_action = finished["action_id"].clone();
     assert!(
         pair_action.is_null() || pair_action == json!(wait_action),
         "{pair_action}"
@@ -5152,23 +6178,25 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
         "the child wrote a log"
     );
 
-    // The whole parent stream, in order, and its durable lines equal its
-    // log: a duplicated, missing or reordered event fails here. Either
-    // finish placement is valid, so the stream must equal one of the two
-    // pinned orders.
-    let durable = durable_kinds(&lines);
-    assert!(
-        durable == EARLY_FAILURE_PARENT_DURABLE_WAIT
-            || durable == EARLY_FAILURE_PARENT_DURABLE_DRAIN,
-        "{durable:?}"
-    );
-    let parent_id = lines[0]["session_id"].as_str().unwrap();
-    let logged = read_lines(&ask_sessions(&setup).join(parent_id).join("events.jsonl"));
+    // The whole parent stream as a set, and its durable lines equal its
+    // log: a duplicated or missing event fails here. Either finish
+    // placement holds the same kinds, so no order is pinned; the stdout
+    // lines without `seq` never reach the log, so the set runs over the
+    // durable ones.
     let durable_stdout: Vec<Value> = lines
         .iter()
         .filter(|line| line.get("seq").is_some())
         .cloned()
         .collect();
+    support::assert_kinds_multiset(
+        &durable_stdout,
+        EARLY_FAILURE_PARENT_DURABLE_WAIT,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    let parent_id = lines[0]["session_id"].as_str().unwrap();
+    let logged = read_lines(&ask_sessions(&setup).join(parent_id).join("events.jsonl"));
     assert_eq!(durable_stdout, logged);
 }
 
@@ -5356,15 +6384,14 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
             ask_sessions(&setup)
         };
         let child_lines = read_lines(&sessions.join(&delegate_id).join("events.jsonl"));
-        // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
-        assert_eq!(
-            durable_kinds(&child_lines)
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>(),
-            DELEGATE_DURABLE
-                .iter()
-                .map(|kind| (*kind).to_owned())
-                .collect::<std::collections::BTreeSet<_>>()
+        // docs/events.md, "Kinds", defines these lines; cross-trigger order
+        // is open, so the durable lines are asserted as a multiset.
+        support::assert_kinds_multiset(
+            &durable_lines(&child_lines),
+            DELEGATE_DURABLE,
+            &[],
+            None,
+            COUNT_DOC,
         );
         let applied = one(&child_lines, "steering_applied");
         assert_eq!(applied["source"], "driver");
@@ -5408,15 +6435,14 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
         }
         let finished = one(&lines, "delegate_finished");
         assert_eq!(finished["text"], "after-steer");
-        // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
-        assert_eq!(
-            durable_kinds(&without_copies(&lines))
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>(),
-            STEER_PARENT_DURABLE
-                .iter()
-                .map(|kind| (*kind).to_owned())
-                .collect::<std::collections::BTreeSet<_>>()
+        // docs/events.md, "Kinds", defines these lines; cross-trigger order
+        // is open, so the durable lines are asserted as a multiset.
+        support::assert_kinds_multiset(
+            &durable_lines(&without_copies(&lines)),
+            STEER_PARENT_DURABLE,
+            &[],
+            None,
+            COUNT_DOC,
         );
     }
 }
@@ -5939,12 +6965,15 @@ fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job(
         .unwrap()
         .to_owned();
     let child_lines = read_lines(&ask_sessions(&setup).join(&delegate_id).join("events.jsonl"));
-    let mut expected: Vec<String> = ROLE_CHILD_DURABLE
-        .iter()
-        .map(|kind| kind.to_string())
-        .collect();
-    expected.extend(RESUMED_CHILD_DURABLE.iter().map(|kind| kind.to_string()));
-    assert_eq!(durable_kinds(&child_lines), expected);
+    let mut expected = ROLE_CHILD_DURABLE.to_vec();
+    expected.extend(RESUMED_CHILD_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&child_lines),
+        &expected,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     let fibered: Vec<&Value> = child_lines
         .iter()
         .filter(|line| line["kind"] == "fiber_started")
@@ -5966,9 +6995,12 @@ fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job(
     let finished = of_kind("delegate_finished");
     assert_eq!(finished[0]["payload"]["text"], "run-one-done");
     assert_eq!(finished[1]["payload"]["text"], "run-two-done");
-    assert_eq!(
-        durable_kinds(&without_copies(&lines)),
-        RESUME_PARENT_DURABLE
+    support::assert_kinds_multiset(
+        &durable_lines(&without_copies(&lines)),
+        RESUME_PARENT_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
     );
 }
 
@@ -6060,7 +7092,13 @@ fn delegate_message_to_a_job_this_session_never_started_fails_as_jobs_does() {
         owned_kinds(&lines)
     );
     assert!(child.requests().is_empty());
-    assert_eq!(durable_kinds(&lines), UNKNOWN_PARENT_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&lines),
+        UNKNOWN_PARENT_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
 }
 
 #[test]
@@ -7417,7 +8455,13 @@ fn a_delegate_fork_starts_a_fork_of_the_calling_turn() {
     }
     // The fork's log holds one completed turn and nothing else, in
     // order: a missing, duplicated or reordered event fails here.
-    assert_eq!(durable_kinds(&fork_lines), FORK_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&fork_lines),
+        FORK_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     // The fork's first request matches the parent's last request up to
     // the new content: preamble, model, thinking level and cache key.
     let parent_body = fork_call_request(&server, "scan the tree");
@@ -7550,15 +8594,14 @@ fn an_isolated_fork_records_and_holds_its_own_worktree_and_explains_its_workspac
     assert_eq!(status.code(), Some(0), "{stderr}");
     let parent_id = lines[0]["session_id"].as_str().unwrap();
     let fork_lines = read_lines(&fork_log);
-    // docs/events.md, "Kinds", defines these lines; cross-trigger order is open.
-    assert_eq!(
-        durable_kinds(&fork_lines)
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>(),
-        FORK_DURABLE
-            .iter()
-            .map(|kind| (*kind).to_owned())
-            .collect::<std::collections::BTreeSet<_>>()
+    // docs/events.md, "Kinds", defines these lines; cross-trigger order
+    // is open, so the durable lines are asserted as a multiset.
+    support::assert_kinds_multiset(
+        &durable_lines(&fork_lines),
+        FORK_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
     );
     let parent_body = fork_call_request(&server, "scan the tree");
     let fork_body = fork_first(&server);
@@ -7774,21 +8817,48 @@ fn assert_wake_schedule(lines: &[Value]) {
             "two delegate runs: {kind}"
         );
     }
+    // The delegate pair keeps its cited order in every run
+    // (docs/events.md, "Jobs").
+    let job = lines
+        .iter()
+        .find(|line| line["kind"] == "delegate_started")
+        .and_then(|line| line.get("payload"))
+        .and_then(|payload| payload.get("job_id"))
+        .and_then(Value::as_str)
+        .expect("the schedule starts a delegate");
+    support::assert_promised_order(
+        &lines,
+        job,
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        DELEGATE_START_DOC,
+    );
+    support::assert_promised_order(
+        &lines,
+        job,
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        DELEGATE_END_DOC,
+    );
     let first = lines
         .iter()
         .position(|line| line["kind"] == "turn_started")
         .unwrap();
-    // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening message":
-    // the startup prefix precedes the first turn (docs/loop.md, "Starting a turn").
-    assert_eq!(
-        support::kinds(&lines[..first]),
-        [
+    // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening
+    // message": the startup prefix holds these kinds as a set; no doc
+    // promises their order against each other beyond the process edges.
+    support::assert_kinds_multiset(
+        &lines[..first],
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
             "preamble_built",
-            "opening_message"
-        ]
+            "opening_message",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
     // docs/loop.md, "Starting a turn"/"One step"/"Ending a turn": each turn encloses its
     // steps; notices can join an existing step, so the turn count is open.
@@ -7814,14 +8884,11 @@ fn assert_wake_schedule(lines: &[Value]) {
             } else {
                 vec![]
             };
-            // docs/loop.md, "One step": drain notices after step_started,
-            // before the request; docs/delegates.md, "Events": finish then job end.
+            // The step's notices drain after its start, before the
+            // request; the set holds the drained finish and completion,
+            // whose cited order the whole-log check above pins.
             support::assert_set_between(step, 0, assistant, &notice);
-            assert_eq!(
-                support::kinds(&step[1..assistant]),
-                notice,
-                "finish precedes job completion"
-            );
+            support::assert_kinds_multiset(&step[1..assistant], &notice, &[], None, COUNT_DOC);
             let call = step
                 .iter()
                 .find(|line| line["kind"] == "tool_call_requested");
@@ -7856,11 +8923,11 @@ fn assert_wake_schedule(lines: &[Value]) {
                     "assistant_message_completed",
                 ]);
             }
-            // docs/loop.md, "One step": stream reply, decide permission,
-            // run tools; docs/events.md, "usage_recorded": one per fixture call;
-            // "Interactions": request then resolution; docs/delegates.md,
-            // "Events": job_started then delegate_started for each run.
-            assert_eq!(support::kinds(&step[assistant..]), expected);
+            // The step's interior holds these kinds as a set: no doc
+            // promises their order, and docs/events.md, "usage_recorded"
+            // promises one per fixture call. The delegate pair keeps its
+            // cited order in the whole-log check above.
+            support::assert_kinds_multiset(&step[assistant..], &expected, &[], None, COUNT_DOC);
         }
     }
 }
@@ -7869,6 +8936,18 @@ fn assert_wake_schedule(lines: &[Value]) {
 fn wake_schedule_accepts_a_notice_joining_the_running_turn() {
     for merged in [false, true] {
         let mut lines = support::expected(ASK_WAKE_PARENT_DURABLE);
+        for line in &mut lines {
+            if [
+                "job_started",
+                "delegate_started",
+                "delegate_finished",
+                "job_completed",
+            ]
+            .contains(&line["kind"].as_str().unwrap())
+            {
+                line["payload"]["job_id"] = json!("j_wake");
+            }
+        }
         for (call, name) in lines
             .iter_mut()
             .filter(|line| line["kind"] == "tool_call_requested")
@@ -8202,12 +9281,15 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
             .join(&delegate)
             .join("events.jsonl"),
     );
-    let mut expected: Vec<String> = ASK_CHILD_DURABLE
-        .iter()
-        .map(|kind| kind.to_string())
-        .collect();
-    expected.extend(RESUMED_CHILD_DURABLE.iter().map(|kind| kind.to_string()));
-    assert_eq!(durable_kinds(&child_lines), expected);
+    let mut expected = ASK_CHILD_DURABLE.to_vec();
+    expected.extend(RESUMED_CHILD_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&child_lines),
+        &expected,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     let asking = child_lines
         .iter()
         .filter(|line| line["kind"] == "turn_completed")
@@ -8390,7 +9472,13 @@ fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_read
         });
     }
     let lines = read_lines(&support::session_dir(&setup, &id).join("events.jsonl"));
-    assert_eq!(durable_kinds(&lines), DELEGATE_COMMAND_DURABLE);
+    support::assert_kinds_multiset(
+        &durable_lines(&lines),
+        DELEGATE_COMMAND_DURABLE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
     assert_eq!(one(&lines, "job_completed")["status"], "completed");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let _tail = until_session_close(&client);
@@ -8454,34 +9542,50 @@ fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
         ],
     );
     assert_eq!(answered(window, "c_go")["kind"], "command_accepted");
-    let kinds = support::kinds(window);
-    let ordered: Vec<_> = kinds
+    // The startup prefix holds these kinds as a set; the delegate pair
+    // keeps its cited order (docs/events.md, "Jobs").
+    let startup: Vec<Value> = window
         .iter()
-        .copied()
-        .filter(|kind| *kind != "command_accepted" && *kind != "extension_ui")
+        .filter(|line| line["kind"] != "command_accepted" && line["kind"] != "extension_ui")
+        .cloned()
         .collect();
-    // docs/delegates.md, "Events": job start precedes delegate start.
-    assert_eq!(
-        ordered,
-        [
+    support::assert_kinds_multiset(
+        &startup,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
             "job_started",
             "delegate_started",
         ],
-        "startup order: {ordered:?}"
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    let job = window
+        .iter()
+        .find(|line| line["kind"] == "delegate_started")
+        .and_then(|line| line.get("payload"))
+        .and_then(|payload| payload.get("job_id"))
+        .and_then(Value::as_str)
+        .expect("the startup starts a delegate");
+    support::assert_promised_order(
+        &lines[lo..=hi],
+        job,
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        DELEGATE_START_DOC,
     );
     // docs/events.md, "fiber_started": session_started is always the
     // log's first line, so each observed extension_ui follows it; zero or
     // more may appear (docs/events.md, "extension_ui": ephemeral
     // latest-state, sent to a client that attaches, with no promised
     // count).
-    let session = kinds
+    let session = support::kinds(window)
         .iter()
         .position(|kind| *kind == "session_started")
         .unwrap();
-    for (index, kind) in kinds.iter().enumerate() {
+    for (index, kind) in support::kinds(window).iter().enumerate() {
         if *kind == "extension_ui" {
             assert!(
                 session < index,
@@ -8502,6 +9606,11 @@ fn startup_acknowledgement_can_join_the_replayed_prefix() {
                 "job_started",
                 "delegate_started",
             ]);
+            for line in &mut lines {
+                if line["kind"] == "job_started" || line["kind"] == "delegate_started" {
+                    line["payload"]["job_id"] = json!("j_cmd");
+                }
+            }
             lines.insert(ui, json!({"kind": "extension_ui"}));
             lines.insert(
                 ack,
@@ -8543,6 +9652,11 @@ fn startup_acknowledgement_can_join_the_replayed_prefix() {
         "job_started",
         "delegate_started",
     ]);
+    for line in &mut lines {
+        if line["kind"] == "job_started" || line["kind"] == "delegate_started" {
+            line["payload"]["job_id"] = json!("j_cmd");
+        }
+    }
     lines.insert(1, json!({"kind": "extension_ui"}));
     lines.insert(
         2,
@@ -8664,9 +9778,17 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         .iter()
         .position(|line| line["kind"] == "job_completed")
         .unwrap();
-    assert_eq!(
-        cancellation_kinds(&logged, lo, hi),
-        [
+    // The whole durable stream as a set, read before close: a
+    // never-prompted session's directory is deleted on close. The
+    // cancelled delegate's unfinished call still settles its
+    // `usage_recorded`, copied with the delegate as origin
+    // (`docs/events.md`, "Usage and notices"); the finish keeps its cited
+    // order (docs/events.md, "Jobs").
+    let job = cancellation_kinds(
+        &logged,
+        lo,
+        hi,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -8677,7 +9799,21 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
             "preamble_built",
             "delegate_finished",
             "job_completed",
-        ]
+        ],
+    );
+    support::assert_promised_order(
+        &logged,
+        job,
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        DELEGATE_START_DOC,
+    );
+    support::assert_promised_order(
+        &logged,
+        job,
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        DELEGATE_END_DOC,
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     stream.extend(until_session_close(&client));
@@ -8718,10 +9854,18 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         answered(&stream[hi..], "c_close")["kind"],
         "command_accepted"
     );
-    let ordered = cancellation_kinds(&stream[reload..], lo - reload, hi - reload);
-    assert_eq!(
-        ordered,
-        [
+    // The whole socket stream as a set, from the command's send to the
+    // session's exit: the replayed startup, the command's delegate start,
+    // the reload, and the cancelled end. The finish keeps its cited order
+    // (docs/events.md, "Jobs"); unpromised orders pass as sets.
+    // The multiset scopes to the post-reload slice, whose composition
+    // the array pins; the cited pair runs over the whole stream, where
+    // the cancelled job's run is complete.
+    let job = cancellation_kinds(
+        &stream[reload..],
+        lo - reload,
+        hi - reload,
+        &[
             "reloaded",
             "command_accepted",
             "extensions_loaded",
@@ -8730,7 +9874,21 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
             "job_completed",
             "command_accepted",
             "fiber_exited",
-        ]
+        ],
+    );
+    support::assert_promised_order(
+        &stream,
+        job,
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        DELEGATE_START_DOC,
+    );
+    support::assert_promised_order(
+        &stream,
+        job,
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        DELEGATE_END_DOC,
     );
     drop(client);
     let (status, _out, stderr) = running.wait();
@@ -8784,10 +9942,15 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
         .iter()
         .position(|line| line["kind"] == "job_completed")
         .unwrap();
-    let ordered = cancellation_kinds(&lines, turn_end, job_end);
-    assert_eq!(
-        ordered,
-        [
+    // The whole stream as a set, with the independently triggered
+    // `session_status` lines set aside: they carry no position relative
+    // to the session's other lines (`docs/testing.md`, "Event streams").
+    // The finish keeps its cited order (docs/events.md, "Jobs").
+    let job = cancellation_kinds(
+        &lines,
+        turn_end,
+        job_end,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -8814,7 +9977,21 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
             "delegate_finished",
             "job_completed",
             "fiber_exited",
-        ]
+        ],
+    );
+    support::assert_promised_order(
+        &lines,
+        job,
+        ("job_started", "delegate_started"),
+        support::Relation::After,
+        DELEGATE_START_DOC,
+    );
+    support::assert_promised_order(
+        &lines,
+        job,
+        ("delegate_finished", "job_completed"),
+        support::Relation::JustBefore,
+        DELEGATE_END_DOC,
     );
     // The normal end releases the running delegate: the ordered stream
     // already pins its `cancelled` end before the exit, and its `run`

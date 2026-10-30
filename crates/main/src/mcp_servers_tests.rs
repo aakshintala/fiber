@@ -1101,6 +1101,28 @@ fn offer_rig() -> crate::test_support::Rig {
     rig
 }
 
+/// Starts the test's configured specs as a pending MCP owner.
+fn pending(
+    rig: &crate::test_support::Rig,
+    specs: super::Specs,
+    clock: &std::sync::Arc<dyn contract::clock::Clock>,
+    artifacts: &std::path::Path,
+    project: &config::ProjectKey,
+) -> super::PendingMcp {
+    super::start_session_tools(
+        &rig.home,
+        &rig.workspace,
+        artifacts,
+        clock,
+        project,
+        Ok((specs.specs, specs.repository)),
+        Vec::new(),
+        std::sync::Arc::new(DummyImages),
+        None,
+    )
+    .expect("the pending MCP start")
+}
+
 /// The session's tools and servers, built inside a deadline: `db` waits
 /// for the post-offer load, and `extension_tools` ride after the rest.
 #[allow(clippy::type_complexity, reason = "one session's tools and servers")]
@@ -1129,12 +1151,13 @@ fn wired(
     let workspace = rig.workspace.clone();
     let delegates = delegates();
     let skills = skills();
+    let pending = pending(rig, specs, &clock, &artifacts, &project);
     let (tools, _infos, _driver, servers) = fakes::within(
         "the session tools",
         Deadline::after(WIRING_WITHIN),
         move || {
             super::session_tools(
-                Ok(fiber),
+                fiber,
                 &home,
                 &workspace,
                 &artifacts,
@@ -1142,9 +1165,7 @@ fn wired(
                 &jobs,
                 &locks,
                 &project,
-                Vec::new(),
-                specs.repository,
-                &[],
+                pending,
                 None,
                 &delegates,
                 skills,
@@ -1252,12 +1273,13 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
     let workspace = rig.workspace.clone();
     let fiber = rig.root.path().join("fiber-stub");
     let delegates = delegates();
+    let pending = pending(&rig, specs, &clock, &artifacts, &project);
     let (tools, _, _, session) = fakes::within(
         "session with a failed optional server",
         Deadline::after(WIRING_WITHIN),
         move || {
             super::session_tools(
-                Ok(fiber),
+                fiber,
                 &home,
                 &workspace,
                 &artifacts,
@@ -1265,9 +1287,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
                 &jobs,
                 &locks,
                 &project,
-                specs.specs,
-                specs.repository,
-                &[],
+                pending,
                 None,
                 &delegates,
                 skills(),

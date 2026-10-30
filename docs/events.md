@@ -38,7 +38,7 @@ One JSON object per line, one event per line, every line valid on its own.
 | Field | On | Meaning |
 |---|---|---|
 | `kind` | every line | the only discriminator a consumer switches on |
-| `session_id` | every line | the session this event belongs to |
+| `session_id` | every session line | the session this event belongs to |
 | `ts` | every line | milliseconds since the epoch |
 | `schema_version` | every line | every line must be readable without negotiation |
 | `turn_id` | lines about a turn, or an action in one | correlation |
@@ -102,6 +102,8 @@ is about the hub or names its session in the payload:
 
 The hub's `command_accepted` and `command_rejected` for a hub command carry
 no `session_id` in the envelope either.
+
+A process extension started outside a session, whose `extension_hello` has reason `call`, exchanges lines with no `session_id` in the envelope. They pass only between Fiber and that process, and no log, hub connection or session reader sees them.
 
 ## Durable and ephemeral
 
@@ -910,7 +912,7 @@ Ephemeral. A failure outside any action, or a login a person must finish (`login
 |---|---|---|---|
 | `code` | string | yes | an open set (`docs/errors.md`, "Registry"); a consumer shows the message for an unknown code |
 | `message` | string | yes | Fiber's own sentence |
-| `extension` | string | no | the extension it concerns |
+| `extension` | string | no | the extension it concerns; absent when a notice groups items from more than one extension |
 
 One `usage_recorded` per model call, whatever started it, however it ended. A
 call that is cancelled, fails or closes early writes its `usage_recorded` at
@@ -1256,8 +1258,8 @@ the session. Behaviour is `docs/extensions.md` ("Process extensions").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `session_id` | string | yes | the session's id |
-| `reason` | string | yes | why the session started: `new`, `resume`, `fork`, `rewind` or `handoff`; a closed set |
+| `session_id` | string | unless `reason` is `call` | the session's id |
+| `reason` | string | yes | why the session started: `new`, `resume`, `fork`, `rewind`, `handoff`, or `call` for a provider call outside a session; a closed set |
 | `workspace` | string | yes | the workspace root |
 | `data_dirs` | object | yes | the paths `host.data_dir` returns: `machine` and `project` path strings |
 | `state` | object | yes | the extension's folded state, as `state.get` reads it |

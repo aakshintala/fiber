@@ -1612,3 +1612,50 @@ fn two_one_question_titles_show_their_place() {
     let queue = folded(&[confirm_asked(S_A, "r_c1"), confirm_asked(S_A, "r_c2")]);
     assert_eq!(header(&queue), question_title(S_A, None, Some((1, 2))));
 }
+
+/// The queue folds requests through the borrowed decoder: a tool call,
+/// a permission request and an interaction question queue, and a line
+/// missing a required key queues nothing.
+#[test]
+fn queue_fold_reads_requests_through_the_borrowed_decoder() {
+    let tool = call(S_A, "a_1", "read", serde_json::json!({"path": "a.png"}));
+    assert!(
+        crate::app::read_ref::<contract::events::ToolCallRequested>(&tool.payload).is_some(),
+        "the tool call decodes"
+    );
+    let ask = standing_ask(S_A, "a_1", "r_1", "npm");
+    assert!(
+        crate::app::read_ref::<contract::events::PermissionRequested>(&ask.payload).is_some(),
+        "the permission request decodes"
+    );
+    let confirm = confirm_asked(S_A, "r_2");
+    assert!(
+        crate::app::read_ref::<contract::events::InteractionRequested>(&confirm.payload).is_some(),
+        "the interaction question decodes"
+    );
+    let queue = folded(&[tool, ask, confirm]);
+    assert!(!panel(&queue).is_empty(), "the three requests queue");
+    // Each malformed line misses a required key, so it queues nothing.
+    for line in [
+        envelope(
+            S_A,
+            "tool_call_requested",
+            serde_json::json!({"name": "read"}),
+            "a_9",
+        ),
+        envelope(
+            S_A,
+            "permission_requested",
+            serde_json::json!({"request_id": "r_9", "effects": ["executes"], "reversible": true}),
+            "a_9",
+        ),
+        envelope(
+            S_A,
+            "interaction_requested",
+            serde_json::json!({"request_id": "r_9", "kind": "confirm"}),
+            "a_9",
+        ),
+    ] {
+        assert!(panel(&folded(&[line])).is_empty(), "no panel opens");
+    }
+}

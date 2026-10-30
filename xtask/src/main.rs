@@ -41,7 +41,7 @@
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
 //! - `flake-report-events`: reads one JSON object on stdin carrying the
 //!   flake titles and the complete open and closed exact-title issue
 //!   lookups with their completeness, and prints the unique closed issue
@@ -69,6 +69,11 @@
 //!   it (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
+//! - `screen-ratchet`: reads the inline per-file maxima from stdin as one
+//!   `<path> <maximum>` per line, and fails when a file under
+//!   `crates/main/tests/` outside `support/` holds more unmarked `.screen()`
+//!   call lines than its maximum (0 when absent)
+//!   (`docs/testing/screens.md`, "Screens")
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
@@ -89,6 +94,7 @@ mod models_dev;
 mod models_dev_table;
 mod must_succeed;
 mod rules;
+mod screen_ratchet;
 mod select;
 mod site;
 mod stress;
@@ -314,6 +320,18 @@ fn run(args: &[String]) -> Result<bool, String> {
             ),
             "ok",
         ),
+        "screen-ratchet" => {
+            let mut input = String::new();
+            std::io::stdin()
+                .read_to_string(&mut input)
+                .map_err(|e| format!("stdin: {e}"))?;
+            let maxima = screen_ratchet::parse_maxima(&input)?;
+            report(
+                "screen-ratchet",
+                &screen_ratchet::check(&rust_files(&workspace_members()?)?, &maxima),
+                "ok",
+            )
+        }
         "site" => site::run(rest),
         "compiled-in" => {
             let members = workspace_members()?;
@@ -376,6 +394,19 @@ fn run(args: &[String]) -> Result<bool, String> {
                 failures.extend(docs::check_file(root, &path)?);
             }
             report("check-docs", &failures, "ok")
+        }
+        "kinds-ratchet" => {
+            let max: usize = flag(rest, "--max")?
+                .parse()
+                .map_err(|e| format!("--max: {e}"))?;
+            let support_max: usize = flag(rest, "--support-max")?
+                .parse()
+                .map_err(|e| format!("--support-max: {e}"))?;
+            report(
+                "kinds-ratchet",
+                &rules::kinds_ratchet(&rust_files(&workspace_members()?)?, max, support_max),
+                "ok",
+            )
         }
         "ci-needs" => report(
             "ci-needs",

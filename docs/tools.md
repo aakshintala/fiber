@@ -25,6 +25,16 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   standing allows, and still meets the credential deny and the standing deny
   and ask rules (`docs/permissions.md`, "The order a call is judged in"). Any
   tool may set it, an extension's included; it only makes the call stricter.
+  A tool may also declare that confinement does not skip review for a call
+  (`review_when_confined`): a confined fast path must not decide it, while
+  session grants and standing allows still apply, as do the credential deny
+  and the standing deny and ask rules (`docs/permissions.md`, "The order a
+  call is judged in"). Any tool may set it; it only makes the call stricter.
+  Today only the shell sets it, for its built-in destructive-command guard:
+  `rm -r` and `rm -rf`, `git reset --hard`, `git clean`, `git checkout --`
+  and `git restore`, matched best effort by command text in any component of
+  a multi-part command, whether or not the command parses
+  (`docs/permissions.md`, "The destructive-command guard").
   A shell call that ran inside the OS sandbox on Linux or macOS carries
   `confined` (`docs/permissions.md`, "Confinement"); the log records it
   (`docs/events.md`, "Declared effects"). Calls remain reviewed.
@@ -524,8 +534,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   workspace; a relative path is resolved against the workspace);
   `timeout_ms` (optional; for a monitor, its deadline);
   `run_in_background` (optional); `tty` (optional); `monitor` (optional;
-  starts a monitor, "Background jobs"). Fiber never reruns a failed
-  confined call outside its sandbox. On macOS the confined shell prints a
+  starts a monitor, "Background jobs"); `unconfined` (optional; when true
+  the call leaves the OS sandbox and is reviewed exactly as with the
+  sandbox off). Fiber never reruns a failed confined call outside its
+  sandbox: the model retries explicitly with `unconfined: true` as a new
+  reviewed call. On macOS the confined shell prints a
   start marker before the user program runs; the call fails instead of
   ending normally when the marker never arrives. Each call starts fresh: a
   `cd` does not carry over to the next call.
@@ -663,7 +676,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   paths the command names, resolved against `workdir`. Otherwise it
   declares `executes`, with no paths. A call that ran inside the OS
   sandbox on Linux or macOS carries `confined`
-  (`docs/permissions.md`, "Confinement"); calls remain reviewed.
+  (`docs/permissions.md`, "Confinement"); a call with `unconfined: true`
+  leaves the sandbox and is reviewed exactly as with the sandbox off.
 - The recogniser accepts only a listed set of syntax: simple commands,
   pipelines, lists joined by `&&`, `||` and `;`, quoted and unquoted words,
   variable assignments before a command, and the redirects below. Any

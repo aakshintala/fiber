@@ -387,12 +387,12 @@ impl Queue {
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
         let session = &envelope.session_id;
         let action = envelope.action_id.as_ref().map(|id| id.0.clone());
-        let payload = Value::Object(envelope.payload.clone());
         match envelope.kind.as_str() {
             "tool_call_requested" => {
-                if let (Some(action), Ok(call)) =
-                    (action, serde_json::from_value::<ToolCallRequested>(payload))
-                {
+                if let (Some(action), Some(call)) = (
+                    action,
+                    crate::app::read_ref::<ToolCallRequested>(&envelope.payload),
+                ) {
                     // The main argument, never JSON: raw text that was not
                     // JSON shows as the model sent it.
                     let summary = match &call.arguments {
@@ -411,7 +411,8 @@ impl Queue {
                 }
             }
             "permission_requested" => {
-                let Ok(asked) = serde_json::from_value::<PermissionRequested>(payload) else {
+                let Some(asked) = crate::app::read_ref::<PermissionRequested>(&envelope.payload)
+                else {
                     return;
                 };
                 self.queue(session, asked.request_id.0, false, |calls| {
@@ -435,7 +436,8 @@ impl Queue {
                 });
             }
             "interaction_requested" => {
-                let Ok(asked) = serde_json::from_value::<InteractionRequested>(payload) else {
+                let Some(asked) = crate::app::read_ref::<InteractionRequested>(&envelope.payload)
+                else {
                     return;
                 };
                 let by_call = asked.action_ids.is_some();

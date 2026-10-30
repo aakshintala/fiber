@@ -212,6 +212,13 @@ pub struct Effects {
     /// allows, and still meets the credential deny and the standing deny
     /// and ask rules.
     pub always_reviewed: bool,
+    /// When true confinement does not skip review for this call: a future
+    /// confined fast path must not decide it. Session grants and standing
+    /// allows still apply, as do the credential deny and the standing deny
+    /// and ask rules. Any tool may set it; it only makes the call
+    /// stricter. Today only the shell sets it, for the built-in
+    /// destructive-command guard (`docs/tools.md`, "What a tool declares").
+    pub review_when_confined: bool,
     /// Network hosts contacted, each named by an HTTP(S) URL
     /// (`docs/tools.md`, "What a tool declares"). `None` is unknown;
     /// an empty list contacts no host the model chose.

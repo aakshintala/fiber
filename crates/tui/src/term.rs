@@ -33,11 +33,13 @@ pub(crate) const PROBE_ID: u32 = 31;
 /// (`docs/tui.md`, "Images").
 pub(crate) const FALLBACK_CELL: (u16, u16) = (10, 20);
 
-/// Kitty's keyboard flags query, then the primary device attributes query,
-/// then kitty's graphics probe: a one-pixel query image under
-/// [`PROBE_ID`]. The appearance queries go first, so the theme follows
-/// the terminal before detection ends (`docs/tui.md`, "Themes").
-const QUERIES: &[u8] = b"\x1b[?u\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
+/// Kitty's keyboard flags query, the XTVERSION query, then the primary
+/// device attributes query, then kitty's graphics probe: a one-pixel
+/// query image under [`PROBE_ID`]. The appearance queries go first, so
+/// the theme follows the terminal before detection ends (`docs/tui.md`,
+/// "Themes"). Detection never delays the first frame: the loop draws
+/// at once and each reply arrives after it (`docs/tui.md`, "Keys").
+const QUERIES: &[u8] = b"\x1b[?u\x1b[>0q\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
 /// Pushes kitty's keyboard flag 1, disambiguate escape codes. The loop
 /// writes it when kitty's flags reply arrives.
 pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
@@ -96,17 +98,25 @@ pub(crate) fn pixels(tty: &File) -> (u16, u16) {
         .unwrap_or((0, 0))
 }
 
+/// One cell's measured size in pixels from the tty's pixel size over
+/// its cell counts: `None` while the tty reports no pixels or a count
+/// is zero. The logo's Sixel gate needs a measured cell, never the
+/// fallback (`docs/tui.md`, "The logo").
+pub(crate) fn measured_cell(pixel: (u16, u16), count: (u16, u16)) -> Option<(u16, u16)> {
+    let (wide, high) = pixel;
+    let (cols, rows) = count;
+    if wide == 0 || high == 0 || cols == 0 || rows == 0 {
+        return None;
+    }
+    Some(((wide / cols).max(1), (high / rows).max(1)))
+}
+
 /// One cell's size in pixels from the tty's pixel size over its cell
 /// counts, for the placeholder grid (`docs/tui.md`, "Images"). Zero
 /// pixels or a zero count reads the fallback, so the grid math never
 /// divides by zero.
 pub(crate) fn cell(pixel: (u16, u16), count: (u16, u16)) -> (u16, u16) {
-    let (wide, high) = pixel;
-    let (cols, rows) = count;
-    if wide == 0 || high == 0 || cols == 0 || rows == 0 {
-        return FALLBACK_CELL;
-    }
-    ((wide / cols).max(1), (high / rows).max(1))
+    measured_cell(pixel, count).unwrap_or(FALLBACK_CELL)
 }
 
 /// Restores the terminal `setup` set up, once: pops kitty's keyboard

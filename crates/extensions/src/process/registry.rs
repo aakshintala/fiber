@@ -398,14 +398,16 @@ impl Registry {
     }
 
     /// Mints the reference for (`command`, `key`): a process function that
-    /// answers nothing until its handler is installed.
+    /// answers nothing until its handler is installed. The installed
+    /// handler receives the invocation's scope; the mint closure ignores
+    /// it and fails either way.
     fn mint(&self, command: CommandId, key: &str) -> FunctionRef {
         let owner = self.owner.clone();
         self.runtime.register_function(
             &self.owner,
             command,
             key.to_owned(),
-            FunctionTarget::Process(Arc::new(move |_, _| {
+            FunctionTarget::Process(Arc::new(move |_, _, _| {
                 Err(Error::Stopped {
                     extension: owner.clone(),
                 })
