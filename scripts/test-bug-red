@@ -104,6 +104,58 @@ for nextest_status in 0 101 4 2; do
 done
 cd "$top"
 
+# Report mode records nextest's result class and lets a separate collector
+# decide. A red test, a green test, a build failure, no matches and an
+# unexpected exit all reach that collector as data.
+cd "$repo"
+for nextest_status in 0 100 101 4 2; do
+  : >"$tmp/github-output.txt"
+  export BUG_RED_NEXTEST_STATUS="$nextest_status"
+  GITHUB_OUTPUT="$tmp/github-output.txt" "$bug_red" --report "$base" "$head" >"$tmp/out-report.txt" 2>&1 || {
+    cat "$tmp/out-report.txt" >&2
+    fail "report mode with nextest $nextest_status failed before collection"
+  }
+  unset BUG_RED_NEXTEST_STATUS
+  grep -Fxq "status=$nextest_status" "$tmp/github-output.txt" || {
+    cat "$tmp/github-output.txt" >&2
+    fail "report mode did not record nextest $nextest_status"
+  }
+done
+cd "$top"
+
+# The collector requires both legs to build and at least one red test to
+# fail; a green leg is allowed when the other leg reproduces the bug.
+rc=0
+"$bug_red" --collect 100 0 >"$tmp/out-collect-red.txt" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$tmp/out-collect-red.txt" >&2; fail "red on one leg exited $rc, want 0"; }
+rc=0
+"$bug_red" --collect 0 0 >"$tmp/out-collect-green.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-green.txt" >&2; fail "green on both legs exited $rc, want 1"; }
+rc=0
+"$bug_red" --collect 100 101 >"$tmp/out-collect-build.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-build.txt" >&2; fail "red that does not build on one leg exited $rc, want 1"; }
+rc=0
+"$bug_red" --collect 100 4 >"$tmp/out-collect-no-match.txt" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$tmp/out-collect-no-match.txt" >&2; fail "red with no match on the other leg exited $rc, want 0"; }
+rc=0
+"$bug_red" --collect 4 0 >"$tmp/out-collect-no-red.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-no-red.txt" >&2; fail "no-match plus green exited $rc, want 1"; }
+rc=0
+"$bug_red" --collect 100 2 >"$tmp/out-collect-unexpected.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-unexpected.txt" >&2; fail "unexpected nextest result exited $rc, want 1"; }
+rc=0
+"$bug_red" --collect 100 "" >"$tmp/out-collect-missing.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-missing.txt" >&2; fail "missing leg result exited $rc, want 1"; }
+rc=0
+"$bug_red" --collect 100 invalid >"$tmp/out-collect-invalid.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-invalid.txt" >&2; fail "invalid leg result exited $rc, want 1"; }
+rc=0
+"$bug_red" --collect docs docs >"$tmp/out-collect-docs.txt" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$tmp/out-collect-docs.txt" >&2; fail "docs-only on both legs exited $rc, want 0"; }
+rc=0
+"$bug_red" --collect docs 0 >"$tmp/out-collect-docs-mixed.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-docs-mixed.txt" >&2; fail "mixed docs-only and test result exited $rc, want 1"; }
+
 # A pull request that changes only docs passes at once, before the
 # one-commit check: the stub selects the branch with BUG_RED_DOCS_ONLY.
 repo_docs="$tmp/repo-docs"
@@ -122,6 +174,20 @@ unset BUG_RED_DOCS_ONLY
 cd "$top"
 [ "$rc" -eq 0 ] || { cat "$tmp/out-docs.txt" >&2; fail "docs-only case exited $rc, want 0"; }
 grep -Fq "changes only docs" "$tmp/out-docs.txt" || { cat "$tmp/out-docs.txt" >&2; fail "docs-only case misses the docs-only message"; }
+: >"$tmp/github-output.txt"
+export BUG_RED_DOCS_ONLY=true
+cd "$repo_docs"
+GITHUB_OUTPUT="$tmp/github-output.txt" "$bug_red" --report "$base_docs" "$head_docs" >"$tmp/out-docs-report.txt" 2>&1 || {
+  cat "$tmp/out-docs-report.txt" >&2
+  fail "docs-only report mode failed"
+}
+unset BUG_RED_DOCS_ONLY
+cd "$repo_docs"
+grep -Fxq 'status=docs' "$tmp/github-output.txt" || {
+  cat "$tmp/github-output.txt" >&2
+  fail "docs-only report did not record its result"
+}
+cd "$top"
 
 # A one-commit branch with no HEAD argument reports the one-commit
 # message: the default HEAD resolves to a SHA, so the guard fires.

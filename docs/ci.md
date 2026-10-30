@@ -304,15 +304,18 @@ On Linux x86_64 alone:
   no pull request or merge.
 - for a pull request where any issue its body resolves is labelled
   `bug`, the tests its first commit, the red commit, adds or changes run
-  at the red commit, and every test the pull request adds or changes runs at
-  its head: the red commit must build, at least one of its tests must fail
-  there, and all of them must pass at the head (`docs/workflow.md`, "The pull
-  request"). A pull request whose every changed file is a docs file, as
-  "Selection" defines it, passes the check with a message saying so: the
-  doc was wrong and the code was right, so no test can show the bug. The
-  label is read when the run's selection job runs, so a relabel takes effect
-  at the next push or a whole-run rerun; rerunning only the failed job keeps
-  the old reading.
+  at the red commit on Linux x86_64 and macOS arm64. Each leg must build
+  the red commit. The check passes only when at least one test fails on at
+  least one leg; a test may pass or have no match on the other. Every test
+  the pull request adds or changes must pass at its head on both platforms.
+  The two red-test legs report nextest's status class to a collector, which
+  keeps one required check named `Bug fix fails at the red commit`
+  (`docs/workflow.md`, "The pull request"). A pull request whose every
+  changed file is a docs file, as "Selection" defines it, passes the check
+  with a message saying so: the doc was wrong and the code was right, so no
+  test can show the bug. The label is read when the run's selection job
+  runs, so a relabel takes effect at the next push or a whole-run rerun;
+  rerunning only the failed job keeps the old reading.
 - each profiling feature built once, without running it:
   `cargo check -p main --bins --tests --features alloc-stats` and
   `cargo check -p main --bins --tests --features dhat-heap`, so neither
