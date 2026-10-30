@@ -1,6 +1,6 @@
 use super::*;
 use config::{Config, ProjectKey, Sources};
-use contract::ErrorCode;
+use contract::{ErrorCode, HubEventKind, HubLine};
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, clock::FakeClock};
 use serde_json::json;
@@ -9,6 +9,149 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+fn spawn_authenticate(client: UnixStream, idle: Duration) -> mpsc::Receiver<Result<(), Error>> {
+    let (done, done_rx) = mpsc::channel();
+    let clock = FakeClock::new();
+    thread::spawn(move || {
+        done.send(authenticate(
+            &client,
+            "box",
+            &Secret::new("device-token".into()),
+            clock.as_ref(),
+            idle,
+        ))
+        .unwrap();
+    });
+    done_rx
+}
+
+fn authenticate_after_replies(replies: &[serde_json::Value]) -> Result<(), Error> {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let done_rx = spawn_authenticate(client, Duration::from_secs(1));
+    for reply in replies {
+        writeln!(server, "{reply}").unwrap();
+    }
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "the authentication reply sequence")
+}
+
+#[test]
+fn authentication_answer_preserves_hub_line_kind_and_payload() {
+    let line: HubLine = serde_json::from_value(json!({
+        "kind": "future_kind",
+        "ts": 1,
+        "schema_version": 1,
+        "payload": {"command_id": "c_authenticate", "marker": "retained"},
+    }))
+    .unwrap();
+    let answer = AuthenticationAnswer::from(line);
+    let expected_payload = json!({
+        "command_id": "c_authenticate",
+        "marker": "retained",
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    assert_eq!(
+        (answer.kind, answer.payload),
+        (
+            HubEventKind::Unknown("future_kind".into()),
+            expected_payload
+        )
+    );
+}
+
+#[test]
+fn authentication_skips_unknown_and_hub_hello_before_refusal() {
+    let unknown = json!({
+        "ts": 1,
+        "schema_version": 1,
+        "kind": "future_kind",
+        "payload": {"command_id": "c_authenticate"},
+    });
+    // #3666 Part 2 R6: matching-ID unknown and known non-answer kinds are skipped.
+    let error = authenticate_after_replies(&[
+        unknown,
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "hub_hello",
+            "payload": {"command_id": "c_authenticate"},
+        }),
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "command_rejected",
+            "payload": {
+                "command_id": "c_authenticate",
+                "code": "unauthenticated",
+                "message": "skip probe: device-token was revoked",
+            },
+        }),
+    ])
+    .unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed);
+    let Error::Refused { hub, message } = &error else {
+        panic!("a matching command_rejected answer must refuse authentication")
+    };
+    assert_eq!(hub, "box");
+    assert_eq!(message, "skip probe: [redacted] was revoked");
+    assert!(!error.to_string().contains("device-token"));
+}
+
+#[test]
+fn authentication_skips_unknown_and_wrong_command_ack_before_acceptance() {
+    let result = authenticate_after_replies(&[
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "future_kind",
+            "payload": {"command_id": "c_authenticate"},
+        }),
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "command_accepted",
+            "payload": {"command_id": "another-command"},
+        }),
+        json!({
+            "ts": 1,
+            "schema_version": 1,
+            "kind": "command_accepted",
+            "payload": {"command_id": "c_authenticate"},
+        }),
+    ]);
+    result.unwrap();
+}
+
+#[test]
+fn authentication_answer_keeps_hub_line_validation() {
+    for line in [
+        b"{".as_slice(),
+        br#"{"ts":1,"schema_version":1,"payload":{}}"#,
+        br#"{"kind":"hub_hello","schema_version":1,"payload":{}}"#,
+        br#"{"kind":"hub_hello","ts":1,"payload":{}}"#,
+        br#"{"kind":"hub_hello","ts":1,"schema_version":1}"#,
+        br#"{"kind":1,"ts":1,"schema_version":1,"payload":{}}"#,
+        br#"{"kind":"hub_hello","ts":1,"schema_version":1,"payload":null}"#,
+        br#"{"kind":"hub_hello","ts":1,"schema_version":1,"payload":[]}"#,
+    ] {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let done_rx = spawn_authenticate(client, Duration::from_secs(1));
+        server.write_all(line).unwrap();
+        server.write_all(b"\n").unwrap();
+        let error = Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the malformed authentication answer")
+            .unwrap_err();
+        let Error::Hello { source, .. } = error else {
+            panic!("malformed answer must be an Error::Hello")
+        };
+        assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(source.to_string(), "invalid authentication answer");
+    }
+}
 
 #[test]
 fn authenticate_accepts_only_its_ack_and_keeps_the_wire_token_secret() {
@@ -80,20 +223,12 @@ fn authenticate_accepts_only_its_ack_and_keeps_the_wire_token_secret() {
 #[test]
 fn authentication_kernel_timeout_needs_no_fake_time_advance() {
     let (client, _silent_server) = UnixStream::pair().unwrap();
-    let (done, done_rx) = mpsc::channel();
-    let clock = FakeClock::new();
-    thread::spawn(move || {
-        done.send(authenticate(
-            &client,
-            "box",
-            &Secret::new("device-token".into()),
-            clock.as_ref(),
-            net::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
-                .unwrap()
-                .idle(),
-        ))
-        .unwrap();
-    });
+    let done_rx = spawn_authenticate(
+        client,
+        net::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
+            .unwrap()
+            .idle(),
+    );
     let error = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&done_rx, "authentication times out on a silent peer")
         .unwrap_err();
