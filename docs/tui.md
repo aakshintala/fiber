@@ -3246,7 +3246,6 @@ CPU and time to first frame. The design keeps to them this way:
 - **A frame redraws only the rows that changed.**
 - **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.
 
-Frame responsiveness evidence lands in the next checkin.
 
 ## Configuration
 
