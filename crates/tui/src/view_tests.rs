@@ -1,6 +1,7 @@
 //! Screen snapshots: the whole in-memory screen against stored files.
 
-use super::{conversation_rows, cursor, draw_row, focus_style, lift_hover, render, text};
+use super::conversation::{test_conversation_rows as conversation_rows, test_draw_row as draw_row};
+use super::{cursor, focus_style, lift_hover, render, text};
 use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -2680,7 +2681,7 @@ fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
     let label: String = (15..=42)
         .map(|x| buf[(x, row)].symbol().to_owned())
         .collect();
-    assert_eq!(label, super::NEW_BELOW);
+    assert_eq!(label, " ↓ New messages below · End ");
     for x in 15..=42 {
         assert_eq!(
             buf[(x, row)].fg,
