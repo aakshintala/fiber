@@ -451,6 +451,14 @@ changes the `shared-key:` the build cache steps carry (`ci-line-tables`; a
 `key:` input is ignored beside it), or the old builds restore as an exact
 match and every build recompiles the dependencies.
 
+## The journey suite
+
+After the backstop passes on `main`, and in the nightly before it publishes,
+the journey suite drives that commit's release binary through the paths a
+person walks (`docs/testing.md`, "Journeys"). A failure opens an issue, or
+comments on the open one. It never blocks a merge, and it is not part of the
+gate.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the exact Rust version, 1.99.1. Local builds and
