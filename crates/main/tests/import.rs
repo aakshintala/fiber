@@ -131,7 +131,11 @@ fn import_skips_skills_discovery_already_reads() {
     already_read_home(setup.root.path());
     let run = import(&setup, &["import", "claude-code"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let agents_skill = setup.root.path().join(".agents/skills/review/SKILL.md");
+    // Discovery logs the canonical path, which on macOS resolves the
+    // `/var` symlink to `/private/var`: canonicalize the fixture path
+    // before expecting it.
+    let agents_skill =
+        fs::canonicalize(setup.root.path().join(".agents/skills/review/SKILL.md")).unwrap();
     // docs/configuration.md promises the lines, not their order: the
     // import prints one line per imported and left-behind skill, and the
     // two left-behind lines may arrive in either order.
