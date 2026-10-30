@@ -124,6 +124,7 @@ impl Tool for LuaTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts,
         })
     }
@@ -214,6 +215,7 @@ impl Tool for ProcessTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts,
         })
     }
