@@ -598,3 +598,92 @@ fn more_text_at_the_total_copies_nothing() {
     // A row's own text still copies: the feature ran.
     assert!(app.home_text(Spot::Entry(key)).is_some());
 }
+
+#[test]
+fn page_recent_keeps_the_unscoped_path_with_the_link_down() {
+    // The scoped half: one row loaded of two held, so the last row pages
+    // its project while the link is up.
+    let mut scoped = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut scoped);
+    let fanout = answer_value(
+        &mut scoped,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    answer_value(
+        &mut scoped,
+        line_id(&fanout[0]),
+        json!({"sessions": [], "total": 2}),
+    );
+    let key = row_key(&scoped, "s_aaaaaaaaaaaaaaaa");
+    let Some(Effect::Send(while_up)) = scoped.page_recent(key) else {
+        panic!("the last row pages its project while up");
+    };
+    assert_eq!(while_up.len(), 1);
+    // The drop keeps the held total: the scoped page now sends nothing.
+    // With no link check on the scoped branch a page goes out.
+    scoped.disconnected();
+    assert_eq!(scoped.page_recent(key), None);
+    // The unscoped half: loaded rows meet the held total, so the next
+    // page stays unscoped past the unscoped cursor.
+    let mut unscoped = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut unscoped);
+    let fanout = answer_value(
+        &mut unscoped,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    answer_value(
+        &mut unscoped,
+        line_id(&fanout[0]),
+        json!({"sessions": [], "total": 1}),
+    );
+    let key = row_key(&unscoped, "s_aaaaaaaaaaaaaaaa");
+    // The drop keeps the unscoped cursor: the unscoped page still goes
+    // out with the link down. With a global offline guard this is `None`.
+    unscoped.disconnected();
+    let Some(Effect::Send(page)) = unscoped.page_recent(key) else {
+        panic!("the unscoped page still goes out while down");
+    };
+    assert_eq!(page.len(), 1);
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(page["command"], "recent");
+    assert!(page["args"].get("project").is_none());
+}
+
+#[test]
+fn scoped_first_needs_a_project_and_the_link() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    answer_value(
+        &mut app,
+        line_id(&fanout[0]),
+        json!({"sessions": [], "total": 1}),
+    );
+    // An empty project sends nothing while the link is up: with `&&`
+    // the empty-but-up ask reads as linked and a line goes out.
+    assert!(app.scoped_first("").is_empty());
+    // A named project sends nothing with the link down: with `&&` the
+    // named-but-down ask reads as linked and a line goes out. The
+    // request waits for the reconnect instead.
+    app.disconnected();
+    assert!(app.scoped_first("-w").is_empty());
+    // The reconnect refetches the project on home: the link-down
+    // behavior held the ask instead of sending it.
+    let lines = commands(app.on_line(hello()));
+    let scoped: Vec<Value> = lines
+        .into_iter()
+        .filter(|line| {
+            line.get("args")
+                .is_some_and(|args| args.get("project").is_some())
+        })
+        .collect();
+    let mut projects = fanout_projects(&scoped);
+    projects.sort_unstable();
+    assert_eq!(projects, ["-w"]);
+}
