@@ -118,17 +118,6 @@ pub(crate) struct Resuming {
     pub(crate) credential: Option<String>,
 }
 
-impl Resuming {
-    /// What `fiber ask --resume` resumes: the session and the credential
-    /// label to switch it to.
-    pub(crate) fn new(selector: String, credential: Option<String>) -> Self {
-        Self {
-            selector,
-            credential,
-        }
-    }
-}
-
 pub(crate) fn ask_resume(
     resuming: Resuming,
     overrides: Vec<String>,

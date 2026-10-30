@@ -23,8 +23,17 @@ pub(crate) fn startup_workspace() -> Result<PathBuf, Failure> {
 
 /// Home first, then the workspace, for paths that read both eagerly.
 pub(crate) fn startup() -> Result<(PathBuf, PathBuf), Failure> {
-    let home = startup_home()?;
-    let workspace = startup_workspace()?;
+    startup_with(config::fiber_home_from_env, std::env::current_dir)
+}
+
+/// `startup` over injected reads, so the precedence test pins the home
+/// error without touching the environment or the process directory.
+fn startup_with(
+    home: impl FnOnce() -> Result<PathBuf, config::ConfigError>,
+    workspace: impl FnOnce() -> io::Result<PathBuf>,
+) -> Result<(PathBuf, PathBuf), Failure> {
+    let home = startup_home_with(home)?;
+    let workspace = startup_workspace_with(workspace)?;
     Ok((home, workspace))
 }
 
@@ -48,7 +57,7 @@ fn startup_workspace_with(
 mod tests {
     use contract::ErrorCode;
 
-    use super::{startup_home_with, startup_workspace_with};
+    use super::{startup_home_with, startup_with, startup_workspace_with};
 
     #[test]
     fn home_failure_keeps_its_code_and_sentence() {
@@ -64,5 +73,16 @@ mod tests {
         let failure = startup_workspace_with(|| Err(std::io::Error::other("gone"))).unwrap_err();
         assert_eq!(failure.code, ErrorCode::IoFailed);
         assert_eq!(failure.message, "the current directory: gone");
+    }
+
+    #[test]
+    fn home_failure_wins_and_the_workspace_is_not_read() {
+        let failure = startup_with(
+            || Err(config::ConfigError::FiberHome("FIBER_HOME is empty.")),
+            || panic!("a home failure leaves the workspace unread"),
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, ErrorCode::Usage);
+        assert_eq!(failure.message, "FIBER_HOME is empty.");
     }
 }

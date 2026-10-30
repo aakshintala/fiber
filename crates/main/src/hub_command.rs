@@ -47,7 +47,16 @@ pub(crate) fn run(
                 ::cli::hub_token_revoke(&device, connect)
             })
         }
-        cli::HubCommands::Serve { installed } => serve(exe, mode(installed)),
+        // `--installed` is the login service's hub; without it a client
+        // started the hub.
+        cli::HubCommands::Serve { installed } => serve(
+            exe,
+            if installed {
+                hub::Mode::Installed
+            } else {
+                hub::Mode::OnDemand
+            },
+        ),
     }
 }
 
@@ -62,16 +71,6 @@ fn client_command(
         Err(error) => return fail(error),
     };
     run(&mut || crate::connect_hub(&home, &target, exe, clock))
-}
-
-/// `--installed` is the login service's hub; without it a client started
-/// the hub.
-fn mode(installed: bool) -> hub::Mode {
-    if installed {
-        hub::Mode::Installed
-    } else {
-        hub::Mode::OnDemand
-    }
 }
 
 fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {

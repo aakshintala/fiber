@@ -183,8 +183,10 @@ fn run() -> i32 {
             match cli::ask_parts(&args.prompt) {
                 Ok((prompt, dash)) => ask(
                     per_run(args.model, args.overrides),
-                    args.resume
-                        .map(|id| resume::Resuming::new(id, args.credential)),
+                    args.resume.map(|id| resume::Resuming {
+                        selector: id,
+                        credential: args.credential,
+                    }),
                     args.worktree,
                     prompt,
                     dash,
@@ -706,7 +708,21 @@ fn ask(
     };
     match resume {
         Some(resuming) => resume::ask_resume(resuming, overrides, prompt, clock, &signals, fiber),
-        None => ask_new(overrides, prompt, worktree, clock, &signals, fiber),
+        None => session_command::new_session(
+            SessionId(doors::mint("s_")),
+            overrides,
+            Some(prompt),
+            true,
+            worktree,
+            None,
+            clock,
+            &signals,
+            fiber,
+            None,
+            None,
+            false,
+            Vec::new(),
+        ),
     }
 }
 
@@ -778,32 +794,6 @@ fn feedback(
         }
         Err(error) => fail(error.into()),
     }
-}
-
-/// `fiber ask` on a new session.
-fn ask_new(
-    overrides: Vec<String>,
-    prompt: String,
-    worktree: bool,
-    clock: Arc<dyn contract::clock::Clock>,
-    signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
-) -> i32 {
-    session_command::new_session(
-        SessionId(doors::mint("s_")),
-        overrides,
-        Some(prompt),
-        true,
-        worktree,
-        None,
-        clock,
-        signals,
-        fiber,
-        None,
-        None,
-        false,
-        Vec::new(),
-    )
 }
 
 /// What an `ask` loop judges with: the workspace the session keeps, the
@@ -1036,16 +1026,6 @@ fn run_turn(
         }
         Err(_) => 1,
     }
-}
-
-/// Stops the servers, then fails before any session line.
-/// Stops the servers and prints a startup failure. Only
-/// `retry_policy_tests` still fails this way; new sessions report through
-/// `session_command::report`, after asking about a recorded signal.
-#[cfg(test)]
-fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
-    servers.servers.stop();
-    ask_failed(e)
 }
 
 /// The terminal's shared reads with its guards: a plain cancel for a
