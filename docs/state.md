@@ -420,13 +420,15 @@ What is recorded:
   worktree writes none. A failed creation or recreation, a recreation that
   finds the path present, and `fiber sessions prune` write none. Their
   `data` holds only `op` and `ms`.
-  Installed for the terminal are `tui.first_render`, `tui.log_read`,
-  `tui.transcript`, `tui.frame`, `tui.attach_summary`, `tui.tail_wait`,
-  `tui.preview_fold` and `tui.tail_install`.
-  `tui.first_render` covers entry through
-  the first draw; a setup failure before the draw discards it and writes
-  none. `tui.log_read` covers the first attach's first fetched page, the
-  first `page_in` `hub.fetch` attempt, to completion whatever its outcome,
+  Installed for the terminal are `tui.extensions`, `tui.first_render`,
+  `tui.log_read`, `tui.transcript`, `tui.frame`, `tui.attach_summary`,
+  `tui.tail_wait`, `tui.preview_fold` and `tui.tail_install`.
+  `tui.extensions` covers extension loading before the first draw; when a
+  loader exists it writes once per process, and without one it writes none
+  (`docs/tui.md`, "How a TUI extension runs"). `tui.first_render` covers
+  entry through the first draw; a setup failure before the draw discards it
+  and writes none. `tui.log_read` covers the first attach's first fetched
+  page, the first `page_in` `hub.fetch` attempt, to completion whatever its outcome,
   and `tui.transcript` covers the first successful `app.load` folding that
   page; each is written at most once per process, a failed fetch leaves the
   transcript latch unset, and an attach with no stream writes neither.
