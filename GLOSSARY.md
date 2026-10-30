@@ -117,6 +117,11 @@ monitor or a delegate. It has its own id and its own ending, and it survives
 cancellation of the turn that started it.
 _Avoid_: background session, task, process
 
+### Journey
+
+A binary-level test that walks one flow a person takes, end to end. See
+`docs/testing.md`, "Journeys".
+
 ### Delegate
 
 An agent session a session starts to do part of its work, running Fiber or
