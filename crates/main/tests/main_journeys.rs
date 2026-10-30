@@ -206,3 +206,172 @@ fn setup_from_installed_home_with_provider_pick_then_first_turn() {
         }),
     );
 }
+
+/// The nightly the journey's stub feed serves, above the release
+/// binary's `0.0.0`.
+const JOURNEY_NIGHTLY: &str = "0.0.1-nightly.20240101";
+
+/// The bytes the stub binary archive holds: the staged `fiber` binary.
+const JOURNEY_MARKER: &[u8] = b"binary-from-the-journey-release";
+
+/// Fiber's own repository as a local one, tagged only with the nightly,
+/// and the git config key that makes `https://github.com/` mean the
+/// directory holding it: the `update.rs` `Github` pattern, file-local.
+/// No stable tag exists, so only the nightly path can satisfy the run.
+struct JourneyGithub {
+    key: String,
+}
+
+impl JourneyGithub {
+    fn new(setup: &Setup) -> Self {
+        let base = setup.root.path().join("gh");
+        let repo = base.join("aakshintala/fiber");
+        std::fs::create_dir_all(repo.join("providers/anthropic")).unwrap();
+        std::fs::write(repo.join("fiber.md"), "fiber").unwrap();
+        std::fs::write(
+            repo.join("providers/anthropic/extension.json"),
+            json!({
+                "name": "github.com/aakshintala/fiber/providers/anthropic",
+                "version": JOURNEY_NIGHTLY,
+                "fiber": "0.0.0",
+                "api": 1,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fakes::git::git(&repo, &["init", "--quiet"]);
+        fakes::git::git(&repo, &["add", "."]);
+        fakes::git::git(&repo, &["commit", "--quiet", "-m", "fiber"]);
+        fakes::git::git(&repo, &["tag", &format!("v{JOURNEY_NIGHTLY}")]);
+        Self {
+            key: format!("url.file://{}/.insteadOf", base.display()),
+        }
+    }
+}
+
+/// The stub nightly feed: the nightly list naming only the nightly, its
+/// tag page, and the nightly's binary, docs and extensions archives with
+/// checksums. It serves no stable tag or release asset.
+fn serve_nightly_feed() -> ProviderServer {
+    use fakes::ustar::{archive, gzip, header, sha256};
+    let binary_archive = format!(
+        "fiber-{}.tar.gz",
+        extensions::release_triple(env!("FIBER_TARGET")).unwrap()
+    );
+    let binary = gzip(&archive(&[(
+        header("fiber", b'0', JOURNEY_MARKER.len() as u64, 0o644, ""),
+        JOURNEY_MARKER,
+    )]));
+    let docs = gzip(&archive(&[(
+        header("README.md", b'0', 4, 0o644, ""),
+        b"docs".as_slice(),
+    )]));
+    let manifest = json!({
+        "name": "github.com/aakshintala/fiber/providers/anthropic",
+        "version": JOURNEY_NIGHTLY,
+        "fiber": JOURNEY_NIGHTLY,
+        "api": 1,
+    })
+    .to_string();
+    let extensions = gzip(&archive(&[(
+        header(
+            "anthropic/extension.json",
+            b'0',
+            manifest.len() as u64,
+            0o644,
+            "",
+        ),
+        manifest.as_bytes(),
+    )]));
+    let ok = |body: Vec<u8>| fakes::Response::status(200, body);
+    let mut routes: Vec<(String, fakes::Response)> = Vec::new();
+    for (name, bytes) in [
+        (binary_archive, binary),
+        ("fiber-docs.tar.gz".to_owned(), docs),
+        ("fiber-extensions.tar.gz".to_owned(), extensions),
+    ] {
+        routes.push((
+            format!("/releases/download/v{JOURNEY_NIGHTLY}/{name}"),
+            ok(bytes.clone()),
+        ));
+        routes.push((
+            format!("/releases/download/v{JOURNEY_NIGHTLY}/{name}.sha256"),
+            ok(sha256(&bytes).into_bytes()),
+        ));
+    }
+    routes.push((
+        format!("/releases/tag/v{JOURNEY_NIGHTLY}"),
+        fakes::Response::status(200, ""),
+    ));
+    routes.push((
+        "/releases".to_owned(),
+        fakes::Response::status(
+            200,
+            json!([{ "tag_name": format!("v{JOURNEY_NIGHTLY}"), "prerelease": true, "draft": false }])
+                .to_string(),
+        ),
+    ));
+    ProviderServer::start_routed(
+        routes
+            .iter()
+            .map(|(path, response)| (path.as_str(), response.clone())),
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap()
+}
+
+/// `fiber update --channel nightly` against the stub feed: the
+/// person-visible approval prompt and update announcement on the release
+/// binary's terminal. Evidence for #3617, whose parent rejects the
+/// nightly before the approval prompt is ever flushed: this journey
+/// fails at that approval-prompt wait.
+#[test]
+fn update_to_nightly_from_local_stub_feed() {
+    run_journey(
+        "update_to_nightly_from_local_stub_feed",
+        // As in the setup journey: the body borrows the fake server, so
+        // the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let server = serve_nightly_feed();
+            let github = JourneyGithub::new(&setup);
+            // A copy of the release binary the update renames over, so
+            // the shared binary stays untouched.
+            let copy = setup.root.path().join("fiber-copy");
+            std::fs::copy(journey_bin(), &copy).unwrap();
+            let base_url = server.url();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &copy,
+                &[
+                    "update",
+                    "--channel",
+                    "nightly",
+                    "--base-url",
+                    base_url.as_str(),
+                ],
+                &[
+                    ("GIT_CONFIG_COUNT", "1"),
+                    ("GIT_CONFIG_KEY_0", github.key.as_str()),
+                    ("GIT_CONFIG_VALUE_0", "https://github.com/"),
+                ],
+            );
+            let at = run.wait_bytes(
+                0,
+                b"Go ahead? [y/N/s to show the full source] ",
+                "the update approval prompt",
+            );
+            run.wait_screen("the update approval", |grid| shows(grid, "Go ahead?"));
+            run.write(b"y\n");
+            run.wait_bytes(at, b"fiber: updated ", "the nightly update announcement");
+            run.wait_screen("the nightly update announcement", |grid| {
+                shows(grid, "fiber: updated")
+            });
+            let exited = run.wait();
+            assert!(exited.status.success(), "nightly update exits 0");
+            assert_eq!(std::fs::read(&copy).unwrap(), JOURNEY_MARKER);
+        }),
+    );
+}
