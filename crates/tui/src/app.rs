@@ -103,7 +103,7 @@ pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
 pub(crate) use select::SurfaceId;
 pub(crate) use select::{NotedSurface, SpanRow};
 pub(crate) use session_views::SessionView;
-pub(crate) use top::Surface;
+pub(crate) use top::{Frame, Surface};
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
