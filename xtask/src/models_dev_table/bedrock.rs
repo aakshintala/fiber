@@ -48,7 +48,7 @@ const GPT_OSS: &str = r#"{"compat":{"reasoning_field":"reasoning_effort"}}"#;
 pub(super) const BEDROCK: Package = Package {
     path: "providers/bedrock/providers/bedrock.json",
     source: "amazon-bedrock",
-    provider: r#"{"credential_label":{"credential_paths":[{"env":"AWS_SHARED_CREDENTIALS_FILE","path":"~/.aws/credentials"},{"path":"~/.aws/sso/cache"},{"path":"~/.aws/cli/cache"}],"default":"AWS_BEARER_TOKEN_BEDROCK, AWS keys in the environment, or the AWS CLI's default chain","names":"AWS profile"},"name":"bedrock","placeholders":{"region":{"env":"AWS_REGION"}},"reviewer_model":"global.anthropic.claude-sonnet-5-5"}"#,
+    provider: r#"{"credential_label":{"credential_env":["AWS_BEARER_TOKEN_BEDROCK","AWS_ACCESS_KEY_ID"],"credential_paths":[{"env":"AWS_SHARED_CREDENTIALS_FILE","path":"~/.aws/credentials"},{"path":"~/.aws/sso/cache"},{"path":"~/.aws/cli/cache"}],"default":"AWS_BEARER_TOKEN_BEDROCK, AWS keys in the environment, or the AWS CLI's default chain","names":"AWS profile"},"name":"bedrock","placeholders":{"region":{"env":"AWS_REGION"}},"reviewer_model":"global.anthropic.claude-sonnet-5-5"}"#,
     protocol: ProtocolRule::Fixed("bedrock-converse"),
     base_url: "https://bedrock-runtime.{region}.amazonaws.com",
     drop_deprecated: true,

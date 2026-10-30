@@ -260,12 +260,18 @@ struct RawCredentialFrom {
     login: Option<Login>,
     #[serde(default)]
     credential_label: Option<CredentialLabelSources>,
+    // This field belongs inside credential_label, never beside it.
+    #[serde(default, deserialize_with = "present")]
+    credential_env: Option<serde_json::Value>,
 }
 
 impl TryFrom<RawCredentialFrom> for CredentialFrom {
     type Error = &'static str;
 
     fn try_from(raw: RawCredentialFrom) -> Result<Self, Self::Error> {
+        if raw.credential_env.is_some() {
+            return Err("`credential_env` belongs inside `credential_label`");
+        }
         match (raw.credential_label, raw.credential, raw.login) {
             (Some(sources), None, None) => Ok(Self::Function(sources)),
             (Some(_), _, _) => {
@@ -285,6 +291,10 @@ pub struct CredentialLabelSources {
     pub names: String,
     /// What the `default` label reads, such as the environment.
     pub default: String,
+    /// Environment variable names whose nonempty values prove credential
+    /// presence without calling `credential()`.
+    #[serde(default)]
+    pub credential_env: Vec<String>,
     /// The paths its `credential()` draws secrets from, which the
     /// credential deny protects (`docs/permissions.md`, "Credentials").
     #[serde(default)]

@@ -131,6 +131,13 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
+    config::store_credential(
+        &home,
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     // Discovery, the token, the turn's step, then its refresh.
     let server = ProviderServer::start_with_fallback(
         [listing_and_token(), listing_and_token(), hello()],

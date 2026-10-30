@@ -118,7 +118,7 @@ groups, then the flags and examples.
 | `sessions delete [--hub <name>] [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
 | `sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
-| `models [<search>] [--json]` | Lists the models the installed providers serve, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. A model whose per-account setting has no value is omitted from the list; one grouped notice on stderr counts the omitted models ("A per-account host" in `docs/model-routing.md`). |
+| `models [<search>] [--json]` | Lists models only from installed providers with credential presence, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. A model whose per-account setting has no value is omitted from the list; one grouped notice on stderr counts the omitted models ("A per-account host" in `docs/model-routing.md`). |
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
@@ -126,10 +126,16 @@ outside one it is every project. With `--hub`, `continue`, `sessions delete`
 and `sessions prune` never read this machine's directory or logs: their scope
 is every project on that hub. `sessions --all` lists every project.
 
-`models` prints each provider's cached model list at once, and runs a
-provider's `models()` only when it has no cached copy. A list older than
+`models` filters cached lists by credential presence on every read
+(`docs/model-routing.md`, "Credentials"). Installed providers without presence
+show no models, even with a cache. An installed but logged-out provider is
+not reported as uninstalled. Presence checks never run credential commands.
+
+For a provider with presence, `models` prints its cached model list at once,
+and runs its `models()` only when it has no cached copy. A list older than
 `model_lists.refresh_after` refreshes in the background for the next run
-(`docs/model-routing.md`, "Model discovery").
+(`docs/model-routing.md`, "Model discovery"). Providers without presence never
+refresh; logout hides their models without deleting their caches.
 
 `fiber ask` has no `--continue`. Several callers run `fiber ask` at once, so
 "the most recent session" is a race.
@@ -151,8 +157,8 @@ credential a session uses"). A new session takes its label from
 | `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). Takes `--channel stable|nightly`, or `FIBER_CHANNEL` when the flag is absent: the flag beats the environment, and an empty setting means stable. `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
 | `setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code \| codex>]... [--completions <shell> \| --no-completions] [--hub \| --no-hub]` | Asks the questions a new install needs, and applies each answer with the command that already does it (below). `install.sh` runs it last; a person runs it again at any time. |
 | `approve [--yes]` | Run in a repository: shows every extension, hook and MCP server the repository declares, as one offer would, and approves them for this person (`docs/extensions.md`, "Code a repository ships"). `--yes` approves without asking, for a script or a machine image. It prints each approval on stderr. |
-| `login [<name>] [--as <label>] [--device]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. `--device` applies only to a provider that logs in by browser, and logs in with a device code instead of the browser. A name that is neither an installed provider, nor a provider the current workspace's approved repository set registers, nor a declared secret is a usage error that names the providers and the declared secrets. With no name, a terminal offers the providers, installed and approved repository ones alike, and the declared secrets; without a terminal, it is a usage error. |
-| `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
+| `login [<name>] [--as <label>] [--device]` | Stores a provider's key under a credential label, switching it on (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. `--device` applies only to a provider that logs in by browser, and logs in with a device code instead of the browser. A name that is neither an installed provider, nor a provider the current workspace's approved repository set registers, nor a declared secret is a usage error that names the providers and the declared secrets. With no name, a terminal offers the providers, installed and approved repository ones alike, and the declared secrets; without a terminal, it is a usage error. |
+| `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. Removing its last label switches it off unless another source still supplies credential presence; the extension and model cache remain installed. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `import <claude-code \| codex>` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
 | `stop [--hub <name>]` | Shuts down every running session, then the hub. It waits for the sockets to close, then prints what it stopped. With nothing running it prints `Nothing running.`. With `--hub`, it stops the sessions and the hub process: a login service on that machine may start the hub again, and the output does not say so. |
