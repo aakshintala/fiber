@@ -1371,6 +1371,81 @@ fn flake_classify_files_two_tests_of_one_binary_once() {
 }
 
 #[test]
+fn flake_classify_keys_unit_flakes_by_file() {
+    // A unit-test binary yields one record per test file, while an
+    // integration binary and a unit test with no `*_tests` module keep
+    // the binary title. File-name byte order reads the arm list first,
+    // so its occurrence wins the dedupe.
+    let dir = TempDir::new("xtask-flake-classify-unit-key");
+    dir.write(
+        "flaky/flaky-tests-linux.txt",
+        "fakes process_group_tests::reaps_children\tthread reaps_children panicked at crates/fakes/tests/process_group.rs:10\nfakes tests::helper\tthread helper panicked at crates/fakes/tests/helper.rs:5\nmain::hub_exit_window helper_tests::case\tthread case panicked at crates/main/tests/hub_exit_window.rs:7\n",
+    );
+    dir.write(
+        "flaky/flaky-tests-arm.txt",
+        "fakes signal_tests::delivers\tthread delivers panicked at crates/fakes/tests/signal.rs:3\n",
+    );
+    let flaky = dir.path().join("flaky");
+    let (code, out) = xtask(
+        &dir,
+        &[
+            "flake-classify",
+            "--flaky-dir",
+            flaky.to_str().unwrap(),
+            "--event",
+            "push",
+            "--tested-commit",
+            "1111111111111111111111111111111111111111",
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    let records: Vec<serde_json::Value> = out
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // title files or comments once; a repeat is skipped".
+    assert_eq!(records.len(), 4, "{out}");
+    let by_title = |title: &str| {
+        records
+            .iter()
+            .find(|record| record["title"] == title)
+            .unwrap_or_else(|| panic!("no record titled {title}: {out}"))
+    };
+    let process_group = by_title("Flaky tests: fakes process_group");
+    assert_eq!(process_group["action"], "lookup");
+    assert_eq!(process_group["runner"], "linux");
+    assert_eq!(
+        process_group["name"],
+        "fakes process_group_tests::reaps_children"
+    );
+    assert_eq!(
+        process_group["detail"],
+        "thread reaps_children panicked at crates/fakes/tests/process_group.rs:10"
+    );
+    assert_eq!(
+        process_group["tested"],
+        "tested 1111111111111111111111111111111111111111"
+    );
+    let signal = by_title("Flaky tests: fakes signal");
+    assert_eq!(signal["action"], "lookup");
+    assert_eq!(signal["runner"], "arm");
+    let fallback = by_title("Flaky tests: fakes");
+    assert_eq!(fallback["action"], "lookup");
+    assert_eq!(fallback["name"], "fakes tests::helper");
+    assert_eq!(fallback["runner"], "linux");
+    let integration = by_title("Flaky tests: main::hub_exit_window");
+    assert_eq!(integration["action"], "lookup");
+    assert_eq!(
+        integration["name"],
+        "main::hub_exit_window helper_tests::case"
+    );
+    assert_eq!(integration["runner"], "linux");
+}
+
+#[test]
 fn flake_classify_absent_compare_files_are_an_empty_list() {
     // No --compare-files flag: a pull request run with the file only in
     // the PR list is PR-owned, never stale.
