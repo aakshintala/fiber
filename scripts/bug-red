@@ -69,7 +69,10 @@ report_status() {
     printf 'status=%s\n' "$1" >>"$GITHUB_OUTPUT"
   fi
 }
-[ "$#" -ge 1 ] && [ "$#" -le 2 ] || { echo "usage: scripts/bug-red [--report] BASE [HEAD]" >&2; exit 2; }
+case "$#" in
+  1 | 2) ;;
+  *) echo "usage: scripts/bug-red [--report] BASE [HEAD]" >&2; exit 2 ;;
+esac
 cd "$(git rev-parse --show-toplevel)"
 
 base=$1

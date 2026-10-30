@@ -55,6 +55,14 @@ base=$(git -C "$repo" rev-parse HEAD~2)
 cd "$repo"
 head=$(git rev-parse HEAD)
 rc=0
+"$bug_red" >"$tmp/out-args-none.txt" 2>&1 || rc=$?
+[ "$rc" -eq 2 ] || { cat "$tmp/out-args-none.txt" >&2; fail "no arguments exited $rc, want 2"; }
+grep -Fq "usage: scripts/bug-red" "$tmp/out-args-none.txt" || { cat "$tmp/out-args-none.txt" >&2; fail "no arguments misses usage"; }
+rc=0
+"$bug_red" "$base" "$head" extra >"$tmp/out-args-extra.txt" 2>&1 || rc=$?
+[ "$rc" -eq 2 ] || { cat "$tmp/out-args-extra.txt" >&2; fail "too many arguments exited $rc, want 2"; }
+grep -Fq "usage: scripts/bug-red" "$tmp/out-args-extra.txt" || { cat "$tmp/out-args-extra.txt" >&2; fail "too many arguments misses usage"; }
+rc=0
 "$bug_red" "$base" "$head" >"$tmp/out1.txt" 2>&1 || rc=$?
 cd "$top"
 [ "$rc" -eq 0 ] || { cat "$tmp/out1.txt" >&2; fail "later-commit case exited $rc, want 0"; }
