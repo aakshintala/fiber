@@ -14,6 +14,7 @@ ignore.workspace = true
 pulldown-cmark.workspace = true
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 rustix.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true
 similar.workspace = true
