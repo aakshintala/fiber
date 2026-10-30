@@ -250,7 +250,7 @@ fn scoped_provider_data_is_available_in_b_despite_the_packages_global_switch() {
             assert_eq!(run_b.code, Some(0), "{}", run_b.stderr);
             assert_eq!(run_b.kinds(), HELLO_KINDS);
             assert!(provider.requests().len() > request_count);
-            let zen = ask(&setup, &b, "opencode-zen/muse-spark-1.3-contributor");
+            let zen = ask(&setup, &b, "opencode-zen/claude-haiku-4-5");
             assert_eq!(zen.code, Some(1));
             assert_eq!(zen.kinds(), ["fiber_exited"]);
             assert_eq!(
@@ -264,14 +264,14 @@ fn scoped_provider_data_is_available_in_b_despite_the_packages_global_switch() {
                 .lines()
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
-            let names: Vec<&str> = rows
+            let model_names: Vec<&str> = rows
                 .iter()
                 .map(|row| row["model"].as_str().unwrap())
                 .collect();
-            assert!(names.contains(&"fake/m"));
-            assert!(names.contains(&"opencode-go/muse-spark-1.3-contributor"));
+            assert!(model_names.contains(&"fake/m"));
+            assert!(model_names.contains(&"opencode-go/muse-spark-1.3-contributor"));
             assert!(
-                names
+                model_names
                     .iter()
                     .all(|name| name.starts_with("fake/") || name.starts_with("opencode-go/"))
             );
