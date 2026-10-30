@@ -1171,7 +1171,7 @@ fn a_refused_rewind_keeps_the_old_sessions_kept_level_for_the_retry() {
     // The refusal keeps the rewound session's kept level and the
     // untouched one, so the redirect retries once through the kept level:
     // both sides of the kept-level check, plus the retry.
-    // `docs/invocation.md:1184`, "What the hub speaks" (#3565): the hub retries the same child id once when the old process exits.
+    // `docs/invocation.md:1179`, "What the hub speaks" (#3565): the hub retries the same child id once when the old process exits.
     assert_eq!(
         starter.rewound().len(),
         2,
@@ -1190,8 +1190,8 @@ fn a_refused_rewind_keeps_the_old_sessions_kept_level_for_the_retry() {
     );
 }
 
-/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, including commands it re-routes, and the acknowledgements come back in that order — so the re-routed acknowledgement forwards before the retiring relay's refusal.
-/// `docs/invocation.md:1162`, "What the hub speaks": a retiring relay holds its later acknowledgements back until what it re-routed is answered.
+/// `docs/invocation.md:1106`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, including commands it re-routes, and the acknowledgements come back in that order — so the re-routed acknowledgement forwards before the retiring relay's refusal.
+/// `docs/invocation.md:1157`, "What the hub speaks": a retiring relay holds its later acknowledgements back until what it re-routed is answered.
 #[test]
 fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() {
     let temp = Temp::new();
@@ -2679,7 +2679,7 @@ impl Starter for RetryGate {
 }
 
 /// A moved child whose start fails retries exactly once across both
-/// old-exit callbacks (#3565, `docs/invocation.md:1184`): the relay-end `follow` and the feed's retry
+/// old-exit callbacks (#3565, `docs/invocation.md:1179`): the relay-end `follow` and the feed's retry
 /// share one decision under the child's start guard, so the second
 /// callback starts nothing even when the first retry fails. Both callback
 /// orders run, each with its own moved child, seeded log and hub: the
@@ -2815,7 +2815,7 @@ fn a_failed_moved_child_retries_once_across_both_old_exit_paths() {
         );
         first.join().unwrap();
         second.join().unwrap();
-        // `docs/invocation.md:1184`, "What the hub speaks": the hub retries the same child id once when the old process exits.
+        // `docs/invocation.md:1179`, "What the hub speaks": the hub retries the same child id once when the old process exits.
         assert_eq!(
             starter.rewound().len(),
             2,
@@ -2916,7 +2916,7 @@ impl Starter for FailOnceThenBind {
 /// per-child claim starts fresh. The winning retry is held inside the
 /// starter until the peer proves it reached the held guard, so the loser
 /// waits for the claimed start to finish before connecting instead of
-/// missing the bind (`docs/invocation.md:1184`, "What the hub speaks":
+/// missing the bind (`docs/invocation.md:1179`, "What the hub speaks":
 /// the hub retries the same child id once when the old process exits).
 #[test]
 fn a_failed_moved_child_retry_attaches_the_losing_callback() {
@@ -3050,7 +3050,7 @@ fn a_failed_moved_child_retry_attaches_the_losing_callback() {
 /// socket's EOF even when the feed never observes the old process exit
 /// (#3565): the retry does not wait for the feed's scan. With and without
 /// a saved subscription, the shared decision still makes the one retry;
-/// only attaching needs the kept level (`docs/invocation.md:1184`,
+/// only attaching needs the kept level (`docs/invocation.md:1179`,
 /// "What the hub speaks": the hub retries the same child id once when
 /// the old process exits).
 #[test]
@@ -3121,6 +3121,11 @@ fn a_failed_moved_child_retries_on_old_exit_before_the_feed_scan() {
 
 /// A failed old-exit retry stays consumed (#3565): no later old-exit
 /// callback starts the child again when it is not running.
+/// `docs/invocation.md:1179`, "What the hub speaks" (#3565): the relay-end
+/// follow and the feed callback share one claim, so together they make at most
+/// one attempt, even when that attempt fails.
+/// `docs/invocation.md:1154`, "What the hub speaks": a command the session is
+/// rewound or moved without answering is dropped, attaching nothing.
 #[test]
 fn a_failed_old_exit_retry_is_never_repeated() {
     let temp = Temp::new();

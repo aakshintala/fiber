@@ -721,15 +721,9 @@ after the session stopped reading is re-routed after the clean exit, as the
 relayed-command table says, and a direct client reads end of file.
 
 What the client receives for a command the session left unanswered depends
-only on how the session ended, as the tables under "What the hub speaks" say:
-a clean exit delivers it once to the resumed session, in the order the hub
-read it; a second clean exit without an answer, or a `closing` answer,
-rejects it `closing`; a crash rejects it `indeterminate` and it is never
-delivered again, so the client decides whether to send it again; a rewind or
-a move drops it without an answer; a client that disconnected drops it
-without an answer. An unanswered `Partial` write rejects the command
-`indeterminate`, however the session ends, and is never delivered again; an
-acknowledgement that consumes the in-flight write first is forwarded instead.
+only on how the session ended, as the tables under "What the hub speaks" say;
+an acknowledgement that consumes the in-flight write first is forwarded instead,
+and a late write result changes nothing.
 
 **A resume whose workspace is gone and cannot be made again is refused
 `io_failed`.** For a resume that needs a new session process, the hub checks
@@ -1145,11 +1139,12 @@ terminal states end it: `Answered` sends exactly one line, and `Dropped` sends n
 | Read | no relay is published and the session connects or resumes | Written | nothing yet |
 | Read or Queued | no relay is published and the open is refused | Answered | one `command_rejected` with the refusal's code |
 | Read or Writing | the write fails before the session could read a byte | Queued | nothing yet; delivered once to the resumed session |
-| Read, Queued or Writing | the write fails after the session may have read a byte; a whole JSON body without its line feed counts | Partial | one `command_rejected indeterminate`; never delivered again |
+| Read, Queued or Writing | the write fails after the session may have read a byte; a whole JSON body without its line feed counts | Partial | one `command_rejected indeterminate`; never delivered again, unless an acknowledgement consumed `Writing` first, which is forwarded instead and the late write result changes nothing |
 | Written after `close`, while the session still reads | the session ends | Rerouted | nothing yet; the resumed session ends it with one `closing` |
 | Written after the session stopped reading | the clean exit | Rerouted | delivered once to the resumed session, in read order |
 | Written or Writing | the session answers accepted, rejected, or `closing` while still closing | Answered | the acknowledgement; a `closing` answer here is never stranded, never `indeterminate` |
 | Read or Queued | the session's relay is live and starts the write | Writing | nothing yet |
+| Read, Queued or Writing | the session answers `closing` after the exited window: the hub confirms delivery | Written | nothing yet; the existing `Written -> Rerouted` claim below then hands the command once to the resumed session, suppressing the old answer |
 | Written | the session answers `closing` after the exited window | Rerouted | nothing yet; delivered once to the resumed session |
 | Written | the session answers `closing` after it already rerouted once | Answered | the `closing` rejection |
 | Written | the session answers `indeterminate` | Answered | the `indeterminate` rejection; never replayed |

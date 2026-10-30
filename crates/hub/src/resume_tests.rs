@@ -3574,7 +3574,7 @@ fn a_malformed_full_subscribe_to_an_exited_delegate_is_refused() {
 }
 
 /// `docs/invocation.md:710`, "Lifecycle": a `full` subscribe naming a delegate whose run has finished replays that run's log instead of opening the session: `command_accepted` carries `last_seq`, then the fold follows, with no live tail after it.
-/// `docs/invocation.md:1162`, "What the hub speaks": the replayed acknowledgement releases the queue, after the handover ahead is answered when exiting.
+/// `docs/invocation.md:1157`, "What the hub speaks": the replayed acknowledgement releases the queue, after the handover ahead is answered when exiting.
 #[test]
 fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queue() {
     // The `Reroute` arm routes with `from` and `exited` set: the replay
@@ -3801,7 +3801,7 @@ fn a_zero_byte_command_write_is_retried_after_a_clean_exit() {
     }));
     client.send("c_2", "reply");
     assert_eq!(client.acknowledged("the retried command's answer"), "c_2");
-    // docs/invocation.md:728 promises a command is delivered once.
+    // docs/invocation.md:1148 promises a command is delivered once.
     assert_eq!(
         received(&starter)
             .iter()
@@ -3890,7 +3890,7 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
     // Two lines arrived on the session, the subscribe and the torn
     // fragment: the bytes arrived once and were never delivered again.
     // Raw lines, not parsed ones: a mid-body fragment parses to nothing.
-    // docs/invocation.md:728 promises a command is delivered once.
+    // docs/invocation.md:1148 promises a command is delivered once.
     assert_eq!(
         starter.received().len(),
         2,

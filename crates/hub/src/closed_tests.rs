@@ -566,6 +566,13 @@ fn a_log_ending_moved_keeps_the_level() {
     drop(bound);
 }
 
+/// `docs/invocation.md:1147`, "What the hub speaks": a post-exit `closing`
+/// confirms `Written` from `Read`, `Queued` or `Writing`.
+/// `docs/invocation.md:1148`, "What the hub speaks": that `Written` then claims
+/// the one `Rerouted`, delivered once to the resumed session.
+/// `docs/invocation.md:1196`: a clean exit sends no `stream_closed`.
+/// `docs/invocation.md:467`, "What each command does": the resumed session is
+/// subscribed at the level the connection last held, so the kept level survives.
 #[test]
 fn a_relay_that_saw_the_exited_window_sends_no_stream_closed() {
     let fixture = Fixture::new("cs5");
