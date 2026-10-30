@@ -1,6 +1,6 @@
 use super::*;
 use config::{Config, ProjectKey, Sources};
-use contract::ErrorCode;
+use contract::{ErrorCode, HubEventKind, HubLine};
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, clock::FakeClock};
 use serde_json::json;
@@ -9,6 +9,92 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+fn authentication_answer(kind: &str) -> AuthenticationAnswer {
+    let line: HubLine = serde_json::from_value(json!({
+        "kind": kind,
+        "ts": 1,
+        "schema_version": 1,
+        "payload": {},
+    }))
+    .unwrap();
+    AuthenticationAnswer::from(line)
+}
+
+fn authentication_error_for_wire_line(line: &[u8]) -> Error {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let (done, done_rx) = mpsc::channel();
+    let clock = FakeClock::new();
+    thread::spawn(move || {
+        done.send(authenticate(
+            &client,
+            "box",
+            &Secret::new("device-token".into()),
+            clock.as_ref(),
+            Duration::from_secs(1),
+        ))
+        .unwrap();
+    });
+    server.write_all(line).unwrap();
+    server.write_all(b"\n").unwrap();
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&done_rx, "the malformed authentication answer")
+        .unwrap_err()
+}
+
+#[test]
+fn authentication_answer_enters_with_a_typed_kind_and_exact_unknown_text() {
+    for (name, expected) in [
+        ("hub_hello", HubEventKind::HubHello),
+        ("attention", HubEventKind::Attention),
+        ("device_changed", HubEventKind::DeviceChanged),
+        ("session_left", HubEventKind::SessionLeft),
+        ("stream_closed", HubEventKind::StreamClosed),
+        ("stream_reopened", HubEventKind::StreamReopened),
+        ("command_accepted", HubEventKind::CommandAccepted),
+        ("command_rejected", HubEventKind::CommandRejected),
+    ] {
+        let answer = authentication_answer(name);
+        assert_eq!(answer.kind, expected, "{name}");
+    }
+
+    for name in [
+        "future_kind",
+        "command_accepted2",
+        "",
+        " ",
+        "未知",
+        "futuré_kind",
+    ] {
+        let answer = authentication_answer(name);
+        assert_eq!(
+            answer.kind,
+            HubEventKind::Unknown(name.to_owned()),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn authentication_answer_keeps_hub_line_validation() {
+    for line in [
+        b"{".as_slice(),
+        br#"{"ts":1,"schema_version":1,"payload":{}}"#,
+        br#"{"kind":"hub_hello","schema_version":1,"payload":{}}"#,
+        br#"{"kind":"hub_hello","ts":1,"payload":{}}"#,
+        br#"{"kind":"hub_hello","ts":1,"schema_version":1}"#,
+        br#"{"kind":1,"ts":1,"schema_version":1,"payload":{}}"#,
+        br#"{"kind":"hub_hello","ts":1,"schema_version":1,"payload":null}"#,
+        br#"{"kind":"hub_hello","ts":1,"schema_version":1,"payload":[]}"#,
+    ] {
+        let error = authentication_error_for_wire_line(line);
+        let Error::Hello { source, .. } = error else {
+            panic!("malformed answer must be an Error::Hello")
+        };
+        assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(source.to_string(), "invalid authentication answer");
+    }
+}
 
 #[test]
 fn authenticate_accepts_only_its_ack_and_keeps_the_wire_token_secret() {
