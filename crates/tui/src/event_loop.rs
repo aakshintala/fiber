@@ -774,10 +774,6 @@ impl<B: Backend> Loop<B> {
     /// sends. Returns the exit code when the terminal quits, before any
     /// frame, as handling every input in `step` did.
     fn handle(&mut self, input: Input) -> Option<i32> {
-        if let Input::Bytes(bytes) = input {
-            let events = self.parser.feed(&bytes);
-            return self.handle_events(events);
-        }
         let result = self.handle_inner(input);
         let lines = self.app.settle_and_find_outgoing();
         if result.is_none() {
