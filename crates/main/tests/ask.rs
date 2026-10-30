@@ -716,6 +716,72 @@ fn a_missing_credential_fails_before_the_session() {
 }
 
 #[test]
+fn a_work_label_keeps_models_visible_but_never_substitutes_for_default() {
+    let setup = Setup::new_with_started_deadline();
+    let base = "http://127.0.0.1:1/v1";
+    let data = json!({"name":"acme","models":[{"id":"m1","protocol":"openai-responses","base_url":base,"context_window":100000}]});
+    inline_extension(
+        &setup,
+        "acme",
+        "fiber.provider('acme', {})",
+        base,
+        Some(&data),
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "work",
+        &config::Secret::new("work-key".into()),
+    )
+    .unwrap();
+    let models = setup.run_with_stdin(&["models", "--json"], None);
+    assert_eq!(models.code, Some(0));
+    assert_eq!(models.lines[0]["model"], "acme/m1");
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(run.stderr.contains("work"), "{}", run.stderr);
+}
+
+#[test]
+fn function_presence_precedes_callback_and_preserves_present_source_failure() {
+    let setup = Setup::new_with_started_deadline();
+    let path = setup.root.path().join("declared-key");
+    let marker = setup.root.path().join("callback-ran");
+    let base = "http://127.0.0.1:1/v1";
+    let data = json!({"name":"acme","models":[{"id":"m1","protocol":"openai-responses","base_url":base,"context_window":100000}],"credential_label":{"names":"profile","default":"file","credential_paths":[{"path":path}]}});
+    inline_extension(
+        &setup,
+        "acme",
+        &format!(
+            "fiber.provider('acme', {{credential={{timeout=1000,run=function() host.fs.write({:?}, 'called'); error('callback failed') end}}}})",
+            marker.display().to_string()
+        ),
+        base,
+        Some(&data),
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("ignored".into()),
+    )
+    .unwrap();
+    let absent = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_pre_session(&absent, 1, "credential_missing");
+    assert!(!marker.exists());
+    fs::write(&path, "").unwrap();
+    let present = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_pre_session(&present, 1, "credential_failed");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "called");
+    assert!(
+        present.last()["payload"]["error"]["provider"]["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("callback failed")
+    );
+}
+
+#[test]
 fn a_failing_credential_command_is_named_by_its_program_alone() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
@@ -2948,6 +3014,13 @@ fn only_model_request(server: &ProviderServer) -> Request {
 #[test]
 fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
     let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     // With no cache discovery runs synchronously once and no refresh
     // runs: one reply each for discovery, the token and the model request.
     let server = ProviderServer::start_with_fallback(
@@ -2999,6 +3072,13 @@ fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
 #[test]
 fn a_provider_whose_listing_fails_with_no_cache_is_listed_once() {
     let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let server = ProviderServer::start_routed(
         [
             (
@@ -3034,6 +3114,13 @@ fn a_provider_whose_listing_fails_with_no_cache_is_listed_once() {
 #[test]
 fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     // Answered by path: the background refresh races the session's own
     // requests, so no order of arrival is fixed. The listing path fails, so
     // a startup that fetched the list synchronously would fail the run: the
@@ -3098,6 +3185,13 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
 #[test]
 fn a_credential_that_errors_fails_before_any_session_line() {
     let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let server = ProviderServer::start([
         Response::status(
             200,
@@ -3415,6 +3509,13 @@ fn inline_extension(
 #[test]
 fn the_initial_model_loads_only_its_own_provider_file() {
     let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "lp",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let server = ProviderServer::start([hello()]).unwrap();
     let base_url = format!("{}/v1", server.url());
     let mut markers = Vec::new();
@@ -3444,6 +3545,13 @@ fn the_initial_model_loads_only_its_own_provider_file() {
 #[test]
 fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provider() {
     let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let server = ProviderServer::start([]).unwrap();
     let base_url = format!("{}/v1", server.url());
     inline_extension(
@@ -3473,6 +3581,13 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
 #[test]
 fn a_credential_error_at_startup_advises_fiber_login_when_the_provider_s_data_declares_login() {
     let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let server = ProviderServer::start([]).unwrap();
     let base_url = format!("{}/v1", server.url());
     let data = json!({"name": "acme", "login": "browser", "models": [{"id": "m1",
@@ -3498,11 +3613,8 @@ fn a_credential_error_at_startup_advises_fiber_login_when_the_provider_s_data_de
 }
 
 #[test]
-fn a_credential_label_without_credential_is_a_key_provider_whose_401_advises_fiber_login() {
-    // The data says `credential()` reads nothing stored, but the Lua
-    // registers none: the session reads the stored key, so `fiber login`
-    // is the fix, and the Lua's registration wins over the data
-    // (`docs/errors.md`, "The shape").
+fn a_credential_label_ignores_stored_origins_even_without_a_callback() {
+    // A function provider's stored key never proves presence.
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([Response::status(401, "{}")]).unwrap();
     let base_url = format!("{}/v1", server.url());
@@ -3526,32 +3638,8 @@ fn a_credential_label_without_credential_is_a_key_provider_whose_401_advises_fib
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
 
-    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
-    let error = &run.last()["payload"]["error"];
-    assert_eq!(error["code"], "authentication_failed");
-    assert_eq!(
-        error["message"],
-        "acme rejected the credential (HTTP 401). Check the key it is configured with, or log \
-         in again with `fiber login acme`."
-    );
-    assert_eq!(server.requests().len(), 1);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(server.requests().is_empty());
 }
 
 #[test]

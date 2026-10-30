@@ -194,13 +194,16 @@ fn ordinary_package_loads_only_in_a_and_repository_cannot_enable_it_in_b() {
 }
 
 #[test]
-fn scoped_provider_package_serves_a_but_neither_provider_is_available_in_b() {
+fn scoped_provider_data_is_available_in_b_despite_the_packages_global_switch() {
     fakes::within(
         "provider scoped session journey",
         Deadline::after(Duration::from_secs(40)),
         || {
             let setup = Setup::new();
-            let provider = support::package::opencode_go_ask_server(vec![hello_inline_completed()]);
+            let provider = support::package::opencode_go_ask_server(vec![
+                hello_inline_completed(),
+                hello_inline_completed(),
+            ]);
             let control = ProviderServer::start([hello_inline_completed()]).unwrap();
             setup.provider(&control);
             let a = setup.workspace();
@@ -243,19 +246,17 @@ fn scoped_provider_package_serves_a_but_neither_provider_is_available_in_b() {
             assert_eq!(run_a.kinds(), HELLO_KINDS);
             let request_count = provider.requests().len();
             assert!(request_count > 0);
-            for model in [
-                "opencode-go/muse-spark-1.3-contributor",
-                "opencode-zen/muse-spark-1.3-contributor",
-            ] {
-                let run_b = ask(&setup, &b, model);
-                assert_eq!(run_b.code, Some(1));
-                assert_eq!(run_b.kinds(), ["fiber_exited"]);
-                assert_eq!(
-                    run_b.first("fiber_exited")["payload"]["error"]["code"],
-                    "extension_missing"
-                );
-            }
-            assert_eq!(provider.requests().len(), request_count);
+            let run_b = ask(&setup, &b, "opencode-go/muse-spark-1.3-contributor");
+            assert_eq!(run_b.code, Some(0), "{}", run_b.stderr);
+            assert_eq!(run_b.kinds(), HELLO_KINDS);
+            assert!(provider.requests().len() > request_count);
+            let zen = ask(&setup, &b, "opencode-zen/muse-spark-1.3-contributor");
+            assert_eq!(zen.code, Some(1));
+            assert_eq!(zen.kinds(), ["fiber_exited"]);
+            assert_eq!(
+                zen.first("fiber_exited")["payload"]["error"]["code"],
+                "credential_missing"
+            );
             let catalogue = command(&setup, &b, &["models", "--json"]);
             assert!(catalogue.status.success());
             let rows: Vec<Value> = String::from_utf8(catalogue.stdout)
@@ -263,11 +264,16 @@ fn scoped_provider_package_serves_a_but_neither_provider_is_available_in_b() {
                 .lines()
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
-            assert_eq!(
-                rows.iter()
-                    .map(|row| row["model"].as_str().unwrap())
-                    .collect::<Vec<_>>(),
-                ["fake/m"]
+            let names: Vec<&str> = rows
+                .iter()
+                .map(|row| row["model"].as_str().unwrap())
+                .collect();
+            assert!(names.contains(&"fake/m"));
+            assert!(names.contains(&"opencode-go/muse-spark-1.3-contributor"));
+            assert!(
+                names
+                    .iter()
+                    .all(|name| name.starts_with("fake/") || name.starts_with("opencode-go/"))
             );
             let run_b = ask(&setup, &b, "fake/m");
             assert_eq!(run_b.code, Some(0), "{}", run_b.stderr);
