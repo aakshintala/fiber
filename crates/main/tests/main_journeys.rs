@@ -724,3 +724,260 @@ fn each_model_picker_notice_code_shown_as_itself() {
         }),
     );
 }
+
+/// Installs a provider `fake` with sixty valid models `m-00` to `m-59`,
+/// so the model picker overflows any journey terminal.
+fn install_many_models_provider(setup: &Setup, server_url: &str) {
+    let source = setup.root.path().join("src");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{server_url}/v1")]}}),
+    );
+    let models: Vec<Value> = (0..60)
+        .map(|n| {
+            json!({"id": format!("m-{n:02}"), "protocol": "openai-responses", "base_url": format!("{server_url}/v1"), "context_window": 100000})
+        })
+        .collect();
+    support::write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": models,
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// The first row containing `needle`, as a `u16` screen row.
+fn find_grid_row(rows: &[String], needle: &str) -> Option<u16> {
+    rows.iter()
+        .position(|row| row.contains(needle))
+        .map(|y| y as u16)
+}
+
+/// One wheel step down at `coord`: SGR button 65.
+fn wheel_down(coord: (u16, u16)) -> Vec<u8> {
+    format!("\x1b[<65;{};{}M", coord.0, coord.1).into_bytes()
+}
+
+/// An `openai-responses` stream with one `read` call of `path`: one round
+/// of the wheel journey's scripted turn.
+fn wheel_read_call(n: usize, path: &str) -> fakes::Response {
+    fakes::wire::stream(&[
+        json!({"type": "response.output_item.done", "item": {
+            "type": "function_call", "id": format!("fc-{n}"), "call_id": format!("call-{n}"),
+            "name": "read", "arguments": format!("{{\"path\":\"{path}\"}}")}}),
+        json!({"type": "response.completed", "response": {
+            "id": format!("resp-{n}"), "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 3}}}),
+    ])
+}
+
+/// The wheel over every swapped view scrolls that view: the model
+/// picker, config, keys and session views each move their own rows
+/// under the wheel, never the hidden conversation. Evidence for #3578,
+/// whose parent let the wheel reach the wrong surface.
+#[test]
+fn wheel_over_each_swapped_view_scrolls_that_view() {
+    run_journey(
+        "wheel_over_each_swapped_view_scrolls_that_view",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            // Five read rounds of distinct sizes, then the answer: the
+            // turn's tool results fill the context view's largest-rows,
+            // and every round's usage fills its sizes.
+            let mut script: Vec<fakes::Response> = (1..=5)
+                .map(|n| wheel_read_call(n, &format!("c{n}.txt")))
+                .collect();
+            script.push(support::hello_inline_completed());
+            let server = ProviderServer::start(script).unwrap();
+            install_many_models_provider(&setup, &server.url());
+            for (n, size) in [100usize, 200, 300, 400, 500].iter().enumerate() {
+                let letter = (b'a' + n as u8) as char;
+                std::fs::write(
+                    setup.workspace().join(format!("c{}.txt", n + 1)),
+                    format!("{letter}\n").repeat(*size),
+                )
+                .unwrap();
+            }
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "fake/m-00", "hub": {"idle_exit_ms": 1000},
+                    "tui": {"rail": {"shown": false}}}),
+            );
+            std::fs::write(
+                setup.home().join("rules"),
+                format!(
+                    "{}\n{}\n{}\n",
+                    json!({"decision": "allow", "tool": "shell", "prefix": ""}),
+                    json!({"decision": "allow", "tool": "edit", "prefix": ""}),
+                    json!({"decision": "allow", "tool": "write", "prefix": ""}),
+                ),
+            )
+            .unwrap();
+            let bin = journey_bin();
+            // Tall enough that every view still draws, short enough that
+            // the context breakdown overflows: thirteen rows against ten
+            // visible, room for one full three-row step.
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                14,
+                &bin,
+                &[],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            let from = run.output().len();
+            run.write(b"wheelmarker\r");
+            run.wait_screen("the answered turn", |grid| {
+                grid.rows.iter().any(|row| row.contains("Hello."))
+            });
+            run.turn_finished(from);
+            // The tall turn scrolled the prompt off the top: the marker
+            // is the transcript's bottom-anchored answer row.
+            let mark_row = find_grid_row(&run.screen().rows, "Hello.").expect("the marker row");
+            let mark_text = run.screen().rows[usize::from(mark_row)].clone();
+            // One wheel step down inside every view, at the same fixed
+            // coordinate in the conversation area, clear of the rail and
+            // the panel.
+            let at = (21, 9);
+            // The model picker: each model takes two display rows, so one
+            // three-row step moves the list top from the section row to
+            // the second model.
+            run.write(b"/model\r");
+            let pre = run.wait_screen("the open picker", |grid| {
+                shows(grid, "Type to search") && shows(grid, "m-00") && !shows(grid, "refreshing")
+            });
+            let first = find_grid_row(&pre.rows, "m-00 ●").expect("the first model row");
+            assert!(
+                pre.rows[usize::from(first) - 1].contains("fake"),
+                "the section row heads the list: {:?}",
+                pre.rows
+            );
+            run.write(&wheel_down(at));
+            let post = run.wait_screen("the wheeled picker", |grid| {
+                grid.rows[usize::from(first) - 1].contains("m-01")
+            });
+            assert!(
+                post.rows.iter().all(|row| !row.contains("m-00 ●")),
+                "the first model scrolled out: {:?}",
+                post.rows
+            );
+            run.write(b"\x1b[27u");
+            let grid = run.wait_screen("the closed picker", |grid| {
+                grid.rows.iter().all(|row| !row.contains("Type to search"))
+            });
+            assert_eq!(
+                grid.rows[usize::from(mark_row)],
+                mark_text,
+                "the picker wheel left the conversation's scroll"
+            );
+            // The settings table: one row per key under its header.
+            run.write(b"/settings\r");
+            let pre = run.wait_screen("the open settings", |grid| {
+                shows(grid, "Settings") && shows(grid, "budget.usd")
+            });
+            let first = find_grid_row(&pre.rows, "budget.usd").expect("the first key row");
+            assert!(
+                pre.rows[usize::from(first) - 1].contains("key"),
+                "the header heads the table: {:?}",
+                pre.rows
+            );
+            let third = pre.rows[usize::from(first) + 2]
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            run.write(&wheel_down(at));
+            let post = run.wait_screen("the wheeled settings", |grid| {
+                grid.rows[usize::from(first) - 1].contains(&third)
+            });
+            assert!(
+                !post.rows[usize::from(first) - 1].contains("budget.usd"),
+                "the first key scrolled out: {:?}",
+                post.rows
+            );
+            run.write(b"\x1b[27u");
+            let grid = run.wait_screen("the closed settings", |grid| {
+                grid.rows.iter().all(|row| !row.contains("Settings"))
+            });
+            assert_eq!(
+                grid.rows[usize::from(mark_row)],
+                mark_text,
+                "the settings wheel left the conversation's scroll"
+            );
+            // The keys screen: one row per binding.
+            run.write(b"/keys\r");
+            let pre = run.wait_screen("the open keys", |grid| {
+                shows(grid, "Keys") && shows(grid, "Send a prompt")
+            });
+            let first = find_grid_row(&pre.rows, "Send a prompt").expect("the first binding row");
+            let third = pre.rows[usize::from(first) + 3]
+                .split_whitespace()
+                .find(|word| word.contains('_'))
+                .unwrap_or_default()
+                .to_owned();
+            run.write(&wheel_down(at));
+            let post = run.wait_screen("the wheeled keys", |grid| {
+                grid.rows[usize::from(first)].contains(&third)
+            });
+            assert!(
+                !post.rows[usize::from(first)].contains("Send a prompt"),
+                "the first binding scrolled out: {:?}",
+                post.rows
+            );
+            run.write(b"\x1b[27u");
+            let grid = run.wait_screen("the closed keys", |grid| {
+                grid.rows.iter().all(|row| !row.contains("/keys"))
+            });
+            assert_eq!(
+                grid.rows[usize::from(mark_row)],
+                mark_text,
+                "the keys wheel left the conversation's scroll"
+            );
+            // The context breakdown: the sizes heading, the bar, the
+            // categories, then the largest tool results. One step moves
+            // three rows, from the heading to the first category.
+            run.write(b"/context\r");
+            let pre = run.wait_screen("the open context", |grid| {
+                shows(grid, "Context")
+                    && shows(grid, "system prompt")
+                    && shows(grid, "Largest tool results")
+            });
+            let first = find_grid_row(&pre.rows, "tokens ·").expect("the sizes row");
+            run.write(&wheel_down(at));
+            let post = run.wait_screen("the wheeled context", |grid| {
+                grid.rows[usize::from(first)].contains("system prompt")
+            });
+            assert!(
+                !post.rows[usize::from(first)].contains("tokens ·"),
+                "the sizes row scrolled out: {:?}",
+                post.rows
+            );
+            run.write(b"\x1b[27u");
+            let grid = run.wait_screen("the closed context", |grid| {
+                grid.rows.iter().all(|row| !row.contains("/context"))
+            });
+            assert_eq!(
+                grid.rows[usize::from(mark_row)],
+                mark_text,
+                "the context wheel left the conversation's scroll"
+            );
+            quit_journey(run);
+        }),
+    );
+}
