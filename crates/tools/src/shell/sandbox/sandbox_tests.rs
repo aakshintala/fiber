@@ -6,7 +6,6 @@
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
 use std::sync::mpsc;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
@@ -1080,6 +1079,7 @@ fn macos_unavailable_settings_never_reach_spawn() {
         None,
         &fixture.settings,
         &fixture.workspace,
+        None,
     ) else {
         panic!("unavailable settings fail");
     };
