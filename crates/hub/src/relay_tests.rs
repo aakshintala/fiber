@@ -2224,12 +2224,23 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
         .unwrap();
     session_peer.flush().unwrap();
     let mut read = std::io::BufReader::new(client_peer);
-    let mut acknowledgement = String::new();
-    read.read_line(&mut acknowledgement).unwrap();
-    assert!(acknowledgement.contains("c_ack"));
-    let mut status = String::new();
-    read.read_line(&mut status).unwrap();
-    assert!(status.contains("session_status"));
+    // Both lines arrive; their relative order is stream order, which no
+    // contract row promises (the order promise in
+    // `docs/invocation.md:1106` covers acknowledgements), so the test
+    // accepts either order.
+    let mut first = String::new();
+    read.read_line(&mut first).unwrap();
+    let mut second = String::new();
+    read.read_line(&mut second).unwrap();
+    let both = format!("{first}{second}");
+    assert!(
+        both.contains("c_ack"),
+        "the acknowledgement arrives: {both:?}"
+    );
+    assert!(
+        both.contains("session_status"),
+        "the status line arrives: {both:?}"
+    );
     let remains = crate::connection::lock(&relays)
         .entries
         .iter()
@@ -4123,7 +4134,7 @@ fn after_a_rewind_a_sent_command_gets_no_line_and_only_unsent_ones_pass_on() {
     assert_eq!(ended.order.session_for("c_1"), None, "c_1 left the queue");
 }
 
-/// `docs/invocation.md`, "Lifecycle": a client that disconnected has its commands dropped, never delivered.
+/// `docs/invocation.md:1156`, "What the hub speaks": the client disconnects, so every kept command drops with nothing delivered and nothing resumed.
 #[test]
 fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
@@ -4163,7 +4174,7 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
-/// `docs/invocation.md`, "Lifecycle": a client that disconnected has its commands dropped, never delivered.
+/// `docs/invocation.md:1156`, "What the hub speaks": the client disconnects, so its `Written` command drops with nothing delivered and nothing resumed.
 #[test]
 fn a_client_that_is_gone_while_its_entry_remains_gets_nothing_re_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -4211,7 +4222,7 @@ fn a_relay_that_saw_the_exited_window_is_clean_even_when_the_log_moved_on() {
     assert_eq!(ended.received_ids(), ["c_1", "c_2"]);
 }
 
-/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
+/// `docs/invocation.md:1150`, "What the hub speaks": the session answers a command still running `indeterminate`, so the rejection is forwarded and the command is never replayed.
 #[test]
 fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
