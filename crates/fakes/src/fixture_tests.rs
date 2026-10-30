@@ -161,6 +161,30 @@ fn the_mcp_fixture_fails_its_start_on_a_fail_start_file() {
     );
 }
 
+/// The accessor returns the checked-in script beside the crate, the same
+/// path every caller executes: looking it up warms that original once, so
+/// the first-exec stall never eats a test's own deadline.
+#[test]
+fn mcp_fixture_is_the_checked_in_server_script() {
+    assert_eq!(
+        mcp_fixture(),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mcp-fixture/server.sh")
+    );
+}
+
+/// The once-only seam behind the accessor runs its warm once no matter how
+/// often lookups request it: the second request skips the warm.
+#[test]
+fn the_fixture_warm_runs_once_per_process() {
+    use std::cell::Cell;
+    use std::sync::OnceLock;
+    let cell = OnceLock::new();
+    let runs = Cell::new(0);
+    super::warm_once(&cell, || runs.set(runs.get() + 1));
+    super::warm_once(&cell, || runs.set(runs.get() + 1));
+    assert_eq!(runs.get(), 1, "the second lookup skips the warm");
+}
+
 /// The fixture directory is built from the crate's manifest dir at
 /// compile time; no run-time read of the repository is involved.
 #[test]
