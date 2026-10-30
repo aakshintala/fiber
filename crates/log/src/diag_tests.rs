@@ -71,9 +71,10 @@ fn session() -> SessionId {
     SessionId("s_0123456789abcdef".into())
 }
 
-fn request() -> ProviderRequest {
-    ProviderRequest {
-        provider: "fake".into(),
+fn request() -> HttpRequest {
+    HttpRequest {
+        provider: Some("fake".into()),
+        extension: None,
         model: Some("m".into()),
         purpose: Purpose::ModelCall,
         host: Some("127.0.0.1:50731".into()),
@@ -147,7 +148,7 @@ fn at_info_debug_lines_write_nothing_and_create_nothing() {
     for process in [Process::Hub, Process::Session, Process::Ask, Process::Tui] {
         let diag = home.diag(process, Level::Info).with_peak(|| Some(7));
         assert!(!diag.debugging());
-        diag.provider_request(&request());
+        diag.http_request(&request());
         diag.peak_memory();
     }
     assert!(!home.path().join("logs").exists());
@@ -159,11 +160,11 @@ fn at_debug_a_provider_request_is_one_line_with_data_last() {
     let diag = home.diag(Process::Ask, Level::Debug);
     assert!(diag.debugging());
     diag.attach(&SessionId("s_7f3a".into()));
-    diag.provider_request(&request());
+    diag.http_request(&request());
     assert_eq!(
         home.text("ask-s_7f3a.log"),
         "{\"ts\":1700000000000,\"level\":\"debug\",\"process\":\"ask\",\
-         \"session_id\":\"s_7f3a\",\"code\":\"provider_request\",\
+         \"session_id\":\"s_7f3a\",\"code\":\"http_request\",\
          \"message\":\"A provider request ended.\",\"data\":{\"provider\":\"fake\",\
          \"model\":\"m\",\"purpose\":\"model_call\",\"host\":\"127.0.0.1:50731\",\
          \"status\":200,\"attempt\":1,\"request_bytes\":2214,\"response_bytes\":913,\
@@ -293,7 +294,7 @@ fn a_failed_write_is_silent() {
         .diag(Process::Session, Level::Debug)
         .with_peak(|| Some(1));
     diag.line(Severity::Info, None, "extension_log", "x: y");
-    diag.provider_request(&request());
+    diag.http_request(&request());
     diag.peak_memory();
     assert_eq!(
         fs::read(home.path().join("logs")).unwrap(),

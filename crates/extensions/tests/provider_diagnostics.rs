@@ -26,7 +26,7 @@ use config::{Config, ProjectKey, Sources};
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::clock::Wake;
-use contract::diag::{DebugLog, HookChain, Op, ProviderRequest, Timing};
+use contract::diag::{DebugLog, HookChain, Op, HttpRequest, Timing};
 use contract::events::CallStatus;
 use contract::events::HandoffTrigger;
 use contract::hook::{
@@ -80,7 +80,7 @@ impl Cancel for Flag {
 /// A sink that keeps every request it is given.
 #[derive(Default)]
 struct Sink {
-    requests: Mutex<Vec<ProviderRequest>>,
+    requests: Mutex<Vec<HttpRequest>>,
 }
 
 impl DebugLog for Sink {
@@ -88,7 +88,7 @@ impl DebugLog for Sink {
         true
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &HttpRequest) {
         self.requests.lock().unwrap().push(request.clone());
     }
 }
@@ -850,12 +850,12 @@ use extensions::{CredentialPair, HostScript, HttpEntry, LuaProvider, ModelsArg};
 
 /// A sink that signals each record it is given.
 struct Watching {
-    requests: Mutex<Vec<ProviderRequest>>,
-    arrived: std::sync::mpsc::Sender<ProviderRequest>,
+    requests: Mutex<Vec<HttpRequest>>,
+    arrived: std::sync::mpsc::Sender<HttpRequest>,
 }
 
 impl Watching {
-    fn new() -> (Arc<Self>, std::sync::mpsc::Receiver<ProviderRequest>) {
+    fn new() -> (Arc<Self>, std::sync::mpsc::Receiver<HttpRequest>) {
         let (tx, rx) = std::sync::mpsc::channel();
         (
             Arc::new(Self {
@@ -866,7 +866,7 @@ impl Watching {
         )
     }
 
-    fn records(&self) -> Vec<ProviderRequest> {
+    fn records(&self) -> Vec<HttpRequest> {
         self.requests.lock().unwrap().clone()
     }
 }
@@ -876,7 +876,7 @@ impl DebugLog for Watching {
         true
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &HttpRequest) {
         self.requests.lock().unwrap().push(request.clone());
         let _ignored = self.arrived.send(request.clone());
     }
@@ -1024,7 +1024,7 @@ fn provider_purposes_record_once_per_attempt() {
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
+                record.provider.clone().expect("provider purposes carry a provider"),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()
@@ -1083,7 +1083,7 @@ fn two_calls_in_one_callback_emit_two_attempt_ones() {
     let records = sink.records();
     assert_eq!(records.len(), 2);
     for record in &records {
-        assert_eq!(record.provider, "p");
+        assert_eq!(record.provider.as_deref(), Some("p"));
         assert_eq!(record.attempt, 1);
         assert_eq!(
             serde_json::to_value(record.purpose).unwrap(),
@@ -1252,7 +1252,7 @@ fn sign_command_and_entry_load_send_unobserved() {
     }
     let records = sink.records();
     assert_eq!(records.len(), 1, "only the models() call records");
-    assert_eq!(records[0].provider, "p");
+    assert_eq!(records[0].provider.as_deref(), Some("p"));
 }
 
 #[test]
@@ -1294,7 +1294,7 @@ fn hook_http_sends_unobserved_with_a_sink_installed() {
 
 /// The serialized keys of one record, sorted: `to_value` holds them in
 /// a map, so declaration order is pinned by the struct, not this helper.
-fn wire_keys(record: &ProviderRequest) -> Vec<String> {
+fn wire_keys(record: &HttpRequest) -> Vec<String> {
     let value = serde_json::to_value(record).unwrap();
     let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
     keys.sort();
@@ -1409,7 +1409,7 @@ impl DebugLog for Dark {
         false
     }
 
-    fn provider_request(&self, _request: &ProviderRequest) {
+    fn http_request(&self, _request: &HttpRequest) {
         panic!("an info sink records nothing");
     }
 }
@@ -1478,7 +1478,7 @@ fn background_refresh_is_observed() {
     assert_eq!(server.requests().len(), 1);
     let records = sink.records();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].provider, "p");
+    assert_eq!(records[0].provider.as_deref(), Some("p"));
     assert_eq!(
         serde_json::to_value(records[0].purpose).unwrap(),
         serde_json::Value::String("model_list".to_owned())
@@ -1603,7 +1603,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
+                record.provider.clone().expect("provider purposes carry a provider"),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()
@@ -1627,7 +1627,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
+                record.provider.clone().expect("provider purposes carry a provider"),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()
@@ -2024,7 +2024,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
+                record.provider.clone().expect("provider purposes carry a provider"),
                 serde_json::to_value(record.purpose)
                     .unwrap()
                     .as_str()

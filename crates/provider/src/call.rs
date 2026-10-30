@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use contract::diag::{DebugLog, PrefixHashes, ProviderRequest, Purpose, Timing};
+use contract::diag::{DebugLog, PrefixHashes, HttpRequest, Purpose, Timing};
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Reply};
 use contract::shapes::Tokens;
@@ -37,7 +37,7 @@ pub(crate) type Decode = fn(
 /// `call_observed`, which knows its own endpoint; the direct test seam
 /// binds it explicitly. The optional timing times one connector attempt
 /// group as `net.connect`; without one the call still records its
-/// `provider_request` line over the plain connector.
+/// `http_request` line over the plain connector.
 #[derive(Clone)]
 pub struct RequestObservation {
     log: Arc<dyn DebugLog>,
@@ -209,7 +209,7 @@ impl ObservationFinish {
         self.cache_write = Some(tokens.cache_write.clone());
     }
 
-    /// Writes the one `provider_request` line, once. A second call writes
+    /// Writes the one `http_request` line, once. A second call writes
     /// nothing: the open reader's error and its drop share this guard.
     pub(crate) fn finish(&mut self) {
         if self.done {
@@ -218,8 +218,9 @@ impl ObservationFinish {
         self.done = true;
         let total = self.clock.now();
         let (host, path) = http::sanitized_target(&self.url, &self.redact);
-        self.log.provider_request(&ProviderRequest {
-            provider: self.provider.clone(),
+        self.log.http_request(&HttpRequest {
+            provider: Some(self.provider.clone()),
+            extension: None,
             model: self.model.clone(),
             purpose: Purpose::ModelCall,
             host,
@@ -358,7 +359,7 @@ impl Call {
         }
     }
 
-    /// Observes this call, writing one `provider_request` line when the
+    /// Observes this call, writing one `http_request` line when the
     /// call was sent. At `info` the call runs exactly as an unobserved one
     /// does: no clock is read and no line is written.
     #[must_use]
@@ -559,7 +560,7 @@ impl Call {
         }
     }
 
-    /// Runs the call observed: one `provider_request` line when the request
+    /// Runs the call observed: one `http_request` line when the request
     /// was sent, whatever the call returns. The total runs through decoding
     /// and the result above, not merely the last byte read. A request never
     /// sent writes no line.

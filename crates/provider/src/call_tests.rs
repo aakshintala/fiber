@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use contract::diag::{DebugLog, ProviderRequest};
+use contract::diag::{DebugLog, HttpRequest};
 
 use super::*;
 use fakes::Deadline;
@@ -17,7 +17,7 @@ use fakes::Deadline;
 /// Captures the lines a record writes.
 struct Capture {
     debugging: bool,
-    lines: Mutex<Vec<ProviderRequest>>,
+    lines: Mutex<Vec<HttpRequest>>,
 }
 
 impl Capture {
@@ -28,7 +28,7 @@ impl Capture {
         })
     }
 
-    fn lines(&self) -> Vec<ProviderRequest> {
+    fn lines(&self) -> Vec<HttpRequest> {
         self.lines.lock().unwrap().clone()
     }
 }
@@ -38,7 +38,7 @@ impl DebugLog for Capture {
         self.debugging
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &HttpRequest) {
         self.lines.lock().unwrap().push(request.clone());
     }
 }

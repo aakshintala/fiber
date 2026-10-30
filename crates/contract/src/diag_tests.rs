@@ -1,4 +1,4 @@
-//! The `provider_request` line's `data` shape (`docs/state.md`, "Diagnostic
+//! The `http_request` line's `data` shape (`docs/state.md`, "Diagnostic
 //! logs"): fields in declared order, absent options left out.
 
 #![allow(clippy::unwrap_used, reason = "test code")]
@@ -6,9 +6,10 @@
 use super::*;
 use std::collections::BTreeMap;
 
-fn full() -> ProviderRequest {
-    ProviderRequest {
-        provider: "fake".into(),
+fn full() -> HttpRequest {
+    HttpRequest {
+        provider: Some("fake".into()),
+        extension: None,
         model: Some("m".into()),
         purpose: Purpose::ModelCall,
         host: Some("127.0.0.1:50731".into()),
@@ -38,6 +39,10 @@ fn every_purpose_serializes_to_its_snake_case_name() {
         (Purpose::Quota, "quota"),
         (Purpose::TokenRefresh, "token_refresh"),
         (Purpose::Cost, "cost"),
+        (Purpose::WebFetch, "web_fetch"),
+        (Purpose::Mcp, "mcp"),
+        (Purpose::Extension, "extension"),
+        (Purpose::ExtensionRelease, "extension_release"),
     ] {
         assert_eq!(
             serde_json::to_string(&purpose).unwrap(),
@@ -49,8 +54,9 @@ fn every_purpose_serializes_to_its_snake_case_name() {
 
 #[test]
 fn an_absent_option_is_left_out_never_null() {
-    let request = ProviderRequest {
-        provider: "fake".into(),
+    let request = HttpRequest {
+        provider: Some("fake".into()),
+        extension: None,
         model: None,
         purpose: Purpose::Quota,
         host: None,
@@ -73,7 +79,7 @@ fn an_absent_option_is_left_out_never_null() {
          \"request_bytes\":0,\"response_bytes\":0,\"total_ms\":3}"
     );
     assert!(!line.contains("null"), "{line}");
-    for absent in ["prefix_hashes", "cache_read", "cache_write"] {
+    for absent in ["extension", "prefix_hashes", "cache_read", "cache_write"] {
         assert!(!line.contains(absent), "{absent} is absent: {line}");
     }
 }
@@ -140,7 +146,7 @@ fn a_provider_request_writes_present_fields_in_order_and_leaves_absent_ones_out(
          \"messages\":[\"c7d0\",\"e91f\"]},\"cache_read\":9585,\
          \"cache_write\":{\"1h\":57}}"
     );
-    let request = ProviderRequest {
+    let request = HttpRequest {
         model: None,
         host: None,
         path: None,
@@ -163,7 +169,7 @@ fn a_provider_request_writes_present_fields_in_order_and_leaves_absent_ones_out(
 
 #[test]
 fn a_prefix_hash_without_optional_segments_leaves_them_out() {
-    let request = ProviderRequest {
+    let request = HttpRequest {
         prefix_hashes: Some(PrefixHashes {
             system: None,
             tools: None,
@@ -181,5 +187,115 @@ fn a_prefix_hash_without_optional_segments_leaves_them_out() {
     assert!(!line.contains("null"), "{line}");
     for absent in ["cache_read", "cache_write"] {
         assert!(!line.contains(absent), "{absent} is absent: {line}");
+    }
+}
+
+#[test]
+fn provider_purposes_keep_provider_and_gain_no_extension() {
+    for purpose in [
+        Purpose::ModelCall,
+        Purpose::ModelList,
+        Purpose::Quota,
+        Purpose::TokenRefresh,
+        Purpose::Cost,
+    ] {
+        let request = HttpRequest::for_provider("fake", purpose);
+        let line = serde_json::to_string(&request).unwrap();
+        assert!(
+            line.contains("\"provider\":\"fake\""),
+            "{purpose:?} keeps provider: {line}"
+        );
+        assert!(!line.contains("extension"), "{purpose:?}: {line}");
+        assert_eq!(request.extension, None, "{purpose:?}");
+    }
+}
+
+#[test]
+fn web_fetch_and_mcp_carry_no_identity_model_host_or_path() {
+    for request in [HttpRequest::for_web_fetch(), HttpRequest::for_mcp()] {
+        let line = serde_json::to_string(&request).unwrap();
+        for absent in [
+            "provider",
+            "extension",
+            "model",
+            "host",
+            "path",
+            "first_token_ms",
+        ] {
+            assert!(
+                !line.contains(absent),
+                "{absent} is absent on {:?}: {line}",
+                request.purpose
+            );
+        }
+        assert!(!line.contains("null"), "{line}");
+    }
+    assert_eq!(HttpRequest::for_web_fetch().purpose, Purpose::WebFetch);
+    assert_eq!(HttpRequest::for_mcp().purpose, Purpose::Mcp);
+}
+
+#[test]
+fn extension_carries_the_extension_name_and_no_provider_model_host_or_path() {
+    let request = HttpRequest::for_extension("mem");
+    let line = serde_json::to_string(&request).unwrap();
+    assert!(line.contains("\"extension\":\"mem\""), "{line}");
+    assert!(line.contains("\"purpose\":\"extension\""), "{line}");
+    for absent in ["provider", "\"model\"", "\"host\"", "\"path\""] {
+        assert!(!line.contains(absent), "{absent} is absent: {line}");
+    }
+    assert!(!line.contains("null"), "{line}");
+}
+
+#[test]
+fn extension_release_carries_host_and_path_but_no_identity_or_model() {
+    let request = HttpRequest::for_extension_release(
+        Some("github.com".into()),
+        Some("/acme/fiber/releases/download/v1.2.3/fiber.tar.gz".into()),
+    );
+    let line = serde_json::to_string(&request).unwrap();
+    assert!(line.contains("\"host\":\"github.com\""), "{line}");
+    assert!(
+        line.contains("\"path\":\"/acme/fiber/releases/download/v1.2.3/fiber.tar.gz\""),
+        "{line}"
+    );
+    assert!(line.contains("\"purpose\":\"extension_release\""), "{line}");
+    for absent in [
+        "\"provider\":",
+        "\"extension\":",
+        "\"model\"",
+        "first_token_ms",
+    ] {
+        assert!(!line.contains(absent), "{absent} is absent: {line}");
+    }
+    assert!(!line.contains("null"), "{line}");
+}
+
+#[test]
+fn a_model_call_built_by_for_web_fetch_fails_the_provider_key_check() {
+    // The constructors fix the wire identity: a model call needs a
+    // provider, which `for_web_fetch` never sets. Re-purposing its
+    // skeleton leaves the line without one.
+    let mut request = HttpRequest::for_web_fetch();
+    request.purpose = Purpose::ModelCall;
+    let line = serde_json::to_string(&request).unwrap();
+    assert!(
+        !line.contains("\"provider\""),
+        "a model_call without provider is not on the wire: {line}"
+    );
+}
+
+#[test]
+fn constructors_start_attempt_at_one_with_zero_bytes() {
+    for request in [
+        HttpRequest::for_provider("fake", Purpose::Quota),
+        HttpRequest::for_web_fetch(),
+        HttpRequest::for_mcp(),
+        HttpRequest::for_extension("mem"),
+        HttpRequest::for_extension_release(None, None),
+    ] {
+        assert_eq!(request.attempt, 1, "{:?}", request.purpose);
+        assert_eq!(request.request_bytes, 0, "{:?}", request.purpose);
+        assert_eq!(request.response_bytes, 0, "{:?}", request.purpose);
+        assert_eq!(request.total_ms, 0, "{:?}", request.purpose);
     }
 }

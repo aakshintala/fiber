@@ -20,7 +20,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use config::{Config, ProjectKey, Sources};
 use contract::clock::Clock;
-use contract::diag::{DebugLog, ProviderRequest, Purpose, Timing};
+use contract::diag::{DebugLog, Purpose, Timing};
+use contract::diag::HttpRequest as ObservedRequest;
 use fakes::clock::FakeClock;
 
 use super::SessionExtensions;
@@ -30,7 +31,7 @@ use fakes::FakeLock;
 /// A sink that keeps every request it is given.
 #[derive(Default)]
 struct Sink {
-    requests: Mutex<Vec<ProviderRequest>>,
+    requests: Mutex<Vec<ObservedRequest>>,
 }
 
 impl Sink {
@@ -44,7 +45,7 @@ impl DebugLog for Sink {
         true
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &ObservedRequest) {
         self.requests.lock().unwrap().push(request.clone());
     }
 }
@@ -393,12 +394,12 @@ impl Clock for Counting {
 
 /// A sink that signals each record it is given.
 struct Watching {
-    requests: Mutex<Vec<ProviderRequest>>,
-    arrived: mpsc::Sender<ProviderRequest>,
+    requests: Mutex<Vec<ObservedRequest>>,
+    arrived: mpsc::Sender<ObservedRequest>,
 }
 
 impl Watching {
-    fn new() -> (Arc<Self>, mpsc::Receiver<ProviderRequest>) {
+    fn new() -> (Arc<Self>, mpsc::Receiver<ObservedRequest>) {
         let (tx, rx) = mpsc::channel();
         (
             Arc::new(Self {
@@ -409,7 +410,7 @@ impl Watching {
         )
     }
 
-    fn records(&self) -> Vec<ProviderRequest> {
+    fn records(&self) -> Vec<ObservedRequest> {
         self.requests.lock().unwrap().clone()
     }
 }
@@ -419,13 +420,13 @@ impl DebugLog for Watching {
         true
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &ObservedRequest) {
         self.requests.lock().unwrap().push(request.clone());
         let _ignored = self.arrived.send(request.clone());
     }
 }
 
-/// A sink that records no debug lines: `provider_request` must never run.
+/// A sink that records no debug lines: `http_request` must never run.
 struct Dark;
 
 impl DebugLog for Dark {
@@ -433,7 +434,7 @@ impl DebugLog for Dark {
         false
     }
 
-    fn provider_request(&self, _request: &ProviderRequest) {
+    fn http_request(&self, _request: &ObservedRequest) {
         panic!("an info sink records nothing");
     }
 }
@@ -517,7 +518,7 @@ fn observed_and_plain_agree_on_every_outcome() {
         let records = sink.records();
         assert_eq!(records.len(), 1);
         let record = &records[0];
-        assert_eq!(record.provider, "p");
+        assert_eq!(record.provider.as_deref(), Some("p"));
         assert_eq!(record.purpose, Purpose::ModelList);
         assert_eq!(record.status, Some(status));
         assert_eq!(record.attempt, 1);
@@ -1199,7 +1200,7 @@ fn worker_emits_only_after_the_guard_releases() {
     let records = sink.records();
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert_eq!(record.provider, "rz");
+    assert_eq!(record.provider.as_deref(), Some("rz"));
     assert_eq!(record.purpose, Purpose::ModelList);
     assert_eq!(record.status, Some(200));
     assert_eq!(record.attempt, 1);
@@ -1559,7 +1560,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
     let record = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrivals)
         .expect("the late worker emitted its record");
-    assert_eq!(record.provider, "p");
+    assert_eq!(record.provider.as_deref(), Some("p"));
     assert_eq!(record.purpose, Purpose::ModelList);
     assert_eq!(record.status, Some(200));
     assert_eq!(record.attempt, 1);

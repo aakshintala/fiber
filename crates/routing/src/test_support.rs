@@ -120,5 +120,5 @@ impl contract::diag::DebugLog for Level {
         self.debug
     }
 
-    fn provider_request(&self, _request: &contract::diag::ProviderRequest) {}
+    fn http_request(&self, _request: &contract::diag::HttpRequest) {}
 }

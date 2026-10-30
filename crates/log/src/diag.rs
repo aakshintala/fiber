@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
-use contract::diag::{DebugLog, Op, ProviderRequest, Timing};
+use contract::diag::{DebugLog, Op, HttpRequest, Timing};
 use support::lock;
 
 pub use memory::peak_kib;
@@ -383,14 +383,14 @@ impl DebugLog for Diag {
         self.level == Level::Debug
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &HttpRequest) {
         if !self.debugging() {
             return;
         }
         self.write(
             "debug",
             None,
-            "provider_request",
+            "http_request",
             "A provider request ended.",
             Some(request),
         );

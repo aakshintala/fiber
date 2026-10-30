@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use config::Config;
 use contract::clock::Clock;
-use contract::diag::{DebugLog, ProviderRequest, Purpose};
+use contract::diag::{DebugLog, Purpose};
 use contract::files::PathLock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
@@ -607,7 +607,7 @@ pub(crate) fn perform(
     execute(request, None)
 }
 
-/// As [`perform`], observed as one `provider_request` line: the provider's
+/// As [`perform`], observed as one `http_request` line: the provider's
 /// name, the purpose, which attempt (always 1: Lua makes no retry), the
 /// body lengths and the send-to-headers and send-to-end milestones. A
 /// response that never came leaves status and headers absent; a body read
@@ -741,7 +741,7 @@ fn execute(
     }
 }
 
-/// Writes the one `provider_request` line for an observed Lua request:
+/// Writes the one `http_request` line for an observed Lua request:
 /// the provider's registered name and the eligible purpose, never a URL.
 /// A Lua invocation makes no retry, so every line's attempt is 1.
 #[allow(
@@ -758,8 +758,9 @@ fn write_request(
     sent: std::time::Instant,
     end: std::time::Instant,
 ) {
-    observation.debug.provider_request(&ProviderRequest {
-        provider: observation.provider.clone(),
+    observation.debug.http_request(&contract::diag::HttpRequest {
+        provider: Some(observation.provider.clone()),
+        extension: None,
         model: None,
         purpose: observation.purpose,
         host: None,
