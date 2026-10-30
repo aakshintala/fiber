@@ -1,8 +1,8 @@
 //! Home's workspace picker drawing: the typed picker's body rows,
 //! the picker's footer, and the typed and untyped picker draws. The
-//! draws read only picker state; the window and placement math stays
-//! in the parent, which passes the area and the picker's read-only
-//! state in.
+//! draws read only picker state. The parent chooses the untyped window
+//! and supplies the typed picker's box top; each draw lays out its own
+//! overlay.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
