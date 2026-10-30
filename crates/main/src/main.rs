@@ -1008,7 +1008,7 @@ fn run_turn(
             }
             // The process's exit sample, after its successful exit line:
             // whatever the exit code, a failed read writes nothing.
-            diag.peak_memory();
+            diag.resources();
             // A signal during the drain wins over the pre-signal line
             // (Ruling 19): `fiber_exited` already holds the pre-signal
             // code, but the process exits with the signal code.

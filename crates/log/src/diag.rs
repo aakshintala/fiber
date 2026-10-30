@@ -18,10 +18,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
-use contract::diag::{DebugLog, Op, HttpRequest, Timing};
+use contract::diag::{DebugLog, HttpRequest, Op, Timing};
 use support::lock;
 
-pub use memory::peak_kib;
+pub use memory::{ResourcesSample, resources_sample};
 
 /// The process a diagnostic file belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +34,9 @@ pub enum Process {
     Ask,
     /// The terminal: `logs/tui-<pid>.log`.
     Tui,
+    /// A command that runs once with no session: `logs/cli-<pid>.log`,
+    /// always named by the process id because it never has a session id.
+    Cli,
 }
 
 impl Process {
@@ -43,6 +46,7 @@ impl Process {
             Self::Session => "session",
             Self::Ask => "ask",
             Self::Tui => "tui",
+            Self::Cli => "cli",
         }
     }
 }
@@ -101,10 +105,16 @@ struct Line<'a, D: serde::Serialize> {
     data: Option<D>,
 }
 
-/// The `data` of a `peak_memory` line.
+/// The `data` of a `resources` line: peak and current memory in KiB,
+/// and the storage the process has read and written since it started,
+/// in bytes. A sample whose source is unreadable writes no line, so
+/// the wire holds all four fields or none.
 #[derive(serde::Serialize)]
-struct Peak {
+struct Resources {
     peak_kib: u64,
+    current_kib: u64,
+    disk_read_bytes: u64,
+    disk_write_bytes: u64,
 }
 
 /// The allocation metrics of an `op_timing` line in an `alloc-stats`
@@ -152,8 +162,8 @@ pub struct Diag {
     level: Level,
     clock: Arc<dyn Clock>,
     rotate_at: Option<u64>,
-    peak: fn() -> Option<u64>,
-    /// A hook run between [`Diag::peak_memory_then_info`]'s two appends,
+    peak: fn() -> Option<ResourcesSample>,
+    /// A hook run between [`Diag::resources_then_info`]'s two appends,
     /// told whether the state lock is still held. Test-only: the `state`
     /// mutex and the interval between the pair's appends are private to
     /// this crate, so no caller can force a competing write into that
@@ -174,7 +184,7 @@ impl Diag {
         let logs = home.join("logs");
         let file = logs.join(match process {
             Process::Hub => "hub.log".to_owned(),
-            Process::Session | Process::Ask | Process::Tui => {
+            Process::Session | Process::Ask | Process::Tui | Process::Cli => {
                 format!("{}-{}.log", process.name(), std::process::id())
             }
         });
@@ -184,7 +194,7 @@ impl Diag {
             level,
             clock,
             rotate_at: None,
-            peak: peak_kib,
+            peak: resources_sample,
             #[cfg(test)]
             between: None,
             state: Arc::new(Mutex::new(State {
@@ -209,14 +219,14 @@ impl Diag {
         self
     }
 
-    /// Reads the peak memory with `read` instead of [`peak_kib`].
+    /// Reads the resources with `read` instead of [`resources_sample`]..
     #[must_use]
-    pub fn with_peak(mut self, read: fn() -> Option<u64>) -> Self {
+    pub fn with_peak(mut self, read: fn() -> Option<ResourcesSample>) -> Self {
         self.peak = read;
         self
     }
 
-    /// Runs `between` between [`Diag::peak_memory_then_info`]'s two
+    /// Runs `between` between [`Diag::resources_then_info`]'s two
     /// appends, telling it whether the state lock is still held, before
     /// the writer is shared. Test-only: see [`Diag`].
     #[cfg(test)]
@@ -242,7 +252,7 @@ impl Diag {
     }
 
     /// A second writer for `session` in the same `logs/` directory: the
-    /// same process, level, clock and peak reader, writing
+    /// same process, level, clock and sample reader, writing
     /// `<kind>-<id>.log` with `session_id` from its first line. The
     /// original keeps its own file and stays unattached. A clone carries
     /// no rotation and no test hook.
@@ -271,43 +281,48 @@ impl Diag {
         self.write(severity.name(), session, code, message, None::<()>);
     }
 
-    /// Appends the `peak_memory` debug line for `kib` while the caller
-    /// holds the state lock, so [`Diag::peak_memory_then_info`] writes its
+    /// Appends the `resources` debug line for `sample` while the caller
+    /// holds the state lock, so [`Diag::resources_then_info`] writes its
     /// pair with nothing between them.
-    fn peak_line(&self, state: &State, kib: u64) {
+    fn resources_line(&self, state: &State, sample: ResourcesSample) {
         self.append(
             state,
             "debug",
             None,
-            "peak_memory",
-            "The process's peak memory so far.",
-            Some(Peak { peak_kib: kib }),
+            "resources",
+            "The process's memory and disk I/O so far.",
+            Some(Resources {
+                peak_kib: sample.peak_kib,
+                current_kib: sample.current_kib,
+                disk_read_bytes: sample.disk_read_bytes,
+                disk_write_bytes: sample.disk_write_bytes,
+            }),
         );
     }
 
-    /// Writes a `peak_memory` line at the debug level with the process's
-    /// peak so far. A failed read writes nothing.
-    pub fn peak_memory(&self) {
+    /// Writes a `resources` line at the debug level with the process's
+    /// memory and disk I/O so far. A failed read writes nothing.
+    pub fn resources(&self) {
         if !self.debugging() {
             return;
         }
-        if let Some(kib) = (self.peak)() {
+        if let Some(sample) = (self.peak)() {
             let _files = lock(&FILES);
             let state = lock(&self.state);
-            self.peak_line(&state, kib);
+            self.resources_line(&state, sample);
         }
     }
 
-    /// Appends the `peak_memory` debug line, when debugging and the read
+    /// Appends the `resources` debug line, when debugging and the read
     /// succeeds, immediately followed by the given `info` line, under one
     /// lock: no other thread's line can come between the pair.
-    pub fn peak_memory_then_info(&self, code: &str, message: &str) {
+    pub fn resources_then_info(&self, code: &str, message: &str) {
         let _files = lock(&FILES);
         let state = lock(&self.state);
         if self.debugging()
-            && let Some(kib) = (self.peak)()
+            && let Some(sample) = (self.peak)()
         {
-            self.peak_line(&state, kib);
+            self.resources_line(&state, sample);
         }
         // The same thread still owns `state`, so `try_lock` never
         // blocks: it reports `WouldBlock` exactly when the single lock
@@ -335,7 +350,7 @@ impl Diag {
     }
 
     /// Serializes one line and appends it while the caller holds the state
-    /// lock, so [`Diag::peak_memory_then_info`] can write its pair with
+    /// lock, so [`Diag::resources_then_info`] can write its pair with
     /// nothing between them. A line that does not serialize writes nothing.
     fn append<D: serde::Serialize>(
         &self,
@@ -391,7 +406,7 @@ impl DebugLog for Diag {
             "debug",
             None,
             "http_request",
-            "A provider request ended.",
+            "An HTTP request ended.",
             Some(request),
         );
     }
