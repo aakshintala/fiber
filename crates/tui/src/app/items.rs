@@ -456,17 +456,23 @@ impl App {
     /// completions, before interrupting the turn: it never sends `cancel`.
     pub(super) fn item_esc(&mut self) -> Effect {
         self.close_item();
-        self.settle();
         Effect::None
     }
 
     /// A click on an item target: ✕ closes, stop sends `job_stop` to the
     /// attached session, which owns the job.
+    #[cfg(test)]
     pub(super) fn item_click(&mut self, spot: Spot) -> Effect {
+        let result = self.item_click_inner(spot);
+        self.settle();
+        result
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(super) fn item_click_inner(&mut self, spot: Spot) -> Effect {
         match spot {
             Spot::Close => {
                 self.close_item();
-                self.settle();
                 Effect::None
             }
             Spot::Stop => self.item_stop(),

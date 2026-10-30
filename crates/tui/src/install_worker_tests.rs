@@ -283,6 +283,7 @@ fn a_hooks_thread_that_cannot_start_posts_the_failure_as_the_result() {
             | Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::WriteFailed(_)
             | Input::Resize
             | Input::Files { .. }
             | Input::FindDue(_)

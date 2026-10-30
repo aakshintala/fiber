@@ -638,7 +638,7 @@ impl App {
     }
 
     /// Folds one hub line into the session list, with the lines to send;
-    /// `None` means `on_line` goes on as today. A hub `session_left` and
+    /// `None` means `on_line` dispatches the unconsumed line to its hub or session handler. A hub `session_left` and
     /// every `session_status` fold into the rows; the answers to `feed`
     /// and the latest `recent` fill the list, and their refusals are one
     /// notice. Every subscribe acknowledgement updates the levels, and
@@ -720,8 +720,9 @@ impl App {
                     }
                     // A rejected `start` is home's blocker text, above the
                     // box until the next `start` goes out. Reading
-                    // `pending` first, it still reaches the rejection
-                    // below, staying a notice as today.
+                    // `pending` first, this branch returns `None`; `on_line`
+                    // then passes the unconsumed hub line to `on_hub`,
+                    // which shows the rejection notice.
                     if !accepted && let Some((Kind::Start, _)) = self.outbox.pending.get(id) {
                         if let Some(message) = hub.payload.get("message").and_then(Value::as_str)
                             && let Some(home) = self.home.as_mut()
