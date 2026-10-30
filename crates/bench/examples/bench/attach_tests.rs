@@ -606,20 +606,25 @@ fn span_samples_emit_one_row_per_op_timing_line() {
     ]
     .join("\n");
     let dir = span_home(4242, &text);
-    let rows = span_samples(dir.path(), 4242, "10 MiB", 10_485_760, 2).expect("spans read");
-    assert_eq!(
-        rows,
-        vec![
-            (
-                SPAN_METRIC,
-                json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.extensions", "ms": 3}),
-            ),
-            (
-                SPAN_METRIC,
-                json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.tail_wait", "ms": 19}),
-            ),
-        ]
-    );
+    let mut rows = span_samples(dir.path(), 4242, "10 MiB", 10_485_760, 2).expect("spans read");
+    let mut want = vec![
+        (
+            SPAN_METRIC,
+            json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.extensions", "ms": 3}),
+        ),
+        (
+            SPAN_METRIC,
+            json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.tail_wait", "ms": 19}),
+        ),
+    ];
+    // `docs/state.md:423-446` promises counts and scopes, not log order,
+    // so the comparison sorts both sides: the exact rows and their count
+    // still match, in any order.
+    let key =
+        |(_, sample): &(&str, serde_json::Value)| serde_json::to_string(sample).unwrap_or_default();
+    rows.sort_by(|a, b| key(a).cmp(&key(b)));
+    want.sort_by(|a, b| key(a).cmp(&key(b)));
+    assert_eq!(rows, want);
     assert_eq!(SPAN_METRIC, "attach_span_ms");
 }
 
