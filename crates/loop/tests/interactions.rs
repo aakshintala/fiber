@@ -105,6 +105,7 @@ impl Tool for Asks {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
@@ -605,6 +606,7 @@ impl Tool for Answerable {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }

@@ -52,7 +52,7 @@ mod wrap;
 
 mod sed;
 
-use classify::classify;
+use classify::{classify, review_when_confined};
 use command::{Finished, SandboxApply, StopKind};
 
 #[cfg(test)]
@@ -297,6 +297,13 @@ impl Tool for Shell {
         // A call `parse` rejects never runs. The closed default keeps a bad
         // `timeout_ms` or `workdir` off the read-only fast path.
         let mut unconfined = false;
+        // The destructive-command guard reads the raw command text before
+        // the parser runs, so a form the parser rejects still declares
+        // review (`docs/tools.md`, "What a tool declares").
+        let guard = arguments
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(review_when_confined);
         let mut effects = match parse(arguments, &self.workspace, self.max_timeout_ms) {
             Ok(parsed) => {
                 unconfined = parsed.unconfined;
@@ -305,6 +312,7 @@ impl Tool for Shell {
             }
             Err(_) => classify::executes(None, None),
         };
+        effects.review_when_confined = guard;
         // An unavailable sandbox does not mark the call confined: it stays
         // on the reviewed path. An explicit `unconfined: true` skips the
         // upgrade and is reviewed as with the sandbox off. Once declared

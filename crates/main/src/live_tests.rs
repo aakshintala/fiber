@@ -114,6 +114,7 @@ impl Tool for Shell {
             subject: Some(command),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }

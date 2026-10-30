@@ -1837,6 +1837,7 @@ impl Tool for Probe {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
@@ -3502,6 +3503,7 @@ impl Tool for Asking {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
