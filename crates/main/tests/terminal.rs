@@ -3558,14 +3558,14 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
     // suppressed. Enter on the dismiss cross dismisses; Esc leaves
     // navigate mode so the next prompt goes to the input box.
     focus_notice(&mut run, "skills are shadowed");
-    let mut grid = run.wait_screen("the notice focused", |grid| {
+    let grid = run.wait_screen("the notice focused", |grid| {
         grid.rows
             .iter()
             .any(|row| row.contains("2 skills are shadowed"))
     });
     let before = reversed_cells(&grid);
     run.write(b"\x1b[B");
-    grid = run.wait_screen("the dismiss cross focused", |next| {
+    run.wait_screen("the dismiss cross focused", |next| {
         reversed_cells(next) != before
     });
     run.write(b"\r");
@@ -3574,15 +3574,19 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
     });
     run.write(b"\x1b[27u");
     run.wait_screen("the input box back", |grid| reversed_cells(grid).is_empty());
-    // A new session in the same run opens beside the first: its
-    // identical opening notice shows no row again, since the run already
-    // showed it (`docs/tui.md`, "Notices").
+    // `/new` goes home with the cursor in the input box; the next prompt
+    // starts the second session beside the first. Its identical opening
+    // notice shows no row again, since the run already showed it
+    // (`docs/tui.md`, "Notices").
     run.write(b"/new\r");
+    run.wait_screen("home for the second session", |grid| {
+        grid.contents.contains("Enter starts a session")
+    });
+    run.write(b"say hi\r");
     let dir = sessions(&setup);
     fakes::wait_until("the second session", setup.deadline, move || {
         fs::read_dir(&dir).is_ok_and(|entries| entries.count() == 2)
     });
-    run.write(b"say hi\r");
     run.wait_screen("the second session's reply", |grid| {
         grid.contents.contains("Hel")
     });
