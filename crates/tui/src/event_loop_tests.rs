@@ -2524,6 +2524,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::WriteFailed(_)
             | Input::Resize
             | Input::Signal(_)
             | Input::Files { .. }
@@ -3123,6 +3124,7 @@ fn the_signal_thread_sends_each_taken_signal() {
         | Input::Connected(..)
         | Input::ConnectFailed(_)
         | Input::Disconnected
+        | Input::WriteFailed(_)
         | Input::Resize
         | Input::Files { .. }
         | Input::FindDue(_)
