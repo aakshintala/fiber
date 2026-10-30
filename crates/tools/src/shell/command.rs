@@ -451,7 +451,9 @@ fn execute_inner(
                     );
                 }
                 Err(cause) => {
-                    return Err(std::io::Error::other(SandboxApply { cause }));
+                    return Err(std::io::Error::other(SandboxApply {
+                        cause: cause.to_string(),
+                    }));
                 }
             },
         }
@@ -475,7 +477,9 @@ fn execute_inner(
             Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
                 Ok(prepared) => Some(prepared),
                 Err(cause) => {
-                    return Err(std::io::Error::other(SandboxApply { cause }));
+                    return Err(std::io::Error::other(SandboxApply {
+                        cause: cause.to_string(),
+                    }));
                 }
             },
         }
