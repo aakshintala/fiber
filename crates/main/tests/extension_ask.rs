@@ -139,11 +139,13 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
         ), &|| setup.deadline.left())
         .unwrap();
     // The request stays pending: no line up to the rejection resolves it.
+    // Consecutive receives draining one stream are one wait: every line
+    // comes through the wait started before the first receive, while the
+    // sends between phases stay separate waits.
     let mut rejected = None;
+    let wait = setup.deadline.start_wait();
     while rejected.is_none() {
-        let line = client
-            .recv(setup.deadline)
-            .expect("the unfit reply is rejected");
+        let line = client.recv(wait).expect("the unfit reply is rejected");
         assert!(
             line["kind"] != "interaction_resolved",
             "the request stays pending after an unfit reply"

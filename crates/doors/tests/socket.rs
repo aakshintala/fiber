@@ -6904,7 +6904,14 @@ mod import_sameness {
     fn direct(home: &Path, person: &Path, source: config::ImportSource) -> config::ImportReport {
         let clock = fakes::clock::FakeClock::new();
         let source_home = config::source_home(person, source);
-        config::import_source(home, &source_home, source, clock.as_ref()).unwrap()
+        config::import_source(
+            home,
+            &source_home,
+            source,
+            &config::no_personal_sources,
+            clock.as_ref(),
+        )
+        .unwrap()
     }
 
     /// The driver's accepted `result` for the `import` line with `id`.

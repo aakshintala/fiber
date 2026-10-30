@@ -3961,7 +3961,7 @@ fn pinned_call(
         if first.is_none() && text.scopes.last() == Some(&call) {
             first = Some(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let header = header.expect("the call row");
     let first = first.expect("opened rows");
@@ -4169,7 +4169,7 @@ fn following_draws_no_pin() {
     let mut row = 0usize;
     let mut covered = None;
     for (line, target) in &page {
-        let height = crate::view::rows(line.clone(), width);
+        let height = crate::view::rows(line, width);
         if row + height > total.saturating_sub(conv) && covered.is_none() {
             covered = Some((line.to_string(), *target));
         }
@@ -4209,7 +4209,7 @@ fn rows_above_the_top_take_no_zero_height_target() {
             tail = Some(row);
             break;
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let tail = tail.expect("the tail reply");
     app.jump(tail);
@@ -4239,7 +4239,7 @@ fn a_narrow_screen_still_pins_one_row() {
         if first.is_none() && text.scopes.last() == Some(&call) {
             first = Some(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let first = first.expect("opened rows");
     let _ = call;
@@ -4261,7 +4261,7 @@ fn a_narrow_screen_still_pins_one_row() {
     let mut row = 0usize;
     let mut covered = None;
     for (line, _) in &rows_page {
-        let height = crate::view::rows(line.clone(), width);
+        let height = crate::view::rows(line, width);
         if row + height > top + 1 && covered.is_none() {
             covered = Some(line.to_string());
         }
@@ -4702,7 +4702,7 @@ fn pinned_call_with_prior_turn(
         if first.is_none() && text.scopes.last() == Some(&call) {
             first = Some(row);
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     let header = header.expect("the call row");
     let first = first.expect("opened rows");

@@ -8,6 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -18,8 +19,8 @@ use fakes::clock::FakeClock;
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 use super::{
-    Cache, Found, commands, discover, discover_cached, entry, expand, listing, size_notice,
-    split_command,
+    Cache, Found, commands, discover, discover_cached, entry, expand, listing,
+    personal_source_paths, size_notice, split_command,
 };
 use crate::prompt::PromptInputs;
 
@@ -1281,4 +1282,266 @@ fn a_raced_skill_read_does_not_pin_the_torn_header() {
     let second = cached(&tree, &mut cache);
     assert_eq!(names(&second), ["same"], "the next turn offers the skill");
     assert_eq!(description_of(&second, "same"), "aaa");
+}
+
+/// Runs the already-read check over `dirs` with `home` as Fiber home
+/// and `person` as the person's home.
+fn already_read(
+    home: &Path,
+    person: Option<&Path>,
+    dirs: &[PathBuf],
+) -> BTreeMap<PathBuf, PathBuf> {
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    personal_source_paths(home, person, dirs, clock)
+}
+
+/// Writes a source skill entry under `skills` and returns the checked
+/// directory.
+fn source_skill(skills: &Path, entry: &str, name: &str) -> PathBuf {
+    let dir = skills.join(entry);
+    skill(skills, entry, name, "Source skill.");
+    dir
+}
+
+#[test]
+fn a_matching_header_under_another_directory_name_diverts() {
+    let tree = Tree::new();
+    let logged = skill(
+        &tree.person().join(".agents/skills"),
+        "review",
+        "review",
+        "Reviews code.",
+    );
+    // The source directory's name never decides: the checked SKILL.md's
+    // header name matches the agents-side skill's.
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
+    assert_eq!(got, BTreeMap::from([(checked, logged)]));
+}
+
+#[test]
+fn an_agents_skill_without_a_name_does_not_divert() {
+    let tree = Tree::new();
+    write(
+        &tree.person().join(".agents/skills"),
+        "review",
+        "---\ndescription: Reviews code.\n---\n\nBody.\n",
+    );
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(&tree.home(), Some(&tree.person()), &[checked]);
+    assert!(
+        got.is_empty(),
+        "a nameless skill is not already read: {got:?}"
+    );
+}
+
+#[test]
+fn an_agents_skill_without_a_description_does_not_divert() {
+    let tree = Tree::new();
+    write(
+        &tree.person().join(".agents/skills"),
+        "review",
+        "---\nname: review\n---\n\nBody.\n",
+    );
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(&tree.home(), Some(&tree.person()), &[checked]);
+    assert!(
+        got.is_empty(),
+        "a descriptionless skill is not already read: {got:?}"
+    );
+}
+
+#[test]
+fn an_unparseable_agents_skill_does_not_divert() {
+    let tree = Tree::new();
+    write(
+        &tree.person().join(".agents/skills"),
+        "review",
+        "This file holds no header at all.\n",
+    );
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(&tree.home(), Some(&tree.person()), &[checked]);
+    assert!(
+        got.is_empty(),
+        "an unparseable skill is not already read: {got:?}"
+    );
+}
+
+#[test]
+fn a_symlinked_source_directory_resolves_under_the_target_name() {
+    let tree = Tree::new();
+    let logged = skill(
+        &tree.person().join(".agents/skills"),
+        "review",
+        "review",
+        "Reviews code.",
+    );
+    // The source entry links into the agents place: discovery loads the
+    // link's target under the target's name, and the check reports the
+    // target's logged path for the link.
+    let link = tree.root.join("source/skills/review");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(tree.person().join(".agents/skills/review"), &link).unwrap();
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&link),
+    );
+    assert_eq!(got, BTreeMap::from([(link, logged)]));
+}
+
+#[test]
+fn a_model_disabled_agents_skill_still_diverts() {
+    let tree = Tree::new();
+    let logged = write(
+        &tree.person().join(".agents/skills"),
+        "review",
+        "---\nname: review\ndescription: Reviews code.\ndisable-model-invocation: true\n---\n\nBody.\n",
+    );
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
+    // The disabled switch leaves the skill out of the listing, never out
+    // of loading: discovery still reads it, so it still diverts.
+    assert_eq!(got, BTreeMap::from([(checked, logged)]));
+}
+
+#[test]
+fn a_fiber_home_winner_does_not_stop_the_diversion() {
+    let tree = Tree::new();
+    skill(&tree.home().join("skills"), "review", "review", "My copy.");
+    let logged = skill(
+        &tree.person().join(".agents/skills"),
+        "review",
+        "review",
+        "Reviews code.",
+    );
+    // Presence, not winner, decides: Fiber home wins the name today, yet
+    // the copy must still go, so the agents-side skill still diverts.
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
+    assert_eq!(got, BTreeMap::from([(checked, logged)]));
+}
+
+#[test]
+fn a_fiber_home_only_skill_does_not_divert() {
+    let tree = Tree::new();
+    skill(&tree.home().join("skills"), "review", "review", "My copy.");
+    // Fiber home is no other personal source: the only copy is already
+    // where the import would put it, so nothing diverts.
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(&tree.home(), Some(&tree.person()), &[checked]);
+    assert!(
+        got.is_empty(),
+        "a Fiber-home copy is not already read: {got:?}"
+    );
+}
+
+#[test]
+fn a_shared_header_name_diverts_to_a_logged_path() {
+    let tree = Tree::new();
+    let first = skill(
+        &tree.person().join(".agents/skills"),
+        "aaa",
+        "review",
+        "First.",
+    );
+    let second = skill(
+        &tree.person().join(".agents/skills"),
+        "zzz",
+        "review",
+        "Second.",
+    );
+    // docs/system-prompt.md sets precedence between sources, not order
+    // within one source: either logged path counts, so the check passes
+    // whichever copy discovery would load.
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
+    let logged = got.get(&checked).expect("the checked dir diverts");
+    assert!(
+        logged == &first || logged == &second,
+        "the logged path is one discovery read: {got:?}",
+    );
+}
+
+#[test]
+fn a_missing_person_home_diverts_nothing() {
+    let tree = Tree::new();
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "review");
+    let got = already_read(&tree.home(), None, &[checked]);
+    assert!(got.is_empty(), "no personal place is read: {got:?}");
+}
+
+#[test]
+fn a_repo_only_skill_does_not_divert() {
+    let tree = Tree::new();
+    skill(
+        &tree.top().join(".fiber/skills"),
+        "solo",
+        "solo",
+        "Repo skill.",
+    );
+    // The repository is no personal source: only Fiber home and the
+    // person's home decide.
+    let checked = source_skill(&tree.root.join("source/skills"), "mine", "solo");
+    let got = already_read(&tree.home(), Some(&tree.person()), &[checked]);
+    assert!(got.is_empty(), "a repo skill is not already read: {got:?}");
+}
+
+#[test]
+fn a_two_mebibyte_valid_pair_diverts_through_the_unbounded_read() {
+    let tree = Tree::new();
+    let body = "x".repeat(2 * 1024 * 1024);
+    let agents_text = format!("---\nname: review\ndescription: Reviews code.\n---\n\n{body}");
+    let logged = write(
+        &tree.person().join(".agents/skills"),
+        "review",
+        &agents_text,
+    );
+    let source_text = format!("---\nname: review\ndescription: Source skill.\n---\n\n{body}");
+    let checked = tree.root.join("source/skills/mine");
+    write(&tree.root.join("source/skills"), "mine", &source_text);
+    // Both sides exceed the import's 1 MiB file cap, which does not bind
+    // this check: discovery reads them whole, so the pair still diverts.
+    let got = already_read(
+        &tree.home(),
+        Some(&tree.person()),
+        std::slice::from_ref(&checked),
+    );
+    assert_eq!(got, BTreeMap::from([(checked, logged)]));
+}
+
+#[test]
+fn a_checked_dir_without_its_file_is_absent() {
+    let tree = Tree::new();
+    skill(
+        &tree.person().join(".agents/skills"),
+        "review",
+        "review",
+        "Reviews code.",
+    );
+    // A check-side read failure diverts nothing and fails nothing: the
+    // entry follows the existing read path instead.
+    let checked = tree.root.join("source/skills/mine");
+    std::fs::create_dir_all(&checked).unwrap();
+    let got = already_read(&tree.home(), Some(&tree.person()), &[checked]);
+    assert!(
+        got.is_empty(),
+        "a missing file is not already read: {got:?}"
+    );
 }

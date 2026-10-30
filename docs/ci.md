@@ -119,7 +119,7 @@ A pull request runs only what its diff can affect.
   a broken harness or judge fails its own pull request rather than the
   backstop.
 - A diff that touches `crates/loop`, `crates/bench` or `xtask/src/bench*` also runs the "Session, memory kept after 10 busy turns" workload (`docs/performance.md`) in `release`. Any other pull request skips it, and the job summary says so. The loop holds the session's state, so a diff elsewhere rarely moves the row, and the backstop catches one that does.
-- On a pull request, the head and base binaries run only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row on both passes. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log`, `crates/worktree` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A diff touching only `docs/performance.md` selects no row, since the selector treats a docs file as selecting nothing: none of the six timing rows is measured on either pass, and the pull request is gated by the table checks and the `main` backstop alone. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
+- On a pull request, the head and base binaries run only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row on both passes. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log`, `crates/worktree` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`; `sandbox setup` on `crates/tools/`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A diff touching only `docs/performance.md` selects no row, since the selector treats a docs file as selecting nothing: none of the seven timing rows is measured on either pass, and the pull request is gated by the table checks and the `main` backstop alone. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
 
 The selector has its own tests.
 
@@ -147,8 +147,11 @@ ships. Cargo ignores the setting when it builds the test harness.
 
 A failed binary-level test retries once. A pass on retry does not fail the
 run, except for a test the pull request touched (below): CI opens a flake
-issue for the test's binary, `Flaky tests: <binary>`, or comments on the open one
-(`docs/testing.md`, "Flaky tests"). The retry is nextest's `ci` profile over
+issue for the test's file, or comments on the open one
+(`docs/testing.md`, "Flaky tests"). The aggregate `main` integration binary
+is keyed by its first test-module segment, as in `Flaky tests:
+main::reviewer_setup`; a root-level `main` test falls back to `Flaky tests:
+main`, while every other binary keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
@@ -159,10 +162,10 @@ up the complete open and closed issues, asks
 `cargo xtask flake-report-events` which issue numbers need event fetches,
 fetches only those endpoints, and runs
 `cargo xtask flake-report --tested-commit` to decide one JSON-lines action
-per test binary, probing ancestry itself only for each selected
+per unique title, probing ancestry itself only for each selected
 latest fix. It then runs `cargo xtask flake-classify`, which reads the
 runner lists and the two file lists git diffs from the merge base, and
-writes one classification line per test binary: a stale base, a
+writes one classification line per unique title: a stale base, a
 file the pull request owns, or the issue lookup. It uploads one combined
 `flake-report-data` artifact carrying the decision lines plus the
 classification lines. The write-only

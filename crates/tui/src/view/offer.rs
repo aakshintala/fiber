@@ -135,7 +135,7 @@ fn wrapped_texts(line: &Line<'static>, width: u16) -> Vec<(String, Join)> {
     if width == 0 {
         return Vec::new();
     }
-    let height = crate::view::rows(line.clone(), width);
+    let height = crate::view::rows(line, width);
     if height == 0 {
         return Vec::new();
     }

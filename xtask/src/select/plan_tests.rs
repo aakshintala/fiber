@@ -498,7 +498,7 @@ fn skipped(event: &str, paths: &[&str]) -> Vec<&'static str> {
 fn a_tui_diff_skips_the_session_rows() {
     assert_eq!(
         skipped("pull_request", &["crates/tui/src/editor.rs"]),
-        vec!["session start", "sessions list"]
+        vec!["session start", "sessions list", "sandbox setup"]
     );
 }
 
@@ -506,7 +506,7 @@ fn a_tui_diff_skips_the_session_rows() {
 fn a_loop_diff_skips_the_list_and_paging_rows() {
     assert_eq!(
         skipped("pull_request", &["crates/loop/src/status.rs"]),
-        vec!["sessions list", "paging"]
+        vec!["sessions list", "paging", "sandbox setup"]
     );
 }
 
@@ -514,7 +514,7 @@ fn a_loop_diff_skips_the_list_and_paging_rows() {
 fn a_routing_diff_skips_the_list_and_paging_rows() {
     assert_eq!(
         skipped("pull_request", &["crates/routing/src/lib.rs"]),
-        vec!["sessions list", "paging"]
+        vec!["sessions list", "paging", "sandbox setup"]
     );
 }
 
@@ -522,7 +522,7 @@ fn a_routing_diff_skips_the_list_and_paging_rows() {
 fn a_hub_diff_skips_only_paging() {
     assert_eq!(
         skipped("pull_request", &["crates/hub/src/feed.rs"]),
-        vec!["paging"]
+        vec!["paging", "sandbox setup"]
     );
 }
 
@@ -530,7 +530,7 @@ fn a_hub_diff_skips_only_paging() {
 fn a_cli_diff_skips_session_start_and_paging() {
     assert_eq!(
         skipped("pull_request", &["crates/cli/src/hub_status.rs"]),
-        vec!["session start", "paging"]
+        vec!["session start", "paging", "sandbox setup"]
     );
 }
 
@@ -544,7 +544,7 @@ fn a_worktree_diff_selects_the_list_row() {
     // only `paging` is skipped.
     assert_eq!(
         skipped("pull_request", &["crates/worktree/src/project.rs"]),
-        vec!["paging"]
+        vec!["paging", "sandbox setup"]
     );
 }
 
@@ -577,7 +577,7 @@ fn an_unmapped_path_selects_every_row() {
 
 #[test]
 fn a_docs_file_selects_no_row() {
-    // The pinned literal list of the six names in table order, cited by
+    // The pinned literal list of the seven names in table order, cited by
     // `crates/bench/examples/bench/main_tests.rs`: each side names the
     // other.
     let all = vec![
@@ -587,6 +587,7 @@ fn a_docs_file_selects_no_row() {
         "terminal attach",
         "terminal wheel",
         "paging",
+        "sandbox setup",
     ];
     // `docs/invocation.md` is compiled in, so `release` runs on it, but
     // its paths are all docs: every base row is skipped.
@@ -595,7 +596,7 @@ fn a_docs_file_selects_no_row() {
     // Docs beside code change nothing.
     assert_eq!(
         skipped("pull_request", &["docs/ci.md", "crates/tui/src/editor.rs"]),
-        vec!["session start", "sessions list"]
+        vec!["session start", "sessions list", "sandbox setup"]
     );
 }
 
@@ -605,7 +606,7 @@ fn markdown_under_crates_is_code() {
     // docs skip: the loop's prompts compile in.
     assert_eq!(
         skipped("pull_request", &["crates/loop/prompt/system.md"]),
-        vec!["sessions list", "paging"]
+        vec!["sessions list", "paging", "sandbox setup"]
     );
     assert_eq!(
         skipped("pull_request", &["crates/tools/prompt/guidelines.md"]),
@@ -622,7 +623,7 @@ fn two_crates_take_the_union() {
             "pull_request",
             &["crates/loop/src/status.rs", "crates/cli/src/hub_status.rs"]
         ),
-        vec!["paging"]
+        vec!["paging", "sandbox setup"]
     );
     // The tui selects the terminal and paging rows: with the loop only
     // the list row is left out.
@@ -631,7 +632,7 @@ fn two_crates_take_the_union() {
             "pull_request",
             &["crates/loop/src/status.rs", "crates/tui/src/editor.rs"]
         ),
-        vec!["sessions list"]
+        vec!["sessions list", "sandbox setup"]
     );
 }
 
