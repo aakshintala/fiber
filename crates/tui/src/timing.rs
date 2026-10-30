@@ -17,6 +17,7 @@ pub(crate) struct Timing {
     transcript: bool,
     attach_summary: bool,
     tail_wait: bool,
+    tail_install: bool,
 }
 
 impl Timing {
@@ -29,6 +30,7 @@ impl Timing {
             transcript: false,
             attach_summary: false,
             tail_wait: false,
+            tail_install: false,
         }
     }
 
@@ -107,6 +109,19 @@ impl Timing {
     /// line.
     pub(crate) fn preview_fold(&self) -> Option<log::diag::Timer> {
         log::diag::timed(&self.diag, Op::TuiPreviewFold, None, None)
+    }
+
+    /// Starts the open's pre-frame install guard, once per process.
+    /// The caller holds it across the preview install to completion,
+    /// whatever its outcome. The install puts the newest candidate on
+    /// screen without another fold (`docs/tui.md`, "History and
+    /// paging"); when no answer folded one, the install folds the
+    /// leftover candidate first, under this same guard.
+    pub(crate) fn tail_install(&mut self) -> Option<log::diag::Timer> {
+        if std::mem::replace(&mut self.tail_install, true) {
+            return None;
+        }
+        log::diag::timed(&self.diag, Op::TuiTailInstall, None, None)
     }
 }
 

@@ -154,6 +154,9 @@ pub enum Op {
     TuiTailWait,
     /// Folding one tail answer into the preview candidate.
     TuiPreviewFold,
+    /// Installing the open's pre-frame preview candidate, without
+    /// another fold.
+    TuiTailInstall,
     /// One session-log write attempt.
     LogAppend,
     /// One session-log sync, when the durability policy syncs.
@@ -219,6 +222,7 @@ impl Op {
             Self::TuiAttachSummary => "tui.attach_summary",
             Self::TuiTailWait => "tui.tail_wait",
             Self::TuiPreviewFold => "tui.preview_fold",
+            Self::TuiTailInstall => "tui.tail_install",
             Self::LogAppend => "log.append",
             Self::LogFsync => "log.fsync",
             Self::ToolPermission => "tool.permission",

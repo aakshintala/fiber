@@ -270,8 +270,24 @@ fn preview_fold_writes_one_line_per_fold() {
     }
 }
 
+/// The pre-frame install writes once: a second install takes no guard,
+/// so a second open writes nothing.
+#[test]
+fn tail_install_writes_once_per_process() {
+    let home = fakes::TempDir::new("tui-timing-tail-install");
+    let clock = FakeClock::new();
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.tail_install());
+    assert!(
+        timing.tail_install().is_none(),
+        "a second install takes no guard"
+    );
+    let lines = op_lines(home.path());
+    assert_terminal_wire(&lines, "tui.tail_install");
+}
+
 /// At `info` the attach spans record nothing: the extension load, the
-/// summary, the tail wait and a fold write no file.
+/// summary, the tail wait, a fold and the install write no file.
 #[test]
 fn attach_spans_write_nothing_at_info() {
     let home = fakes::TempDir::new("tui-timing-attach-spans-info");
@@ -280,6 +296,7 @@ fn attach_spans_write_nothing_at_info() {
     crate::timing::discard(timing.attach_summary());
     crate::timing::discard(timing.tail_wait());
     crate::timing::discard(timing.preview_fold());
+    crate::timing::discard(timing.tail_install());
     crate::timing::discard(None);
     assert!(
         !home.path().join("logs").exists(),
@@ -704,17 +721,7 @@ fn subscribing_lp(name: &str) -> (fakes::TempDir, super::Loop<TestBackend>, Stri
 fn assert_terminal_wires(lines: &[serde_json::Value], op: &str) {
     assert!(!lines.is_empty(), "at least one line for {op}");
     for line in lines {
-        assert_eq!(line["code"], "op_timing", "{line}");
-        assert_eq!(line["level"], "debug", "{line}");
-        assert_eq!(line["process"], "tui", "{line}");
-        assert!(line.get("session_id").is_none(), "{line}");
-        assert_eq!(line["message"], "An operation ended.", "{line}");
-        let data = line["data"].as_object().expect("data is an object");
-        let mut keys: Vec<&str> = data.keys().map(String::as_str).collect();
-        keys.sort_unstable();
-        assert_eq!(keys, vec!["ms", "op"], "{line}");
-        assert!(line["data"]["ms"].as_u64().is_some(), "{line}");
-        assert_eq!(line["data"]["op"], op, "{line}");
+        assert_terminal_wire(std::slice::from_ref(line), op);
     }
 }
 
@@ -743,7 +750,6 @@ fn accept_summary(lp: &mut super::Loop<TestBackend>, id: &str) {
 #[test]
 fn summary_span_covers_the_send_through_the_acceptance() {
     let (home, mut lp, id) = subscribing_lp("tui-timing-summary-span");
-    let _ = &home;
     assert!(lp.app.summary_in_flight(), "the summary is in flight");
     lp.poll_summary_span();
     assert!(
@@ -796,10 +802,11 @@ fn summary_poll_starts_nothing_once_the_latch_is_set() {
 }
 
 /// The open's pre-frame tail read is timed end to end: one
-/// `tui.tail_wait` line spans the whole fetch, and one `tui.preview_fold`
-/// line covers each fold after it: the answer's fold and the install's
-/// fold. A `Phase::Count` read takes no `tail_wait` guard, so swapping
-/// the arms leaves none here.
+/// `tui.tail_wait` line spans the whole fetch, one `tui.preview_fold`
+/// line covers the answer's fold, and one `tui.tail_install` line covers
+/// the install, which installs the newest candidate without another fold
+/// (`docs/tui.md`, "History and paging"). A `Phase::Count` read takes no
+/// `tail_wait` guard, so swapping the arms leaves none here.
 #[test]
 fn open_tail_times_the_wait_and_every_fold() {
     let (home, mut lp, id) = subscribing_lp("tui-timing-open-tail");
@@ -868,12 +875,19 @@ fn open_tail_times_the_wait_and_every_fold() {
         .filter(|line| line["data"]["op"] == "tui.preview_fold")
         .cloned()
         .collect();
-    assert_eq!(
-        folds.len(),
-        2,
-        "the answer fold and the install fold: {folds:?}"
-    );
+    assert_eq!(folds.len(), 1, "the answer's fold: {folds:?}");
     assert_terminal_wires(&folds, "tui.preview_fold");
+    let installs: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.tail_install")
+        .cloned()
+        .collect();
+    assert_eq!(
+        installs.len(),
+        1,
+        "the install without another fold: {installs:?}"
+    );
+    assert_terminal_wires(&installs, "tui.tail_install");
 }
 
 /// A refused connect still draws its first frame, and only it.

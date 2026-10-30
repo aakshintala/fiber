@@ -98,6 +98,7 @@ fn every_operation_serializes_to_its_wire_name() {
         (Op::TuiAttachSummary, "tui.attach_summary"),
         (Op::TuiTailWait, "tui.tail_wait"),
         (Op::TuiPreviewFold, "tui.preview_fold"),
+        (Op::TuiTailInstall, "tui.tail_install"),
         (Op::LogAppend, "log.append"),
         (Op::LogFsync, "log.fsync"),
         (Op::ToolPermission, "tool.permission"),

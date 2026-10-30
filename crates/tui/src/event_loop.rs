@@ -1425,10 +1425,11 @@ impl<B: Backend> Loop<B> {
     /// Reads the open's tail when one is due: the own-segment history
     /// windows fill it, then the preview installs. No stream means the
     /// tail ended with nothing read; a lost read ends everything
-    /// through `disconnected`, with no install. The tail wait and each
-    /// fold are timed once per process; the first fetched page below
-    /// keeps its own timer. Older windows and ancestors read after the
-    /// first frame draws, through the retained count.
+    /// through `disconnected`, with no install. The tail wait, each
+    /// answer fold and the install are timed once per process; the
+    /// first fetched page below keeps its own timer. Older windows and
+    /// ancestors read after the first frame draws, through the retained
+    /// count.
     fn open_tail(&mut self, rx: &Receiver<Input>) {
         let Some(session) = self.app.tail_due() else {
             return;
@@ -1437,7 +1438,7 @@ impl<B: Backend> Loop<B> {
         self.app.clear_tail_read();
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
-            let install = self.timing.preview_fold();
+            let install = self.timing.tail_install();
             self.app.install_tail();
             drop(install);
             return;
@@ -1462,9 +1463,11 @@ impl<B: Backend> Loop<B> {
         // its tail read here (only a lost connection drops it, and that
         // returns above). No page count is compared: a rebuild can
         // hold the same count, and an empty tail still installs its
-        // empty preview. The install holds the fold guard: it folds the
-        // leftover candidate when no answer did, then installs it.
-        let install = self.timing.preview_fold();
+        // empty preview. The install holds its own guard: it installs
+        // the newest candidate without another fold (`docs/tui.md`,
+        // "History and paging"); when no answer folded one, it folds
+        // the leftover candidate first, under the same guard.
+        let install = self.timing.tail_install();
         self.app.install_tail();
         drop(install);
     }
