@@ -34,9 +34,9 @@ use contract::provider::{
 };
 use contract::rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
 use contract::shapes::{
-    ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, ProtectedPathFailure,
-    ProtectedPaths, Sender as From, Tokens, Usage,
+    ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender as From, Tokens, Usage,
 };
+use contract::shapes::{ProtectedPathFailure, ProtectedPaths};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Settle, Tool};
 use contract::{
     ActionId, CommandId, Envelope, ErrorCode, GenerationId, JobId, RequestId, Seq, SessionId,

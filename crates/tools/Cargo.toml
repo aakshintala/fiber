@@ -7,9 +7,7 @@ publish.workspace = true
 
 # Of Fiber's crates, `tools` depends on `contract` and `net`
 # (docs/architecture.md, "The call rules"); `support` holds no domain
-# knowledge, so every crate may depend on it. `config` holds the Fiber-home
-# layout, so the shell's protected-path state lives under its projects
-# root instead of joining the segments itself. thiserror names each tool
+# knowledge, so every crate may depend on it. thiserror names each tool
 # failure as its own case (`docs/errors.md`, "Where a code comes from").
 [dependencies]
 config = { path = "../config" }
