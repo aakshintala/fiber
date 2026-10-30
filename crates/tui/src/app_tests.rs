@@ -1950,3 +1950,203 @@ fn until_waited_needs_the_sessions_own_until_pass() {
         .push((session.clone(), Pass::Until(contract::Seq(7))));
     assert!(app.until_waited(&session), "its own boundary waits");
 }
+
+/// The borrowed `read_ref` seam reads `payload` exactly as the cloning
+/// `read!` body does: the setup asserts the payload decodes through the
+/// old body, then the parity assert compares the two.
+fn read_parity<T>(payload: serde_json::Value)
+where
+    T: serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    let map = payload.as_object().cloned().unwrap_or_default();
+    let old = serde_json::from_value::<T>(serde_json::Value::Object(map.clone())).ok();
+    assert!(old.is_some(), "setup: the payload decodes: {payload}");
+    assert_eq!(super::read_ref::<T>(&map), old);
+}
+
+/// Both paths read `payload` as `None`: the payload is malformed for `T`.
+fn read_none<T>(payload: serde_json::Value)
+where
+    T: serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    let map = payload.as_object().cloned().unwrap_or_default();
+    let old = serde_json::from_value::<T>(serde_json::Value::Object(map.clone())).ok();
+    assert_eq!(old, None, "setup: the payload stays unreadable: {payload}");
+    assert_eq!(super::read_ref::<T>(&map), None);
+}
+
+use contract::events::{
+    AssistantMessageCompleted, CommandAccepted, CommandRejected, ContextNudged, DelegateFinished,
+    DelegateStarted, ExtensionUi, FiberExited, FiberStarted, HandoffCompleted, HandoffStarted,
+    InteractionRequested, InteractionResolved, JobCompleted, JobDelta, JobStarted, McpServerFailed,
+    McpServerReady, ModelChanged, Notice, PermissionRequested, PreambleBuilt, ReasoningCompleted,
+    RetryScheduled, Rewound, SessionNamed, SessionStarted, SessionStatus, ShellCommand,
+    SteeringApplied, SteeringQueue, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnCompleted, TurnStarted,
+    UsageRecorded,
+};
+
+#[test]
+fn read_ref_matches_the_clone_for_command_outcomes() {
+    read_parity::<CommandAccepted>(serde_json::json!({"command_id": "c_1"}));
+    read_parity::<CommandAccepted>(
+        serde_json::json!({"command_id": "c_1", "result": {"lines": []}}),
+    );
+    read_parity::<CommandRejected>(
+        serde_json::json!({"command_id": "c_1", "code": "io_failed", "message": "no hub"}),
+    );
+    // An unknown field is ignored, like the old body.
+    read_parity::<CommandAccepted>(serde_json::json!({"command_id": "c_1", "zzz_unknown": 1}));
+    read_none::<CommandAccepted>(serde_json::json!({}));
+    read_none::<CommandRejected>(serde_json::json!({"command_id": "c_1"}));
+    read_none::<CommandRejected>(serde_json::json!({"command_id": "c_1", "code": 5}));
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_session_lines() {
+    read_parity::<TurnStarted>(serde_json::json!({"input": []}));
+    read_parity::<TurnStarted>(
+        serde_json::json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": "hi"}]}]}),
+    );
+    read_parity::<TurnCompleted>(serde_json::json!({"outcome": "completed"}));
+    read_parity::<ShellCommand>(
+        serde_json::json!({"command": "ls", "output": "o", "process": {"timed_out": false}}),
+    );
+    read_parity::<SessionNamed>(serde_json::json!({"name": "n", "by": "person"}));
+    read_parity::<SteeringQueue>(serde_json::json!({"messages": []}));
+    read_parity::<Notice>(serde_json::json!({"code": "busy", "message": "m"}));
+    read_none::<TurnStarted>(serde_json::json!({"input": "x"}));
+    read_none::<TurnCompleted>(serde_json::json!({"outcome": "done"}));
+    read_none::<SessionNamed>(serde_json::json!({"name": "n"}));
+    read_none::<Notice>(serde_json::json!({"code": "busy"}));
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_approval_kinds() {
+    // `try_from`: the line without repair keys converts.
+    read_parity::<ToolCallRequested>(serde_json::json!({"name": "read", "arguments": {}}));
+    read_parity::<PermissionRequested>(
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"], "reversible": true, "step": "standing_ask", "standing_rule": {"scope": "global", "prefix": "npm"}}),
+    );
+    read_parity::<InteractionRequested>(
+        serde_json::json!({"request_id": "r_1", "kind": "confirm", "prompt": "P?"}),
+    );
+    read_parity::<InteractionResolved>(
+        serde_json::json!({"request_id": "r_1", "by": "person", "confirmed": true}),
+    );
+    read_parity::<InteractionResolved>(
+        serde_json::json!({"request_id": "r_1", "by": "fiber", "declined": true}),
+    );
+    read_none::<ToolCallRequested>(serde_json::json!({"name": "read"}));
+    // `try_from`: a confirm carrying options is not a confirm.
+    read_none::<InteractionRequested>(serde_json::json!({"request_id": "r_1", "kind": "confirm"}));
+    read_none::<PermissionRequested>(
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"], "reversible": true, "step": "standing_ask"}),
+    );
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_usage_and_retry() {
+    read_parity::<UsageRecorded>(
+        serde_json::json!({"generation_id": "g01w1", "model": "fake/m", "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 2}, "input_bytes": 10, "cost": null}),
+    );
+    read_parity::<RetryScheduled>(
+        serde_json::json!({"code": "busy", "attempt": 1, "last_attempt": 2, "delay_ms": 10}),
+    );
+    read_none::<UsageRecorded>(serde_json::json!({}));
+    read_none::<RetryScheduled>(serde_json::json!({"code": "busy", "attempt": 1}));
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_jobs_and_delegates() {
+    read_parity::<JobStarted>(
+        serde_json::json!({"job_id": "j_1", "description": "d", "output_path": "/tmp/o"}),
+    );
+    read_parity::<DelegateStarted>(
+        serde_json::json!({"job_id": "j_1", "delegate_session_id": "s_bbbbbbbbbbbbbbbb", "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    );
+    read_parity::<JobCompleted>(serde_json::json!({"job_id": "j_1", "status": "completed"}));
+    read_parity::<JobDelta>(serde_json::json!({"job_id": "j_1"}));
+    read_parity::<JobDelta>(serde_json::json!({"job_id": "j_1", "text": "out"}));
+    read_parity::<DelegateFinished>(
+        serde_json::json!({"job_id": "j_1", "text": "done", "usage": {"tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 2}, "cost": null, "subscription_cost": 0.0}}),
+    );
+    read_none::<JobStarted>(serde_json::json!({"job_id": "j_1"}));
+    read_none::<JobCompleted>(serde_json::json!({"job_id": "j_1", "status": "won"}));
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_tool_call_progress() {
+    // `flatten`: the declared effects ride beside the call's own keys.
+    read_parity::<ToolCallStarted>(
+        serde_json::json!({"effects": ["executes"], "reversible": true}),
+    );
+    read_parity::<ToolCallCompleted>(serde_json::json!({"status": "completed", "content": []}));
+    read_parity::<ToolCallArgumentsDelta>(serde_json::json!({"index": 0, "text": "x"}));
+    read_parity::<TextDelta>(serde_json::json!({"text": "t"}));
+    read_parity::<TextCompleted>(serde_json::json!({"text": "t"}));
+    read_parity::<ReasoningCompleted>(serde_json::json!({"text": "t"}));
+    read_parity::<AssistantMessageCompleted>(serde_json::json!({"outcome": "completed"}));
+    read_none::<ToolCallCompleted>(serde_json::json!({"status": "completed"}));
+    read_none::<ToolCallStarted>(serde_json::json!({"reversible": true}));
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_session_lifecycle() {
+    read_parity::<SessionStarted>(
+        serde_json::json!({"workspace": "/w", "variables": {"path": "/bin", "names": [], "source": "inherited"}}),
+    );
+    read_parity::<SessionStatus>(
+        serde_json::json!({"name": "fix", "workspace": "/w", "project": "-w", "started": 0, "calls": 0, "since": 0, "spend": {"tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 2}, "cost": 0.0, "subscription_cost": 0.0}, "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0, "state": "streaming"}),
+    );
+    read_parity::<FiberStarted>(serde_json::json!({"version": "0.0.1", "resumed": false}));
+    read_parity::<FiberExited>(
+        serde_json::json!({"exit_code": 0, "usage": {"tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 2}, "cost": null, "subscription_cost": 0.0}}),
+    );
+    read_parity::<Rewound>(serde_json::json!({"new_session_id": "s_bbbbbbbbbbbbbbbb", "seq": 1}));
+    read_none::<SessionStarted>(serde_json::json!({"workspace": "/w"}));
+    read_none::<FiberStarted>(serde_json::json!({"version": "0.0.1"}));
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_preamble_and_model() {
+    read_parity::<PreambleBuilt>(
+        serde_json::json!({"reason": "start", "model": "m", "context_window": 1000, "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "s", "tools": []}),
+    );
+    read_parity::<ModelChanged>(
+        serde_json::json!({"before": {"model": "a", "cache_lifetime": "5m"}, "after": {"model": "b", "cache_lifetime": "1h"}, "source": "driver"}),
+    );
+    read_none::<PreambleBuilt>(serde_json::json!({"reason": "start"}));
+    read_none::<ModelChanged>(
+        serde_json::json!({"before": {"model": "a", "cache_lifetime": "5m"}}),
+    );
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_mcp_and_extension_ui() {
+    read_parity::<McpServerFailed>(
+        serde_json::json!({"server": "s", "reason": "died", "will_restart": true, "error": {"code": "busy", "message": "m"}}),
+    );
+    read_parity::<McpServerReady>(serde_json::json!({"server": "s"}));
+    read_parity::<ExtensionUi>(serde_json::json!({"extension": "e", "status": "hi"}));
+    read_parity::<ExtensionUi>(
+        serde_json::json!({"extension": "e", "widget": "w", "lines": ["l"]}),
+    );
+    read_none::<McpServerReady>(serde_json::json!({}));
+    read_none::<McpServerFailed>(serde_json::json!({"server": "s"}));
+}
+
+#[test]
+fn read_ref_matches_the_clone_for_handoff_and_context() {
+    read_parity::<HandoffStarted>(serde_json::json!({"trigger": "auto"}));
+    read_parity::<HandoffCompleted>(
+        serde_json::json!({"outcome": "completed", "tokens_before": 1000}),
+    );
+    read_parity::<ContextNudged>(serde_json::json!({"tokens": 1, "trigger_at": 2}));
+    read_parity::<SteeringApplied>(
+        serde_json::json!({"content": [{"type": "text", "text": "go"}], "source": "driver"}),
+    );
+    // A trigger outside the enum never decodes.
+    read_none::<HandoffStarted>(serde_json::json!({"trigger": "manual"}));
+    read_none::<ContextNudged>(serde_json::json!({"tokens": 1}));
+}
