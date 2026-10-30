@@ -550,7 +550,11 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
     // relative order among those three, so the test pins only that each
     // appears once between the start and the first turn. Each turn then
     // opens its one step before the assistant message (`docs/loop.md`,
-    // "One step").
+    // "One step"). `usage_recorded` is promised only as one line per model
+    // call (`docs/events.md`, "`usage_recorded`"), with no position against
+    // the message lines, so the turns below are a set with counts
+    // (`docs/testing.md`, "Event streams") and only the documented pairs
+    // are pinned as orders.
     assert_eq!(kinds[0], "session_started", "the log starts: {kinds:?}");
     assert_eq!(
         kinds[1], "fiber_started",
@@ -582,9 +586,16 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
             "{prologue} sits between the start and the first turn: {kinds:?}"
         );
     }
-    assert_eq!(
-        kinds[first_turn..],
-        [
+    // No doc puts `usage_recorded` before or after the message lines, so
+    // the two turns are a set with counts; the orders below pin only pairs
+    // the docs promise.
+    let first_event = events
+        .iter()
+        .position(|line| line["kind"] == "turn_started")
+        .unwrap_or_else(|| panic!("a first turn: {kinds:?}"));
+    support::assert_kinds_multiset(
+        &events[first_event..],
+        &[
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -600,7 +611,50 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
             "assistant_message_completed",
             "turn_completed",
         ],
-        "both turns in order"
+        &[],
+        None,
+        "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails",
+    );
+    // Each turn opens its one step before the assistant message
+    // (`docs/loop.md`, "One step": step 1 writes `step_started`, step 4
+    // sends the request each `assistant_message_started` precedes in
+    // `docs/events.md`, "`assistant_message_started`"), whose items follow
+    // `assistant_message_started` in order with `assistant_message_completed`
+    // closing it (`docs/events.md`, "`text_completed`"), inside a turn that
+    // runs from `turn_started` to `turn_completed` (`docs/loop.md`,
+    // "Starting a turn" and "Ending a turn"; `docs/events.md`,
+    // "`step_started`", a step ends where the next `step_started` or the
+    // `turn_completed` is).
+    let mut turn_started = Vec::new();
+    let mut step_started = Vec::new();
+    let mut message_started = Vec::new();
+    let mut text = Vec::new();
+    let mut message_completed = Vec::new();
+    let mut turn_completed = Vec::new();
+    for (at, kind) in kinds.iter().enumerate().skip(first_turn) {
+        match *kind {
+            "turn_started" => turn_started.push(at),
+            "step_started" => step_started.push(at),
+            "assistant_message_started" => message_started.push(at),
+            "text_completed" => text.push(at),
+            "assistant_message_completed" => message_completed.push(at),
+            "turn_completed" => turn_completed.push(at),
+            _ => {}
+        }
+    }
+    for (turn, what) in [(0, "the first turn"), (1, "the second turn")] {
+        assert!(
+            turn_started[turn] < step_started[turn]
+                && step_started[turn] < message_started[turn]
+                && message_started[turn] < text[turn]
+                && text[turn] < message_completed[turn]
+                && message_completed[turn] < turn_completed[turn],
+            "{what} runs in the documented order: {kinds:?}"
+        );
+    }
+    assert!(
+        turn_completed[0] < turn_started[1],
+        "the second turn starts after the first completes: {kinds:?}"
     );
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
 }
