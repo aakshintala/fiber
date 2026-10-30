@@ -33,6 +33,44 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
         .collect()
 }
 
+/// The ordered-assertion literals the kinds ratchet counts: the literal
+/// `assert_eq!(kinds(` and the direct-support `assert_eq!(support::kinds`.
+/// Occurrences count, not matching lines, so two call sites on one line
+/// both count. Only files under `crates/` count.
+pub(crate) const KINDS_LITERAL: &str = "assert_eq!(kinds(";
+pub(crate) const SUPPORT_KINDS_LITERAL: &str = "assert_eq!(support::kinds";
+
+/// Occurrences of each ordered-assertion literal in `files` under `crates/`,
+/// as `(kinds, support)`.
+pub(crate) fn kinds_counts(files: &[RustFile]) -> (usize, usize) {
+    let mut kinds = 0;
+    let mut support = 0;
+    for f in files.iter().filter(|f| f.path.starts_with("crates/")) {
+        kinds += f.source.matches(KINDS_LITERAL).count();
+        support += f.source.matches(SUPPORT_KINDS_LITERAL).count();
+    }
+    (kinds, support)
+}
+
+/// Each committed maximum the counts exceed: a converted call site lowers
+/// the count, so adding a literal site fails until the maximum is lowered
+/// beside the `scripts/check` step with it.
+pub(crate) fn kinds_ratchet(files: &[RustFile], max: usize, support_max: usize) -> Vec<String> {
+    let (kinds, support) = kinds_counts(files);
+    let mut failures = Vec::new();
+    if kinds > max {
+        failures.push(format!(
+            "{kinds} `{KINDS_LITERAL}` occurrences under crates/, above the committed maximum {max}"
+        ));
+    }
+    if support > support_max {
+        failures.push(format!(
+            "{support} `{SUPPORT_KINDS_LITERAL}` occurrences under crates/, above the committed maximum {support_max}"
+        ));
+    }
+    failures
+}
+
 /// Crates only some workspace members may link.
 pub(crate) struct Isolation {
     /// The crates kept out of every other member's normal dependency tree.

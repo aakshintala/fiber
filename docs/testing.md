@@ -92,12 +92,15 @@ must be on the selector's list of package readers (`docs/ci.md`,
 
 An event-stream test asserts two things:
 
-- the complete, ordered list of event kinds, so a duplicated, missing or
-  reordered event fails
+- the event kinds as a set with counts, so a duplicated or missing event fails
 - the fields under test, on the lines under test
 
-A test may build the list from named segments held in `fakes`; the full
-ordered list is still asserted.
+An order is asserted only where a doc promises it, through the helper that
+takes the promising doc line, so the order and its reason sit together. A
+test may build the expected kinds from named segments held in `fakes`. A
+documented variable-progress kind, such as `job_delta`
+(`docs/events.md`, "Jobs"), may be excluded from the multiset only when its
+count is not under test.
 
 A line the contract writes on its own trigger, with no position relative to
 the session's other lines, is set aside from the ordered list rather than
@@ -111,8 +114,8 @@ asserts it only when it is the line under test.
 A test asserts an order or a count only where a doc promises it. For each
 pair of lines whose order the test pins, and each count it asserts, such as
 the number of turns, the review finds the `docs/<area>.md` line that promises
-it. Where the doc leaves the order open, the test asserts the lines as a set,
-or forces one order with a pause point. For example, a job notice waiting in
+it. Where the doc leaves the order open, the test asserts the lines as a set;
+that is the default helper. For example, a job notice waiting in
 the inbox joins the running turn at its next step (`docs/loop.md`, "One
 step"), so the number of turns is open unless the test holds the turn.
 
