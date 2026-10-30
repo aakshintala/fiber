@@ -288,7 +288,16 @@ fn run() -> i32 {
             ::cli::approve(args.yes, env!("CARGO_PKG_VERSION"), Arc::clone(&clock))
         }
         cli::Invocation::Run(Some(cli::Commands::Import { source }), _) => {
-            ::cli::import(source.into(), clock.as_ref())
+            let fiber_home = match config::fiber_home_from_env() {
+                Ok(home) => home,
+                Err(error) => return fail(failure(error.code(), error.to_string())),
+            };
+            let check = crate::prompt_files::personal_source_check(
+                fiber_home,
+                crate::prompt_files::agents_home(std::env::var_os("HOME")),
+                Arc::clone(&clock),
+            );
+            ::cli::import(source.into(), check.as_ref(), clock.as_ref())
         }
         cli::Invocation::Run(Some(cli::Commands::Config(cmd)), _) => match cmd {
             cli::ConfigCommands::Get { key } => ::cli::config_get(&key),
@@ -625,8 +634,18 @@ fn setup_entry(
         completions,
         hub,
     };
+    let fiber_home = match config::fiber_home_from_env() {
+        Ok(home) => home,
+        Err(error) => return fail(failure(error.code(), error.to_string())),
+    };
+    let check = crate::prompt_files::personal_source_check(
+        fiber_home,
+        crate::prompt_files::agents_home(std::env::var_os("HOME")),
+        Arc::clone(&clock),
+    );
     ::cli::setup(
         &flags,
+        check.as_ref(),
         Arc::clone(&clock),
         Arc::new(tools::PathLocks::new()),
         &runner,

@@ -511,6 +511,13 @@ fn import(conn: &mut Conn, id: CommandId, args: &contract::commands::ImportArgs)
         return;
     };
     let clock = Arc::clone(&conn.gate.clock);
+    // The session process wires the discovery-backed check before the
+    // session runs; the socket drive path wires none, so it treats
+    // nothing as already read, exactly like the direct test helper.
+    let check = conn
+        .gate
+        .personal_source_check()
+        .unwrap_or_else(|| Arc::new(config::no_personal_sources));
     let mut imported = contract::events::ImportedNames::default();
     let mut left_behind = Vec::new();
     for source in sources {
@@ -518,6 +525,7 @@ fn import(conn: &mut Conn, id: CommandId, args: &contract::commands::ImportArgs)
             &conn.gate.home,
             &source_home(std::path::Path::new(&home_env), *source),
             *source,
+            check.as_ref(),
             clock.as_ref(),
         ) {
             Ok(report) => report,
