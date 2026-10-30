@@ -451,6 +451,7 @@ impl Connection {
                 | Input::Hub(_)
                 | Input::Connected(..)
                 | Input::ConnectFailed(_)
+                | Input::WriteFailed(_)
                 | Input::Resize
                 | Input::FindDue(_)
                 | Input::Image { .. }
@@ -481,7 +482,7 @@ impl Connection {
     /// so each ended connection gives the hub thread one permit.
     pub(super) fn on_disconnected(&mut self, app: &mut App) {
         self.hub = None;
-        app.disconnected();
+        app.disconnected_inner();
         self.retry_later(app);
     }
 
@@ -497,24 +498,24 @@ impl Connection {
     /// reader's end of the stream gives the permit.
     pub(super) fn lost(&mut self, app: &mut App) {
         self.hang_up();
-        app.disconnected();
+        app.disconnected_inner();
     }
 
     /// Writes command lines to the hub, each one written kept for resending
-    /// until it is answered. A failed write hangs up: the connection is
-    /// lost, and the text of the lines not sent returns to the draft.
-    pub(super) fn send(&mut self, lines: &[String], app: &mut App) {
+    /// until it is answered. A failed write hangs up and returns the lines
+    /// not sent for the loop to route as an input.
+    pub(super) fn send(&mut self, lines: &[String], app: &mut App) -> Option<Vec<String>> {
         for (at, line) in lines.iter().enumerate() {
             let Some(hub) = &mut self.hub else {
-                return;
+                return None;
             };
             if link::write_line(hub, line).is_err() {
                 self.hang_up();
-                app.write_failed(lines.get(at..).unwrap_or_default());
-                return;
+                return Some(lines.get(at..).unwrap_or_default().to_vec());
             }
             app.outbox.wrote(line);
         }
+        None
     }
 
     /// Stops the hub reader, releases its capacity wait, shuts the hub

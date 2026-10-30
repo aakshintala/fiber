@@ -45,3 +45,8 @@ vt100 = "0.16.2"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "main_journeys"
+path = "tests/main_journeys.rs"
+test = false
