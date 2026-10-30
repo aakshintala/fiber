@@ -170,6 +170,7 @@ fn completion(rx: &Receiver<Input>, wait: &Deadline) -> Input {
             | Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::WriteFailed(_)
             | Input::Resize
             | Input::Signal(_)
             | Input::Files { .. }
@@ -195,7 +196,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
     let (mut lp, theirs, rx, images, marker, _dir) = loop_with_viewer("echo \"$2\" > \"$1\"\n");
     let (_idle_tx, idle) = mpsc::channel();
     let lines = click(&mut lp);
-    lp.hub.send(&lines, &mut lp.app);
+    assert!(lp.hub.send(&lines, &mut lp.app).is_none());
     let id = answer(&theirs);
     assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
     match completion(&rx, &Deadline::after(MUST_SUCCEED_WITHIN)) {
@@ -208,6 +209,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
         | Input::Connected(..)
         | Input::ConnectFailed(_)
         | Input::Disconnected
+        | Input::WriteFailed(_)
         | Input::Resize
         | Input::Signal(_)
         | Input::Files { .. }
@@ -243,7 +245,7 @@ fn a_failed_viewer_draws_the_notice() {
     let (mut lp, theirs, rx, _images, _marker, _dir) = loop_with_viewer("exit 3\n");
     let (_idle_tx, idle) = mpsc::channel();
     let lines = click(&mut lp);
-    lp.hub.send(&lines, &mut lp.app);
+    assert!(lp.hub.send(&lines, &mut lp.app).is_none());
     let id = answer(&theirs);
     assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
     // The worker's completion arrives as its own input: stepping it
@@ -710,11 +712,11 @@ fn logo_app() -> App {
 /// kitty writer's chunks land where the test reads them.
 fn logo_loop() -> (Loop<TestBackend>, std::io::PipeReader, Receiver<Input>) {
     let (tty_out, tty_in) = std::io::pipe().unwrap_or_else(|err| panic!("pipe: {err}"));
-    let (mut lp, _) = super::tests::new_loop(
-        TestBackend::new(80, 24),
-        Some(std::fs::File::from(std::os::fd::OwnedFd::from(tty_in))),
-    );
-    lp.app = logo_app();
+    let app = logo_app();
+    let screen =
+        Screen::new(TestBackend::new(80, 24), 80, 24).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop::for_test(app, screen);
+    lp.tty = std::fs::File::from(std::os::fd::OwnedFd::from(tty_in));
     let (_, rx) = mpsc::channel();
     (lp, tty_out, rx)
 }
@@ -747,6 +749,19 @@ fn buffer_has_placeholder(buf: &ratatui::buffer::Buffer) -> bool {
     buf.content
         .iter()
         .any(|cell| cell.symbol().starts_with('\u{10EEEE}'))
+}
+
+/// This home-only fixture has no session images, so each iTerm2 File is
+/// the logo's; assert the documented logo write without pinning its count.
+fn assert_logo_iterm_file(lp: &Loop<TestBackend>, sent: &[u8], transition: &str) {
+    assert!(
+        lp.app.session().is_none(),
+        "the fixture has no session images"
+    );
+    assert!(
+        sent.windows(4).any(|window| window == b"1337"),
+        "{transition}: the logo's iTerm2 File write is present"
+    );
 }
 
 /// The first frame draws pixels: no reply has arrived, so no image
@@ -811,7 +826,8 @@ fn logo_no_colour_draws_pixels() {
 }
 
 /// Kitty needs no measured geometry: the flags reply is enough for
-/// placeholders, one transmit, and the place bytes.
+/// placeholders, one transmit, and the place bytes (`docs/tui.md`,
+/// "The logo", "Images"). Its 32-by-4 cells give the placeholder count.
 #[test]
 fn logo_kitty_swap_transmits_once() {
     let (mut lp, tty, rx) = logo_loop();
@@ -982,14 +998,12 @@ fn logo_iterm_writes_positioned_after_the_frame() {
         .position(|window| window == b"\x1b7")
         .expect("the cursor saves");
     assert_eq!(&sent[at + 2..at + 8], b"\x1b[1;1H", "at the logo rect");
-    assert!(
-        sent.windows(4).any(|window| window == b"1337"),
-        "the File writes"
-    );
+    assert_logo_iterm_file(&lp, &sent, "positioned home frame");
     assert_eq!(&sent[sent.len() - 2..], b"\x1b8", "the cursor restores");
 }
 
-/// A scrolled frame rewrites the iTerm2 image: one File per touch.
+/// A scrolled frame still emits the logo's iTerm2 image
+/// (`docs/tui.md`, "Images": the logo is drawn using iTerm2).
 #[test]
 fn logo_iterm_rewrites_after_touch() {
     let (mut lp, tty, rx) = logo_loop();
@@ -1001,10 +1015,7 @@ fn logo_iterm_rewrites_after_touch() {
         tty,
         POSITIONED_TAIL.to_vec(),
     );
-    assert_eq!(
-        first.windows(4).filter(|window| *window == b"1337").count(),
-        1
-    );
+    assert_logo_iterm_file(&lp, &first, "initial home frame");
     // Typing rewrites the frame, and the image with it.
     let (second, _tty) = step_emission(
         &mut lp,
@@ -1013,14 +1024,7 @@ fn logo_iterm_rewrites_after_touch() {
         tty,
         POSITIONED_TAIL.to_vec(),
     );
-    assert_eq!(
-        second
-            .windows(4)
-            .filter(|window| *window == b"1337")
-            .count(),
-        1,
-        "a touched frame rewrites the image"
-    );
+    assert_logo_iterm_file(&lp, &second, "touched home frame");
 }
 
 /// Sixel scales to the measured cell: 10 by 20 pixels draws a 320 by
@@ -1088,7 +1092,8 @@ fn logo_cell_bound_rows_body() {
     );
 }
 
-/// Re-tinting re-emits: a new theme's bytes differ from the old.
+/// Re-tinting re-emits: a new theme's bytes differ from the old
+/// (`docs/tui.md`, "The logo", "Images").
 #[test]
 fn logo_retints_with_the_theme() {
     let (mut lp, tty, rx) = logo_loop();
@@ -1100,10 +1105,7 @@ fn logo_retints_with_the_theme() {
         tty,
         POSITIONED_TAIL.to_vec(),
     );
-    assert_eq!(
-        first.windows(4).filter(|window| *window == b"1337").count(),
-        1
-    );
+    assert_logo_iterm_file(&lp, &first, "initial tinted home frame");
     let light = crate::look::Look::new(crate::ThemeSetting::Light, &|_: &str| -> Option<String> {
         None
     })
@@ -1117,18 +1119,13 @@ fn logo_retints_with_the_theme() {
         tty,
         POSITIONED_TAIL.to_vec(),
     );
-    assert_eq!(
-        second
-            .windows(4)
-            .filter(|window| *window == b"1337")
-            .count(),
-        1
-    );
+    assert_logo_iterm_file(&lp, &second, "re-tinted home frame");
     assert_ne!(first, second, "the re-tint writes new bytes");
 }
 
 /// Leaving home repaints and redraws at once: the stale image clears
-/// with the frame, never a blank screen.
+/// with the frame, never a blank screen (`docs/tui.md`, "Images": the logo
+/// is drawn once per home visit).
 #[test]
 fn logo_leave_home_repaints_then_redraws() {
     let (mut lp, tty, rx) = logo_loop();
@@ -1140,11 +1137,7 @@ fn logo_leave_home_repaints_then_redraws() {
         tty,
         POSITIONED_TAIL.to_vec(),
     );
-    assert_eq!(
-        first.windows(4).filter(|window| *window == b"1337").count(),
-        1,
-        "home emits the image"
-    );
+    assert_logo_iterm_file(&lp, &first, "home before leaving");
     lp.app.attach(contract::SessionId(SESSION.to_owned()));
     assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
     let mut tty = tty;
@@ -1164,7 +1157,8 @@ fn logo_leave_home_repaints_then_redraws() {
     );
 }
 
-/// A session that never showed the logo clears nothing on any frame.
+/// A session that never showed the logo clears nothing on any frame
+/// (`docs/tui.md`, "The input box", "The logo", "Images").
 #[test]
 fn logo_non_home_never_clears() {
     let (mut lp, mut tty, rx) = logo_loop();
@@ -1173,6 +1167,13 @@ fn logo_non_home_never_clears() {
         assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
     }
     assert!(
+        buffer_of(&lp)
+            .content
+            .iter()
+            .any(|cell| cell.symbol() == "›"),
+        "the session input box is drawn"
+    );
+    assert!(
         !drain_tty(&mut tty)
             .windows(4)
             .any(|window| window == b"\x1b[2J"),
@@ -1180,7 +1181,8 @@ fn logo_non_home_never_clears() {
     );
 }
 
-/// A flat home keeps pixels, and unflattening re-emits the image.
+/// A flat home keeps pixels, and unflattening re-emits the image
+/// (`docs/tui.md`, "The logo", "Images").
 #[test]
 fn logo_flat_home_keeps_pixels_then_reemits() {
     let (mut lp, tty, rx) = logo_loop();
@@ -1192,10 +1194,7 @@ fn logo_flat_home_keeps_pixels_then_reemits() {
         tty,
         POSITIONED_TAIL.to_vec(),
     );
-    assert_eq!(
-        first.windows(4).filter(|window| *window == b"1337").count(),
-        1
-    );
+    assert_logo_iterm_file(&lp, &first, "initial flat-home frame");
     // Flat: pixels, no image, and the rect-gone repaint.
     lp.app.set_flat(true);
     assert_eq!(lp.step(Input::Bytes(Vec::new()), &rx), None);
@@ -1216,14 +1215,7 @@ fn logo_flat_home_keeps_pixels_then_reemits() {
         tty,
         POSITIONED_TAIL.to_vec(),
     );
-    assert_eq!(
-        second
-            .windows(4)
-            .filter(|window| *window == b"1337")
-            .count(),
-        1,
-        "the returned rect re-emits"
-    );
+    assert_logo_iterm_file(&lp, &second, "returned home rect");
     assert_eq!(first, second, "the same theme re-emits the same bytes");
 }
 

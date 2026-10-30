@@ -381,7 +381,15 @@ impl App {
     /// Opens the call's view: Enter on its opened row or its more row,
     /// or a click on the more row. The call stays open behind the view;
     /// Esc returns with its row still focused.
+    #[cfg(test)]
     pub(in crate::app) fn open_call_view(&mut self, id: usize) -> Effect {
+        let result = self.open_call_view_inner(id);
+        self.settle();
+        result
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(in crate::app) fn open_call_view_inner(&mut self, id: usize) -> Effect {
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
@@ -396,7 +404,6 @@ impl App {
             view.notice = Some("The call's output could not load: not connected.".to_owned());
         }
         self.set_call_view(view);
-        self.settle();
         self.call_view_pump_effect()
     }
 
@@ -452,7 +459,6 @@ impl App {
             return Vec::new();
         }
         view.refresh_from_completed(done);
-        self.settle();
         self.refresh_call_view_matches();
         self.call_view_pump().into_iter().collect()
     }
@@ -473,7 +479,6 @@ impl App {
             let len = view.rows().len();
             view.list.select(*at, len, height.max(1));
         }
-        self.settle();
         Effect::None
     }
 
@@ -491,7 +496,7 @@ impl App {
         }
         match key {
             Key::Esc => {
-                self.close_call_view();
+                self.close_call_view_inner();
                 Some(Effect::None)
             }
             // With the find bar open the arrows move between the view's
@@ -535,7 +540,14 @@ impl App {
     }
 
     /// Closes the view, focusing its more row or, for short calls, the call row.
+    #[cfg(test)]
     pub(in crate::app) fn close_call_view(&mut self) {
+        self.close_call_view_inner();
+        self.settle();
+    }
+
+    /// Handles the route without settling; the caller owns the layout pass.
+    pub(in crate::app) fn close_call_view_inner(&mut self) {
         let call = self
             .call_view_mut()
             .map(|view| (view.call, view.plain.len() > opened::OPENED_LINES));
@@ -547,7 +559,6 @@ impl App {
                 Target::Call(call)
             }));
         }
-        self.settle();
     }
 
     /// Shifts the open view's window one wheel step: three displayed
@@ -590,7 +601,6 @@ impl App {
                 view.queue(next);
             }
         }
-        self.settle();
         self.call_view_pump_effect()
     }
 
@@ -642,7 +652,6 @@ impl App {
                 view.queue(next);
             }
         }
-        self.settle();
         self.call_view_pump_effect()
     }
 
@@ -715,7 +724,6 @@ impl App {
             return Vec::new();
         };
         view.land(offset, text, lines, next, size, height);
-        self.settle();
         self.refresh_call_view_matches();
         self.call_view_pump().into_iter().collect()
     }
@@ -745,7 +753,6 @@ impl App {
         if aborted {
             self.resume_call_window();
         }
-        self.settle();
     }
 
     /// Reapplies the bounded draw window once a copy ends: pages a
@@ -805,7 +812,6 @@ impl App {
             }
             view.copy = Some(CopyReq);
         }
-        self.settle();
         match self.take_call_copy() {
             Some(text) => Effect::Copy(text),
             None => self.call_view_pump_effect(),
@@ -907,7 +913,6 @@ impl App {
         let len = view.rows().len();
         view.list
             .select(row, len, shown_height(height, view.below_len()));
-        self.settle();
     }
 
     /// The find bar's count while the view is open: the view's matches.
