@@ -1374,8 +1374,8 @@ fn flake_classify_files_two_tests_of_one_binary_once() {
 fn flake_classify_keys_main_modules_by_file() {
     // The aggregate `main` binary yields one record per test-module file,
     // while a root-level `main` test falls back to the binary title and a
-    // single-file integration binary keeps its title. File-name byte order
-    // reads the arm list first, so its occurrence wins the dedupe.
+    // single-file integration binary keeps its title. The arm-list
+    // occurrence contributes the reload-module record.
     let dir = TempDir::new("xtask-flake-classify-main-key");
     dir.write(
         "flaky/flaky-tests-linux.txt",

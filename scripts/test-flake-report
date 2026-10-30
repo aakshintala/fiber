@@ -1119,7 +1119,7 @@ collate_key=$tmp/collate-key
 mkdir -p "$collate_key/flaky"
 {
   printf 'main reviewer_setup::the_setup_saves\td1\nmain reload_tests::some_test\td2\n'
-  printf 'main root_level_test\td3\nmain\td4\n'
+  printf 'main root_level_test\td3\nmain\td4\nmain ::empty_segment\td8\n'
   printf 'main::hub_exit_window helper_tests::case\td5\n'
   printf 'fakes process_group_tests::reaps_children\td6\nfakes\td7\n'
 } >"$collate_key/flaky/flaky-tests-linux.txt"
