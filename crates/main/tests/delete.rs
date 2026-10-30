@@ -500,6 +500,16 @@ fn esc_keeps_the_live_session_for_a_second_prompt() {
     let first = run.wait_screen("the first reply", |grid| grid.contents.contains("first."));
     assert!(first.contents.contains("run it"));
     let a = wait_stored(&setup, 1).into_iter().next().unwrap();
+    // Rendered reply text is not proof the turn ended: `text_completed`
+    // precedes `turn_completed` in the log below, so the screen can show
+    // the reply while the first turn is still live. The persisted
+    // `turn_completed` event is the turn-end signal; typing before it lands
+    // steers the next prompt into the live turn.
+    let first_dir = session_dir(&setup, &a);
+    fakes::wait_until("the first turn to complete", setup.deadline, move || {
+        fs::read_to_string(first_dir.join("events.jsonl"))
+            .is_ok_and(|events| events.contains("turn_completed"))
+    });
     run.write(b"/delete\r");
     let question = run.wait_screen("the delete question", |grid| {
         grid.contents.contains("It cannot be undone")
