@@ -135,9 +135,12 @@ pub fn model_lists_grouped(
 /// every installed model's list read at `read`: the cached lists at
 /// once, refreshed with or without the age check for
 /// [`ModelLists::Refresh`]. `load` starts the Lua providers; a
-/// [`ModelLists::Cached`] read never calls it. The fourth value reads
-/// each placeholder value the way the hub would: from the hub's captured
-/// environment, else the process environment.
+/// [`ModelLists::Cached`] read never calls it. Only switched-on
+/// providers return: the presence gate drops the rest after admission,
+/// before either placeholder fill, so no per-model group leaks through
+/// for them. The fourth value reads each placeholder value the way the
+/// hub would: from the hub's captured environment, else the process
+/// environment.
 #[allow(
     clippy::type_complexity,
     reason = "the shared read prefix: four values both the apart and grouped reads map in one step"
@@ -184,6 +187,7 @@ fn lists_before_fill(
             );
         }
     }
+    providers.retain_credentialed(&config);
     Ok((providers, config, notices, lookup))
 }
 

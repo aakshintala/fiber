@@ -300,6 +300,8 @@ fn quota_load_uses_the_reloaded_set_and_startup_credential_labels() {
         now.loader.clock.clone(),
         now.loader.locks.clone(),
     );
+    // Disabled non-provider code stays out of the loaded set; provider
+    // handles remain available for quota with the startup labels.
     assert!(!extensions.has_extensions());
     now.loader.extensions = Arc::new(extensions);
     now.config = Arc::new(config);
@@ -310,7 +312,7 @@ fn quota_load_uses_the_reloaded_set_and_startup_credential_labels() {
         Deadline::after(MUST_SUCCEED_WITHIN),
         move || held.load(),
     );
-    let rows = store.answer_with_spawn(|_| Ok(())).0;
+    let rows = cached(&store);
     assert_eq!(
         rows.iter()
             .map(|row| (row.provider.as_str(), row.credential.as_str()))

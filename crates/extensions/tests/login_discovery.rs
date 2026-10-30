@@ -103,6 +103,13 @@ fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<Strin
     server.hold();
     let home = setup.home();
     install(&home, &format!("{}/", server.url()), stuck);
+    config::store_credential(
+        &home,
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let (providers, notices) = Providers::load(&home).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
     let clock = FakeClock::new();
@@ -191,10 +198,15 @@ fn a_models_call_that_never_returns_is_answered_with_a_timeout_notice() {
 #[test]
 fn a_provider_file_that_never_finishes_loading_is_answered_with_no_models() {
     // The load deadline is 2 s, with the same grace.
-    // The abandoned load leaves the registry as it was: an answer with no
-    // notice, which is the bound this test pins.
+    // The stored login opens the presence gate, so discovery reaches the
+    // stuck file: the abandoned load answers with no models and one
+    // failure notice, the established result for a credentialed user.
     let (notices, models) = discover(Stuck::AtLoad, Duration::from_secs(2));
-    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        notices,
+        vec![(ErrorCode::ExtensionFailed, Some("acme-ext".to_owned()))],
+        "{notices:?}"
+    );
     // No Lua-discovered models: `m` is the fixture's static data-file
     // model, while the stuck file's `models()` would return `{}`.
     assert_eq!(models, vec!["m".to_owned()], "{models:?}");

@@ -783,13 +783,9 @@ fn setup_prints_no_model_unconfigured_notice_and_keeps_those_models_out() {
     );
     let installed = setup.run_setup(&["extension", "install", to.to_str().unwrap()], None, &[]);
     assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
-    config::store_credential(
-        &setup.home(),
-        "vertex",
-        "default",
-        &config::Secret::new("sk-vertex".into()),
-    )
-    .unwrap();
+    let credentials = setup.root.path().join(".config/gcloud/credentials.db");
+    fs::create_dir_all(credentials.parent().unwrap()).unwrap();
+    fs::write(credentials, "fixture credential source").unwrap();
 
     // Skip the providers, keep the model.
     let run = setup.run_on_terminal(&["setup", "--no-hub", "--no-completions"], "\n\n", &[]);

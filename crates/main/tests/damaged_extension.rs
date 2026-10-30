@@ -248,6 +248,13 @@ fn skips(run: &Output) -> usize {
 #[track_caller]
 fn damaged_flow(invalid: bool) {
     let setup = Setup::new_with_sources();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let installed = setup.extension(&["install", &setup.src("healthy")]);
     assert_eq!(installed.code, Some(0), "{}", installed.stderr);
     let installed = setup.extension(&["install", &setup.src("broken")]);
@@ -309,6 +316,7 @@ fn damaged_flow(invalid: bool) {
         run.stderr
     );
 
+    assert!(config::delete_credential(&setup.home(), "acme", "default").unwrap());
     let run = setup.run_with_input(&["login", "acme"], "test-key\n");
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(
