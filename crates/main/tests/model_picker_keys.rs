@@ -221,8 +221,11 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
 /// Spawns home at 120x32 with the picker provider installed and `env`
 /// in the child's environment: the fake server answers no turn, since
 /// no prompt goes out. Returns the run once the first frame drew and
-/// the chip row names the configured model, so a click never lands
-/// before its target draws.
+/// the chip row names the configured model and the default level, so
+/// a click never lands before its target draws. The exact strings are
+/// final at launch (`home.launch` in `crates/tui/src/app/home.rs`):
+/// a local home owes no hub chip read, so nothing in the background
+/// moves the row after the first frame.
 #[track_caller]
 fn home_run(setup: &Setup, env: &[(&str, &str)]) -> Run {
     let mut full = vec![("FIBER_TEST_FAKE_KEY", "sk-test")];
@@ -230,39 +233,36 @@ fn home_run(setup: &Setup, env: &[(&str, &str)]) -> Run {
     let mut run = Run::spawn(setup, 120, 32, &[], &full);
     run.ready();
     run.wait_screen("home with its chips", |screen| {
-        shows(screen, "[fake/alpha]") && shows(screen, "[thinking:")
+        shows(screen, "[fake/alpha]") && shows(screen, "[thinking: default]")
     });
     run
 }
 
-/// The chip row's cell just inside `needle`'s opening bracket on
-/// `screen`: the coordinates come from the drawn grid, never from a
+/// The chip's origin on `screen`: the cell just inside `needle`'s
+/// opening bracket, or `None` while the needle is absent or past the
+/// row's end. The coordinates come from the drawn grid, never from a
 /// hard-coded column, so the centred box may sit anywhere.
+fn chip_origin(screen: &Grid, needle: &str) -> Option<(u16, u16)> {
+    let y = u16::try_from(screen.rows.iter().position(|row| row.contains(needle))?).ok()?;
+    let symbols: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
+    let len = u16::try_from(symbols.len()).ok()?;
+    let (cols, _) = screen.size();
+    let x = (0..=cols.saturating_sub(len)).find(|x| {
+        symbols.iter().enumerate().all(|(dx, symbol)| {
+            let Ok(dx) = u16::try_from(dx) else {
+                return false;
+            };
+            screen.cell(x.saturating_add(dx), y).symbol == *symbol
+        })
+    })?;
+    Some((x + 1, y))
+}
+
+/// The chip row's cell just inside `needle`'s opening bracket on
+/// `screen`.
 #[track_caller]
 fn chip_cell(screen: &Grid, needle: &str) -> (u16, u16) {
-    let y = screen
-        .rows
-        .iter()
-        .position(|row| row.contains(needle))
-        .unwrap_or_else(|| panic!("no chip {needle} in {:?}", screen.rows));
-    let y = u16::try_from(y).expect("the chip fits the screen");
-    let symbols: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
-    let len = u16::try_from(symbols.len()).expect("the chip fits its row");
-    let (cols, _) = screen.size();
-    let x = (0..=cols.saturating_sub(len))
-        .find(|x| {
-            symbols.iter().enumerate().all(|(dx, symbol)| {
-                screen
-                    .cell(
-                        x.saturating_add(u16::try_from(dx).expect("the chip fits its row")),
-                        y,
-                    )
-                    .symbol
-                    == *symbol
-            })
-        })
-        .expect("the chip's cells on its row");
-    (x + 1, y)
+    chip_origin(screen, needle).unwrap_or_else(|| panic!("no chip {needle} in {:?}", screen.rows))
 }
 
 /// Clicks the cell at `(x, y)`: an SGR press then its release on the
@@ -323,7 +323,7 @@ fn clicking_the_model_chip_opens_the_model_picker() {
     install_picker_provider(&setup, &server);
     let mut run = home_run(&setup, &[("TERM", "xterm-256color")]);
     // The home grid above proves the chip drew before the click.
-    let (x, y) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 home with its chips
+    let (x, y) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 run.ready() + home with its chips
     click(&mut run, x, y);
     run.wait_screen("the open picker with its catalogue", picker_open);
     close_and_quit(run);
@@ -341,7 +341,7 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
     // fallback draws exactly like the thinking open, so the first
     // open warms the lists: it waits for the catalogue, then closes.
     // Esc closes at once with no query typed.
-    let (x0, y0) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 home with its chips
+    let (x0, y0) = chip_cell(&run.screen(), "[fake/alpha]"); // settled: case 1 run.ready() + home with its chips
     click(&mut run, x0, y0);
     run.wait_screen("the open picker with its catalogue", picker_open);
     run.write(b"\x1b[27u");
@@ -512,30 +512,16 @@ const CHIP_SURFACE: Colour = Colour::Rgb(0x1a, 0x1a, 0x22);
 /// False while the needle is absent, never panicking, so a wait on it
 /// only matches the settled frame.
 fn chip_unhovered(screen: &Grid, needle: &str) -> bool {
-    let Some(row) = screen.rows.iter().position(|row| row.contains(needle)) else {
-        return false;
-    };
-    let Ok(y) = u16::try_from(row) else {
+    let Some((x, y)) = chip_origin(screen, needle) else {
         return false;
     };
     let symbols: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
     let Ok(len) = u16::try_from(symbols.len()) else {
         return false;
     };
-    let (cols, _) = screen.size();
-    let Some(x) = (0..=cols.saturating_sub(len)).find(|x| {
-        symbols.iter().enumerate().all(|(dx, symbol)| {
-            let Ok(dx) = u16::try_from(dx) else {
-                return false;
-            };
-            screen.cell(x.saturating_add(dx), y).symbol == *symbol
-        })
-    }) else {
-        return false;
-    };
     let mut wanted: Vec<String> = symbols.iter().skip(1).cloned().collect();
     wanted.push(" ".to_owned());
-    chip_cells(screen, x + 1, y, len)
+    chip_cells(screen, x, y, len)
         .iter()
         .zip(wanted.iter())
         .all(|(cell, symbol)| {
