@@ -86,10 +86,15 @@ fn a_placeholder_with_no_value_stays_silent_and_the_picker_counts_it() {
     // The count row proves the grouped read answered with the `fake`
     // group: the same read that raises per-model notices at launch,
     // so a valueless placeholder had its chance to raise one.
-    run.wait_screen("the picker count row", |screen| {
+    let counted_grid = run.wait_screen("the picker count row", |screen| {
         shows(screen, "1 model needs workspace: run `fiber login fake`")
+            && !shows(screen, "model_unconfigured")
+            && screen
+                .rows
+                .iter()
+                .all(|row| !(row.contains("model_invalid") && row.contains("fake/alpha")))
     });
-    let counted = run.screen().rows.clone();
+    let counted = counted_grid.rows.clone();
     assert!(
         counted
             .iter()
