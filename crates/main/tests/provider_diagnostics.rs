@@ -180,6 +180,8 @@ fn ask_debug_writes_one_http_request_and_two_resources_lines() {
         .filter(|line| line["code"] == "resources")
         .collect();
     assert_eq!(peaks.len(), 2, "one turn and one orderly exit");
+    let mut disk_read = 0;
+    let mut disk_write = 0;
     for peak in &peaks {
         assert_eq!(peak["process"], "ask");
         assert_eq!(peak["session_id"], id.as_str());
@@ -187,6 +189,16 @@ fn ask_debug_writes_one_http_request_and_two_resources_lines() {
             peak["data"]["peak_kib"].as_u64().unwrap() > 0,
             "positive on Linux and macOS: {peak}"
         );
+        assert!(
+            peak["data"]["current_kib"].as_u64().unwrap() > 0,
+            "positive on Linux and macOS: {peak}"
+        );
+        let read = peak["data"]["disk_read_bytes"].as_u64().unwrap();
+        let written = peak["data"]["disk_write_bytes"].as_u64().unwrap();
+        assert!(read >= disk_read, "counters never go back: {peak}");
+        assert!(written >= disk_write, "counters never go back: {peak}");
+        disk_read = read;
+        disk_write = written;
     }
     assert_eq!(
         lines.last().unwrap()["code"],
@@ -980,6 +992,43 @@ fn each_protocol_writes_one_diagnostics_line() {
             assert!(
                 !wire.contains(sentinel),
                 "no content in the line on {protocol}: {sentinel}"
+            );
+        }
+    }
+}
+
+/// A debug turn grows the session's `events.jsonl`: the file the session
+/// writes, never filesystem free space, measured before and after the
+/// turn's own completion.
+#[test]
+fn a_debug_turn_grows_the_session_events_file() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let run = ask_debug(&setup, &server, json!({}));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let events = support::session_dir(&setup, run.session_id()).join("events.jsonl");
+    let after = fs::metadata(&events).unwrap().len();
+    assert!(
+        after > 0,
+        "the turn wrote and fsynced the session log: {}",
+        events.display()
+    );
+    let lines = diagnostic_file(&setup, &format!("ask-{}.log", run.session_id()));
+    let peaks: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "resources")
+        .collect();
+    assert_eq!(peaks.len(), 2, "one turn and one orderly exit");
+    for peak in &peaks {
+        for field in [
+            "peak_kib",
+            "current_kib",
+            "disk_read_bytes",
+            "disk_write_bytes",
+        ] {
+            assert!(
+                peak["data"][field].is_u64(),
+                "all four fields present: {peak}"
             );
         }
     }

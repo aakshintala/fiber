@@ -331,7 +331,7 @@ fn a_debug_journey_times_the_session_core_matrix() {
             );
         }
     }
-    for line in &lines {
+    for line in log_lines(&setup) {
         let raw = line.to_string();
         for leaked in [
             "sk-test",
