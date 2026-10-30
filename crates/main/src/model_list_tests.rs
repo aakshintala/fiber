@@ -42,6 +42,8 @@ impl Setup {
 
     /// Installs a data-only extension registering `name` with these model
     /// ids, each on `openai-responses` with `extra` merged into each model.
+    /// A positive fixture is logged in: the presence gate needs a stored
+    /// login for its models to list.
     fn install_data(&self, extension: &str, name: &str, ids: &[&str], extra: &Value) {
         let models: Vec<Value> = ids
             .iter()
@@ -69,6 +71,13 @@ impl Setup {
             }),
             &[(name, json!({"name": name, "models": models}))],
         );
+        config::store_credential(
+            &self.home(),
+            name,
+            "default",
+            &config::Secret::new("test".into()),
+        )
+        .unwrap();
     }
 
     fn write_config(&self, value: &Value) {
@@ -80,7 +89,9 @@ impl Setup {
     /// placeholder declared, the `install_data` layout with separate
     /// extension and provider names. `credential` is merged into the
     /// provider data, so a `credential_label` reads a login the
-    /// `fiber login` command cannot ask for.
+    /// `fiber login` command cannot ask for. A positive fixture is
+    /// logged in: the presence gate needs a stored login, which
+    /// `credential_label` providers ignore.
     fn install_placeholder_data(
         &self,
         extension: &str,
@@ -113,6 +124,13 @@ impl Setup {
             }),
             &[(name, data)],
         );
+        config::store_credential(
+            &self.home(),
+            name,
+            "default",
+            &config::Secret::new("test".into()),
+        )
+        .unwrap();
     }
 
     /// Writes `value` for `setting` to the extension's global
@@ -185,6 +203,15 @@ fn a_model_name_reaches_its_picker_entry() {
             ]}),
         )],
     );
+    // Logged in: the presence gate needs a stored login for the models
+    // to list.
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let called = Cell::new(false);
     let catalogue = read(
         &setup.home(),
@@ -1012,11 +1039,16 @@ fn a_placeholder_with_no_value_leaves_a_group_and_no_notice() {
 #[test]
 fn a_first_party_group_carries_its_full_name_and_short_file() {
     let setup = Setup::new("fiber-model-list-first-party");
+    // A declared credential path switches the `credential_label`
+    // provider on; stored logins do not count for it.
+    let creds = setup.home().join("opencode-creds");
+    std::fs::write(&creds, "").unwrap();
     setup.install_placeholder_data(
         "github.com/aakshintala/fiber/providers/opencode",
         "opencode",
         "workspace",
-        json!({"credential_label": {"names": "profile", "default": "the environment"}}),
+        json!({"credential_label": {"names": "profile", "default": "the environment",
+            "credential_paths": [{"path": creds.to_str().unwrap()}]}}),
     );
     let called = Cell::new(false);
     let catalogue = read(

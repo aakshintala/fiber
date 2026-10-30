@@ -104,6 +104,12 @@ pub(super) fn start_vm(
     Ok((extension, ignored))
 }
 
+/// Registers the Lua providers of one started entry on the session: the
+/// caller reads each provider's declared names from its `ProviderData`,
+/// and the session keeps one `LuaProvider` per script under its weak VMs.
+/// Reads no key and runs no Lua. A provider-only entry reuses the VM the
+/// session started for it, whose entry script never runs; an entry with no
+/// VM yet starts one as session start starts it.
 pub(super) fn provider_handles(
     session: &mut SessionExtensions,
     entry: &super::Started,
@@ -149,7 +155,9 @@ impl SessionExtensions {
     /// extension the session keeps for its hooks or commands lends its
     /// running VM; any other gets a fresh one, started as session start
     /// starts it, with the session's browser and any installed emitter, but
-    /// no driver or inbox. Its hooks and commands are not registered. A start that fails, or a VM that does not
+    /// no driver or inbox. A late fresh VM for a disabled provider-only
+    /// extension skips its entry script, as the session's one does; only
+    /// providers may run there. Its hooks and commands are not registered. A start that fails, or a VM that does not
     /// register `provider`, fails with `extension_failed`.
     pub fn start_provider(
         &self,
@@ -206,6 +214,15 @@ impl SessionExtensions {
                     locks,
                     self.state.clone(),
                 )?;
+                // A disabled provider-only extension's late VM skips its
+                // entry script, as the session's one does: only providers
+                // may run.
+                let lua = if !crate::is_enabled(config, extension) && !manifest.providers.is_empty()
+                {
+                    lua.without_entry()
+                } else {
+                    lua
+                };
                 let lua = lua.with_browser(self.browser.clone());
                 let lua = match &self.host_script {
                     Some(script) => lua.with_host_script(Arc::clone(script)),
