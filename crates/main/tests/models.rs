@@ -87,6 +87,13 @@ impl Setup {
     /// Installs the provider `acme` serving `big` with a context window and
     /// prices, and makes `acme/big` the configured model.
     fn provider(&self) {
+        config::store_credential(
+            &self.home(),
+            "acme",
+            "default",
+            &config::Secret::new("test".into()),
+        )
+        .unwrap();
         let dir = self.home().join("extensions").join("acme");
         fs::create_dir_all(dir.join("providers")).unwrap();
         fs::write(
@@ -122,6 +129,11 @@ impl Setup {
     /// [`Deadline`].
     #[track_caller]
     fn fiber(&self, args: &[&str]) -> Output {
+        self.fiber_env(args, &[])
+    }
+
+    #[track_caller]
+    fn fiber_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(self.exe());
         command
             .args(args)
@@ -131,6 +143,7 @@ impl Setup {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.root.path())
             .env("FIBER_HOME", self.home())
+            .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -158,6 +171,93 @@ impl Setup {
 fn write(file: &PathBuf, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
+}
+
+#[test]
+fn first_party_models_follow_environment_presence_and_survive_logout() {
+    let setup = Setup::new();
+    for package in ["anthropic", "openai"] {
+        let dir = setup.home().join("extensions").join(package);
+        support::package::copy_package(package, &dir, "", "");
+        write_record(&dir);
+    }
+    for args in [vec!["models"], vec!["models", "--json"]] {
+        let off = setup.fiber(&args);
+        assert_eq!(off.code, Some(0), "{}", off.stderr);
+        assert_eq!(off.stdout, "");
+        assert_eq!(off.stderr, "");
+        let empty = setup.fiber_env(&args, &[("ANTHROPIC_API_KEY", "")]);
+        assert_eq!(empty.stdout, "");
+        assert_eq!(empty.stderr, "");
+        let on = setup.fiber_env(&args, &[("ANTHROPIC_API_KEY", "key")]);
+        assert_eq!(on.code, Some(0), "{}", on.stderr);
+        assert_eq!(on.stderr, "");
+        assert!(on.stdout.contains("anthropic/"), "{}", on.stdout);
+        assert!(!on.stdout.contains("openai/"), "{}", on.stdout);
+    }
+    let logout = setup.fiber_env(
+        &["logout", "anthropic", "--all"],
+        &[("ANTHROPIC_API_KEY", "key")],
+    );
+    assert_eq!(logout.code, Some(1), "{}", logout.stderr);
+    assert!(logout.stderr.contains("fiber logout cannot remove it"));
+    let on = setup.fiber_env(&["models", "--json"], &[("ANTHROPIC_API_KEY", "key")]);
+    assert!(!listed_ids(&on).is_empty());
+    assert!(
+        listed_ids(&on)
+            .iter()
+            .all(|id| id.starts_with("anthropic/"))
+    );
+}
+
+#[test]
+fn declared_paths_switch_native_providers_on_without_a_cli() {
+    for (package, relative, host) in [
+        ("bedrock", ".aws/credentials", ("AWS_REGION", "us-east-1")),
+        (
+            "vertex",
+            ".config/gcloud/credentials.db",
+            ("GOOGLE_CLOUD_PROJECT", "example"),
+        ),
+    ] {
+        let setup = Setup::new();
+        let dir = setup.home().join("extensions").join(package);
+        support::package::copy_package(package, &dir, "", "");
+        write_record(&dir);
+        let path = setup.root.path().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let env = [host, ("PATH", "/no-provider-cli")];
+        let listed = || {
+            let run = setup.fiber_env(&["models", "--json"], &env);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert_eq!(run.stderr, "");
+            listed_ids(&run)
+        };
+        assert!(listed().is_empty());
+        fs::write(&path, "").unwrap();
+        assert!(!listed().is_empty());
+        fs::remove_file(&path).unwrap();
+        assert!(listed().is_empty());
+        fs::create_dir(&path).unwrap();
+        assert!(listed().is_empty());
+        fs::write(path.join("entry"), "invalid credential contents").unwrap();
+        assert!(!listed().is_empty());
+        fs::remove_file(path.join("entry")).unwrap();
+        assert!(listed().is_empty());
+        fs::remove_dir(&path).unwrap();
+        let target = setup.root.path().join("target");
+        fs::write(&target, "").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(!listed().is_empty());
+        fs::remove_file(&target).unwrap();
+        assert!(listed().is_empty());
+        fs::create_dir(&target).unwrap();
+        assert!(listed().is_empty());
+        fs::create_dir(target.join("unopened-entry")).unwrap();
+        assert!(!listed().is_empty());
+        fs::remove_dir(target.join("unopened-entry")).unwrap();
+        assert!(listed().is_empty());
+    }
 }
 
 #[test]
@@ -225,6 +325,13 @@ fn help_models_matches_models_help() {
 #[test]
 fn models_runs_a_lua_providers_models_with_no_cached_copy() {
     let setup = Setup::new();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let server = fakes::ProviderServer::start([fakes::Response::status(
         200,
         json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
@@ -435,6 +542,18 @@ fn models_lists_every_first_party_model_and_drops_none() {
         let dest = setup.home().join("extensions").join(package);
         support::package::copy_package(package, &dest, "", "");
         write_record(&dest);
+        for provider in config::read_providers(&dest).unwrap() {
+            config::store_credential(
+                &setup.home(),
+                provider
+                    .credential_name
+                    .as_deref()
+                    .unwrap_or(&provider.name),
+                "default",
+                &config::Secret::new("test".into()),
+            )
+            .unwrap();
+        }
     }
     let run = setup.fiber(&["models", "--json"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -472,6 +591,13 @@ fn await_refresh_exit(deadline: Deadline, pattern: &str) {
 #[test]
 fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     let setup = Setup::new();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     // Declared after `setup`, so it drops first: a failing run kills this
     // test's refresh child before its directory is removed.
     let refresh_guard = Watchdog::matching(&setup.refresh_pattern());
@@ -627,6 +753,13 @@ fn model_at(id: &str, base: &str) -> Value {
 #[test]
 fn models_skips_an_extension_whose_data_names_an_undeclared_provider() {
     let setup = Setup::new();
+    config::store_credential(
+        &setup.home(),
+        "b",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     install_data(
         &setup.home(),
         "a-ext",
@@ -670,6 +803,13 @@ fn models_skips_an_extension_whose_data_names_an_undeclared_provider() {
 #[test]
 fn models_skips_an_extension_whose_lua_registers_an_undeclared_provider() {
     let setup = Setup::new();
+    config::store_credential(
+        &setup.home(),
+        "c",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     install_data(
         &setup.home(),
         "c-ext",
@@ -714,6 +854,13 @@ fn models_skips_an_extension_whose_lua_registers_an_undeclared_provider() {
 #[test]
 fn models_leaves_out_a_model_whose_base_url_is_not_listed() {
     let setup = Setup::new();
+    config::store_credential(
+        &setup.home(),
+        "fake",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     install_data(
         &setup.home(),
         "fake-ext",
@@ -776,6 +923,13 @@ fn fiber_in(setup: &Setup, dir: &Path, args: &[&str]) -> Output {
 #[test]
 fn models_lists_an_approved_repository_providers_models() {
     let setup = Setup::new();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let workspace = setup.root.path().join("w");
     git_init(&workspace);
     declare_repo_provider(
@@ -795,6 +949,13 @@ fn models_lists_an_approved_repository_providers_models() {
 #[test]
 fn models_outside_the_project_lists_no_repository_models() {
     let setup = Setup::new();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let workspace = setup.root.path().join("w");
     git_init(&workspace);
     declare_repo_provider(
@@ -815,6 +976,13 @@ fn models_outside_the_project_lists_no_repository_models() {
 #[test]
 fn models_never_runs_an_unapproved_repository_providers_code() {
     let setup = Setup::new();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let server = fakes::ProviderServer::start([fakes::Response::status(
         200,
         json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),

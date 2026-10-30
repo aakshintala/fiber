@@ -7,6 +7,14 @@
 //! Every byte it reads comes from a descriptor that a non-blocking open
 //! returned and `fstat` proved regular first, so a path swapped for a FIFO
 //! after the listing is never waited on and never read.
+//!
+//! Whether a provider is switched on ([`Credentials::has_credential`]) is
+//! presence, not validity: an empty stored or configured file still counts,
+//! and no key is read and no command is run. An ordinary provider counts any
+//! label's origin. A provider whose `credential()` reads nothing Fiber stores
+//! ignores every stored and configured origin: only its declared nonempty
+//! `credential_env` variables or a
+//! declared `credential_paths` entry counts.
 
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -15,7 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::credential::{Credentials, DEFAULT_LABEL};
 use crate::credential_file::credential_path;
 use crate::error::ConfigError;
-use crate::extension::ProviderData;
+use crate::extension::{CredentialFrom, CredentialLabelSources, ProviderData};
 use crate::home::plain;
 use crate::secret::CredentialSource;
 
@@ -172,6 +180,70 @@ impl Credentials {
         }
     }
 
+    /// Whether `provider` is switched on: it has a credential
+    /// (`docs/model-routing.md`, "Credentials"). Presence is not validity:
+    /// an empty regular file still counts, and no key is read and no command
+    /// is run. `env` answers for environment variables, so tests control it.
+    /// An ordinary provider is on when any label's origin proves a login,
+    /// whatever label a session would use. A provider whose `credential()`
+    /// reads nothing Fiber stores ignores every stored and configured
+    /// origin, including its labels: only its declared nonempty
+    /// `credential_env` variables or a declared
+    /// `credential_paths` entry counts. Never memoizes: each call reads the
+    /// files and environment again, so a logout switches the next read off.
+    pub fn has_credential(
+        &self,
+        provider: &ProviderData,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        match &provider.credential_from {
+            CredentialFrom::Function(sources) => {
+                sources
+                    .credential_env
+                    .iter()
+                    .any(|name| env(name).is_some_and(|value| !value.is_empty()))
+                    || declared_present(sources, env)
+            }
+            CredentialFrom::Stored { .. } => self
+                .labels(provider)
+                .iter()
+                .any(|label| self.label_present(provider, label, env)),
+        }
+    }
+
+    /// Whether one label of an ordinary provider proves a login, under the
+    /// one precedence [`Credentials::locate`] answers with. A label whose
+    /// stored path is refused, or that answers nothing, proves nothing; a
+    /// label that fails never falls back to another source under itself, but
+    /// another label may still prove the login.
+    fn label_present(
+        &self,
+        provider: &ProviderData,
+        label: &str,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        match self.locate(provider, label) {
+            // A regular stored file owns its label however little it holds:
+            // presence is not validity, and no key is read.
+            Ok(Located::Stored) => true,
+            Ok(Located::Source(source)) => match source {
+                // Set and not empty. Surrounding whitespace still counts as
+                // a login, unlike the blank a session would reject.
+                CredentialSource::Env(var) => env(&var).is_some_and(|value| !value.is_empty()),
+                // A regular file, however empty. Links are followed, as a
+                // session's configured file source follows them; a
+                // directory, FIFO, missing path or anything else proves
+                // nothing. Nothing is opened or read.
+                CredentialSource::File(file) => {
+                    fs::metadata(&file).is_ok_and(|meta| meta.is_file())
+                }
+                // Configured, so counted; never run to check.
+                CredentialSource::Command { .. } => true,
+            },
+            Ok(Located::Nothing) | Err(_) => false,
+        }
+    }
+
     /// The one precedence: stored, else configured, else the provider's own
     /// for `default`. Reads no key. [`Credentials::credential_with`],
     /// [`Credentials::credential_origins`] and
@@ -203,6 +275,39 @@ impl Credentials {
         }
         Ok(Located::Nothing)
     }
+}
+
+/// Whether any declared `credential_paths` entry proves a login: the entry
+/// resolved under `env`, then an existence check that opens nothing.
+fn declared_present(
+    sources: &CredentialLabelSources,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    sources
+        .credential_paths
+        .iter()
+        .filter_map(|entry| entry.resolve(env))
+        .any(|path| declared_entry_present(&path))
+}
+
+/// Whether the declared path proves a login, following links as for files.
+/// A regular file counts however empty; a directory counts when one read
+/// finds a first entry, of any kind, which is never opened or inspected, so
+/// an empty cache directory left behind by a logout does not count. A
+/// missing or broken target, an unsupported type, or a failed check proves
+/// nothing.
+fn declared_entry_present(path: &Path) -> bool {
+    let meta = match fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    if meta.is_file() {
+        return true;
+    }
+    if !meta.is_dir() {
+        return false;
+    }
+    fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some_and(|entry| entry.is_ok()))
 }
 
 /// A label that was listed but answers nothing: its stored file vanished
