@@ -575,6 +575,30 @@ impl<B: Backend> Loop<B> {
     /// parses reads itself. Returns the exit code when the terminal
     /// quits, before any frame.
     fn handle_events(&mut self, events: Vec<Event>) -> Option<i32> {
+        let result = self.handle_events_inner(events);
+        self.settle_and_send(result)
+    }
+
+    /// Settles a Loop boundary and sends the outgoing lines unless it quits.
+    fn settle_and_send(&mut self, result: Option<i32>) -> Option<i32> {
+        let lines = self.app.settle_and_find_outgoing_if_up();
+        if result.is_none()
+            && let Some(unsent) = self.hub.send(&lines, &mut self.app)
+        {
+            self.handle(Input::WriteFailed(unsent));
+        }
+        result
+    }
+
+    /// Sends lines during an input route, before that input's settlement.
+    fn send_inner(&mut self, lines: &[String]) {
+        if let Some(unsent) = self.hub.send(lines, &mut self.app) {
+            self.app.write_failed_inner(&unsent);
+        }
+    }
+
+    /// Dispatches parsed events without settling; the input boundary owns the layout pass.
+    fn handle_events_inner(&mut self, events: Vec<Event>) -> Option<i32> {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -589,13 +613,13 @@ impl<B: Backend> Loop<B> {
                 None
             };
             if let Some(line) = quota {
-                self.hub.send(&[line], &mut self.app);
+                self.send_inner(&[line]);
             }
             let effect = match event {
-                Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
-                Event::Key(key) => self.app.on_key(key, self.clock.now()),
-                Event::Edit(edit) => self.app.on_edit(edit),
-                Event::Mouse(mouse) => self.app.on_mouse(
+                Event::Stroke(stroke) => self.app.on_press_inner(stroke, self.clock.now()).0,
+                Event::Key(key) => self.app.on_key_inner(key, self.clock.now()),
+                Event::Edit(edit) => self.app.on_edit_inner(edit),
+                Event::Mouse(mouse) => self.app.on_mouse_inner(
                     &mouse,
                     self.screen.targets(),
                     &mut self.pointer,
@@ -650,13 +674,13 @@ impl<B: Backend> Loop<B> {
                     );
                 }
                 Effect::OpenLink(url) => self.open_link(url),
-                Effect::Send(lines) => self.hub.send(&lines, &mut self.app),
+                Effect::Send(lines) => self.send_inner(&lines),
                 Effect::Quit => return Some(0),
                 Effect::Exit(lines) => {
                     // The quit question's closes go out, then the
                     // terminal quits: a close never written keeps
                     // its resume line.
-                    self.hub.send(&lines, &mut self.app);
+                    self.send_inner(&lines);
                     return Some(0);
                 }
                 Effect::ListFiles => self.list_files(),
@@ -671,7 +695,7 @@ impl<B: Backend> Loop<B> {
                         // result can never arrive: landing the
                         // failure shows the notice and clears the
                         // gate for the next press.
-                        self.app.on_image(ticket, Err(notice));
+                        self.app.on_image_inner(ticket, Err(notice));
                     }
                 }
                 Effect::Feedback { description } => {
@@ -683,7 +707,7 @@ impl<B: Backend> Loop<B> {
                     ) {
                         // Nothing started, so no answer can arrive:
                         // landing the failure shows the notice.
-                        self.app.on_feedback(Err(notice));
+                        self.app.on_feedback_inner(Err(notice));
                     }
                 }
                 Effect::FindPause { generation, after } => {
@@ -764,6 +788,44 @@ impl<B: Backend> Loop<B> {
     /// sends. Returns the exit code when the terminal quits, before any
     /// frame, as handling every input in `step` did.
     fn handle(&mut self, input: Input) -> Option<i32> {
+        match input {
+            Input::WriteFailed(unsent) => {
+                self.app.set_now(
+                    self.clock.now(),
+                    contract::clock::wall_ms(self.clock.wall()),
+                );
+                self.app.on_write_failed(&unsent);
+                self.save_shares();
+                None
+            }
+            input @ (Input::Bytes(_)
+            | Input::Hub(_)
+            | Input::Connected(..)
+            | Input::ConnectFailed(_)
+            | Input::Disconnected
+            | Input::Resize
+            | Input::Files { .. }
+            | Input::FindDue(_)
+            | Input::Image { .. }
+            | Input::Viewed { .. }
+            | Input::Converted { .. }
+            | Input::Models(_)
+            | Input::Feedback(_)
+            | Input::Login { .. }
+            | Input::Install { .. }
+            | Input::HooksOfferNames { .. }
+            | Input::HooksInstalled { .. }
+            | Input::Tick
+            | Input::Signal(_)
+            | Input::KittyFailed) => {
+                let result = self.handle_inner(input);
+                self.settle_and_send(result)
+            }
+        }
+    }
+
+    /// Dispatches one input without settling; the input boundary owns the layout pass.
+    fn handle_inner(&mut self, input: Input) -> Option<i32> {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -779,11 +841,11 @@ impl<B: Backend> Loop<B> {
             Input::KittyFailed => return Some(1),
             Input::Bytes(bytes) => {
                 let events = self.parser.feed(&bytes);
-                return self.handle_events(events);
+                return self.handle_events_inner(events);
             }
             Input::Hub(line) => {
-                let lines = self.app.on_line(line);
-                self.hub.send(&lines, &mut self.app);
+                let lines = self.app.on_line_inner(line);
+                self.send_inner(&lines);
             }
             Input::Connected(stream, hello) => {
                 self.hub.store(stream);
@@ -792,13 +854,13 @@ impl<B: Backend> Loop<B> {
                 // connect does. The reader's end of it retries like any
                 // other lost connection.
                 if !self.hub.has_stream() {
-                    self.app.connect_failed(
+                    self.app.connect_failed_inner(
                         "Could not set up the hub connection: its write timeout could not be set"
                             .to_owned(),
                     );
                 } else {
-                    let lines = self.app.on_line(Line::Hub(hello));
-                    self.hub.send(&lines, &mut self.app);
+                    let lines = self.app.on_line_inner(Line::Hub(hello));
+                    self.send_inner(&lines);
                     // A `hub_hello` this terminal cannot read leaves it
                     // unconnected: it says so and disconnects.
                     if !self.app.connected() {
@@ -808,19 +870,20 @@ impl<B: Backend> Loop<B> {
             }
             Input::ConnectFailed(error) => {
                 self.app
-                    .connect_failed(format!("Could not reach the hub: {error}"));
+                    .connect_failed_inner(format!("Could not reach the hub: {error}"));
                 self.hub.retry_later(&mut self.app);
             }
             Input::Disconnected => self.hub.on_disconnected(&mut self.app),
-            Input::Files { generation, result } => self.app.on_files(generation, result),
+            Input::WriteFailed(unsent) => self.app.write_failed_inner(&unsent),
+            Input::Files { generation, result } => self.app.on_files_inner(generation, result),
             Input::Models(result) => {
-                self.app.on_models(result);
+                self.app.on_models_inner(result);
                 // The queued read, if one waits, starts on the loop's
                 // channel.
                 self.model_reader.done(&self.files_out);
             }
-            Input::Image { ticket, result } => self.app.on_image(ticket, result),
-            Input::Feedback(result) => self.app.on_feedback(result),
+            Input::Image { ticket, result } => self.app.on_image_inner(ticket, result),
+            Input::Feedback(result) => self.app.on_feedback_inner(result),
             Input::Viewed {
                 id,
                 name,
@@ -837,7 +900,7 @@ impl<B: Backend> Loop<B> {
             }
             Input::FindDue(generation) => {
                 let lines = self.app.find_due(generation);
-                self.hub.send(&lines, &mut self.app);
+                self.send_inner(&lines);
             }
             // Its frame already drew: the next moving frame arms the
             // tick again below.
@@ -848,7 +911,7 @@ impl<B: Backend> Loop<B> {
             }
             Input::HooksInstalled { ticket, result } => {
                 let lines = self.app.on_hooks_installed(ticket, result);
-                self.hub.send(&lines, &mut self.app);
+                self.send_inner(&lines);
             }
             Input::Login { ticket, step } => {
                 // Only the waiting ticket's `Open` opens anything: any
@@ -865,7 +928,7 @@ impl<B: Backend> Loop<B> {
                         term::pixels(&self.tty),
                         (width, height),
                     ));
-                    self.app.set_size(width, height);
+                    self.app.set_size_inner(width, height);
                     let lock = Arc::clone(&self.tty_lock);
                     let _guard = lock.loop_write();
                     if self.screen.resize(width, height).is_err() {
@@ -881,6 +944,12 @@ impl<B: Backend> Loop<B> {
     /// batch, after every input in it is handled. Returns the exit code
     /// when the terminal cannot be drawn.
     fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
+        let result = self.frame_inner(rx);
+        self.settle_and_send(result)
+    }
+
+    /// Runs the frame without settling; the frame boundary owns the layout pass.
+    fn frame_inner(&mut self, rx: &Receiver<Input>) -> Option<i32> {
         // A failed Kitty write ends the loop from the next frame top: no
         // further frame, title, shape, alert or delete write starts. A
         // loop write already running may be attempted before this check,
@@ -896,7 +965,7 @@ impl<B: Backend> Loop<B> {
         // brings it.
         let now = self.clock.now();
         let due = self.app.items_due(now);
-        self.hub.send(&due, &mut self.app);
+        self.send_inner(&due);
         // A rewind `history` wait past its bound ends as a lost
         // connection, exactly as the loop's own history wait does.
         if self.app.rewind_due(now) {
@@ -989,7 +1058,7 @@ impl<B: Backend> Loop<B> {
         // The open's `full` raise goes out after the first frame draws,
         // so no `full` line is written before it.
         if let Some(line) = self.app.take_raise() {
-            self.hub.send(&[line], &mut self.app);
+            self.send_inner(&[line]);
         }
         // What the frame asked wakes the tick: nothing moving arms
         // nothing.
@@ -1073,7 +1142,7 @@ impl<B: Backend> Loop<B> {
     /// without waiting on the child.
     fn drain_display(&mut self) {
         let out = self.app.take_image_out();
-        self.hub.send(&out.display, &mut self.app);
+        self.send_inner(&out.display);
         if out.purge || !out.items.is_empty() {
             if !self.ensure_kitty_writer() {
                 self.start_next_convert();
@@ -1499,16 +1568,19 @@ impl<B: Backend> Loop<B> {
                     // transcript, once per process. A failed fetch never
                     // takes the latch, so it stays for the next load.
                     let transcript = self.timing.transcript();
-                    self.app.load(&session, lines);
+                    self.app.load_inner(&session, lines);
                     drop(transcript);
                     // An answer that folded nothing into the page would
                     // leave it needed, and the frame asking forever.
                     if self.app.needs().first() == Some(&(session.clone(), range.clone())) {
-                        self.app
-                            .load_failed(&session, &range, "the answer held none of its lines");
+                        self.app.load_failed_inner(
+                            &session,
+                            &range,
+                            "the answer held none of its lines",
+                        );
                     }
                 }
-                Err(message) => self.app.load_failed(&session, &range, &message),
+                Err(message) => self.app.load_failed_inner(&session, &range, &message),
             }
         }
     }
@@ -1562,7 +1634,7 @@ impl<B: Backend> Loop<B> {
             // so only Done reaches here: the draft is unchanged on a
             // kill, and live sessions keep their resume lines.
             if let editor::Outcome::Done(done) = result {
-                self.app.editor_returned(target, done);
+                self.app.editor_returned_inner(target, done);
             }
         }
         code

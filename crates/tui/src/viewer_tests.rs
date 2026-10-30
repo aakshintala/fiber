@@ -45,6 +45,7 @@ fn viewed(rx: &mpsc::Receiver<Input>) -> Result<(), String> {
             | Input::Connected(..)
             | Input::ConnectFailed(_)
             | Input::Disconnected
+            | Input::WriteFailed(_)
             | Input::Resize
             | Input::Signal(_)
             | Input::Files { .. }

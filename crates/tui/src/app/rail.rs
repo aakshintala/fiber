@@ -417,12 +417,11 @@ impl App {
                 Code::Up | Code::Down | Code::Enter | Code::Esc | Code::Tab
             ) {
                 if let Some(Event::Key(key)) = default_event(stroke) {
-                    return Some(self.on_key(key, now));
+                    return Some(self.on_key_inner(key, now));
                 }
             } else if matches!(stroke.code, Code::Right) {
                 self.clear_rail_focus();
                 self.edited();
-                self.settle();
                 return Some(Effect::None);
             }
         }
@@ -437,7 +436,6 @@ impl App {
         {
             let effect = self.stop_focused_card();
             self.edited();
-            self.settle();
             return Some(effect);
         }
         // Shift+Tab walks the walk back ahead of a rebound `navigate`,
@@ -447,7 +445,7 @@ impl App {
             && stroke.code == Code::Tab
             && let Some(Event::Key(key)) = default_event(stroke)
         {
-            return Some(self.on_key(key, now));
+            return Some(self.on_key_inner(key, now));
         }
         if self.keys().current("focus_rail").contains(stroke) {
             if !self.draft.is_empty() {
@@ -475,7 +473,6 @@ impl App {
                 if let Some(key) = self.attached_card_key() {
                     self.set_rail_focus(Spot::Card(key));
                     self.edited();
-                    self.settle();
                     return Some(Effect::None);
                 }
                 let Some(key) = self.attached_row_key() else {
@@ -644,7 +641,6 @@ impl App {
         };
         if layout.rail.is_some() {
             self.hide_rail();
-            self.settle();
             return Effect::None;
         }
         self.show_rail()
@@ -658,16 +654,19 @@ impl App {
     /// (`docs/tui.md`, "Shedding"). ⌥P brings the panel back, and the
     /// rail sheds again.
     pub(super) fn show_rail(&mut self) -> Effect {
-        self.chrome.show_rail();
+        let home = self.home.as_ref().map(|home| super::chrome::HomeState {
+            shares: crate::layout::Shares {
+                rail: home.launch.rail_share,
+                panel: home.launch.panel_share,
+            },
+            on_home: self.on_home(),
+        });
+        let sheds_panel =
+            self.chrome
+                .show_rail_and_sheds_panel(self.screen.width(), self.screen.height(), home);
         self.queue_save("tui.rail.shown", "true".to_owned());
-        self.settle();
-        if self
-            .chrome
-            .layout()
-            .is_some_and(|layout| layout.rail.is_none() && layout.panel.is_some())
-        {
+        if sheds_panel {
             self.chrome.toggle_panel();
-            self.settle();
         }
         Effect::None
     }

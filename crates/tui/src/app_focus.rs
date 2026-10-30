@@ -330,9 +330,9 @@ impl App {
         if let TargetId::Line(super::Target::Call(call)) = id
             && self.call_open(call)
         {
-            return self.open_call_view(call);
+            return self.open_call_view_inner(call);
         }
-        let effect = self.on_click(id);
+        let effect = self.on_click_inner(id);
         if matches!(id, TargetId::Steering(_)) {
             self.focus = None;
         }
