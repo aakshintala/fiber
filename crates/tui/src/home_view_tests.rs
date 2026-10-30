@@ -1,7 +1,7 @@
 //! Home's frame: snapshots and the cursor.
 
 use super::super::{cursor, render, text};
-use super::{TypedRow, typed_body};
+use super::picker::{TypedRow, typed_body};
 use crate::app::{App, Effect, QUIT_HINT};
 use crate::home::{Launch, Spot};
 use crate::keys::Key;
@@ -3466,6 +3466,13 @@ fn the_typed_body_draws_the_completions_beside_a_focused_recent() {
 fn the_typed_body_beside_a_focused_recent_without_completions() {
     use TypedRow::{Recent as R, Typed as T};
     assert_eq!(typed_body(0, 2, Some(1), false, 3), vec![T, R(1)]);
+}
+
+/// A focus past the last row clamps to the last recent. Room 3 takes
+/// the budget-two branch, so the focused recent index stays in range.
+#[test]
+fn a_focus_past_the_end_clamps_to_the_last_recent() {
+    assert!(typed_body(2, 1, Some(99), false, 3).contains(&TypedRow::Recent(0)));
 }
 
 /// A short screen keeps the focused completion barred: the last of 30
