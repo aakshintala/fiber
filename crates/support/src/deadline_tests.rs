@@ -230,7 +230,7 @@ fn the_bounds_keep_their_order_and_fit_nextests_kill() {
     // bound, the guard, cleanup and the total fit under nextest's kill.
     assert!(WAIT <= WAITS && WAITS < CLEANUP && CLEANUP < BUDGET);
     assert!(BUDGET < Duration::from_secs(120));
-    // Existing nextest timeout rule (`docs/testing.md:232`): the per-test
+    // Existing nextest timeout rule (`docs/testing.md`, "Waits and timeouts"): the per-test
     // timeout is at least twice the longest single deadline. Per
     // RULING-3662-C this pins only the twice-deadline part, not normal run
     // time, so the clause is unchanged and no run-time constant is added.
@@ -277,7 +277,7 @@ fn a_slow_first_wait_leaves_the_next_wait_its_full_bound() {
         // The first wait spent its whole bound.
         assert_eq!(first.left(), Duration::ZERO);
         // The next wait still gets its full fresh bound, not the remainder
-        // (`docs/testing.md:243`: one slow step does not use up a later
+        // (`docs/testing.md`, "Waits and timeouts": one slow step does not use up a later
         // step's time).
         assert_eq!(guard.left(), WAIT);
         assert_eq!(guard.start_wait().left(), WAIT);
@@ -324,7 +324,7 @@ fn a_started_wait_does_not_refresh_per_receive() {
             .expect("waited for the waiter to leave its park");
     });
     // The started wait's bound fell by the advanced span: no receive
-    // renewed it (`docs/testing.md:243`: the parts of one wait take that one
+    // renewed it (`docs/testing.md`, "Waits and timeouts": the parts of one wait take that one
     // deadline, never a fresh one per receive). The root still offers a
     // fresh bound.
     assert_eq!(
