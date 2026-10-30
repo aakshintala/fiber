@@ -15,6 +15,8 @@ pub(crate) struct Timing {
     diag: Arc<log::diag::Diag>,
     log_read: bool,
     transcript: bool,
+    attach_summary: bool,
+    tail_wait: bool,
 }
 
 impl Timing {
@@ -25,6 +27,8 @@ impl Timing {
             diag,
             log_read: false,
             transcript: false,
+            attach_summary: false,
+            tail_wait: false,
         }
     }
 
@@ -69,6 +73,40 @@ impl Timing {
     /// line; the suppression lives in the timer's drop.
     pub(crate) fn frame(&self) -> Option<log::diag::Timer> {
         log::diag::timed(&self.diag, Op::TuiFrame, None, None)
+    }
+
+    /// Starts the extension load's guard. Loading runs once before the
+    /// first frame, so no latch: one line per process.
+    pub(crate) fn extensions(&self) -> Option<log::diag::Timer> {
+        log::diag::timed(&self.diag, Op::TuiExtensions, None, None)
+    }
+
+    /// Starts the opening summary subscribe's guard, once per process.
+    /// The loop drops it once the open leaves the summary stage, so one
+    /// line covers the send through the acceptance that queues the
+    /// session's commands line.
+    pub(crate) fn attach_summary(&mut self) -> Option<log::diag::Timer> {
+        if std::mem::replace(&mut self.attach_summary, true) {
+            return None;
+        }
+        log::diag::timed(&self.diag, Op::TuiAttachSummary, None, None)
+    }
+
+    /// Starts the open's pre-frame tail read guard, once per process.
+    /// The caller holds it across the whole tail phase to completion,
+    /// whatever its outcome; the post-frame count never takes it.
+    pub(crate) fn tail_wait(&mut self) -> Option<log::diag::Timer> {
+        if std::mem::replace(&mut self.tail_wait, true) {
+            return None;
+        }
+        log::diag::timed(&self.diag, Op::TuiTailWait, None, None)
+    }
+
+    /// Starts one preview fold's guard. Each tail answer folds the
+    /// candidate separately, so no latch: every fold writes its own
+    /// line.
+    pub(crate) fn preview_fold(&self) -> Option<log::diag::Timer> {
+        log::diag::timed(&self.diag, Op::TuiPreviewFold, None, None)
     }
 }
 

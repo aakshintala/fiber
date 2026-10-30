@@ -69,11 +69,23 @@ fn text(lines: Vec<String>) -> Result<String, String> {
 
 /// A debug run whose workload ran, with the given notes and logs.
 fn run(result: Result<(), String>, notes: Vec<String>, logs: Vec<Result<String, String>>) -> Run {
+    run_spans(result, notes, logs, Vec::new())
+}
+
+/// A debug run whose workload ran, with the given notes, logs and span
+/// rows.
+fn run_spans(
+    result: Result<(), String>,
+    notes: Vec<String>,
+    logs: Vec<Result<String, String>>,
+    spans: crate::idle::Samples,
+) -> Run {
     Run {
         result,
         notes,
         ms: 4.0,
         logs,
+        spans,
     }
 }
 
@@ -373,4 +385,161 @@ fn debug_pass_is_skipped_unless_only_all() {
     });
     assert!(calls.get() > 0);
     assert!(head.metrics.contains_key("op_breakdown"));
+}
+
+/// The attach workload's entry carries its per-sample, per-fixture spans
+/// in sample order, separate from the tallied totals, with no error when
+/// spans exist.
+#[test]
+fn debug_pass_attach_entry_carries_per_sample_spans() {
+    let mut head = Pass::new(Side::Head, args(&["--paging", "j"]));
+    debug_pass(&mut head, |workload| {
+        if workload.name == crate::attach::SAMPLED[0].name {
+            run_spans(
+                Ok(()),
+                Vec::new(),
+                vec![text(vec![op("tui.tail_wait", 11)])],
+                vec![
+                    (
+                        crate::attach::SPAN_METRIC,
+                        json!({"fixture": "1 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 11}),
+                    ),
+                    (
+                        crate::attach::SPAN_METRIC,
+                        json!({"fixture": "10 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 13}),
+                    ),
+                ],
+            )
+        } else {
+            run(Ok(()), Vec::new(), Vec::new())
+        }
+    });
+    let entries = head.metrics.get("op_breakdown").expect("op_breakdown");
+    let attach = entries
+        .iter()
+        .find(|entry| entry.get("workload") == Some(&json!("terminal attach")))
+        .expect("attach entry");
+    assert_eq!(
+        attach.get("spans"),
+        Some(&json!([
+            {"fixture": "1 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 11},
+            {"fixture": "10 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 13},
+        ])),
+        "{attach}"
+    );
+    assert!(attach.get("error").is_none(), "{attach}");
+    // The tallied totals still stand beside the spans.
+    assert_eq!(
+        attach.get("ops"),
+        Some(&json!({"tui.tail_wait": {"count": 1, "ms": 11}})),
+        "{attach}"
+    );
+}
+
+/// A successful attach run with no spans fails the diagnostic result:
+/// without spans there is no Phase 1 evidence.
+#[test]
+fn debug_pass_attach_entry_errors_without_spans() {
+    let mut head = Pass::new(Side::Head, args(&["--paging", "j"]));
+    debug_pass(&mut head, |_| run(Ok(()), Vec::new(), Vec::new()));
+    let entries = head.metrics.get("op_breakdown").expect("op_breakdown");
+    let attach = entries
+        .iter()
+        .find(|entry| entry.get("workload") == Some(&json!("terminal attach")))
+        .expect("attach entry");
+    assert_eq!(
+        attach.get("error"),
+        Some(&json!("no attach spans were recorded")),
+        "{attach}"
+    );
+    assert_eq!(attach.get("spans"), Some(&json!([])), "{attach}");
+}
+
+/// A failed attach run keeps the workload's error, and still carries
+/// whatever spans it recorded.
+#[test]
+fn debug_pass_attach_entry_keeps_the_workload_error() {
+    let mut head = Pass::new(Side::Head, args(&["--paging", "j"]));
+    debug_pass(&mut head, |workload| {
+        if workload.name == crate::attach::SAMPLED[0].name {
+            run_spans(
+                Err("boom".to_owned()),
+                Vec::new(),
+                Vec::new(),
+                vec![(
+                    crate::attach::SPAN_METRIC,
+                    json!({"fixture": "1 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 11}),
+                )],
+            )
+        } else {
+            run(Ok(()), Vec::new(), Vec::new())
+        }
+    });
+    let entries = head.metrics.get("op_breakdown").expect("op_breakdown");
+    let attach = entries
+        .iter()
+        .find(|entry| entry.get("workload") == Some(&json!("terminal attach")))
+        .expect("attach entry");
+    assert_eq!(attach.get("error"), Some(&json!("boom")), "{attach}");
+    assert_eq!(
+        attach.get("spans"),
+        Some(&json!([
+            {"fixture": "1 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 11},
+        ])),
+        "{attach}"
+    );
+}
+
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static PROBE_RUNS: AtomicU32 = AtomicU32::new(u32::MAX);
+static PROBE_OTHER_RUNS: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// A workload recording how many samples the debug pass asked of it.
+fn probe_runs(ctx: &idle::Ctx<'_>, _: &mut Vec<String>) -> Result<idle::Samples, String> {
+    PROBE_RUNS.store(ctx.runs, Ordering::SeqCst);
+    Ok(Vec::new())
+}
+
+fn probe_other_runs(ctx: &idle::Ctx<'_>, _: &mut Vec<String>) -> Result<idle::Samples, String> {
+    PROBE_OTHER_RUNS.store(ctx.runs, Ordering::SeqCst);
+    Ok(Vec::new())
+}
+
+/// The debug pass runs the attach workload five samples per fixture, like
+/// the timed path, and every other workload once: one debug-only run
+/// never stands in for the five timed samples.
+#[test]
+fn run_debug_runs_attach_five_times_and_others_once() {
+    assert_eq!(crate::attach::SAMPLED[0].name, "terminal attach");
+    const ATTACH_PROBE: idle::Workload = idle::Workload {
+        name: "terminal attach",
+        timing: true,
+        run: probe_runs,
+    };
+    const OTHER_PROBE: idle::Workload = idle::Workload {
+        name: "session start",
+        timing: true,
+        run: probe_other_runs,
+    };
+    let fiber = std::env::current_exe().unwrap();
+    let clock = crate::run::System;
+    run_debug(
+        &fiber,
+        &clock,
+        None,
+        std::time::Duration::ZERO,
+        None,
+        &ATTACH_PROBE,
+    );
+    run_debug(
+        &fiber,
+        &clock,
+        None,
+        std::time::Duration::ZERO,
+        None,
+        &OTHER_PROBE,
+    );
+    assert_eq!(PROBE_RUNS.load(Ordering::SeqCst), 5);
+    assert_eq!(PROBE_OTHER_RUNS.load(Ordering::SeqCst), 1);
 }

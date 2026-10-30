@@ -339,6 +339,63 @@ fn pass_entry(label: &str, log_bytes: u64, pass_ms: f64) -> (&'static str, Value
     )
 }
 
+/// The diagnostic span rows' metric: one `attach_span_ms` row per
+/// `op_timing` line in a timed sample's TUI log, carrying the fixture,
+/// the sample, the operation and its milliseconds. Reported only, never
+/// gated: the judge reads its own metric ids.
+pub(crate) const SPAN_METRIC: &str = "attach_span_ms";
+
+/// One sample's attach-span rows from the TUI log of `pid`, the process
+/// this sample spawned: one [`SPAN_METRIC`] row per `op_timing` line,
+/// carrying the fixture, the sample number, the operation and its whole
+/// milliseconds. A home without that log (every non-debug home) holds
+/// no rows, leaving the timed rows unchanged. A log that cannot be read,
+/// a line that is not JSON, or an `op_timing` line with no string
+/// `data.op` or whole `data.ms` fails the span result instead of
+/// disappearing into it; other codes and blank lines are not spans.
+pub(crate) fn span_samples(
+    home: &std::path::Path,
+    pid: u32,
+    label: &str,
+    log_bytes: u64,
+    sample: u32,
+) -> Result<Samples, String> {
+    let path = home.join("logs").join(format!("tui-{pid}.log"));
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(format!("reading {}: {err}", path.display())),
+    };
+    let mut out = Samples::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(line)
+            .map_err(|err| format!("{} line {} is not JSON ({err})", path.display(), n + 1))?;
+        if value.get("code").and_then(Value::as_str) != Some("op_timing") {
+            continue;
+        }
+        let data = value.get("data");
+        let (Some(op), Some(ms)) = (
+            data.and_then(|data| data.get("op")).and_then(Value::as_str),
+            data.and_then(|data| data.get("ms")).and_then(Value::as_u64),
+        ) else {
+            return Err(format!(
+                "{} line {} has no string data.op or whole data.ms: {line}",
+                path.display(),
+                n + 1
+            ));
+        };
+        out.push((
+            SPAN_METRIC,
+            json!({"fixture": label, "log_bytes": log_bytes, "sample": sample, "op": op, "ms": ms}),
+        ));
+    }
+    Ok(out)
+}
+
 /// One timed attach: the log's size just before the spawn, then spawn to
 /// the tail on screen for the first frame and spawn to the scroll-bar
 /// thumb for the pass end.
@@ -348,6 +405,7 @@ fn sample(
     label: &str,
     fixture: &Fixture,
     id: &str,
+    sample_no: u32,
     notes: &mut Vec<String>,
 ) -> Result<Samples, String> {
     let log_bytes = read_log_bytes(home, id)?;
@@ -382,6 +440,17 @@ fn sample(
     )];
     samples.push(pass_entry(label, log_bytes, pass_ms));
     samples.extend(memory_rows(label, peak, retained));
+    // The sample's own TUI log, when the home kept one: one span row per
+    // `op_timing` line, attributed to this fixture and sample. A missing
+    // log keeps nothing; a malformed one fails the sample, so a broken
+    // diagnostic never passes as a fast attach.
+    samples.extend(span_samples(
+        &home.home(),
+        pid,
+        label,
+        log_bytes,
+        sample_no,
+    )?);
     let hub_ms = hub_replay(ctx, home, id)?;
     if ctx.paging.is_none() {
         // Without the release-built jig the log's stages stay unmeasured;
@@ -596,6 +665,9 @@ pub(crate) struct AttachFixture {
     id: String,
     label: &'static str,
     fixture: Fixture,
+    /// Timed samples taken against this fixture: the next sample's
+    /// number, so each sample's span rows carry their own identity.
+    taken: std::cell::Cell<u32>,
 }
 
 /// The attach row's prepared fixtures, in [`PLANS`] order.
@@ -659,6 +731,7 @@ fn prepare_fixture(
             id,
             label,
             fixture: *fixture,
+            taken: std::cell::Cell::new(0),
         }),
         Err(err) => {
             let _finished = home.finish();
@@ -711,12 +784,17 @@ pub(crate) fn sample_attach(
     let Some(fixture) = prepared.fixtures.get(index) else {
         return Err(format!("no attach fixture at index {index}"));
     };
+    // The sample number counts timed samples against this fixture, so
+    // the warm attach and the other fixture never share one.
+    let sample_no = fixture.taken.get();
+    fixture.taken.set(sample_no.saturating_add(1));
     sample(
         ctx,
         &fixture.home,
         fixture.label,
         &fixture.fixture,
         &fixture.id,
+        sample_no,
         notes,
     )
 }

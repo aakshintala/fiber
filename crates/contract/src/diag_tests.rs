@@ -92,6 +92,12 @@ fn every_operation_serializes_to_its_wire_name() {
         (Op::TuiTranscript, "tui.transcript"),
         (Op::TuiFirstRender, "tui.first_render"),
         (Op::TuiFrame, "tui.frame"),
+        // #3654's attach spans: the launch-to-first-screen path, each
+        // timed separately and never summed.
+        (Op::TuiExtensions, "tui.extensions"),
+        (Op::TuiAttachSummary, "tui.attach_summary"),
+        (Op::TuiTailWait, "tui.tail_wait"),
+        (Op::TuiPreviewFold, "tui.preview_fold"),
         (Op::LogAppend, "log.append"),
         (Op::LogFsync, "log.fsync"),
         (Op::ToolPermission, "tool.permission"),

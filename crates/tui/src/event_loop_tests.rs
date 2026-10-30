@@ -185,6 +185,7 @@ impl<B: Backend> Loop<B> {
             on_attach: Box::new(|_| {}),
             clock,
             timing: crate::timing::Timing::info(),
+            summary_span: None,
             files_out,
             search: None,
             reader,

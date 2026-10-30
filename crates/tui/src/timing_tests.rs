@@ -212,6 +212,81 @@ fn transcript_writes_once_per_process() {
     assert_terminal_wire(&lines, "tui.transcript");
 }
 
+/// The extension load writes one `tui.extensions` line in the wire shape.
+#[test]
+fn extensions_writes_one_line_in_the_wire_shape() {
+    let home = fakes::TempDir::new("tui-timing-extensions");
+    let clock = FakeClock::new();
+    let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.extensions());
+    let lines = op_lines(home.path());
+    assert_terminal_wire(&lines, "tui.extensions");
+}
+
+/// The opening summary subscribe writes once: a second attach writes
+/// nothing.
+#[test]
+fn attach_summary_writes_once_per_process() {
+    let home = fakes::TempDir::new("tui-timing-attach-summary");
+    let clock = FakeClock::new();
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.attach_summary());
+    assert!(
+        timing.attach_summary().is_none(),
+        "a second attach takes no summary guard"
+    );
+    let lines = op_lines(home.path());
+    assert_terminal_wire(&lines, "tui.attach_summary");
+}
+
+/// The pre-frame tail read writes once: the post-frame count takes no
+/// guard, so a second tail phase writes nothing.
+#[test]
+fn tail_wait_writes_once_per_process() {
+    let home = fakes::TempDir::new("tui-timing-tail-wait");
+    let clock = FakeClock::new();
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.tail_wait());
+    assert!(
+        timing.tail_wait().is_none(),
+        "a second tail phase takes no guard"
+    );
+    let lines = op_lines(home.path());
+    assert_terminal_wire(&lines, "tui.tail_wait");
+}
+
+/// Each preview fold writes its own line: two answers fold twice.
+#[test]
+fn preview_fold_writes_one_line_per_fold() {
+    let home = fakes::TempDir::new("tui-timing-preview-fold");
+    let clock = FakeClock::new();
+    let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.preview_fold());
+    drop(timing.preview_fold());
+    let lines = op_lines(home.path());
+    assert_eq!(lines.len(), 2, "one line per fold: {lines:?}");
+    for line in &lines {
+        assert_terminal_wire(std::slice::from_ref(line), "tui.preview_fold");
+    }
+}
+
+/// At `info` the attach spans record nothing: the extension load, the
+/// summary, the tail wait and a fold write no file.
+#[test]
+fn attach_spans_write_nothing_at_info() {
+    let home = fakes::TempDir::new("tui-timing-attach-spans-info");
+    let mut timing = crate::timing::Timing::info();
+    crate::timing::discard(timing.extensions());
+    crate::timing::discard(timing.attach_summary());
+    crate::timing::discard(timing.tail_wait());
+    crate::timing::discard(timing.preview_fold());
+    crate::timing::discard(None);
+    assert!(
+        !home.path().join("logs").exists(),
+        "at info no attach span writes a line"
+    );
+}
+
 /// A frame the scripted clock pushes over budget writes `tui.frame`.
 #[test]
 fn frame_over_budget_writes_through_the_loop() {
@@ -575,6 +650,230 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
         .cloned()
         .collect();
     assert_terminal_wire(&transcript, "tui.transcript");
+}
+
+/// A debug-diag loop whose launch open sent its summary subscribe: the
+/// hello went in. Returns the home (for its log), the loop, and the
+/// subscribe's id, for the caller to accept.
+fn subscribing_lp(name: &str) -> (fakes::TempDir, super::Loop<TestBackend>, String) {
+    let home = fakes::TempDir::new(name);
+    let clock = FakeClock::new();
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.clock = dyn_clock(&clock);
+    lp.timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    lp.app = crate::app::testkit::home_with(
+        80,
+        24,
+        crate::home::Launch {
+            location: crate::LaunchLocation::Local {
+                workspace: std::path::PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git: false,
+            },
+            hover: true,
+            version: "0.0.1".to_owned(),
+            model: None,
+            thinking: None,
+            logo_glyph: "\u{237b}".to_owned(),
+            keys: crate::KeysSetup::default(),
+            rail_share: 15.0,
+            panel_share: 21.0,
+            panel_cards: Vec::new(),
+            open_at: crate::OpenAt::Session(
+                contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                None,
+            ),
+            ..Default::default()
+        },
+    );
+    // The link comes up: the launch open sends the summary subscribe.
+    let lines = lp.app.on_line(crate::link::Line::Hub(hello()));
+    let summary = lines
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a summary subscribe goes out: {lines:?}"));
+    let id = summary["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{summary}"))
+        .to_owned();
+    (home, lp, id)
+}
+
+/// Every line of `lines` is a terminal `op_timing` wire line for `op`.
+fn assert_terminal_wires(lines: &[serde_json::Value], op: &str) {
+    assert!(!lines.is_empty(), "at least one line for {op}");
+    for line in lines {
+        assert_eq!(line["code"], "op_timing", "{line}");
+        assert_eq!(line["level"], "debug", "{line}");
+        assert_eq!(line["process"], "tui", "{line}");
+        assert!(line.get("session_id").is_none(), "{line}");
+        assert_eq!(line["message"], "An operation ended.", "{line}");
+        let data = line["data"].as_object().expect("data is an object");
+        let mut keys: Vec<&str> = data.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["ms", "op"], "{line}");
+        assert!(line["data"]["ms"].as_u64().is_some(), "{line}");
+        assert_eq!(line["data"]["op"], op, "{line}");
+    }
+}
+
+/// Accepts the launch open's summary subscribe, so the open reaches the
+/// commands-due stage.
+fn accept_summary(lp: &mut super::Loop<TestBackend>, id: &str) {
+    let _ = lp
+        .app
+        .on_line(crate::link::Line::Session(contract::Envelope {
+            kind: "command_accepted".to_owned(),
+            session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: [("command_id".to_owned(), json!(id))].into_iter().collect(),
+        }));
+}
+
+/// The opening summary subscribe is timed through its acceptance: the
+/// poll starts the guard while the summary is in flight and drops it on
+/// the frame after the acceptance folds, writing one
+/// `tui.attach_summary` line. A repeated poll while the summary is in
+/// flight starts no second guard.
+#[test]
+fn summary_span_covers_the_send_through_the_acceptance() {
+    let (home, mut lp, id) = subscribing_lp("tui-timing-summary-span");
+    let _ = &home;
+    assert!(lp.app.summary_in_flight(), "the summary is in flight");
+    lp.poll_summary_span();
+    assert!(
+        lp.summary_span.is_some(),
+        "the poll starts the guard while the summary is in flight"
+    );
+    // A repeated poll while the summary is in flight starts no second
+    // guard: flipping the `is_none` check would drop the first guard
+    // here and lose the send-to-acceptance span.
+    lp.poll_summary_span();
+    assert!(
+        lp.summary_span.is_some(),
+        "a repeated poll keeps the one guard"
+    );
+    // The acceptance folds: the commands line goes out and the open
+    // leaves the summary stage.
+    accept_summary(&mut lp, &id);
+    assert!(
+        !lp.app.summary_in_flight(),
+        "the acceptance leaves the summary stage"
+    );
+    lp.poll_summary_span();
+    assert!(
+        lp.summary_span.is_none(),
+        "the poll drops the guard after the acceptance"
+    );
+    let lines = op_lines(home.path());
+    assert_terminal_wire(&lines, "tui.attach_summary");
+}
+
+/// A latched summary timer starts no second guard: the poll leaves the
+/// span unset while a second summary is in flight, so a second open
+/// writes no second line.
+#[test]
+fn summary_poll_starts_nothing_once_the_latch_is_set() {
+    let (home, mut lp, _) = subscribing_lp("tui-timing-summary-latch");
+    // The latch is set, as a first open left it: dropping the guard
+    // writes that first open's line.
+    crate::timing::discard(lp.timing.attach_summary());
+    assert!(lp.app.summary_in_flight(), "the summary is in flight");
+    lp.poll_summary_span();
+    assert!(
+        lp.summary_span.is_none(),
+        "a latched timer starts no guard for a second open"
+    );
+    assert!(
+        !log_file(home.path()).exists(),
+        "a second open writes no second line"
+    );
+}
+
+/// The open's pre-frame tail read is timed end to end: one
+/// `tui.tail_wait` line spans the whole fetch, and one `tui.preview_fold`
+/// line covers each fold after it: the answer's fold and the install's
+/// fold. A `Phase::Count` read takes no `tail_wait` guard, so swapping
+/// the arms leaves none here.
+#[test]
+fn open_tail_times_the_wait_and_every_fold() {
+    let (home, mut lp, id) = subscribing_lp("tui-timing-open-tail");
+    accept_summary(&mut lp, &id);
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub.store(ours);
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-open-tail-hub".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(theirs);
+            let mut text = String::new();
+            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                if command["command"] != "history" {
+                    continue;
+                }
+                let id = command["id"].clone();
+                let payload = json!({"command_id": id, "result": {"lines": []}});
+                let envelope = contract::Envelope {
+                    kind: "command_accepted".to_owned(),
+                    session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                    ts: 0,
+                    schema_version: contract::SCHEMA_VERSION,
+                    turn_id: None,
+                    action_id: None,
+                    seq: None,
+                    payload: payload.as_object().cloned().unwrap_or_default(),
+                };
+                if tx
+                    .send(crate::Input::Hub(crate::link::Line::Session(envelope)))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // `open_tail` blocks in `recv`: it runs on a thread of its own and
+    // the loop arrives through one deadline, so a wait that never ends
+    // fails here instead of hanging the suite (`docs/testing.md`,
+    // "Waits and timeouts").
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-open-tail".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            lp.open_tail(&rx);
+            done.send(lp).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let lp = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the tail read: {err}"));
+    drop(lp);
+    let lines = op_lines(home.path());
+    let waits: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.tail_wait")
+        .cloned()
+        .collect();
+    assert_terminal_wire(&waits, "tui.tail_wait");
+    let folds: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.preview_fold")
+        .cloned()
+        .collect();
+    assert_eq!(
+        folds.len(),
+        2,
+        "the answer fold and the install fold: {folds:?}"
+    );
+    assert_terminal_wires(&folds, "tui.preview_fold");
 }
 
 /// A refused connect still draws its first frame, and only it.

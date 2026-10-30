@@ -254,7 +254,12 @@ pub(crate) fn run_with(
     // deadline started before reading. Uninterruptible overruns fail on return.
     // The queries are out; no tty or hub read precedes the first frame.
     if let Some(loader) = extensions {
+        // The load is timed but never moved: extensions may change the
+        // first frame, so they load before it draws (`docs/tui.md`,
+        // "How a TUI extension runs").
+        let load = timing.extensions();
         let (renderer, notices) = loader.load();
+        drop(load);
         app.use_renderer(renderer);
         for (code, text) in notices {
             app.push_notice(&code, text);
@@ -302,6 +307,7 @@ pub(crate) fn run_with(
         on_attach,
         clock,
         timing,
+        summary_span: None,
         files_out: tx.clone(),
         search: None,
         reader,
@@ -442,6 +448,9 @@ struct Loop<B: Backend> {
     clock: Arc<dyn Clock>,
     /// The diagnostic writer the timed scopes share.
     timing: crate::timing::Timing,
+    /// The opening summary subscribe's guard, while the open holds that
+    /// stage: dropped once the open leaves it, writing one line.
+    summary_span: Option<log::diag::Timer>,
     /// Where workers post their results.
     files_out: Sender<Input>,
     /// The `@` panel's search worker, while the panel is open.
@@ -888,6 +897,10 @@ impl<B: Backend> Loop<B> {
         if self.kitty_failed.load(std::sync::atomic::Ordering::SeqCst) {
             return Some(1);
         }
+        // The summary span opens and closes here: every handled batch
+        // ends in a frame, so the send is seen on the next frame top
+        // and the acceptance on the frame after it folds.
+        self.poll_summary_span();
         // A frame past its 16 ms budget writes `tui.frame`; one within
         // budget writes no line, so scrolling leaves the log small.
         let _frame = self.timing.frame();
@@ -1392,13 +1405,30 @@ impl<B: Backend> Loop<B> {
         self.search = Some(search);
     }
 
+    /// Starts the attach summary guard while the open's first-stage
+    /// summary subscribe is in flight and drops it once the open leaves
+    /// that stage, writing one `tui.attach_summary` line per process.
+    /// A second open finds the latch set and writes nothing. The guard
+    /// only observes: the subscribes and their answers are unchanged.
+    fn poll_summary_span(&mut self) {
+        if self.app.summary_in_flight() {
+            if self.summary_span.is_none() {
+                self.summary_span = self.timing.attach_summary();
+            }
+            return;
+        }
+        if let Some(span) = self.summary_span.take() {
+            drop(span);
+        }
+    }
+
     /// Reads the open's tail when one is due: the own-segment history
     /// windows fill it, then the preview installs. No stream means the
     /// tail ended with nothing read; a lost read ends everything
-    /// through `disconnected`, with no install. The tail read stays
-    /// untimed: the attach timers cover the first fetched page below.
-    /// Older windows and ancestors read after the first frame draws,
-    /// through the retained count.
+    /// through `disconnected`, with no install. The tail wait and each
+    /// fold are timed once per process; the first fetched page below
+    /// keeps its own timer. Older windows and ancestors read after the
+    /// first frame draws, through the retained count.
     fn open_tail(&mut self, rx: &Receiver<Input>) {
         let Some(session) = self.app.tail_due() else {
             return;
@@ -1407,7 +1437,9 @@ impl<B: Backend> Loop<B> {
         self.app.clear_tail_read();
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
+            let install = self.timing.preview_fold();
             self.app.install_tail();
+            drop(install);
             return;
         }
         if self
@@ -1420,6 +1452,7 @@ impl<B: Backend> Loop<B> {
                 self.clock.as_ref(),
                 self.tick.armed(),
                 hub::Phase::Tail,
+                &mut self.timing,
             )
             .is_err()
         {
@@ -1429,8 +1462,11 @@ impl<B: Backend> Loop<B> {
         // its tail read here (only a lost connection drops it, and that
         // returns above). No page count is compared: a rebuild can
         // hold the same count, and an empty tail still installs its
-        // empty preview.
+        // empty preview. The install holds the fold guard: it folds the
+        // leftover candidate when no answer did, then installs it.
+        let install = self.timing.preview_fold();
         self.app.install_tail();
+        drop(install);
     }
 
     /// Reads the retained count after the first frame draws: older
@@ -1453,6 +1489,7 @@ impl<B: Backend> Loop<B> {
                 self.clock.as_ref(),
                 self.tick.armed(),
                 hub::Phase::Count,
+                &mut self.timing,
             )
             .is_err()
         {

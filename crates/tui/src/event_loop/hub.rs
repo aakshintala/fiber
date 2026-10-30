@@ -293,9 +293,13 @@ impl Connection {
     /// rejected or unreadable answer ends its read as failed with its
     /// message; a reopening abandons it without one. A lost connection
     /// ends the read; the loop's `disconnected` already ended the overlay.
+    /// The tail phase holds its wait guard to completion, whatever the
+    /// outcome, and each of its answers folds under its own fold guard;
+    /// the count phase takes neither. The guards only observe: the
+    /// requests, their order and the answers are unchanged.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the fetch carries the session, the app, the tick, the clock and the frame's deadline"
+        reason = "the fetch carries the session, the app, the tick, the clock, the frame's deadline and the attach timing"
     )]
     pub(super) fn fetch_history(
         &mut self,
@@ -306,7 +310,12 @@ impl Connection {
         clock: &dyn Clock,
         frame_deadline: Option<Instant>,
         phase: Phase,
+        timing: &mut crate::timing::Timing,
     ) -> Result<(), String> {
+        let _tail = match phase {
+            Phase::Tail => timing.tail_wait(),
+            Phase::Count => None,
+        };
         loop {
             let args = match phase {
                 Phase::Count => app.tail_count_next(),
@@ -328,7 +337,11 @@ impl Connection {
             match self.answer(rx, &id, app, tick, clock, frame_deadline) {
                 Ok(Answer::Lines(lines)) => match phase {
                     Phase::Count => app.tail_count_lines(lines),
-                    Phase::Tail => app.tail_lines(lines),
+                    Phase::Tail => {
+                        let fold = timing.preview_fold();
+                        app.tail_lines(lines);
+                        drop(fold);
+                    }
                 },
                 Ok(Answer::Reopened) => {
                     match phase {
