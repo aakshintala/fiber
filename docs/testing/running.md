@@ -19,7 +19,7 @@ watchdog, started beside Fiber, kills Fiber's process group when the test
 process dies. A shell test's fixtures stop themselves (a stop file, 120 s at most) and the test signals no process.
 A filter that matches no
 tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
-"0 passed" and exits 0. Doc-tests run under `cargo test --doc`.
+"0 passed" and exits 0. Doc-tests run under `cargo test --doc`. `scripts/check` runs nextest with one thread per CPU the host has free, from the load when the run starts, and prints the count; a loaded host runs fewer tests at once rather than starving each of them. Locally the count is `floor(cpus - load)`, at least 2 and at most `cpus`, printed as `== nextest threads: N (C cpus, load L)` via `cargo xtask threads`. Under `GITHUB_ACTIONS` the gate keeps the runner's own count instead, printing that it does so and passing no `--test-threads`.
 
 `scripts/check` exports `FIBER_CHECK_RUN` for the run, and `scripts/leak-scan`
 fails the run when a process still carries it after the tests, listing each

@@ -155,17 +155,25 @@ const PAGING_CRATES: [&str; 4] = [
     "crates/log/",
 ];
 
+/// `docs/ci.md`, "Selection": the crates whose change selects the
+/// `sandbox setup` timing row. The row times `tools::prepare`
+/// (`crates/tools/src/shell/sandbox/mod.rs`), the per-spawn policy build
+/// every confined shell call makes (`docs/sandbox.md`, "How read denies
+/// are built"). Slash-bounded like every other crate list here.
+const SANDBOX_CRATES: [&str; 1] = ["crates/tools/"];
+
 /// `docs/ci.md`, "Selection": each base timing row with the crates
 /// whose change selects it, in workload order. The names are the
 /// harness's own workload names, cited by
 /// `crates/bench/examples/bench/main_tests.rs`.
-const BASE_ROWS: [(&str, &[&str]); 6] = [
+const BASE_ROWS: [(&str, &[&str]); 7] = [
     ("session start", &SESSION_CRATES),
     ("sessions list", &LIST_CRATES),
     ("terminal first frame", &TERMINAL_CRATES),
     ("terminal attach", &TERMINAL_CRATES),
     ("terminal wheel", &TERMINAL_CRATES),
     ("paging", &PAGING_CRATES),
+    ("sandbox setup", &SANDBOX_CRATES),
 ];
 
 /// Whether `path` is a docs file for the base-row selection: `is_docs_file`

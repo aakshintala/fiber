@@ -78,6 +78,7 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |
 | `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |
+| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | — | — | — | — | — |
 | `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |
 | `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured | 8 ms | 5 ms | 10 ms | 16 % | 4 % |

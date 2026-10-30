@@ -193,8 +193,9 @@ impl Running {
 
     #[track_caller]
     pub(crate) fn wait_for(&mut self, kind: &str) {
+        let wait = self.deadline.start_wait();
         loop {
-            let line = match self.deadline.recv(&self.lines) {
+            let line = match wait.recv(&self.lines) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited until the deadline for {kind} on the session's stdout")
