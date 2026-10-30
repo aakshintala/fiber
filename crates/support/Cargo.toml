@@ -11,8 +11,8 @@ ring.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
 
-# macOS only: the peer process id and the KERN_PROC_PID/KERN_PROCARGS2
-# sysctls behind support::peer. Linux reads /proc with std::fs instead.
+# macOS only: the peer process id and the PROC_PIDT_SHORTBSDINFO/KERN_PROCARGS2
+# process reads behind support::peer. Linux reads /proc with std::fs instead.
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 

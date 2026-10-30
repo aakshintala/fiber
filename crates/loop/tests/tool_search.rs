@@ -140,6 +140,7 @@ impl Tool for SearchTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
@@ -233,6 +234,7 @@ impl Tool for CatalogTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }

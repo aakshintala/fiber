@@ -405,6 +405,7 @@ fn an_always_reviewed_call_offers_no_rule() {
         subject: Some("npm test --watch".into()),
         prefix: Some("npm test".into()),
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     };
     let offered = rule_offer(&plain).expect("a plain call offers its subject and prefix");
@@ -412,6 +413,7 @@ fn an_always_reviewed_call_offers_no_rule() {
     assert_eq!(offered.prefix, "npm test");
     let flagged = Effects {
         always_reviewed: true,
+        review_when_confined: false,
         ..plain
     };
     assert!(rule_offer(&flagged).is_none());
@@ -534,6 +536,7 @@ impl contract::tool::Tool for ReviewTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
@@ -641,6 +644,7 @@ fn the_effects_item_names_the_call_under_review() {
         subject: None,
         prefix: None,
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     };
     for prepared in [
@@ -723,6 +727,7 @@ fn batch_stage1_build_matches_the_serial_path_byte_for_byte() {
                     subject: None,
                     prefix: None,
                     always_reviewed: false,
+                    review_when_confined: false,
                     hosts: None,
                 },
                 rewritten: Some(vec!["fiber.test/guard".into()]),
@@ -958,6 +963,7 @@ fn a_review_note_follows_the_declared_effects_in_both_branches() {
                 subject: None,
                 prefix: None,
                 always_reviewed: false,
+                review_when_confined: false,
                 hosts: None,
             },
             rewritten,
@@ -1012,6 +1018,7 @@ fn the_effects_item_names_the_added_folders_beside_the_workspace_root() {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         },
         rewritten: None,
@@ -1117,6 +1124,7 @@ mod supervised {
                 subject: None,
                 prefix: None,
                 always_reviewed: true,
+                review_when_confined: false,
                 hosts: None,
             })
         }
