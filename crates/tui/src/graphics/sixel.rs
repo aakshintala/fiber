@@ -18,6 +18,14 @@ fn register_332(red: u8, green: u8, blue: u8) -> u8 {
     (red & 0xe0) | ((green & 0xe0) >> 3) | (blue >> 6)
 }
 
+/// Whether `row` names a row in the source image.
+// `<`→`<=` is equivalent: the following `at.get` rejects the first row
+// past the image. Keep the guard explicit about the source dimensions.
+#[cfg_attr(false, mutants::skip)]
+fn row_is_in_image(row: usize, rows: usize) -> bool {
+    row < rows
+}
+
 /// Encodes `rgba` (`width` by `height`, 8-bit RGBA row-major) as Sixel
 /// data over `background`: 3-3-2 quantized, six-row bands, P2 set for
 /// square pixels.
@@ -87,9 +95,7 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) 
                 let mut cell = b'?';
                 for row in 0..BAND_ROWS {
                     let y = band * BAND_ROWS + row;
-                    // Past the last row `get` misses, so no explicit
-                    // bound is needed.
-                    if at.get(y * cols + col) == Some(register) {
+                    if row_is_in_image(y, rows) && at.get(y * cols + col) == Some(register) {
                         cell += 1 << row;
                     }
                 }
