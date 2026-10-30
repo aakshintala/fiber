@@ -130,11 +130,11 @@ pub(crate) fn paragraph(line: Line<'_>) -> Paragraph<'_> {
 
 /// How many rows `line` takes at `width`: one when it fits, without
 /// wrapping it.
-pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
+pub(crate) fn rows(line: &Line<'_>, width: u16) -> usize {
     if line.width() <= usize::from(width) {
         return 1;
     }
-    paragraph(line).line_count(width).max(1)
+    paragraph(line.clone()).line_count(width).max(1)
 }
 
 /// The slab the quit question or the notice overlay draws now, or an

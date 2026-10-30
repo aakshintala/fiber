@@ -740,7 +740,7 @@ fn a_wrapped_item_is_revealed_whole() {
     let rows_of = |at: usize| {
         app.lines()
             .get(at)
-            .map(|text| crate::view::rows(text.clone(), 12))
+            .map(|text| crate::view::rows(text, 12))
             .unwrap_or(0)
     };
     // An open ledger's long call row splits inside the padding, so every
@@ -1803,7 +1803,7 @@ fn text_row(app: &App, target: Target) -> usize {
         if *line_target == Some(target) {
             return row;
         }
-        row += crate::view::rows(line.clone(), width);
+        row += crate::view::rows(line, width);
     }
     panic!("no row for {target:?}");
 }
