@@ -294,6 +294,7 @@ impl Tool for CountingTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
@@ -1386,6 +1387,7 @@ fn rewrite_yields_both_fields_or_neither() {
         subject: Some(String::new()),
         prefix: None,
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     };
     let prepared = |rewritten: Option<Vec<String>>| super::Prepared {

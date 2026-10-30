@@ -25,8 +25,9 @@ use std::time::Duration;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, PIXEL, PIXEL_BASE64, Setup, complete_lines, function_call, git, hello,
-    kinds, stream, text_reply, write_json,
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, Setup, assert_kinds_multiset,
+    assert_session_process_boundaries, complete_lines, function_call, git, hello, kinds, stream,
+    text_reply, write_json,
 };
 
 impl Setup {
@@ -521,6 +522,36 @@ const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 18] = [
     "fiber_exited",
 ];
 
+/// The verbatim count rule the multiset calls cite
+/// (`docs/testing.md`, "Event streams").
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+
+/// The combined citation the `job_delta` exclusion carries: the narrow
+/// exception (`docs/testing.md`, "Event streams") and the ephemeral-progress
+/// definition it names (`docs/events.md:1333`).
+const IGNORE_JOB_DELTA_DOC: &str = "docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta`, may be excluded from the multiset only when its count is not under test.; docs/events.md:1333: Ephemeral. Progress for clients, paced as `tool_call_delta` is.";
+
+/// Verbatim lifecycle sources for the session-boundary assertions below.
+const SESSION_FIRST_DOC: &str =
+    "docs/events.md:339: Durable. The first line of every session's log.";
+const PROCESS_START_DOC: &str = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+const PROCESS_END_DOC: &str =
+    "docs/events.md:296: Durable. The last line a process writes for a session.";
+
+#[track_caller]
+fn assert_session_edges(setup: &Setup, id: &str) {
+    let log = support::complete_lines(
+        &fs::read_to_string(setup.session_dir(id).join("events.jsonl")).unwrap(),
+    );
+    assert_session_process_boundaries(
+        &log,
+        id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+}
+
 /// The same run's stdout kinds: the loop's own lines, without the
 /// socket's `command_accepted` echoes.
 const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 15] = [
@@ -622,8 +653,15 @@ fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
     let mut stream = vec![sub];
     stream.extend(rest);
     stream.extend(tail);
-    assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
-    assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
+    assert_kinds_multiset(
+        &stream,
+        &SOCKET_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(&out, &STDOUT_KINDS_ONE_TURN_AND_CLOSE, &[], None, COUNT_DOC);
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -697,8 +735,15 @@ fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
     let mut stream = vec![sub];
     stream.extend(rest);
     stream.extend(tail);
-    assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
-    assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
+    assert_kinds_multiset(
+        &stream,
+        &SOCKET_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(&out, &STDOUT_KINDS_ONE_TURN_AND_CLOSE, &[], None, COUNT_DOC);
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -751,11 +796,12 @@ fn an_idle_session_exits_with_a_client_still_connected() {
         1,
         "the client attached once: {stream:?}"
     );
-    // The ordered turn: subscribe, then the held prompt's turn, then the
-    // close (`docs/loop.md`, "Starting a turn", "Ending a turn").
-    assert_eq!(
-        kinds(&stream),
-        [
+    // The turn's kinds as a set: the subscribe, the held prompt's turn and
+    // the close. The one `clients` line is fixed, so it is counted too.
+    assert_kinds_multiset(
+        &stream,
+        &[
+            "clients",
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -772,11 +818,14 @@ fn an_idle_session_exits_with_a_client_still_connected() {
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &["clients"],
+        None,
+        COUNT_DOC,
     );
-    assert_eq!(
-        kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -792,8 +841,12 @@ fn an_idle_session_exits_with_a_client_still_connected() {
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -887,9 +940,9 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
     stream.extend(first);
     stream.extend(second);
     stream.extend(tail);
-    assert_eq!(
-        kinds(&stream),
-        [
+    assert_kinds_multiset(
+        &stream,
+        &[
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -917,11 +970,14 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
             "turn_completed",
             "command_accepted",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
-    assert_eq!(
-        kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -946,8 +1002,12 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -975,9 +1035,9 @@ fn a_served_session_whose_last_turn_failed_exits_0() {
         out.last().unwrap()
     );
     assert_eq!(stderr, "");
-    assert_eq!(
-        kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -987,8 +1047,12 @@ fn a_served_session_whose_last_turn_failed_exits_0() {
             "step_started",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
     // Its client saw the failure on the turn's own `turn_completed`.
     let completed = out
         .iter()
@@ -1030,14 +1094,26 @@ fn a_session_that_never_got_a_prompt_leaves_nothing_behind() {
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
     // No prompt, so no preamble and no turn: the opening lines, then the exit.
-    assert_eq!(
-        kinds(&out),
-        [
+    // Stdout is the whole session here: nothing was ever written to a
+    // session directory, so the lifecycle edges are asserted on it.
+    assert_kinds_multiset(
+        &out,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &out,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
     assert!(
         !setup.session_dir(&id).exists(),
@@ -1192,9 +1268,9 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
     stream.extend(asked);
     stream.extend(decided);
     stream.extend(tail);
-    assert_eq!(
-        kinds(&stream),
-        [
+    assert_kinds_multiset(
+        &stream,
+        &[
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -1224,11 +1300,14 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
             "turn_completed",
             "command_accepted",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
-    assert_eq!(
-        kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -1254,8 +1333,12 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -1323,8 +1406,15 @@ fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
     let mut stream = vec![sub];
     stream.extend(rest);
     stream.extend(tail);
-    assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
-    assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
+    assert_kinds_multiset(
+        &stream,
+        &SOCKET_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(&out, &STDOUT_KINDS_ONE_TURN_AND_CLOSE, &[], None, COUNT_DOC);
+    assert_session_edges(&setup, &id);
 }
 
 /// Starts a session on a standing ask that idle-exits on it at once, and
@@ -1679,9 +1769,9 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(
-        kinds(&events),
-        [
+    assert_kinds_multiset(
+        &events,
+        &[
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -1690,15 +1780,30 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
             "command_accepted",
             "fiber_exited",
         ],
+        &[],
+        None,
+        COUNT_DOC,
     );
-    assert_eq!(
-        kinds(&out),
-        [
+    // Stdout is the whole session here: this session was never prompted,
+    // so nothing was written to a session directory.
+    assert_kinds_multiset(
+        &out,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
             "fiber_exited",
         ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &out,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
 }
 
@@ -1779,9 +1884,13 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
             "the resumed client was counted once"
         );
     }
-    assert_eq!(
-        kinds(&events),
-        [
+    // The resumed `clients` line is fixed, so it is counted too; the
+    // resumed-process stdout capture stays a multiset, with the complete
+    // durable log asserting the lifecycle edges below.
+    assert_kinds_multiset(
+        &events,
+        &[
+            "clients",
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -1804,17 +1913,25 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
             "command_accepted",
             "fiber_exited",
         ],
+        &["clients"],
+        None,
+        COUNT_DOC,
     );
-    assert_eq!(
-        kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
+            "clients",
             "fiber_started",
             "extensions_loaded",
             "preamble_built",
             "permission_requested",
             "fiber_exited",
         ],
+        &["clients"],
+        None,
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 /// The acknowledgement or rejection naming `id`.
@@ -2311,22 +2428,21 @@ fn stdout_projection_also_sets_aside_job_deltas() {
     ]);
     // The set-aside list is fixed (`docs/testing.md`, "Event streams"):
     // `clients`, `session_status`, `attention` and `date_changed` never
-    // reach the ordered projection, whatever positions they held.
-    assert_eq!(
-        kinds(&lines),
-        ["fiber_started", "job_delta", "fiber_exited"]
+    // reach the multiset unless counted, whatever positions they held.
+    assert_kinds_multiset(
+        &lines,
+        &["fiber_started", "job_delta", "fiber_exited"],
+        &[],
+        None,
+        COUNT_DOC,
     );
-    assert_eq!(stdout_kinds(&lines), ["fiber_started", "fiber_exited"]);
-}
-
-/// The session's stdout kinds without `job_delta`: it is ephemeral, and
-/// where it lands depends on when the job writes. Like [`kinds`], without
-/// `session_status`.
-fn stdout_kinds(out: &[Value]) -> Vec<&str> {
-    kinds(out)
-        .into_iter()
-        .filter(|kind| *kind != "job_delta")
-        .collect()
+    assert_kinds_multiset(
+        &lines,
+        &["fiber_started", "fiber_exited"],
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
 }
 
 /// A `close` with `now`, answered `command_accepted`.
@@ -2360,7 +2476,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
     server.hold();
-    let (running, client, job_group, _) =
+    let (running, client, job_group, id) =
         job_session(&setup, JOB_SCRIPT_FOREVER, &server, || server.release_one());
     // The first response is through, the job runs, and the second request
     // is held: the turn is in flight.
@@ -2389,23 +2505,27 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 2);
-    assert_eq!(
-        stdout_kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             CLOSE_START.as_slice(),
             CLOSE_BG_STEP.as_slice(),
             CLOSE_HELD.as_slice(),
             &["job_completed", "fiber_exited"],
         ]
-        .concat()
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
 fn close_now_while_idle_with_a_job_starts_no_turn() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
-    let (running, client, job_group, _) = job_session(&setup, JOB_SCRIPT_FOREVER, &server, || {});
+    let (running, client, job_group, id) = job_session(&setup, JOB_SCRIPT_FOREVER, &server, || {});
     // The prompt's turn completed: the session is idle with the job running.
     let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -2425,16 +2545,20 @@ fn close_now_while_idle_with_a_job_starts_no_turn() {
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 2, "no ending-notice request ran");
-    assert_eq!(
-        stdout_kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             CLOSE_START.as_slice(),
             CLOSE_BG_STEP.as_slice(),
             CLOSE_REPLY.as_slice(),
             &["job_completed", "fiber_exited"],
         ]
-        .concat()
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 /// The background call this test's first response makes: `cat` on a
@@ -2586,9 +2710,9 @@ fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
         out.iter().all(|line| line["kind"] != "tool_call_completed"),
         "the shutdown ran no call"
     );
-    assert_eq!(
-        stdout_kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             CLOSE_START.as_slice(),
             &[
                 "step_started",
@@ -2600,8 +2724,12 @@ fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
                 "fiber_exited",
             ],
         ]
-        .concat()
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -2632,14 +2760,21 @@ fn close_now_while_idle_with_no_jobs_exits_0() {
     let (status, out, stderr) = running.wait();
     assert_exited_clean(&assert_exited_0(status, &out, &stderr));
     assert_eq!(server.requests().len(), 1);
-    assert_eq!(stdout_kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
+    assert_kinds_multiset(
+        &out,
+        &STDOUT_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
 fn close_without_now_waits_for_the_job_to_finish() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello(), hello()]).unwrap();
-    let (mut running, client, job_group, _) =
+    let (mut running, client, job_group, id) =
         job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
     let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -2666,9 +2801,9 @@ fn close_without_now_waits_for_the_job_to_finish() {
         .find(|line| line["kind"] == "job_completed")
         .expect("the background job completed");
     assert_eq!(job["payload"]["status"], "completed");
-    assert_eq!(
-        stdout_kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             CLOSE_START.as_slice(),
             CLOSE_BG_STEP.as_slice(),
             CLOSE_REPLY.as_slice(),
@@ -2696,8 +2831,12 @@ fn close_without_now_waits_for_the_job_to_finish() {
                 "fiber_exited",
             ],
         ]
-        .concat()
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -2751,7 +2890,7 @@ fn a_closing_session_says_so_to_a_client_that_subscribes_mid_close() {
 fn close_now_after_close_stops_the_job_it_was_waiting_for() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello()]).unwrap();
-    let (running, client, job_group, _) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let (running, client, job_group, id) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
     let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -2776,9 +2915,9 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 3);
-    assert_eq!(
-        stdout_kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             CLOSE_START.as_slice(),
             CLOSE_BG_STEP.as_slice(),
             CLOSE_REPLY.as_slice(),
@@ -2797,8 +2936,12 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
                 "fiber_exited",
             ],
         ]
-        .concat()
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -3081,9 +3224,9 @@ fn a_delegate_runs_one_turn_and_exits_with_its_parent_recorded() {
     assert_eq!(exited["payload"]["exit_code"], 0);
     assert_eq!(exited["payload"]["text"], "Hello.");
     let lines = delegate_events(&setup, &id);
-    assert_eq!(
-        kinds(&lines),
-        [
+    assert_kinds_multiset(
+        &lines,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -3097,7 +3240,17 @@ fn a_delegate_runs_one_turn_and_exits_with_its_parent_recorded() {
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
     let started = lines
         .iter()
@@ -3126,9 +3279,9 @@ fn an_ask_user_call_ends_a_delegate_turn_with_its_questions() {
     assert_eq!(exited["payload"]["exit_code"], 0);
     assert_eq!(exited["payload"]["questions"], questions);
     let lines = delegate_events(&setup, &id);
-    assert_eq!(
-        kinds(&lines),
-        [
+    assert_kinds_multiset(
+        &lines,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -3144,7 +3297,17 @@ fn an_ask_user_call_ends_a_delegate_turn_with_its_questions() {
             "tool_call_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
 }
 
@@ -3169,9 +3332,9 @@ fn dropping_a_delegate_lifeline_exits_129_within_the_bound() {
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 129);
     let lines = delegate_events(&setup, &id);
-    assert_eq!(
-        kinds(&lines),
-        [
+    assert_kinds_multiset(
+        &lines,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -3183,7 +3346,17 @@ fn dropping_a_delegate_lifeline_exits_129_within_the_bound() {
             "usage_recorded",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
 }
 
@@ -3307,8 +3480,15 @@ fn the_prompt_command_runs_a_servers_prompt() {
     let mut stream = vec![sub];
     stream.extend(rest);
     stream.extend(tail);
-    assert_eq!(kinds(&stream), SOCKET_KINDS_ONE_TURN_AND_CLOSE);
-    assert_eq!(kinds(&out), STDOUT_KINDS_ONE_TURN_AND_CLOSE);
+    assert_kinds_multiset(
+        &stream,
+        &SOCKET_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(&out, &STDOUT_KINDS_ONE_TURN_AND_CLOSE, &[], None, COUNT_DOC);
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -3333,9 +3513,9 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(
-        kinds(&events),
-        [
+    assert_kinds_multiset(
+        &events,
+        &[
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -3344,15 +3524,30 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
             "command_accepted",
             "fiber_exited",
         ],
+        &[],
+        None,
+        COUNT_DOC,
     );
-    assert_eq!(
-        kinds(&out),
-        [
+    // Stdout is the whole session here: this session was never prompted,
+    // so nothing was written to a session directory.
+    assert_kinds_multiset(
+        &out,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
             "fiber_exited",
         ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &out,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
 }
 
@@ -3428,9 +3623,13 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
             "the resumed client was counted once"
         );
     }
-    assert_eq!(
-        kinds(&events),
-        [
+    // The resumed `clients` line is fixed, so it is counted too; the
+    // resumed-process stdout capture stays a multiset, with the complete
+    // durable log asserting the lifecycle edges below.
+    assert_kinds_multiset(
+        &events,
+        &[
+            "clients",
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -3453,17 +3652,25 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
             "command_accepted",
             "fiber_exited",
         ],
+        &["clients"],
+        None,
+        COUNT_DOC,
     );
-    assert_eq!(
-        kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
+            "clients",
             "fiber_started",
             "extensions_loaded",
             "preamble_built",
             "permission_requested",
             "fiber_exited",
         ],
+        &["clients"],
+        None,
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -3507,9 +3714,9 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     });
     let mut stream = vec![sub];
     stream.extend(first.clone());
-    assert_eq!(
-        kinds(&stream),
-        [
+    assert_kinds_multiset(
+        &stream,
+        &[
             "command_accepted",
             "session_started",
             "fiber_started",
@@ -3526,7 +3733,10 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
     assert!(
         first
@@ -3550,9 +3760,9 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     let second = until_session(&client, "the second turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    assert_eq!(
-        kinds(&second),
-        [
+    assert_kinds_multiset(
+        &second,
+        &[
             "skills_changed",
             "turn_started",
             "command_accepted",
@@ -3571,7 +3781,10 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
     let changed = second
         .iter()
@@ -3610,9 +3823,9 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     let third = until_session(&client, "the third turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    assert_eq!(
-        kinds(&third),
-        [
+    assert_kinds_multiset(
+        &third,
+        &[
             "skills_changed",
             "turn_started",
             "command_accepted",
@@ -3631,7 +3844,10 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
     let removed = third
         .iter()
@@ -3648,13 +3864,19 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let tail = until_session_close(&client);
-    assert_eq!(kinds(&tail), ["command_accepted", "fiber_exited"]);
+    assert_kinds_multiset(
+        &tail,
+        &["command_accepted", "fiber_exited"],
+        &[],
+        None,
+        COUNT_DOC,
+    );
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(
-        kinds(&out),
-        [
+    assert_kinds_multiset(
+        &out,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -3704,8 +3926,12 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
     );
+    assert_session_edges(&setup, &id);
 }
 
 #[test]
@@ -3870,9 +4096,9 @@ fn a_resumed_delegate_runs_its_prompt_as_one_turn_and_exits() {
     assert_eq!(exited["payload"]["exit_code"], 0);
     assert_eq!(exited["payload"]["text"], "Again.");
     let lines = delegate_events(&setup, &id);
-    assert_eq!(
-        kinds(&lines),
-        [
+    assert_kinds_multiset(
+        &lines,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -3897,7 +4123,17 @@ fn a_resumed_delegate_runs_its_prompt_as_one_turn_and_exits() {
             "assistant_message_completed",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
     // One session for both runs.
     assert_eq!(
@@ -3953,9 +4189,9 @@ fn dropping_a_resumed_delegate_lifeline_exits_129_within_the_bound() {
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 129);
     let lines = delegate_events(&setup, &id);
-    assert_eq!(
-        kinds(&lines),
-        [
+    assert_kinds_multiset(
+        &lines,
+        &[
             "session_started",
             "fiber_started",
             "extensions_loaded",
@@ -3978,7 +4214,17 @@ fn dropping_a_resumed_delegate_lifeline_exits_129_within_the_bound() {
             "usage_recorded",
             "turn_completed",
             "fiber_exited",
-        ]
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
     );
 }
 

@@ -108,8 +108,15 @@ pub(crate) enum Edit {
 pub(crate) enum Reply {
     /// Kitty keyboard flags (`CSI ? <flags> u`).
     KittyFlags(u8),
-    /// Primary device attributes (`CSI ? ... c`).
-    DeviceAttributes,
+    /// Primary device attributes (`CSI ? ... c`): `sixel` names whether
+    /// a `?`-led parameter is exactly `4` (`docs/tui.md`, "The logo").
+    DeviceAttributes {
+        /// Whether the terminal reports Sixel.
+        sixel: bool,
+    },
+    /// An XTVERSION reply (`ESC P > | <text> ESC \`): the terminal's
+    /// version text (`docs/tui.md`, "The logo").
+    Version(String),
     /// A theme-report reply: the terminal's light or dark appearance.
     Appearance(Appearance),
     /// Kitty's graphics reply: the probe's or an image transmit's id,
@@ -351,10 +358,13 @@ impl Parser {
             }
             // debt: without kitty's flags a lone ESC ending a read is Esc, so
             // a paste start marker split right after its ESC reads as Esc and
-            // the paste as keys. Ceiling: only a read boundary landing exactly
-            // after that ESC. Upgrade trigger: a report of a paste typed as
-            // keys on a terminal without kitty's keyboard protocol; the fix
-            // is an Esc timeout.
+            // the paste as keys. A DCS reply split right after its ESC is
+            // lost the same way: the ESC reads as Esc, the rest as keys,
+            // and the logo stays pixels for the session. Ceiling: only a
+            // read boundary landing exactly after that ESC. Upgrade trigger:
+            // a report of a paste typed as keys on a terminal without
+            // kitty's keyboard protocol, or of a lost XTVERSION reply; the
+            // fix is an Esc timeout.
             if self.kitty && rest == [0x1b] {
                 break;
             }
@@ -412,6 +422,14 @@ fn step(buf: &[u8]) -> Step {
                 Apc::Hold => None,
                 Apc::Done(events, used) => Some((events, used)),
                 Apc::Off => alt_stroke(buf),
+            },
+            // An XTVERSION reply starts here; anything off its
+            // grammar stays keys, so a typed Alt+Shift+P never
+            // swallows text.
+            Some(b'P') => match crate::graphics::logo::dcs(buf) {
+                crate::graphics::logo::Dcs::Hold => None,
+                crate::graphics::logo::Dcs::Done(events, used) => Some((events, used)),
+                crate::graphics::logo::Dcs::Off => alt_stroke(buf),
             },
             // ESC before an arrow's CSI is the legacy Alt arrow.
             Some(0x1b) if buf.get(2) == Some(&b'[') => {
@@ -617,8 +635,14 @@ fn parse_csi(buf: &[u8]) -> Step {
             }
         }
         0x63 if params.first() == Some(&b'?') => {
-            // DA1: `CSI ? ... c` ends detection.
-            vec![Event::Reply(Reply::DeviceAttributes)]
+            // DA1: `CSI ? ... c` ends detection. A `?`-led parameter
+            // of exactly `4` names Sixel (`docs/tui.md`, "The logo").
+            let sixel = params
+                .get(1..)
+                .unwrap_or_default()
+                .split(|byte| *byte == b';')
+                .any(|field| field == b"4");
+            vec![Event::Reply(Reply::DeviceAttributes { sixel })]
         }
         // The theme report: `CSI ? 997 ; 1 n` dark, `; 2` light. `scheme`
         // takes only those two, so anything else is nothing.
