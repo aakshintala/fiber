@@ -147,6 +147,9 @@ fn counts(line: &str) -> BTreeMap<&'static str, (u32, u32)> {
 
 #[test]
 fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
+    // A pull request's timing workloads run three times
+    // (`docs/performance.md`, "Measuring"), so the sandbox setup timing
+    // row repeats its run three times.
     let got = counts("--fiber f --out o --runs 5 --timing-runs 3 --paging j");
     assert_eq!(
         got,

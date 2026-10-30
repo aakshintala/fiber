@@ -82,7 +82,7 @@ pub(crate) fn time_prepare(
     workspace: &Path,
 ) -> Result<Samples, String> {
     let start = clock.now();
-    tools::prepare(settings, workspace)?;
+    tools::prepare(settings, workspace).map_err(|error| error.to_string())?;
     Ok(vec![("sandbox_setup_ms", ms(clock, start))])
 }
 

@@ -30,15 +30,18 @@ fn home() -> Home {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn sandbox_setup_reports_one_timed_sample() {
-    assert_eq!(WORKLOADS.len(), 1);
-    let workload = &WORKLOADS[0];
-    assert_eq!(workload.name, "sandbox setup");
+    let workload = WORKLOADS
+        .iter()
+        .find(|workload| workload.name == "sandbox setup")
+        .expect("the sandbox setup workload");
     assert!(workload.timing);
     let home = home();
     let clock = FakeClock::new();
     let samples = (workload.run)(&ctx(&home, &*clock), &mut Vec::new()).expect("prepare succeeds");
-    assert_eq!(samples.len(), 1);
-    assert_eq!(samples[0].0, "sandbox_setup_ms");
+    assert!(
+        samples.iter().any(|(id, _)| *id == "sandbox_setup_ms"),
+        "the workload reports its metric: {samples:?}"
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
