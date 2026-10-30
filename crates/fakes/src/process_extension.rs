@@ -130,9 +130,9 @@ impl ProcessFixture {
         }
     }
 
-    /// The first captured line `keep` takes, waiting at most what remains
-    /// of `deadline`. A stall fails naming `what` instead of hanging the
-    /// test; a closed stdout fails at once.
+    /// The first captured line `keep` takes, waiting at most one wait's own
+    /// bound from when the wait starts. A stall fails naming the wait's
+    /// bound instead of hanging the test; a closed stdout fails at once.
     #[track_caller]
     pub fn wait_for(
         &self,
@@ -140,15 +140,16 @@ impl ProcessFixture {
         what: &str,
         mut keep: impl FnMut(&str) -> bool,
     ) -> String {
+        let wait = deadline.start_wait();
         loop {
-            match deadline.recv(&self.lines) {
+            match wait.recv(&self.lines) {
                 Ok(line) => {
                     if keep(&line) {
                         return line;
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    panic!("waited {:?} for {what}", deadline.left())
+                    panic!("waited {:?} for {what}", wait.left())
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     panic!("the fixture closed its stdout while waiting for {what}")

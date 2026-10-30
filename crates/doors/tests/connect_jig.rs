@@ -132,11 +132,10 @@ impl Jig {
         )
     }
     fn until(&self, predicate: impl Fn(&Value) -> bool) -> Vec<Value> {
+        let wait = self.deadline.start_wait();
         let mut lines = Vec::new();
         loop {
-            let line = self
-                .deadline
-                .recv_or_fail(&self.lines, "the jig's next output line");
+            let line = wait.recv_or_fail(&self.lines, "the jig's next output line");
             let last = predicate(&line);
             lines.push(line);
             if last {
