@@ -123,7 +123,6 @@ impl Deadline {
         Self {
             wait: self.cleanup,
             waits: self.cleanup,
-            wait_start: None,
             ..*self
         }
     }

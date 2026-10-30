@@ -87,7 +87,7 @@ pub(crate) fn check_files(
 ) -> Vec<String> {
     let mut scanned: Vec<&RustFile> = files
         .iter()
-        .filter(|f| f.path.ends_with(".rs") && changed.contains_key(&f.path))
+        .filter(|f| changed.contains_key(&f.path))
         .collect();
     scanned.sort_by(|a, b| a.path.cmp(&b.path));
     let mut failures = Vec::new();
@@ -215,8 +215,8 @@ fn site_at(trees: &[TokenTree], i: usize, scan: &Scan, test: bool) -> Option<Sit
     // closed on anything else, so an unshown bound needs its ruling.
     let spelling: TokenStream = arg.iter().cloned().collect();
     match trailing_ident(arg).as_deref().and_then(known_ms) {
-        Some(ms) if ms < AFTER_FLOOR_MS => None,
-        Some(_) => Some(Site {
+        Some(false) => None,
+        Some(true) => Some(Site {
             line,
             what: format!("Deadline::after({spelling}) is 60 s or more"),
         }),
@@ -230,7 +230,8 @@ fn site_at(trees: &[TokenTree], i: usize, scan: &Scan, test: bool) -> Option<Sit
 /// A `const WAITS|BUDGET|CLEANUP: Duration = <duration>` at `trees[i]`,
 /// when the duration is above the shared bound it names.
 fn const_site(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
-    let TokenTree::Ident(name) = trees.get(i + 1)? else {
+    let mut declaration = trees.get(i..)?.iter().skip(1);
+    let TokenTree::Ident(name) = declaration.next()? else {
         return None;
     };
     let cap = match name.to_string().as_str() {
@@ -239,18 +240,33 @@ fn const_site(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
         "CLEANUP" => CLEANUP,
         _ => return None,
     };
-    if !is_punct(trees.get(i + 2), ':') {
+    if !is_punct(declaration.next(), ':') {
         return None;
     }
-    let eq = (i + 3..trees.len().min(i + 16)).find(|&j| is_punct(trees.get(j), '='))?;
-    if !scan.is_duration(trees.get(eq - 1)) {
+    let mut declared_type = Vec::new();
+    let mut found_initializer = false;
+    for tree in declaration
+        .by_ref()
+        .take_while(|tree| !is_punct(Some(tree), ';'))
+    {
+        if is_punct(Some(tree), '=') {
+            found_initializer = true;
+            break;
+        }
+        declared_type.push(tree.clone());
+    }
+    if !found_initializer {
         return None;
     }
-    let end = (eq..trees.len())
-        .find(|&j| is_punct(trees.get(j), ';'))
-        .unwrap_or(trees.len());
+    if !scan.is_duration(declared_type.last()) {
+        return None;
+    }
+    let rhs: Vec<TokenTree> = declaration
+        .take_while(|tree| !is_punct(Some(tree), ';'))
+        .cloned()
+        .collect();
     let line = name.span().start().line;
-    match duration(trees.get(eq + 1..end)?, scan) {
+    match duration(&rhs, scan) {
         Some((ms, _)) if ms <= cap.as_millis() => None,
         Some((ms, _)) => Some(Site {
             line,
@@ -272,17 +288,12 @@ fn const_site(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
 }
 
 /// The bound in ms named by the last path segment `name`, when the lane
-/// knows it: the shared guards and the short must-succeed bound. An xtask
-/// test pins each against its const.
-fn known_ms(name: &str) -> Option<u128> {
+/// knows whether it is below the 60 s floor: the shared guards are long,
+/// and the one-wait bounds are short. An xtask test pins them to their consts.
+fn known_ms(name: &str) -> Option<bool> {
     match name {
-        "WAIT" => Some(40_000),
-        "WAITS" => Some(WAITS.as_millis()),
-        "BUDGET" => Some(BUDGET.as_millis()),
-        "CLEANUP" => Some(CLEANUP.as_millis()),
-        "MUST_SUCCEED_WITHIN" => Some(10_000),
-        "ZERO" => Some(0),
-        "MAX" => Some(u128::MAX),
+        "WAITS" | "BUDGET" | "CLEANUP" | "MAX" => Some(true),
+        "WAIT" | "MUST_SUCCEED_WITHIN" | "ZERO" => Some(false),
         _ => None,
     }
 }
@@ -305,15 +316,15 @@ fn split_top_level(args: &[TokenTree]) -> Vec<&[TokenTree]> {
 /// The value in ms, and the call as written without its path, of
 /// `[::][path::]Duration::from_secs(N)` or `from_millis(N)` and nothing else.
 /// A path before `Duration`, such as `std::time::` or `::std::time::`, is
-/// allowed, and so is a name the file gives `Duration` with `as`.
+/// allowed; aliases and other expressions fail closed.
 fn duration(tokens: &[TokenTree], scan: &Scan) -> Option<(u128, String)> {
     let [path @ .., duration, c1, c2, from, TokenTree::Group(call)] = tokens else {
         return None;
     };
-    if !(scan.is_duration(Some(duration))
-        && is_punct(Some(c1), ':')
-        && is_punct(Some(c2), ':')
-        && call.delimiter() == Delimiter::Parenthesis)
+    if !scan.is_duration(Some(duration))
+        || !is_punct(Some(c1), ':')
+        || !is_punct(Some(c2), ':')
+        || call.delimiter() != Delimiter::Parenthesis
     {
         return None;
     }
@@ -328,7 +339,7 @@ fn duration(tokens: &[TokenTree], scan: &Scan) -> Option<(u128, String)> {
     let path_is_segments = path.chunks(3).all(|segment| {
         matches!(segment, [TokenTree::Ident(_), a, b] if is_punct(Some(a), ':') && is_punct(Some(b), ':'))
     });
-    if !path_is_segments || path.len() % 3 != 0 {
+    if !path_is_segments {
         return None;
     }
     let inner: Vec<TokenTree> = call.stream().into_iter().collect();
@@ -344,8 +355,8 @@ fn duration(tokens: &[TokenTree], scan: &Scan) -> Option<(u128, String)> {
     Some((ms, format!("{duration}::{from}({})", call.stream())))
 }
 
-/// The value of an integer literal, `_` separators, a `0x`, `0o` or `0b`
-/// radix prefix and an unsigned or signed type suffix allowed.
+/// The value of an integer literal, `_` separators, radix prefixes and an
+/// integer type suffix. Other literals fail closed.
 fn single_integer(tree: &TokenTree) -> Option<u64> {
     let TokenTree::Literal(literal) = tree else {
         return None;

@@ -1,7 +1,38 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 
 use super::*;
 use crate::rules::RustFile;
+
+struct RestoreFile {
+    path: PathBuf,
+    source: String,
+}
+
+impl Drop for RestoreFile {
+    fn drop(&mut self) {
+        let restored = fs::write(&self.path, &self.source);
+        assert!(
+            restored.is_ok() || std::thread::panicking(),
+            "could not restore {}: {restored:?}",
+            self.path.display()
+        );
+    }
+}
+
+struct RemoveFile(PathBuf);
+
+impl Drop for RemoveFile {
+    fn drop(&mut self) {
+        match fs::remove_file(&self.0) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("could not remove {}: {error}", self.0.display()),
+        }
+    }
+}
 
 fn file(path: &str, rel: &str, source: &str) -> RustFile {
     RustFile {
@@ -27,10 +58,14 @@ fn the_bounds_match_the_shared_consts() {
     assert_eq!(WAITS, fakes::deadline::WAITS);
     assert_eq!(BUDGET, fakes::deadline::BUDGET);
     assert_eq!(CLEANUP, fakes::deadline::CLEANUP);
-    assert_eq!(known_ms("WAIT"), Some(fakes::deadline::WAIT.as_millis()));
+    let floor = std::time::Duration::from_secs(60);
+    assert_eq!(known_ms("WAIT"), Some(fakes::deadline::WAIT >= floor));
+    assert_eq!(known_ms("WAITS"), Some(fakes::deadline::WAITS >= floor));
+    assert_eq!(known_ms("BUDGET"), Some(fakes::deadline::BUDGET >= floor));
+    assert_eq!(known_ms("CLEANUP"), Some(fakes::deadline::CLEANUP >= floor));
     assert_eq!(
         known_ms("MUST_SUCCEED_WITHIN"),
-        Some(fakes::MUST_SUCCEED_WITHIN.as_millis())
+        Some(fakes::MUST_SUCCEED_WITHIN >= floor)
     );
 }
 
@@ -46,6 +81,19 @@ fn a_raised_guard_const_fails() {
     assert!(
         failures[0].starts_with("crates/support/src/deadline.rs:1: const WAITS is 91 s, above"),
         "{failures:?}"
+    );
+}
+
+#[test]
+fn a_non_duration_budget_const_is_not_a_timeout_bound() {
+    assert!(
+        check(
+            "crates/main/src/tool_budget_tests.rs",
+            "src/tool_budget_tests.rs",
+            "const BUDGET: usize = 15815;",
+            &[1],
+        )
+        .is_empty()
     );
 }
 
@@ -153,6 +201,27 @@ fn a_const_bound_passes_outside_the_diff() {
 }
 
 #[test]
+fn suffixed_decimal_bounds_are_read() {
+    let failures = check(
+        "crates/x/tests/a.rs",
+        "tests/a.rs",
+        "fn a() { Deadline::after(Duration::from_secs(60u64)); }",
+        &[1],
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].ends_with("is 60 s or more"), "{failures:?}");
+    assert!(
+        check(
+            "crates/x/tests/a.rs",
+            "tests/a.rs",
+            "fn a() { Deadline::after(Duration::from_secs(59u64)); }",
+            &[1],
+        )
+        .is_empty()
+    );
+}
+
+#[test]
 fn a_shared_bound_name_passes() {
     let source = "fn a() { Deadline::after(fakes::deadline::WAIT); }";
     assert!(check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]).is_empty());
@@ -208,6 +277,152 @@ fn an_unshown_after_fails_closed() {
             "{case}: {failures:?}"
         );
     }
+}
+
+#[test]
+fn radix_integer_bounds_are_read() {
+    for after in [
+        "Duration::from_secs(0x3c)",
+        "Duration::from_secs(0o74)",
+        "Duration::from_secs(0b111100)",
+    ] {
+        let source = format!("fn a() {{ Deadline::after({after}); }}");
+        let failures = check("crates/x/tests/a.rs", "tests/a.rs", &source, &[1]);
+        assert_eq!(failures.len(), 1, "{after}: {failures:?}");
+        assert!(
+            failures[0].ends_with("is 60 s or more"),
+            "{after}: {failures:?}"
+        );
+    }
+}
+
+#[test]
+fn imported_duration_aliases_are_read() {
+    for (after, fails) in [
+        ("Span::from_secs(30)", false),
+        ("Span::from_secs(60)", true),
+    ] {
+        let source =
+            format!("use std::time::Duration as Span;\nfn a() {{ Deadline::after({after}); }}");
+        let failures = check("crates/x/tests/a.rs", "tests/a.rs", &source, &[2]);
+        assert_eq!(failures.len(), usize::from(fails), "{after}: {failures:?}");
+    }
+}
+
+#[test]
+fn unsupported_duration_paths_fail_closed() {
+    for after in [
+        "Span::from_secs(30)",
+        "Duration.:from_secs(30)",
+        "Duration:.from_secs(30)",
+        "Duration::from_secs[30]",
+        "foo.bar.Duration::from_secs(30)",
+        ":x std::time::Duration::from_secs(30)",
+    ] {
+        let source = format!("fn a() {{ Deadline::after({after}); }}");
+        let failures = check("crates/x/tests/a.rs", "tests/a.rs", &source, &[1]);
+        assert_eq!(failures.len(), 1, "{after}: {failures:?}");
+        assert!(
+            failures[0].ends_with("is not shown below 60 s"),
+            "{after}: {failures:?}"
+        );
+    }
+}
+
+#[test]
+fn absolute_duration_paths_are_read() {
+    let source = "fn a() { Deadline::after(::std::time::Duration::from_secs(60)); }";
+    let failures = check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].ends_with("is 60 s or more"), "{failures:?}");
+}
+
+#[test]
+fn other_after_methods_are_not_deadline_bounds() {
+    for source in [
+        "fn a() { Other::after(Duration::from_secs(60)); }",
+        "fn a() { Deadline.:after(Duration::from_secs(60)); }",
+    ] {
+        assert!(
+            check("crates/x/tests/a.rs", "tests/a.rs", source, &[1]).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn budget_bounds_reads_changed_lines_and_rejects_a_new_long_after() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "budget_bounds::tests::budget_bounds_probe_child",
+            "--test-threads=1",
+        ])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+#[ignore = "invoked by budget_bounds_reads_changed_lines_and_rejects_a_new_long_after"]
+fn budget_bounds_probe_child() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let test_path = root.join("xtask/src/budget_bounds_tests.rs");
+    let test_source = fs::read_to_string(&test_path).unwrap();
+    let _restore_test = RestoreFile {
+        path: test_path.clone(),
+        source: test_source.clone(),
+    };
+    let probe = "\nfn budget_bounds_probe() { Deadline::after(Duration::from_secs(60)); }\n";
+    let probe_line = test_source.lines().count() + 2;
+    fs::write(&test_path, format!("{test_source}{probe}")).unwrap();
+
+    let docs_path = root.join("docs/testing.md");
+    let docs_source = fs::read_to_string(&docs_path).unwrap();
+    let _restore_docs = RestoreFile {
+        path: docs_path.clone(),
+        source: docs_source.clone(),
+    };
+    fs::write(
+        &docs_path,
+        format!("{docs_source}\n<!-- budget bounds probe -->\n"),
+    )
+    .unwrap();
+
+    let ignored_path = root.join("xtask/src/budget_bounds_probe.txt");
+    fs::write(&ignored_path, "not Rust\n").unwrap();
+    let _remove_ignored = RemoveFile(ignored_path);
+
+    let changed = changed_lines("HEAD").unwrap();
+    let test_rel = "xtask/src/budget_bounds_tests.rs";
+    assert!(
+        changed
+            .get(test_rel)
+            .is_some_and(|lines| lines.contains(&probe_line)),
+        "the added line must be included in its hunk: {changed:?}"
+    );
+    assert!(!changed.contains_key("docs/testing.md"), "{changed:?}");
+    assert!(
+        !changed.contains_key("xtask/src/budget_bounds_probe.txt"),
+        "{changed:?}"
+    );
+
+    let failures = budget_bounds("HEAD").unwrap();
+    assert!(
+        failures.iter().any(|failure| {
+            failure.starts_with(&format!("{test_rel}:{probe_line}: Deadline::after("))
+        }),
+        "{failures:?}"
+    );
 }
 
 #[test]
