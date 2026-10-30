@@ -491,10 +491,31 @@ impl Classified {
     }
 }
 
-/// One classification per distinct binary title, in first-seen order
-/// across the lists and then the lines. A blank line carries no title
-/// and is skipped; a line that is only a TAB names the empty test, and
-/// a last line with no trailing newline is still read.
+/// The issue title for one flake line: a binary id with `::` keeps its
+/// binary title, while a unit-test binary id is keyed by its test file,
+/// the first `*_tests` module segment of the test name with one suffix
+/// removed. A test name with no such segment, or one whose stem is
+/// empty, falls back to the binary id.
+/// Mirrors the Collate step in .github/workflows/ci.yml; scripts/test-flake-report checks the two agree.
+fn flake_title(binary: &str, test: &str) -> String {
+    if binary.contains("::") {
+        return format!("Flaky tests: {binary}");
+    }
+    for segment in test.split("::") {
+        if let Some(stem) = segment.strip_suffix("_tests") {
+            if !stem.is_empty() {
+                return format!("Flaky tests: {binary} {stem}");
+            }
+            break;
+        }
+    }
+    format!("Flaky tests: {binary}")
+}
+
+/// One classification per distinct title, in first-seen order across
+/// the lists and then the lines. A blank line carries no title and is
+/// skipped; a line that is only a TAB names the empty test, and a last
+/// line with no trailing newline is still read.
 pub(crate) fn classify(lists: &[Listed], run: &Run) -> Vec<Classified> {
     let mut out: Vec<Classified> = Vec::new();
     for list in lists {
@@ -506,11 +527,14 @@ pub(crate) fn classify(lists: &[Listed], run: &Run) -> Vec<Classified> {
                 Some((name, detail)) => (name, detail),
                 None => (line, ""),
             };
-            let binary = name.split(' ').next().unwrap_or_default();
+            let (binary, test) = match name.split_once(' ') {
+                Some((binary, test)) => (binary, test),
+                None => (name, ""),
+            };
             // A legacy `Flaky test: <binary> <test>` ticket, open or
-            // closed, is never matched: the lookup compares this binary
-            // title exactly, with no legacy-title fallback.
-            let title = format!("Flaky tests: {binary}");
+            // closed, is never matched: the lookup compares this title
+            // exactly, with no legacy-title fallback.
+            let title = flake_title(binary, test);
             if out.iter().any(|seen| seen.title == title) {
                 continue;
             }

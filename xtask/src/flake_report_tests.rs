@@ -741,6 +741,101 @@ fn a_unit_test_binary_id_without_colons() {
 }
 
 #[test]
+fn two_files_of_one_unit_binary_make_two_records() {
+    // A unit-test binary is keyed by its test file: the first `*_tests`
+    // module segment names the file, so two modules file two titles.
+    let text = "fakes process_group_tests::reaps_children\tfirst detail\n\
+                fakes signal_tests::delivers\tsecond detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // title files or comments once; a repeat is skipped".
+    assert_eq!(out.len(), 2);
+    let process_group = titled(&out, "fakes process_group");
+    assert_eq!(
+        field(process_group, "title"),
+        Some("Flaky tests: fakes process_group")
+    );
+    assert_eq!(
+        field(process_group, "name"),
+        Some("fakes process_group_tests::reaps_children")
+    );
+    assert_eq!(field(process_group, "detail"), Some("first detail"));
+    let signal = titled(&out, "fakes signal");
+    assert_eq!(field(signal, "title"), Some("Flaky tests: fakes signal"));
+    assert_eq!(field(signal, "name"), Some("fakes signal_tests::delivers"));
+    assert_eq!(field(signal, "detail"), Some("second detail"));
+}
+
+#[test]
+fn a_unit_test_without_a_tests_module_falls_back_to_the_binary() {
+    // A bare `tests` segment is not a `*_tests` module, so the line keeps
+    // the binary title and dedupes with the bare id.
+    let text = "fakes tests::helper\tfirst detail\nfakes\tsecond detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // title files or comments once; a repeat is skipped".
+    // docs/testing/running.md, "Flaky tests": "a repeated title takes its
+    // runner and detail from its first occurrence in file-name byte order".
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "fakes");
+    assert_eq!(field(record, "title"), Some("Flaky tests: fakes"));
+    assert_eq!(field(record, "name"), Some("fakes tests::helper"));
+    assert_eq!(field(record, "detail"), Some("first detail"));
+}
+
+#[test]
+fn an_integration_test_ignores_tests_modules_in_the_test_name() {
+    // A binary id with `::` keeps its binary title without inspecting the
+    // test name, even when the name holds a `*_tests` segment.
+    let text = "main::hub_exit_window helper_tests::case\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main::hub_exit_window");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: main::hub_exit_window")
+    );
+    assert_eq!(
+        field(record, "name"),
+        Some("main::hub_exit_window helper_tests::case")
+    );
+    assert_eq!(field(record, "detail"), Some("some detail"));
+}
+
+#[test]
+fn the_first_tests_module_names_the_unit_file() {
+    // Only the first `*_tests` segment counts: a later one never renames
+    // the file.
+    let text = "fakes outer_tests::inner_tests::case\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "fakes outer");
+    assert_eq!(field(record, "title"), Some("Flaky tests: fakes outer"));
+}
+
+#[test]
+fn an_empty_tests_stem_falls_back_to_the_binary() {
+    // A segment that is exactly `_tests` names no file, so the line keeps
+    // the binary title.
+    let text = "fakes _tests::case\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "fakes");
+    assert_eq!(field(record, "title"), Some("Flaky tests: fakes"));
+    assert_eq!(field(record, "name"), Some("fakes _tests::case"));
+}
+
+#[test]
+fn one_tests_suffix_is_removed() {
+    // Only one `_tests` suffix comes off: the stem keeps its own.
+    let text = "fakes foo_tests_tests::case\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "fakes foo_tests");
+    assert_eq!(field(record, "title"), Some("Flaky tests: fakes foo_tests"));
+}
+
+#[test]
 fn a_name_with_no_space_is_the_whole_id() {
     let out = classified(&[("linux", "main::t\tsome detail")], &push_run());
     // docs/testing/running.md, "Flaky tests": "Within one report job a file's
