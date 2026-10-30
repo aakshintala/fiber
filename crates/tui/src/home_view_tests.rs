@@ -1,7 +1,7 @@
 //! Home's frame: snapshots and the cursor.
 
 use super::super::{cursor, render, text};
-use super::{TypedRow, typed_body};
+use super::picker::{TypedRow, typed_body};
 use crate::app::{App, Effect, QUIT_HINT};
 use crate::home::{Launch, Spot};
 use crate::keys::Key;
