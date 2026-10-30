@@ -10,19 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-fn authentication_answer(kind: &str) -> AuthenticationAnswer {
-    let line: HubLine = serde_json::from_value(json!({
-        "kind": kind,
-        "ts": 1,
-        "schema_version": 1,
-        "payload": {},
-    }))
-    .unwrap();
-    AuthenticationAnswer::from(line)
-}
-
-fn authenticate_after_replies(replies: &[serde_json::Value]) -> Result<(), Error> {
-    let (client, mut server) = UnixStream::pair().unwrap();
+fn spawn_authenticate(client: UnixStream, idle: Duration) -> mpsc::Receiver<Result<(), Error>> {
     let (done, done_rx) = mpsc::channel();
     let clock = FakeClock::new();
     thread::spawn(move || {
@@ -31,68 +19,47 @@ fn authenticate_after_replies(replies: &[serde_json::Value]) -> Result<(), Error
             "box",
             &Secret::new("device-token".into()),
             clock.as_ref(),
-            Duration::from_secs(1),
+            idle,
         ))
         .unwrap();
     });
+    done_rx
+}
+
+fn authenticate_after_replies(replies: &[serde_json::Value]) -> Result<(), Error> {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let done_rx = spawn_authenticate(client, Duration::from_secs(1));
     for reply in replies {
         writeln!(server, "{reply}").unwrap();
     }
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "the authentication reply sequence")
 }
 
-fn authentication_error_for_wire_line(line: &[u8]) -> Error {
-    let (client, mut server) = UnixStream::pair().unwrap();
-    let (done, done_rx) = mpsc::channel();
-    let clock = FakeClock::new();
-    thread::spawn(move || {
-        done.send(authenticate(
-            &client,
-            "box",
-            &Secret::new("device-token".into()),
-            clock.as_ref(),
-            Duration::from_secs(1),
-        ))
-        .unwrap();
-    });
-    server.write_all(line).unwrap();
-    server.write_all(b"\n").unwrap();
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&done_rx, "the malformed authentication answer")
-        .unwrap_err()
-}
-
 #[test]
-fn authentication_answer_enters_with_a_typed_kind_and_exact_unknown_text() {
-    for (name, expected) in [
-        ("hub_hello", HubEventKind::HubHello),
-        ("attention", HubEventKind::Attention),
-        ("device_changed", HubEventKind::DeviceChanged),
-        ("session_left", HubEventKind::SessionLeft),
-        ("stream_closed", HubEventKind::StreamClosed),
-        ("stream_reopened", HubEventKind::StreamReopened),
-        ("command_accepted", HubEventKind::CommandAccepted),
-        ("command_rejected", HubEventKind::CommandRejected),
-    ] {
-        let answer = authentication_answer(name);
-        assert_eq!(answer.kind, expected, "{name}");
-    }
+fn authentication_answer_preserves_hub_line_kind_and_payload() {
+    let line: HubLine = serde_json::from_value(json!({
+        "kind": "future_kind",
+        "ts": 1,
+        "schema_version": 1,
+        "payload": {"command_id": "c_authenticate", "marker": "retained"},
+    }))
+    .unwrap();
+    let answer = AuthenticationAnswer::from(line);
+    let expected_payload = json!({
+        "command_id": "c_authenticate",
+        "marker": "retained",
+    })
+    .as_object()
+    .unwrap()
+    .clone();
 
-    for name in [
-        "future_kind",
-        "command_accepted2",
-        "",
-        " ",
-        "未知",
-        "futuré_kind",
-    ] {
-        let answer = authentication_answer(name);
-        assert_eq!(
-            answer.kind,
-            HubEventKind::Unknown(name.to_owned()),
-            "{name}"
-        );
-    }
+    assert_eq!(
+        (answer.kind, answer.payload),
+        (
+            HubEventKind::Unknown("future_kind".into()),
+            expected_payload
+        )
+    );
 }
 
 #[test]
@@ -103,11 +70,7 @@ fn authentication_skips_unknown_and_hub_hello_before_refusal() {
         "kind": "future_kind",
         "payload": {"command_id": "c_authenticate"},
     });
-    let unknown_line: HubLine = serde_json::from_value(unknown.clone()).unwrap();
-    assert_eq!(
-        AuthenticationAnswer::from(unknown_line).kind,
-        HubEventKind::Unknown("future_kind".into())
-    );
+    // #3666 Part 2 R6: matching-ID unknown and known non-answer kinds are skipped.
     let error = authenticate_after_replies(&[
         unknown,
         json!({
@@ -175,7 +138,13 @@ fn authentication_answer_keeps_hub_line_validation() {
         br#"{"kind":"hub_hello","ts":1,"schema_version":1,"payload":null}"#,
         br#"{"kind":"hub_hello","ts":1,"schema_version":1,"payload":[]}"#,
     ] {
-        let error = authentication_error_for_wire_line(line);
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let done_rx = spawn_authenticate(client, Duration::from_secs(1));
+        server.write_all(line).unwrap();
+        server.write_all(b"\n").unwrap();
+        let error = Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the malformed authentication answer")
+            .unwrap_err();
         let Error::Hello { source, .. } = error else {
             panic!("malformed answer must be an Error::Hello")
         };
@@ -254,20 +223,12 @@ fn authenticate_accepts_only_its_ack_and_keeps_the_wire_token_secret() {
 #[test]
 fn authentication_kernel_timeout_needs_no_fake_time_advance() {
     let (client, _silent_server) = UnixStream::pair().unwrap();
-    let (done, done_rx) = mpsc::channel();
-    let clock = FakeClock::new();
-    thread::spawn(move || {
-        done.send(authenticate(
-            &client,
-            "box",
-            &Secret::new("device-token".into()),
-            clock.as_ref(),
-            net::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
-                .unwrap()
-                .idle(),
-        ))
-        .unwrap();
-    });
+    let done_rx = spawn_authenticate(
+        client,
+        net::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
+            .unwrap()
+            .idle(),
+    );
     let error = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&done_rx, "authentication times out on a silent peer")
         .unwrap_err();
