@@ -104,8 +104,13 @@ fn edge_child_probe() {
 }
 
 /// Runs [`edge_child_probe`] in a child process with `vars` applied over
-/// the inherited environment, returning its output.
+/// the inherited environment, returning its output. The blocking wait
+/// runs on a thread under a fresh test deadline, as every binary-level
+/// wait does (`docs/testing.md`, "Waits and timeouts"): expiry kills
+/// the child's group and reaps it before failing naming the probe, so
+/// no hang outlives the deadline and no child is left behind.
 fn run_edge_child(vars: &[(&str, Option<&str>)]) -> std::process::Output {
+    let deadline = support::Deadline::start();
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
         .arg("edge_child_probe")
@@ -121,7 +126,31 @@ fn run_edge_child(vars: &[(&str, Option<&str>)]) -> std::process::Output {
             }
         }
     }
-    command.output().unwrap()
+    // Piped, as `Command::output` pipes them: the assertions below
+    // read the child's stderr, and an inherited terminal would also
+    // interleave the child's harness output with this test's own.
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let (child, watchdog) = support::spawn_watched(&mut command);
+    let group = child.id();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match deadline.recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(deadline, group, &finished, "the edge child probe to exit"),
+    };
+    watchdog.stand_down(deadline.cleanup_phase());
+    output
+}
+
+/// A fresh per-test temporary directory for the contract edge probes:
+/// the system temporary directory is shared across test runs, so a
+/// fixed name could meet another run's file (`docs/testing/running.md`,
+/// "Running tests").
+fn edge_temp_dir() -> fakes::TempDir {
+    fakes::TempDir::new("fiber-journey-edge")
 }
 
 /// Without `FIBER_JOURNEY_BIN` the suite names the variable instead of
@@ -147,7 +176,8 @@ fn journey_bin_without_its_variable_names_it() {
 /// executable bit, rejects it on every platform.
 #[test]
 fn journey_bin_at_a_missing_path_names_it() {
-    let missing = std::env::temp_dir().join("fiber-journey-no-such-binary");
+    let edge_dir = edge_temp_dir();
+    let missing = edge_dir.path().join("fiber-journey-no-such-binary");
     let run_edge_child_output = run_edge_child(&[
         ("FIBER_JOURNEY_EDGE", Some("bin")),
         ("FIBER_JOURNEY_BIN", Some(missing.to_str().unwrap())),
@@ -172,13 +202,13 @@ fn journey_bin_at_a_missing_path_names_it() {
 #[cfg(unix)]
 #[test]
 fn journey_bin_at_a_non_executable_file_names_it() {
-    let plain = std::env::temp_dir().join("fiber-journey-plain-file");
+    let edge_dir = edge_temp_dir();
+    let plain = edge_dir.path().join("fiber-journey-plain-file");
     std::fs::write(&plain, "not a binary").unwrap();
     let run_edge_child_output = run_edge_child(&[
         ("FIBER_JOURNEY_EDGE", Some("bin")),
         ("FIBER_JOURNEY_BIN", Some(plain.to_str().unwrap())),
     ]);
-    std::fs::remove_file(&plain).unwrap();
     assert!(
         !run_edge_child_output.status.success(),
         "a non-executable file fails"
@@ -214,14 +244,14 @@ fn journey_bin_returns_an_executable_file() {
 /// their order: the caller-created file is never truncated.
 #[test]
 fn record_failure_appends_after_existing_entries() {
-    let file = std::env::temp_dir().join("fiber-journey-failures");
+    let edge_dir = edge_temp_dir();
+    let file = edge_dir.path().join("fiber-journey-failures");
     std::fs::write(&file, "earlier-line\n").unwrap();
     let run_edge_child_output = run_edge_child(&[
         ("FIBER_JOURNEY_EDGE", Some("record")),
         ("FIBER_JOURNEY_FAILURES", Some(file.to_str().unwrap())),
     ]);
     let body = std::fs::read_to_string(&file).unwrap();
-    std::fs::remove_file(&file).unwrap();
     assert!(
         run_edge_child_output.status.success(),
         "the append passes: {}",
@@ -234,7 +264,8 @@ fn record_failure_appends_after_existing_entries() {
 /// before the panic naming the path: the failure is never lost silently.
 #[test]
 fn record_failure_prints_before_the_append_panics() {
-    let missing = std::env::temp_dir().join("fiber-journey-no-such-dir");
+    let edge_dir = edge_temp_dir();
+    let missing = edge_dir.path().join("fiber-journey-no-such-dir");
     let target = missing.join("failures");
     let run_edge_child_output = run_edge_child(&[
         ("FIBER_JOURNEY_EDGE", Some("record")),
@@ -641,13 +672,10 @@ fn install_quota_provider(setup: &Setup, server_url: &str) {
 }
 
 /// A server answering every Lua purpose plus native model calls: the
-/// quota fetch reports 90% used and signals the test when it lands.
-fn start_quota_server(hit: std::sync::mpsc::Sender<()>) -> ProviderServer {
-    ProviderServer::start_responding(move |request| match request.path.as_str() {
-        "/lua-quota" => {
-            let _sent = hit.send(());
-            fakes::Response::status(200, "90")
-        }
+/// quota fetch reports 90% used.
+fn start_quota_server() -> ProviderServer {
+    ProviderServer::start_responding(|request| match request.path.as_str() {
+        "/lua-quota" => fakes::Response::status(200, "90"),
         "/lua-models" | "/lua-token" => fakes::Response::status(200, "{}"),
         "/v1/responses" => support::hello(),
         _ => fakes::Response::status(500, "unrouted"),
@@ -667,8 +695,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
         // so the standard `catch_unwind` wrapper applies.
         std::panic::AssertUnwindSafe(|| {
             let setup = Setup::new();
-            let (quota_hit, quota_rx) = std::sync::mpsc::channel();
-            let server = start_quota_server(quota_hit);
+            let server = start_quota_server();
             install_quota_provider(&setup, &server.url());
             std::fs::create_dir_all(setup.home().join("credentials/test")).unwrap();
             std::fs::write(setup.home().join("credentials/test/work"), "test-key").unwrap();
@@ -685,14 +712,31 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             run.wait_screen("the first answered turn", |grid| {
                 grid.contents.contains("Hello.")
             });
-            // The fake signals when its quota response is ready, so the
-            // focus-in below runs after the fetch it started: the named
-            // screen wait then draws the fetched share.
-            setup.deadline.recv_or_fail(
-                &quota_rx,
-                "the fake quota response for the fetch the first turn starts",
-            );
-            run.write(b"\x1b[I");
+            // The drawn value proves the fetch landed: the fetch-less
+            // snapshot behind focus-in never re-asks when a flight lands
+            // after it, so one focus-in can miss the first turn's fetch
+            // still in flight. Re-ask on every pass until the drawn
+            // value proves `finish_quota` stored it
+            // (`quota_fetch_session.rs`,
+            // `slash_quota_opens_the_view_and_shows_the_fetched_values`;
+            // `docs/testing.md`, "Waits and timeouts"): each focus-in
+            // sends a fetch-less query that starts no new fetch, so
+            // re-asking starts no new `/lua-quota` request. The poll
+            // reads the raw output, never the grid, so the file's zero
+            // bare screen reads stand; the grid wait below is the
+            // assertion.
+            let quota_from = run.output().len();
+            loop {
+                run.write(b"\x1b[I");
+                if String::from_utf8_lossy(&run.output()[quota_from..]).contains("10%") {
+                    break;
+                }
+                assert!(
+                    !setup.deadline.left().is_zero(),
+                    "waited until the deadline for the fetched quota share to draw after focus-in"
+                );
+                std::thread::yield_now();
+            }
             run.wait_screen("the fetched quota share", |grid| {
                 grid.contents.contains("10%")
             });
