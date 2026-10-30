@@ -727,9 +727,9 @@ read it; a second clean exit without an answer, or a `closing` answer,
 rejects it `closing`; a crash rejects it `indeterminate` and it is never
 delivered again, so the client decides whether to send it again; a rewind or
 a move drops it without an answer; a client that disconnected drops it
-without an answer. A write that failed after the session may have read a
-byte rejects the command `indeterminate`, however the session ends, and the
-command is never delivered again.
+without an answer. An unanswered `Partial` write rejects the command
+`indeterminate`, however the session ends, and is never delivered again; an
+acknowledgement that consumes the in-flight write first is forwarded instead.
 
 **A resume whose workspace is gone and cannot be made again is refused
 `io_failed`.** For a resume that needs a new session process, the hub checks
@@ -1130,26 +1130,26 @@ websocket for everything it does.
   continuously, so the hub never meets that grace.
 
 **A relayed command passes through these states.** `Read`: the hub read it
-from the client connection. `Written`: the whole line reached the session
-socket, and the hub waits for its answer. `Partial`: the write failed after
-the session may have read a byte. `Queued`: held unsent on a retiring relay,
-never read by a session. `Rerouted`: handed to the resumed session, the one
-permitted re-route. Two terminal states end it: `Answered` sends exactly one
-line, and `Dropped` sends none.
+from the client connection. `Writing`: a live write in flight from `Read` or
+`Queued`. `Written`: the whole line reached the session socket, and the hub
+waits for its answer. `Partial`: the write failed after the session may have
+read a byte. `Queued`: held unsent on a retiring relay, never read by a session.
+`Rerouted`: handed to the resumed session, the one permitted re-route. Two
+terminal states end it: `Answered` sends exactly one line, and `Dropped` sends none.
 
 | State before | Event | State after | What the client receives |
 |---|---|---|---|
 | — | the hub reads a command with a `session_id` | Read | nothing yet |
-| Read | the session's relay is live and takes the whole line | Written | nothing yet |
+| Read or Writing | the session's relay is live and takes the whole line | Written | nothing yet |
 | Read | the relay is retiring and its thread is alive | Queued | nothing yet |
 | Read | no relay is published and the session connects or resumes | Written | nothing yet |
 | Read or Queued | no relay is published and the open is refused | Answered | one `command_rejected` with the refusal's code |
-| Read | the write fails before the session could read a byte | Queued | nothing yet; delivered once to the resumed session |
-| Read or Queued | the write fails after the session may have read a byte; a whole JSON body without its line feed counts | Partial | one `command_rejected indeterminate`; never delivered again |
+| Read or Writing | the write fails before the session could read a byte | Queued | nothing yet; delivered once to the resumed session |
+| Read, Queued or Writing | the write fails after the session may have read a byte; a whole JSON body without its line feed counts | Partial | one `command_rejected indeterminate`; never delivered again |
 | Written after `close`, while the session still reads | the session ends | Rerouted | nothing yet; the resumed session ends it with one `closing` |
 | Written after the session stopped reading | the clean exit | Rerouted | delivered once to the resumed session, in read order |
-| Written | the session answers accepted or rejected | Answered | the acknowledgement |
-| Written | the session answers `closing` while still closing | Answered | the promised `closing` answer; never stranded, never `indeterminate` |
+| Written or Writing | the session answers accepted, rejected, or `closing` while still closing | Answered | the acknowledgement; a `closing` answer here is never stranded, never `indeterminate` |
+| Read or Queued | the session's relay is live and starts the write | Writing | nothing yet |
 | Written | the session answers `closing` after the exited window | Rerouted | nothing yet; delivered once to the resumed session |
 | Written | the session answers `closing` after it already rerouted once | Answered | the `closing` rejection |
 | Written | the session answers `indeterminate` | Answered | the `indeterminate` rejection; never replayed |

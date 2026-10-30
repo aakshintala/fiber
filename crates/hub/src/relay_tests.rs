@@ -2636,13 +2636,19 @@ fn a_replay_that_cannot_start_is_refused_io_failed() {
 fn transition_allows_each_documented_move_and_refuses_the_rest() {
     use crate::relay::CommandState;
     use crate::retire::{AckOrder, IllegalTransition};
-    use CommandState::{Answered, Dropped, Partial, Queued, Read, Rerouted, Written};
-    let states = [Read, Queued, Written, Partial, Rerouted, Answered, Dropped];
+    use CommandState::{Answered, Dropped, Partial, Queued, Read, Rerouted, Writing, Written};
+    let states = [
+        Read, Queued, Writing, Written, Partial, Rerouted, Answered, Dropped,
+    ];
     fn allowed(from: CommandState, to: CommandState) -> bool {
         matches!(
             (from, to),
-            (Read, Queued | Written | Partial | Answered)
-                | (Queued, Queued | Written | Partial | Answered | Dropped)
+            (Read, Queued | Writing | Written | Partial | Answered)
+                | (
+                    Queued,
+                    Queued | Writing | Written | Partial | Answered | Dropped
+                )
+                | (Writing, Written | Queued | Partial | Answered)
                 | (Written, Written | Rerouted | Answered | Dropped)
                 | (Partial, Answered | Dropped)
                 | (Rerouted, Answered | Dropped)
@@ -2654,6 +2660,9 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
             Read => {}
             Queued => {
                 order.transition("c_1", Queued).unwrap();
+            }
+            Writing => {
+                order.transition("c_1", Writing).unwrap();
             }
             Written | Rerouted => {
                 order.transition("c_1", Written).unwrap();
@@ -2760,6 +2769,9 @@ fn the_command_state_table_matches_the_transition_api() {
             CommandState::Queued => {
                 order.transition("c_1", CommandState::Queued).unwrap();
             }
+            CommandState::Writing => {
+                order.transition("c_1", CommandState::Writing).unwrap();
+            }
             CommandState::Written | CommandState::Rerouted => {
                 order.transition("c_1", CommandState::Written).unwrap();
                 if from == CommandState::Rerouted {
@@ -2795,6 +2807,7 @@ fn the_command_state_table_matches_the_transition_api() {
     let states = [
         CommandState::Read,
         CommandState::Queued,
+        CommandState::Writing,
         CommandState::Written,
         CommandState::Partial,
         CommandState::Rerouted,
@@ -3577,7 +3590,7 @@ fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
     join_within_deadline(thread);
 }
 
-/// `docs/invocation.md:1152`, "What the hub speaks" (#3491, #3534): a command the session
+/// `docs/invocation.md:1151`, "What the hub speaks" (#3491, #3534): a command the session
 /// read while closing is answered `closing`, never stranded and never
 /// `indeterminate`. Without the exited window the hub forwards the
 /// session's answer as promised instead of routing it again.
@@ -3647,6 +3660,9 @@ fn an_exiting_hub_sends_no_hello_before_the_connection_ends() {
     assert!(
         bytes.is_empty(),
         "EOF with no `hub_hello`: no command completes"
+    );
+}
+
 /// The typed `parse_typed` seam reads `line` exactly as the full-parse
 /// `acknowledgement` does: the setup asserts the line acknowledges
 /// through the old path, then the parity assert compares the two.

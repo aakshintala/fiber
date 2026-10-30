@@ -64,13 +64,18 @@ pub(crate) type Kept = Arc<Mutex<Vec<(String, Map<String, Value>, CommandState)>
 /// One relayed command's delivery state
 /// (`docs/invocation.md`, "What the hub speaks"): the canonical state
 /// lives in [`crate::retire::AckOrder`], which owns every move between
-/// these states; a relay entry's kept commands only ever hold the three
-/// write outcomes (`Queued`, `Written`, `Partial`), since an entry drops
-/// a command once it is answered and only passes on what it never wrote.
+/// these states; a relay entry's kept commands only ever hold the write
+/// outcomes (`Writing`, `Queued`, `Written`, `Partial`), since an entry
+/// drops a command once it is answered and only passes on what it never
+/// wrote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandState {
     /// The hub read the command; it reached no session socket.
     Read,
+    /// A live write is in flight, owned by the kept attempt until the
+    /// write or an acknowledgement wins it: an internal transient, never
+    /// a client-visible result.
+    Writing,
     /// Held unsent, never read by a session: queued on a retiring relay,
     /// or kept back by a write that accepted nothing.
     Queued,
@@ -599,62 +604,76 @@ pub(crate) fn route(
             report(&order, &id.0, CommandState::Queued);
             return true;
         }
-        // Kept before the write, so the relay thread finds it when the
-        // session answers. The drain never sees the push without the
-        // write's outcome: it collects under the relays lock, which
-        // this hold keeps until the write's result flips the entry.
+        // Kept as `Writing` before the write, so the relay thread finds
+        // the in-flight attempt when the session answers: the kept lock
+        // arbitrates the attempt between the write and the
+        // acknowledgement. The canonical `Writing` report lands only from
+        // `Read` or `Queued`; a rerouted command keeps its `Rerouted`
+        // claim while only its local attempt is `Writing`. The drain never
+        // sees the push without the write's outcome: it collects under the
+        // relays lock, which this hold keeps until the write's result
+        // claims the attempt.
         #[cfg(test)]
         let before_write = held.before_command_write.take();
+        #[cfg(test)]
+        let after_write = held.after_command_write.take();
         #[cfg(test)]
         let cap = command_cap(before_write, &bytes);
         #[cfg(not(test))]
         let cap = None;
         let outcome = held.entries.get(at).map(|entry| {
-            lock(&entry.kept).push((id.0.clone(), stripped.clone(), CommandState::Written));
+            lock(&entry.kept).push((id.0.clone(), stripped.clone(), CommandState::Writing));
+            report(&order, &id.0, CommandState::Writing);
             write_client_command(&entry.writer, &bytes, cap)
         });
+        #[cfg(test)]
+        if let Some(after_write) = after_write {
+            after_write();
+        }
+        // One candidate outcome for the kept attempt and the canonical
+        // report: the kept entry takes it first, then the same value is
+        // reported to `AckOrder`. An acknowledgement that consumed the
+        // attempt first already won and was forwarded, so the late outcome
+        // changes nothing and is not reported. The canonical claim wins
+        // when the two differ: a report the command already moved past is
+        // refused and keeps its state, so a `Partial` candidate after the
+        // `Written -> Rerouted` claim leaves the canonical state
+        // `Rerouted`.
+        let state = match &outcome {
+            Some(Ok(())) => CommandState::Written,
+            Some(Err(partial)) if partial.written > 0 => CommandState::Partial,
+            _ => CommandState::Queued,
+        };
+        let mut published = false;
+        if let Some(entry) = held.entries.get_mut(at)
+            && let Some(kept) = lock(&entry.kept)
+                .iter_mut()
+                .find(|(kept, _, _)| *kept == id.0)
+        {
+            kept.2 = state;
+            published = true;
+        }
+        if published {
+            // The whole line landed, a write that accepted nothing keeps
+            // the command unsent, and a write that accepted bytes may
+            // still have reached the session. A rerouted command keeps its
+            // claim through the write: a `Written` report is refused and
+            // the canonical state stays `Rerouted`, so a second clean exit
+            // still answers it `closing`.
+            report(&order, &id.0, state);
+        }
         if matches!(outcome, Some(Ok(()))) {
-            // The whole line landed. A rerouted command keeps its claim
-            // through the write.
-            report(&order, &id.0, CommandState::Written);
             return true;
         }
         // The write failed: the session is gone. Only the write half
         // shuts, so every answer already in the kernel buffer is still
-        // read. A write that accepted bytes may still have reached the
-        // session: when its kept entry is still present it is marked
-        // `Partial`, and only a still-kept unanswered `Partial` is
-        // settled `indeterminate` at drain, never routed again. An
-        // acknowledgement that consumes the entry first while it is still
-        // `Written` is forwarded normally. A write that accepted nothing
-        // keeps the command unsent, as when a live relay's socket closes.
-        // One candidate outcome for the kept attempt and the canonical
-        // report: the kept entry takes it first, then the same value is
-        // reported to `AckOrder`. The canonical claim wins when the two
-        // differ: a report the command already moved past is refused and
-        // keeps its state, so a `Partial` candidate after the
-        // `Written -> Rerouted` claim leaves the canonical state
-        // `Rerouted`.
-        let state = match &outcome {
-            Some(Err(partial)) if partial.written > 0 => CommandState::Partial,
-            _ => CommandState::Queued,
-        };
+        // read.
         if let Some(entry) = held.entries.get_mut(at) {
             entry.retiring = Some(Retire::Dead);
-            if let Some(kept) = lock(&entry.kept)
-                .iter_mut()
-                .find(|(kept, _, _)| *kept == id.0)
-            {
-                kept.2 = state;
-            }
             match entry.writer.shutdown(Shutdown::Write) {
                 Ok(()) | Err(_) => {}
             }
         }
-        // A rerouted command keeps its claim through the failed write:
-        // the `Partial` report is refused and the canonical state stays
-        // `Rerouted`, so a second clean exit still answers it `closing`.
-        report(&order, &id.0, state);
         true
     };
     if serve_existing() {
@@ -1699,10 +1718,21 @@ fn relay(
                         exiting = true;
                         // A command re-routes once: the session it was
                         // handed to also ended without answering, so its
-                        // own `closing` goes to the client as it is. Only
-                        // the move into `Rerouted` claims the re-route: a
-                        // refused claim falls through to the forward below.
+                        // own `closing` goes to the client as it is. A
+                        // post-exit `closing` proves the session received
+                        // the command, so an in-flight or unsent attempt
+                        // counts as delivered: the claim confirms `Written`
+                        // first, from `Read`, `Queued` or `Writing`. A
+                        // second claim is refused and the `closing` falls
+                        // through to the forward below. Only the move into
+                        // `Rerouted` claims the re-route: a refused claim
+                        // falls through to the forward below.
+                        report(&order, &id, CommandState::Written);
                         if order.transition(&id, CommandState::Rerouted).is_ok() {
+                            #[cfg(test)]
+                            if let Some(claimed) = lock(&hub.after_reroute_claim).take() {
+                                claimed();
+                            }
                             if crate::retire::hand_over(&order, relays, session, epoch, &id, &line)
                             {
                                 route(

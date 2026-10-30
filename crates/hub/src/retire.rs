@@ -281,25 +281,33 @@ impl AckOrder {
 
 /// Whether `CommandState::transition` allows the move from `from` to `to`
 /// (`docs/invocation.md`, "What the hub speaks"): a new command starts in
-/// `Read`; a write moves it to `Queued` when the session could have read
-/// nothing, `Written` when the whole line landed, or `Partial` when the
-/// session may have read a byte. A write that changes nothing reports its
-/// outcome anyway: `Queued` stays queued, `Written` stays written, and a
-/// rerouted command keeps its `Rerouted` claim through later writes, so a
-/// command queued behind a re-route is passed on, never delivered twice.
-/// Only `Written` claims the one permitted re-route into `Rerouted`, and
-/// only once: a second claim is refused and answered `closing`. `Partial`
-/// is terminal except for its own `indeterminate` answer: the command is
-/// never delivered again. Every answered command ends in `Answered`; a
-/// disconnect, rewind or move drops a command in `Queued`, `Written`,
-/// `Partial` or `Rerouted` through `drop_ids`, without an answer and
-/// without a further move.
+/// `Read`; a live write first moves it to `Writing`, owned by the kept
+/// attempt until the write or an acknowledgement wins it. A won write
+/// moves it to `Queued` when the session could have read nothing, `Written`
+/// when the whole line landed, or `Partial` when the session may have read
+/// a byte. A won acknowledgement moves it to `Answered` and is forwarded,
+/// and the late write result changes nothing. A write that changes nothing
+/// reports its outcome anyway: `Queued` stays queued, `Written` stays
+/// written, and a rerouted command keeps its `Rerouted` claim through later
+/// writes, so a command queued behind a re-route is passed on, never
+/// delivered twice. Only `Written` claims the one permitted re-route into
+/// `Rerouted`, and only once: a second claim is refused and answered
+/// `closing`. `Writing` never moves directly to `Rerouted`: a post-exit
+/// `closing` confirms `Written` first. `Partial` is terminal except for its
+/// own `indeterminate` answer: the command is never delivered again. Every
+/// answered command ends in `Answered`; a disconnect, rewind or move drops
+/// a command in `Queued`, `Written`, `Partial` or `Rerouted` through
+/// `drop_ids`, without an answer and without a further move.
 fn allowed(from: CommandState, to: CommandState) -> bool {
-    use CommandState::{Answered, Dropped, Partial, Queued, Read, Rerouted, Written};
+    use CommandState::{Answered, Dropped, Partial, Queued, Read, Rerouted, Writing, Written};
     matches!(
         (from, to),
-        (Read, Queued | Written | Partial | Answered)
-            | (Queued, Queued | Written | Partial | Answered | Dropped)
+        (Read, Queued | Writing | Written | Partial | Answered)
+            | (
+                Queued,
+                Queued | Writing | Written | Partial | Answered | Dropped
+            )
+            | (Writing, Written | Queued | Partial | Answered)
             | (Written, Written | Rerouted | Answered | Dropped)
             | (Partial, Answered | Dropped)
             | (Rerouted, Answered | Dropped)
