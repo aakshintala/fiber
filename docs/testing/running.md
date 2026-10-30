@@ -84,8 +84,12 @@ tests in `crates/main/src/`. A pass on retry does not block the
 merge, unless the pull request added or changed that test, in which case
 the test job fails (`docs/ci.md`). Flakes are tracked per test file. CI opens one flake issue for the file,
 naming the test and its failure, or comments on the file's open issue. The
-issue's title is `Flaky tests: ` followed by the test file's binary as
-nextest prints it before the test's name, such as `main::hub_exit_window`. Each body the report writes (the issue, a
+issue's title is `Flaky tests: ` followed by the file's key: the aggregate
+`main` integration binary names its first test-module segment, so `main
+reviewer_setup::the_setup_saves` files `Flaky tests: main::reviewer_setup`.
+A root-level `main` test falls back to `Flaky tests: main`. Every other
+binary keeps its binary title, such as `Flaky tests: main::hub_exit_window`,
+and unit-test ids such as `fakes` are not parsed specially. Each body the report writes (the issue, a
 sighting comment, a pull request comment) names the tested commit on its own
 line: `tested <sha> = main <base> + head <head>` on a pull request run, where
 the merge commit's parents are main and the pull request head, and
