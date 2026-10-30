@@ -374,6 +374,18 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
     );
     assert_each_followed_by(
         &kinds,
+        "assistant_message_started",
+        "tool_call_requested",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "text_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
         "tool_call_requested",
         "assistant_message_completed",
         REPLY_DOC,
@@ -472,6 +484,18 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
     );
     assert_each_followed_by(
         &kinds,
+        "assistant_message_started",
+        "tool_call_requested",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "text_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
         "tool_call_requested",
         "assistant_message_completed",
         REPLY_DOC,
@@ -566,6 +590,12 @@ fn no_hooks_key_loads_no_hooks_vm() {
     );
     assert_each_followed_by(
         &kinds,
+        "assistant_message_started",
+        "text_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
         "text_completed",
         "assistant_message_completed",
         REPLY_DOC,
@@ -605,6 +635,12 @@ fn empty_hooks_settings_load_silently() {
         &kinds,
         "assistant_message_started",
         "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "text_completed",
         REPLY_DOC,
     );
     assert_each_followed_by(
@@ -715,6 +751,12 @@ fn a_removed_package_with_only_non_blocking_entries_warns_and_runs() {
     );
     assert_each_followed_by(
         &kinds,
+        "assistant_message_started",
+        "text_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
         "text_completed",
         "assistant_message_completed",
         REPLY_DOC,
@@ -775,6 +817,12 @@ fn a_removed_package_with_watcher_only_declarations_runs_quietly() {
     );
     assert_each_followed_by(
         &kinds,
+        "assistant_message_started",
+        "text_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
         "text_completed",
         "assistant_message_completed",
         REPLY_DOC,
@@ -830,6 +878,12 @@ fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
         &kinds,
         "assistant_message_started",
         "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "text_completed",
         REPLY_DOC,
     );
     assert_each_followed_by(
@@ -918,6 +972,18 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
         &kinds,
         "assistant_message_started",
         "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "tool_call_requested",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "text_completed",
         REPLY_DOC,
     );
     assert_each_followed_by(
@@ -1029,6 +1095,18 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
     );
     assert_each_followed_by(
         &kinds,
+        "assistant_message_started",
+        "tool_call_requested",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "text_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
         "tool_call_requested",
         "assistant_message_completed",
         REPLY_DOC,
@@ -1113,6 +1191,18 @@ fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
         &kinds,
         "assistant_message_started",
         "assistant_message_completed",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "tool_call_requested",
+        REPLY_DOC,
+    );
+    assert_each_followed_by(
+        &kinds,
+        "assistant_message_started",
+        "text_completed",
         REPLY_DOC,
     );
     assert_each_followed_by(
@@ -1314,7 +1404,7 @@ fn kinds_without_deltas_hold_counts_but_not_delta_chunking() {
 /// `second`, or a missing kind, fails.
 #[test]
 fn each_followed_by_pins_the_promised_pair() {
-    let doc = "no doc promises this test pair";
+    let doc = RELOAD_PREAMBLE_DOC;
     assert_each_followed_by(
         &["reloaded", "preamble_built"],
         "reloaded",
