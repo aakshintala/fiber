@@ -4275,6 +4275,11 @@ fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
         crate::retire::PARTIAL_WRITE_MAY_HAVE_RUN,
         "{answer}"
     );
+    // `retire::forward` writes the rejection before it calls `order.done`,
+    // so the client read does not synchronize cleanup: close the session
+    // peer and join the relay thread before asserting the queue is clean.
+    drop(session_peer);
+    join_within_deadline(thread);
     // Exactly one answer: the suppressed accept is consumed, the queue is
     // clean, and nothing resumes to deliver the command again.
     assert!(
@@ -4285,8 +4290,6 @@ fn a_reply_cut_before_its_line_feed_is_answered_indeterminate_once() {
     assert_eq!(order.state(&CommandId("c_2".to_owned())), None);
     assert!(starter.resumed().is_empty(), "nothing is resumed");
     drop(park_tx);
-    drop(session_peer);
-    join_within_deadline(thread);
 }
 
 /// `docs/invocation.md:1145`, "What the hub speaks" (#3491, #3534): a command the session

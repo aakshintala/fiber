@@ -3874,7 +3874,7 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
     // The route's cut write runs before the session ends: the hook fires
     // once the torn bytes are written, so ending it now cannot turn the
     // failure into a zero-byte one.
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&written_rx)
         .expect("the cut write ran");
     if let Some(last) = last {
