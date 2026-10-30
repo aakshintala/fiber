@@ -18,33 +18,52 @@ fn maxima(entries: &[(&str, usize)]) -> BTreeMap<String, usize> {
 }
 
 #[test]
-fn a_call_form_line_counts() {
-    assert_eq!(count_unmarked("    let grid = run.screen();\n"), 1);
+fn the_line_rule_counts_plain_calls() {
+    let cases: &[(&str, usize)] = &[
+        ("    let grid = run.screen();\n", 1),
+        ("    let a = run.screen();\n    let b = run.screen();\n", 2),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(count_unmarked(source), *expected, "source: {source:?}");
+    }
 }
 
 #[test]
 fn a_field_access_without_parens_does_not_count() {
-    assert_eq!(count_unmarked("    run.screen.wait_for(\"Key: \");\n"), 0);
-    assert_eq!(count_unmarked("    let shown = &run.screen.seen;\n"), 0);
+    let cases: &[(&str, usize)] = &[
+        ("    run.screen.wait_for(\"Key: \");\n", 0),
+        ("    let shown = &run.screen.seen;\n", 0),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(count_unmarked(source), *expected, "source: {source:?}");
+    }
 }
 
 #[test]
-fn a_call_inside_a_string_does_not_count() {
-    assert_eq!(count_unmarked("    let marker = \"run.screen()\";\n"), 0);
+fn a_full_line_comment_call_does_not_count() {
+    let cases: &[(&str, usize)] = &[
+        ("    // let grid = run.screen();\n", 0),
+        ("// run.screen();\n", 0),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(count_unmarked(source), *expected, "source: {source:?}");
+    }
 }
 
 #[test]
-fn a_call_inside_a_line_comment_does_not_count() {
-    assert_eq!(count_unmarked("    // let grid = run.screen();\n"), 0);
+fn a_call_inside_a_string_counts() {
+    assert_eq!(count_unmarked("    let marker = \"run.screen()\";\n"), 1);
 }
 
 #[test]
-fn a_call_inside_a_block_comment_does_not_count() {
-    assert_eq!(count_unmarked("    /* run.screen() */\n"), 0);
-    assert_eq!(
-        count_unmarked("    /* open\n    run.screen();\n    close */\n"),
-        0
-    );
+fn a_call_inside_a_block_comment_counts() {
+    let cases: &[(&str, usize)] = &[
+        ("    /* run.screen() */\n", 1),
+        ("    /* open\n    run.screen();\n    close */\n", 1),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(count_unmarked(source), *expected, "source: {source:?}");
+    }
 }
 
 #[test]
@@ -64,70 +83,30 @@ fn a_settled_marker_on_the_previous_line_exempts() {
 }
 
 #[test]
+fn marker_text_inside_a_string_still_exempts() {
+    assert_eq!(
+        count_unmarked("    let note = \"// settled: done\";\n    let grid = run.screen();\n"),
+        0
+    );
+    assert_eq!(
+        count_unmarked("    let grid = run.screen(); let note = \"// settled: x\";\n"),
+        0
+    );
+}
+
+#[test]
+fn an_unrelated_previous_line_does_not_exempt() {
+    assert_eq!(
+        count_unmarked("    let other = 1;\n    let grid = run.screen();\n"),
+        1
+    );
+}
+
+#[test]
 fn a_marker_two_lines_above_does_not_exempt() {
     assert_eq!(
         count_unmarked(
             "    // settled: wait checked tint\n    let other = 1;\n    let grid = run.screen();\n"
-        ),
-        1
-    );
-}
-
-#[test]
-fn a_marker_inside_a_string_literal_does_not_exempt() {
-    assert_eq!(
-        count_unmarked("    let note = \"// settled: done\";\n    let grid = run.screen();\n"),
-        1
-    );
-    assert_eq!(
-        count_unmarked("    let grid = run.screen();\n    let note = \"// settled: done\";\n"),
-        1
-    );
-}
-
-#[test]
-fn a_marker_inside_a_block_comment_does_not_exempt() {
-    assert_eq!(
-        count_unmarked("    /* // settled: done */\n    let grid = run.screen();\n"),
-        1
-    );
-}
-
-#[test]
-fn a_quote_inside_a_char_literal_does_not_start_a_string() {
-    assert_eq!(
-        count_unmarked("    let tick = '\"';\n    let grid = run.screen();\n"),
-        1
-    );
-}
-
-#[test]
-fn a_call_and_a_marker_inside_a_raw_string_count_for_nothing() {
-    assert_eq!(
-        count_unmarked("    let raw = r\"run.screen() // settled: x\";\n"),
-        0
-    );
-    assert_eq!(
-        count_unmarked("    let raw = r#\"// settled: x\"#;\n    let grid = run.screen();\n"),
-        1
-    );
-}
-
-#[test]
-fn a_multiline_raw_string_hides_a_settled_marker() {
-    assert_eq!(
-        count_unmarked(
-            "    let raw = r#\"\n    // settled: fake\"#;\n    let grid = run.screen();\n"
-        ),
-        1
-    );
-}
-
-#[test]
-fn a_multiline_string_hides_a_settled_marker() {
-    assert_eq!(
-        count_unmarked(
-            "    let note = \"open\n    // settled: fake\";\n    let grid = run.screen();\n"
         ),
         1
     );

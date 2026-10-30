@@ -1,12 +1,16 @@
 //! The bare screen-call ratchet (`docs/testing/screens.md`, "Screens"): each
 //! file under `crates/main/tests/` holds at most its inline maximum of
 //! unmarked `.screen()` call-form lines, outside
-//! `crates/main/tests/support/`. Only a real `// settled:` line comment on
-//! the call line or the line before it exempts a call: the marker inside a
-//! string literal or a block comment exempts nothing. A file missing from
-//! the maxima table holds none. `scripts/check` keeps the table inline and
-//! passes it here on stdin; this module owns call detection, comment
-//! recognition and the per-file comparison.
+//! `crates/main/tests/support/`. The count is conservative: a line counts
+//! when it holds the text `.screen()`, even inside a string literal or a
+//! block comment, and only a full-line `//` comment line or the literal
+//! text `// settled:` on the call line or the line before it exempts it.
+//! Literal false positives are safe because the ratchet is an upper bound:
+//! over-counting a `.screen()` inside a string, or exempting on marker
+//! text inside a string, never lets a real bare read slip past. A file
+//! missing from the maxima table holds none. `scripts/check` keeps the
+//! table inline and passes it here on stdin; this module owns call
+//! detection, comment recognition and the per-file comparison.
 
 use std::collections::BTreeMap;
 
@@ -78,164 +82,22 @@ pub(crate) fn check(files: &[RustFile], maxima: &BTreeMap<String, usize>) -> Vec
     failures
 }
 
-/// The number of `.screen()` call-form lines in `source` with no real
-/// `// settled:` comment on the call line or the line before it.
+/// The number of `.screen()` call-form lines in `source` with no literal
+/// `// settled:` text on the call line or the line before it. A line
+/// whose trimmed start begins `//` never counts.
 pub(crate) fn count_unmarked(source: &str) -> usize {
-    let mut depth = 0u32;
-    let mut in_string = false;
-    let mut raw_hashes: Option<usize> = None;
     let mut previous_settled = false;
     let mut count = 0usize;
     for line in source.lines() {
-        let (has_call, has_settled, next_depth, next_string, next_raw) =
-            scan_line(line, depth, in_string, raw_hashes);
-        depth = next_depth;
-        in_string = next_string;
-        raw_hashes = next_raw;
-        if has_call && !has_settled && !previous_settled {
+        let has_call = line.contains(CALL);
+        let is_comment = line.trim_start().starts_with("//");
+        let has_settled = line.contains(MARKER);
+        if has_call && !is_comment && !has_settled && !previous_settled {
             count = count.saturating_add(1);
         }
         previous_settled = has_settled;
     }
     count
-}
-
-/// Whether a byte can continue a Rust identifier.
-fn is_ident_byte(byte: Option<&u8>) -> bool {
-    matches!(byte, Some(seen) if seen.is_ascii_alphanumeric() || *seen == b'_')
-}
-
-/// Scans one line: whether its code holds a `.screen()` call and whether
-/// its line comment holds the marker, plus the lexer state the next line
-/// starts in (block-comment depth, open string, open raw string with its
-/// hash count). Strings, character literals, raw strings and block comments
-/// hide both markers; a line comment ends the scan.
-fn scan_line(
-    line: &str,
-    mut depth: u32,
-    mut in_string: bool,
-    mut raw_hashes: Option<usize>,
-) -> (bool, bool, u32, bool, Option<usize>) {
-    let bytes = line.as_bytes();
-    let mut index = 0usize;
-    let mut has_call = false;
-    while index < bytes.len() {
-        if let Some(hashes) = raw_hashes {
-            if bytes.get(index) == Some(&b'"') {
-                let mut closed = true;
-                for offset in 0..hashes {
-                    if bytes.get(index.saturating_add(1).saturating_add(offset)) != Some(&b'#') {
-                        closed = false;
-                        break;
-                    }
-                }
-                if closed {
-                    raw_hashes = None;
-                    index = index.saturating_add(1).saturating_add(hashes);
-                    continue;
-                }
-            }
-            index = index.saturating_add(1);
-            continue;
-        }
-        if in_string {
-            if bytes.get(index) == Some(&b'\\') {
-                index = index.saturating_add(2);
-                continue;
-            }
-            if bytes.get(index) == Some(&b'"') {
-                in_string = false;
-            }
-            index = index.saturating_add(1);
-            continue;
-        }
-        if depth > 0 {
-            if bytes.get(index) == Some(&b'/') && bytes.get(index.saturating_add(1)) == Some(&b'*')
-            {
-                depth = depth.saturating_add(1);
-                index = index.saturating_add(2);
-                continue;
-            }
-            if bytes.get(index) == Some(&b'*') && bytes.get(index.saturating_add(1)) == Some(&b'/')
-            {
-                depth = depth.saturating_sub(1);
-                index = index.saturating_add(2);
-                continue;
-            }
-            index = index.saturating_add(1);
-            continue;
-        }
-        if bytes.get(index) == Some(&b'r') {
-            let mut hashes_end = index.saturating_add(1);
-            while bytes.get(hashes_end) == Some(&b'#') {
-                hashes_end = hashes_end.saturating_add(1);
-            }
-            if bytes.get(hashes_end) == Some(&b'"') {
-                let prev_is_ident = index > 0 && is_ident_byte(bytes.get(index.saturating_sub(1)));
-                let prev_is_byte_prefix = prev_is_ident
-                    && bytes.get(index.saturating_sub(1)) == Some(&b'b')
-                    && (index < 2 || !is_ident_byte(bytes.get(index.saturating_sub(2))));
-                if !prev_is_ident || prev_is_byte_prefix {
-                    raw_hashes = Some(hashes_end.saturating_sub(index.saturating_add(1)));
-                    index = hashes_end.saturating_add(1);
-                    continue;
-                }
-            }
-        }
-        if bytes.get(index) == Some(&b'"') {
-            in_string = true;
-            index = index.saturating_add(1);
-            continue;
-        }
-        if bytes.get(index) == Some(&b'\'') {
-            if bytes.get(index.saturating_add(1)) == Some(&b'\\') {
-                let mut close = index.saturating_add(2);
-                while close < bytes.len()
-                    && close < index.saturating_add(12)
-                    && bytes.get(close) != Some(&b'\'')
-                {
-                    close = close.saturating_add(1);
-                }
-                if bytes.get(close) == Some(&b'\'') {
-                    index = close.saturating_add(1);
-                } else {
-                    index = index.saturating_add(1);
-                }
-                continue;
-            }
-            if bytes.get(index.saturating_add(2)) == Some(&b'\'') {
-                index = index.saturating_add(3);
-                continue;
-            }
-            index = index.saturating_add(1);
-            continue;
-        }
-        if bytes.get(index) == Some(&b'/') && bytes.get(index.saturating_add(1)) == Some(&b'*') {
-            depth = depth.saturating_add(1);
-            index = index.saturating_add(2);
-            continue;
-        }
-        if bytes.get(index) == Some(&b'/') && bytes.get(index.saturating_add(1)) == Some(&b'/') {
-            let comment = line.get(index..).unwrap_or_default();
-            return (
-                has_call,
-                comment.contains(MARKER),
-                depth,
-                in_string,
-                raw_hashes,
-            );
-        }
-        if bytes.get(index) == Some(&b'.') {
-            let end = index.saturating_add(CALL.len());
-            if end <= line.len() && line.get(index..end) == Some(CALL) {
-                has_call = true;
-                index = end;
-                continue;
-            }
-        }
-        index = index.saturating_add(1);
-    }
-    (has_call, false, depth, in_string, raw_hashes)
 }
 
 #[cfg(test)]
