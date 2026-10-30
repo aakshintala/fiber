@@ -25,6 +25,16 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   standing allows, and still meets the credential deny and the standing deny
   and ask rules (`docs/permissions.md`, "The order a call is judged in"). Any
   tool may set it, an extension's included; it only makes the call stricter.
+  A tool may also declare that confinement does not skip review for a call
+  (`review_when_confined`): a confined fast path must not decide it, while
+  session grants and standing allows still apply, as do the credential deny
+  and the standing deny and ask rules (`docs/permissions.md`, "The order a
+  call is judged in"). Any tool may set it; it only makes the call stricter.
+  Today only the shell sets it, for its built-in destructive-command guard:
+  `rm -r` and `rm -rf`, `git reset --hard`, `git clean`, `git checkout --`
+  and `git restore`, matched best effort by command text in any component of
+  a multi-part command, whether or not the command parses
+  (`docs/permissions.md`, "The destructive-command guard").
   A shell call that ran inside the OS sandbox on Linux or macOS carries
   `confined` (`docs/permissions.md`, "Confinement"); the log records it
   (`docs/events.md`, "Declared effects"). Calls remain reviewed.

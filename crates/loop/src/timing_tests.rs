@@ -220,6 +220,7 @@ impl Tool for ReadsTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
@@ -2240,6 +2241,7 @@ impl Tool for ExecTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }

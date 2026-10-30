@@ -696,3 +696,89 @@ fn walk_names_the_peer_when_the_caller_owner_is_unreadable() {
         IncompleteWalk { pid: Pid(10) }
     );
 }
+
+/// One `ps` row: the pid, its parent, its kernel uid and its real uid. `ps`
+/// reads through `sysctl`, which stays readable for another user's
+/// processes, so it is the oracle the kernel reader is checked against.
+#[cfg(target_os = "macos")]
+fn ps_identities(deadline: fakes::Deadline) -> Vec<(Pid, Pid, EffectiveUid, u32)> {
+    let output = fakes::within("ps to list processes", deadline, || {
+        std::process::Command::new("ps")
+            .args(["-o", "pid=,ppid=,uid=,ruid=", "-A"])
+            .output()
+            .expect("ps lists processes")
+    });
+    assert!(output.status.success(), "ps lists processes");
+    let text = String::from_utf8(output.stdout).expect("ps output is UTF-8");
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let ppid = fields.next()?.parse::<u32>().ok()?;
+            let uid = fields.next()?.parse::<u32>().ok()?;
+            let ruid = fields.next()?.parse::<u32>().ok()?;
+            Some((Pid(pid), Pid(ppid), EffectiveUid(uid), ruid))
+        })
+        .collect()
+}
+
+/// Whether `ps` still lists `pid`: a candidate that exits between the
+/// listing and the read is tried no further, so a short-lived daemon cannot
+/// fail the test.
+#[cfg(target_os = "macos")]
+fn ps_lists(deadline: fakes::Deadline, pid: Pid) -> bool {
+    ps_identities(deadline)
+        .iter()
+        .any(|(listed, _, _, _)| *listed == pid)
+}
+
+/// The kernel reader reports a root-owned process other than PID 1: its
+/// effective uid reads 0 and its parent reads the `ps` parent. A setuid-root
+/// candidate reads first, so a real uid beside 0 proves the uid is the
+/// effective one; any root daemon proves the flavor stays readable for
+/// another user's processes. An argument vector of another owner's process
+/// stays unreadable.
+#[cfg(target_os = "macos")]
+#[test]
+fn kernel_reader_reads_a_root_owned_non_init_process() {
+    let read = KernelProcessRead;
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(10));
+    let mut candidates: Vec<(Pid, Pid, EffectiveUid, u32)> = ps_identities(deadline)
+        .into_iter()
+        .filter(|(pid, _, euid, _)| *pid != Pid(1) && *euid == EffectiveUid(0))
+        .collect();
+    assert!(
+        !candidates.is_empty(),
+        "ps lists a root-owned process other than PID 1"
+    );
+    candidates.sort_by_key(|(_, _, _, ruid)| *ruid == 0);
+    for (pid, ppid, _, ruid) in candidates.into_iter().take(8) {
+        assert_ne!(pid, Pid(1), "the candidate is not PID 1");
+        let euid = match read.euid(pid) {
+            Ok(euid) => euid,
+            Err(_) if !ps_lists(deadline, pid) => continue,
+            Err(error) => {
+                panic!("the kernel reader reports the effective uid of root-owned {pid}: {error}")
+            }
+        };
+        let parent = match read.parent(pid) {
+            Ok(parent) => parent,
+            Err(_) if !ps_lists(deadline, pid) => continue,
+            Err(error) => {
+                panic!("the kernel reader reports the parent of root-owned {pid}: {error}")
+            }
+        };
+        assert_eq!(
+            euid,
+            EffectiveUid(0),
+            "the effective uid of root-owned {pid} is 0 beside real uid {ruid}"
+        );
+        assert_eq!(parent, ppid, "the parent of root-owned {pid} matches ps");
+        assert!(
+            read.argv(pid).is_err(),
+            "the argument vector of root-owned {pid} stays unreadable"
+        );
+        return;
+    }
+    panic!("every root-owned candidate exited before its reads");
+}

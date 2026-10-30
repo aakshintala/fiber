@@ -183,12 +183,16 @@ also says `Doc friction: none` or links each `needs-owner` issue it raised
 A pull request that resolves an issue labelled `bug` proves its fix with a
 red commit, then green. Its first commit, the red commit, holds the test that
 reproduces the bug and any new signature or test seam that test needs, but
-not the fix. The red commit builds, and at least one new or changed test
-fails there. The head passes. CI runs the red commit's new and changed tests there, and every new and
-changed test at the head (`docs/testing.md`, "Proving a test bites"). The squash merge still
-lands one commit. A pull request whose every changed file is a docs file, as
-"Selection" defines it, passes the check with a message saying so: the doc
-was wrong and the code was right, so no test can show the bug.
+not the fix. CI runs the red commit's new and changed tests on Linux x86_64
+and macOS arm64. Both legs must build; at least one test must fail on at
+least one leg. A test may pass or have no match on the other leg. The head
+must pass every new and changed test on both platforms
+(`docs/testing.md`, "Proving a test bites"). `scripts/bug-red BASE` runs
+the local check; CI uses `--report` on each platform and `--collect` to make
+the single required check. The squash merge still lands one commit. A pull
+request whose every changed file is a docs file, as "Selection" defines it,
+passes the check with a message saying so: the doc was wrong and the code
+was right, so no test can show the bug.
 
 A ticket whose defect is in test code, such as a flaky test, or in CI
 configuration (`.github/` or a script only CI runs), carries the `test-only`
