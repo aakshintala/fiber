@@ -2238,9 +2238,7 @@ fn every_start_helper_warms_the_fixture_before_its_deadline() {
     // This pins only the changed helper: it fails when the `warm_up` call
     // is removed, when a helper stops guarding fixture-only starts, or
     // when a helper stops warming first.
-    let source =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/test_support.rs"))
-            .expect("test_support.rs");
+    let source = include_str!("test_support.rs");
     let warmer = source.find("fn warm_once").expect("warm_once");
     let warmed = source.find("impl Setup").expect("impl Setup");
     let warm_up = source.find("fakes::warm_up").expect("warm_up");
