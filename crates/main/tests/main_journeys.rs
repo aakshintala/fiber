@@ -489,11 +489,38 @@ fn serve_nightly_feed() -> ProviderServer {
     .unwrap()
 }
 
+/// Installs the anthropic extension as a nightly install wrote it: the
+/// installed record carries the nightly version. #3617's update failed
+/// on such a home, where the shared resolver fed the nightly have-value
+/// through the strict version parser; a fresh home never trips it.
+fn install_nightly_extension(setup: &Setup) {
+    let source = setup.root.path().join("nightlysrc");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({
+            "name": "github.com/aakshintala/fiber/providers/anthropic",
+            "version": JOURNEY_NIGHTLY,
+            "fiber": "0.0.0",
+            "api": 1,
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
 /// `fiber update --channel nightly` against the stub feed: the
 /// person-visible approval prompt and update announcement on the release
 /// binary's terminal. Evidence for #3617, whose parent rejects the
-/// nightly before the approval prompt is ever flushed: this journey
-/// fails at that approval-prompt wait.
+/// nightly install record before the approval prompt is ever flushed:
+/// this journey fails at that approval-prompt wait.
 #[test]
 fn update_to_nightly_from_local_stub_feed() {
     run_journey(
@@ -504,6 +531,7 @@ fn update_to_nightly_from_local_stub_feed() {
             let setup = Setup::new();
             let server = serve_nightly_feed();
             let github = JourneyGithub::new(&setup);
+            install_nightly_extension(&setup);
             // A copy of the release binary the update renames over, so
             // the shared binary stays untouched.
             let copy = setup.root.path().join("fiber-copy");
