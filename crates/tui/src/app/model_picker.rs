@@ -14,15 +14,19 @@ use crate::swapped::{Spot, about};
 use contract::ThinkingLevel;
 
 impl App {
-    /// Folds a model-list read's answer: each catalogue notice shows once,
-    /// and a read error shows once with the old catalogue kept.
+    /// Folds a model-list read's answer: the catalogue's notices show
+    /// grouped by code, and a read error shows once with the old
+    /// catalogue kept.
     pub(crate) fn on_models(&mut self, result: Result<Catalogue, String>) {
         // The load landed, answered or not: its wait is over.
         self.notices
             .clear_code("models_loading", Self::MODELS_LOADING_TEXT);
         match &result {
             Ok(catalogue) => {
-                for notice in &catalogue.notices {
+                for notice in contract::events::group_notices(
+                    catalogue.notices.clone(),
+                    contract::events::grouped_lead,
+                ) {
                     self.push_notice(&crate::format::code(&notice.code), notice.message.clone());
                 }
             }

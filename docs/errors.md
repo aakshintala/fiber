@@ -414,6 +414,9 @@ the lines that carry it.
 
 Notices, for a failure outside any action or a login a person must finish:
 
+A pass that finds several problems of one code raises one notice of that
+code: its message gives the count and lists each item.
+
 | Code | Class | Meaning |
 |---|---|---|
 | `command_conflict` | event | two extensions registered the same command name, replaced the same TUI slot, or bound the same key (one notice for each slot and set of contenders until `/reload`; `docs/tui.md`, "When two extensions want one slot") |

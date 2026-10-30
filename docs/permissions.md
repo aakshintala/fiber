@@ -12,13 +12,15 @@ there and nothing else. The request and reply events themselves are
 
 ## The rule everything else follows from
 
-**Nothing in Fiber decides what is dangerous by looking at a command.** A tool
+**The permission policy never decides what is dangerous by looking at a command.** A tool
 is asked what a specific call does, in a closed vocabulary, and every later
 decision is made from that answer. The loop never sees the command string and
 never learns which tool produced the call, which is what
 `docs/architecture.md` requires: "`loop` never names a tool, a vendor or a
 provider. It reasons about what a tool is allowed to do, never about which
-tool it is."
+tool it is." The shell tool reads its own command to answer, as
+`shell.read_only` and the destructive-command guard do (`docs/tools.md`,
+"What a tool declares").
 
 The consequence worth stating first: **adding a tool never means editing the
 permission policy.** A tool arrives already able to describe itself.
@@ -58,6 +60,22 @@ seam identically.
 An MCP tool declares its effects from the hints its server gives, per tool
 rather than per call. How the hints map to effects is `docs/mcp.md`
 ("Effects").
+
+### The destructive-command guard
+
+Some shell commands stay reviewed even when confined. The shell keeps a
+built-in list: `rm -r` and `rm -rf`, `git reset --hard`, `git clean`,
+`git checkout --` and `git restore` (`docs/tools.md`, "What a tool
+declares").
+
+Matching is best effort by command text. The shell reads its own command
+and declares `review_when_confined` when any component of a multi-part
+command holds a listed form. It matches whether or not the command
+parses.
+
+The declaration removes only the confined fast path. The call stays
+confined. It keeps its credential deny, standing deny and ask rules,
+session grants and standing allows.
 
 ## One mode
 

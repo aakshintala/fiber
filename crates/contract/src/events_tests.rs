@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{CommandId, SessionId, TurnId};
+use crate::{CommandId, ErrorCode, SessionId, TurnId};
 
 const DOC: &str = include_str!("../../../docs/events.md");
 
@@ -2558,6 +2558,216 @@ fn a_call_hello_omits_session_id_and_other_reasons_require_it() {
     });
     serde_json::from_value::<ExtensionHello>(session_call)
         .expect_err("a session hello cannot carry reason call");
+}
+
+/// One pass's notice batch for the grouping tests: `code` with `message`,
+/// concerning `extension` when one is named.
+fn grouped_notice(code: ErrorCode, message: &str, extension: Option<&str>) -> Notice {
+    Notice {
+        code,
+        message: message.to_owned(),
+        extension: extension.map(str::to_owned),
+    }
+}
+
+/// Grouping an empty batch raises no notice and never calls the lead.
+#[test]
+fn grouping_an_empty_batch_raises_no_notice() {
+    let calls = std::cell::Cell::new(0);
+    let grouped = group_notices(vec![], |first, count| {
+        calls.set(calls.get() + 1);
+        grouped_lead(first, count)
+    });
+    assert!(grouped.is_empty());
+    assert_eq!(calls.get(), 0);
+}
+
+/// A code seen once passes through unchanged, without calling the lead:
+/// the same code, message and extension.
+#[test]
+fn a_singleton_code_passes_through_unchanged() {
+    let calls = std::cell::Cell::new(0);
+    let only = grouped_notice(ErrorCode::SkillShadowed, "one shadowed", Some("e"));
+    let grouped = group_notices(vec![only.clone()], |first, count| {
+        calls.set(calls.get() + 1);
+        grouped_lead(first, count)
+    });
+    assert_eq!(grouped, vec![only]);
+    assert_eq!(calls.get(), 0);
+}
+
+/// Groups keep first-seen code order and item order: an interleaved
+/// second code's singleton stays between the first code's items, which
+/// join one group in the order the pass raised them.
+#[test]
+fn groups_keep_first_seen_code_order_and_item_order() {
+    let grouped = group_notices(
+        vec![
+            grouped_notice(ErrorCode::SkillShadowed, "first", None),
+            grouped_notice(ErrorCode::IoFailed, "unreadable", None),
+            grouped_notice(ErrorCode::SkillShadowed, "second", None),
+            grouped_notice(ErrorCode::SkillShadowed, "third", None),
+        ],
+        grouped_lead,
+    );
+    assert_eq!(
+        grouped
+            .iter()
+            .map(|notice| (notice.code.clone(), notice.message.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                ErrorCode::SkillShadowed,
+                "3 skills are shadowed: first\n- first\n- second\n- third".to_owned(),
+            ),
+            (ErrorCode::IoFailed, "unreadable".to_owned(),),
+        ]
+    );
+}
+
+/// The lead sees the group's first notice and its count: two items give
+/// the first item's message with count 2.
+#[test]
+fn the_lead_names_the_count_and_first_item() {
+    let seen = std::cell::RefCell::new(Vec::new());
+    let grouped = group_notices(
+        vec![
+            grouped_notice(ErrorCode::HookFailed, "first failed", Some("a")),
+            grouped_notice(ErrorCode::HookFailed, "second failed", Some("a")),
+        ],
+        |first, count| {
+            seen.borrow_mut().push((first.message.clone(), count));
+            grouped_lead(first, count)
+        },
+    );
+    assert_eq!(seen.borrow().as_slice(), [("first failed".to_owned(), 2)]);
+    assert_eq!(grouped.len(), 1);
+}
+
+/// The grouped message lists every item in order, one `- ` line each, so
+/// the overlay shows the whole list behind the lead sentence.
+#[test]
+fn the_grouped_message_lists_every_item_in_order() {
+    let grouped = group_notices(
+        vec![
+            grouped_notice(ErrorCode::SkillShadowed, "first", None),
+            grouped_notice(ErrorCode::SkillShadowed, "second", None),
+            grouped_notice(ErrorCode::SkillShadowed, "third", None),
+        ],
+        grouped_lead,
+    );
+    assert_eq!(
+        grouped,
+        vec![Notice {
+            code: ErrorCode::SkillShadowed,
+            message: "3 skills are shadowed: first\n- first\n- second\n- third".to_owned(),
+            extension: None,
+        }]
+    );
+}
+
+/// A group whose items all name one extension keeps it, and each item
+/// line keeps its attribution.
+#[test]
+fn a_common_extension_stays_on_the_group() {
+    let grouped = group_notices(
+        vec![
+            grouped_notice(ErrorCode::HookFailed, "first failed", Some("a")),
+            grouped_notice(ErrorCode::HookFailed, "second failed", Some("a")),
+        ],
+        grouped_lead,
+    );
+    assert_eq!(
+        grouped,
+        vec![Notice {
+            code: ErrorCode::HookFailed,
+            message: "2 hooks failed: first failed\n\
+                      - first failed (extension `a`)\n\
+                      - second failed (extension `a`)"
+                .to_owned(),
+            extension: Some("a".to_owned()),
+        }]
+    );
+}
+
+/// A group across extensions, or mixing one with none, names no
+/// extension, while every item stays in the message with its own
+/// attribution where it has one.
+#[test]
+fn a_mixed_extension_group_names_none_but_lists_each_item() {
+    let grouped = group_notices(
+        vec![
+            grouped_notice(ErrorCode::HookFailed, "first failed", Some("a")),
+            grouped_notice(ErrorCode::HookFailed, "second failed", None),
+            grouped_notice(ErrorCode::HookFailed, "third failed", Some("b")),
+        ],
+        grouped_lead,
+    );
+    assert_eq!(
+        grouped,
+        vec![Notice {
+            code: ErrorCode::HookFailed,
+            message: "3 hooks failed: first failed\n\
+                      - first failed (extension `a`)\n\
+                      - second failed\n\
+                      - third failed (extension `b`)"
+                .to_owned(),
+            extension: None,
+        }]
+    );
+}
+
+/// A group with no extensions stays without one, and its item lines
+/// carry no attribution.
+#[test]
+fn absent_extensions_stay_absent() {
+    let grouped = group_notices(
+        vec![
+            grouped_notice(ErrorCode::SkillShadowed, "first", None),
+            grouped_notice(ErrorCode::SkillShadowed, "second", None),
+        ],
+        grouped_lead,
+    );
+    assert_eq!(
+        grouped,
+        vec![Notice {
+            code: ErrorCode::SkillShadowed,
+            message: "2 skills are shadowed: first\n- first\n- second".to_owned(),
+            extension: None,
+        }]
+    );
+}
+
+/// The default lead names what was counted for the codes one pass
+/// raises in bulk, and the code itself otherwise: each bulk code, one
+/// unlisted known code, and an unknown one.
+#[test]
+fn the_default_lead_names_the_count_and_first_item() {
+    for (code, plural) in [
+        (ErrorCode::SkillShadowed, "skills are shadowed"),
+        (ErrorCode::ExtensionShadowed, "extensions are shadowed"),
+        (ErrorCode::SkillInvalid, "skills are invalid"),
+        (ErrorCode::IoFailed, "reads failed"),
+        (ErrorCode::CommandConflict, "command conflicts"),
+        (ErrorCode::HookFailed, "hooks failed"),
+        (ErrorCode::ModelUnconfigured, "models are unconfigured"),
+    ] {
+        assert_eq!(
+            grouped_lead(&grouped_notice(code, "first", None), 2),
+            format!("2 {plural}: first")
+        );
+    }
+    assert_eq!(
+        grouped_lead(&grouped_notice(ErrorCode::CacheRebuild, "first", None), 3),
+        "3 `cache_rebuild` notices: first"
+    );
+    assert_eq!(
+        grouped_lead(
+            &grouped_notice(ErrorCode::Other("custom".into()), "first", None),
+            2
+        ),
+        "2 `custom` notices: first"
+    );
 }
 
 /// A session hello carries its session id and one of the session

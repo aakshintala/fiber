@@ -21,11 +21,14 @@ use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::kinds_without_attention as kinds;
 use support::*;
 
 /// Prompt and workspace text no timer line may carry.
 const PROBE: &str = "timing-probe-twelve";
+
+/// The verbatim count rule the multiset calls cite
+/// (`docs/testing.md`, "Event streams").
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
 
 /// Every `op_timing` line in `text`, parsed.
 fn op_lines(text: &str) -> Vec<Value> {
@@ -35,19 +38,11 @@ fn op_lines(text: &str) -> Vec<Value> {
         .collect()
 }
 
-/// The event kinds of `lines`, in order, without the observer's own
-/// lines: `session_status` and `attention` fall where they fall, and the
-/// ephemeral `clients` line does too, so none is pinned (as
-/// `hub_start_overrides` filters them).
-fn ordered_kinds(lines: &[Value]) -> Vec<&str> {
-    kinds(lines)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect()
-}
-
-/// The complete, ordered stream of the first turn, from the session's
-/// start through its first `turn_completed`.
+/// The complete stream of the first turn, from the session's start
+/// through its first `turn_completed`, asserted as a set: no doc promises
+/// this turn prefix an order, and the observer's own `session_status`,
+/// `attention` and ephemeral `clients` lines fall where they fall, so none
+/// is pinned (as `hub_start_overrides` filters them).
 const FIRST_TURN_KINDS: [&str; 14] = [
     "session_started",
     "fiber_started",
@@ -65,9 +60,9 @@ const FIRST_TURN_KINDS: [&str; 14] = [
     "turn_completed",
 ];
 
-/// The complete, ordered stream the resumed turn collects: the exited
-/// process's `fiber_exited`, already forwarded before the exit the test
-/// closed on, then the resumed process's start through its
+/// The complete stream the resumed turn collects, asserted as a set: the
+/// exited process's `fiber_exited`, already forwarded before the exit the
+/// test closed on, then the resumed process's start through its
 /// `turn_completed`. Deltas are live-only lines, so the resumed stream
 /// carries none: the hub replays what the log holds.
 const SECOND_TURN_KINDS: [&str; 14] = [
@@ -231,10 +226,11 @@ fn debug_times_hub_start_resume_listing_replay_and_socket() {
     );
     assert_eq!(ops(&hub_timings, "sessions.list").len(), 2);
 
-    // Both turns ran to completion over the socket, in order, with
-    // nothing missing, duplicated or reordered.
-    assert_eq!(ordered_kinds(&first), FIRST_TURN_KINDS, "{first:?}");
-    assert_eq!(ordered_kinds(&second), SECOND_TURN_KINDS, "{second:?}");
+    // Both turns ran to completion over the socket, with nothing
+    // missing or duplicated; the turn prefixes hold no promised order, so
+    // each is asserted as a set.
+    support::assert_kinds_multiset(&first, &FIRST_TURN_KINDS, &[], None, COUNT_DOC);
+    support::assert_kinds_multiset(&second, &SECOND_TURN_KINDS, &[], None, COUNT_DOC);
     // The resumed stream opens with the exited process's goodbye.
     let exited = second
         .iter()

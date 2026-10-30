@@ -1096,6 +1096,92 @@ fn a_bad_return_fails_the_hook() {
     }
 }
 
+/// Two non-blocking failures in one chain answer one grouped notice: the
+/// count and the first item up front, every item with its extension in
+/// the list, and no extension on the group itself (`docs/errors.md`,
+/// "Notices": one per code, count and first item up front).
+fn assert_grouped_pair(notices: &[contract::events::Notice]) {
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let notice = &notices[0];
+    assert_eq!(notice.code, ErrorCode::HookFailed);
+    assert_eq!(notice.extension, None);
+    assert!(
+        notice.message.starts_with("2 hooks failed: "),
+        "{}",
+        notice.message
+    );
+    assert!(
+        notice.message.contains("(extension `fiber.test/a`)"),
+        "{}",
+        notice.message
+    );
+    assert!(
+        notice.message.contains("(extension `fiber.test/b`)"),
+        "{}",
+        notice.message
+    );
+}
+
+#[test]
+fn two_non_blocking_before_tool_failures_group_by_code() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &tool_hook("non-blocking", "transform", "error(\"boom-a\")"),
+    );
+    home.install(
+        "b",
+        &tool_hook("non-blocking", "transform", "error(\"boom-b\")"),
+    );
+    let answer = before_tool(&home.load(&[]), arguments(&[("path", "x")]), reads());
+    assert!(
+        matches!(answer.outcome, BeforeToolOutcome::Unchanged),
+        "{:?}",
+        answer.outcome
+    );
+    assert_grouped_pair(&answer.notices);
+}
+
+#[test]
+fn two_non_blocking_check_tool_failures_group_by_code() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &tool_hook("non-blocking", "check", "error(\"boom-a\")"),
+    );
+    home.install(
+        "b",
+        &tool_hook("non-blocking", "check", "error(\"boom-b\")"),
+    );
+    let answer = check_tool(&home.load(&[]), arguments(&[("path", "x")]), reads());
+    assert!(
+        matches!(answer.outcome, CheckOutcome::Passed),
+        "{:?}",
+        answer.outcome
+    );
+    assert_grouped_pair(&answer.notices);
+}
+
+#[test]
+fn two_non_blocking_before_message_failures_group_by_code() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &message_hook("non-blocking", "transform", "error(\"boom-a\")"),
+    );
+    home.install(
+        "b",
+        &message_hook("non-blocking", "transform", "error(\"boom-b\")"),
+    );
+    let answer = before_message(
+        &home.load(&[]),
+        vec![ContentPart::Text { text: "hi".into() }],
+    );
+    let (replaced, _) = passed(&answer);
+    assert_eq!(replaced, None);
+    assert_grouped_pair(&answer.notices);
+}
+
 #[test]
 fn an_empty_arguments_table_rewrites_to_the_empty_object() {
     let home = Home::new();

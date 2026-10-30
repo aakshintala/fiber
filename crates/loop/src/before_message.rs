@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::sync::mpsc;
 
-use contract::events::{Event, Notice};
+use contract::events::{Event, Notice, group_notices, grouped_lead};
 use contract::hook::{BeforeMessage, BeforeMessageOutcome, Context, MessageSender, StateLine};
 use contract::inbox::{Ack, Message};
 use contract::shapes::ContentPart;
@@ -75,7 +75,7 @@ impl Loop {
         });
         let state = hooks.take_change_state();
         self.drain_state(&hooks, turn)?;
-        for notice in answer.notices {
+        for notice in group_notices(answer.notices, grouped_lead) {
             self.write(&Event::Notice(notice), turn, None)?;
         }
         match answer.outcome {

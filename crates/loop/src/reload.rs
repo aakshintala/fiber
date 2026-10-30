@@ -9,6 +9,7 @@ use crate::{BlockLimits, Error, HandoffSettings, Loop, Retry, Reviewer};
 use contract::diag::Observe;
 use contract::events::{
     CacheLifetime, CommandInfo, LoadedExtension, Notice, ReloadFailure, ReloadedServers,
+    group_notices, grouped_lead,
 };
 use contract::hook::Hooks;
 use contract::inbox::{Ack, Rejection};
@@ -348,7 +349,7 @@ impl Loop {
             None,
             None,
         )?;
-        for notice in notices {
+        for notice in group_notices(notices, grouped_lead) {
             self.write(&Event::Notice(notice), None, None)?;
         }
         if let Some(hooks) = self.hooks.clone() {
@@ -361,7 +362,7 @@ impl Loop {
         self.build_preamble()?;
         if self.opened {
             let skills = self.skills.reload_check();
-            for notice in skills.notices {
+            for notice in group_notices(skills.notices, grouped_lead) {
                 self.write(&Event::Notice(notice), None, None)?;
             }
             if let Some(changed) = skills.changed {
@@ -386,7 +387,7 @@ impl Loop {
             None,
             None,
         )?;
-        for notice in installed.notices {
+        for notice in group_notices(installed.notices, grouped_lead) {
             self.write(&Event::Notice(notice), None, None)?;
         }
         if let Some(hooks) = self.hooks.clone() {

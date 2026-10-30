@@ -47,6 +47,7 @@ impl<B: Backend> Screen<B> {
                 size: area.as_size(),
                 open: false,
                 emit: B::emit,
+                touched: false,
             },
             TerminalOptions {
                 viewport: Viewport::Fixed(area),
@@ -130,6 +131,31 @@ impl<B: Backend> Screen<B> {
         self.terminal.backend_mut().size = self.area.as_size();
         self.terminal.resize(self.area)?;
         self.terminal.backend_mut().flush_inner()
+    }
+
+    /// Clears the viewport for an immediate redraw in the same step: a
+    /// shown logo image lost its rect, and the redraw must follow at
+    /// once, never a blank screen (`docs/tui.md`, "The logo").
+    pub(crate) fn repaint(&mut self) -> Result<(), B::Error> {
+        self.terminal.clear()?;
+        self.last = None;
+        Ok(())
+    }
+
+    /// Whether the last frame wrote bytes, clearing the mark: the
+    /// logo's positioned image rewrites after any touched frame
+    /// (`docs/tui.md`, "The logo").
+    pub(crate) fn take_touched(&mut self) -> bool {
+        let backend = self.terminal.backend_mut();
+        let touched = backend.touched;
+        backend.touched = false;
+        touched
+    }
+
+    /// The logo's tint and page background, while the look has colour
+    /// (`docs/tui.md`, "The logo").
+    pub(crate) fn logo_tint(&self) -> Option<(crate::graphics::logo::Tint, crate::theme::Rgb)> {
+        self.look.logo_tint()
     }
 
     /// The click targets of the last frame drawn: what a click hits.
@@ -387,6 +413,9 @@ struct TtySized<B: Backend> {
     open: bool,
     /// Writes one synchronized-output marker to the inner backend.
     emit: fn(&mut B, begin: bool) -> Result<(), B::Error>,
+    /// Whether the last frame wrote bytes: the logo's positioned image
+    /// rewrites after any touched frame (`docs/tui.md`, "The logo").
+    touched: bool,
 }
 
 impl<B: Backend> TtySized<B> {
@@ -415,6 +444,10 @@ impl<B: Backend> Backend for TtySized<B> {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
+        let mut content = content.peekable();
+        if content.peek().is_some() {
+            self.touched = true;
+        }
         self.open_block()?;
         self.inner.draw(content)
     }
@@ -439,11 +472,13 @@ impl<B: Backend> Backend for TtySized<B> {
     }
 
     fn clear(&mut self) -> Result<(), Self::Error> {
+        self.touched = true;
         self.open_block()?;
         self.inner.clear()
     }
 
     fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.touched = true;
         self.open_block()?;
         self.inner.clear_region(clear_type)
     }

@@ -282,6 +282,7 @@ fn static_effects_are_returned_without_starting_a_callback() {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     );
@@ -315,6 +316,7 @@ fn an_effects_function_answers_each_call_from_its_arguments() {
                 subject: Some(String::new()),
                 prefix: None,
                 always_reviewed: false,
+                review_when_confined: false,
                 hosts: None,
             })
         );

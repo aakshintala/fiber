@@ -921,7 +921,7 @@ Ephemeral. A failure outside any action, or a login a person must finish (`login
 |---|---|---|---|
 | `code` | string | yes | an open set (`docs/errors.md`, "Registry"); a consumer shows the message for an unknown code |
 | `message` | string | yes | Fiber's own sentence |
-| `extension` | string | no | the extension it concerns |
+| `extension` | string | no | the extension it concerns; absent when a notice groups items from more than one extension |
 
 One `usage_recorded` per model call, whatever started it, however it ended. A
 call that is cancelled, fails or closes early writes its `usage_recorded` at

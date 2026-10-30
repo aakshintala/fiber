@@ -453,6 +453,7 @@ fn judged(subject: &str) -> Effects {
         subject: Some(subject.into()),
         prefix: None,
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     }
 }
@@ -712,6 +713,7 @@ fn reads() -> Effects {
         subject: Some(String::new()),
         prefix: None,
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     }
 }
@@ -2380,6 +2382,7 @@ fn writes(paths: &[String]) -> Effects {
         subject: Some(String::new()),
         prefix: None,
         always_reviewed: false,
+        review_when_confined: false,
         hosts: None,
     }
 }
