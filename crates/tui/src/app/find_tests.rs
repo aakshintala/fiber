@@ -3331,6 +3331,17 @@ fn search_text() -> String {
 }
 
 #[test]
+fn settle_returns_fetches_queued_by_the_search_rescan() {
+    let (mut app, _, _) = dropped_fetch();
+    app.find_lost();
+
+    let outgoing = app.settle_and_find_outgoing();
+
+    assert_eq!(outgoing.len(), 1, "the settle queues a dropped-page fetch");
+    assert_eq!(command(&outgoing[0]).1, 1);
+}
+
+#[test]
 fn a_completed_rescan_clears_the_search_text() {
     let (mut app, log, _) = dropped_fetch();
     app.find_lost();

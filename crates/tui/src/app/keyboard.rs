@@ -154,7 +154,7 @@ impl App {
     /// attention title (`docs/tui.md`, "Getting the person's attention").
     #[cfg(test)]
     pub(crate) fn on_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
-        let (effect, settle) = self.press_route(stroke, now);
+        let (effect, settle) = self.on_press_inner(stroke, now);
         if settle {
             self.settle();
         }
@@ -162,11 +162,7 @@ impl App {
     }
 
     /// Handles one stroke without settling; the input boundary owns the layout pass.
-    pub(crate) fn on_press_inner(&mut self, stroke: Stroke, now: Instant) -> Effect {
-        self.press_route(stroke, now).0
-    }
-
-    fn press_route(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
+    pub(crate) fn on_press_inner(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
         self.attention_seen();
         if self.top_surface() == Surface::KeysScreen {
             // The notice overlay hides the screen: Esc closes the
@@ -267,27 +263,19 @@ impl App {
             && let Some(event) = Keyset::action_event(&id, variant.as_deref())
         {
             self.drain_key_notices(&renderer);
-            return (
-                Some(match event {
-                    Resolved::Key(key) => (
-                        {
-                            *routed = true;
-                            self.on_key_inner(key, now)
-                        },
-                        false,
-                    ),
-                    Resolved::Edit(edit) => (
-                        {
-                            *routed = true;
-                            self.on_edit_inner(edit)
-                        },
-                        false,
-                    ),
-                    Resolved::Action(id) => (self.on_action(id), true),
-                    Resolved::Nothing => (Effect::None, false),
-                }),
-                false,
-            );
+            let dispatch = match event {
+                Resolved::Key(key) => {
+                    *routed = true;
+                    (self.on_key_inner(key, now), false)
+                }
+                Resolved::Edit(edit) => {
+                    *routed = true;
+                    (self.on_edit_inner(edit), false)
+                }
+                Resolved::Action(id) => (self.on_action(id), true),
+                Resolved::Nothing => (Effect::None, false),
+            };
+            return (Some(dispatch), false);
         }
         // Nothing handled the stroke: the adapter's queued notices settle
         // the fallthrough, and the built-in paths below still run.

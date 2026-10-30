@@ -712,8 +712,7 @@ impl App {
     /// answer releases the line kept for resending as it folds.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
         let mut lines = self.on_line_inner(line);
-        self.settle();
-        lines.extend(self.find_outgoing());
+        lines.extend(self.settle_and_find_outgoing());
         lines
     }
 
@@ -741,8 +740,13 @@ impl App {
             }
             self.land_pass();
         }
-        lines.extend(self.find_outgoing());
         lines
+    }
+
+    /// Settles the app and returns any search commands the settle queued.
+    pub(crate) fn settle_and_find_outgoing(&mut self) -> Vec<String> {
+        self.settle();
+        self.find_outgoing()
     }
 
     /// Whether `name` changes the visible label for `id`: a repeated

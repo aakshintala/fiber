@@ -37,6 +37,24 @@ pub(crate) struct Chrome {
 }
 
 impl Chrome {
+    fn layout_for(
+        width: u16,
+        height: u16,
+        home: Option<HomeState>,
+        rail_hidden: bool,
+        panel_hidden: bool,
+    ) -> Option<Layout> {
+        home.filter(|home| !home.on_home && layout::floor_line(width, height).is_none())
+            .map(|home| {
+                let want = Want {
+                    rail: !rail_hidden,
+                    rail_by_count: true,
+                    panel: !panel_hidden,
+                };
+                layout::split(width, height, &home.shares, &want)
+            })
+    }
+
     /// Shows or hides the panel.
     pub(crate) fn toggle_panel(&mut self) {
         self.panel_hidden = !self.panel_hidden;
@@ -60,22 +78,8 @@ impl Chrome {
         home: Option<HomeState>,
     ) -> bool {
         self.show_rail();
-        let Some(home) =
-            home.filter(|home| !home.on_home && layout::floor_line(width, height).is_none())
-        else {
-            return false;
-        };
-        let layout = layout::split(
-            width,
-            height,
-            &home.shares,
-            &Want {
-                rail: true,
-                rail_by_count: true,
-                panel: !self.panel_hidden,
-            },
-        );
-        layout.rail.is_none() && layout.panel.is_some()
+        Self::layout_for(width, height, home, false, self.panel_hidden)
+            .is_some_and(|layout| layout.rail.is_none() && layout.panel.is_some())
     }
 
     /// Lays a `width` by `height` screen out, returning whether the
@@ -84,16 +88,7 @@ impl Chrome {
     pub(crate) fn lay_out(&mut self, width: u16, height: u16, home: Option<HomeState>) -> bool {
         let before = self.layout;
         self.floor = home.and_then(|_| layout::floor_line(width, height));
-        self.layout = home
-            .filter(|home| !home.on_home && self.floor.is_none())
-            .map(|home| {
-                let want = Want {
-                    rail: !self.rail_hidden,
-                    rail_by_count: true,
-                    panel: !self.panel_hidden,
-                };
-                layout::split(width, height, &home.shares, &want)
-            });
+        self.layout = Self::layout_for(width, height, home, self.rail_hidden, self.panel_hidden);
         self.layout != before
     }
 

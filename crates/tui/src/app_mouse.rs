@@ -242,13 +242,8 @@ impl App {
     /// Puts the request the panel shows aside, as Esc does, so it waits on
     /// the badge. The `hover` jig's way to a badge from an events file.
     pub(crate) fn put_aside(&mut self) {
-        self.put_aside_inner();
-        self.settle();
-    }
-
-    /// Handles the route without settling; the caller owns the layout pass.
-    pub(crate) fn put_aside_inner(&mut self) {
         self.queue.on_key(&Key::Esc);
+        self.settle();
     }
 
     /// The mouse wheel scrolls what it is over (`docs/tui.md`, "Turns",

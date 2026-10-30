@@ -1126,7 +1126,8 @@ fn logo_retints_with_the_theme() {
 }
 
 /// Leaving home repaints and redraws at once: the stale image clears
-/// with the frame, never a blank screen.
+/// with the frame, never a blank screen (`docs/tui.md`, "Images": the logo
+/// is drawn once per home visit).
 #[test]
 fn logo_leave_home_repaints_then_redraws() {
     let (mut lp, tty, rx) = logo_loop();
@@ -1162,7 +1163,8 @@ fn logo_leave_home_repaints_then_redraws() {
     );
 }
 
-/// A session that never showed the logo clears nothing on any frame.
+/// A session that never showed the logo clears nothing on any frame
+/// (`docs/tui.md`, "The logo", "Images").
 #[test]
 fn logo_non_home_never_clears() {
     let (mut lp, mut tty, rx) = logo_loop();

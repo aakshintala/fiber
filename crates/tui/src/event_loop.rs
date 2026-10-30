@@ -576,7 +576,10 @@ impl<B: Backend> Loop<B> {
     /// quits, before any frame.
     fn handle_events(&mut self, events: Vec<Event>) -> Option<i32> {
         let result = self.handle_events_inner(events);
-        self.app.settle();
+        let lines = self.app.settle_and_find_outgoing();
+        if result.is_none() {
+            self.hub.send(&lines, &mut self.app);
+        }
         result
     }
 
@@ -599,7 +602,7 @@ impl<B: Backend> Loop<B> {
                 self.hub.send(&[line], &mut self.app);
             }
             let effect = match event {
-                Event::Stroke(stroke) => self.app.on_press_inner(stroke, self.clock.now()),
+                Event::Stroke(stroke) => self.app.on_press_inner(stroke, self.clock.now()).0,
                 Event::Key(key) => self.app.on_key_inner(key, self.clock.now()),
                 Event::Edit(edit) => self.app.on_edit_inner(edit),
                 Event::Mouse(mouse) => self.app.on_mouse_inner(
@@ -776,7 +779,10 @@ impl<B: Backend> Loop<B> {
             return self.handle_events(events);
         }
         let result = self.handle_inner(input);
-        self.app.settle();
+        let lines = self.app.settle_and_find_outgoing();
+        if result.is_none() {
+            self.hub.send(&lines, &mut self.app);
+        }
         result
     }
 
@@ -900,7 +906,10 @@ impl<B: Backend> Loop<B> {
     /// when the terminal cannot be drawn.
     fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
         let result = self.frame_inner(rx);
-        self.app.settle();
+        let lines = self.app.settle_and_find_outgoing();
+        if result.is_none() {
+            self.hub.send(&lines, &mut self.app);
+        }
         result
     }
 
