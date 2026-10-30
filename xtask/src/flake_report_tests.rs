@@ -749,6 +749,11 @@ fn two_files_of_one_unit_binary_make_two_records() {
     let out = classified(&[("linux", text)], &push_run());
     // docs/testing/running.md, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "The issue's title is `Flaky
+    // tests: ` followed by the binary and the test file: a unit test names
+    // its file from the first `*_tests` module in its test name".
     assert_eq!(out.len(), 2);
     let process_group = titled(&out, "fakes process_group");
     assert_eq!(
@@ -776,6 +781,11 @@ fn a_unit_test_without_a_tests_module_falls_back_to_the_binary() {
     // title files or comments once; a repeat is skipped".
     // docs/testing/running.md, "Flaky tests": "a repeated title takes its
     // runner and detail from its first occurrence in file-name byte order".
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "An integration binary keeps its
+    // binary title, such as `Flaky tests: main::hub_exit_window`, as does a
+    // unit test with no `*_tests` module".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "fakes");
     assert_eq!(field(record, "title"), Some("Flaky tests: fakes"));
@@ -789,6 +799,11 @@ fn an_integration_test_ignores_tests_modules_in_the_test_name() {
     // test name, even when the name holds a `*_tests` segment.
     let text = "main::hub_exit_window helper_tests::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "An integration binary keeps its
+    // binary title, such as `Flaky tests: main::hub_exit_window`, as does a
+    // unit test with no `*_tests` module".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::hub_exit_window");
     assert_eq!(
@@ -808,6 +823,11 @@ fn the_first_tests_module_names_the_unit_file() {
     // the file.
     let text = "fakes outer_tests::inner_tests::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "The issue's title is `Flaky
+    // tests: ` followed by the binary and the test file: a unit test names
+    // its file from the first `*_tests` module in its test name".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "fakes outer");
     assert_eq!(field(record, "title"), Some("Flaky tests: fakes outer"));
@@ -819,6 +839,11 @@ fn an_empty_tests_stem_falls_back_to_the_binary() {
     // the binary title.
     let text = "fakes _tests::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "An integration binary keeps its
+    // binary title, such as `Flaky tests: main::hub_exit_window`, as does a
+    // unit test with no `*_tests` module".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "fakes");
     assert_eq!(field(record, "title"), Some("Flaky tests: fakes"));
@@ -830,6 +855,11 @@ fn one_tests_suffix_is_removed() {
     // Only one `_tests` suffix comes off: the stem keeps its own.
     let text = "fakes foo_tests_tests::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "The issue's title is `Flaky
+    // tests: ` followed by the binary and the test file: a unit test names
+    // its file from the first `*_tests` module in its test name".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "fakes foo_tests");
     assert_eq!(field(record, "title"), Some("Flaky tests: fakes foo_tests"));

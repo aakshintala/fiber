@@ -532,6 +532,11 @@ code=$(classify_case "$tmp/push-create-unit" push "" "" "")
 expect_exit push-create-unit-classify "$code" 0
 code=$(run_step "$tmp/push-create-unit" push "" "$empty_open" "" decisions.jsonl)
 expect_exit push-create-unit "$code" 0
+# docs/ci.md, "On every pull request that changes code": "writes one
+# classification line per unique title": one title writes once.
+# docs/testing/running.md, "Flaky tests": "The issue's title is `Flaky tests: `
+# followed by the binary and the test file: a unit test names its file from
+# the first `*_tests` module in its test name".
 expect_writes "$tmp/push-create-unit" 1
 unit_plain="The test \`$unit_name\` passed after a retry on linux: $url."
 expect_write "$tmp/push-create-unit" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$unit_title" "$(detail="$unit_detail" body "$unit_plain" "$push_tested")")"

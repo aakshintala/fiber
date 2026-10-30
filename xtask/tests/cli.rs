@@ -1407,6 +1407,12 @@ fn flake_classify_keys_unit_flakes_by_file() {
         .collect();
     // docs/testing/running.md, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title": two files give two titles plus
+    // the fallback and integration titles.
+    // docs/testing/running.md, "Flaky tests": "The issue's title is `Flaky
+    // tests: ` followed by the binary and the test file: a unit test names
+    // its file from the first `*_tests` module in its test name".
     assert_eq!(records.len(), 4, "{out}");
     let by_title = |title: &str| {
         records
