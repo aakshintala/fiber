@@ -712,7 +712,7 @@ fn required_process_miss_fails_the_session_start() {
 /// either order, instead of merely running slower.
 #[test]
 fn process_and_mcp_start_in_parallel() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     // Armed before any start: the gated wrapper names the root in its
     // command line, so a failing exit still kills it with the setup.
     let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
@@ -739,7 +739,7 @@ fn process_and_mcp_start_in_parallel() {
 /// start joins, then stops and reaps the MCP server before the session fails.
 #[test]
 fn required_process_failure_stops_pending_mcp() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
     let provider = calling(&[]);
     setup.provider(&provider);
@@ -924,7 +924,7 @@ fn configure_held_fx(setup: &Setup, dir: &Path) -> PathBuf {
 /// established, and the deadline bounds every wait.
 #[test]
 fn required_process_spawn_failure_joins_then_stops_held_mcp() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
     let provider = calling(&[]);
     setup.provider(&provider);

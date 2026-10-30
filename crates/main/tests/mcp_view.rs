@@ -408,7 +408,7 @@ fn drive_callback(auth_url: &str) {
 
 #[test]
 fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::new_with_mcp_fixture();
     let dir = fixture_dir(&setup, "fx");
     let remote = oauth_and_mcp();
     let _model = configure(
@@ -493,7 +493,7 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
 
 #[test]
 fn reconnect_restarts_the_failed_server() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::new_with_mcp_fixture();
     let dir = fixture_dir(&setup, "fx");
     let marker = setup.root.path().join("marker");
     let wrapper = setup.root.path().join("flaky.sh");
@@ -734,7 +734,7 @@ fn reconnect_of_an_unknown_server_is_invalid_arguments() {
 
 #[test]
 fn reconnect_of_an_unapproved_repository_server_gives_the_approve_advice() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::new_with_mcp_fixture();
     let workspace = setup.workspace();
     let status = std::process::Command::new("git")
         .args(["init", "-q"])
@@ -783,7 +783,7 @@ fn reconnect_of_an_unapproved_repository_server_gives_the_approve_advice() {
 
 #[test]
 fn two_quick_reconnects_spawn_the_server_once() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::new_with_mcp_fixture();
     let dir = fixture_dir(&setup, "fx");
     let marker = setup.root.path().join("marker");
     let spawns = setup.root.path().join("spawns");
