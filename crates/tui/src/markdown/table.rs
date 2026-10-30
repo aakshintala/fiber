@@ -8,7 +8,7 @@ use pulldown_cmark::Alignment;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::wrap::{Cell, link_cols, spans_of, wrap_joined_indices};
+use super::wrap::{Cell, link_cols, spans_of, visit_wrap_ranges, wrap_joined_indices};
 use crate::theme::{Role, style};
 
 /// Cells between columns.
@@ -53,6 +53,93 @@ impl Table {
         self.rows.push(std::mem::take(&mut self.row));
     }
 
+    /// Counts the table's lines without assembling styled output.
+    pub(super) fn count_rows(self, width: usize) -> (usize, bool) {
+        let count = self
+            .rows
+            .iter()
+            .map(Vec::len)
+            .chain([self.aligns.len()])
+            .max()
+            .unwrap_or_default();
+        let mut widths = vec![0usize; count];
+        for row in &self.rows {
+            for (column, (cell, _)) in widths.iter_mut().zip(row) {
+                *column = (*column).max(cells_width(cell));
+            }
+        }
+        let numeric = numeric_columns(&self.rows, count);
+        shrink(&mut widths, width);
+        let mut over_width = false;
+        let mut lines = 0usize;
+        for (at, row) in self.rows.iter().enumerate() {
+            let mut height = 1usize;
+            let mut wrapped = Vec::with_capacity(widths.len());
+            for (column, column_width) in widths.iter().enumerate() {
+                let cell = row.get(column).map_or(&[][..], |(cell, _)| cell.as_slice());
+                let cell_widths: Vec<usize> = cell
+                    .iter()
+                    .map(|(ch, _)| super::wrap::char_width(*ch))
+                    .collect();
+                let mut ranges = Vec::new();
+                visit_wrap_ranges(
+                    cell,
+                    &cell_widths,
+                    *column_width,
+                    *column_width,
+                    true,
+                    |range, _| ranges.push(range),
+                );
+                height = height.max(ranges.len());
+                wrapped.push((cell_widths, ranges));
+            }
+            for line in 0..height {
+                let mut parts = Vec::new();
+                for (column, column_width) in widths.iter().enumerate() {
+                    if column != 0 {
+                        parts.push(" ".repeat(GAP));
+                    }
+                    let cell = row.get(column).map_or(&[][..], |(cell, _)| cell.as_slice());
+                    let piece = wrapped
+                        .get(column)
+                        .and_then(|(_, ranges)| ranges.get(line))
+                        .and_then(|range| cell.get(range.clone()))
+                        .unwrap_or_default();
+                    let pad = column_width.saturating_sub(cells_width(piece));
+                    let align = if numeric.get(column).copied().unwrap_or_default() {
+                        Alignment::Right
+                    } else {
+                        self.aligns.get(column).copied().unwrap_or(Alignment::None)
+                    };
+                    let before = before_padding(pad, align);
+                    if before != 0 {
+                        parts.push(" ".repeat(before));
+                    }
+                    append_cell_parts(
+                        &mut parts,
+                        piece,
+                        at == 0,
+                        numeric.get(column).copied().unwrap_or_default(),
+                    );
+                    let after = pad.saturating_sub(before);
+                    if after != 0 {
+                        parts.push(" ".repeat(after));
+                    }
+                }
+                if width > 0 {
+                    let (span_width, pad_width) =
+                        crate::rows::row_widths(parts.iter().map(String::as_str));
+                    over_width |= span_width.max(pad_width) > width;
+                }
+            }
+            lines = lines.saturating_add(height);
+        }
+        if !self.rows.is_empty() {
+            lines = lines.saturating_add(1);
+        }
+        (lines, over_width)
+    }
+
     /// The table's lines at `width`, each with the links drawn on it and
     /// their cells in the line (`docs/tui.md`, "Links").
     pub(super) fn layout(self, width: usize) -> Vec<TableLine> {
@@ -69,19 +156,7 @@ impl Table {
                 *column = (*column).max(cells_width(cell));
             }
         }
-        let numeric: Vec<bool> = (0..count)
-            .map(|at| {
-                let mut body = self
-                    .rows
-                    .iter()
-                    .skip(1)
-                    .filter_map(|row| row.get(at))
-                    .map(|(cell, _)| cell.iter().map(|(ch, _)| ch).collect::<String>())
-                    .filter(|text| !text.trim().is_empty())
-                    .peekable();
-                body.peek().is_some() && body.all(|text| is_number(&text))
-            })
-            .collect();
+        let numeric = numeric_columns(&self.rows, count);
         shrink(&mut widths, width);
         let mut lines = Vec::new();
         for (at, row) in self.rows.iter().enumerate() {
@@ -95,18 +170,19 @@ impl Table {
                         .get(column)
                         .map(|(cell, links)| (cell.as_slice(), links.as_slice()))
                         .unwrap_or((&[][..], &[][..]));
-                    let owned: Vec<Cell> = if at == 0 {
-                        cell.iter()
-                            .map(|&(ch, style)| (ch, style.add_modifier(Modifier::BOLD)))
-                            .collect()
-                    } else if numeric.get(column).copied().unwrap_or_default() {
-                        // A number column's body cells are plain text.
-                        cell.iter()
-                            .map(|&(ch, _)| (ch, style(Role::Text)))
-                            .collect()
-                    } else {
-                        cell.to_vec()
-                    };
+                    let owned: Vec<Cell> = cell
+                        .iter()
+                        .map(|&(ch, cell_style)| {
+                            (
+                                ch,
+                                display_style(
+                                    cell_style,
+                                    at == 0,
+                                    numeric.get(column).copied().unwrap_or_default(),
+                                ),
+                            )
+                        })
+                        .collect();
                     wrap_joined_indices(&owned, *width, *width, true)
                         .into_iter()
                         .map(|(row, _, indices)| (row, indices, links))
@@ -139,11 +215,7 @@ impl Table {
                     } else {
                         self.aligns.get(column).copied().unwrap_or(Alignment::None)
                     };
-                    let before = match align {
-                        Alignment::Right => pad,
-                        Alignment::Center => pad / 2,
-                        Alignment::Left | Alignment::None => 0,
-                    };
+                    let before = before_padding(pad, align);
                     spans.push(Span::raw(" ".repeat(before)));
                     col = col.saturating_add(before);
                     let piece_start = col;
@@ -199,10 +271,56 @@ fn is_number(text: &str) -> bool {
             .all(|ch| ch.is_ascii_digit() || matches!(ch, ',' | '.' | '%'))
 }
 
+fn before_padding(pad: usize, align: Alignment) -> usize {
+    match align {
+        Alignment::Right => pad,
+        Alignment::Center => pad / 2,
+        Alignment::Left | Alignment::None => 0,
+    }
+}
+
+fn numeric_columns(rows: &[Vec<TableCell>], count: usize) -> Vec<bool> {
+    (0..count)
+        .map(|at| {
+            let mut body = rows
+                .iter()
+                .skip(1)
+                .filter_map(|row| row.get(at))
+                .map(|(cell, _)| cell.iter().map(|(ch, _)| ch).collect::<String>())
+                .filter(|text| !text.trim().is_empty())
+                .peekable();
+            body.peek().is_some() && body.all(|text| is_number(&text))
+        })
+        .collect()
+}
+
+fn display_style(
+    cell_style: ratatui::style::Style,
+    header: bool,
+    numeric: bool,
+) -> ratatui::style::Style {
+    if header {
+        cell_style.add_modifier(Modifier::BOLD)
+    } else if numeric {
+        // A number column's body cells are plain text.
+        style(Role::Text)
+    } else {
+        cell_style
+    }
+}
+
+fn append_cell_parts(parts: &mut Vec<String>, cells: &[Cell], header: bool, numeric: bool) {
+    for run in cells
+        .chunk_by(|a, b| display_style(a.1, header, numeric) == display_style(b.1, header, numeric))
+    {
+        parts.push(run.iter().map(|(ch, _)| ch).collect());
+    }
+}
+
 /// The cells `cells` take on screen.
 fn cells_width(cells: &[Cell]) -> usize {
     cells
         .iter()
-        .map(|(ch, _)| crate::text::char_width(*ch))
+        .map(|(ch, _)| super::wrap::char_width(*ch))
         .sum()
 }
