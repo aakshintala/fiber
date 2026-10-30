@@ -736,8 +736,8 @@ fn ps_lists(deadline: fakes::Deadline, pid: Pid) -> bool {
 /// effective uid reads 0 and its parent reads the `ps` parent. A setuid-root
 /// candidate reads first, so a real uid beside 0 proves the uid is the
 /// effective one; any root daemon proves the flavor stays readable for
-/// another user's processes. With `PROC_PIDTBSDINFO` both reads fail. An
-/// argument vector of another owner's process stays unreadable.
+/// another user's processes. An argument vector of another owner's process
+/// stays unreadable.
 #[cfg(target_os = "macos")]
 #[test]
 fn kernel_reader_reads_a_root_owned_non_init_process() {

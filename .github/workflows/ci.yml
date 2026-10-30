@@ -935,8 +935,8 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: macos-26
-    # Initial measurement on this pull request; update to about twice its runtime after the first run.
-    timeout-minutes: 70
+    # PR run 40989874631 took 8m10s; 17 minutes covers about twice that.
+    timeout-minutes: 17
     outputs:
       status: ${{ steps.red.outputs.status }}
     env:
