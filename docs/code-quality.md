@@ -119,7 +119,7 @@ the code and the list disagree.
 |---|---|---|
 | `support` | `crates/support/src/group.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
 | `tools` | `crates/tools/src/shell/command.rs` | on Linux, `pre_exec` installs the prepared Landlock and seccomp policy between fork and exec; success runs only syscalls, failure aborts spawn |
-| `support` | `crates/support/src/peer.rs` | on macOS, `getsockopt` with `LOCAL_PEERPID` reads the socket peer's pid from a borrowed fd, `proc_pidinfo` with `PROC_PIDTBSDINFO` reads one process's parent pid and effective uid, and `sysctl` with `KERN_PROCARGS2` reads its argument vector into a caller-sized buffer |
+| `support` | `crates/support/src/peer.rs` | on macOS, `getsockopt` with `LOCAL_PEERPID` reads the socket peer's pid from a borrowed fd, `proc_pidinfo` with `PROC_PIDT_SHORTBSDINFO` reads one process's parent pid and effective uid, and `sysctl` with `KERN_PROCARGS2` reads its argument vector into a caller-sized buffer |
 | `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
 | `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
 | `cli` | `crates/cli/src/stop_tests.rs` | the close-wait test wraps a write-only file fd as a `UnixStream`, forcing the read error the wait reports as lost |
@@ -142,6 +142,8 @@ whose fields can contradict each other: `done: bool` beside
 `done_at: Option<Timestamp>` admits "done, at no time", where
 `enum Status { Open, Done { at: Timestamp } }` cannot. A runtime check for a
 combination "that cannot happen" marks a type that is too loose.
+
+A closed set of named cases that crosses a crate boundary, such as a notice code, a view, a version format or a prompt's source, is an enum, never a `String` or `&str`, so the wildcard lints (`docs/code-quality/lints.md`) make every consumer handle a new case. Text stays only at the process boundary, and a JSON name is parsed into the enum where it enters. A reader that must ignore what it does not know, as an event or notice consumer does (`docs/events.md`, "Versioning"), parses an unknown name into its own case, keeping the text, never one of the known cases. A command's arguments refuse an unknown name as `invalid_arguments`.
 
 ## Visibility
 
@@ -233,6 +235,7 @@ Only what no tool can:
   mode or a state, is a variant or a table entry, not one more branch on an
   existing `if`/`else` chain or a second flag that must stay in step with a
   first
+- a pull request that adds a member to a closed set lists in its body every consumer of that set, found by searching for the type, and what each does with the new member
 - code that works around its doc is reported as a doc finding that cites
   the doc rule and the code, for `docs/workflow.md`, "When a doc should
   change", not as a code fix

@@ -483,6 +483,9 @@ fn link_notice(item: &RepoItem, path: &Path) -> Notice {
 /// the set's entries, in slug order; one `extension_shadowed` notice per
 /// shadowed personal install, enabled or not. A name appears at most once:
 /// the set already settled its own duplicates.
+///
+/// The load pass groups the batch by code before writing it
+/// (`docs/errors.md`, "Notices").
 pub(crate) fn candidates(
     personal: Vec<crate::installed::Entry>,
     set: &RepositorySet,

@@ -4,7 +4,9 @@ name: Allocator comparison
 # (research/allocator/README.md) on three builds of one commit: the musl
 # release binary with its system allocator, the same build with mimalloc
 # as the global allocator, and a x86_64-unknown-linux-gnu release build
-# (glibc's allocator). Manual only: `gh workflow run
+# (glibc's allocator). A fourth result reruns the musl-mimalloc binary
+# through a shell wrapper exporting MIMALLOC_PURGE_DELAY=0, with no new
+# build. Manual only: `gh workflow run
 # allocator-compare.yml --ref <branch>`, never on a push or a pull
 # request. Its numbers are a comparison, not budget evidence: the budgets
 # are judged by the Release job (docs/ci.md, "On every pull request that
@@ -27,9 +29,10 @@ defaults:
 jobs:
   compare:
     runs-on: ubuntu-24.04
-    # Three release builds with LTO plus three full five-sample benchmark
-    # runs: far above the Release job's 7 warm minutes for one build and
-    # two runs, so the bound is set high until 20 runs show a median.
+    # Three release builds with LTO plus four full five-sample benchmark
+    # runs, including the musl-mimalloc rerun: far above the Release job's
+    # 7 warm minutes for one build and two runs, so the bound is set high
+    # until 20 runs show a median.
     timeout-minutes: 120
     env:
       # C code (lua-src, ring, mimalloc) compiles against musl's headers
@@ -102,7 +105,10 @@ jobs:
 
       # The full harness, five samples each: the attach rows keep their
       # paging-jig stages, and the comparison reads the attach timing, the
-      # attach peak and both retained rows out of each file.
+      # attach peak and both retained rows out of each file. The fourth
+      # result reruns the musl-mimalloc binary through a wrapper exporting
+      # MIMALLOC_PURGE_DELAY=0, forwarding every argument unchanged, with
+      # the same harness invocation on the same runner and commit.
       - name: Run the benchmarks on each build
         run: |
           harness=target/debug/examples/bench
@@ -111,6 +117,13 @@ jobs:
               --paging "$RUNNER_TEMP/allocator/$build/paging" \
               --out "$RUNNER_TEMP/allocator/$build.json" --only all --runs 5
           done
+          real="$RUNNER_TEMP/allocator/musl-mimalloc/fiber"
+          wrapper="$RUNNER_TEMP/allocator/musl-mimalloc-purge0-fiber"
+          printf '#!/bin/bash\nexport MIMALLOC_PURGE_DELAY=0\nexec "%s" "$@"\n' "$real" > "$wrapper"
+          chmod +x "$wrapper"
+          "$harness" --fiber "$wrapper" \
+            --paging "$RUNNER_TEMP/allocator/musl-mimalloc/paging" \
+            --out "$RUNNER_TEMP/allocator/musl-mimalloc-purge0.json" --only all --runs 5
           {
             echo "commit: $(git rev-parse HEAD)"
             echo "runner: ubuntu-24.04"
@@ -123,6 +136,7 @@ jobs:
         run: |
           for file in "$RUNNER_TEMP/allocator/musl-system.json" \
             "$RUNNER_TEMP/allocator/musl-mimalloc.json" \
+            "$RUNNER_TEMP/allocator/musl-mimalloc-purge0.json" \
             "$RUNNER_TEMP/allocator/gnu.json"; do
             if [ "$(jq '(.failures // []) | length > 0' "$file")" = "true" ]; then
               echo "benchmark failures in $file:"
@@ -150,15 +164,16 @@ jobs:
             def attach(build): [(build[0].metrics.terminal_attach_ms // [])[]
               | select(.fixture == "10 MiB") | .ms] | median;
             ["## Allocator comparison (medians of 5)", "",
-             "| Row | musl system | musl + mimalloc | gnu |",
-             "|---|---|---|---|",
-             "| attach 10 MiB terminal ms | \(attach($system) | show) | \(attach($mimalloc) | show) | \(attach($gnu) | show) |",
-             "| attach peak RSS KiB | \(med($system; "terminal_attach_rss_kib") | show) | \(med($mimalloc; "terminal_attach_rss_kib") | show) | \(med($gnu; "terminal_attach_rss_kib") | show) |",
-             "| attach retained RssAnon KiB | \(med($system; "terminal_attach_retained_kib") | show) | \(med($mimalloc; "terminal_attach_retained_kib") | show) | \(med($gnu; "terminal_attach_retained_kib") | show) |",
-             "| busy turn retained RssAnon KiB | \(med($system; "busy_turn_retained_kib") | show) | \(med($mimalloc; "busy_turn_retained_kib") | show) | \(med($gnu; "busy_turn_retained_kib") | show) |"]
+             "| Row | musl system | musl + mimalloc | musl + mimalloc, purge delay 0 | gnu |",
+             "|---|---|---|---|---|",
+             "| attach 10 MiB terminal ms | \(attach($system) | show) | \(attach($mimalloc) | show) | \(attach($purge0) | show) | \(attach($gnu) | show) |",
+             "| attach peak RSS KiB | \(med($system; "terminal_attach_rss_kib") | show) | \(med($mimalloc; "terminal_attach_rss_kib") | show) | \(med($purge0; "terminal_attach_rss_kib") | show) | \(med($gnu; "terminal_attach_rss_kib") | show) |",
+             "| attach retained RssAnon KiB | \(med($system; "terminal_attach_retained_kib") | show) | \(med($mimalloc; "terminal_attach_retained_kib") | show) | \(med($purge0; "terminal_attach_retained_kib") | show) | \(med($gnu; "terminal_attach_retained_kib") | show) |",
+             "| busy turn retained RssAnon KiB | \(med($system; "busy_turn_retained_kib") | show) | \(med($mimalloc; "busy_turn_retained_kib") | show) | \(med($purge0; "busy_turn_retained_kib") | show) | \(med($gnu; "busy_turn_retained_kib") | show) |"]
             | join("\n")
           ' --slurpfile system "$RUNNER_TEMP/allocator/musl-system.json" \
             --slurpfile mimalloc "$RUNNER_TEMP/allocator/musl-mimalloc.json" \
+            --slurpfile purge0 "$RUNNER_TEMP/allocator/musl-mimalloc-purge0.json" \
             --slurpfile gnu "$RUNNER_TEMP/allocator/gnu.json" \
             <<< '{}')
           echo "$table"

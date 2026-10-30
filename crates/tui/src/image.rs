@@ -207,7 +207,11 @@ impl IdAllocator {
             Some(id) => id,
             None => return 0,
         };
-        if id == crate::term::PROBE_ID {
+        // The graphics probe's id and the logo's own id are never an
+        // image: each skip moves to the next id, and a skip past
+        // `u32::MAX` exhausts instead of repeating one
+        // (`docs/tui.md`, "Images", "The logo").
+        while id == crate::term::PROBE_ID || id == crate::graphics::logo::ID {
             id = match id.checked_add(1) {
                 Some(id) => id,
                 None => return 0,

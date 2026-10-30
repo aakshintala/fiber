@@ -44,7 +44,7 @@ fn small_doc_with_reports(report_jobs: &[&str]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: {jobs}. Done.\n"
+        "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report without gating it directly: {jobs}. Done.\n"
     )
 }
 
@@ -104,7 +104,7 @@ fn scalar(extra: &[&str], needs: &str) -> String {
 }
 
 #[test]
-fn a_sixth_local_report_job_needs_no_builder_edit() {
+fn an_extra_local_report_job_needs_no_builder_edit() {
     let mut reports = REPORT_JOBS.to_vec();
     reports.push("fixture_report");
     let workflow = workflow_with_reports(
@@ -112,7 +112,7 @@ fn a_sixth_local_report_job_needs_no_builder_edit() {
         "    needs: select\n    runs-on: ubuntu-24.04\n",
         &reports,
     );
-    // The check reads REPORT_JOBS, so only the five real names are exempt:
+    // The check reads REPORT_JOBS, so only the real names are exempt:
     // the made-up job is a gating job the fixture's ci leaves out of needs.
     let failures = check(&workflow, &small_doc_with_reports(&REPORT_JOBS)).unwrap();
     assert!(
@@ -206,9 +206,9 @@ fn missing_jobs_are_sorted() {
 #[test]
 fn an_extra_report_job_in_the_doc_fails() {
     let doc = real_doc();
-    let from = "`flake_report`.";
+    let from = "`bug_red_macos`.";
     assert!(doc.contains(from), "the fixture drifted");
-    let changed = doc.replace(from, "`flake_report`, `extra`.");
+    let changed = doc.replace(from, "`bug_red_macos`, `extra`.");
     let failures = check(&real_workflow(), &changed).unwrap();
     assert_eq!(failures.len(), 1);
     assert!(
@@ -236,7 +236,7 @@ fn a_missing_report_job_in_the_doc_fails() {
 #[test]
 fn a_fragment_split_over_lines_passes() {
     let doc = fixture(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing:\n  {reports}.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report without gating it directly:\n  {reports}.\n",
     );
     assert_eq!(check(&scalar(&[], "select"), &doc), Ok(vec![]));
 }
@@ -244,7 +244,7 @@ fn a_fragment_split_over_lines_passes() {
 #[test]
 fn a_correct_copy_elsewhere_cannot_hide_a_wrong_declaration() {
     let doc = fixture(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `extra`. Done.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: {reports}.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report without gating it directly: `backstop_report`, `extra`. Done.\n\n## Toolchain\n\nexcept the jobs that report without gating it directly: {reports}.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -258,7 +258,7 @@ fn a_correct_copy_elsewhere_cannot_hide_a_wrong_declaration() {
 #[test]
 fn two_identical_declarations_in_the_section_fail() {
     let doc = fixture(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: {reports}. Again: except the jobs that report and gate nothing: {reports}.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report without gating it directly: {reports}. Again: except the jobs that report without gating it directly: {reports}.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -272,7 +272,7 @@ fn two_identical_declarations_in_the_section_fail() {
 #[test]
 fn two_different_declarations_in_the_section_fail() {
     let doc = fixture(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: {reports}. Or: except the jobs that report and gate nothing: `backstop_report`, `extra`.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report without gating it directly: {reports}. Or: except the jobs that report without gating it directly: `backstop_report`, `extra`.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -286,7 +286,7 @@ fn two_different_declarations_in_the_section_fail() {
 #[test]
 fn a_fragment_only_outside_the_section_fails() {
     let doc = fixture(
-        "# CI\n\n## The merge gate\n\nJobs run and gate the merge.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: {reports}.\n",
+        "# CI\n\n## The merge gate\n\nJobs run and gate the merge.\n\n## Toolchain\n\nexcept the jobs that report without gating it directly: {reports}.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -312,7 +312,7 @@ fn a_section_running_to_the_end_of_the_file_passes() {
 #[test]
 fn a_subheading_does_not_end_the_section() {
     let doc = fixture(
-        "# CI\n\n## The merge gate\n\n### Detail\n\nJobs run, except the jobs that report and gate nothing: {reports}. Done.\n",
+        "# CI\n\n## The merge gate\n\n### Detail\n\nJobs run, except the jobs that report without gating it directly: {reports}. Done.\n",
     );
     assert_eq!(check(&scalar(&[], "select"), &doc), Ok(vec![]));
 }
@@ -320,7 +320,7 @@ fn a_subheading_does_not_end_the_section() {
 #[test]
 fn a_second_declaration_after_a_subheading_counts() {
     let doc = fixture(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: {reports}.\n\n### Detail\n\nAgain: except the jobs that report and gate nothing: {reports}.\n",
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report without gating it directly: {reports}.\n\n### Detail\n\nAgain: except the jobs that report without gating it directly: {reports}.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -606,7 +606,7 @@ fn a_hash_after_a_word_is_not_a_comment() {
 #[test]
 fn a_heading_with_extra_text_is_not_the_section() {
     let doc = fixture(
-        "# CI\n\nJobs run, except the jobs that report and gate nothing: {reports}.\n\n## The merge gate!\n\nJobs run and gate the merge.\n",
+        "# CI\n\nJobs run, except the jobs that report without gating it directly: {reports}.\n\n## The merge gate!\n\nJobs run and gate the merge.\n",
     );
     let err = check(&scalar(&[], "select"), &doc).unwrap_err();
     assert!(err.contains("no `## The merge gate` heading"), "{err}");
@@ -615,7 +615,7 @@ fn a_heading_with_extra_text_is_not_the_section() {
 #[test]
 fn a_declaration_above_the_heading_is_not_in_the_section() {
     let doc = fixture(
-        "# CI\n\nJobs run, except the jobs that report and gate nothing: {reports}.\n\n## The merge gate\n\nJobs run and gate the merge.\n",
+        "# CI\n\nJobs run, except the jobs that report without gating it directly: {reports}.\n\n## The merge gate\n\nJobs run and gate the merge.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);

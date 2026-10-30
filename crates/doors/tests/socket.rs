@@ -6511,6 +6511,7 @@ impl Tool for ReadOnlyStub {
                 subject: Some(subject.clone()),
                 prefix: Some(prefix.clone()),
                 always_reviewed: false,
+                review_when_confined: false,
                 hosts: None,
             }),
             None => Err(EffectsError::Arguments("unclassifiable".to_owned())),

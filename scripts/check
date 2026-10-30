@@ -106,6 +106,43 @@ if [ "$scope" != platform ]; then
     cargo xtask loop-tool-names
     echo "== must-succeed bounds"
     cargo xtask must-succeed
+    echo "== bare screen-call ratchet"
+    # A `.screen()` call outside a wait reads a grid no wait settled, so
+    # the frame it observes can differ from the waited one
+    # (docs/testing/screens.md, "Screens"). Each file under
+    # crates/main/tests/ holds at most its inline maximum of unmarked
+    # call lines, and a file missing from the list holds none: the literal
+    # text `// settled:` on the call line or the line before it exempts a
+    # call, even inside a string literal, since the count is a conservative
+    # upper bound. `crates/main/tests/support/` is outside the rule,
+    # and a `.screen` field access (as in `login.rs`) is not a call. Call
+    # detection, comment recognition and the per-file comparison live in
+    # `cargo xtask screen-ratchet` (docs/testing.md, "Levels").
+    cargo xtask screen-ratchet <<'EOF'
+crates/main/tests/ask_user_form_look.rs 3
+crates/main/tests/attach_first_frame.rs 1
+crates/main/tests/call_view.rs 1
+crates/main/tests/change_workspace.rs 1
+crates/main/tests/delegates.rs 2
+crates/main/tests/delete.rs 1
+crates/main/tests/inline_images.rs 2
+crates/main/tests/link_look.rs 4
+crates/main/tests/look.rs 5
+crates/main/tests/look_diff.rs 2
+crates/main/tests/model_picker_keys.rs 7
+crates/main/tests/model_picker_name.rs 2
+crates/main/tests/pinned_call_row.rs 1
+crates/main/tests/placeholders_picker.rs 1
+crates/main/tests/quota_fetch_session.rs 1
+crates/main/tests/release_notes.rs 4
+crates/main/tests/steer_drawn.rs 2
+crates/main/tests/stream_closed_notice.rs 2
+crates/main/tests/terminal.rs 2
+crates/main/tests/tui_extensions.rs 2
+crates/main/tests/wheel_scroll.rs 1
+EOF
+    echo "== kinds ratchet"
+    cargo xtask kinds-ratchet --max 238 --support-max 36
     # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
     # ships shellcheck, so a missing one fails rather than skips.
     if [ "$(uname -s)" = Linux ]; then

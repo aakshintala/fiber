@@ -130,6 +130,23 @@ fn passed_with_context(context: Vec<(&str, &str)>) -> BeforeMessageAnswer {
     }
 }
 
+fn noticed_twice(first: (&str, &str), second: (&str, &str)) -> BeforeMessageAnswer {
+    BeforeMessageAnswer {
+        outcome: BeforeMessageOutcome::Passed {
+            replaced: None,
+            context: Vec::new(),
+        },
+        notices: [first, second]
+            .into_iter()
+            .map(|(extension, message)| contract::events::Notice {
+                code: ErrorCode::HookFailed,
+                message: message.to_owned(),
+                extension: Some(extension.to_owned()),
+            })
+            .collect(),
+    }
+}
+
 fn noticed(code: ErrorCode, extension: &str) -> BeforeMessageAnswer {
     BeforeMessageAnswer {
         outcome: BeforeMessageOutcome::Passed {
@@ -1181,6 +1198,91 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
             text: "original".into(),
             images: Vec::new(),
         })
+    );
+}
+
+/// The single grouped notice from `all`: exactly one, with the count and
+/// the first item up front and every item with its extension in the list
+/// (`docs/errors.md`, "Notices": one notice per code, count and first
+/// item up front, no extension across extensions).
+fn grouped_notice(all: &[Envelope]) -> &Envelope {
+    let notices: Vec<&Envelope> = all.iter().filter(|line| line.kind == "notice").collect();
+    assert_eq!(notices.len(), 1, "{all:?}");
+    assert_eq!(notices[0].payload["code"], "hook_failed");
+    assert_eq!(
+        notices[0].payload.get("extension"),
+        None,
+        "a group across extensions names none"
+    );
+    let message = notices[0].payload["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("2 hooks failed: extension fiber.test/a failed softly\n"),
+        "{message}"
+    );
+    assert!(
+        message.contains("extension fiber.test/a failed softly (extension `fiber.test/a`)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("extension fiber.test/b failed softly (extension `fiber.test/b`)"),
+        "{message}"
+    );
+    notices[0]
+}
+
+#[test]
+fn two_non_blocking_failures_write_one_grouped_notice() {
+    // One `before_message` batch reaches the log as one notice: the
+    // count and the first item up front, in the admission slot before the
+    // preamble, with no turn (`docs/errors.md`, "Notices": one per code;
+    // `docs/loop.md`, "Starting a turn": before_message runs before
+    // turn_started).
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(noticed_twice(
+        ("fiber.test/a", "extension fiber.test/a failed softly"),
+        ("fiber.test/b", "extension fiber.test/b failed softly"),
+    ));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let (ack, answered) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "original"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the prompt's answer")
+            .is_ok()
+    );
+    drop(world.looped.take());
+
+    let all = streamed(&mut world);
+    let notice = grouped_notice(&all);
+    assert!(notice.turn_id.is_none(), "an idle notice names no turn");
+    // The grouped notice is written at admission, before the turn's preamble
+    // (`docs/loop.md`, "Starting a turn").
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "notice",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
 }
 

@@ -14,6 +14,7 @@ use crate::rows::{RowText, Rows};
 
 /// The render at the width last asked, shared by a reply and its clones.
 type Shared = Arc<Mutex<Option<(u16, Arc<Rendered>)>>>;
+type CountShared = Arc<Mutex<Option<(u16, Arc<super::Counted>)>>>;
 /// Whether the source holds a table, shared by a reply and its clones
 /// until either changes its text.
 type TableShared = Arc<Mutex<Option<bool>>>;
@@ -26,6 +27,7 @@ pub(crate) struct Reply {
     text: String,
     id: usize,
     cache: Shared,
+    count: CountShared,
     table: TableShared,
 }
 
@@ -36,6 +38,7 @@ impl Reply {
             text,
             id,
             cache: Arc::new(Mutex::new(None)),
+            count: Arc::new(Mutex::new(None)),
             table: Arc::new(Mutex::new(None)),
         }
     }
@@ -55,6 +58,7 @@ impl Reply {
     pub(crate) fn push(&mut self, text: &str) {
         self.text.push_str(text);
         self.cache = Arc::new(Mutex::new(None));
+        self.count = Arc::new(Mutex::new(None));
         self.table = Arc::new(Mutex::new(None));
     }
 
@@ -63,6 +67,7 @@ impl Reply {
     pub(crate) fn set(&mut self, text: String) {
         self.text = text;
         self.cache = Arc::new(Mutex::new(None));
+        self.count = Arc::new(Mutex::new(None));
         self.table = Arc::new(Mutex::new(None));
     }
 
@@ -117,6 +122,26 @@ impl Reply {
         cached.as_ref().map(|(width, _)| *width)
     }
 
+    #[cfg(test)]
+    pub(crate) fn count_cached_at(&self, width: u16) -> Option<Arc<super::Counted>> {
+        let cached = support::lock(&self.count);
+        cached
+            .as_ref()
+            .and_then(|(at, counted)| (*at == width).then(|| Arc::clone(counted)))
+    }
+
+    fn counted(&self, width: u16) -> Arc<super::Counted> {
+        let mut cached = support::lock(&self.count);
+        if let Some((at, counted)) = &*cached
+            && *at == width
+        {
+            return Arc::clone(counted);
+        }
+        let counted = Arc::new(super::render_count(&self.text, width));
+        *cached = Some((width, Arc::clone(&counted)));
+        counted
+    }
+
     /// The rendered lines at `width`, each code block's header carrying
     /// its copy target, and each with what it adds to its logical line.
     /// A bound `reply` renderer replaces the lines: the copy targets
@@ -145,28 +170,82 @@ impl Reply {
             }
             crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
         };
-        match rendered {
-            Some(fitted) => {
-                for line in fitted.iter() {
-                    out.push_fitted(line, None);
-                }
+        if let Some(fitted) = rendered {
+            for line in fitted.iter() {
+                out.push_fitted(line, None);
             }
-            None => {
-                let rendered = self.rendered(width);
-                for (at, line) in rendered.lines.iter().cloned().enumerate() {
-                    let block = rendered.targets.iter().position(|target| target.line == at);
-                    let target = block.map(|block| Target::Copy {
-                        reply: self.id,
-                        block,
-                    });
-                    let text = rendered
-                        .text
-                        .get(at)
-                        .cloned()
-                        .unwrap_or_else(RowText::plain);
-                    out.push_text((line, target), text);
-                }
+        } else {
+            self.push_builtin_rows(width, out);
+        }
+    }
+
+    /// Counts the built-in reply rows without making styled lines. A
+    /// selected renderer keeps its existing fitted-line behavior.
+    pub(crate) fn count_rows(&self, width: u16, out: &mut Rows) {
+        let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+        let input = crate::ext::ReplyText {
+            text: &self.text,
+            flat,
+        };
+        let wrapped = crate::ext::Input::Reply(input);
+        let builtin = |input: &crate::ext::Input<'_>, w: u16| {
+            if !matches!(input, crate::ext::Input::Reply(_)) {
+                return Vec::new();
             }
+            self.rendered(w)
+                .lines
+                .iter()
+                .map(|line| crate::ext::spans::from_ratatui(&line.spans))
+                .collect()
+        };
+        let rendered = match out.fills_for("reply") {
+            crate::ext::SlotSelection::Draw { extension } => {
+                out.ext_lines("reply", &extension, &wrapped, width, &builtin)
+            }
+            crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+        };
+        if let Some(fitted) = rendered {
+            for line in fitted.iter() {
+                out.push_fitted(line, None);
+            }
+            return;
+        }
+        let counted = self.counted(width);
+        if counted.over_width {
+            self.push_builtin_rows(width, out);
+        } else {
+            let targets: Vec<(usize, Target)> = counted
+                .targets
+                .iter()
+                .enumerate()
+                .map(|(block, line)| {
+                    (
+                        *line,
+                        Target::Copy {
+                            reply: self.id,
+                            block,
+                        },
+                    )
+                })
+                .collect();
+            out.push_counted(counted.rows, &targets);
+        }
+    }
+
+    fn push_builtin_rows(&self, width: u16, out: &mut Rows) {
+        let rendered = self.rendered(width);
+        for (at, line) in rendered.lines.iter().cloned().enumerate() {
+            let block = rendered.targets.iter().position(|target| target.line == at);
+            let target = block.map(|block| Target::Copy {
+                reply: self.id,
+                block,
+            });
+            let text = rendered
+                .text
+                .get(at)
+                .cloned()
+                .unwrap_or_else(RowText::plain);
+            out.push_text((line, target), text);
         }
     }
 }

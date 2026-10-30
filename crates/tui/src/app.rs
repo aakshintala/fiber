@@ -108,10 +108,38 @@ pub(crate) use top::Surface;
 /// line is skipped.
 macro_rules! read {
     ($envelope:expr, $kind:ty) => {
-        serde_json::from_value::<$kind>(serde_json::Value::Object($envelope.payload.clone())).ok()
+        $crate::app::read_ref::<$kind>(&$envelope.payload)
     };
 }
 pub(crate) use read;
+
+/// A line's payload as `T`, borrowed from the envelope's map: no clone
+/// and no `Value` tree. It returns `Some` exactly when the decoded
+/// payload parses as `T`.
+pub(crate) fn read_ref<'de, T>(payload: &'de Map<String, Value>) -> Option<T>
+where
+    T: serde::Deserialize<'de>,
+{
+    #[cfg(test)]
+    DECODE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    T::deserialize(payload).ok()
+}
+
+// Borrowed decodes on the calling thread: the counted-work test reads
+// it on the folding thread, since one fold's decodes never leave it.
+// Test-only; non-test builds carry no counter.
+#[cfg(test)]
+thread_local! {
+    static DECODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many borrowed decodes the calling thread has made
+/// (`docs/testing.md`, "a test of how much work something does counts
+/// the work"). The counted-work test reads it on the folding thread.
+#[cfg(test)]
+pub(crate) fn decode_count() -> usize {
+    DECODE_COUNT.with(|count| count.get())
+}
 
 /// How long the second Ctrl+C waits for the first.
 pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
@@ -271,6 +299,29 @@ pub(crate) struct App {
     /// answer, which never delays the first frame (`docs/tui.md`,
     /// "Images").
     graphics: bool,
+    /// Whether detection saw an iTerm2-family version reply: `iTerm2 `
+    /// or `WezTerm ` starts the XTVERSION text (`docs/tui.md`,
+    /// "The logo").
+    iterm: bool,
+    /// Whether detection saw the Sixel bit with a measured cell inside
+    /// the logo's bound: out-of-bound or unmeasured cells keep the
+    /// pixel logo (`docs/tui.md`, "The logo").
+    sixel: bool,
+    /// The measured cell in pixels, while the tty reports one: Sixel
+    /// sizes from it, never from the fallback (`docs/tui.md`,
+    /// "The logo").
+    measured_cell: Option<(u16, u16)>,
+    /// The depth the current look was resolved at: without colour the
+    /// pixel logo stays (`docs/tui.md`, "The logo").
+    logo_depth: crate::look::Depth,
+    /// Whether the logo's kitty transmit was rejected: the pixel logo
+    /// stays for the session, with no retry (`docs/tui.md`, "The logo").
+    logo_rejected: bool,
+    /// Whether the measured cell passed the logo's bound when Sixel
+    /// was detected: re-gated on every resize while Sixel is set, so a
+    /// failed session never re-asks and a later session inherits the
+    /// terminal's own answer (`docs/tui.md`, "The logo").
+    logo_cell_ok: bool,
     /// One cell's size in pixels, for the placeholder grid: the tty's
     /// pixel size over its cell counts, the fallback while unknown
     /// (`docs/tui.md`, "Images").
@@ -418,6 +469,12 @@ impl App {
             armed_at: None,
             kitty: false,
             graphics: false,
+            iterm: false,
+            sixel: false,
+            measured_cell: None,
+            logo_depth: crate::look::Depth::True,
+            logo_rejected: false,
+            logo_cell_ok: false,
             cell: crate::term::FALLBACK_CELL,
             queue: Queue::default(),
             offer: crate::offer::Offer::default(),
@@ -1551,6 +1608,83 @@ impl App {
     pub(crate) fn set_graphics(&mut self) {
         self.graphics = true;
         self.refresh_image_sizing();
+    }
+
+    /// Records an iTerm2-family XTVERSION reply: the terminal speaks
+    /// iTerm2's image protocol (`docs/tui.md`, "The logo").
+    pub(crate) fn set_iterm(&mut self) {
+        self.iterm = true;
+    }
+
+    /// Whether detection saw an iTerm2-family version reply.
+    pub(crate) fn iterm(&self) -> bool {
+        self.iterm
+    }
+
+    /// Records a Sixel device-attributes reply: the terminal speaks
+    /// Sixel only with a measured cell inside the logo's bound, so an
+    /// unmeasured or out-of-bound cell keeps the pixel logo for the
+    /// session, silently (`docs/tui.md`, "The logo").
+    pub(crate) fn set_sixel(&mut self) {
+        if self
+            .measured_cell
+            .is_some_and(crate::graphics::logo::cell_ok)
+        {
+            self.sixel = true;
+            self.logo_cell_ok = true;
+        }
+    }
+
+    /// Whether detection saw Sixel on a measured cell.
+    pub(crate) fn sixel(&self) -> bool {
+        self.sixel
+    }
+
+    /// Sets the measured cell beside the coalesced one: `None` while
+    /// the tty reports no pixels. While Sixel is set, a resize re-gates
+    /// the cell bound, so the logo follows the terminal
+    /// (`docs/tui.md`, "The logo").
+    pub(crate) fn set_measured_cell(&mut self, cell: Option<(u16, u16)>) {
+        self.measured_cell = cell;
+        if self.sixel {
+            self.logo_cell_ok = cell.is_some_and(crate::graphics::logo::cell_ok);
+        }
+    }
+
+    /// The measured cell in pixels, while the tty reports one.
+    pub(crate) fn measured_cell(&self) -> Option<(u16, u16)> {
+        self.measured_cell
+    }
+
+    /// Sets the depth the current look was resolved at, beside every
+    /// look change (`docs/tui.md`, "The logo").
+    pub(crate) fn set_logo_depth(&mut self, depth: crate::look::Depth) {
+        self.logo_depth = depth;
+    }
+
+    /// Records a rejected kitty transmit for the logo's own id: the
+    /// pixel logo stays for the session, with no retry and no notice
+    /// (`docs/tui.md`, "The logo").
+    pub(crate) fn set_logo_rejected(&mut self) {
+        self.logo_rejected = true;
+    }
+
+    /// Whether the logo's kitty transmit was rejected this session.
+    #[cfg(test)]
+    pub(crate) fn logo_rejected(&self) -> bool {
+        self.logo_rejected
+    }
+
+    /// Whether the measured cell passed the logo's bound for Sixel.
+    #[cfg(test)]
+    pub(crate) fn logo_cell_ok(&self) -> bool {
+        self.logo_cell_ok
+    }
+
+    /// Sets flat mode in tests: the pixel logo draws, never an image.
+    #[cfg(test)]
+    pub(crate) fn set_flat(&mut self, flat: bool) {
+        self.screen.pages_mut().set_flat(flat);
     }
 
     /// Sets one cell's size in pixels, for the placeholder grid, and

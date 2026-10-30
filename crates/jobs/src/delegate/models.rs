@@ -95,6 +95,7 @@ impl Tool for DelegateModels {
             // the fast path and never reaches a reviewer
             // (`docs/permissions.md`, "Fast paths").
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }

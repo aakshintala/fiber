@@ -1185,6 +1185,150 @@ pub(super) fn one_grep(command: &str) -> bool {
         .is_some_and(|word| word.cooked == "grep")
 }
 
+/// Whether `command` holds a built-in destructive form anywhere in its
+/// text (`docs/tools.md`, "What a tool declares"): `rm -r`, `rm -rf`,
+/// `git reset --hard`, `git clean`, `git checkout --` or `git restore`.
+/// The scan runs before parsing and never claims a complete parse: a word
+/// sequence in any `;`-, `&`-, `|`-, group- or newline-separated component
+/// matches, whether the parser accepts the command or not. Quotes do not
+/// hide a form and wrappers do not hide one either: the listed sequence
+/// matches at any word offset within a component, so `sudo rm -rf tmp`
+/// counts, with a slash-qualified name compared by its basename. The scan
+/// is textual and may over-match, so a quoted or echoed form still counts;
+/// over-matching only keeps a call reviewed. Each form below is its own
+/// check, so removing one leaves its commands unguarded.
+pub(super) fn review_when_confined(command: &str) -> bool {
+    components(command).into_iter().any(|words| {
+        rm_recursive(&words)
+            || rm_recursive_force(&words)
+            || git_reset_hard(&words)
+            || git_clean(&words)
+            || git_checkout_dashdash(&words)
+            || git_restore(&words)
+    })
+}
+
+/// One component's words: the command splits on `;`, `&`, `|`, grouping
+/// parentheses and newlines, then on whitespace. Flags keep their dashes,
+/// so `--hard` and `--` survive intact.
+fn components(command: &str) -> Vec<Vec<&str>> {
+    command
+        .split([';', '&', '|', '(', ')', '\n'])
+        .map(|part| part.split_whitespace().collect())
+        .collect()
+}
+
+/// A component's command name: the first word with quotes stripped, then
+/// the slash-delimited basename, so `/usr/bin/rm` names `rm` without
+/// resolving `PATH`.
+fn command_name(word: &str) -> &str {
+    let bare = word.trim_matches(|mark| mark == '\'' || mark == '"');
+    bare.rsplit('/').next().unwrap_or(bare)
+}
+
+/// Whether `word` asks `rm` to recurse: a short cluster holding `r` or
+/// `R`, or the long `--recursive`. `--force` holds an `r` but recurses
+/// nothing, so long options compare whole.
+fn rm_recursive_flag(word: &str) -> bool {
+    let Some(cluster) = word.strip_prefix('-') else {
+        return false;
+    };
+    if cluster.starts_with('-') {
+        return word == "--recursive";
+    }
+    cluster.contains('r') || cluster.contains('R')
+}
+
+/// Whether `word` asks `rm` to force: a short cluster holding `f`, or the
+/// long `--force`.
+// Exempted from mutation testing: the guard answers `recursive && !force`
+// or `recursive && force`, whose disjunction is `recursive`, so no change
+// to the force value alone changes `review_when_confined` and every mutant
+// here is equivalent (docs/testing/mutants.md). The `rm -r`/`rm -rf` split
+// stays so removing either predicate fails the guard test.
+#[cfg_attr(false, mutants::skip)]
+fn rm_force_flag(word: &str) -> bool {
+    let Some(cluster) = word.strip_prefix('-') else {
+        return false;
+    };
+    if cluster.starts_with('-') {
+        return word == "--force";
+    }
+    cluster.contains('f')
+}
+
+/// `rm -r` without `-f`, at any word offset within the component so a
+/// wrapper such as `sudo` does not hide it. A force flag beside it is the
+/// `rm -rf` form below, so the two checks never overlap and deleting one
+/// fails its own cases.
+fn rm_recursive(words: &[&str]) -> bool {
+    rm_starts(words).any(|rest| {
+        let recursive = rest.iter().any(|word| rm_recursive_flag(word));
+        let force = rest.iter().any(|word| rm_force_flag(word));
+        recursive && !force
+    })
+}
+
+/// `rm -rf`, at any word offset: recurse and force together, in one cluster
+/// or two words.
+fn rm_recursive_force(words: &[&str]) -> bool {
+    rm_starts(words).any(|rest| {
+        rest.iter().any(|word| rm_recursive_flag(word))
+            && rest.iter().any(|word| rm_force_flag(word))
+    })
+}
+
+/// The words after each `rm` word in the component, by basename, so a
+/// wrapper before `rm` does not hide the form.
+fn rm_starts<'a>(words: &'a [&'a str]) -> impl Iterator<Item = &'a [&'a str]> {
+    words.iter().enumerate().filter_map(|(start, word)| {
+        if command_name(word) == "rm" {
+            words.get(start + 1..)
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether `words` holds `git <name>` at any word offset: a `git` word by
+/// basename, directly followed by the subcommand.
+fn git_subcommand(words: &[&str], name: &str) -> bool {
+    git_starts(words, name).next().is_some()
+}
+
+/// The words after each `git <name>` occurrence in the component.
+fn git_starts<'a>(words: &'a [&'a str], name: &str) -> impl Iterator<Item = &'a [&'a str]> {
+    words.iter().enumerate().filter_map(move |(start, word)| {
+        if command_name(word) == "git" && words.get(start + 1).is_some_and(|second| *second == name)
+        {
+            words.get(start + 2..)
+        } else {
+            None
+        }
+    })
+}
+
+/// `git reset --hard`: the reset runs with the hard flag anywhere after
+/// the subcommand.
+fn git_reset_hard(words: &[&str]) -> bool {
+    git_starts(words, "reset").any(|rest| rest.contains(&"--hard"))
+}
+
+/// `git clean`: the subcommand alone names it, whatever flags follow.
+fn git_clean(words: &[&str]) -> bool {
+    git_subcommand(words, "clean")
+}
+
+/// `git checkout --`: the checkout separates paths with a bare `--`.
+fn git_checkout_dashdash(words: &[&str]) -> bool {
+    git_starts(words, "checkout").any(|rest| rest.contains(&"--"))
+}
+
+/// `git restore`: the subcommand alone names it, whatever follows.
+fn git_restore(words: &[&str]) -> bool {
+    git_subcommand(words, "restore")
+}
+
 #[cfg(test)]
 #[path = "classify_tests.rs"]
 mod tests;
