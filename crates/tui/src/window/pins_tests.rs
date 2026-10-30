@@ -10,7 +10,10 @@ fn two_pins_on_a_page_need_two_unpins() {
     assert_eq!(pins.pages().collect::<Vec<_>>(), [3]);
     pins.unpin(3);
     assert!(!pins.contains(3));
-    assert_eq!(pins.pages().count(), 0);
+    assert!(
+        pins.pages().next().is_none(),
+        "no page remains after the second unpin"
+    );
 }
 
 #[test]
@@ -18,9 +21,16 @@ fn unpin_of_an_unpinned_page_does_nothing() {
     let mut pins = Pins::default();
     pins.unpin(2);
     assert!(!pins.contains(2));
-    assert_eq!(pins.pages().count(), 0);
+    assert!(
+        pins.pages().next().is_none(),
+        "unpinning an absent page keeps no page"
+    );
     pins.pin(1);
     pins.unpin(2);
     assert!(pins.contains(1));
-    assert_eq!(pins.pages().count(), 1);
+    assert_eq!(
+        pins.pages().collect::<Vec<_>>(),
+        [1],
+        "the absent-page unpin leaves page 1 held"
+    );
 }

@@ -1076,7 +1076,7 @@ fn overlapping_pending_copies_keep_each_others_pins() {
         app.pending_turn
             .as_ref()
             .is_some_and(|pending| pending.turn == 0),
-        "the turn copy waits no more"
+        "the turn copy still waits on its pages"
     );
     app.on_key(Key::End, now());
     assert!(

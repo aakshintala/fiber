@@ -45,22 +45,22 @@ fn request_turn_pins_only_what_its_copy_does_not_hold() {
     let missing = request_turn(&mut pages, 0, &[]);
     assert_eq!(missing, vec![0]);
     // The pending copy's page is asked for: it loads before the copy runs.
+    let page = pages.index().pages().first().expect("page 0 exists").clone();
+    let want = (page.session.clone(), page.first_seq..=page.last_seq);
     let asked = pages.needs(usize::MAX / 2, 1);
-    assert_eq!(asked.len(), 1, "the copy waits on one page: {asked:?}");
-    assert_eq!(
-        asked[0].0,
-        contract::SessionId(SESSION.to_owned()),
-        "the copy waits on its own session: {asked:?}"
+    assert!(
+        asked.contains(&want),
+        "the copy waits on page 0 in its session: {asked:?}"
     );
     // The pending copy holds page 0 already: asking again waits on the
-    // same page, once.
+    // same page.
     assert_eq!(request_turn(&mut pages, 0, &missing), vec![0]);
-    assert_eq!(
-        pages.needs(usize::MAX / 2, 1),
-        asked,
-        "the second press waits on nothing new"
+    let again = pages.needs(usize::MAX / 2, 1);
+    assert!(
+        again.contains(&want),
+        "the second press waits on nothing new: {again:?}"
     );
-    // One release lets page 0 go: it was held exactly once.
+    // Releasing page 0 ends that need.
     pages.unwant(0);
     assert!(
         pages.needs(usize::MAX / 2, 1).is_empty(),

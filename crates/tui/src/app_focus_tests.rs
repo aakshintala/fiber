@@ -1529,7 +1529,7 @@ fn pending_copy() -> (App, Vec<contract::Envelope>) {
         app.pending_turn
             .as_ref()
             .is_some_and(|pending| pending.turn == 0 && !pending.pages.is_empty()),
-        "nothing waits on the dropped pages"
+        "the first press waits on the dropped pages"
     );
     (app, envelopes)
 }
@@ -1542,7 +1542,7 @@ fn esc_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
     app.open_notice(0);
     app.on_key(Key::Esc, now());
     assert_eq!(app.focused(), Some(TargetId::Turn(0)));
-    assert!(app.pending_turn.is_none(), "Esc keeps the copy waiting");
+    assert!(app.pending_turn.is_none(), "Esc releases the waiting copy");
 }
 
 #[test]
@@ -1552,7 +1552,7 @@ fn moving_focus_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
     assert_ne!(app.focused(), Some(TargetId::Turn(0)));
     assert!(
         app.pending_turn.is_none(),
-        "the moved focus keeps the copy waiting"
+        "moving focus releases the waiting copy"
     );
 }
 
@@ -1566,11 +1566,11 @@ fn a_failed_history_load_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
     }
     assert!(
         app.pending_turn.is_none(),
-        "the failed load keeps the copy waiting"
+        "the failed load releases the waiting copy"
     );
     assert!(
         app.needs().is_empty(),
-        "the failed pages are asked for still: {:?}",
+        "the failed pages wait no more: {:?}",
         app.needs()
     );
 }
@@ -1583,7 +1583,7 @@ fn requesting_another_turn_releases_the_pending_whole_turn_copy() {
     // turn 0's wait.
     let text = app.turn_text(1);
     assert!(text.is_some(), "the resident turn has text");
-    assert!(app.pending_turn.is_none(), "turn 0's copy waits still");
+    assert!(app.pending_turn.is_none(), "turn 0's copy waits no more");
 }
 
 #[test]
@@ -1626,14 +1626,14 @@ fn a_second_y_on_a_pending_turn_pins_nothing_twice() {
             .map(|pending| pending.pages.clone())
             .unwrap_or_default(),
         waiting,
-        "the second press waits on a page again"
+        "the second press waits on nothing new"
     );
     load_needed(&mut app, &envelopes);
     app.focus = Some(TargetId::Turn(0));
     assert!(matches!(app.on_key(Key::Char('y'), now()), Effect::Copy(_)));
     assert!(
         app.pending_turn.is_none(),
-        "the copy waits on its pages still"
+        "the copy releases its waiting pages"
     );
 }
 
@@ -1644,7 +1644,7 @@ fn a_turn_copy_with_nothing_missing_pins_nothing() {
     // 0's pending copy, whose wait goes with it.
     app.focus = Some(TargetId::Turn(1));
     assert!(app.turn_text(1).is_some());
-    assert!(app.needs().is_empty(), "turn 1's copy waits on a page");
+    assert!(app.needs().is_empty(), "turn 1's copy waits on no page");
     assert!(app.pending_turn.is_none());
 }
 
