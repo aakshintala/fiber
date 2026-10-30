@@ -429,6 +429,8 @@ fn markdown_exact_row_width_matches_the_text_width_helper() {
 
 #[test]
 fn markdown_ascii_cell_widths_match_the_text_width_helper() {
+    // The existing text helper counts controls as one column too.
+    assert_eq!(crate::text::char_width('\u{1b}'), 1);
     for code in 0..=0x7f {
         let ch = char::from(code);
         assert_eq!(
