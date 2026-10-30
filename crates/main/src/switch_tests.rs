@@ -1563,6 +1563,13 @@ fn vm_runs(counter: &Path) -> usize {
 #[test]
 fn a_dead_start_lock_entry_restarts_the_provider() {
     let (fixture, counter, _) = lua_fixture("fiber-switch-dead-start");
+    config::store_credential(
+        &fixture.home,
+        "lp",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let switching = switching(&fixture, &[]);
     let loader = switching.loader();
     let extension = loader.owners.get("lp").unwrap();
@@ -1592,6 +1599,13 @@ fn a_dead_start_lock_entry_restarts_the_provider() {
 #[test]
 fn an_unloaded_lua_provider_is_started_for_the_switch_once() {
     let (fixture, counter, _) = lua_fixture("fiber-switch-lua-start");
+    config::store_credential(
+        &fixture.home,
+        "lp",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let switching = switching(&fixture, &[]);
     assert_eq!(vm_runs(&counter), 1, "startup ran the entry script");
     assert!(loaded(&switching).is_empty());
@@ -1648,6 +1662,13 @@ fn applying_a_switch_unloads_the_old_provider_unless_the_reviewer_uses_it() {
 #[test]
 fn a_reviewer_on_an_unloaded_lua_provider_is_started_on_demand() {
     let (fixture, counter, _) = lua_fixture("fiber-switch-lua-reviewer");
+    config::store_credential(
+        &fixture.home,
+        "lp",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
     let switching = switching(&fixture, &["reviewer.model=lp/lm"]);
     let made = prepared(&switching, &args("fake/m"), None);
     assert_eq!(made.model.reference, "fake/m");

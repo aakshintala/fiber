@@ -1123,6 +1123,50 @@ impl Providers {
         self.lua.clear();
     }
 
+    /// Whether the installed inventory declares a provider, including a
+    /// Lua-only provider whose VM has not started. Presentation filtering
+    /// never removes this identity.
+    pub fn has_installed_providers(&self) -> bool {
+        !self.by_name.is_empty()
+            || self
+                .declared
+                .values()
+                .any(|providers| !providers.is_empty())
+    }
+
+    /// Keeps every installed provider named while showing only
+    /// switched-on ones: a provider without a credential keeps its name,
+    /// declaration and source inventory, but its models, addendum,
+    /// unconfigured entries and Lua handle leave, so `fiber models` and
+    /// the pickers show no models for it without claiming none are
+    /// installed (`docs/model-routing.md`, "Model lists"). Reads only the
+    /// installed data, checking the process environment; never a runner,
+    /// a VM or a full load. Runs before the placeholder fill, so
+    /// providers without a credential never reach it: no per-model group
+    /// leaks through for them. `scripted` has no credential to check and
+    /// always stays. Use only on disposable presentation catalogues, never
+    /// on a session's resolver inventory.
+    pub fn retain_credentialed(&mut self, config: &config::Config) {
+        let mut off = Vec::new();
+        for (name, data) in &self.by_name {
+            if name != scripted::SCRIPTED
+                && !config
+                    .credentials()
+                    .has_credential(data, &|var| std::env::var(var).ok())
+            {
+                off.push(name.clone());
+            }
+        }
+        for name in off {
+            if let Some(data) = self.by_name.get_mut(&name) {
+                data.models.clear();
+            }
+            self.addenda.remove(&name);
+            self.unconfigured.remove(&name);
+            self.lua.remove(&name);
+        }
+    }
+
     /// The text of the chosen model's addendum file; `None` when the model
     /// names none.
     pub fn addendum(&self, model: &Model<'_>) -> Option<&str> {

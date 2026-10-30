@@ -19,6 +19,24 @@ use fakes::{Deadline, NoLock};
 use serde_json::json;
 
 #[test]
+fn presentation_filter_preserves_inventory_and_unfiltered_resolution() {
+    let setup = Setup::new();
+    let (empty, _) = Providers::load(&setup.home()).unwrap();
+    assert!(!empty.has_installed_providers());
+    let source = setup.source("acme", &manifest("acme"), &[provider("acme", &["m"])]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty());
+    assert!(providers.has_installed_providers());
+    assert_eq!(providers.resolve("acme/m").unwrap().reference(), "acme/m");
+    let mut presentation = providers.clone();
+    presentation.retain_credentialed(&config(&setup, &[]));
+    assert!(presentation.has_installed_providers());
+    assert!(presentation.get("acme").unwrap().models.is_empty());
+    assert_eq!(providers.resolve("acme/m").unwrap().reference(), "acme/m");
+}
+
+#[test]
 fn disabled_packages_keep_their_provider_data() {
     fakes::within(
         "Providers::load_enabled",

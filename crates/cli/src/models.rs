@@ -45,14 +45,14 @@ fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<std::process:
 /// The providers due a background refresh: a credential and a cached list
 /// older than `max_age` (`docs/model-routing.md`, "Model discovery"). A
 /// list exactly `max_age` old is not stale, and one with no cached copy is
-/// not due: it already ran when the lists were read.
+/// not due: it already ran when the lists were read. Runs no command and
+/// loads nothing: the one `has_credential` presence line decides.
 fn stale_lists(
     home: &Path,
     providers: &Providers,
     config: &Config,
     max_age: Duration,
     now: SystemTime,
-    run: config::Runner<'_>,
 ) -> Vec<String> {
     let mut stale = Vec::new();
     for name in providers.names() {
@@ -212,6 +212,9 @@ fn run(
     // and the process environment serves, as before.
     let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock.as_ref());
     notices.extend(providers.add_session(&extensions, &config, run, &lookup));
+    // Only switched-on providers list: the presence gate drops the rest
+    // before the host fill, so no per-model group leaks through for them.
+    providers.retain_credentialed(&config);
     // A search selects rows and counts the models a placeholder with no
     // value leaves out by the one rule: an ASCII-case-insensitive
     // substring of `provider/model`.
@@ -268,12 +271,11 @@ fn run(
         &config,
         config::refresh_after(&config),
         clock.wall(),
-        run,
     );
     if !stale.is_empty() {
         let _ignored = spawn(stale);
     }
-    if providers.names().next().is_none() {
+    if !providers.has_installed_providers() {
         writeln!(err, "{NO_PROVIDER}").map_err(CliError::StandardError)?;
         return Ok(());
     }
