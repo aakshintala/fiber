@@ -42,6 +42,9 @@ pub use session_message::SessionMessage;
 pub use session_search::SessionSearch;
 pub use shell::Shell;
 pub use shell::sandbox::check_available as sandbox_check_available;
+pub use shell::sandbox::protected::{
+    ProtectedPaths, Report as ProtectedReport, RestoreFailure as ProtectedRestoreFailure,
+};
 pub use shell::sandbox::{Settings as SandboxSettings, Unavailable as SandboxUnavailable};
 pub use skill::Skill;
 pub use tool_search::ToolSearch;
