@@ -1733,12 +1733,15 @@ pub(crate) fn assert_kinds_multiset(
     );
 }
 
-/// Asserts an exact kind pair in every run of one job: the stream is
-/// filtered to the lines carrying `job_id`, partitioned into runs from each
-/// `job_started` through its matching `job_completed` (or the end of the
-/// stream when the run never completed), and the pair must hold in each
-/// run. A later run cannot borrow the pair from an earlier one. Lines from
-/// other jobs may interleave; only the same job's lines break adjacency.
+/// Asserts an exact kind pair in every run of one job: runs are delimited
+/// in the full stream from each `job_started` carrying `job_id` through its
+/// matching `job_completed` (or the end of the stream when the run never
+/// completed), and the pair must hold in each run. A later run cannot borrow
+/// the pair from an earlier one. `After` checks an ordered subsequence within
+/// the run, allowing other jobs to interleave. `JustBefore` checks adjacency
+/// in the full ordered stream after removing only kinds explicitly set aside
+/// by the testing contract (`clients`, `session_status`, `attention`,
+/// `date_changed`); other jobs or ordered kinds between the pair fail it.
 /// `doc` is the verbatim source line promising the order.
 #[track_caller]
 pub(crate) fn assert_promised_order(
@@ -1748,54 +1751,93 @@ pub(crate) fn assert_promised_order(
     relation: Relation,
     doc: &str,
 ) {
+    fn job_of(line: &Value) -> Option<&str> {
+        line.get("payload")
+            .and_then(|payload| payload.get("job_id"))
+            .and_then(Value::as_str)
+    }
+    fn kind_of(line: &Value) -> &str {
+        line["kind"].as_str().unwrap()
+    }
     let (first, second) = pair;
-    let mine: Vec<&str> = lines
-        .iter()
-        .filter(|line| {
-            line.get("payload")
-                .and_then(|payload| payload.get("job_id"))
-                .and_then(Value::as_str)
-                == Some(job_id)
-        })
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect();
-    assert!(!mine.is_empty(), "no lines for job {job_id}: {doc}",);
-    let starts: Vec<usize> = mine
+    let has_job = lines.iter().any(|line| job_of(line) == Some(job_id));
+    assert!(
+        !lines.is_empty() && has_job,
+        "no lines for job {job_id}: {doc}",
+    );
+    let starts: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, kind)| **kind == "job_started")
+        .filter(|(_, line)| kind_of(line) == "job_started" && job_of(line) == Some(job_id))
         .map(|(i, _)| i)
         .collect();
     assert!(
         !starts.is_empty(),
-        "no run for job {job_id}: no `job_started` in {mine:?} ({doc})",
+        "no run for job {job_id}: no `job_started` for it ({doc})",
     );
     // Each run holds its start through its matching completion: the first
-    // `job_completed` at or after the start. Runs of one job never
-    // overlap, so that completion closes the run that opened it.
-    let mut runs: Vec<&[&str]> = Vec::with_capacity(starts.len());
+    // `job_completed` for this job at or after the start. Runs of one job
+    // never overlap, so that completion closes the run that opened it.
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(starts.len());
     for start in &starts {
-        let end = mine[*start..]
+        let end = lines[*start..]
             .iter()
-            .position(|kind| *kind == "job_completed")
+            .position(|line| kind_of(line) == "job_completed" && job_of(line) == Some(job_id))
             .map(|at| start + at + 1)
-            .unwrap_or(mine.len());
-        runs.push(&mine[*start..end]);
+            .unwrap_or(lines.len());
+        spans.push((*start, end));
     }
-    for (n, run) in runs.iter().enumerate() {
+    for (n, (start, end)) in spans.iter().enumerate() {
+        let span = &lines[*start..*end];
         let holds = match relation {
-            Relation::After => run
-                .iter()
-                .position(|kind| *kind == first)
-                .is_some_and(|i| run[i + 1..].contains(&second)),
-            Relation::JustBefore => run
-                .iter()
-                .enumerate()
-                .any(|(i, kind)| *kind == first && run.get(i + 1) == Some(&second)),
+            Relation::After => {
+                let mut seen_first = false;
+                let mut holds = false;
+                for line in span {
+                    if kind_of(line) == first && job_of(line) == Some(job_id) {
+                        seen_first = true;
+                    } else if seen_first && kind_of(line) == second && job_of(line) == Some(job_id)
+                    {
+                        holds = true;
+                        break;
+                    }
+                }
+                // A `first` at the very end with no later `second` fails;
+                // the loop above only sets `holds` on a later `second`.
+                holds
+            }
+            Relation::JustBefore => {
+                let mut previous: Option<&Value> = None;
+                let mut holds = false;
+                for line in span {
+                    if UNORDERED_KINDS.contains(&kind_of(line)) {
+                        continue;
+                    }
+                    if let Some(previous) = previous.take()
+                        && kind_of(previous) == first
+                        && job_of(previous) == Some(job_id)
+                        && kind_of(line) == second
+                        && job_of(line) == Some(job_id)
+                    {
+                        holds = true;
+                        break;
+                    }
+                    previous = Some(line);
+                }
+                holds
+            }
         };
+        // The failure renders the run's set-aside-projected kinds: the full
+        // ordered stream decides adjacency, so the projection is what the
+        // `JustBefore` check saw.
+        let shown: Vec<&str> = span
+            .iter()
+            .map(kind_of)
+            .filter(|kind| !UNORDERED_KINDS.contains(kind))
+            .collect();
         assert!(
             holds,
-            "job {job_id} run {n}: `{first}` is not {relation:?} `{second}` in {run:?} ({doc})",
+            "job {job_id} run {n}: `{first}` is not {relation:?} `{second}` in {shown:?} ({doc})",
         );
     }
 }
@@ -1846,7 +1888,11 @@ pub(crate) fn assert_session_process_boundaries(
                 "session {session_id}: `fiber_started` while a process run is still open \
                  (missing `fiber_exited`): {process_end_doc}; got {ordered:?}",
             ),
-            ("fiber_exited", _) => open = false,
+            ("fiber_exited", true) => open = false,
+            ("fiber_exited", false) => panic!(
+                "session {session_id}: `fiber_exited` with no process run open \
+                 (missing `fiber_started`): {process_end_doc}; got {ordered:?}",
+            ),
             _ => {}
         }
     }

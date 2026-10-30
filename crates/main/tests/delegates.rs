@@ -359,19 +359,17 @@ fn cancellation_kinds<'a>(lines: &'a [Value], lo: usize, hi: usize, expected: &[
     let finish = lines[lo + 1..hi]
         .iter()
         .find(|line| line["kind"] == "delegate_finished")
-        .expect("the window holds the delegate finish")
-        .clone();
-    let mut outer: Vec<Value> = lines[..=lo].to_vec();
-    outer.extend(lines[hi..].to_vec());
-    outer.push(finish);
-    support::assert_kinds_multiset(&outer, expected, &[], None, COUNT_DOC);
-    lines[lo + 1..hi]
-        .iter()
-        .find(|line| line["kind"] == "delegate_finished")
-        .and_then(|line| line.get("payload"))
+        .expect("the window holds the delegate finish");
+    let job = finish
+        .get("payload")
         .and_then(|payload| payload.get("job_id"))
         .and_then(Value::as_str)
-        .expect("the finish names its job")
+        .expect("the finish names its job");
+    let mut outer: Vec<Value> = lines[..=lo].to_vec();
+    outer.extend(lines[hi..].to_vec());
+    outer.push(finish.clone());
+    support::assert_kinds_multiset(&outer, expected, &[], None, COUNT_DOC);
+    job
 }
 
 #[test]
@@ -382,6 +380,7 @@ fn cancellation_windows_allow_both_usage_positions_but_require_one_call() {
         vec!["usage_recorded", "delegate_finished"],
         vec!["delegate_finished", "usage_recorded"],
     ] {
+        let usage_first = interior[0] == "usage_recorded";
         let mut kinds = vec!["job_started", "delegate_started", "turn_completed"];
         kinds.extend(interior);
         kinds.extend(["job_completed", "fiber_exited"]);
@@ -398,8 +397,8 @@ fn cancellation_windows_allow_both_usage_positions_but_require_one_call() {
                 line["payload"]["job_id"] = json!("j_cancel");
             }
         }
-        // The window's run keeps both cited delegate relations; the outer
-        // set counts the run's start kinds too.
+        // The window's run keeps the cited start relation in both orders;
+        // the outer set counts the run's start kinds too.
         let job = cancellation_kinds(
             &lines,
             2,
@@ -420,13 +419,31 @@ fn cancellation_windows_allow_both_usage_positions_but_require_one_call() {
             support::Relation::After,
             DELEGATE_START_DOC,
         );
-        support::assert_promised_order(
-            &lines,
-            job,
-            ("delegate_finished", "job_completed"),
-            support::Relation::JustBefore,
-            DELEGATE_END_DOC,
-        );
+        // Only usage-before-finish keeps the cited end relation: the finish
+        // is written just before its completion with no yield between
+        // (`crates/loop/src/jobs.rs`, `write_end`), so an ordered line after
+        // the finish breaks adjacency in the full stream.
+        if usage_first {
+            support::assert_promised_order(
+                &lines,
+                job,
+                ("delegate_finished", "job_completed"),
+                support::Relation::JustBefore,
+                DELEGATE_END_DOC,
+            );
+        } else {
+            assert!(
+                std::panic::catch_unwind(|| support::assert_promised_order(
+                    &lines,
+                    job,
+                    ("delegate_finished", "job_completed"),
+                    support::Relation::JustBefore,
+                    DELEGATE_END_DOC,
+                ))
+                .is_err(),
+                "accepted usage between a just-before pair"
+            );
+        }
     }
     for interior in [
         vec!["delegate_finished"],
@@ -820,12 +837,54 @@ fn promised_order_checks_every_run_with_the_cited_line() {
         support::Relation::After,
         start_doc,
     );
+    // Another job's ordered lines between the finish and its completion
+    // fail `JustBefore`: adjacency is checked in the full ordered stream,
+    // after removing only the set-aside kinds.
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &interleaved,
+            "j1",
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            end_doc
+        ))
+        .is_err(),
+        "accepted another job's lines between a just-before pair"
+    );
+    // A set-aside kind between the pair is ignored, so adjacency still
+    // holds.
+    let mut set_aside = vec![
+        job_line("job_started", "j1"),
+        job_line("delegate_started", "j1"),
+        job_line("delegate_finished", "j1"),
+    ];
+    set_aside.push(json!({"kind": "clients"}));
+    set_aside.push(job_line("job_completed", "j1"));
     support::assert_promised_order(
-        &interleaved,
+        &set_aside,
         "j1",
         ("delegate_finished", "job_completed"),
         support::Relation::JustBefore,
         end_doc,
+    );
+    // An ordered kind with no job between the pair fails it too.
+    let mut jobless = vec![
+        job_line("job_started", "j1"),
+        job_line("delegate_started", "j1"),
+        job_line("delegate_finished", "j1"),
+    ];
+    jobless.push(json!({"kind": "turn_completed"}));
+    jobless.push(job_line("job_completed", "j1"));
+    assert!(
+        std::panic::catch_unwind(|| support::assert_promised_order(
+            &jobless,
+            "j1",
+            ("delegate_finished", "job_completed"),
+            support::Relation::JustBefore,
+            end_doc
+        ))
+        .is_err(),
+        "accepted an ordered line between a just-before pair"
     );
     // A same-job line between the finish and its completion fails only
     // `JustBefore`: the weaker relation still allows the interleaving.
@@ -919,6 +978,17 @@ fn lifecycle_edges_accept_complete_logs_and_reject_broken_ones() {
                 "fiber_started",
                 "fiber_exited",
                 "turn_started",
+            ]
+            .iter()
+            .map(|kind| session_line(kind, "s1"))
+            .collect()
+        }),
+        ("stray process exit", {
+            [
+                "session_started",
+                "fiber_exited",
+                "fiber_started",
+                "fiber_exited",
             ]
             .iter()
             .map(|kind| session_line(kind, "s1"))

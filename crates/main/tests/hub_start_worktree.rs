@@ -28,9 +28,11 @@ use support::{
     until,
 };
 
-/// The verbatim count rule the multiset calls cite
-/// (`docs/testing.md`, "Event streams").
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+/// The verbatim count rules the multiset calls cite
+/// (`docs/testing.md`, "Event streams"): the general set-with-counts rule,
+/// plus the one-`clients`-line-per-attach promise for the counted `clients`
+/// line.
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails; docs/testing.md:109-111: Where its count is fixed, such as one `clients` line per attach, the test asserts the count, so a duplicate or a missing line still fails";
 
 /// Verbatim lifecycle sources for the session-boundary assertions below.
 const SESSION_FIRST_DOC: &str =
@@ -122,21 +124,9 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     ]);
     support::assert_kinds_multiset(&stream, &expected, &["clients"], None, COUNT_DOC);
     // The hub capture above is complete through the exit. The session ran
-    // in a new worktree, so its durable log lives under that project: walk
-    // for it as the hub timer test does.
-    let continued: Vec<Value> = fs::read_dir(setup.home().join("projects"))
-        .unwrap()
-        .map(|entry| {
-            entry
-                .unwrap()
-                .path()
-                .join("sessions")
-                .join(&id)
-                .join("events.jsonl")
-        })
-        .find(|log| log.is_file())
-        .map(|log| support::complete_lines(&fs::read_to_string(log).unwrap()))
-        .expect("the session's log exists");
+    // in a new worktree, so its durable log lives under that project, which
+    // the shared log helper below already walks.
+    let (continued, _) = session_log(&setup, &id);
     support::assert_session_process_boundaries(
         &continued,
         &id,
@@ -254,9 +244,22 @@ fn until_resumed(client: &Socket, what: &str) -> Vec<Value> {
     lines[resumed..].to_vec()
 }
 
-/// The session log's lines and its first line's bytes.
+/// The session log's lines and its first line's bytes, wherever its project
+/// is: a worktree session's durable log lives under that project, so the
+/// helper walks the projects dir rather than pinning the workspace project.
 fn session_log(setup: &Setup, id: &str) -> (Vec<Value>, Vec<u8>) {
-    let events = session_dir(setup, id).join("events.jsonl");
+    let events = fs::read_dir(setup.home().join("projects"))
+        .unwrap()
+        .map(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .join("sessions")
+                .join(id)
+                .join("events.jsonl")
+        })
+        .find(|log| log.is_file())
+        .expect("the session's log exists");
     let bytes = fs::read(&events).unwrap();
     let lines = complete_lines(&String::from_utf8_lossy(&bytes));
     let first = bytes.split(|byte| *byte == b'\n').next().unwrap().to_vec();

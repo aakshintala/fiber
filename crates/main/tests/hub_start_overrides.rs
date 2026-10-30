@@ -20,9 +20,11 @@ use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::*;
 
-/// The verbatim count rule the multiset calls cite
-/// (`docs/testing.md`, "Event streams").
-const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+/// The verbatim count rules the multiset calls cite
+/// (`docs/testing.md`, "Event streams"): the general set-with-counts rule,
+/// plus the one-`clients`-line-per-attach promise for the counted `clients`
+/// line.
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails; docs/testing.md:109-111: Where its count is fixed, such as one `clients` line per attach, the test asserts the count, so a duplicate or a missing line still fails";
 
 /// Verbatim lifecycle sources for the session-boundary assertions below.
 const SESSION_FIRST_DOC: &str =
