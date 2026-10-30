@@ -251,7 +251,7 @@ fn counted_pages_keep_shown_rows_sources_focus_and_turn_ranges() {
         assert_eq!(counted.2, shown.2, "page {at} focus targets");
         assert_eq!(counted.3, shown.3, "page {at} turn ranges");
         let shown_rows = shown.0.iter().fold(0usize, |total, (line, _)| {
-            total.saturating_add(crate::view::rows(line.clone(), pages.width))
+            total.saturating_add(crate::view::rows(line, pages.width))
         });
         assert_eq!(pages.index().pages()[at].rows, shown_rows, "page {at}");
     }
@@ -315,7 +315,7 @@ fn a_late_usage_line_on_a_dropped_page_counts_the_padded_closing_rows() {
     let head = pages.summaries.first().expect("the first turn's totals");
     let closing = head.closing().expect("a closing line");
     assert_eq!(closing.to_string(), "▣ completed · 1 call");
-    assert_eq!(crate::view::rows(closing.clone(), 20), 1);
+    assert_eq!(crate::view::rows(&closing, 20), 1);
     assert_eq!(crate::rows::fitted(&closing, crate::surface::inset(20)), 2);
     pages.residency.drop_slot_for_test(0);
     lines.push(Envelope {

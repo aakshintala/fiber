@@ -69,6 +69,11 @@
 //!   it (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
+//! - `threads <cpus> <load>`: the nextest `--test-threads` count for the
+//!   host's load, printed as one integer
+//! - `budget-bounds --base REV`: whether any line changed against the merge
+//!   base with REV raises `WAITS`, `BUDGET` or `CLEANUP`, or adds a
+//!   `Deadline::after` of 60 s or more in a test, without `// ruling: #N`
 //! - `screen-ratchet`: reads the inline per-file maxima from stdin as one
 //!   `<path> <maximum>` per line, and fails when a file under
 //!   `crates/main/tests/` outside `support/` holds more unmarked `.screen()`
@@ -86,6 +91,7 @@
 )]
 
 mod bench;
+mod budget_bounds;
 mod ci_needs;
 mod docs;
 mod flake_report;
@@ -98,6 +104,7 @@ mod screen_ratchet;
 mod select;
 mod site;
 mod stress;
+mod threads;
 mod ticket;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -320,6 +327,20 @@ fn run(args: &[String]) -> Result<bool, String> {
             ),
             "ok",
         ),
+        "threads" => {
+            let (cpus, load) = match rest {
+                [cpus, load] => (cpus, load),
+                _ => return Err("usage: cargo xtask threads <cpus> <load>".to_owned()),
+            };
+            let cpus: f64 = cpus.parse().map_err(|e| format!("cpus: {e}"))?;
+            let load: f64 = load.parse().map_err(|e| format!("load: {e}"))?;
+            println!("{}", threads::threads(cpus, load));
+            Ok(true)
+        }
+        "budget-bounds" => {
+            let base = flag(rest, "--base")?;
+            report("budget-bounds", &budget_bounds::budget_bounds(&base)?, "ok")
+        }
         "screen-ratchet" => {
             let mut input = String::new();
             std::io::stdin()

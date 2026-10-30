@@ -1,10 +1,12 @@
 //! Tests of the binary-level tests' shared deadline (`docs/testing.md`,
 //! "Waits and timeouts") through the socket and process helpers in
-//! `support`: each wait takes what remains of the test's one deadline.
-//! The deadline's own arithmetic lives in `fakes::deadline`'s tests, on a
-//! fake clock; the live-process probe below waits on real processes, so it
-//! takes its deadline from the process clock, which is the only clock those
-//! waits advance.
+//! `support`: each wait gets its own bound, made when the wait starts,
+//! capped by the test's guard. A first helper wait consuming 40 s of guard
+//! leaves the second its full 40 s; refusal cases spend the guard, not a
+//! single wait. The deadline's own arithmetic lives in `fakes::deadline`'s
+//! tests, on a fake clock; the live-process probe below waits on real
+//! processes, so it takes its deadline from the process clock, which is the
+//! only clock those waits advance.
 
 #![allow(
     clippy::unwrap_used,
@@ -22,7 +24,6 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use fakes::clock::FakeClock;
 use support::*;
@@ -48,49 +49,42 @@ fn sleeper() -> (std::process::Child, u32, KillGroup) {
 }
 
 #[test]
-fn a_socket_line_takes_what_remains_and_no_more() {
-    // A partial line: the rest never arrives, and no time is left for it.
+fn a_first_helper_wait_leaves_the_second_its_full_bound() {
+    // One wait's own bound carries one line: the rest of the stream waits
+    // for the next wait, not for the remainder of this one.
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
     let (mine, mut peer) = UnixStream::pair().unwrap();
-    peer.write_all(b"a\nb").unwrap();
+    peer.write_all(b"a\n").unwrap();
     let mut reader = BufReader::new(mine);
     assert_eq!(
         read_line(&mut reader, deadline, "the first line").unwrap(),
         Some("a\n".to_owned())
     );
-    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    // 40 s of the guard pass with no wait open. Socket reads wait on the
+    // wall clock, never on this clock, so time moves here by hand.
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(Duration::from_secs(40));
-    let error = read_line(&mut reader, deadline, "the second line").unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::TimedOut);
-    assert!(error.to_string().contains("the second line"), "{error}");
-
-    // A buffered line: it is taken at zero, without reading.
-    let clock = fake_clock();
-    let deadline = Deadline::on(&**clock);
-    let (mine, mut peer) = UnixStream::pair().unwrap();
-    peer.write_all(b"a\nc\n").unwrap();
-    let mut reader = BufReader::new(mine);
+    clock.advance(fakes::deadline::WAIT);
+    // The next wait still gets its full fresh bound, not the remainder
+    // (`docs/testing.md`, "Waits and timeouts": one slow step does not use up a later step's
+    // time).
+    assert_eq!(deadline.left(), fakes::deadline::WAIT);
     assert_eq!(
-        read_line(&mut reader, deadline, "the first line").unwrap(),
-        Some("a\n".to_owned())
+        deadline.start_wait().left(),
+        fakes::deadline::WAIT,
+        "a wait started late keeps its full bound"
     );
-    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(Duration::from_secs(40));
+    // ... through the helpers too: the second line arrives at once.
+    peer.write_all(b"c\n").unwrap();
     assert_eq!(
-        read_line(&mut reader, deadline, "the buffered line").unwrap(),
+        read_line(&mut reader, deadline, "the second line").unwrap(),
         Some("c\n".to_owned())
     );
 
-    // Writes: delivered with time left, refused at zero.
+    // Writes: delivered with time left.
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
     let (mut mine, peer) = UnixStream::pair().unwrap();
@@ -98,12 +92,37 @@ fn a_socket_line_takes_what_remains_and_no_more() {
     let mut got = [0; 3];
     (&peer).read_exact(&mut got).unwrap();
     assert_eq!(&got, b"hi\n");
-    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+}
+
+#[test]
+fn a_spent_guard_refuses_without_reading_or_writing() {
+    // Past the guard, a read fails naming its wait without reading: the
+    // peer holds a partial line whose rest never arrives.
+    let clock = fake_clock();
+    let deadline = Deadline::on(&**clock);
+    let (mine, mut peer) = UnixStream::pair().unwrap();
+    peer.write_all(b"b").unwrap();
+    let mut reader = BufReader::new(mine);
+    // Socket reads wait on the wall clock, never on this clock, so the
+    // guard is spent here by hand.
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(Duration::from_secs(40));
+    clock.advance(fakes::deadline::WAITS);
+    let error = read_line(&mut reader, deadline, "the refused line").unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TimedOut);
+    assert!(error.to_string().contains("the refused line"), "{error}");
+
+    // Past the guard, a write fails naming its wait without writing.
+    let clock = fake_clock();
+    let deadline = Deadline::on(&**clock);
+    let (mut mine, peer) = UnixStream::pair().unwrap();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(fakes::deadline::WAITS);
     let error = write_line(&mut mine, deadline, b"no\n", "a late line").unwrap_err();
     assert_eq!(error.kind(), ErrorKind::TimedOut);
     assert!(error.to_string().contains("a late line"), "{error}");
@@ -111,8 +130,10 @@ fn a_socket_line_takes_what_remains_and_no_more() {
     let mut rest = Vec::new();
     (&peer).read_to_end(&mut rest).unwrap();
     assert!(rest.is_empty(), "nothing was written at zero: {rest:?}");
+}
 
-    // The peer closing is the end of the stream.
+#[test]
+fn a_closed_peer_is_the_end_of_the_stream() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
     let (mine, peer) = UnixStream::pair().unwrap();
@@ -126,12 +147,14 @@ fn bounded_returns_or_expires() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
     assert_eq!(bounded(deadline, "a quick answer", || 5), 5);
-    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    // Past the guard, the blocking call expires at once instead of taking
+    // a fresh wait. No code under test waits on the clock here; the clock
+    // only ages the Deadline (ruling 6179406086).
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(Duration::from_secs(40));
+    clock.advance(fakes::deadline::WAITS);
     let (_never, blocked) = mpsc::channel::<()>();
     let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         bounded(deadline, "a reply nobody sends", move || blocked.recv())
@@ -146,10 +169,10 @@ fn bounded_returns_or_expires() {
 
 #[test]
 fn a_probe_on_a_live_group_is_bounded() {
-    // A wait on a live process advances only the wall clock: a fake clock
-    // that never advances would renew the allowance at every wait, so this
-    // probe takes the test's one process-clock deadline, and successive
-    // waits share its budget (`docs/testing.md`, "Waits and timeouts").
+    // A wait on a live process advances only the wall clock, so this probe
+    // takes the test's process-clock deadline: each wait takes a fresh
+    // bound under the guard, and the guard outlives the reaps below
+    // (`docs/testing.md`, "Waits and timeouts").
     let deadline = Deadline::start();
     let (mut child, group, _guard) = sleeper();
     assert!(fakes::group_alive(group));
