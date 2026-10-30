@@ -505,6 +505,12 @@ impl App {
         let ids = self.images.id_allocator.clone();
         self.screen.pages_mut().set_image_ids(ids.clone());
         self.attached_screen_mut().pages_mut().set_image_ids(ids);
+        // A rejected logo transmit may be re-attempted: the failure was
+        // one session's answer. The cell gate stays put with the
+        // measured cell — the terminal did not change, so a later
+        // session inherits its answer and a resize re-gates it
+        // (`docs/tui.md`, "The logo").
+        self.logo_rejected = false;
     }
 
     /// Queues the display `read_file` commands for the inline images

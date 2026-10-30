@@ -323,6 +323,10 @@ pub(crate) struct HomeScreen {
     pub(crate) question_scroll: usize,
     /// The input box shows its placeholder.
     pub(crate) placeholder: bool,
+    /// What draws in the logo's cells: the image form where the
+    /// terminal speaks an image protocol, else the pixel logo
+    /// (`docs/tui.md`, "The logo").
+    pub(crate) logo: crate::graphics::logo::Shown,
 }
 
 /// The header's nonzero state counts in display order.
