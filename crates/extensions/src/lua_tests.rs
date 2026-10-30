@@ -126,6 +126,7 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
             name: "fixture".to_owned(),
             dir: fakes::lua_fixture(),
             home: PathBuf::from("/nonexistent-fiber-home"),
+            run_entry: true,
             load_by: Some(clock.now().checked_add(LOAD_TIMEOUT).unwrap()),
             memory_cap: MEMORY_CAP,
             browser: Arc::new(SystemBrowser::default()),
@@ -151,6 +152,60 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
         vm.resume(f, "boom", LOAD_TIMEOUT, mlua::Value::Nil)
     }));
     assert!(outcome.is_err(), "the panic became {outcome:?}");
+}
+
+/// Loads the VM over `dir` with this entry choice: the common setup
+/// runs either way, and only the entry script itself is conditional.
+fn load_vm(dir: &std::path::Path, run_entry: bool, clock: Arc<FakeClock>) -> Result<Vm, Error> {
+    let hub = Hub::new(clock.clone());
+    Vm::load(
+        &hub,
+        &schedule::Start {
+            name: "fixture".to_owned(),
+            dir: dir.to_path_buf(),
+            home: PathBuf::from("/nonexistent-fiber-home"),
+            run_entry,
+            load_by: Some(clock.now().checked_add(LOAD_TIMEOUT).unwrap()),
+            memory_cap: MEMORY_CAP,
+            browser: Arc::new(SystemBrowser::default()),
+            session: None,
+            secrets: Vec::new(),
+            deps: Default::default(),
+        },
+    )
+}
+
+#[test]
+fn a_provider_only_vm_skips_a_trapping_init_and_serves_providers() {
+    let clock = FakeClock::new();
+    let dir = extension("provider-only", "error(\"init must not run\")");
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(
+        dir.path().join("providers/p.lua"),
+        "fiber.provider(\"p\", {})",
+    )
+    .unwrap();
+    let vm = load_vm(dir.path(), false, clock).unwrap();
+    // The entry script never ran, but the provider script still loads.
+    assert!(vm.load_provider("p", None).is_ok());
+}
+
+#[test]
+fn a_default_vm_runs_a_trapping_init() {
+    let clock = FakeClock::new();
+    let dir = extension("default-entry", "error(\"init must run\")");
+    let err = match load_vm(dir.path(), true, clock) {
+        Ok(_) => panic!("a default VM runs its entry script"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("init must run"), "{err:?}");
+}
+
+#[test]
+fn a_provider_only_vm_without_an_init_loads() {
+    let clock = FakeClock::new();
+    let dir = fakes::TempDir::new("fiber-lua-no-entry");
+    load_vm(dir.path(), false, clock).unwrap();
 }
 
 #[test]
@@ -687,6 +742,7 @@ fn serve_after(
                 name: "ext".to_owned(),
                 dir,
                 home: PathBuf::from("/nonexistent-fiber-home"),
+                run_entry: true,
                 load_by,
                 memory_cap: MEMORY_CAP,
                 browser: Arc::new(SystemBrowser::default()),
@@ -1145,6 +1201,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
                 name: "ext".to_owned(),
                 dir,
                 home: PathBuf::from("/nonexistent-fiber-home"),
+                run_entry: true,
                 load_by,
                 memory_cap: MEMORY_CAP,
                 browser: Arc::new(SystemBrowser::default()),
@@ -1238,6 +1295,7 @@ fn a_held_command_blocks_the_stream_until_released() {
                 name: "ext".to_owned(),
                 dir,
                 home: PathBuf::from("/nonexistent-fiber-home"),
+                run_entry: true,
                 load_by,
                 memory_cap: MEMORY_CAP,
                 browser: Arc::new(SystemBrowser::default()),

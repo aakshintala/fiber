@@ -190,6 +190,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "support",
+ "tools",
  "tui",
  "worktree",
 ]

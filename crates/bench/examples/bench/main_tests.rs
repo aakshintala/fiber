@@ -11,7 +11,7 @@ use super::brand_string;
 use super::host_cpu;
 use super::{
     Args, Base, Only, Pass, Side, attach, bench, busy, debug, document, idle, listing, measure_all,
-    model_name, paging, parse, resume, selected, session_list, sides, timing_names, wheel,
+    model_name, paging, parse, resume, sandbox, selected, session_list, sides, timing_names, wheel,
 };
 
 fn args(line: &str) -> Result<Args, String> {
@@ -147,6 +147,9 @@ fn counts(line: &str) -> BTreeMap<&'static str, (u32, u32)> {
 
 #[test]
 fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
+    // A pull request's timing workloads run three times
+    // (`docs/performance.md`, "Measuring"), so the sandbox setup timing
+    // row repeats its run three times.
     let got = counts("--fiber f --out o --runs 5 --timing-runs 3 --paging j");
     assert_eq!(
         got,
@@ -166,6 +169,7 @@ fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
             ("sessions list", (1, 3)),
             ("terminal attach", (1, 5)),
             ("terminal wheel", (1, 3)),
+            ("sandbox setup", (3, 3)),
         ])
     );
     let timing = counts("--fiber f --out o --runs 5 --timing-runs 3 --paging j --only timing");
@@ -173,6 +177,7 @@ fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
         timing.keys().collect::<Vec<_>>(),
         [
             &"paging",
+            &"sandbox setup",
             &"session start",
             &"session_list",
             &"sessions list",
@@ -339,7 +344,7 @@ fn a_repeated_row_alternates_head_and_base_by_sample() {
         "--only",
         "timing",
         "--skip-rows",
-        "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel",
+        "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel,sandbox setup",
     ])
     .unwrap();
     let base = args("--fiber b --out ob --runs 3 --timing-runs 3 --only timing").unwrap();
@@ -385,6 +390,12 @@ fn sampled_rows_alternate_head_and_base_by_sample() {
         (back, "session_list", 2),
         (forward, "session_list", 3),
         (back, "session_list", 3),
+        (forward, "sandbox setup", 1),
+        (back, "sandbox setup", 1),
+        (forward, "sandbox setup", 2),
+        (back, "sandbox setup", 2),
+        (forward, "sandbox setup", 3),
+        (back, "sandbox setup", 3),
     ];
     // Each sampled row is one call per sample: listing's 3, attach's 2
     // fixtures of 5, wheel's 2 sessions of 3.
@@ -426,7 +437,7 @@ fn a_stall_shifts_one_sample_not_a_side() {
             "--only",
             "timing",
             "--skip-rows",
-            "session start,terminal first frame,session_list,paging,terminal attach,terminal wheel",
+            "session start,terminal first frame,session_list,paging,terminal attach,terminal wheel,sandbox setup",
         ])
         .unwrap()
     };
@@ -567,7 +578,7 @@ fn skip_rows_filters_the_head_and_the_base_lists() {
     };
     assert_eq!(skipped(&head), json!(["session start"]));
     assert_eq!(skipped(&base), json!(["session start"]));
-    // Memory and exact rows keep running: with every one of the six
+    // Memory and exact rows keep running: with every one of the seven
     // selectable rows left out, the head still runs its untimed rows, and
     // the never-skipped `session_list` row runs on both sides.
     let (head_args, base_args) = sides(
@@ -589,7 +600,7 @@ fn skip_rows_filters_the_head_and_the_base_lists() {
             "--base-paging",
             "j",
             "--skip-rows",
-            "session start,sessions list,terminal first frame,terminal attach,terminal wheel,paging",
+            "session start,sessions list,terminal first frame,terminal attach,terminal wheel,paging,sandbox setup",
         ])
         .unwrap(),
     );
@@ -636,6 +647,7 @@ fn skip_rows_filters_the_head_and_the_base_lists() {
         "terminal attach",
         "terminal wheel",
         "paging",
+        "sandbox setup",
     ] {
         assert!(
             !log.iter().any(|(_, row, _)| *row == name),
@@ -676,7 +688,7 @@ fn fail_row(fail_head: &[u32], fail_base: &[u32]) -> (Vec<(Side, &'static str, u
         "--only",
         "timing",
         "--skip-rows",
-        "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel",
+        "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel,sandbox setup",
     ])
     .unwrap();
     let base = args("--fiber b --out ob --runs 3 --timing-runs 3 --only timing").unwrap();
@@ -788,7 +800,7 @@ fn an_error_keeps_its_notes_on_both_sides() {
             "--only",
             "timing",
             "--skip-rows",
-            "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel",
+            "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel,sandbox setup",
         ])
         .unwrap()
     };
@@ -971,7 +983,7 @@ fn skip_rows_leaves_exactly_the_named_timing_workloads_out() {
         .collect();
     assert!(!kept.contains(&"session start"), "{kept:?}");
     assert!(!kept.contains(&"sessions list"), "{kept:?}");
-    assert_eq!(kept.len(), 13, "{kept:?}");
+    assert_eq!(kept.len(), 14, "{kept:?}");
     assert_eq!(kept.len() + 2, all.len());
 }
 
@@ -1047,7 +1059,7 @@ fn the_results_document_records_skipped_rows_after_ten_turns() {
 
 #[test]
 fn skip_rows_names_exactly_the_timing_workloads() {
-    // The six names mapped in `xtask/src/select/plan_tests.rs`, plus
+    // The seven names mapped in `xtask/src/select/plan_tests.rs`, plus
     // session_list, which runs on every base pass.
     let literal = [
         "session start",
@@ -1057,6 +1069,7 @@ fn skip_rows_names_exactly_the_timing_workloads() {
         "sessions list",
         "terminal attach",
         "terminal wheel",
+        "sandbox setup",
     ];
     assert_eq!(timing_names(), literal);
     let every: Vec<&str> = idle::WORKLOADS
@@ -1069,6 +1082,7 @@ fn skip_rows_names_exactly_the_timing_workloads() {
         .chain(listing::SAMPLED.iter())
         .chain(attach::SAMPLED.iter())
         .chain(wheel::SAMPLED.iter())
+        .chain(&sandbox::WORKLOADS)
         .filter(|workload| workload.timing)
         .map(|workload| workload.name)
         .collect();

@@ -94,10 +94,10 @@ fn the_picker_matches_a_model_through_its_display_name() {
     // catalogue. The open picker's catalogue proves the key is taken.
     // Both models list before any filter: the negative control.
     run.write(b"\x0c");
-    run.wait_screen("the open picker with its catalogue", |screen| {
+    let opened_grid = run.wait_screen("the open picker with its catalogue", |screen| {
         shows(screen, "Type to search") && shows(screen, "alpha-1") && shows(screen, "beta-2")
     });
-    let opened = run.screen().rows.clone();
+    let opened = opened_grid.rows.clone();
     assert!(
         opened.iter().any(|row| row.contains("Type to search")),
         "the picker shows its filter: {opened:?}"
@@ -115,10 +115,10 @@ fn the_picker_matches_a_model_through_its_display_name() {
     // and `beta-2` drops out. The open picker's catalogue above proves
     // the filter is taken.
     run.write(b"opus 5.5");
-    run.wait_screen("the name-filtered list", |screen| {
+    let filtered_grid = run.wait_screen("the name-filtered list", |screen| {
         shows(screen, "1 of 2 models") && shows(screen, "alpha-1") && !shows(screen, "beta-2")
     });
-    let filtered = run.screen().rows.clone();
+    let filtered = filtered_grid.rows.clone();
     assert!(
         filtered.iter().any(|row| row.contains("1 of 2 models")),
         "the count names one of two: {filtered:?}"

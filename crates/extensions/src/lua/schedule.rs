@@ -64,6 +64,9 @@ pub(super) struct Start {
     pub(super) name: String,
     pub(super) dir: PathBuf,
     pub(super) home: PathBuf,
+    /// Whether the VM runs the entry script: a disabled provider-only
+    /// package's VM serves provider scripts but never runs `init.lua`.
+    pub(super) run_entry: bool,
     pub(super) load_by: Option<Instant>,
     pub(super) memory_cap: usize,
     pub(super) browser: Arc<dyn Browser>,
@@ -82,6 +85,7 @@ pub(super) fn start(extension: &LuaExtension, shared: &mut Shared) -> Result<(),
         name: extension.name.clone(),
         dir: extension.dir.clone(),
         home: extension.home.clone(),
+        run_entry: extension.run_entry,
         load_by,
         memory_cap: extension.memory_cap,
         browser: Arc::clone(&extension.browser),

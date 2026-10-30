@@ -25,7 +25,7 @@ fn want(entries: &[(&str, u16, u16, u16)]) -> Vec<(String, u16, u16, u16)> {
 /// The ordering invariant: `(row, col)` and the byte ranges strictly
 /// increase and are disjoint, and every entry lies inside the drawn rows.
 fn assert_ordered(line: &Line<'_>, width: u16, placed: &[Placed]) {
-    let rows = crate::view::rows(line.clone(), width);
+    let rows = crate::view::rows(line, width);
     for pair in placed.windows(2) {
         let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
             continue;
