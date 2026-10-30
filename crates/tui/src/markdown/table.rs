@@ -106,14 +106,24 @@ impl Table {
                         .and_then(|range| cell.get(range.clone()))
                         .unwrap_or_default();
                     let pad = column_width.saturating_sub(cells_width(piece));
+                    let align = if numeric.get(column).copied().unwrap_or_default() {
+                        Alignment::Right
+                    } else {
+                        self.aligns.get(column).copied().unwrap_or(Alignment::None)
+                    };
+                    let before = before_padding(pad, align);
+                    if before != 0 {
+                        parts.push(" ".repeat(before));
+                    }
                     append_cell_parts(
                         &mut parts,
                         piece,
                         at == 0,
                         numeric.get(column).copied().unwrap_or_default(),
                     );
-                    if pad != 0 {
-                        parts.push(" ".repeat(pad));
+                    let after = pad.saturating_sub(before);
+                    if after != 0 {
+                        parts.push(" ".repeat(after));
                     }
                 }
                 if width > 0 {
@@ -205,11 +215,7 @@ impl Table {
                     } else {
                         self.aligns.get(column).copied().unwrap_or(Alignment::None)
                     };
-                    let before = match align {
-                        Alignment::Right => pad,
-                        Alignment::Center => pad / 2,
-                        Alignment::Left | Alignment::None => 0,
-                    };
+                    let before = before_padding(pad, align);
                     spans.push(Span::raw(" ".repeat(before)));
                     col = col.saturating_add(before);
                     let piece_start = col;
@@ -263,6 +269,14 @@ fn is_number(text: &str) -> bool {
         && digits
             .chars()
             .all(|ch| ch.is_ascii_digit() || matches!(ch, ',' | '.' | '%'))
+}
+
+fn before_padding(pad: usize, align: Alignment) -> usize {
+    match align {
+        Alignment::Right => pad,
+        Alignment::Center => pad / 2,
+        Alignment::Left | Alignment::None => 0,
+    }
 }
 
 fn numeric_columns(rows: &[Vec<TableCell>], count: usize) -> Vec<bool> {

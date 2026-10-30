@@ -599,6 +599,23 @@ fn code_block_counts_keep_tab_width_and_language_fallback_boundaries() {
 }
 
 #[test]
+fn centered_table_padding_keeps_the_extra_cell_on_the_right() {
+    let table = "| a |\n|:---:|\n| abcd |";
+    let rendered = Reply::new(table.to_owned(), 1).rendered(80);
+    let lines: Vec<String> = rendered
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    assert!(lines.iter().any(|line| line == " a  "), "{lines:?}");
+}
+
+#[test]
 fn table_with_repeated_heart_clusters_uses_the_draw_fallback() {
     let table = "| x |\n|---|\n| ❤️❤️❤️❤️❤️ |";
     let reply = Reply::new(table.to_owned(), 1);
