@@ -3,8 +3,7 @@
 //! its feed and `recent` again and subscribes afresh. The rows, the stop
 //! asks, the quit question's closes, the launch and the picker stay.
 
-use super::super::{App, mint};
-use super::recent_line;
+use super::super::App;
 
 impl App {
     /// Clears the old connection's subscription state and open gate, and
@@ -19,26 +18,17 @@ impl App {
         let Some(home) = self.home.as_mut() else {
             return;
         };
-        home.fed = false;
         home.subs.reset();
         // Every held total goes with the old connection, with the scoped
         // ids waiting and their dirty flags: a stale scoped answer
         // matches nothing afterwards.
         home.sessions.drop_all_totals();
-        home.scoped_asks.clear();
-        let projects: Vec<String> = home
-            .sessions
-            .sections(home.launch_project())
-            .into_iter()
-            .map(|section| section.project.to_owned())
-            .collect();
-        for project in &projects {
-            if project.is_empty() {
-                continue;
-            }
-            let id = mint();
-            home.scoped_asks.insert(id.clone(), project.clone());
-            home.subs.queue(recent_line(&id, Some(project), None));
+        let launch_project = home.launch_project().map(str::to_owned);
+        let recent = home
+            .recent
+            .reset_for_connection(&home.sessions, launch_project.as_deref());
+        for line in recent {
+            home.subs.queue(line);
         }
         self.settle_deletes();
     }
