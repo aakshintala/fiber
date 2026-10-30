@@ -118,7 +118,7 @@ if [ "$scope" != platform ]; then
     # and a `.screen` field access (as in `login.rs`) is not a call. Call
     # detection, comment recognition and the per-file comparison live in
     # `cargo xtask screen-ratchet` (docs/testing.md, "Levels").
-    screen_ratchet_table=$(cat <<'EOF'
+    cargo xtask screen-ratchet <<'EOF'
 crates/main/tests/ask_user_form_look.rs 3
 crates/main/tests/attach_first_frame.rs 1
 crates/main/tests/call_view.rs 1
@@ -141,8 +141,6 @@ crates/main/tests/terminal.rs 2
 crates/main/tests/tui_extensions.rs 2
 crates/main/tests/wheel_scroll.rs 1
 EOF
-    )
-    printf '%s\n' "$screen_ratchet_table" | cargo xtask screen-ratchet
     # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
     # ships shellcheck, so a missing one fails rather than skips.
     if [ "$(uname -s)" = Linux ]; then

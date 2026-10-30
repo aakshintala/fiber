@@ -2,10 +2,11 @@ use super::*;
 use std::collections::BTreeMap;
 
 // Rule sources: `docs/testing/screens.md` ("Screens") requires each kept
-// read to name its signal in a `// settled:` comment; the counting rule
-// itself (plain `.screen()` text, full-line `//` exclusion, literal marker
-// on the call or previous line) lives in the `screen_ratchet` module doc,
-// which the ratchet enforces as a conservative upper bound.
+// read to name its signal in a `// settled:` comment and defines the
+// ratchet's line rule (plain `.screen()` text, full-line `//` exclusion,
+// literal marker on the call or previous line) as a conservative upper
+// bound; every count asserted below cites that section, and the
+// `screen_ratchet` module doc enforces the same rule.
 
 fn file(path: &str, source: &str) -> RustFile {
     RustFile {
