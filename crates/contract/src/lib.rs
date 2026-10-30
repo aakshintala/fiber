@@ -18,6 +18,7 @@ pub mod extension;
 pub mod feedback;
 pub mod files;
 pub mod hook;
+mod hub_event_kind;
 mod ids;
 pub mod images;
 pub mod inbox;
@@ -49,6 +50,7 @@ pub mod tool;
 
 pub use codes::ErrorCode;
 pub use envelope::{Envelope, HubLine, SCHEMA_VERSION};
+pub use hub_event_kind::HubEventKind;
 pub use ids::{
     ActionId, CommandId, GenerationId, JobId, ProviderCallId, RequestId, Seq, SessionId, TurnId,
     is_minted_session_id,
