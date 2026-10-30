@@ -113,6 +113,13 @@ fn a_model_call_through_an_open_session_fetches_lua_quota() {
     let server = start_routed();
     let url = server.url();
     install_test_provider(&setup, &url);
+    config::store_credential(
+        &setup.home(),
+        "test",
+        "default",
+        &config::Secret::new("k-test".into()),
+    )
+    .unwrap();
     configure(&setup, "test/m1");
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);

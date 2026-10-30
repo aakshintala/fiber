@@ -1,6 +1,7 @@
 //! `docs/configuration.md`, "Secrets": a credential command runs once per
-//! process. Startup discovery asks whether the provider has a credential,
-//! and the session reads the key afterwards; both share one run.
+//! process. Startup discovery checks presence without running it, and the
+//! session reads the key afterwards; actual discovery and the session share
+//! one run.
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
@@ -54,7 +55,14 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
     })
     .unwrap();
 
-    // Discovery: no model cache, so `add_lua` asks for the credential.
+    // Presence checks run nothing: the configured command counts without
+    // running, through the configuration and through Lua alike.
+    let data = providers.data("acme");
+    assert!(config.credentials().has_credential(&data, &|_| None));
+    assert!(lua.has_credential(&config, &data));
+    assert!(!marker.exists(), "presence checks run no command");
+    // Discovery: no model cache, so a present credential lets `add_lua`
+    // read the key for real.
     let (discovered, config) = fakes::within(
         "providers.add_lua",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -84,5 +92,45 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
         },
     );
     assert_eq!(key.expose(), "key");
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
+}
+
+#[test]
+fn presence_then_a_session_read_runs_the_command_once() {
+    let setup = Setup::new();
+    let marker = setup.root().join("runs");
+    let script = format!("echo run >> '{}'; printf key", marker.display());
+    let mut data = provider("acme", &["a"]);
+    data["credential"] = json!({ "command": ["sh", "-c", script] });
+    let source = setup.source("acme", &manifest("acme-ext"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    let config = Config::load(Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project: ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+
+    // Presence without discovery runs nothing.
+    let data = providers.data("acme");
+    assert!(config.credentials().has_credential(&data, &|_| None));
+    assert!(!marker.exists(), "presence checks run no command");
+    // The session's first real read runs it once, and a repeated read on
+    // the same configuration reuses the run.
+    let key = config
+        .credentials()
+        .credential_with(&data, "default", &fakes::children::grouped_output)
+        .map(|read| read.secret)
+        .unwrap();
+    assert_eq!(key.expose(), "key");
+    let again = config
+        .credentials()
+        .credential_with(&data, "default", &fakes::children::grouped_output)
+        .map(|read| read.secret)
+        .unwrap();
+    assert_eq!(again.expose(), "key");
     assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
 }
