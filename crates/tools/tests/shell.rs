@@ -3393,10 +3393,7 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
         .protected_paths
         .as_ref()
         .expect("the restore is in the result");
-    assert_eq!(
-        report.restored,
-        vec![".git/config", ".git/hooks", ".fiber"]
-    );
+    assert_eq!(report.restored, vec![".git/config", ".git/hooks", ".fiber"]);
     assert!(report.failed.is_empty());
     assert!(text(&output).contains(".git/config"));
 }

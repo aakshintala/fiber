@@ -216,9 +216,7 @@ impl ProtectedPaths {
                 changed = true;
             }
         }
-        if changed
-            && let Err(source) = baseline::write_baseline(&dir.baseline, &baseline.entries)
-        {
+        if changed && let Err(source) = baseline::write_baseline(&dir.baseline, &baseline.entries) {
             // The old baseline would roll the approved bytes back at
             // the holder's end: drop it, so the end reports the failure
             // instead of restoring what the call recorded.
