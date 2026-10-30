@@ -8,10 +8,71 @@
 # by the normal test jobs.
 #
 # Usage: scripts/bug-red BASE [HEAD]
+#        scripts/bug-red --report BASE HEAD
+#        scripts/bug-red --collect LINUX_STATUS MACOS_STATUS
 # A pull request that changes only docs passes at once, with a message
 # saying so: the doc was wrong and the code was right, so no test can show
-# the bug.
+# the bug. --report writes nextest's status class to GITHUB_OUTPUT and lets
+# the collector decide whether this leg passed. --collect accepts a test
+# failure on either platform, but requires a build on both.
 set -euo pipefail
+
+if [ "${1-}" = --collect ]; then
+  [ "$#" -eq 3 ] || { echo "usage: scripts/bug-red --collect LINUX_STATUS MACOS_STATUS" >&2; exit 2; }
+  linux_status=$2
+  macos_status=$3
+  if [ "$linux_status" = docs ] || [ "$macos_status" = docs ]; then
+    if [ "$linux_status" = docs ] && [ "$macos_status" = docs ]; then
+      echo "bug-red: both legs confirm the pull request changes only docs"
+      exit 0
+    fi
+    echo "bug-red: docs-only result disagrees between legs (linux=$linux_status, macos=$macos_status)"
+    exit 1
+  fi
+  for status in "$linux_status" "$macos_status"; do
+    case "$status" in
+      '' | *[!0-9]*)
+        echo "bug-red: missing or invalid platform result (linux=$linux_status, macos=$macos_status)"
+        exit 1
+        ;;
+    esac
+  done
+  if [ "$linux_status" -eq 101 ] || [ "$macos_status" -eq 101 ]; then
+    echo "bug-red: the red commit must build on both platforms (linux=$linux_status, macos=$macos_status)"
+    exit 1
+  fi
+  for status in "$linux_status" "$macos_status"; do
+    case "$status" in
+      0 | 4 | 100) : ;;
+      *) echo "bug-red: nextest failed unexpectedly (linux=$linux_status, macos=$macos_status)"; exit 1 ;;
+    esac
+  done
+  if [ "$linux_status" -eq 100 ] || [ "$macos_status" -eq 100 ]; then
+    echo "bug-red: red commit failed tests on at least one platform (linux=$linux_status, macos=$macos_status)"
+    exit 0
+  fi
+  echo "bug-red: every red-commit test passed or no test ran (linux=$linux_status, macos=$macos_status)"
+  exit 1
+fi
+
+report=false
+if [ "${1-}" = --report ]; then
+  report=true
+  shift
+fi
+report_status() {
+  if [ "$report" = true ]; then
+    if [ -z "${GITHUB_OUTPUT:-}" ]; then
+      echo "bug-red: --report needs GITHUB_OUTPUT" >&2
+      exit 2
+    fi
+    printf 'status=%s\n' "$1" >>"$GITHUB_OUTPUT"
+  fi
+}
+case "$#" in
+  1 | 2) ;;
+  *) echo "usage: scripts/bug-red [--report] BASE [HEAD]" >&2; exit 2 ;;
+esac
 cd "$(git rev-parse --show-toplevel)"
 
 base=$1
@@ -37,6 +98,7 @@ docs_only_status=0
 cargo xtask docs-only ${files[@]+"${files[@]}"} >/dev/null || docs_only_status=$?
 if [ "$docs_only_status" -eq 0 ]; then
   echo "bug-red: ok, the pull request changes only docs, so it has no code for a test to show the bug"
+  report_status docs
   exit 0
 elif [ "$docs_only_status" -ne 1 ]; then
   exit "$docs_only_status"
@@ -78,9 +140,28 @@ status=0
 # nextest-metadata's exit codes: 100 when a test failed, 101 when the build
 # failed and 4 when no test matched. Only a failed test shows the bug.
 case $status in
-  100) echo "bug-red: ok, one of the red commit's tests fails at the red commit" ;;
-  0) echo "bug-red: every one of the red commit's tests passes at the red commit, so none shows the bug"; exit 1 ;;
-  101) echo "bug-red: the red commit $red does not build; it must build without the fix"; exit 1 ;;
-  4) echo "bug-red: none of the red commit's tests runs at the red commit"; exit 1 ;;
-  *) echo "bug-red: nextest exited $status at the red commit"; exit 1 ;;
+  100)
+    echo "bug-red: ok, one of the red commit's tests fails at the red commit"
+    report_status "$status"
+    ;;
+  0)
+    echo "bug-red: every one of the red commit's tests passes at the red commit, so none shows the bug"
+    report_status "$status"
+    [ "$report" = true ] || exit 1
+    ;;
+  101)
+    echo "bug-red: the red commit $red does not build; it must build without the fix"
+    report_status "$status"
+    [ "$report" = true ] || exit 1
+    ;;
+  4)
+    echo "bug-red: none of the red commit's tests runs at the red commit"
+    report_status "$status"
+    [ "$report" = true ] || exit 1
+    ;;
+  *)
+    echo "bug-red: nextest exited $status at the red commit"
+    report_status "$status"
+    [ "$report" = true ] || exit 1
+    ;;
 esac

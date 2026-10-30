@@ -416,6 +416,7 @@ impl Tool for Gated {
             subject: Some("npm publish".into()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
@@ -478,6 +479,7 @@ impl Tool for Asks {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }
@@ -2078,6 +2080,7 @@ fn add_directory_while_an_approval_waits_is_written_and_a_later_call_sees_it() {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         },
         &Ok(contract::rules::StandingRules::default()),
