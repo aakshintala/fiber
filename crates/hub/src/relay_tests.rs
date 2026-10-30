@@ -2445,6 +2445,8 @@ fn the_relay_parses_each_session_line_once() {
         line(&format!(
             r#"{{"kind":"command_accepted","ts":1,"schema_version":1,"payload":{{"command_id":"c_rw","result":{{"new_session_id":"{NEXT}"}}}}}}"#
         )),
+        // A line the typed pass rejects still counts its one pass.
+        line(r#"{"kind":"command_accepted","ts":1,"payload":{"command_id":"#),
     ];
     // Every line is written, and the session half dropped, before the
     // relay starts reading, so the count never depends on its timing.
@@ -2521,8 +2523,8 @@ fn the_relay_parses_each_session_line_once() {
     join_within_deadline(thread);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&count_rx).ok(),
-        Some(6),
-        "the relay parses each session line once"
+        Some(7),
+        "the relay parses each session line once, failed parses included"
     );
 }
 
@@ -3048,6 +3050,209 @@ fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
+/// The typed `parse_typed` seam reads `line` exactly as the full-parse
+/// `acknowledgement` does: the setup asserts the line acknowledges
+/// through the old path, then the parity assert compares the two.
+fn typed_parity(line: &[u8]) {
+    let old = acknowledgement(line);
+    assert!(old.is_some(), "setup: the line acknowledges");
+    assert_eq!(super::ack::parse_typed(line), old);
+}
+
+/// Both paths read `line` as `None`: the line acknowledges nothing.
+fn typed_none(line: &[u8]) {
+    assert_eq!(acknowledgement(line), None, "setup: the line stays unread");
+    assert_eq!(super::ack::parse_typed(line), None);
+}
+
+/// Parity proves the two paths agree; these pin the values the old full
+/// parse produced, so a mutant that shifts both paths still fails.
+#[test]
+fn parse_typed_names_the_ack_absolute_values() {
+    let line = |kind: &str, payload: Value| {
+        serde_json::to_vec(&json!({"kind": kind, "ts": 1, "payload": payload})).unwrap()
+    };
+    let accepted = line(
+        "command_accepted",
+        json!({"command_id": "c", "result": {"last_seq": 41}}),
+    );
+    let ack = super::ack::parse_typed(&accepted).expect("the accepted line acknowledges");
+    assert_eq!(ack.id, "c");
+    assert!(matches!(ack.verdict, Verdict::Accepted));
+    assert_eq!(ack.last_seq, Some(41));
+    assert_eq!(ack.rewound, None);
+    let closing = line(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "closing", "message": "m"}),
+    );
+    let ack = super::ack::parse_typed(&closing).expect("the closing line acknowledges");
+    assert_eq!(ack.id, "c_1");
+    assert!(matches!(ack.verdict, Verdict::Closing));
+    assert_eq!(ack.last_seq, None);
+    // An escaped `closing` takes the owned-string path and still closes.
+    let escaped = b"{\"kind\": \"command_rejected\", \"payload\": {\"command_id\": \"c_1\", \"code\": \"clos\\u0069ng\", \"message\": \"m\"}}\n";
+    let ack = super::ack::parse_typed(escaped).expect("the escaped closing line acknowledges");
+    assert!(matches!(ack.verdict, Verdict::Closing));
+    let rewind = line(
+        "command_accepted",
+        json!({"command_id": "c_rw", "result": {"new_session_id": "s_bbbbbbbbbbbbbbbb"}}),
+    );
+    let ack = super::ack::parse_typed(&rewind).expect("the rewind acknowledges");
+    assert_eq!(ack.id, "c_rw");
+    assert_eq!(
+        ack.rewound.map(|next| next.0),
+        Some("s_bbbbbbbbbbbbbbbb".to_owned())
+    );
+    assert_eq!(ack.last_seq, None);
+    // A wrong-typed optional reads as absent with the ack still naming
+    // its command, for a scalar, a sequence and a map alike.
+    for fragment in [
+        json!({"last_seq": "41"}),
+        json!({"last_seq": -1}),
+        json!({"last_seq": 4.5}),
+        json!({"last_seq": [41]}),
+        json!({"last_seq": {"n": 41}}),
+    ] {
+        let bytes = line(
+            "command_accepted",
+            json!({"command_id": "c", "result": fragment}),
+        );
+        let ack = super::ack::parse_typed(&bytes).expect("a wrong-typed last_seq keeps the ack");
+        assert_eq!(ack.id, "c");
+        assert!(matches!(ack.verdict, Verdict::Accepted));
+        assert_eq!(ack.last_seq, None, "{fragment}");
+        assert_eq!(ack.rewound, None, "{fragment}");
+    }
+    for fragment in [json!([1]), json!({"n": 1})] {
+        let bytes = line(
+            "command_rejected",
+            json!({"command_id": "c_1", "code": fragment, "message": "m"}),
+        );
+        let ack = super::ack::parse_typed(&bytes).expect("a wrong-typed code keeps the ack");
+        assert_eq!(ack.id, "c_1");
+        assert!(matches!(ack.verdict, Verdict::Rejected));
+    }
+    for fragment in [
+        json!("x"),
+        json!(Value::Null),
+        json!([41]),
+        json!({"n": 41}),
+    ] {
+        let bytes = line(
+            "command_accepted",
+            json!({"command_id": "c", "result": fragment}),
+        );
+        let ack = super::ack::parse_typed(&bytes).expect("a non-object result keeps the ack");
+        assert_eq!(ack.id, "c");
+        assert_eq!(ack.last_seq, None, "{fragment}");
+        assert_eq!(ack.rewound, None, "{fragment}");
+    }
+}
+
+#[test]
+fn parse_typed_matches_acknowledgement_for_verdicts() {
+    let line = |kind: &str, payload: Value| {
+        serde_json::to_vec(&json!({"kind": kind, "ts": 1, "payload": payload})).unwrap()
+    };
+    // An accepted acknowledgement carries a numeric `last_seq`.
+    let accepted = line(
+        "command_accepted",
+        json!({"command_id": "c", "result": {"last_seq": 41}}),
+    );
+    assert_eq!(
+        acknowledgement(&accepted)
+            .as_ref()
+            .and_then(|ack| ack.last_seq),
+        Some(41)
+    );
+    typed_parity(&accepted);
+    typed_parity(&line("command_accepted", json!({"command_id": "c"})));
+    typed_parity(&line(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "closing", "message": "m"}),
+    ));
+    typed_parity(&line(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "busy", "message": "m"}),
+    ));
+    // A rewind carries the session it starts.
+    typed_parity(&line(
+        "command_accepted",
+        json!({"command_id": "c_rw", "result": {"new_session_id": "s_bbbbbbbbbbbbbbbb"}}),
+    ));
+    // Missing and non-object `payload` acknowledge nothing.
+    typed_none(&line("command_rejected", Value::Null));
+    typed_none(&serde_json::to_vec(&json!({"kind": "command_accepted", "ts": 1})).unwrap());
+    typed_none(b"not json\n");
+}
+
+#[test]
+fn parse_typed_takes_the_last_duplicate_key() {
+    // A top-level array is no acknowledgement: there is no map to read.
+    typed_none(b"[{\"kind\": \"command_accepted\"}]\n");
+    // Duplicate keys resolve last-wins, at the top level and inside the
+    // nested `payload` and `result`: the replayed kind loses.
+    typed_parity(b"{\"kind\": \"session_status\", \"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\"}}\n");
+    typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c_old\"}, \"payload\": {\"command_id\": \"c\"}}\n");
+    typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c_old\", \"command_id\": \"c\"}}\n");
+    typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\", \"result\": {\"last_seq\": 7}, \"result\": {\"last_seq\": 41}}}\n");
+    typed_parity(b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\", \"result\": {\"last_seq\": 7, \"last_seq\": 41}}}\n");
+    assert_eq!(
+        super::ack::parse_typed(
+            b"{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\", \"result\": {\"last_seq\": 7, \"last_seq\": 41}}}\n"
+        )
+        .and_then(|ack| ack.last_seq),
+        Some(41),
+        "the last duplicate wins"
+    );
+    typed_none(b"{\"kind\": \"command_accepted\", \"kind\": \"session_status\", \"payload\": {\"command_id\": \"c\"}}\n");
+}
+
+#[test]
+fn parse_typed_keeps_the_ack_on_wrong_typed_optionals() {
+    let line = |payload: Value| {
+        serde_json::to_vec(&json!({"kind": "command_accepted", "payload": payload})).unwrap()
+    };
+    // A wrong-typed `last_seq` reads no sequence, but the ack still
+    // names its command.
+    for last_seq in [
+        json!("41"),
+        json!(-1),
+        json!(4.5),
+        serde_json::from_str::<Value>("18446744073709551616").unwrap(),
+    ] {
+        let bytes = line(json!({"command_id": "c", "result": {"last_seq": last_seq}}));
+        assert_eq!(
+            acknowledgement(&bytes)
+                .as_ref()
+                .and_then(|ack| ack.last_seq),
+            None,
+            "setup: {last_seq} reads no sequence"
+        );
+        typed_parity(&bytes);
+    }
+    // A string or null `result` reads no sequence and starts nothing.
+    for result in [json!("x"), Value::Null] {
+        typed_parity(&line(json!({"command_id": "c", "result": result})));
+    }
+    // Wrong-typed `new_session_id` and `code` read no session and no
+    // closing verdict, but the ack still names its command.
+    typed_parity(&line(
+        json!({"command_id": "c_rw", "result": {"new_session_id": 7}}),
+    ));
+    typed_parity(
+        &serde_json::to_vec(&json!({"kind": "command_rejected", "payload": {"command_id": "c_1", "code": 7, "message": "m"}})).unwrap(),
+    );
+    // A malformed unknown value rejects the line exactly where the full
+    // parse rejects it: an invalid escaped surrogate and an out-of-range
+    // number acknowledge nothing.
+    typed_none("{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\"}, \"x\": \"\\ud800\"}\n".as_bytes());
+    typed_none(
+        "{\"kind\": \"command_accepted\", \"payload\": {\"command_id\": \"c\"}, \"x\": 1e999}\n"
+            .as_bytes(),
+    );
+}
+
 /// A refused admission still answers the command already written to the
 /// new socket: the exclusive attach finds the live relay, so no thread
 /// ever reads the command, and the client must hear `session_not_found`
@@ -3186,6 +3391,88 @@ fn a_spawn_failure_answers_the_written_command() {
     assert_eq!(order.session_for("c_unspawned"), None);
 }
 
+#[test]
+fn parse_typed_matches_last_wrong_typed_duplicates_and_escaped_optional_objects() {
+    use super::ack::Ack;
+
+    let accepted = |id: &str, last_seq: Option<u64>| {
+        Some(Ack {
+            id: id.to_owned(),
+            verdict: Verdict::Accepted,
+            rewound: None,
+            last_seq,
+        })
+    };
+    let rejected = |id: &str| {
+        Some(Ack {
+            id: id.to_owned(),
+            verdict: Verdict::Rejected,
+            rewound: None,
+            last_seq: None,
+        })
+    };
+    let parity = |line: &[u8], expected: Option<Ack>| {
+        assert_eq!(
+            super::ack::parse_typed(line),
+            expected,
+            "{}",
+            String::from_utf8_lossy(line)
+        );
+    };
+
+    // The last value wins even when the earlier duplicate has the wrong type.
+    parity(
+        br#"{"kind":7,"kind":"command_accepted","payload":{"command_id":"c"}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","kind":7,"payload":{"command_id":"c"}}"#,
+        None,
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":[],"payload":{"command_id":"c"}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":[1],"payload":{"command_id":"c"}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c"},"payload":[]}"#,
+        None,
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":7,"command_id":"c"}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","command_id":7}}"#,
+        None,
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","result":7,"result":{"last_seq":41}}}"#,
+        accepted("c", Some(41)),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","result":{"last_seq":41},"result":7}}"#,
+        accepted("c", None),
+    );
+
+    // A malformed optional object's escaped key is still consumed, and
+    // the optional field remains absent exactly as in the old Value map.
+    parity(
+        br#"{"kind":"command_rejected","payload":{"command_id":"c","code":{"a\n":1}}}"#,
+        rejected("c"),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","result":{"new_session_id":{"a\n":1}}}}"#,
+        accepted("c", None),
+    );
+    parity(
+        br#"{"kind":"command_accepted","payload":{"command_id":"c","result":{"last_seq":{"a\n":1}}}}"#,
+        accepted("c", None),
+    );
+}
 /// The command writer counts accepted bytes before a write or flush
 /// failure. A whole write succeeds; a cut reports its accepted count; a
 /// zero cap accepts nothing; a failed flush reports the whole line.
@@ -3261,6 +3548,17 @@ fn a_closing_answer_for_a_partly_written_command_is_not_routed_again() {
         "a partly written command's closing answer is its own"
     );
     assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+}
+
+#[test]
+fn parse_typed_rejects_wrong_typed_payload_values_like_the_full_parse() {
+    for payload in [
+        "null", "true", "false", "7", "4.5", "\"text\"", "[]", "[1e999]",
+    ] {
+        let line = format!("{{\"kind\":\"command_accepted\",\"payload\":{payload}}}");
+        typed_none(line.as_bytes());
+    }
+    typed_none(br#"{"kind":"command_accepted","payload":[1e999],"payload":{"command_id":"c"}}"#);
 }
 
 /// A failed `change_workspace` start keeps the old session's kept level:
