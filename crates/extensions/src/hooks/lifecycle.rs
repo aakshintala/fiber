@@ -4,7 +4,7 @@
 //! what its answer decides.
 
 use contract::ErrorCode;
-use contract::events::Notice;
+use contract::events::{Notice, group_notices, grouped_lead};
 use contract::hook::{
     BeforeModelCall, CheckAnswer, CheckOutcome, Context, ContextAnswer, ContextOutcome,
     HookFailure, Refusal, SessionStart, StartReason, TurnEnd, TurnStart,
@@ -19,6 +19,13 @@ use crate::Error;
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod tests;
+
+/// Groups one chain's notice batch by code, so a pass with several
+/// non-blocking failures answers one notice per code; the loop groups the
+/// batch again at its event flush (`docs/errors.md`, "Notices").
+fn grouped(notices: Vec<Notice>) -> Vec<Notice> {
+    group_notices(notices, grouped_lead)
+}
 
 /// Runs every `session_start` hook, in order: each is shown the same input
 /// and every return is kept, in run order. Before the chain runs, the
@@ -91,7 +98,7 @@ pub(super) fn before_model_call(
         if at > 0 && call.cancel.is_cancelled() {
             return CheckAnswer {
                 outcome: CheckOutcome::Passed,
-                notices,
+                notices: grouped(notices),
             };
         }
         let Some(name) = session.runtime.owner_name(&entry.hook) else {
@@ -115,7 +122,7 @@ pub(super) fn before_model_call(
                         extension: name.to_owned(),
                         reason,
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) if entry.blocking => {
@@ -124,7 +131,7 @@ pub(super) fn before_model_call(
                         extension: name.to_owned(),
                         message: error.to_string(),
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) => notices.push(failed_notice(BEFORE_MODEL_CALL, &name, &error)),
@@ -132,7 +139,7 @@ pub(super) fn before_model_call(
     }
     CheckAnswer {
         outcome: CheckOutcome::Passed,
-        notices,
+        notices: grouped(notices),
     }
 }
 
@@ -160,7 +167,7 @@ fn run_additive(
         if at > 0 && cancel.is_cancelled() {
             return ContextAnswer {
                 outcome: ContextOutcome::Added(Vec::new()),
-                notices,
+                notices: grouped(notices),
             };
         }
         let Some(name) = session.runtime.owner_name(&entry.hook) else {
@@ -193,7 +200,7 @@ fn run_additive(
                         extension: name.to_owned(),
                         message: error.to_string(),
                     }),
-                    notices,
+                    notices: grouped(notices),
                 };
             }
             Err(error) => notices.push(failed_notice(point, &name, &error)),
@@ -201,7 +208,7 @@ fn run_additive(
     }
     ContextAnswer {
         outcome: ContextOutcome::Added(context),
-        notices,
+        notices: grouped(notices),
     }
 }
 

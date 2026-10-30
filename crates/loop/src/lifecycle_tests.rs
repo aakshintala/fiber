@@ -1473,6 +1473,20 @@ fn failed(by: &str, message: &str) -> ContextAnswer {
     }
 }
 
+fn noticed_twice(first: (&str, &str), second: (&str, &str)) -> ContextAnswer {
+    ContextAnswer {
+        outcome: ContextOutcome::Added(Vec::new()),
+        notices: [first, second]
+            .into_iter()
+            .map(|(extension, message)| contract::events::Notice {
+                code: ErrorCode::HookFailed,
+                message: message.to_owned(),
+                extension: Some(extension.to_owned()),
+            })
+            .collect(),
+    }
+}
+
 fn noticed_soft(by: &str) -> ContextAnswer {
     ContextAnswer {
         outcome: ContextOutcome::Added(Vec::new()),
@@ -2125,6 +2139,232 @@ fn a_non_blocking_turn_start_failure_writes_a_notice_and_the_turn_goes_on() {
     assert_eq!(notice.payload["code"], "hook_failed");
     assert_eq!(notice.payload["extension"], "fiber.test/soft");
     assert_eq!(world.provider.requests().len(), 1);
+}
+
+/// The single grouped notice in `all`: exactly one, with the count and
+/// the first item up front, every item with its extension in the list,
+/// and no extension on the group (`docs/errors.md`, "Notices": one
+/// notice per code, count and first item up front, no extension across
+/// extensions).
+fn grouped_notice(all: &[Envelope]) {
+    let notices: Vec<&Envelope> = all.iter().filter(|line| line.kind == "notice").collect();
+    assert_eq!(notices.len(), 1, "{all:?}");
+    assert_eq!(notices[0].payload["code"], "hook_failed");
+    assert_eq!(
+        notices[0].payload.get("extension"),
+        None,
+        "a group across extensions names none"
+    );
+    let message = notices[0].payload["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("2 hooks failed: extension fiber.test/a failed softly\n"),
+        "{message}"
+    );
+    assert!(
+        message.contains("extension fiber.test/a failed softly (extension `fiber.test/a`)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("extension fiber.test/b failed softly (extension `fiber.test/b`)"),
+        "{message}"
+    );
+}
+
+#[test]
+fn two_session_start_notices_arrive_as_one_grouped_notice() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_session_start(noticed_twice(
+        ("fiber.test/a", "extension fiber.test/a failed softly"),
+        ("fiber.test/b", "extension fiber.test/b failed softly"),
+    ));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    let all = streamed(&mut world);
+    grouped_notice(&all);
+    // The session start runs at the first turn, after the opening: its
+    // notice lands between the opening and the turn (`docs/loop.md`,
+    // "Starting a turn": session_start after the opening, before
+    // turn_started; `docs/errors.md`, "Notices": one notice per code).
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "notice",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn two_turn_start_notices_arrive_as_one_grouped_notice() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_start(noticed_twice(
+        ("fiber.test/a", "extension fiber.test/a failed softly"),
+        ("fiber.test/b", "extension fiber.test/b failed softly"),
+    ));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    let all = streamed(&mut world);
+    grouped_notice(&all);
+    // The turn-start notice lands after turn_started, before the first
+    // step (`docs/loop.md`, "Starting a turn": turn_start before the
+    // first model request; `docs/errors.md`, "Notices": one per code).
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "notice",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(world.provider.requests().len(), 1);
+}
+
+#[test]
+fn two_before_model_call_notices_arrive_as_one_grouped_notice() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_before_model_call(CheckAnswer {
+        outcome: CheckOutcome::Passed,
+        notices: [
+            ("fiber.test/a", "extension fiber.test/a failed softly"),
+            ("fiber.test/b", "extension fiber.test/b failed softly"),
+        ]
+        .into_iter()
+        .map(|(extension, message)| contract::events::Notice {
+            code: ErrorCode::HookFailed,
+            message: message.to_owned(),
+            extension: Some(extension.to_owned()),
+        })
+        .collect(),
+    });
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    let all = streamed(&mut world);
+    grouped_notice(&all);
+    // The before-model-call notice lands after the step starts, before
+    // the first delta (`docs/loop.md`, "One step" and "Spending budget":
+    // before_model_call after the request is built, before it is sent;
+    // `docs/errors.md`, "Notices": one per code).
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "notice",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(world.provider.requests().len(), 1);
+}
+
+#[test]
+fn repeated_turn_end_notices_arrive_as_one_grouped_notice() {
+    // The turn-end chain's two `hook_failed` notices reach the log as one
+    // grouped notice: the count and the first item up front, every item
+    // with its extension in the list (`docs/errors.md`, "Notices").
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(noticed_twice(
+        ("fiber.test/a", "extension fiber.test/a failed softly"),
+        ("fiber.test/b", "extension fiber.test/b failed softly"),
+    ));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    let all = streamed(&mut world);
+    grouped_notice(&all);
+    // The turn-end notice lands before turn_completed (`docs/loop.md`,
+    // "Ending a turn": turn_end runs before turn_completed;
+    // `docs/errors.md`, "Notices": one per code).
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "notice",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
