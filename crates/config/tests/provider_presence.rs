@@ -61,6 +61,7 @@ fn function(name: &str, paths: Vec<CredentialPath>) -> ProviderData {
         credential_from: CredentialFrom::Function(CredentialLabelSources {
             names: "profile".into(),
             default: "the environment".into(),
+            credential_env: Vec::new(),
             credential_paths: paths,
         }),
     }
@@ -638,12 +639,12 @@ fn bedrock_key_pair_is_on() {
 }
 
 #[test]
-fn bedrock_half_pairs_are_off() {
+fn bedrock_access_key_id_alone_is_on_and_secret_alone_is_off() {
     let setup = Setup::new();
     let config = setup.load(&[]).unwrap();
     let bedrock = named(&shipped("bedrock"), "bedrock");
     let home = empty_home(&setup);
-    assert!(!present(
+    assert!(present(
         &config,
         &bedrock,
         &env_in(&home, vec![("AWS_ACCESS_KEY_ID", "id")])
@@ -653,7 +654,7 @@ fn bedrock_half_pairs_are_off() {
         &bedrock,
         &env_in(&home, vec![("AWS_SECRET_ACCESS_KEY", "secret")])
     ));
-    assert!(!present(
+    assert!(present(
         &config,
         &bedrock,
         &env_in(
@@ -910,6 +911,23 @@ fn home_unset_leaves_declared_paths_off() {
         &bedrock,
         &[("AWS_SHARED_CREDENTIALS_FILE", "/x/creds")]
     ));
+}
+
+#[test]
+fn a_custom_function_provider_reads_only_its_declared_environment_names() {
+    let setup = Setup::new();
+    let dir = setup.root().join("custom");
+    setup.write(
+        &dir.join("providers/custom.json"),
+        r#"{"name":"custom","credential_label":{"names":"profile","default":"environment","credential_env":["ACME_TOKEN"]},"models":[]}"#,
+    );
+    let provider = config::read_providers(&dir).unwrap().remove(0);
+    let config = setup.load(&[]).unwrap();
+    assert!(!present(&config, &provider, &[]));
+    assert!(!present(&config, &provider, &[("ACME_TOKEN", "")]));
+    assert!(present(&config, &provider, &[("ACME_TOKEN", "key")]));
+    assert!(present(&config, &provider, &[("ACME_TOKEN", " ")]));
+    assert!(!present(&config, &provider, &[("AWS_ACCESS_KEY_ID", "id")]));
 }
 
 #[test]

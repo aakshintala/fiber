@@ -665,6 +665,7 @@ fn credential_label_reads_alone_and_is_invalid_beside_login_or_a_key_source() {
         CredentialFrom::Function(CredentialLabelSources {
             names: "AWS profile".into(),
             default: "the environment".into(),
+            credential_env: Vec::new(),
             credential_paths: Vec::new(),
         })
     );
@@ -684,6 +685,44 @@ fn credential_label_reads_alone_and_is_invalid_beside_login_or_a_key_source() {
             "{beside}: {err}"
         );
     }
+}
+
+#[test]
+fn credential_env_is_a_string_list_inside_credential_label_only() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    for value in [r#""KEY""#, r#"[1]"#, "null", "{}"] {
+        setup.write(
+            &dir.join("providers/p.json"),
+            &format!(r#"{{"name":"p","credential_label":{{"names":"profile","default":"env","credential_env":{value}}},"models":[]}}"#),
+        );
+        assert_eq!(
+            read_providers(&dir).unwrap_err().code(),
+            ErrorCode::ConfigInvalid
+        );
+    }
+    for extra in [
+        "",
+        r#", "credential_label":{"names":"profile","default":"env"}"#,
+    ] {
+        setup.write(
+            &dir.join("providers/p.json"),
+            &format!(r#"{{"name":"p","credential_env":["KEY"]{extra},"models":[]}}"#),
+        );
+        assert_eq!(
+            read_providers(&dir).unwrap_err().code(),
+            ErrorCode::ConfigInvalid
+        );
+    }
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","credential_label":{"names":"profile","default":"env","credential_env":["ACME_TOKEN","OTHER"]},"models":[]}"#,
+    );
+    let data = read_providers(&dir).unwrap().remove(0);
+    let CredentialFrom::Function(sources) = data.credential_from else {
+        panic!("expected function sources");
+    };
+    assert_eq!(sources.credential_env, ["ACME_TOKEN", "OTHER"]);
 }
 
 #[test]

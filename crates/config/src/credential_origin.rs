@@ -12,7 +12,8 @@
 //! presence, not validity: an empty stored or configured file still counts,
 //! and no key is read and no command is run. An ordinary provider counts any
 //! label's origin. A provider whose `credential()` reads nothing Fiber stores
-//! ignores every stored and configured origin: only its environment key or a
+//! ignores every stored and configured origin: only its declared nonempty
+//! `credential_env` variables or a
 //! declared `credential_paths` entry counts.
 
 use std::fs;
@@ -186,7 +187,8 @@ impl Credentials {
     /// An ordinary provider is on when any label's origin proves a login,
     /// whatever label a session would use. A provider whose `credential()`
     /// reads nothing Fiber stores ignores every stored and configured
-    /// origin, including its labels: only its environment key or a declared
+    /// origin, including its labels: only its declared nonempty
+    /// `credential_env` variables or a declared
     /// `credential_paths` entry counts. Never memoizes: each call reads the
     /// files and environment again, so a logout switches the next read off.
     pub fn has_credential(
@@ -196,7 +198,11 @@ impl Credentials {
     ) -> bool {
         match &provider.credential_from {
             CredentialFrom::Function(sources) => {
-                direct_env_present(&provider.name, env) || declared_present(sources, env)
+                sources
+                    .credential_env
+                    .iter()
+                    .any(|name| env(name).is_some_and(|value| !value.is_empty()))
+                    || declared_present(sources, env)
             }
             CredentialFrom::Stored { .. } => self
                 .labels(provider)
@@ -268,25 +274,6 @@ impl Credentials {
             return Ok(Located::Source(own));
         }
         Ok(Located::Nothing)
-    }
-}
-
-/// Whether the environment directly holds a provider's credential, by
-/// provider name: Bedrock's `credential()` reads the environment itself, a
-/// Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK` or AWS keys in
-/// `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` together. A session token
-/// alone names no credential. Every other provider whose `credential()`
-/// reads nothing Fiber stores, Vertex included, draws only on its declared
-/// paths: project and region settings are not credentials. Empty counts as
-/// unset.
-fn direct_env_present(name: &str, env: &dyn Fn(&str) -> Option<String>) -> bool {
-    let set = |var: &str| env(var).is_some_and(|value| !value.is_empty());
-    match name {
-        "bedrock" => {
-            set("AWS_BEARER_TOKEN_BEDROCK")
-                || (set("AWS_ACCESS_KEY_ID") && set("AWS_SECRET_ACCESS_KEY"))
-        }
-        _ => false,
     }
 }
 
