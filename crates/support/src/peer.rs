@@ -349,32 +349,33 @@ fn argv_of(pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
 }
 
 /// The parent pid and effective uid of one process from the kernel's
-/// `proc_bsdinfo` (`bsd/sys/proc_info.h`): `pbi_ppid` is the parent, and
-/// `pbi_uid` is the effective uid beside the real one.
+/// `proc_bsdshortinfo` (`bsd/sys/proc_info.h`): `pbsi_ppid` is the parent,
+/// and `pbsi_uid` is the effective uid beside the real `pbsi_ruid`.
 #[cfg(target_os = "macos")]
 // Mutants run on Linux, where this is not compiled; the macOS test job runs it.
 #[cfg_attr(false, mutants::skip)]
 #[allow(
     unsafe_code,
-    reason = "proc_pidinfo PROC_PIDTBSDINFO into a caller-sized proc_bsdinfo: the pid converts losslessly, the flavor and zero arg are fixed, and the buffer is exactly one structure the kernel fills or fails"
+    reason = "proc_pidinfo PROC_PIDT_SHORTBSDINFO into a caller-sized proc_bsdshortinfo: the pid converts losslessly, the flavor and zero arg are fixed, and the buffer is exactly one structure the kernel fills or fails"
 )]
-fn bsdinfo_of(pid: Pid) -> Result<libc::proc_bsdinfo, ReadError> {
+fn bsdinfo_of(pid: Pid) -> Result<libc::proc_bsdshortinfo, ReadError> {
     let pid_arg =
         libc::c_int::try_from(pid.0).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).map_err(|_| {
-        ReadError::Unreadable {
-            pid,
-            what: "proc_bsdinfo",
-        }
-    })?;
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+    let size =
+        libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdshortinfo>()).map_err(|_| {
+            ReadError::Unreadable {
+                pid,
+                what: "proc_bsdshortinfo",
+            }
+        })?;
     // SAFETY: `pid_arg` is the wanted pid, the flavor and zero arg select
-    // the bsd info of that pid, and `info` with `size` is one whole
-    // `proc_bsdinfo` of plain integers the kernel fills or fails.
+    // the short bsd info of that pid, and `info` with `size` is one whole
+    // `proc_bsdshortinfo` of plain integers the kernel fills or fails.
     let read = unsafe {
         libc::proc_pidinfo(
             pid_arg,
-            libc::PROC_PIDTBSDINFO,
+            libc::PROC_PIDT_SHORTBSDINFO,
             0,
             info.as_mut_ptr().cast::<libc::c_void>(),
             size,
@@ -383,7 +384,7 @@ fn bsdinfo_of(pid: Pid) -> Result<libc::proc_bsdinfo, ReadError> {
     if read != size {
         return Err(ReadError::Unreadable {
             pid,
-            what: "proc_bsdinfo",
+            what: "proc_bsdshortinfo",
         });
     }
     // SAFETY: the call above filled every byte or failed, and the size
@@ -474,14 +475,14 @@ fn argv_from_sysctl(
 // Mutants run on Linux, where this is not compiled; the macOS test job runs it.
 #[cfg_attr(false, mutants::skip)]
 fn euid_of(pid: Pid) -> Result<EffectiveUid, ReadError> {
-    Ok(EffectiveUid(bsdinfo_of(pid)?.pbi_uid))
+    Ok(EffectiveUid(bsdinfo_of(pid)?.pbsi_uid))
 }
 
 #[cfg(target_os = "macos")]
 // Mutants run on Linux, where this is not compiled; the macOS test job runs it.
 #[cfg_attr(false, mutants::skip)]
 fn parent_of(pid: Pid) -> Result<Pid, ReadError> {
-    Ok(Pid(bsdinfo_of(pid)?.pbi_ppid))
+    Ok(Pid(bsdinfo_of(pid)?.pbsi_ppid))
 }
 
 #[cfg(target_os = "macos")]
