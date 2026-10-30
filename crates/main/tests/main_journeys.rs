@@ -86,6 +86,175 @@ fn run_journey(name: &str, body: impl FnOnce() + std::panic::UnwindSafe) {
     }
 }
 
+/// The contract edges below run through this child-side probe, so no test
+/// mutates its own process environment: each parent spawns the test
+/// binary filtered to this one test with a crafted environment, and
+/// asserts on the child's exit and stderr. Without `FIBER_JOURNEY_EDGE`
+/// it passes silently, so the normal suite run stays green.
+#[test]
+fn edge_child_probe() {
+    match std::env::var("FIBER_JOURNEY_EDGE").as_deref() {
+        Ok("bin") => {
+            let _ = journey_bin();
+        }
+        Ok("record") => record_failure("edge-line"),
+        _ => {}
+    }
+}
+
+/// Runs [`edge_child_probe`] in a child process with `vars` applied over
+/// the inherited environment, returning its output.
+fn run_edge_child(vars: &[(&str, Option<&str>)]) -> std::process::Output {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .arg("edge_child_probe")
+        .arg("--exact")
+        .arg("--nocapture");
+    for (key, value) in vars {
+        match value {
+            Some(text) => {
+                command.env(key, text);
+            }
+            None => {
+                command.env_remove(key);
+            }
+        }
+    }
+    command.output().unwrap()
+}
+
+/// Without `FIBER_JOURNEY_BIN` the suite names the variable instead of
+/// falling back to any build: the failure tells the caller what to set.
+#[test]
+fn journey_bin_without_its_variable_names_it() {
+    let run_edge_child_output = run_edge_child(&[
+        ("FIBER_JOURNEY_EDGE", Some("bin")),
+        ("FIBER_JOURNEY_BIN", None),
+    ]);
+    assert!(
+        !run_edge_child_output.status.success(),
+        "an unset variable fails"
+    );
+    let stderr = String::from_utf8_lossy(&run_edge_child_output.stderr);
+    assert!(
+        stderr.contains("FIBER_JOURNEY_BIN is not set"),
+        "names the variable: {stderr}"
+    );
+}
+
+/// A missing binary path fails naming it: the file check, not the
+/// executable bit, rejects it on every platform.
+#[test]
+fn journey_bin_at_a_missing_path_names_it() {
+    let missing = std::env::temp_dir().join("fiber-journey-no-such-binary");
+    let run_edge_child_output = run_edge_child(&[
+        ("FIBER_JOURNEY_EDGE", Some("bin")),
+        ("FIBER_JOURNEY_BIN", Some(missing.to_str().unwrap())),
+    ]);
+    assert!(
+        !run_edge_child_output.status.success(),
+        "a missing file fails"
+    );
+    let stderr = String::from_utf8_lossy(&run_edge_child_output.stderr);
+    assert!(
+        stderr.contains("FIBER_JOURNEY_BIN is not executable"),
+        "names the variable: {stderr}"
+    );
+    assert!(
+        stderr.contains("fiber-journey-no-such-binary"),
+        "names the path: {stderr}"
+    );
+}
+
+/// A present file without the executable bit fails naming it. Unix-only:
+/// elsewhere executability is the file check the missing-path test pins.
+#[cfg(unix)]
+#[test]
+fn journey_bin_at_a_non_executable_file_names_it() {
+    let plain = std::env::temp_dir().join("fiber-journey-plain-file");
+    std::fs::write(&plain, "not a binary").unwrap();
+    let run_edge_child_output = run_edge_child(&[
+        ("FIBER_JOURNEY_EDGE", Some("bin")),
+        ("FIBER_JOURNEY_BIN", Some(plain.to_str().unwrap())),
+    ]);
+    std::fs::remove_file(&plain).unwrap();
+    assert!(
+        !run_edge_child_output.status.success(),
+        "a non-executable file fails"
+    );
+    let stderr = String::from_utf8_lossy(&run_edge_child_output.stderr);
+    assert!(
+        stderr.contains("FIBER_JOURNEY_BIN is not executable"),
+        "names the variable: {stderr}"
+    );
+    assert!(
+        stderr.contains("fiber-journey-plain-file"),
+        "names the path: {stderr}"
+    );
+}
+
+/// An executable file passes: the test binary itself, which the suite
+/// just executed.
+#[test]
+fn journey_bin_returns_an_executable_file() {
+    let exe = std::env::current_exe().unwrap();
+    let run_edge_child_output = run_edge_child(&[
+        ("FIBER_JOURNEY_EDGE", Some("bin")),
+        ("FIBER_JOURNEY_BIN", Some(exe.to_str().unwrap())),
+    ]);
+    assert!(
+        run_edge_child_output.status.success(),
+        "an executable file passes: {}",
+        String::from_utf8_lossy(&run_edge_child_output.stderr)
+    );
+}
+
+/// A failure appends after the entries already in the file, preserving
+/// their order: the caller-created file is never truncated.
+#[test]
+fn record_failure_appends_after_existing_entries() {
+    let file = std::env::temp_dir().join("fiber-journey-failures");
+    std::fs::write(&file, "earlier-line\n").unwrap();
+    let run_edge_child_output = run_edge_child(&[
+        ("FIBER_JOURNEY_EDGE", Some("record")),
+        ("FIBER_JOURNEY_FAILURES", Some(file.to_str().unwrap())),
+    ]);
+    let body = std::fs::read_to_string(&file).unwrap();
+    std::fs::remove_file(&file).unwrap();
+    assert!(
+        run_edge_child_output.status.success(),
+        "the append passes: {}",
+        String::from_utf8_lossy(&run_edge_child_output.stderr)
+    );
+    assert_eq!(body, "earlier-line\nedge-line\n");
+}
+
+/// When the append cannot open its file, the name is already on stderr
+/// before the panic naming the path: the failure is never lost silently.
+#[test]
+fn record_failure_prints_before_the_append_panics() {
+    let missing = std::env::temp_dir().join("fiber-journey-no-such-dir");
+    let target = missing.join("failures");
+    let run_edge_child_output = run_edge_child(&[
+        ("FIBER_JOURNEY_EDGE", Some("record")),
+        ("FIBER_JOURNEY_FAILURES", Some(target.to_str().unwrap())),
+    ]);
+    assert!(
+        !run_edge_child_output.status.success(),
+        "an unopenable file fails"
+    );
+    let stderr = String::from_utf8_lossy(&run_edge_child_output.stderr);
+    let printed = stderr
+        .find("Journey failure: edge-line")
+        .expect("prints the name");
+    let panicked = stderr.find("panicked").expect("then panics");
+    assert!(printed < panicked, "the print precedes the panic: {stderr}");
+    assert!(
+        stderr.contains("fiber-journey-no-such-dir"),
+        "then names the path: {stderr}"
+    );
+}
+
 /// Installs only the fake provider extension, as the installed-provider
 /// stand-in of a home right after install (`docs/releasing.md`, "Install
 /// steps"): the extension-install portion of `Setup::provider`, without
