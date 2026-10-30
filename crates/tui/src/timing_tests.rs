@@ -802,11 +802,12 @@ fn summary_poll_starts_nothing_once_the_latch_is_set() {
 }
 
 /// The open's pre-frame tail read is timed end to end: one
-/// `tui.tail_wait` line spans the whole fetch, one `tui.preview_fold`
-/// line covers the answer's fold, and one `tui.tail_install` line covers
-/// the install, which installs the newest candidate without another fold
-/// (`docs/tui.md`, "History and paging"). A `Phase::Count` read takes no
-/// `tail_wait` guard, so swapping the arms leaves none here.
+/// `tui.tail_wait` line spans the whole fetch, two `tui.preview_fold`
+/// lines cover the initial seed fold and the answer's fold separately,
+/// and one `tui.tail_install` line covers the install, which installs
+/// the newest candidate without another fold (`docs/tui.md`, "History
+/// and paging"). A `Phase::Count` read takes no `tail_wait` guard, so
+/// swapping the arms leaves none here.
 #[test]
 fn open_tail_times_the_wait_and_every_fold() {
     let (home, mut lp, id) = subscribing_lp("tui-timing-open-tail");
@@ -875,7 +876,11 @@ fn open_tail_times_the_wait_and_every_fold() {
         .filter(|line| line["data"]["op"] == "tui.preview_fold")
         .cloned()
         .collect();
-    assert_eq!(folds.len(), 1, "the answer's fold: {folds:?}");
+    assert_eq!(
+        folds.len(),
+        2,
+        "the initial seed fold and the answer's fold: {folds:?}"
+    );
     assert_terminal_wires(&folds, "tui.preview_fold");
     let installs: Vec<Value> = lines
         .iter()

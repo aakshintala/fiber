@@ -294,9 +294,10 @@ impl Connection {
     /// message; a reopening abandons it without one. A lost connection
     /// ends the read; the loop's `disconnected` already ended the overlay.
     /// The tail phase holds its wait guard to completion, whatever the
-    /// outcome, and each of its answers folds under its own fold guard;
-    /// the count phase takes neither. The guards only observe: the
-    /// requests, their order and the answers are unchanged.
+    /// outcome, and its initial seed fold plus each of its answers folds
+    /// under its own fold guard; the count phase takes neither. The
+    /// guards only observe: the requests, their order and the answers
+    /// are unchanged.
     #[allow(
         clippy::too_many_arguments,
         reason = "the fetch carries the session, the app, the tick, the clock, the frame's deadline and the attach timing"
@@ -316,11 +317,25 @@ impl Connection {
             Phase::Tail => timing.tail_wait(),
             Phase::Count => None,
         };
+        // The initial tail read happens once, before any answer, and
+        // the next `tail_next` calls see the existing preview: only the
+        // first call can fold the seed, so only it takes a fold guard.
+        let mut first_tail = matches!(phase, Phase::Tail);
         loop {
             let args = match phase {
                 Phase::Count => app.tail_count_next(),
-                Phase::Tail => app.tail_next(),
+                Phase::Tail => {
+                    let seed = if first_tail {
+                        timing.preview_fold()
+                    } else {
+                        None
+                    };
+                    let args = app.tail_next();
+                    drop(seed);
+                    args
+                }
             };
+            first_tail = false;
             let Some(args) = args else {
                 return Ok(());
             };
