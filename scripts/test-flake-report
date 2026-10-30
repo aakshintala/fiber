@@ -348,6 +348,10 @@ pr_tested="tested $sha = main $base + head $head"
 plain="The test \`$name\` passed after a retry on linux: $url."
 see_pr="$plain (see #12)"
 belongs="The test \`$name\` passed after a retry on linux, but its failing file \`crates/main/tests/flaky_probe.rs\` belongs to #12 rather than main: $url."
+mainmod_name='main reviewer_setup::the_setup_saves'
+mainmod_title='Flaky tests: main::reviewer_setup'
+mainmod_detail='thread the_setup_saves panicked at crates/main/tests/reviewer_setup.rs:10:9\nfirst attempt'
+mainmod_decide='{"action": "file-new", "title": "'"$mainmod_title"'"}'
 
 # The body is the sentence, the tested line, then the failure in a fence.
 body() {
@@ -518,6 +522,23 @@ expect_exit push-no-tab "$code" 0
 # docs/testing/running.md, "Flaky tests": "A failure with no panic path, or any failure on a push run, files as usual"
 expect_writes "$tmp/push-no-tab" 1
 expect_write "$tmp/push-no-tab" 0 "$(printf 'create %s\n%s\n%s\nlabel=test-only' "$title" "$plain" "$push_tested")"
+
+# A `main` module flake files under its per-module title: the binary
+# plus the first test-module segment.
+setup_case push-create-mainmod
+printf '%s\t%s\n' "$mainmod_name" "$mainmod_detail" >"$tmp/push-create-mainmod/temp/flaky/flaky-tests-linux.txt"
+printf '%s\n' "$mainmod_decide" >"$tmp/push-create-mainmod/decisions.jsonl"
+code=$(classify_case "$tmp/push-create-mainmod" push "" "" "")
+expect_exit push-create-mainmod-classify "$code" 0
+code=$(run_step "$tmp/push-create-mainmod" push "" "$empty_open" "" decisions.jsonl)
+expect_exit push-create-mainmod "$code" 0
+# docs/ci.md, "On every pull request that changes code": "writes one
+# classification line per unique title": one title writes once.
+# docs/testing/running.md, "Flaky tests": "the aggregate `main`
+# integration binary names its first test-module segment".
+expect_writes "$tmp/push-create-mainmod" 1
+mainmod_plain="The test \`$mainmod_name\` passed after a retry on linux: $url."
+expect_write "$tmp/push-create-mainmod" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$mainmod_title" "$(detail="$mainmod_detail" body "$mainmod_plain" "$push_tested")")"
 
 # A pull request run with two parents, main then the pull request head: a
 # new issue naming the pull request, a comment on the open one, a comment
@@ -1003,10 +1024,11 @@ classify_real "$realgit" "$mg3"
 [ "$("$real_jq" -r --arg t 'Flaky tests: main::forced' "select(.title == \$t) | .tested // empty" "$classes")" = "tested $mg3 = main $m2 + head $p3" ] || fail "classify-real-git force-pushed-head: the tested line must name the rewritten head"
 unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 
-# The Collate step titles one line per binary id: the step is the one
-# whose header contains "Collate this run", its `run: |` body up to the
-# next step line. Each case runs it with the step's own env and asserts
-# the exact titles file and the flakes output.
+# The Collate step titles one line per unique title, keyed by test module
+# for the aggregate `main` binary: the step is the one whose header contains
+# "Collate this run", its `run: |` body up to the next step line. Each
+# case runs it with the step's own env and asserts the exact titles
+# file and the flakes output.
 collate_dir=$tmp/collate
 mkdir -p "$collate_dir"
 awk '
@@ -1020,7 +1042,7 @@ awk '
   }
 ' .github/workflows/ci.yml >"$collate_dir/collate.sh"
 [ -s "$collate_dir/collate.sh" ] || fail "the collate step's script was not found in .github/workflows/ci.yml"
-grep -Fq 'Flaky tests:' "$collate_dir/collate.sh" || fail "the collate step does not title by binary id"
+grep -Fq 'Flaky tests:' "$collate_dir/collate.sh" || fail "the collate step does not title flakes"
 # run_collate DIR: runs the extracted Collate step against DIR/flaky,
 # writing DIR/out/flake-titles.txt and DIR/out/output.
 run_collate() {
@@ -1034,7 +1056,7 @@ run_collate() {
     bash --noprofile --norc -eo pipefail "$collate_dir/collate.sh" || fail "$dir: the collate step failed"
 }
 # expect_titles_sorted DIR WANT: the titles file holds exactly the titles in
-# WANT as a set. The Collate step promises one line per binary id, not an
+# WANT as a set. The Collate step promises one line per unique title, not an
 # order for distinct titles, so both sides are sorted before comparing; a
 # duplicate or a missing title still fails.
 # docs/testing/running.md, "Flaky tests": "Within one report job a file's title files or comments once; a repeat is skipped"
@@ -1080,13 +1102,40 @@ printf 'main::a t1\td1\nmain::b t1\td2\n' >"$collate_two/flaky/flaky-tests-linux
 run_collate "$collate_two"
 expect_titles_sorted "$collate_two" "$(printf 'Flaky tests: main::a\nFlaky tests: main::b')"
 expect_flakes "$collate_two" 'has_flakes=true'
-# A unit-test binary id and the bare id give the one title.
+# A unit-test id and the bare id give the one binary title: unit ids
+# are not parsed specially.
 collate_unit=$tmp/collate-unit
 mkdir -p "$collate_unit/flaky"
 printf 'fiber-core tests::foo\td1\nfiber-core\td2\n' >"$collate_unit/flaky/flaky-tests-linux.txt"
 run_collate "$collate_unit"
 expect_titles "$collate_unit" 'Flaky tests: fiber-core'
 expect_flakes "$collate_unit" 'has_flakes=true'
+# The aggregate `main` binary files one title per test-module file, while
+# a root-level `main` test and its bare id, a single-file integration
+# binary and a unit-test id with a module segment keep the binary title.
+# The shell and Rust derivations run over the same lines and agree
+# byte-for-byte.
+collate_key=$tmp/collate-key
+mkdir -p "$collate_key/flaky"
+{
+  printf 'main reviewer_setup::the_setup_saves\td1\nmain reload_tests::some_test\td2\n'
+  printf 'main root_level_test\td3\nmain\td4\nmain ::empty_segment\td8\n'
+  printf 'main::hub_exit_window helper_tests::case\td5\n'
+  printf 'fakes process_group_tests::reaps_children\td6\nfakes\td7\n'
+} >"$collate_key/flaky/flaky-tests-linux.txt"
+run_collate "$collate_key"
+expect_titles_sorted "$collate_key" "$(printf 'Flaky tests: main::reviewer_setup\nFlaky tests: main::reload_tests\nFlaky tests: main\nFlaky tests: main::hub_exit_window\nFlaky tests: fakes')"
+expect_flakes "$collate_key" 'has_flakes=true'
+"$real_cargo" run --quiet --manifest-path "$toplevel/xtask/Cargo.toml" -- flake-classify --flaky-dir "$collate_key/flaky" --event push --tested-commit "$sha" >"$collate_key/classes.jsonl" || fail "collate-key: flake-classify failed"
+"$real_jq" -r .title "$collate_key/classes.jsonl" | LC_ALL=C sort >"$collate_key/rust.txt"
+LC_ALL=C sort "$collate_key/out/flake-titles.txt" >"$collate_key/shell.txt"
+cmp -s "$collate_key/rust.txt" "$collate_key/shell.txt" || {
+  echo "--- rust titles:" >&2
+  cat "$collate_key/rust.txt" >&2
+  echo "--- shell titles:" >&2
+  cat "$collate_key/shell.txt" >&2
+  fail "collate-key: the shell and Rust titles differ"
+}
 # An empty list gives no flakes and an empty titles file.
 collate_empty=$tmp/collate-empty
 mkdir -p "$collate_empty/flaky"
