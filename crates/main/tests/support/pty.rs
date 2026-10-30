@@ -677,6 +677,80 @@ impl Run {
         Self::spawn_inner(setup, cols, rows, Some((xpixel, ypixel)), args, env, true)
     }
 
+    /// Spawns the binary at `bin` with `args` on a `cols` by `rows` pty:
+    /// the journey suite's run, which the gate never builds. Same shape
+    /// as [`Run::spawn_unseeded`] (no receipt seeding, cleared env plus
+    /// caller env, `TERM=xterm-256color`, pty stdio, run deadline), but
+    /// the child binary is the given path instead of
+    /// `env!("CARGO_BIN_EXE_fiber")`.
+    #[track_caller]
+    pub(crate) fn spawn_journey(
+        setup: &Setup,
+        cols: u16,
+        rows: u16,
+        bin: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
+        Self::spawn_inner_bin(setup, cols, rows, bin, args, env)
+    }
+
+    /// The `spawn_inner` shape with the child binary taken from `bin`:
+    /// no receipt seeding, cleared env plus caller env,
+    /// `TERM=xterm-256color`, pty stdio, run deadline. Kept separate so
+    /// no existing spawn wrapper changes.
+    #[track_caller]
+    fn spawn_inner_bin(
+        setup: &Setup,
+        cols: u16,
+        rows: u16,
+        bin: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
+        let terminal = open_with_pixels(cols, rows, 0, 0);
+        let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
+        let mut command = Command::new(bin);
+        command
+            .current_dir(setup.workspace())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", setup.root.path())
+            .env("FIBER_HOME", setup.home())
+            .env("TERM", "xterm-256color");
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command.args(args);
+        command
+            .stdin(terminal.stdio())
+            .stdout(terminal.stdio())
+            .stderr(terminal.stdio());
+        let (child, watchdog) = spawn_watched(&mut command);
+        drop(terminal.terminal);
+        let deadline = setup.deadline;
+        let main = fs::File::from(terminal.main);
+        let shared = Arc::new(Mutex::new(Shared::new(cols, rows)));
+        let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
+        let (reader, wakes) =
+            Reader::start(main, Arc::clone(&shared), Arc::clone(&writer), deadline);
+        Self {
+            child: Some(child),
+            hub_socket: setup.home().join("run").join("hub"),
+            hub_home: setup.home().to_path_buf(),
+            watchdog: Some(watchdog),
+            sessions: Some((sessions, setup.workspace().to_string_lossy().into_owned())),
+            shared,
+            writer,
+            reader: Some(reader),
+            wakes,
+            cols,
+            rows,
+            deadline,
+        }
+    }
+
     /// Spawns `fiber` with `args` on a `cols` by `rows` pty: standard
     /// input, output and error all on the terminal side, as on a real
     /// terminal. Each run starts from a cleared environment with only
