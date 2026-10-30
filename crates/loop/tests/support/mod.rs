@@ -351,6 +351,7 @@ impl Tool for TestTool {
             subject: self.subject.clone(),
             prefix: self.prefix.clone(),
             always_reviewed: self.always_reviewed,
+            review_when_confined: false,
             hosts: self.hosts.clone(),
         })
     }
@@ -495,6 +496,7 @@ impl Tool for WriteFile {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            review_when_confined: false,
             hosts: None,
         })
     }

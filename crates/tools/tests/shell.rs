@@ -2809,6 +2809,113 @@ fn effects_of(shell: &Shell, command: &str) -> contract::tool::Effects {
     shell.effects(&args(command)).expect("effects")
 }
 
+/// The destructive-command guard (`docs/tools.md`, "What a tool declares"):
+/// the shell declares `review_when_confined` when any component of a
+/// multi-part command holds a built-in destructive form, matched by command
+/// text. Each of the six forms stands alone below so deleting one matcher
+/// predicate fails this test.
+#[test]
+fn the_destructive_guard_matches_each_form_in_every_placement() {
+    let dir = fakes::TempDir::new("fiber-shell-destructive-guard");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    let guarded = [
+        "rm -r tmp",
+        "rm -rf tmp",
+        "git reset --hard",
+        "git clean -fd",
+        "git checkout -- README.md",
+        "git restore README.md",
+    ];
+    let mut cases: Vec<String> = Vec::new();
+    for form in guarded {
+        cases.push(form.to_owned());
+        for sep in ["&&", "||", ";", "|"] {
+            cases.push(format!("{form} {sep} echo hi"));
+            cases.push(format!("echo hi {sep} {form} {sep} echo hi"));
+            cases.push(format!("echo hi {sep} {form}"));
+        }
+    }
+    cases.push("/usr/bin/rm -rf tmp".to_owned());
+    cases.push("/usr/bin/git reset --hard".to_owned());
+    cases.push("/usr/bin/git clean -fd && echo hi".to_owned());
+    for command in cases {
+        let effects = effects_of(&shell, &command);
+        assert!(
+            effects.review_when_confined,
+            "a guarded component stays reviewed: {command}"
+        );
+        assert!(
+            !effects.always_reviewed,
+            "the guard is not a full review: {command}"
+        );
+    }
+}
+
+/// Near-misses and benign commands declare no guard: the flag stays false
+/// and the call keeps its ordinary `always_reviewed` answer.
+#[test]
+fn the_destructive_guard_ignores_near_misses() {
+    let dir = fakes::TempDir::new("fiber-shell-destructive-guard-benign");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    for command in [
+        "rm tmp",
+        "rm -f tmp",
+        "git reset",
+        "git reset --soft HEAD",
+        "git checkout main",
+        "git checkout -b feature",
+        "git status",
+        "echo hi",
+        "echo rm -rf tmp",
+        "echo \"rm -rf tmp\"",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert!(
+            !effects.review_when_confined,
+            "no guarded form appears: {command}"
+        );
+        assert!(
+            !effects.always_reviewed,
+            "the guard changes nothing benign: {command}"
+        );
+    }
+}
+
+/// The guard reads the raw command text, so it holds where the parser
+/// gives up: a newline the recogniser refuses, an opaque grouped stage,
+/// and a command past the parser's length limit.
+#[test]
+fn the_destructive_guard_covers_text_the_parser_rejects() {
+    let dir = fakes::TempDir::new("fiber-shell-destructive-guard-raw");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    let long = format!("{} && git restore f", "true ".repeat(3_000));
+    assert!(
+        long.len() > 10_000,
+        "the long case stays past the parser limit"
+    );
+    for command in [
+        "echo hi\ngit clean -fd".to_owned(),
+        "true && (git clean -fd)".to_owned(),
+        long,
+    ] {
+        let effects = effects_of(&shell, &command);
+        assert!(
+            effects.review_when_confined,
+            "raw text still guards: {command:?}"
+        );
+        assert!(
+            !effects.always_reviewed,
+            "the guard is not a full review: {command:?}"
+        );
+    }
+}
+
 fn jq_r() -> Vec<(String, Vec<String>)> {
     vec![("jq".to_owned(), vec!["-r".to_owned()])]
 }
