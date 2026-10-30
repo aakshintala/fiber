@@ -908,13 +908,15 @@ jobs:
           path: mutants.out
           if-no-files-found: ignore
 
-  bug_red:
-    name: Bug fix fails at the red commit
+  bug_red_linux:
+    name: Bug red (Linux x86_64)
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
-    # One run, 3 min; the slowest passing run of the last 25 took 3.5 min; 10 minutes covers twice it.
+    # The slowest passing run of the last 25 took 3.5 min; 10 minutes covers twice it.
     timeout-minutes: 10
+    outputs:
+      status: ${{ steps.red.outputs.status }}
     env:
       BASE: ${{ needs.select.outputs.base }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -925,7 +927,44 @@ jobs:
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest
-      - run: scripts/bug-red "$BASE" "$HEAD_SHA"
+      - id: red
+        run: scripts/bug-red --report "$BASE" "$HEAD_SHA"
+
+  bug_red_macos:
+    name: Bug red (macOS arm64)
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).bug_red
+    runs-on: macos-26
+    # PR run 40989874631 took 8m10s; 17 minutes covers about twice that.
+    timeout-minutes: 17
+    outputs:
+      status: ${{ steps.red.outputs.status }}
+    env:
+      BASE: ${{ needs.select.outputs.base }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - *checkout-full
+      - *toolchain
+      - *cache-restore
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      - id: red
+        run: scripts/bug-red --report "$BASE" "$HEAD_SHA"
+
+  bug_red:
+    name: Bug fix fails at the red commit
+    needs: [select, bug_red_linux, bug_red_macos]
+    if: always() && needs.select.result == 'success' && fromJSON(needs.select.outputs.jobs).bug_red
+    runs-on: ubuntu-24.04
+    # Collector only reads the two leg results; median under 5 minutes.
+    timeout-minutes: 5
+    env:
+      LINUX_STATUS: ${{ needs.bug_red_linux.outputs.status }}
+      MACOS_STATUS: ${{ needs.bug_red_macos.outputs.status }}
+    steps:
+      - *checkout-full
+      - run: scripts/bug-red --collect "$LINUX_STATUS" "$MACOS_STATUS"
 
   release:
     name: Release build and size (Linux x86_64)

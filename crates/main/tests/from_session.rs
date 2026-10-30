@@ -10,7 +10,8 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    reason = "test helpers; a failure is the test's"
+    clippy::print_stderr,
+    reason = "test helpers; a failure is the test's; a skip prints its reason"
 )]
 
 mod support;
@@ -1724,5 +1725,76 @@ fn shell_started_ask_steered_by_the_shell_is_refused_from_session() {
     );
     let closed = recv_answer(&client, "c_close_ask", "the close acknowledgement");
     assert_eq!(closed["kind"], "command_accepted", "{closed}");
+    finish(hub, client, guard, &[&session]);
+}
+
+/// A client under a root-owned `sudo` prompts a session that is not its
+/// own: the walk reads through the root ancestor, so the prompt is accepted.
+/// `sudo -n -u` the caller's own name puts root `sudo` between the test and
+/// the probe without a password; without it a local run prints why and
+/// returns, while CI fails because it must exercise the test.
+#[test]
+fn root_ancestor_prompt_to_another_session_is_accepted() {
+    let setup = Setup::new();
+    let sudo = std::path::Path::new("/usr/bin/sudo");
+    let user = support::bounded(setup.deadline, "the test user's name", || {
+        std::process::Command::new("id").arg("-un").output()
+    })
+    .expect("id prints the test user's name");
+    assert!(user.status.success(), "id prints the test user's name");
+    let user = String::from_utf8(user.stdout)
+        .expect("the user name is UTF-8")
+        .trim()
+        .to_owned();
+    let sudo_user = user.clone();
+    let probe_sudo = support::bounded(
+        setup.deadline,
+        "passwordless sudo to the test user",
+        move || {
+            std::process::Command::new(sudo)
+                .args(["-n", "-u", &sudo_user, "true"])
+                .status()
+        },
+    );
+    if !probe_sudo.map(|status| status.success()).unwrap_or(false) {
+        let reason = "root_ancestor_prompt_to_another_session_is_accepted needs passwordless `sudo -n -u \"$(id -un)\"`";
+        if std::env::var_os("CI").is_some() {
+            panic!("CI prerequisite unavailable: {reason}");
+        }
+        eprintln!("SKIP: {reason}");
+        return;
+    }
+    let server = fakes::ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
+    let probe = write_probe(&setup);
+    let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
+    let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "run it");
+    // The prompt lands once the first turn ends: the turn's end proves the
+    // session is idle, so the prompt is queued on an idle loop.
+    let first_turn = until(&client, "the session's first turn to end", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == session
+    });
+    first_turn.last().expect("the turn ended");
+    let line = json!({
+        "id": "c_sudo_prompt",
+        "session_id": session,
+        "command": "prompt",
+        "args": {"content": [{"type": "text", "text": "from under sudo"}]},
+    });
+    let answer = run_probe_direct(
+        &setup,
+        sudo,
+        &[
+            "-n",
+            "-u",
+            user.as_str(),
+            "python3",
+            probe.as_str(),
+            hub_socket.as_str(),
+            session.as_str(),
+            "c_sudo_sub",
+            &line.to_string(),
+        ],
+    );
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
     finish(hub, client, guard, &[&session]);
 }
