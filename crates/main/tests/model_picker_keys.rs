@@ -356,7 +356,7 @@ fn clicking_the_thinking_chip_opens_the_picker_on_its_level_chips() {
     // touched (`model_picker::open`), saving only the default
     // level; an ordinary choose would save only the model and write
     // no level, failing the config read below.
-    let (x, y) = chip_cell(&home, "[thinking:");
+    let (x, y) = chip_cell(&home, "[thinking:"); // settled: case 1 run.ready() + home again (exact text per home with its chips)
     click(&mut run, x, y);
     run.wait_screen("the picker on alpha's level chips", |screen| {
         picker_open(screen) && thinking_focused(screen)
@@ -557,7 +557,7 @@ fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
         let before = run.wait_screen(&format!("the unhovered chip {needle}"), |screen| {
             chip_unhovered(screen, needle)
         });
-        let (x, y) = chip_cell(&before, needle);
+        let (x, y) = chip_cell(&before, needle); // settled: case 1 run.ready() + the unhovered chip wait
         let len = u16::try_from(needle.len()).expect("the chip fits its row");
         let plain = chip_cells(&before, x, y, len);
         hover(&mut run, x, y);
