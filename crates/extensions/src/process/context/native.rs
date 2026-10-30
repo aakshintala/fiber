@@ -23,7 +23,12 @@ impl NativeHostServices {
     /// The body reads as a bytes position. A call with no deadline
     /// waits without a backstop, as a timer's does. With a script the
     /// reply comes from the case alone, exactly as the Lua half consults
-    /// it: a scripted miss never falls through to native I/O.
+    /// it: a scripted miss never falls through to native I/O, and a
+    /// scripted request records nothing. A real request records one
+    /// `http_request` line as the extension's own — the callback's
+    /// extension with `Purpose::Extension`, never a provider, model,
+    /// host or path — with the same attempt-1 and failure semantics the
+    /// Lua path observes.
     fn http(
         &self,
         method: &str,
@@ -50,7 +55,23 @@ impl NativeHostServices {
             .deadline
             .map(|end| end.saturating_duration_since(self.clock.now()) + GRACE);
         let request = crate::host::HttpRequest { timeout, ..request };
-        let (status, bytes) = crate::host::perform(&request)?;
+        // The extension's own request, observed exactly as the Lua path
+        // observes it: the callback's extension names it, whatever
+        // callback made it, and the sink stamps it. A silent sink, or no
+        // sink, runs the same request unobserved.
+        let observation = self.diagnostics.as_ref().and_then(|debug| {
+            debug.debugging().then(|| crate::host::HttpObservation {
+                provider: None,
+                extension: Some(callback.extension.clone()),
+                purpose: contract::diag::Purpose::Extension,
+                debug: Arc::clone(debug),
+                clock: Arc::clone(&self.clock),
+            })
+        });
+        let (status, bytes) = match observation {
+            Some(observation) => crate::host::perform_observed(&request, observation)?,
+            None => crate::host::perform(&request)?,
+        };
         Ok(Some(Self::http_answer(status, bytes)))
     }
 

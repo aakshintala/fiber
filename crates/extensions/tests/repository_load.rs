@@ -266,6 +266,7 @@ fn load_session(setup: &Setup, set: RepositorySet, overrides: &[&str]) -> Sessio
             None,
             StateSeed::new(),
             set,
+            None,
         ))
         .unwrap();
     });
@@ -1490,7 +1491,7 @@ fn reload_session(
     let (done, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
-        done.send(session.reload_repository(&home, &config, FakeClock::new(), locks, set))
+        done.send(session.reload_repository(&home, &config, FakeClock::new(), locks, set, None))
             .unwrap();
     });
     Deadline::after(WAIT).recv_or_fail(&rx, "the session reload")

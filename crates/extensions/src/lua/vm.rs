@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use contract::diag::DebugLog;
 use mlua::{FromLua, Function, Lua, LuaOptions, MultiValue, StdLib, Table, Thread};
 use serde_json::Value;
 
@@ -29,6 +30,11 @@ pub(super) struct Vm {
     /// The session's workspace, resolving an `exec` `cwd` as `host.fs`
     /// paths are.
     workspace: PathBuf,
+    /// The installed diagnostic sink when the VM started: snapshotted
+    /// from the hub before the entry script runs, so the entry's own
+    /// `host.http` still observes when the sink arrived with the session
+    /// load. `None` on test-only loads with no sink.
+    diagnostics: Option<Arc<dyn DebugLog>>,
     /// The host calls the case runner scripts, absent in ordinary sessions
     /// (`docs/testing.md`, "Testing an extension").
     host_script: Option<Arc<crate::host::script::HostScript>>,
@@ -192,6 +198,7 @@ impl Vm {
             name: name.to_owned(),
             deadline,
             clock,
+            diagnostics: hub.diagnostics(),
             workspace,
             host_script: hub.host_script(),
             memory_cap: *memory_cap,
@@ -534,7 +541,22 @@ impl Vm {
                 setup::Poll::Host(host::Request::Http(request)) => {
                     let result = match &self.host_script {
                         Some(script) => script.http(request.case_value()),
-                        None => host::perform(&request),
+                        // A real entry request outside a provider function
+                        // is the extension's own: it observes with the
+                        // sink the VM snapshotted before entry ran.
+                        None => match &self.diagnostics {
+                            Some(debug) if debug.debugging() => {
+                                let observation = host::HttpObservation {
+                                    provider: None,
+                                    extension: Some(self.name.clone()),
+                                    purpose: contract::diag::Purpose::Extension,
+                                    debug: Arc::clone(debug),
+                                    clock: Arc::clone(&self.clock),
+                                };
+                                host::perform_observed(&request, observation)
+                            }
+                            _ => host::perform(&request),
+                        },
                     };
                     args = host::resume_values(&self.lua, &self.clock, host::Reply::Http(result))
                         .map_err(fail)?;

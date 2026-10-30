@@ -480,6 +480,7 @@ fn load_set(setup: &Setup, repos: &Repos) -> Arc<SessionExtensions> {
             None,
             StateSeed::new(),
             set,
+            None,
         ));
     });
     Deadline::after(MUST_SUCCEED_WITHIN)

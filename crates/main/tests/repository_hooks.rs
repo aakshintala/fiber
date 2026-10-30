@@ -668,6 +668,7 @@ fn deliberately_skipped_required_does_not_fail() {
         None,
         extensions::StateSeed::new(),
         set1,
+        None,
     );
     let set2 = extensions::RepositorySet::load(
         &home,
@@ -686,6 +687,7 @@ fn deliberately_skipped_required_does_not_fail() {
         fakes::clock::FakeClock::new(),
         std::sync::Arc::new(fakes::FakeLock::new()),
         set2,
+        None,
     );
     // A deliberately skipped required replacement is not a copy failure:
     // the required gate sees no failure (`docs/extensions.md`, "Hooks

@@ -1107,19 +1107,37 @@ pub(crate) fn provider_purpose(target: &Target) -> Option<(&str, Purpose)> {
 }
 
 /// Snapshots the owned observation context for an HTTP request about to
-/// run as `target`: the provider's registered name and the eligible
-/// purpose, with the installed sink and clock. None unless the target is
-/// an eligible provider purpose, a sink is installed and it records debug
+/// run as `target` of the extension `extension`: its purpose, with the
+/// installed sink and clock. A provider function keeps the provider's
+/// registered name and its eligible purpose; every other target — a
+/// hook, command, timer, tool, watcher, search, effects, delegate, the
+/// entry script or any target added later — records as the extension's
+/// own request. A provider function without a purpose (`sign`, or any
+/// other future one) stays silent, whatever HTTP it sends. None unless
+/// the target is eligible, a sink is installed and it records debug
 /// lines. No timer starts and nothing is written here: the admitted
 /// worker observes once it executes.
-pub(crate) fn http_observation(hub: &Hub, target: &Target) -> Option<host::HttpObservation> {
-    let (provider, purpose) = provider_purpose(target)?;
+pub(crate) fn http_observation(
+    hub: &Hub,
+    target: &Target,
+    extension: &str,
+) -> Option<host::HttpObservation> {
+    let (provider, observed_extension, purpose) = match provider_purpose(target) {
+        Some((provider, purpose)) => (Some(provider.to_owned()), None, purpose),
+        // Outside a provider function there is no provider purpose: the
+        // request is the extension's own. The named provider functions
+        // above were illustrative, so the test is "outside a provider
+        // function" and the list cannot go stale.
+        None if matches!(target, Target::Provider { .. }) => return None,
+        None => (None, Some(extension.to_owned()), Purpose::Extension),
+    };
     let debug = hub.diagnostics()?;
     if !debug.debugging() {
         return None;
     }
     Some(host::HttpObservation {
-        provider: provider.to_owned(),
+        provider,
+        extension: observed_extension,
         purpose,
         debug,
         clock: hub.clock_handle(),

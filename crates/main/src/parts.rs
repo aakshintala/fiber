@@ -278,10 +278,22 @@ fn load_session_extensions(
     seed: extensions::StateSeed,
     set: extensions::RepositorySet,
     launch: &Option<SessionLaunch>,
+    diag: &Arc<log::diag::Diag>,
 ) -> Result<extensions::SessionExtensions, Failure> {
     let Some(launch) = launch else {
+        // The sink installs before the first entry script runs, so an
+        // entry's own `host.http` still records; at info no writer
+        // passes and entry requests stay unobserved.
         return Ok(extensions::SessionExtensions::load_repository(
-            home, config, clock, locks, host, seed, set,
+            home,
+            config,
+            clock,
+            locks,
+            host,
+            seed,
+            set,
+            diag.debugging()
+                .then(|| Arc::clone(diag) as Arc<dyn contract::diag::DebugLog>),
         ));
     };
     let start = extensions::StartContext {
@@ -295,7 +307,7 @@ fn load_session_extensions(
         drive: None,
         event_cursor: launch.event_cursor,
     };
-    let set = extensions::SessionExtensions::load_session(
+    let set = extensions::SessionExtensions::load_session_with_diagnostics(
         home,
         config,
         clock,
@@ -305,6 +317,11 @@ fn load_session_extensions(
         set,
         start,
         BTreeSet::new(),
+        // The sink installs before the first child starts, so a process
+        // callback's own `host.http` still records; at info no writer
+        // passes and process requests stay unobserved.
+        diag.debugging()
+            .then(|| Arc::clone(diag) as Arc<dyn contract::diag::DebugLog>),
     );
     if let Some(notice) = set
         .notices()
@@ -426,6 +443,7 @@ fn parts_inner(
         seed,
         set,
         &launch,
+        &diag,
     )?;
     drop(extensions_timing);
     // A required repository extension that did not load fails the start

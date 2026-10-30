@@ -279,7 +279,7 @@ pub(super) fn admit<'a>(
                             drop(worker.lock());
                             #[cfg(test)]
                             if let Some(observation) = http.as_ref() {
-                                await_observed_release(&observation.provider);
+                                await_observed_release(observation.provider.as_deref());
                             }
                             http_deliver(Reply::Http(match http {
                                 Some(observation) => host::perform_observed(&request, observation),
@@ -825,11 +825,12 @@ pub(crate) fn unpause_observed_execution() {
 }
 
 /// Waits for the test's release when an observed worker of the paused
-/// provider reaches its pause, and passes everything else through. The
+/// provider reaches its pause, and passes everything else — including an
+/// extension's own request, which carries no provider — through. The
 /// worker blocks holding no lock.
 #[cfg(test)]
-fn await_observed_release(provider: &str) {
-    let gate = lock(&OBSERVED_PAUSE).take_if(|pause| pause.provider == provider);
+fn await_observed_release(provider: Option<&str>) {
+    let gate = lock(&OBSERVED_PAUSE).take_if(|pause| Some(pause.provider.as_str()) == provider);
     if let Some(pause) = gate {
         let _ignored = pause.arrived.send(());
         let _ignored = pause.release.recv();

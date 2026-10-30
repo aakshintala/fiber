@@ -27,6 +27,10 @@ impl super::Seam {
             Arc::clone(&self.locks) as Arc<dyn PathLock>,
             Arc::clone(&self.reads),
             refresh,
+            // The hub door carries no debug writer on this path: the
+            // hub's own log runs at its configured level elsewhere, so
+            // a catalogue entry's own `host.http` stays unobserved here.
+            None,
         )
         .map_err(|error| Failure {
             code: error.code(),

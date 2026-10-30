@@ -219,6 +219,7 @@ impl Setup {
                     None,
                     extensions::StateSeed::new(),
                     repository,
+                    None,
                 )
             },
             spawn,

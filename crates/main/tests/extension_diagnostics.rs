@@ -1,7 +1,7 @@
 //! Lua provider HTTP and hook chains at the binary level (`docs/state.md`,
 //! "Diagnostic logs"): the built `fiber` runs `ask` and `session` with a
 //! Lua provider as the session model. At debug each eligible Lua request
-//! writes one `provider_request` line without its URL, and each non-tool
+//! writes one `http_request` line without its URL, and each non-tool
 //! hook dispatch writes one `op_timing` line; otherwise both stay silent.
 //! A late model switch starts a fresh provider VM that keeps the sink.
 
@@ -261,13 +261,13 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
         .collect();
     let pid_requests: Vec<&Value> = pid_lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(pid_requests.len(), 2);
     for line in &pid_requests {
         assert_eq!(line["level"], "debug");
         assert_eq!(line["process"], "ask");
-        assert_eq!(line["message"], "A provider request ended.");
+        assert_eq!(line["message"], "An HTTP request ended.");
     }
     let mut pid_purposes: Vec<&str> = pid_requests
         .iter()
@@ -283,7 +283,7 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
     }
     let requests: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     // The native model call's record is always in the ask log. The quota
     // fetch runs off the request path and can outlive an ask, so its
@@ -300,12 +300,12 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
             .iter()
             .all(|line| line["data"]["purpose"] == "model_call"
                 || line["data"]["purpose"] == "quota"),
-        "only the model call and the quota fetch write ask-log provider_request lines: {requests:?}"
+        "only the model call and the quota fetch write ask-log http_request lines: {requests:?}"
     );
     let native = requests
         .iter()
         .find(|line| line["data"]["purpose"] == "model_call")
-        .expect("one model_call provider_request");
+        .expect("one model_call http_request");
     assert_eq!(native["data"]["purpose"], "model_call");
     assert_eq!(native["data"]["model"], "m1");
     // Each hook chain timed once per actual dispatch; unrelated installed
@@ -372,7 +372,7 @@ fn default_ask_runs_silent() {
     assert!(
         lines
             .iter()
-            .all(|line| line["code"] != "provider_request" && line["code"] != "op_timing"),
+            .all(|line| line["code"] != "http_request" && line["code"] != "op_timing"),
         "{lines:?}"
     );
 }
@@ -671,7 +671,7 @@ fn late_switch_starts_fresh_with_the_sink() {
     let late: Vec<&Value> = lines
         .iter()
         .filter(|line| {
-            line["code"] == "provider_request"
+            line["code"] == "http_request"
                 && line["data"]["provider"] == "late"
                 && line["data"]["purpose"] == "token_refresh"
         })
@@ -679,7 +679,7 @@ fn late_switch_starts_fresh_with_the_sink() {
     assert_eq!(late.len(), 1);
     assert_eq!(late[0]["data"]["purpose"], "token_refresh");
     assert_eq!(late[0]["data"]["attempt"], 1);
-    assert_eq!(late[0]["message"], "A provider request ended.");
+    assert_eq!(late[0]["message"], "An HTTP request ended.");
     let wire = serde_json::to_string(late[0]).unwrap();
     assert!(!wire.contains("late-tok"), "no credential: {wire}");
     assert!(!wire.contains(&url), "no URL: {wire}");

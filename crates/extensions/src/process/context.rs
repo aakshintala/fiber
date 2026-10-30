@@ -432,6 +432,11 @@ pub(crate) struct NativeHostServices {
     /// `host.config` and locked `host.fs`: `None` without a session, when
     /// those calls fail naming the missing session.
     pub session: Mutex<Option<crate::host::Session>>,
+    /// The session's diagnostic sink, when it debugs: an entry or callback
+    /// `host.http` the child makes records one `http_request` line as the
+    /// extension's own. `None` on test-only and sessionless starts, which
+    /// record nothing.
+    pub diagnostics: Option<Arc<dyn contract::diag::DebugLog>>,
 }
 
 /// How long one parked wait rests before re-reading its end condition.

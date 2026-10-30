@@ -20,8 +20,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use config::{Config, ProjectKey, Sources};
 use contract::clock::Clock;
-use contract::diag::{DebugLog, Purpose, Timing};
 use contract::diag::HttpRequest as ObservedRequest;
+use contract::diag::{DebugLog, Purpose, Timing};
 use fakes::clock::FakeClock;
 
 use super::SessionExtensions;
@@ -456,7 +456,8 @@ fn observed(
     clock: Arc<dyn Clock>,
 ) -> HttpObservation {
     HttpObservation {
-        provider: provider.to_owned(),
+        provider: Some(provider.to_owned()),
+        extension: None,
         purpose,
         debug,
         clock,
@@ -844,24 +845,65 @@ fn purpose_mapping_covers_every_target() {
     }
     // The snapshot filters before any stamp, read or write: no sink, an
     // info sink, or no debugging all give none without touching the clock.
+    // Outside a provider function the request is the extension's own, so
+    // hooks, commands, timers, tools, watchers, searches, effects and
+    // delegates all observe with the extension's name.
     let target = Target::Provider {
         name: "p".to_owned(),
         function: "models",
         credential: None,
     };
     let bare = crate::lua::Hub::new(FakeClock::new());
-    assert!(http_observation(&bare, &target).is_none());
+    assert!(http_observation(&bare, &target, "mem").is_none());
     let counting = Counting::new();
     let dark_hub = crate::lua::Hub::new(counting.clone());
     dark_hub.set_diagnostics(Arc::new(Dark));
-    assert!(http_observation(&dark_hub, &target).is_none());
+    assert!(http_observation(&dark_hub, &target, "mem").is_none());
     assert_eq!(counting.reads(), 0);
     let (sink, _) = Watching::new();
     let hub = crate::lua::Hub::new(FakeClock::new());
     hub.set_diagnostics(sink.clone());
-    let context = http_observation(&hub, &target).expect("an eligible target observes");
-    assert_eq!(context.provider, "p");
+    let context = http_observation(&hub, &target, "mem").expect("an eligible target observes");
+    assert_eq!(context.provider.as_deref(), Some("p"));
+    assert_eq!(context.extension, None);
     assert_eq!(context.purpose, Purpose::ModelList);
+    assert!(sink.records().is_empty());
+    // Every non-provider target observes as the extension, with no
+    // provider and no host, path or model on the line.
+    for target in [
+        Target::Command("c".to_owned()),
+        Target::Hook {
+            point: "before_message".to_owned(),
+            index: 0,
+        },
+        Target::Watcher { index: 0 },
+        Target::Timer { id: 0 },
+        Target::Tool("t".to_owned()),
+        Target::Search("s".to_owned()),
+        Target::Effects("e".to_owned()),
+        Target::Delegate {
+            extension: "mem".to_owned(),
+            job_id: contract::JobId("1".to_owned()),
+            handle: 1,
+            timeout: std::time::Duration::from_secs(1),
+        },
+    ] {
+        let context =
+            http_observation(&hub, &target, "mem").expect("outside a provider function observes");
+        assert_eq!(context.provider, None);
+        assert_eq!(context.extension.as_deref(), Some("mem"));
+        assert_eq!(context.purpose, Purpose::Extension);
+    }
+    // A provider function without a purpose stays silent, whatever HTTP
+    // it sends.
+    for function in ["sign", "bogus"] {
+        let target = Target::Provider {
+            name: "p".to_owned(),
+            function,
+            credential: None,
+        };
+        assert!(http_observation(&hub, &target, "mem").is_none());
+    }
     assert!(sink.records().is_empty());
 }
 
@@ -1197,15 +1239,31 @@ fn worker_emits_only_after_the_guard_releases() {
         .expect("waited for the hook")
         .expect("the released hook completes");
     unpause_settle();
+    // The worker's line and the released hook's line both land: one
+    // provider line for the models call, one extension line for the
+    // hook's own HTTP, matched as a set since the two writes race.
     let records = sink.records();
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
-    assert_eq!(record.provider.as_deref(), Some("rz"));
-    assert_eq!(record.purpose, Purpose::ModelList);
-    assert_eq!(record.status, Some(200));
-    assert_eq!(record.attempt, 1);
-    assert_eq!(record.headers_ms, Some(0));
-    assert_eq!(record.total_ms, 0);
+    assert_eq!(
+        records.len(),
+        2,
+        "the worker and the released hook each record"
+    );
+    let provider_record = records
+        .iter()
+        .find(|record| record.provider.as_deref() == Some("rz"))
+        .expect("the models call records its provider line");
+    assert_eq!(provider_record.purpose, Purpose::ModelList);
+    assert_eq!(provider_record.status, Some(200));
+    assert_eq!(provider_record.attempt, 1);
+    assert_eq!(provider_record.headers_ms, Some(0));
+    assert_eq!(provider_record.total_ms, 0);
+    let hook_record = records
+        .iter()
+        .find(|record| record.extension.as_deref() == Some("ext"))
+        .expect("the released hook records its extension line");
+    assert_eq!(hook_record.provider, None);
+    assert_eq!(hook_record.purpose, Purpose::Extension);
+    assert_eq!(hook_record.status, Some(200));
 }
 
 #[test]
@@ -1414,7 +1472,14 @@ fn expired_before_admission_starts_nothing() {
         server_b.requests().is_empty(),
         "an unadmitted call sends nothing"
     );
-    assert!(sink.records().is_empty());
+    // The expired provider call records nothing; the released hook ran
+    // its own HTTP, which records as the extension's.
+    let records = sink.records();
+    assert_eq!(records.len(), 1, "only the released hook's request records");
+    let record = &records[0];
+    assert_eq!(record.provider, None);
+    assert_eq!(record.extension.as_deref(), Some("ext"));
+    assert_eq!(record.purpose, Purpose::Extension);
 }
 
 #[test]

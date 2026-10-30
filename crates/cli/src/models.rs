@@ -351,6 +351,7 @@ pub fn models(
                     None,
                     StateSeed::new(),
                     repository,
+                    None,
                 )
             },
             &|providers| match &exe {
@@ -417,6 +418,7 @@ fn refresh_run(
             None,
             StateSeed::new(),
             set,
+            None,
         );
         refresh_named(
             home,

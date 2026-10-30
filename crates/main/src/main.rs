@@ -83,6 +83,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use config::{Config, Layer, Sources};
+use contract::diag::DebugLog as _;
 use contract::inbox::Delivery;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -1125,17 +1126,9 @@ fn terminal(
     // The picker's model lists: the cached copy at once, refreshed in the
     // background (`docs/model-routing.md`, "Model discovery"). The lock
     // is the one `fiber models` uses: a refresh beside another process
-    // refreshes once.
-    let models = model_list::reader(
-        home.clone(),
-        workspace.clone(),
-        Arc::clone(&clock),
-        Arc::new(tools::PathLocks::new()),
-        Arc::clone(&reads),
-    );
-    // The viewer's copies live under Fiber home: cloned before the
-    // connect closure moves it, as is the diagnostic writer's.
-    let launch_home = home.clone();
+    // refreshes once. The terminal's diagnostic writer installs first:
+    // built here, before the reader, so an entry script's own `host.http`
+    // still records; at info no writer passes.
     let diag_home = home.clone();
     // The terminal's diagnostic writer: one process, one file. Built once
     // here and shared with the terminal, so the error path below writes to
@@ -1150,6 +1143,18 @@ fn terminal(
         },
         Arc::clone(&clock),
     ));
+    let models = model_list::reader(
+        home.clone(),
+        workspace.clone(),
+        Arc::clone(&clock),
+        Arc::new(tools::PathLocks::new()),
+        Arc::clone(&reads),
+        diag.debugging()
+            .then(|| Arc::clone(&diag) as Arc<dyn contract::diag::DebugLog>),
+    );
+    // The viewer's copies live under Fiber home: cloned before the
+    // connect closure moves it, as is the diagnostic writer's.
+    let launch_home = home.clone();
     // The interactive door's report writer reads the same launch
     // directory the terminal opens in: cloned before `launch` takes it.
     let feedback_home = home.clone();
