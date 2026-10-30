@@ -147,6 +147,27 @@ fn cleanup_phase_left_is_cleanup_at_three_instants() {
 }
 
 #[test]
+fn cleanup_phase_after_a_started_wait_keeps_the_cleanup_bound() {
+    let clock = fake_clock();
+    let deadline = Deadline::on(&**clock);
+    let wait = deadline.start_wait();
+    // Past one wait's fresh bound, inside the guard: the started wait is
+    // spent, while cleanup still holds its reserve.
+    let spent = WAIT + Duration::from_secs(10);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(spent);
+    assert_eq!(wait.left(), Duration::ZERO);
+    // The cleanup phase offers the cleanup bound remaining from the original
+    // guard, not the started wait's leftover.
+    let phase = wait.cleanup_phase();
+    assert_eq!(phase.left(), deadline.cleanup());
+    assert_eq!(phase.left(), CLEANUP.saturating_sub(spent));
+}
+
+#[test]
 fn after_the_longest_duration_never_panics_and_leaves_years() {
     let wait = Deadline::after(Duration::MAX);
     let thousand_years = Duration::from_secs(1_000 * 365 * 24 * 3_600);
