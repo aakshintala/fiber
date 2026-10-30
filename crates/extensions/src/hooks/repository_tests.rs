@@ -89,6 +89,7 @@ impl Setup {
             &self.workspace(),
             skipped,
             Fetch::new(crate::Origin::github(), "0.0.0", FakeClock::new()),
+            None,
         )
     }
 

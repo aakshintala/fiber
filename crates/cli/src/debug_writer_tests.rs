@@ -11,7 +11,6 @@
 use std::sync::Arc;
 
 use super::debug_writer_for;
-use contract::diag::DebugLog;
 
 fn config_with(home: &std::path::Path, workspace: &std::path::Path, level: &str) -> config::Config {
     std::fs::write(

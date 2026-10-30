@@ -639,7 +639,8 @@ impl SessionExtensions {
                 continue;
             }
             let project = config.extensions().project().clone();
-            let store = crate::repository::Store::new(home, &project, Arc::clone(&clock));
+            let store = crate::repository::Store::new(home, &project, Arc::clone(&clock))
+                .with_diagnostics(debug.clone());
             if let Ok(hold) = store.try_hold_finished(&snapshot.hash) {
                 repository.holds.push(hold);
                 repository.hooks.insert(

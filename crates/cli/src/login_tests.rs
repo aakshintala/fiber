@@ -2077,7 +2077,8 @@ impl Setup {
     fn workspace_providers(&self, workspace: &Path) -> Providers {
         let clock = fakes::clock::FakeClock::new();
         let (_, project) = crate::project_of(&self.home(), workspace).unwrap();
-        let set = extensions::RepositorySet::load_pinned(&self.home(), &project, workspace, clock);
+        let set =
+            extensions::RepositorySet::load_pinned(&self.home(), &project, workspace, clock, None);
         let (providers, notices) = Providers::load_all_repository(&self.home(), &set).unwrap();
         assert!(notices.is_empty(), "{notices:?}");
         providers
