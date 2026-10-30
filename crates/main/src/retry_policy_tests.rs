@@ -41,6 +41,7 @@ fn empty_servers() -> crate::mcp_servers::SessionServers {
         &workspace.join("cache"),
         &clock,
         "0.0.0",
+        None,
     );
     let servers = std::sync::Arc::new(started.servers);
     crate::mcp_servers::SessionServers {

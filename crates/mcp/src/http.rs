@@ -17,8 +17,10 @@ use std::io::{self, BufReader, Read};
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Condvar, Mutex, Weak, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use contract::clock::Clock;
+use contract::diag::{DebugLog, HttpRequest};
 use contract::tool::Cancel;
 use serde_json::Value;
 use ureq::unversioned::resolver::DefaultResolver;
@@ -35,6 +37,10 @@ use crate::wait::Shared;
 /// production caller besides [`crate::server::Server::start`].
 /// A direct remote start without timing: HTTP tests only.
 #[cfg(test)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the test start's inputs plus the sink"
+)]
 pub(crate) fn start(
     url: &str,
     tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
@@ -43,6 +49,7 @@ pub(crate) fn start(
     clock: &Arc<dyn contract::clock::Clock>,
     startup_timeout: Duration,
     client_version: &str,
+    debug: Option<Arc<dyn DebugLog>>,
 ) -> Result<OpenServer, StartError> {
     start_observed(
         url,
@@ -53,6 +60,7 @@ pub(crate) fn start(
         startup_timeout,
         client_version,
         None,
+        debug,
         &mut None,
     )
 }
@@ -61,10 +69,11 @@ pub(crate) fn start(
 /// tool-list boundary and keeping `timing` on the link for the actual
 /// connector work: the handshake consumes the guard there, and every
 /// later exchange builds its agent from the same context. `None` stays
-/// untimed and builds the plain agent.
+/// untimed and builds the plain agent. `debug` observes every request
+/// the link makes as `mcp`; `None` stays silent.
 #[allow(
     clippy::too_many_arguments,
-    reason = "the observed companion adds only the Timing and connection guard"
+    reason = "the observed companion adds only the Timing, the sink and the connection guard"
 )]
 pub(crate) fn start_observed(
     url: &str,
@@ -75,6 +84,7 @@ pub(crate) fn start_observed(
     startup_timeout: Duration,
     client_version: &str,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn DebugLog>>,
     connection: &mut Option<Box<dyn Send>>,
 ) -> Result<OpenServer, StartError> {
     // Sticky: a start after the stop spawns nothing.
@@ -92,6 +102,7 @@ pub(crate) fn start_observed(
         proxy,
         limits,
         timing,
+        debug,
     ));
     let pumping = Arc::clone(&link);
     let reading = Arc::clone(&shared);
@@ -158,6 +169,11 @@ pub(crate) struct Link {
     /// The timing context actual connector work builds its observed
     /// agent from: `None` builds the plain agent. Never logged.
     timing: Option<contract::diag::Timing>,
+    /// Where each request's `http_request` line goes, or `None` when the
+    /// server stays silent. The session installs its sink at debug.
+    debug: Option<Arc<dyn DebugLog>>,
+    /// The injected clock every line's stamps are read on.
+    clock: Arc<dyn Clock>,
 }
 
 // The URL's userinfo and query can carry a token, and the session id
@@ -208,12 +224,14 @@ impl Link {
         clock: Arc<dyn contract::clock::Clock>,
         proxy: Option<ureq::Proxy>,
         limits: net::Limits,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Self {
-        Self::new_observed(url, tokens, clock, proxy, limits, None)
+        Self::new_observed(url, tokens, clock, proxy, limits, None, debug)
     }
 
     /// As [`Link::new`], keeping `timing` for the observed agent:
-    /// `None` builds the plain agent, as before.
+    /// `None` builds the plain agent, as before. `debug` observes every
+    /// request the link makes as `mcp`; `None` stays silent.
     fn new_observed(
         url: String,
         tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
@@ -221,8 +239,9 @@ impl Link {
         proxy: Option<ureq::Proxy>,
         limits: net::Limits,
         timing: Option<contract::diag::Timing>,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Self {
-        let bearer = Arc::new(crate::token::Bearer::new(&url, tokens, clock));
+        let bearer = Arc::new(crate::token::Bearer::new(&url, tokens, clock.clone()));
         Self {
             url,
             proxy,
@@ -231,7 +250,46 @@ impl Link {
             bearer,
             poll: Condvar::new(),
             timing,
+            debug,
+            clock,
         }
+    }
+
+    /// The send stamp, `None` when silent so no clock is read at info.
+    fn stamp(&self) -> Option<Instant> {
+        self.debug.as_ref().map(|_| self.clock.now())
+    }
+
+    /// Writes one `mcp` line for a request that reached the client: no
+    /// identity, host, path, URL, server name or credential, attempt 1,
+    /// the posted byte length, the consumed response bytes, the status
+    /// when a response came, and the send/headers/end stamps. A sink
+    /// that stopped debugging writes nothing.
+    fn observe(
+        &self,
+        start: Option<Instant>,
+        headers: Option<Instant>,
+        status: Option<u16>,
+        request_bytes: u64,
+        response_bytes: u64,
+    ) {
+        let (Some(debug), Some(start)) = (self.debug.as_ref(), start) else {
+            return;
+        };
+        if !debug.debugging() {
+            return;
+        }
+        let end = self.clock.now();
+        let millis = |instant: Instant| {
+            u64::try_from(instant.saturating_duration_since(start).as_millis()).unwrap_or(u64::MAX)
+        };
+        let mut line = HttpRequest::for_mcp();
+        line.status = status;
+        line.headers_ms = headers.map(millis);
+        line.total_ms = millis(end);
+        line.request_bytes = request_bytes;
+        line.response_bytes = response_bytes;
+        debug.http_request(&line);
     }
 
     /// The protocol version the `initialize` result negotiated: every later
@@ -347,19 +405,48 @@ impl crate::token::Refresh for Exchange {
             .wait_timeout(lock(&self.link.state), Duration::from_millis(20));
     }
     fn post(&self, url: &str, form: &[(&str, &str)]) -> Result<(u16, Vec<u8>), ()> {
-        let mut response = agent_for(&self.link, self.id)
+        // The encoded form's length is the posted count: the bytes sent
+        // are identical to `send_form`'s, with the same content type.
+        let body = crate::login::form_body(form);
+        let start = self.link.stamp();
+        let response = match agent_for(&self.link, self.id)
             .post(url)
-            .send_form(form.iter().copied())
-            .map_err(|_| ())?;
+            .header("content-type", "application/x-www-form-urlencoded")
+            .send(body.as_str())
+        {
+            Ok(response) => response,
+            Err(_) => {
+                self.link.observe(
+                    start,
+                    None,
+                    None,
+                    u64::try_from(body.len()).unwrap_or(u64::MAX),
+                    0,
+                );
+                return Err(());
+            }
+        };
+        let headers = self.link.stamp();
+        let mut response = response;
         let status = response.status().as_u16();
-        let mut body = Vec::new();
-        response
+        let mut bytes = Vec::new();
+        let read = response
             .body_mut()
             .as_reader()
             .take(MAX_LINE as u64 + 1)
-            .read_to_end(&mut body)
-            .map_err(|_| ())?;
-        Ok((status, body))
+            .read_to_end(&mut bytes);
+        // A body-read failure retains the status and headers and the
+        // bytes consumed: the token endpoint answered, and the reply is
+        // what failed.
+        self.link.observe(
+            start,
+            headers,
+            Some(status),
+            u64::try_from(body.len()).unwrap_or(u64::MAX),
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        );
+        read.map_err(|_| ())?;
+        Ok((status, bytes))
     }
 }
 
@@ -525,7 +612,10 @@ fn split(line: &[u8]) -> Option<(u64, String)> {
 /// `POST`s what the pump posts itself (a notification, or an answer to a
 /// server request) under exchange key 0 and reads its status. The status
 /// is ignored, `404` included: only request exchanges expire or kill, so a
-/// late or unrelated `404` here changes nothing.
+/// late or unrelated `404` here changes nothing. When observed, the post
+/// writes one `mcp` line: without status, headers time or body bytes when
+/// no head came back, with the status, the headers time and no body bytes
+/// once a head arrived, since the body is never read.
 fn post_own(link: &Arc<Link>, line: &[u8]) -> Result<Option<u16>, String> {
     let agent = agent_for(link, 0);
     let (session, version) = {
@@ -534,18 +624,44 @@ fn post_own(link: &Arc<Link>, line: &[u8]) -> Result<Option<u16>, String> {
     };
     let url = link.url.clone();
     let authorization = link.bearer.stored()?;
-    let answered = headers(
+    let start = link.stamp();
+    let answered = match headers(
         agent.post(url.as_str()),
         session.as_deref(),
         version.as_deref(),
         authorization.as_deref(),
     )
-    .send(line);
-    Ok(answered.ok().map(|response| response.status().as_u16()))
+    .send(line)
+    {
+        Ok(response) => response,
+        Err(_) => {
+            link.observe(
+                start,
+                None,
+                None,
+                u64::try_from(line.len()).unwrap_or(u64::MAX),
+                0,
+            );
+            return Ok(None);
+        }
+    };
+    let headers = link.stamp();
+    let status = answered.status().as_u16();
+    link.observe(
+        start,
+        headers,
+        Some(status),
+        u64::try_from(line.len()).unwrap_or(u64::MAX),
+        0,
+    );
+    Ok(Some(status))
 }
 
 /// Says goodbye: `DELETE` with the session id, ignoring its status (the
-/// spec allows `405`).
+/// spec allows `405`). When observed, the delete writes one `mcp` line:
+/// without status, headers time or body bytes when no head came back,
+/// with the status, the headers time and no body bytes once a head
+/// arrived, since the body is never read.
 fn delete(link: &Arc<Link>) {
     let agent = agent_for(link, 0);
     if let Some(session) = link.session() {
@@ -557,7 +673,13 @@ fn delete(link: &Arc<Link>) {
         if let Some(authorization) = authorization {
             request = request.header("authorization", authorization);
         }
-        let _answered = request.call();
+        let start = link.stamp();
+        let answered = request.call();
+        let headers = link.stamp();
+        match answered {
+            Ok(response) => link.observe(start, headers, Some(response.status().as_u16()), 0, 0),
+            Err(_) => link.observe(start, None, None, 0, 0),
+        }
     }
 }
 
@@ -603,6 +725,8 @@ fn exchange(
     };
     let agent = agent_for(&link, id);
     let url = link.url.clone();
+    let posted = u64::try_from(line.len()).unwrap_or(u64::MAX);
+    let start = link.stamp();
     let response = headers(
         agent.post(url.as_str()),
         session.as_deref(),
@@ -619,21 +743,31 @@ fn exchange(
     let response = match response {
         Ok(response) => response,
         Err(_) => {
+            // A transport error while the answer is still awaited is
+            // the server dying; the post reached no head, so the line
+            // carries no status, headers time or body bytes.
+            link.observe(start, None, None, posted, 0);
             shared.gone_if_awaiting(id);
             return;
         }
     };
+    let headers = link.stamp();
     let status = response.status().as_u16();
     if status == 401 {
+        link.observe(start, headers, Some(status), posted, 0);
         shared.deliver(id, Outcome::Login(LOGIN.into()));
         return;
     }
     if is_init && (400..500).contains(&status) {
+        // The probe writes its own `GET` line; this post still writes
+        // its line, with no body read.
+        link.observe(start, headers, Some(status), posted, 0);
         probe_legacy(id, status, &link, &shared);
         return;
     }
     if status == 404 && carried {
         after_status_hook();
+        link.observe(start, headers, Some(status), posted, 0);
         if link.is_proven() {
             // The session expired: not a death. Each waiting call ends
             // `Expired`, and the slot starts a new session on the next
@@ -655,7 +789,8 @@ fn exchange(
     }
     if !(200..300).contains(&status) || status == 202 {
         // A request needs an answer: `202`, and any other failure, fail
-        // only this request, never the server.
+        // only this request, never the server. The body is never read.
+        link.observe(start, headers, Some(status), posted, 0);
         shared.deliver(id, Outcome::Http(http_status(status)));
         return;
     }
@@ -671,6 +806,7 @@ fn exchange(
         {
             Some(Ok(session)) => link.set_session(session.to_owned()),
             Some(Err(_)) => {
+                link.observe(start, headers, Some(status), posted, 0);
                 shared.deliver(
                     id,
                     Outcome::Http(
@@ -684,23 +820,26 @@ fn exchange(
     }
     let media = media_type(&response);
     if media == "application/json" {
-        json_answer(id, response, &shared, &writer);
+        let consumed = json_answer(id, response, &shared, &writer);
+        link.observe(start, headers, Some(status), posted, consumed);
     } else if media == "text/event-stream" {
-        stream_answer(id, response, &shared, &writer);
+        let consumed = stream_answer(id, response, &shared, &writer);
+        link.observe(start, headers, Some(status), posted, consumed);
     } else {
+        link.observe(start, headers, Some(status), posted, 0);
         shared.deliver(id, Outcome::Http(media_sentence(&media)));
     }
 }
 
 /// Routes one JSON answer as a stdout line is routed. The body ends the
 /// exchange either way: when it carried no answer while still awaited,
-/// the server died.
+/// the server died. Returns the body bytes read, however the read ended.
 fn json_answer(
     id: u64,
     response: ureq::http::Response<ureq::Body>,
     shared: &Arc<Shared>,
     writer: &Weak<mpsc::SyncSender<Vec<u8>>>,
-) {
+) -> u64 {
     let mut body = Vec::new();
     match response
         .into_body()
@@ -709,41 +848,70 @@ fn json_answer(
         .read_to_end(&mut body)
     {
         Err(_) => {
+            let consumed = u64::try_from(body.len()).unwrap_or(u64::MAX);
             shared.gone_if_awaiting(id);
-            return;
+            return consumed;
         }
         Ok(_) if body.len() > MAX_LINE => {
+            let consumed = u64::try_from(body.len()).unwrap_or(u64::MAX);
             shared.gone_if_awaiting(id);
-            return;
+            return consumed;
         }
         Ok(_) => {}
     }
     crate::pipes::route(&String::from_utf8_lossy(&body), shared, writer);
     shared.gone_if_awaiting(id);
+    u64::try_from(body.len()).unwrap_or(u64::MAX)
 }
 
 /// Routes one event-stream answer event by event. Reading stops once the
 /// request is no longer awaited (its answer delivered, or its wait
 /// ended): a stream that ends first, or runs past the cap, is the server
-/// dying.
+/// dying. Returns the body bytes consumed, however the read ended: the
+/// bytes pulled through the reader, not headers, not re-serialized
+/// events.
 fn stream_answer(
     id: u64,
     response: ureq::http::Response<ureq::Body>,
     shared: &Arc<Shared>,
     writer: &Weak<mpsc::SyncSender<Vec<u8>>>,
-) {
-    let mut reader = BufReader::new(response.into_body().into_reader());
-    loop {
-        if !shared.awaiting(id) {
-            return;
-        }
-        match crate::sse::next(&mut reader) {
-            crate::sse::Next::Event(event) => crate::pipes::route(&event.data, shared, writer),
-            crate::sse::Next::End | crate::sse::Next::TooLong => {
-                shared.gone_if_awaiting(id);
-                return;
+) -> u64 {
+    let mut counted = Counted {
+        inner: response.into_body().into_reader(),
+        bytes: 0,
+    };
+    {
+        let mut reader = BufReader::new(&mut counted);
+        loop {
+            if !shared.awaiting(id) {
+                break;
+            }
+            match crate::sse::next(&mut reader) {
+                crate::sse::Next::Event(event) => crate::pipes::route(&event.data, shared, writer),
+                crate::sse::Next::End | crate::sse::Next::TooLong => {
+                    shared.gone_if_awaiting(id);
+                    break;
+                }
             }
         }
+    }
+    counted.bytes
+}
+
+/// Counts the body bytes pulled through it, however the read ends, so a
+/// failed or stopped read still reports what arrived before it.
+struct Counted<R> {
+    inner: R,
+    bytes: u64,
+}
+
+impl<R: Read> Read for Counted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.bytes = self
+            .bytes
+            .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+        Ok(read)
     }
 }
 
@@ -754,6 +922,10 @@ fn stream_answer(
 /// with the original `POST`'s status. The probe runs under `initialize`'s
 /// exchange id, so the startup deadline and a stop close its socket too.
 /// An `initialize` answered 2xx is streamable HTTP and never probed.
+/// When observed, the probe writes one `mcp` line: without status,
+/// headers time or body bytes when no head came back, with the status,
+/// the headers time and the first event's body bytes once a head
+/// arrived, and nothing when the stored token is missing.
 fn probe_legacy(id: u64, post_status: u16, link: &Arc<Link>, shared: &Arc<Shared>) {
     let agent = agent_for(link, id);
     let url = link.url.clone();
@@ -770,8 +942,12 @@ fn probe_legacy(id: u64, post_status: u16, link: &Arc<Link>, shared: &Arc<Shared
     if let Some(authorization) = authorization {
         request = request.header("authorization", authorization);
     }
-    let legacy = match request.call() {
+    let start = link.stamp();
+    let answered = request.call();
+    let headers = link.stamp();
+    let legacy = match answered {
         Ok(response) if response.status().as_u16() == 401 => {
+            link.observe(start, headers, Some(401), 0, 0);
             shared.deliver(id, Outcome::Login(LOGIN.into()));
             return;
         }
@@ -779,18 +955,35 @@ fn probe_legacy(id: u64, post_status: u16, link: &Arc<Link>, shared: &Arc<Shared
             if (200..300).contains(&response.status().as_u16())
                 && media_type(&response) == "text/event-stream" =>
         {
-            let mut reader = BufReader::new(response.into_body().into_reader());
-            match crate::sse::next(&mut reader) {
-                // Without the name check any streamable answer to the
-                // probe would read as legacy: the `message` mutant fails
-                // the start here.
-                crate::sse::Next::Event(event) if event.name == "endpoint" => true,
-                crate::sse::Next::Event(_) | crate::sse::Next::End | crate::sse::Next::TooLong => {
-                    false
+            let status = response.status().as_u16();
+            let mut counted = Counted {
+                inner: response.into_body().into_reader(),
+                bytes: 0,
+            };
+            let legacy = {
+                let mut reader = BufReader::new(&mut counted);
+                match crate::sse::next(&mut reader) {
+                    // Without the name check any streamable answer to the
+                    // probe would read as legacy: the `message` mutant fails
+                    // the start here.
+                    crate::sse::Next::Event(event) if event.name == "endpoint" => true,
+                    crate::sse::Next::Event(_)
+                    | crate::sse::Next::End
+                    | crate::sse::Next::TooLong => false,
                 }
-            }
+            };
+            link.observe(start, headers, Some(status), 0, counted.bytes);
+            legacy
         }
-        Ok(_) | Err(_) => false,
+        Ok(response) => {
+            let status = response.status().as_u16();
+            link.observe(start, headers, Some(status), 0, 0);
+            false
+        }
+        Err(_) => {
+            link.observe(start, None, None, 0, 0);
+            false
+        }
     };
     shared.deliver(
         id,

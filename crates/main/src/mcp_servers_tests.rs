@@ -168,6 +168,7 @@ fn empty_servers(
         &config::mcp_cache_dir(&rig.home),
         clock,
         "test",
+        None,
     );
     assert!(started.failed.is_empty());
     std::sync::Arc::new(started.servers)
@@ -1118,6 +1119,7 @@ fn pending(
         Ok((specs.specs, specs.repository)),
         Vec::new(),
         std::sync::Arc::new(DummyImages),
+        None,
         None,
     )
     .expect("the pending MCP start")

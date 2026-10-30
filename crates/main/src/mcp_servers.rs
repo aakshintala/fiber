@@ -281,6 +281,7 @@ pub(crate) fn start_session_tools(
     skipped: Vec<r#loop::OfferKey>,
     images: Arc<dyn contract::images::Images>,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> Result<PendingMcp, Failure> {
     let home = home.to_path_buf();
     let workspace = workspace.to_path_buf();
@@ -314,6 +315,9 @@ pub(crate) fn start_session_tools(
                 &clock,
                 env!("CARGO_PKG_VERSION"),
                 timing,
+                // The session's sink observes each MCP request at
+                // debug; at any other level the servers stay silent.
+                debug,
             );
             Ok((prepared, started))
         })
@@ -805,7 +809,7 @@ fn mcp_login(
                 support::lock(&waiting).insert(server.to_owned(), Some(auth_url.to_owned()));
                 extensions::SystemBrowser::default().open(auth_url);
             };
-            let outcome = mcp::login(&files, &url, &present, clock.as_ref());
+            let outcome = mcp::login_observed(&files, &url, &present, clock.as_ref(), None);
             support::lock(&waiting).insert(server.to_owned(), None);
             if let Err(error) = outcome {
                 finish(&waiting);
@@ -1023,6 +1027,9 @@ fn adopt_server(
         clock,
         env!("CARGO_PKG_VERSION"),
         servers.timing(),
+        // The session's sink follows the reconnect: structs keep their
+        // shape, so it is read from the servers.
+        servers.debug_sink(),
     );
     let records = started
         .failed

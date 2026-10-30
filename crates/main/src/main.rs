@@ -459,7 +459,9 @@ impl contract::McpRemote for McpClient {
         present: &dyn Fn(&str),
         clock: &dyn contract::clock::Clock,
     ) -> Result<(), contract::shapes::Failure> {
-        mcp::login(files, url, present, clock).map_err(|e| failure(e.code(), e.to_string()))
+        // The hub keeps its `None`: the login writes no `http_request` line.
+        mcp::login_observed(files, url, present, clock, None)
+            .map_err(|e| failure(e.code(), e.to_string()))
     }
 }
 

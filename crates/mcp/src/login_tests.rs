@@ -11,12 +11,13 @@
 use super::callback::{MAX_HEAD, SILENT_POLLS, Served, answer, decode};
 use super::*;
 use crate::test_support::{FakeTokens, WITHIN};
+use contract::diag::{DebugLog, HttpRequest, Purpose};
 use contract::mcp_tokens::TokenFiles;
 use fakes::{Deadline, ProviderServer, Request, Response};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 #[test]
@@ -1032,6 +1033,7 @@ fn a_failing_random_source_fails_closed_with_no_side_effects() {
         &url,
         &|_| panic!("no authorization URL is shown"),
         &*clock,
+        None,
         &|_| Err(ring::error::Unspecified),
     )
     .unwrap_err();
@@ -1786,12 +1788,16 @@ fn post_helpers_read_one_mib_plus_one_whole() {
         ProviderServer::start_responding(move |_: &Request| Response::status(200, big.clone()))
             .unwrap();
     let url = format!("{}/reply", server.url());
-    let (status, bytes) = super::post_json(&url, "{}").unwrap();
+    let observe = super::Observe {
+        debug: None,
+        clock: &*fakes::clock::FakeClock::new(),
+    };
+    let (status, bytes) = super::post_json(&url, "{}", &observe).unwrap();
     assert_eq!(status, 200);
     assert_eq!(bytes.len(), super::MAX_BODY + 1);
     assert_eq!(bytes[0], b'b');
     assert_eq!(bytes[super::MAX_BODY], b'b');
-    let (status, bytes) = super::post_form(&url, &[("a", "b")]).unwrap();
+    let (status, bytes) = super::post_form(&url, &[("a", "b")], &observe).unwrap();
     assert_eq!(status, 200);
     assert_eq!(bytes.len(), super::MAX_BODY + 1);
 }
@@ -2674,4 +2680,172 @@ fn the_callback_wait_serves_a_connection_that_pauses_before_its_head() {
     });
     assert!(echo.starts_with("HTTP/1.1 200"), "{echo}");
     assert_eq!(result.unwrap(), "abc");
+}
+
+/// A sink that records every `mcp` line: the observed login's record.
+struct Lines {
+    lines: Mutex<Vec<HttpRequest>>,
+}
+
+impl DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+/// Runs the login observed on `debug`, driving one callback as
+/// [`run_with_callback`] does: the result and the sink's lines. The
+/// silent [`login`] keeps its shape: only the observed entry writes.
+fn run_observed_with_callback(
+    server_url: &str,
+    files: &FakeTokens,
+    clock: &Arc<fakes::clock::FakeClock>,
+    query_for: impl Fn(&str) -> String + Send,
+    debug: Arc<Lines>,
+) -> (Result<(), LoginError>, Vec<HttpRequest>) {
+    let (sent, received) = mpsc::channel();
+    let (sent_done, received_done) = mpsc::channel();
+    let clock = Arc::clone(clock);
+    let (result, recorded) = std::thread::scope(|scope| {
+        // `sent` moves into the login thread: when the login fails before
+        // presenting, its end drops the URL sender, which releases the
+        // driver's blocking receive below. Owned outside, the sender would
+        // outlive the scope and the driver would never leave.
+        let login = scope.spawn({
+            let clock = Arc::clone(&clock);
+            let seen = Arc::clone(&debug);
+            move || {
+                let result = login_observed(
+                    files,
+                    server_url,
+                    &|url| sent.send(url.to_owned()).unwrap(),
+                    &*clock,
+                    Some(seen as Arc<dyn DebugLog>),
+                );
+                sent_done.send(result).unwrap();
+            }
+        });
+        let _driver = scope.spawn({
+            let clock = Arc::clone(&clock);
+            move || {
+                // No URL ever comes when the login fails before the wait:
+                // the hung-up channel ends the driver, and the result below
+                // names the failure.
+                let Ok(url) = received.recv() else {
+                    return;
+                };
+                drive_releasing_on_panic(&clock, || {
+                    let query = query_for(&url);
+                    let redirect = query_param(&url, "redirect_uri").unwrap().to_owned();
+                    send_callback(&redirect, &query);
+                });
+            }
+        });
+        // The result first, through the deadline: joining a stuck login
+        // would hang past the hang guard. On expiry the clock wait is
+        // released so the scope can still join.
+        let result = match fakes::Deadline::after(WITHIN).recv(&received_done) {
+            Ok(result) => result,
+            Err(_) => {
+                clock.advance_when_parked(
+                    Some(clock.origin() + CALLBACK_WAIT),
+                    None,
+                    CALLBACK_WAIT,
+                    &fakes::Deadline::after(WITHIN),
+                );
+                login.join().unwrap();
+                panic!("waited until the deadline for the driven login");
+            }
+        };
+        login.join().unwrap();
+        (result, debug.lines.lock().unwrap().clone())
+    });
+    (result, recorded)
+}
+
+/// The `mcp` shape every login line carries: the fixed purpose with no
+/// identity, host or path, and the first attempt.
+fn assert_mcp_shape(line: &HttpRequest) {
+    assert_eq!(line.purpose, Purpose::Mcp);
+    assert_eq!(line.provider, None, "no provider: {line:?}");
+    assert_eq!(line.extension, None, "no extension: {line:?}");
+    assert_eq!(line.model, None, "no model: {line:?}");
+    assert_eq!(line.host, None, "no host: {line:?}");
+    assert_eq!(line.path, None, "no path: {line:?}");
+    assert_eq!(line.attempt, 1, "every login post sends once: {line:?}");
+}
+
+#[test]
+fn an_observed_login_writes_one_mcp_line_per_request() {
+    let server = start_full();
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let debug = Arc::new(Lines {
+        lines: Mutex::new(Vec::new()),
+    });
+    let (result, lines) =
+        run_observed_with_callback(&server_url(&server), &files, &clock, succeed, debug);
+    result.expect("the driven login succeeds");
+    let requests = server.requests();
+    let paths: Vec<String> = requests
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/mcp",
+            "/prm",
+            "/.well-known/oauth-authorization-server",
+            "/register",
+            "/token",
+        ],
+        "the probe, two discovery fetches, the registration, the exchange"
+    );
+    assert_eq!(lines.len(), requests.len(), "{lines:?}");
+    for (line, request) in lines.iter().zip(requests.iter()) {
+        assert_mcp_shape(line);
+        assert_eq!(
+            line.request_bytes,
+            request.body.len() as u64,
+            "the sent length: {line:?}"
+        );
+    }
+    // The probe answers 401: its `{}` body is read like any fetch.
+    assert_eq!(lines[0].status, Some(401), "{:?}", lines[0]);
+    assert_eq!(lines[0].request_bytes, 0, "{:?}", lines[0]);
+    assert_eq!(lines[0].response_bytes, 2, "{:?}", lines[0]);
+    let base = server.url();
+    assert_eq!(lines[1].status, Some(200), "{:?}", lines[1]);
+    assert_eq!(
+        lines[1].response_bytes,
+        json!({"authorization_servers": [base]}).to_string().len() as u64,
+        "{:?}",
+        lines[1]
+    );
+    assert_eq!(lines[2].status, Some(200), "{:?}", lines[2]);
+    assert_eq!(
+        lines[2].response_bytes,
+        authorization_document(&base).to_string().len() as u64,
+        "{:?}",
+        lines[2]
+    );
+    assert_eq!(lines[3].status, Some(200), "{:?}", lines[3]);
+    assert_eq!(
+        lines[3].response_bytes,
+        json!({"client_id": "c1"}).to_string().len() as u64,
+        "{:?}",
+        lines[3]
+    );
+    assert_eq!(lines[4].status, Some(200), "{:?}", lines[4]);
+    assert_eq!(
+        lines[4].response_bytes,
+        token_reply("at-1").to_string().len() as u64,
+        "{:?}",
+        lines[4]
+    );
 }

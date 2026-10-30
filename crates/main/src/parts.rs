@@ -393,6 +393,11 @@ fn parts_inner(
                 Err(failure) => (Err(failure), mcp_servers::Specs::default()),
             };
             let timing = diag.debugging().then(|| diag.timings());
+            // The session's sink observes each MCP request at debug; at
+            // any other level the servers stay silent.
+            let debug = diag
+                .debugging()
+                .then(|| Arc::clone(&diag) as Arc<dyn contract::diag::DebugLog>);
             let artifacts = log::SessionDir::new(&sessions, &launch.id).artifacts();
             let images = crate::builtin::session_images(fiber, &artifacts, timing.clone());
             let pending = mcp_servers::start_session_tools(
@@ -405,6 +410,7 @@ fn parts_inner(
                 repository.skipped.clone(),
                 images,
                 timing,
+                debug,
             )?;
             (Some(mcp), Some(pending))
         }
