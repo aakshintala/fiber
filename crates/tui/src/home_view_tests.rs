@@ -3468,6 +3468,17 @@ fn the_typed_body_beside_a_focused_recent_without_completions() {
     assert_eq!(typed_body(0, 2, Some(1), false, 3), vec![T, R(1)]);
 }
 
+/// A focus past the last row clamps to the last recent: room 3 takes
+/// the budget-two branch, so an unclamped recent index would change
+/// the row list.
+#[test]
+fn a_focus_past_the_end_clamps_to_the_last_recent() {
+    assert_eq!(
+        typed_body(2, 1, Some(99), false, 3),
+        typed_body(2, 1, Some(2), false, 3)
+    );
+}
+
 /// A short screen keeps the focused completion barred: the last of 30
 /// draws with the typed row, and the first drops out.
 #[test]
