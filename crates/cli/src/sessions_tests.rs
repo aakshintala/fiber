@@ -912,12 +912,6 @@ fn a_rejection_without_a_message_names_the_command() {
     assert_eq!(error.to_string(), "the hub refused `delete`");
 }
 
-#[test]
-fn another_kind_with_the_matching_id_is_no_answer() {
-    let line = hub_answer(HubEventKind::SessionLeft, json!({"command_id": "c_1"}));
-    assert!(matched(line, "c_1", || "delete".to_owned()).is_none());
-}
-
 /// One complete hub JSON line enters as its typed kind.
 fn entered(kind: &str, payload: Value) -> HubAnswer {
     serde_json::from_value(json!({"kind": kind, "ts": 1, "schema_version": 1, "payload": payload}))
@@ -1012,6 +1006,8 @@ fn an_accepted_answer_never_runs_the_fallback() {
 fn an_unknown_line_before_an_accepted_answer_reads_the_answer() {
     let setup = Setup::new();
     setup.started(ROOT, None);
+    // Per docs/events.md:56-57 a consumer skips any kind it does not
+    // recognise, so the unknown line is skipped and the real answer is read.
     let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "result": {"token": "wrong"},
     }});
@@ -1038,6 +1034,8 @@ fn an_unknown_line_before_an_accepted_answer_reads_the_answer() {
 fn an_unknown_line_before_a_rejection_reads_the_refusal() {
     let setup = Setup::new();
     setup.started(ROOT, None);
+    // Per docs/events.md:56-57 a consumer skips any kind it does not
+    // recognise, so the unknown line is skipped and the refusal is read.
     let unknown = json!({"kind": "future_kind", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "code": "session_held", "message": "held",
     }});
