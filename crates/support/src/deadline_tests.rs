@@ -226,9 +226,16 @@ fn recv_or_fail_names_the_wait_at_the_callers_line() {
 
 #[test]
 fn the_bounds_keep_their_order_and_fit_nextests_kill() {
+    // Owner-ruled B relations for this ticket (see #3662): the per-wait
+    // bound, the guard, cleanup and the total fit under nextest's kill.
     assert!(WAIT <= WAITS && WAITS < CLEANUP && CLEANUP < BUDGET);
     assert!(BUDGET < Duration::from_secs(120));
+    // Existing nextest timeout rule (`docs/testing.md:232`): the per-test
+    // timeout is at least twice the longest single deadline. Per
+    // RULING-3662-C this pins only the twice-deadline part, not normal run
+    // time, so the clause is unchanged and no run-time constant is added.
     assert!(WAIT * 2 <= Duration::from_secs(120));
+    // Owner-ruled reserve for this ticket (see #3662).
     assert!(BUDGET.saturating_sub(CLEANUP) >= Duration::from_secs(10));
 }
 

@@ -1,6 +1,8 @@
-//! Thread-count pins (`docs/testing/running.md:22`): `scripts/check` runs
-//! nextest with one thread per CPU the host has free, so each count below is
-//! `floor(cpus - load)`, floored at 2 and capped at `cpus`.
+//! Thread-count pins (`docs/testing/running.md`, "Running tests"):
+//! `scripts/check` runs nextest with one thread per CPU the host has free
+//! locally, and keeps the runner's own count under `GITHUB_ACTIONS`, so each
+//! count below is `floor(cpus - load)`, floored at 2 and capped at `cpus`.
+//! The two-thread floor keeps the gate moving under extreme load.
 
 use super::*;
 
@@ -11,6 +13,7 @@ fn eight_cpus_at_four_and_a_half_load_runs_three() {
 
 #[test]
 fn load_past_the_cpu_count_floors_at_two() {
+    // The two-thread floor (`docs/testing/running.md`, "Running tests").
     assert_eq!(threads(4.0, 10.0), 2);
 }
 
@@ -36,5 +39,6 @@ fn a_negative_load_clamps_at_the_cpu_count() {
 
 #[test]
 fn load_exactly_covering_the_cpus_floors_at_two() {
+    // The two-thread floor (`docs/testing/running.md`, "Running tests").
     assert_eq!(threads(8.0, 8.0), 2);
 }

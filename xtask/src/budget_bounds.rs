@@ -41,9 +41,25 @@ pub(crate) fn changed_lines(base: &str) -> Result<BTreeMap<String, BTreeSet<usiz
         .into_iter()
         .next()
         .ok_or("no merge base")?;
+    let diff = crate::output("git", &["diff", "-U0", &merge_base])?;
+    let mut changed = parse_changed_diff(&diff);
+    for path in crate::git_lines(&["ls-files", "--others", "--exclude-standard"])? {
+        let lines = std::fs::read_to_string(&path)
+            .map_err(|e| format!("{path}: {e}"))?
+            .lines()
+            .count();
+        add_untracked_file(&mut changed, path, lines);
+    }
+    Ok(changed)
+}
+
+/// The changed lines in a `git diff -U0` output, by repository path: added
+/// lines are 1-based new-file lines. Deletions (`/dev/null`) and non-Rust
+/// files never count. Pure parsing, so unit tests cover it without git.
+fn parse_changed_diff(diff: &str) -> BTreeMap<String, BTreeSet<usize>> {
     let mut changed: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
     let mut path = String::new();
-    for line in crate::output("git", &["diff", "-U0", &merge_base])?.lines() {
+    for line in diff.lines() {
         if let Some(rest) = line.strip_prefix("+++ ") {
             path = rest.strip_prefix("b/").unwrap_or(rest).to_owned();
         } else if let Some(hunk) = line.strip_prefix("@@ ") {
@@ -66,17 +82,23 @@ pub(crate) fn changed_lines(base: &str) -> Result<BTreeMap<String, BTreeSet<usiz
             }
         }
     }
-    for path in crate::git_lines(&["ls-files", "--others", "--exclude-standard"])? {
-        if !path.ends_with(".rs") {
-            continue;
-        }
-        let lines = std::fs::read_to_string(&path)
-            .map_err(|e| format!("{path}: {e}"))?
-            .lines()
-            .count();
-        changed.entry(path).or_default().extend(1..=lines.max(1));
+    changed
+}
+
+/// An untracked file counts whole: 1-based lines `1..=lines`, at least line 1
+/// for an empty file. Non-Rust files never count.
+fn add_untracked_file(
+    changed: &mut BTreeMap<String, BTreeSet<usize>>,
+    path: String,
+    line_count: usize,
+) {
+    if !path.ends_with(".rs") {
+        return;
     }
-    Ok(changed)
+    changed
+        .entry(path)
+        .or_default()
+        .extend(1..=line_count.max(1));
 }
 
 /// Each violation in `files` on a changed line, in path then line order.

@@ -1,38 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
 
 use super::*;
 use crate::rules::RustFile;
 
-struct RestoreFile {
-    path: PathBuf,
-    source: String,
-}
-
-impl Drop for RestoreFile {
-    fn drop(&mut self) {
-        let restored = fs::write(&self.path, &self.source);
-        assert!(
-            restored.is_ok() || std::thread::panicking(),
-            "could not restore {}: {restored:?}",
-            self.path.display()
-        );
-    }
-}
-
-struct RemoveFile(PathBuf);
-
-impl Drop for RemoveFile {
-    fn drop(&mut self) {
-        match fs::remove_file(&self.0) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => panic!("could not remove {}: {error}", self.0.display()),
-        }
-    }
-}
+/// Compiled-in `docs/testing.md` for the selector's compiled-in list
+/// (`docs/ci.md`, "Selection"): kept as `include_str!` so the check sees it.
+#[allow(dead_code, reason = "compiled-in list needs the include, not a read")]
+const DOCS_TESTING: &str = include_str!("../../docs/testing.md");
 
 fn file(path: &str, rel: &str, source: &str) -> RustFile {
     RustFile {
@@ -367,78 +341,78 @@ fn other_after_methods_are_not_deadline_bounds() {
 }
 
 #[test]
-fn budget_bounds_reads_changed_lines_and_rejects_a_new_long_after() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let status = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--ignored",
-            "--exact",
-            "budget_bounds::tests::budget_bounds_probe_child",
-            "--test-threads=1",
-        ])
-        .current_dir(root)
-        .status()
-        .unwrap();
-    assert!(status.success());
+fn changed_diff_parsing_keeps_added_rust_lines_and_skips_deletions() {
+    // In-process replacement for the removed nested-probe: parses a
+    // synthetic `git diff -U0` without spawning a child or touching tracked
+    // files. Deleting the `/dev/null` guard would include the deletion hunk;
+    // deleting the `.rs` guard would include the markdown hunk.
+    let diff = "diff --git a/xtask/src/budget_bounds_tests.rs b/xtask/src/budget_bounds_tests.rs\n+++ b/xtask/src/budget_bounds_tests.rs\n@@ -0,0 +5,1 @@\n+fn budget_bounds_probe() { Deadline::after(Duration::from_secs(60)); }\n\
+        diff --git a/docs/testing.md b/docs/testing.md\n+++ b/docs/testing.md\n@@ -1,1 +1,1 @@\n-old\n+new\n\
+        diff --git a/old.rs b/old.rs\n+++ b//dev/null\n@@ -1,1 +1,1 @@\n-old\n";
+    let changed = parse_changed_diff(diff);
+    assert_eq!(
+        changed.get("xtask/src/budget_bounds_tests.rs"),
+        Some(&BTreeSet::from([5])),
+        "{changed:?}"
+    );
+    assert!(!changed.contains_key("docs/testing.md"), "{changed:?}");
+    assert!(!changed.contains_key("/dev/null"), "{changed:?}");
+    // The parsed added line is a long `after` on a changed line, so the
+    // check rejects it in-process without git.
+    let files = [file(
+        "xtask/src/budget_bounds_tests.rs",
+        "src/budget_bounds_tests.rs",
+        "fn budget_bounds_probe() { Deadline::after(Duration::from_secs(60)); }",
+    )];
+    let mut map = BTreeMap::new();
+    map.insert(
+        "xtask/src/budget_bounds_tests.rs".to_owned(),
+        BTreeSet::from([1]),
+    );
+    let failures = check_files(&files, &map);
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].contains("Deadline::after("), "{failures:?}");
 }
 
 #[test]
-#[ignore = "invoked by budget_bounds_reads_changed_lines_and_rejects_a_new_long_after"]
-fn budget_bounds_probe_child() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let test_path = root.join("xtask/src/budget_bounds_tests.rs");
-    let test_source = include_str!("budget_bounds_tests.rs");
-    let _restore_test = RestoreFile {
-        path: test_path.clone(),
-        source: test_source.to_owned(),
-    };
-    let probe = "\nfn budget_bounds_probe() { Deadline::after(Duration::from_secs(60)); }\n";
-    let probe_line = test_source.lines().count() + 2;
-    fs::write(&test_path, format!("{test_source}{probe}")).unwrap();
-
-    let docs_path = root.join("docs/testing.md");
-    let docs_source = include_str!("../../docs/testing.md");
-    let _restore_docs = RestoreFile {
-        path: docs_path.clone(),
-        source: docs_source.to_owned(),
-    };
-    fs::write(
-        &docs_path,
-        format!("{docs_source}\n<!-- budget bounds probe -->\n"),
-    )
-    .unwrap();
-
-    let ignored_path = root.join("xtask/src/budget_bounds_probe.txt");
-    fs::write(&ignored_path, "not Rust\n").unwrap();
-    let _remove_ignored = RemoveFile(ignored_path);
-
-    let changed = changed_lines("HEAD").unwrap();
-    let test_rel = "xtask/src/budget_bounds_tests.rs";
-    assert!(
-        changed
-            .get(test_rel)
-            .is_some_and(|lines| lines.contains(&probe_line)),
-        "the added line must be included in its hunk: {changed:?}"
-    );
-    assert!(!changed.contains_key("docs/testing.md"), "{changed:?}");
-    assert!(
-        !changed.contains_key("xtask/src/budget_bounds_probe.txt"),
+fn untracked_files_count_whole_and_skip_non_rust() {
+    // In-process coverage for the untracked branch: no git, no filesystem.
+    // Deleting the `.rs` guard would include the text file; replacing
+    // `max(1)` handling would empty the zero-line file.
+    let mut changed = BTreeMap::new();
+    add_untracked_file(&mut changed, "xtask/src/new_test.rs".to_owned(), 3);
+    add_untracked_file(&mut changed, "notes.txt".to_owned(), 3);
+    add_untracked_file(&mut changed, "xtask/src/empty.rs".to_owned(), 0);
+    assert_eq!(
+        changed.get("xtask/src/new_test.rs"),
+        Some(&BTreeSet::from([1, 2, 3])),
         "{changed:?}"
     );
-
-    let failures = budget_bounds("HEAD").unwrap();
-    assert!(
-        failures.iter().any(|failure| {
-            failure.starts_with(&format!("{test_rel}:{probe_line}: Deadline::after("))
-        }),
-        "{failures:?}"
+    assert!(!changed.contains_key("notes.txt"), "{changed:?}");
+    assert_eq!(
+        changed.get("xtask/src/empty.rs"),
+        Some(&BTreeSet::from([1])),
+        "{changed:?}"
     );
+}
+
+#[test]
+fn invalid_bases_fail_instead_of_reporting_empty() {
+    // The git-backed wrappers fail closed on an unknown base: a mutant that
+    // returns an empty map or list would report no failure and pass silently.
+    // No tracked files are touched and no test binary is spawned.
+    assert!(changed_lines("definitely-not-a-fiber-base").is_err());
+    assert!(budget_bounds("definitely-not-a-fiber-base").is_err());
+}
+
+#[test]
+fn show_formats_seconds_and_milliseconds() {
+    // Direct pin for `show`: the numeric formatter's exact output.
+    // Returning `String::new()` or `"xyzzy"` fails each assertion below.
+    assert_eq!(show(60_000), "60 s");
+    assert_eq!(show(101_000), "101 s");
+    assert_eq!(show(90_001), "90001 ms");
+    assert_eq!(show(0), "0 s");
 }
 
 #[test]
