@@ -2353,11 +2353,11 @@ mod linux_signal {
             libc::SYS_accept4,
             libc::SYS_io_uring_setup,
         ] {
+            let want = u32::try_from(denied).expect("denied syscall number fits in u32");
             assert!(
                 program
                     .iter()
-                    .any(|instruction| instruction.code & 0x07 == JUMP
-                        && instruction.k == denied as u32),
+                    .any(|instruction| instruction.code & 0x07 == JUMP && instruction.k == want),
                 "the filter compares {denied}"
             );
         }
