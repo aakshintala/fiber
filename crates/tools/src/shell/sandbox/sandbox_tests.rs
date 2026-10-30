@@ -1866,6 +1866,24 @@ fn a_stale_baseline_is_recovered_before_a_new_snapshot() {
     );
 }
 
+#[test]
+fn a_workspace_no_project_key_can_name_fails_before_spawn() {
+    let dir = fakes::TempDir::new("fiber-protected-bad-key");
+    let home = protected_home(&dir);
+    let handle = open_handle(&home, dir.path());
+    // A NUL byte survives the slug but no project key can name it.
+    let bad = dir.path().join("no\0key");
+    let error = handle.begin(&bad).expect_err("no key names the workspace");
+    assert!(
+        error.to_string().contains("is not a project key"),
+        "the failure names the key: {error}"
+    );
+    assert!(
+        !home.join("projects").exists(),
+        "the failed begin records nothing"
+    );
+}
+
 /// No baseline file exists under `home`.
 fn no_baseline_yet(home: &std::path::Path) {
     let projects = home.join("projects");

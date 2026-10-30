@@ -179,11 +179,19 @@ impl ProtectedPaths {
         let handle = Arc::new(Self {
             home: home.to_path_buf(),
         });
-        let dir = state_paths(&handle.home, workspace);
+        let dir = state_paths(&handle.home, workspace)?;
         if !dir.dir.exists() {
             // No state yet: no stale baseline can exist, and the first
             // confined call's begin records it. A session that ends
-            // before any call leaves the home untouched.
+            // before any call leaves the home untouched. A home that
+            // exists but is no directory can never hold state, so
+            // opening fails closed instead of deferring the failure.
+            if std::fs::metadata(&handle.home).is_ok_and(|meta| !meta.is_dir()) {
+                return Err(format!(
+                    "{} is not a directory, so protected-path state cannot be recorded",
+                    handle.home.display()
+                ));
+            }
             return Ok((handle, None));
         }
         let recovered = recover(&dir)?;
@@ -195,7 +203,7 @@ impl ProtectedPaths {
     /// before spawn when protection cannot be established, so the call
     /// never runs unprotected.
     pub(crate) fn begin(&self, workspace: &Path) -> Result<Begin, SetupError> {
-        let dir = state_paths(&self.home, workspace);
+        let dir = state_paths(&self.home, workspace).map_err(|message| SetupError { message })?;
         create_dir(&dir.dir).map_err(setup)?;
         let baseline_file = open_lock(&dir.baseline_lock).map_err(setup)?;
         baseline_file.lock().map_err(setup)?;
@@ -256,7 +264,9 @@ impl ProtectedPaths {
     /// protected entry holds is a no-op. Failures leave the baseline as it
     /// is; the next confined call still compares against the recorded one.
     pub(crate) fn note_approved_write(&self, workspace: &Path, path: &Path) {
-        let dir = state_paths(&self.home, workspace);
+        let Ok(dir) = state_paths(&self.home, workspace) else {
+            return;
+        };
         let Ok(baseline_file) = open_lock(&dir.baseline_lock) else {
             return;
         };
@@ -398,18 +408,21 @@ fn slug(path: &Path) -> String {
     path.to_string_lossy().replace('/', "-")
 }
 
-/// The state files for `workspace`'s project.
-fn state_paths(home: &Path, workspace: &Path) -> StatePaths {
-    let dir = home
-        .join("projects")
-        .join(slug(&identity(workspace).path))
+/// The state files for `workspace`'s project, under the config layout's
+/// projects root (`docs/state.md`, "Projects"). The slug must name one
+/// file in `projects/`; anything else fails closed before spawn.
+fn state_paths(home: &Path, workspace: &Path) -> Result<StatePaths, String> {
+    let slug = slug(&identity(workspace).path);
+    let key = config::ProjectKey::new(slug).map_err(|source| source.to_string())?;
+    let dir = config::projects_dir(home)
+        .join(key.as_str())
         .join("protected-paths");
-    StatePaths {
+    Ok(StatePaths {
         baseline: dir.join("baseline.json"),
         baseline_lock: dir.join("baseline.lock"),
         active_lock: dir.join("active.lock"),
         dir,
-    }
+    })
 }
 
 /// One registered worktree: its root, and whether git lists it first.
