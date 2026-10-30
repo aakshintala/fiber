@@ -41,7 +41,13 @@ pub use session_list::SessionList;
 pub use session_message::SessionMessage;
 pub use session_search::SessionSearch;
 pub use shell::Shell;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use shell::sandbox::Prepared;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use shell::sandbox::SetupError as SandboxSetupError;
 pub use shell::sandbox::check_available as sandbox_check_available;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use shell::sandbox::prepare;
 pub use shell::sandbox::protected::{
     ProtectedPaths, ProtectedPathsOpenError, Report as ProtectedReport,
     RestoreFailure as ProtectedRestoreFailure,

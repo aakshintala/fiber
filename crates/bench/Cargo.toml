@@ -22,6 +22,7 @@ log = { path = "../log" }
 rustix.workspace = true
 serde_json.workspace = true
 support = { path = "../support" }
+tools = { path = "../tools" }
 tui = { path = "../tui" }
 worktree = { path = "../worktree" }
 

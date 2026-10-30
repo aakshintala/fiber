@@ -655,9 +655,12 @@ fn plan_skips_the_base_rows_the_diff_does_not_select() {
     };
     assert_eq!(base_skip(&dir), "base_skip=");
     dir.write("crates/tui/src/x.rs", "//! x\n");
-    assert_eq!(base_skip(&dir), "base_skip=session start,sessions list");
+    assert_eq!(
+        base_skip(&dir),
+        "base_skip=session start,sessions list,sandbox setup"
+    );
     dir.write("crates/loop/src/status.rs", "//! status\n");
-    assert_eq!(base_skip(&dir), "base_skip=sessions list");
+    assert_eq!(base_skip(&dir), "base_skip=sessions list,sandbox setup");
 }
 
 #[test]
