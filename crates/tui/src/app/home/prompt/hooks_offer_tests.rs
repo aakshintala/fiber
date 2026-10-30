@@ -458,7 +458,7 @@ fn clear_staged_decline_stays_attached_and_sends_no_close() {
         app.session().map(|session| session.0.as_str()),
         Some(session)
     );
-    assert!(app.clear_pending.is_none(), "the clear settles");
+    assert!(app.clear.pending.is_none(), "the clear settles");
 }
 
 #[test]
@@ -694,7 +694,8 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
     app.on_line(status(old_session));
     app.clear();
     let staged = app
-        .clear_pending
+        .clear
+        .pending
         .as_ref()
         .expect("the clear staged a start")
         .command_id
@@ -735,7 +736,8 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
         .expect("the retry has an id")
         .to_owned();
     assert_eq!(
-        app.clear_pending
+        app.clear
+            .pending
             .as_ref()
             .map(|pending| pending.command_id.as_str()),
         Some(new.as_str()),
@@ -1081,7 +1083,7 @@ fn clear_staged_install_failure_settles_the_clear() {
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
     let old = refuse_start(&mut app, "");
-    assert!(app.clear_pending.is_some(), "the clear staged a start");
+    assert!(app.clear.pending.is_some(), "the clear staged a start");
     let ticket = match app.take_hooks_job().expect("the query waits") {
         crate::install_worker::HooksJob::Query(query) => query.ticket,
         crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
@@ -1115,7 +1117,7 @@ fn clear_staged_install_failure_settles_the_clear() {
         app.session().map(|session| session.0.as_str()),
         Some(session)
     );
-    assert!(app.clear_pending.is_none(), "the clear settles");
+    assert!(app.clear.pending.is_none(), "the clear settles");
     assert!(!app.outbox.pending.contains_key(&old));
 }
 
@@ -1127,7 +1129,7 @@ fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
     let old = refuse_start(&mut app, "");
-    assert!(app.clear_pending.is_some(), "the clear staged a start");
+    assert!(app.clear.pending.is_some(), "the clear staged a start");
     assert!(app.take_hooks_job().is_some(), "the query runs");
     app.disconnected();
     assert!(!app.hooks_offer_open(), "the offer closes");
@@ -1142,7 +1144,7 @@ fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
             "Connection lost.".to_owned()
         )]
     );
-    assert!(app.clear_pending.is_none(), "the clear settles");
+    assert!(app.clear.pending.is_none(), "the clear settles");
     assert!(!app.outbox.pending.contains_key(&old));
     assert_eq!(
         app.session().map(|session| session.0.as_str()),

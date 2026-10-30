@@ -86,7 +86,7 @@ impl App {
     /// `close` will go with `now`. With no status to name, or a `start`
     /// already in flight, the question only closes.
     fn confirm_clear(&mut self) -> Effect {
-        if self.clear_pending.is_some() {
+        if self.clear_pending() {
             return Effect::None;
         }
         let staged = self.home.as_mut().and_then(|home| {

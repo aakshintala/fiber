@@ -382,12 +382,12 @@ impl App {
     /// start restores its draft and phase; a clear-staged start stays
     /// attached to the old session.
     fn settle_hooks_start(&mut self, state: &State) {
-        if let Some(pending) = self.clear_pending.take() {
+        if let Some(pending) = self.clear.pending.take() {
             if pending.command_id == state.refused_id {
                 self.outbox.answered(&state.refused_id);
                 return;
             }
-            self.clear_pending = Some(pending);
+            self.clear.pending = Some(pending);
         }
         self.fail(&state.refused_id);
         self.outbox.answered(&state.refused_id);
@@ -454,7 +454,7 @@ impl App {
                     .fail(&state.refused_id)
                     .map(|(_, draft)| draft)
                     .unwrap_or_default();
-                if let Some(pending) = self.clear_pending.as_mut() {
+                if let Some(pending) = self.clear.pending.as_mut() {
                     // The retry is actually sent now: the clear's close
                     // follows only this new start's answer.
                     if pending.command_id == state.refused_id {
@@ -500,7 +500,8 @@ impl App {
         } else if let Some(state) = self.take_hooks_offer() {
             self.hooks_job = None;
             if self
-                .clear_pending
+                .clear
+                .pending
                 .as_ref()
                 .is_some_and(|pending| pending.command_id == state.refused_id)
             {
@@ -561,7 +562,7 @@ impl App {
             if !matches!(self.on_key(crate::keys::Key::Enter, now), Effect::Send(_)) {
                 return None;
             }
-        } else if self.clear_pending.is_none() && !matches!(self.clear(), Effect::Send(_)) {
+        } else if self.clear.pending.is_none() && !matches!(self.clear(), Effect::Send(_)) {
             return None;
         }
         let id = self

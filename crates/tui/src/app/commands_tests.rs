@@ -2668,12 +2668,12 @@ fn clear_close_answer_settles_only_its_matching_command_id() {
         "command_accepted",
         json!({"command_id": "c_unrelated", "result": {}}),
     ));
-    assert_eq!(app.clear_close.as_deref(), Some(close_id));
+    assert_eq!(app.clear.close.as_deref(), Some(close_id));
     app.on_line(hub_line(
         "command_accepted",
         json!({"command_id": close_id, "result": {}}),
     ));
-    assert_eq!(app.clear_close, None);
+    assert_eq!(app.clear.close, None);
 }
 
 #[test]
