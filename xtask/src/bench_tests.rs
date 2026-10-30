@@ -26,6 +26,7 @@ const DOC: &str = concat!(
     "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |\n",
     "| `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |\n",
+    "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | — | — | — | — | — |\n",
     "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| `paging` jig, open pass and first frame | 616 ms | Linux x86_64 | picked | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |\n",
     "| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked | 8 ms | 5 ms | 10 ms | 16 % | 4 % |\n",
@@ -91,7 +92,8 @@ fn head() -> Value {
             "paging_scale16_search_ms": [86.0, 84.0, 87.0, 86.5, 83.0],
             "paging_append_ms": [1.8, 1.7, 1.8, 1.9, 1.8],
             "wheel_paging_ms": [3.9, 4.1, 3.8, 4.0, 4.2],
-            "wheel_read_ms": [1.1, 1.0, 1.2, 1.1, 1.0]
+            "wheel_read_ms": [1.1, 1.0, 1.2, 1.1, 1.0],
+            "sandbox_setup_ms": [2.9, 2.7, 2.8, 3.0, 2.8]
         },
         "failures": []
     });
@@ -196,7 +198,8 @@ fn base() -> Value {
             "paging_width_ms": [20.5, 20.5, 20.5, 20.5, 20.5],
             "paging_append_ms": [1.5, 1.5, 1.5, 1.5, 1.5],
             "wheel_paging_ms": [3.5, 3.5, 3.5, 3.5, 3.5],
-            "wheel_read_ms": [0.9, 0.9, 0.9, 0.9, 0.9]
+            "wheel_read_ms": [0.9, 0.9, 0.9, 0.9, 0.9],
+            "sandbox_setup_ms": [0.9, 0.9, 0.9, 0.9, 0.9]
         },
         "failures": []
     })
@@ -1209,6 +1212,44 @@ fn paging_memory_at_its_ceiling_passes_and_one_kib_over_fails() {
 }
 
 #[test]
+fn unavailable_timing_class_cells_stay_advisory_without_weakening_populated_gates() {
+    const ROW: &str = "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | — | — | — | — | — |";
+    let id = "sandbox_setup_ms";
+    let (head, base) = scalar_pair(id, json!(vec![20.0; 5]), json!(vec![0.9; 5]), SLOW_MODEL);
+    for populated in [
+        "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | 10 ms | — | — | 20 % | — |",
+        "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | 10 ms | — | 10 ms | 20 % | — |",
+    ] {
+        let doc = doc_with(ROW, populated);
+        let out = judge_doc(&doc, &head, Some(&base), Event::PullRequest);
+        assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+        let line = row(&out.comment, "Sandbox setup for one confined shell call");
+        assert!(line.contains("20.0 ms"), "{line}");
+        assert!(line.contains("class gate unavailable"), "{line}");
+        assert!(line.ends_with("| advisory |"), "{line}");
+    }
+
+    let populated = doc_with(
+        ROW,
+        "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | 10 ms | — | 10 ms | 20 % | 10 % |",
+    );
+    let out = judge_doc(&populated, &head, Some(&base), Event::PullRequest);
+    assert!(has(&out.failures, "sandbox_setup_ms"), "{:?}", out.failures);
+}
+
+#[test]
+fn malformed_timing_class_cells_still_fail_instead_of_becoming_advisory() {
+    let doc = doc_with(
+        "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | — | — | — | — | — |",
+        "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | 10 ms | — | soon | 20 % | — |",
+    );
+    let h = with_cpu(head(), SLOW_MODEL);
+    let b = with_cpu(base(), SLOW_MODEL);
+    let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+    assert!(has(&out.failures, "<number> ms"), "{:?}", out.failures);
+}
+
+#[test]
 fn a_slow_paging_timing_is_advisory_and_shows_both_medians() {
     let mut slow = head();
     for (_, id) in PAGING.iter().skip(1) {
@@ -2217,6 +2258,7 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
         "paging_append_ms",
         "wheel_paging_ms",
         "wheel_read_ms",
+        "sandbox_setup_ms",
         "paging_counts",
     ] {
         three = trim_metric(&three, id, 3);
@@ -2681,6 +2723,11 @@ const HEAD_SKIP_ROWS: &[(&str, &[&str], &[&str])] = &[
             "paging_scale16_width_ms",
             "paging_scale16_search_ms",
         ],
+    ),
+    (
+        "sandbox setup",
+        &["Sandbox setup for one confined shell call"],
+        &["sandbox_setup_ms"],
     ),
 ];
 
@@ -4114,7 +4161,7 @@ fn malformed_class_cells_are_configuration_failures() {
     );
     assert!(has(&out.failures, "Session start"), "{:?}", out.failures);
     // Wrong units, negative and non-finite ceilings fail.
-    for bad in ["16 s", "16 KiB", "-16 ms", "NaN ms", "inf ms", "—"] {
+    for bad in ["16 s", "16 KiB", "-16 ms", "NaN ms", "inf ms"] {
         let doc = doc_with(
             "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
             &format!("| {bad} | 12 ms | 13 ms | 55 % | 9 % |"),
@@ -4127,7 +4174,7 @@ fn malformed_class_cells_are_configuration_failures() {
         );
     }
     // Missing and malformed tolerances fail.
-    for bad in ["55", "-55 %", "NaN %", "—"] {
+    for bad in ["55", "-55 %", "NaN %"] {
         let doc = doc_with(
             "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
             &format!("| 16 ms | 12 ms | 13 ms | {bad} | 9 % |"),
@@ -4149,7 +4196,7 @@ fn malformed_class_cells_are_configuration_failures() {
     );
     let doc = doc_with(
         "| 16 ms | 12 ms | 13 ms | 55 % | 9 % |",
-        "| — | 12 ms | 13 ms | 55 % | 9 % |",
+        "| soon ms | 12 ms | 13 ms | 55 % | 9 % |",
     );
     let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
     assert!(has(&out.failures, "Session start"), "{:?}", out.failures);
@@ -5937,6 +5984,7 @@ fn remeasure_maps_timing_ids_to_their_rows() {
             "paging",
             "terminal wheel",
             "session_list",
+            "sandbox setup",
         ],
     );
     for (id, row) in [
@@ -5953,6 +6001,7 @@ fn remeasure_maps_timing_ids_to_their_rows() {
         ("paging_search_ms", "paging"),
         ("paging_scale16_width_ms", "paging"),
         ("paging_scale16_search_ms", "paging"),
+        ("sandbox_setup_ms", "sandbox setup"),
     ] {
         assert_eq!(super::judge::remeasured_row(id), Some(row), "{id}");
     }
@@ -5988,7 +6037,7 @@ fn a_breached_paging_row_leaves_every_other_timing_workload_in_the_skip_list() {
         out.remeasure_skip,
         Some(
             "session start,terminal first frame,sessions list,\
-             terminal attach,terminal wheel,session_list"
+             terminal attach,terminal wheel,session_list,sandbox setup"
                 .to_owned()
         ),
     );
@@ -6022,7 +6071,7 @@ fn two_breached_rows_both_leave_the_skip_list() {
         out.remeasure_skip,
         Some(
             "terminal first frame,sessions list,terminal attach,\
-             terminal wheel,session_list"
+             terminal wheel,session_list,sandbox setup"
                 .to_owned()
         ),
     );
