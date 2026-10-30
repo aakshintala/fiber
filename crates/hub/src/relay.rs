@@ -626,18 +626,20 @@ pub(crate) fn route(
         // answers it `indeterminate` however the session ends, and never
         // routes it again. A write that accepted nothing keeps the
         // command unsent, as when a live relay's socket closes.
-        let partial = matches!(&outcome, Some(Err(partial)) if partial.written > 0);
+        // One outcome for both consumers: the kept entry and the
+        // canonical report always agree, so the two never disagree about
+        // whether the session may have read the command.
+        let state = match &outcome {
+            Some(Err(partial)) if partial.written > 0 => CommandState::Partial,
+            _ => CommandState::Queued,
+        };
         if let Some(entry) = held.entries.get_mut(at) {
             entry.retiring = Some(Retire::Dead);
             if let Some(kept) = lock(&entry.kept)
                 .iter_mut()
                 .find(|(kept, _, _)| *kept == id.0)
             {
-                kept.2 = if partial {
-                    CommandState::Partial
-                } else {
-                    CommandState::Queued
-                };
+                kept.2 = state;
             }
             match entry.writer.shutdown(Shutdown::Write) {
                 Ok(()) | Err(_) => {}
@@ -645,15 +647,7 @@ pub(crate) fn route(
         }
         // A rerouted command keeps its claim through the failed write: a
         // second clean exit still answers it `closing`.
-        report(
-            &order,
-            &id.0,
-            if partial {
-                CommandState::Partial
-            } else {
-                CommandState::Queued
-            },
-        );
+        report(&order, &id.0, state);
         true
     };
     if serve_existing() {
