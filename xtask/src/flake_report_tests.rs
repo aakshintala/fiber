@@ -741,6 +741,136 @@ fn a_unit_test_binary_id_without_colons() {
 }
 
 #[test]
+fn two_modules_of_main_make_two_records() {
+    // The aggregate `main` binary is keyed by its first test-module
+    // segment, so two modules file two titles.
+    let text = "main reviewer_setup::the_setup_saves\tfirst detail\n\
+                main reload_tests::some_test\tsecond detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // title files or comments once; a repeat is skipped".
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "the aggregate `main`
+    // integration binary names its first test-module segment".
+    assert_eq!(out.len(), 2);
+    let reviewer = titled(&out, "main::reviewer_setup");
+    assert_eq!(
+        field(reviewer, "title"),
+        Some("Flaky tests: main::reviewer_setup")
+    );
+    assert_eq!(
+        field(reviewer, "name"),
+        Some("main reviewer_setup::the_setup_saves")
+    );
+    assert_eq!(field(reviewer, "detail"), Some("first detail"));
+    let reload = titled(&out, "main::reload_tests");
+    assert_eq!(
+        field(reload, "title"),
+        Some("Flaky tests: main::reload_tests")
+    );
+    assert_eq!(field(reload, "name"), Some("main reload_tests::some_test"));
+    assert_eq!(field(reload, "detail"), Some("second detail"));
+}
+
+#[test]
+fn a_root_level_main_test_falls_back_to_main() {
+    // A `main` test with no module segment falls back to the binary id
+    // and dedupes with the bare id.
+    let text = "main root_level_test\tfirst detail\nmain\tsecond detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    // docs/testing/running.md, "Flaky tests": "Within one report job a file's
+    // title files or comments once; a repeat is skipped".
+    // docs/testing/running.md, "Flaky tests": "a repeated title takes its
+    // runner and detail from its first occurrence in file-name byte order".
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "A root-level `main` test
+    // falls back to `Flaky tests: main`".
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main");
+    assert_eq!(field(record, "title"), Some("Flaky tests: main"));
+    assert_eq!(field(record, "name"), Some("main root_level_test"));
+    assert_eq!(field(record, "detail"), Some("first detail"));
+}
+
+#[test]
+fn a_single_file_integration_binary_keeps_its_title() {
+    // Every binary but the aggregate `main` keeps its binary title without
+    // inspecting the test name, even when the name holds a module segment.
+    let text = "main::hub_exit_window helper_tests::case\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "Every other binary keeps
+    // its binary title, such as `Flaky tests: main::hub_exit_window`".
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main::hub_exit_window");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: main::hub_exit_window")
+    );
+    assert_eq!(
+        field(record, "name"),
+        Some("main::hub_exit_window helper_tests::case")
+    );
+    assert_eq!(field(record, "detail"), Some("some detail"));
+}
+
+#[test]
+fn only_the_first_module_segment_names_the_main_key() {
+    // Only the first `::` segment counts: a later one never renames the
+    // file.
+    let text = "main reviewer_setup::inner::case\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "the aggregate `main`
+    // integration binary names its first test-module segment".
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main::reviewer_setup");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: main::reviewer_setup")
+    );
+}
+
+#[test]
+fn an_empty_first_segment_falls_back_to_main() {
+    // A test name starting with `::` names no module, so the line keeps
+    // the `main` title.
+    let text = "main ::case\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "A root-level `main` test
+    // falls back to `Flaky tests: main`".
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "main");
+    assert_eq!(field(record, "title"), Some("Flaky tests: main"));
+    assert_eq!(field(record, "name"), Some("main ::case"));
+}
+
+#[test]
+fn a_unit_test_with_a_tests_module_keeps_its_binary_title() {
+    // Unit-test ids are not parsed specially: a `*_tests` segment in the
+    // test name never renames the title.
+    let text = "fakes process_group_tests::reaps_children\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    // docs/ci.md, "On every pull request that changes code": "writes one
+    // classification line per unique title".
+    // docs/testing/running.md, "Flaky tests": "unit-test ids such as
+    // `fakes` are not parsed specially".
+    assert_eq!(out.len(), 1);
+    let record = titled(&out, "fakes");
+    assert_eq!(field(record, "title"), Some("Flaky tests: fakes"));
+    assert_eq!(
+        field(record, "name"),
+        Some("fakes process_group_tests::reaps_children")
+    );
+}
+
+#[test]
 fn a_name_with_no_space_is_the_whole_id() {
     let out = classified(&[("linux", "main::t\tsome detail")], &push_run());
     // docs/testing/running.md, "Flaky tests": "Within one report job a file's
