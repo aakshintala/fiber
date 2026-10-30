@@ -176,6 +176,10 @@ pub(crate) struct Look {
     follow: bool,
     /// The terminal's appearance, as it last reported it.
     appearance: Appearance,
+    /// The source theme, kept for the logo's tint: its shades read
+    /// straight, never through the depth's indexed paint
+    /// (`docs/tui.md`, "The logo").
+    theme: Theme,
 }
 
 impl Default for Look {
@@ -225,6 +229,7 @@ impl Look {
                 Appearance::Dark => Theme::DARK,
                 Appearance::Light => Theme::LIGHT,
             };
+            self.theme = theme.clone();
             self.colours = Self::colours(&theme, self.depth);
             self.lifted = Self::lifted_colours(&theme, self.depth);
         }
@@ -236,6 +241,46 @@ impl Look {
         self.appearance
     }
 
+    /// The terminal's colour depth.
+    pub(crate) fn depth(&self) -> Depth {
+        self.depth
+    }
+
+    /// The logo's tint and page background: the wave in the accent, the
+    /// name stops in heading, accent, string, type and keyword, over
+    /// the background. `None` without colour, or when any needed shade
+    /// is not an RGB one: the pixel logo then stays. A background the
+    /// theme leaves to the terminal falls back to the reported
+    /// appearance, black under dark and white under light
+    /// (`docs/tui.md`, "The logo").
+    pub(crate) fn logo_tint(&self) -> Option<(crate::graphics::logo::Tint, Rgb)> {
+        if self.depth == Depth::NoColour {
+            return None;
+        }
+        let rgb = |role: Role| match self.theme.shade(role) {
+            Shade::Rgb(rgb) => Some(rgb),
+            Shade::Terminal | Shade::Dim => None,
+        };
+        let tint = crate::graphics::logo::Tint {
+            wave: rgb(Role::Accent)?,
+            stops: [
+                rgb(Role::Heading)?,
+                rgb(Role::Accent)?,
+                rgb(Role::String)?,
+                rgb(Role::Type)?,
+                rgb(Role::Keyword)?,
+            ],
+        };
+        let background = match self.theme.shade(Role::Background) {
+            Shade::Rgb(rgb) => rgb,
+            Shade::Terminal | Shade::Dim => match self.appearance {
+                Appearance::Dark => (0, 0, 0),
+                Appearance::Light => (255, 255, 255),
+            },
+        };
+        Some((tint, background))
+    }
+
     /// The look of `theme` at `depth`, following the terminal when
     /// `follow`.
     fn resolve(theme: &Theme, depth: Depth, follow: bool, appearance: Appearance) -> Look {
@@ -245,6 +290,7 @@ impl Look {
             lifted: Self::lifted_colours(theme, depth),
             follow,
             appearance,
+            theme: theme.clone(),
         }
     }
 

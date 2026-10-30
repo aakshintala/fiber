@@ -8,13 +8,13 @@ use std::io::Write;
 
 /// What `setup` writes with hover on: the alternate screen, the title
 /// pushed, bracketed paste, mouse modes 1000, 1002, 1006 and 1003, the
-/// appearance queries, then the two detection queries and the graphics
-/// probe.
+/// appearance queries, then the keyboard flags, XTVERSION and device
+/// attributes queries and the graphics probe.
 const START_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[>0q\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
 /// What `setup` writes with hover off: no mode 1003.
 const START_NO_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[>0q\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
 /// What `restore` writes: kitty's flags popped, bracketed paste and every
 /// mouse mode off, theme reporting off, the title popped, the alternate
 /// screen left, the cursor shown.
@@ -343,4 +343,26 @@ fn cell_never_drops_below_one() {
     assert_eq!(super::cell((80, 24), (80, 24)), (1, 1));
     assert_eq!(super::cell((40, 20), (80, 24)), (1, 1));
     assert_eq!(super::cell((159, 47), (80, 24)), (1, 1));
+}
+
+#[test]
+fn measured_cell_needs_pixels_and_counts() {
+    assert_eq!(super::measured_cell((1920, 1080), (80, 24)), Some((24, 45)));
+    assert_eq!(super::measured_cell((160, 48), (80, 24)), Some((2, 2)));
+    // A small cell still measures: the logo's gate bounds it, not the
+    // measurement.
+    assert_eq!(super::measured_cell((40, 20), (80, 24)), Some((1, 1)));
+    for (pixel, count) in [
+        ((0, 0), (0, 0)),
+        ((1920, 1080), (0, 24)),
+        ((1920, 1080), (80, 0)),
+        ((0, 1080), (80, 24)),
+        ((1920, 0), (80, 24)),
+    ] {
+        assert_eq!(
+            super::measured_cell(pixel, count),
+            None,
+            "{pixel:?} {count:?}"
+        );
+    }
 }
