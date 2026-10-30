@@ -1084,3 +1084,77 @@ fn a_bare_url_in_a_prompt_bubble_is_on_its_drawn_cells() {
         "{link:?}"
     );
 }
+
+#[test]
+fn a_swapped_view_on_home_tints_the_focused_row_and_lifts_the_hovered_row() {
+    use crate::home::Launch;
+    use crate::swapped::Spot;
+    use crate::theme::hover_bg;
+    use ratatui::style::Modifier;
+    // The `/keys` screen on home draws through the swapped-view early
+    // return, with one target per row (`docs/tui.md`, "Swapped views")
+    // and one row per action (`docs/tui.md`, "Bindings": every action
+    // with its keys, id and description — the table lists dozens, so at
+    // least two rows exist to focus one and hover another).
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    for ch in "/keys".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.keys_screen_open());
+    assert!(app.on_home() && app.swapped_view_open());
+    let area = Rect::new(0, 0, 80, 24);
+    let rows: Vec<(TargetId, Rect)> = {
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        targets
+            .into_iter()
+            .filter(|target| matches!(target.id, TargetId::View(Spot::Row(_))))
+            .map(|target| (target.id, target.rect))
+            .collect()
+    };
+    assert!(rows.len() >= 2, "two rows to focus and hover: {rows:?}");
+    let (focus_id, focus_rect) = rows[0];
+    let (hover_id, hover_rect) = rows[1];
+    assert_ne!(focus_rect.y, hover_rect.y);
+    app.focus = Some(focus_id);
+    // The unhovered frame: the focused row's base for the hover math.
+    let mut base = Buffer::empty(area);
+    crate::view::render(&app, area, &mut base, None);
+    // Hover the second row's first cell.
+    let pointer = (hover_rect.x, hover_rect.y);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, Some(pointer));
+    assert_eq!(hit(&targets, pointer.0, pointer.1), Some(hover_id));
+    // The focused row keeps the focus style, with no hover lift: the
+    // pointer sits elsewhere.
+    for dx in 0..focus_rect.width {
+        let at = (focus_rect.x.saturating_add(dx), focus_rect.y);
+        let cell = &buf[at];
+        assert!(
+            cell.modifier.contains(Modifier::REVERSED),
+            "focused cell {dx}"
+        );
+        assert_eq!(cell.bg, base[at].bg, "focused cell {dx} unlifted");
+    }
+    // The hovered row lifts each cell over its unhovered background,
+    // with no focus style: focus sits elsewhere.
+    for dx in 0..hover_rect.width {
+        let at = (hover_rect.x.saturating_add(dx), hover_rect.y);
+        let cell = &buf[at];
+        assert_eq!(cell.bg, hover_bg(base[at].bg), "hovered cell {dx}");
+        assert!(
+            !cell.modifier.contains(Modifier::REVERSED),
+            "hovered cell {dx}"
+        );
+    }
+}

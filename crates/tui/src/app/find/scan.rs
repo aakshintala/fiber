@@ -363,7 +363,7 @@ pub(super) fn row_offsets(rows: &[Row], width: u16) -> Vec<usize> {
     let mut row = 0usize;
     for (line, _) in rows {
         offsets.push(row);
-        row = row.saturating_add(crate::view::rows(line.clone(), width));
+        row = row.saturating_add(crate::view::rows(line, width));
     }
     offsets
 }

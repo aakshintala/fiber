@@ -39,7 +39,7 @@ pub(crate) fn place(line: &Line<'_>, width: u16) -> Vec<Placed> {
 pub(crate) fn place_steps(line: &Line<'_>, width: u16) -> (Vec<Placed>, usize, usize) {
     let mut steps = 0usize;
     let placed = layout(line, width, &mut steps);
-    let rows = crate::view::rows(line.clone(), width);
+    let rows = crate::view::rows(line, width);
     (
         placed,
         steps,
@@ -104,7 +104,7 @@ fn layout(line: &Line<'_>, width: u16, steps: &mut usize) -> Vec<Placed> {
         }
         return out;
     }
-    let rows = crate::view::rows(line.clone(), width);
+    let rows = crate::view::rows(line, width);
     let area = Rect::new(0, 0, width, u16::try_from(rows).unwrap_or(u16::MAX));
     // The paragraph can draw a wide grapheme, and what follows it on its
     // row, past the area's right edge; the scratch buffer has room for

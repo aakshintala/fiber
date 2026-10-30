@@ -271,7 +271,7 @@ fn joined(pages: &mut Pages, lines: &[Envelope]) -> Vec<Row> {
         }
         let drawn: usize = rows
             .iter()
-            .map(|(line, _)| crate::view::rows(line.clone(), pages.width))
+            .map(|(line, _)| crate::view::rows(line, pages.width))
             .sum();
         let counted = pages.index().pages().get(at).map(|page| page.rows);
         assert_eq!(counted, Some(drawn), "page {at}");
@@ -1558,7 +1558,7 @@ fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
     let mut expected = HashMap::new();
     for (line, _) in &out {
         if line.width() > usize::from(width) {
-            expected.insert(line.to_string(), crate::view::rows(line.clone(), width));
+            expected.insert(line.to_string(), crate::view::rows(line, width));
         }
     }
     assert!(!expected.is_empty());
@@ -1715,7 +1715,7 @@ fn every_row_of_the_fixture_places_inside_the_rows_it_draws() {
             pages.apply(line);
         }
         for (line, _) in joined(&mut pages, &lines) {
-            let rows = crate::view::rows(line.clone(), width);
+            let rows = crate::view::rows(&line, width);
             for placed in crate::cells::place(&line, width) {
                 assert!(
                     usize::from(placed.row) < rows,
@@ -4821,7 +4821,7 @@ fn chain_joined(pages: &mut Pages, log: &[Envelope]) -> Vec<Row> {
         }
         let drawn: usize = rows
             .iter()
-            .map(|(line, _)| crate::view::rows(line.clone(), pages.width))
+            .map(|(line, _)| crate::view::rows(line, pages.width))
             .sum();
         let counted = pages.index().pages().get(at).map(|page| page.rows);
         assert_eq!(counted, Some(drawn), "page {at}");
