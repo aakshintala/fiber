@@ -277,9 +277,13 @@ impl Tool for Shell {
                     "monitor": {
                         "type": ["boolean", "null"],
                         "description": "Start the command as a monitor: a job whose standard output lines reach you in batches. Standard error goes to its own file."
+                    },
+                    "unconfined": {
+                        "type": ["boolean", "null"],
+                        "description": "Leave the OS sandbox for this call. Reviewed exactly as with the sandbox off."
                     }
                 },
-                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor"],
+                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "unconfined"],
                 "additionalProperties": false
             }),
             deferred: false, hosted: None,
@@ -292,19 +296,22 @@ impl Tool for Shell {
     ) -> Result<Effects, contract::tool::EffectsError> {
         // A call `parse` rejects never runs. The closed default keeps a bad
         // `timeout_ms` or `workdir` off the read-only fast path.
+        let mut unconfined = false;
         let mut effects = match parse(arguments, &self.workspace, self.max_timeout_ms) {
             Ok(parsed) => {
+                unconfined = parsed.unconfined;
                 let entries = support::lock(&self.read_only);
                 classify(&parsed.command, &self.workspace, &parsed.workdir, &entries)
             }
             Err(_) => classify::executes(None, None),
         };
         // An unavailable sandbox does not mark the call confined: it stays
-        // on the reviewed path. Once declared confined, run_with_effects
-        // carries that decision unchanged and fails closed if availability
-        // changes before spawn.
+        // on the reviewed path. An explicit `unconfined: true` skips the
+        // upgrade and is reviewed as with the sandbox off. Once declared
+        // confined, run_with_effects carries that decision unchanged and
+        // fails closed if availability changes before spawn.
         let settings = self.selected();
-        if sandbox::check_available(&settings, &self.workspace).is_ok() {
+        if !unconfined && sandbox::check_available(&settings, &self.workspace).is_ok() {
             effects.declared.confined = true;
         }
         Ok(effects)
@@ -354,7 +361,18 @@ impl Tool for Shell {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         // A direct call derives its decision now: there is no earlier
-        // declaration to preserve.
+        // declaration to preserve. An explicit `unconfined: true` forces
+        // the policy off, matching the declared-not-confined path of
+        // `run_with_effects`.
+        if is_unconfined(arguments) {
+            let off = sandbox::Settings {
+                enabled: false,
+                allow_write: Vec::new(),
+                deny_read: Vec::new(),
+                fiber_home: PathBuf::new(),
+            };
+            return self.run_inner(arguments, &off, cancel, emit);
+        }
         let settings = self.selected();
         self.run_inner(arguments, &settings, cancel, emit)
     }
@@ -516,6 +534,7 @@ struct Args {
     run_in_background: Option<bool>,
     tty: Option<bool>,
     monitor: Option<bool>,
+    unconfined: Option<bool>,
 }
 
 struct Parsed {
@@ -524,6 +543,20 @@ struct Parsed {
     /// The command's timeout: `timeout_ms`, or a monitor's deadline.
     timeout_ms: u64,
     mode: Mode,
+    /// Whether the call leaves the OS sandbox: only a literal
+    /// `unconfined: true` sets it. Omitted, null and false follow the
+    /// session's sandbox setting; any other JSON type fails `parse`.
+    unconfined: bool,
+}
+
+/// Whether the call leaves the OS sandbox: only a literal
+/// `unconfined: true` does. Omitted, null and false follow the session's
+/// sandbox setting; any other JSON type fails `parse` as
+/// `invalid_arguments` before this is consulted.
+fn is_unconfined(arguments: &Map<String, Value>) -> bool {
+    arguments
+        .get("unconfined")
+        .is_some_and(|value| *value == Value::Bool(true))
 }
 
 /// How a call runs: the arguments `run_in_background`, `tty` and `monitor`,
@@ -593,6 +626,7 @@ fn parse(
     let command = args.command;
     let workdir = workdir(args.workdir.as_deref(), workspace)?;
     let given_timeout = args.timeout_ms;
+    let unconfined = args.unconfined.unwrap_or(false);
     let run_in_background = args.run_in_background.unwrap_or(false);
     let tty = args.tty.unwrap_or(false);
     let monitor = args.monitor.unwrap_or(false);
@@ -619,6 +653,7 @@ fn parse(
         workdir,
         timeout_ms,
         mode,
+        unconfined,
     })
 }
 

@@ -163,6 +163,9 @@ fn run(
     origin: &extensions::Origin,
     restart: &dyn Fn(&Path) -> Result<bool, CliError>,
 ) -> Result<i32, CliError> {
+    // The platform check runs before any download, even the channel tag
+    // fetch, so an unlisted run fails without a single request.
+    let triple = extensions::release_triple(triple)?;
     let tag = match channel {
         Channel::Stable => extensions::latest_stable_tag(&bases.web)?,
         Channel::Nightly => extensions::fetch_nightly_tag(&bases.api)?,

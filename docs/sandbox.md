@@ -18,9 +18,12 @@ call that ran inside it, and nothing else. The rule that judges calls is
 
 The sandbox is opt-in and off by default. When it is on, a shell call runs
 confined on Linux under Fiber's own policy: Landlock plus seccomp; no srt,
-no bubblewrap. Calls remain reviewed; this slice adds no reviewer fast path,
-no `unconfined` argument, no `/sandbox` toggle, and no delegate inheritance.
-A delegate does not inherit its parent's setting in this slice.
+no bubblewrap. Calls remain reviewed. A call the model marks
+`unconfined: true` runs outside the sandbox and is reviewed exactly as with
+the sandbox off. A confined call whose sandbox cannot be applied fails;
+Fiber never reruns it unconfined. This slice adds no reviewer fast path, no
+`/sandbox` toggle, and no delegate inheritance. A delegate does not inherit
+its parent's setting in this slice.
 
 The sandbox's own read deny follows whatever the credential deny covers:
 Fiber home's `credentials/`, `file` sources, and whatever #3025 adds, plus
@@ -42,7 +45,7 @@ the person's `sandbox.deny_read` paths.
   Linux by the seccomp filter and on macOS by the Seatbelt policy's deny by
   default. This blocks the hub, session socket, `docker.sock` and
   ssh-agent. There is no setting that grants a socket; a command that
-  needs one runs unconfined and is reviewed.
+  needs one runs with `unconfined: true` and is reviewed.
 - Ask the sandbox to protect `.git/config`, hooks, a worktree's `.git` file
   or `.fiber/` on Linux. This slice does not claim that protection; slice 4
   owns it. A confined call in this slice can write those paths when they sit

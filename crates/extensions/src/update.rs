@@ -34,17 +34,47 @@ fn compat(version: &str) -> String {
 /// The fiber repository holding the release tags.
 const FIBER_REPO: &str = "github.com/aakshintala/fiber";
 
+/// Every published binary archive file name
+/// (`docs/releasing.md`, "What a release publishes"): the only archives
+/// `fiber update` can name.
+const PUBLISHED_ARCHIVES: [&str; 3] = [
+    "fiber-aarch64-apple-darwin.tar.gz",
+    "fiber-x86_64-unknown-linux-musl.tar.gz",
+    "fiber-aarch64-unknown-linux-musl.tar.gz",
+];
+
+/// The release archive triple for the running binary's build triple: a
+/// Linux build takes its architecture's musl archive whatever libc it
+/// was built against, and a listed triple stays itself. A platform the
+/// release publishes no archive for fails, naming the platform and the
+/// published archives.
+pub fn release_triple(build: &str) -> Result<&'static str, Error> {
+    match build {
+        "x86_64-unknown-linux-gnu" => Ok("x86_64-unknown-linux-musl"),
+        "aarch64-unknown-linux-gnu" => Ok("aarch64-unknown-linux-musl"),
+        "x86_64-unknown-linux-musl" => Ok("x86_64-unknown-linux-musl"),
+        "aarch64-unknown-linux-musl" => Ok("aarch64-unknown-linux-musl"),
+        "aarch64-apple-darwin" => Ok("aarch64-apple-darwin"),
+        unlisted => Err(Error::UnsupportedPlatform {
+            triple: unlisted.into(),
+            archives: PUBLISHED_ARCHIVES.map(str::to_owned),
+        }),
+    }
+}
+
 /// The release `fiber update` moves to: where its archives live, the
-/// version, and the target triple selecting the binary archive. The
-/// release tag's commit is resolved inside, never passed in.
+/// version, and the release archive triple selected for the running
+/// binary by [`release_triple`]. The release tag's commit is resolved
+/// inside, never passed in.
 pub struct Target {
     /// Where releases are published, such as
     /// `https://github.com/aakshintala/fiber/releases`.
     pub base: String,
     /// The release's version, such as `0.3.0`.
     pub version: String,
-    /// The target triple, selecting the `fiber-<triple>.tar.gz` archive,
-    /// such as `aarch64-apple-darwin`.
+    /// The release archive triple, such as `aarch64-apple-darwin`.
+    /// Linux builds use their architecture's musl archive, whatever libc
+    /// they were built against.
     pub triple: String,
 }
 
@@ -123,6 +153,10 @@ pub fn stage_update<'c>(
     stage_docs: bool,
     installed_binary: Option<&Path>,
 ) -> Result<StagedUpdate<'c>, Error> {
+    // Both entries map the same way: a Linux build stages its
+    // architecture's musl archive, and an unlisted platform fails before
+    // any download.
+    let archive_triple = release_triple(&release.triple)?;
     let scratch = Scratch::create(&std::env::temp_dir(), "fiber-update", 0o700)?;
     let archives = Release {
         base: release.base.clone(),
@@ -131,7 +165,7 @@ pub fn stage_update<'c>(
         // resolved below.
         commit: String::new(),
     };
-    let binary_file = format!("fiber-{}.tar.gz", release.triple);
+    let binary_file = format!("fiber-{archive_triple}.tar.gz");
     let binary_archive = fetch_verified(&archives, &binary_file)?;
     let binary_dir = scratch.path().join("binary");
     fs::create_dir(&binary_dir).map_err(io(&binary_dir))?;
