@@ -3726,48 +3726,77 @@ fn a_closing_answer_consumes_an_in_flight_write_from_queued() {
 
 /// `docs/invocation.md:1151`, "What the hub speaks": a rejected answer
 /// consumes the in-flight `Writing` attempt and settles to nothing to
-/// forward, so the forward reports `Answered` with the original rejection;
-/// a late write result is refused against terminal `Answered`, so the
-/// command is never delivered. The forward itself runs unchanged through
-/// the ordered path the other race tests exercise on the wire.
+/// forward, so the ordered forward writes the session's original rejection
+/// to the client; a late write result is refused as unknown, so the
+/// command is never delivered.
 #[test]
 fn a_rejected_answer_consumes_an_in_flight_write() {
     use std::sync::{Arc, Mutex};
     let held = fakes::TempDir::new("rwj");
     let hub = hub(&held);
-    let sid = "s_aaaaaaaaaaaaaaaa";
-    let command = json!({"id": "c_1", "command": "reply", "args": {}})
-        .as_object()
-        .unwrap()
-        .clone();
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let order = crate::connection::lock(&relays).order.clone();
+    let c_1 = CommandId("c_1".to_owned());
+    order.enqueue(END_SID, &c_1);
+    // The fixture stands in for `route`'s pre-write publish: the attempt
+    // is kept as `Writing` and the canonical state moves with it.
     let kept: Kept = Arc::new(Mutex::new(vec![(
         "c_1".to_owned(),
-        command,
+        LiveWrite::stripped(),
         CommandState::Writing,
     )]));
-    let order = crate::retire::AckOrder::default();
-    let c_1 = CommandId("c_1".to_owned());
-    order.enqueue(sid, &c_1);
     order
         .transition(&c_1, CommandState::Writing)
         .expect("the live write owns the in-flight attempt");
-    let ack = serde_json::to_vec(&rejection("c_1", "invalid_arguments")).unwrap();
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
+    let client_writer = Arc::new(Mutex::new(client_write));
+    let mut buf = serde_json::to_vec(&rejection("c_1", "invalid_arguments")).unwrap();
+    buf.push(b'\n');
+    let ack = acknowledgement(&buf);
+    assert!(ack.is_some(), "the bytes parse as an acknowledgement");
     assert!(
-        settle(acknowledgement(&ack).as_ref(), &kept, &hub, sid, false).is_none(),
+        settle(ack.as_ref(), &kept, &hub, END_SID, false).is_none(),
         "a rejected answer to an in-flight attempt settles to nothing to forward"
     );
     assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
-    report(&order, &c_1, CommandState::Answered);
-    assert_eq!(
-        order.state(&c_1),
-        Some(CommandState::Answered),
-        "the rejected answer finishes answered"
-    );
+    // The forward runs on the test's wiring instead of the relay thread:
+    // the paused write holds the relays lock the forward needs, and no
+    // other seam orders the relay's settle before the write's publish.
+    // The closing-answer tests cover the relay thread's schedule. The
+    // epoch binds before the call so no relays guard is held across it:
+    // a guard temporary would live to the call's end and deadlock the
+    // forward's own lock.
+    let epoch = crate::connection::lock(&relays).mint();
+    crate::retire::forward(
+        &buf,
+        ack.as_ref(),
+        &client_writer,
+        &relays,
+        &hub,
+        &order,
+        epoch,
+    )
+    .expect("the forward writes the rejection");
+    let mut client = std::io::BufReader::new(client_read);
+    let mut text = String::new();
+    client
+        .read_line(&mut text)
+        .expect("the client reads its rejection");
+    let line: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "invalid_arguments", "{line}");
+    assert_eq!(order.state(&c_1), None, "the answered id is forgotten");
+    // A late write result after the answer changes nothing: the id is
+    // already forgotten, so the report is refused as unknown.
     report(&order, &c_1, CommandState::Written);
     assert_eq!(
         order.state(&c_1),
-        Some(CommandState::Answered),
-        "the late write result cannot change the answer"
+        None,
+        "the late write result cannot resurrect the answer"
     );
 }
 
@@ -3845,8 +3874,10 @@ fn a_closing_answer_the_first_time_is_routed_to_the_resumed_session() {
     ended.close_session();
 }
 
-/// `docs/invocation.md`, "Lifecycle": after a crash the hub never delivers the command again; it rejects it `indeterminate`, and the client decides whether to send it again.
-/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md:1181`, "Lifecycle": after a crash each sent, unanswered command gets one `indeterminate` and is never delivered again, and queued commands pass on.
+/// `docs/invocation.md:1158`, "What the hub speaks": a command the session crashes without answering is rejected `indeterminate` and never delivered again.
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md:1162`, "What the hub speaks": the retiring relay passes a queued command on after the handover ahead is answered when exiting.
 #[test]
 fn a_crash_rejects_each_sent_command_indeterminate_and_passes_the_unsent_on() {
     let (popped_tx, popped_rx) = std::sync::mpsc::channel();
@@ -3881,8 +3912,10 @@ fn a_crash_rejects_each_sent_command_indeterminate_and_passes_the_unsent_on() {
     );
 }
 
-/// `docs/invocation.md`, "What each command does", "`rewind` starts a new session process": the old session closes with `rewound` and the hub starts the new one; a command for it resumes as for any session ("Lifecycle").
-/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+/// `docs/invocation.md:568`, "Lifecycle", "`rewind` starts a new session process": the session being rewound closes with `rewound` while it still holds its lock, and the hub starts the new one.
+/// `docs/invocation.md:1159`, "What the hub speaks": a command the session is rewound or moved without answering is dropped, already answered at the rewind.
+/// `docs/invocation.md:1162`, "What the hub speaks": the retiring relay passes the unsent queued command on.
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn after_a_rewind_a_sent_command_gets_no_line_and_only_unsent_ones_pass_on() {
     let mut ended = Ended::start("rewound", true, &["c_1"], &["c_2"]);
@@ -3958,7 +3991,9 @@ fn a_client_that_is_gone_while_its_entry_remains_gets_nothing_re_routed() {
     assert_eq!(ended.order.session_for("c_1"), None);
 }
 
-/// `docs/invocation.md`, "Lifecycle": after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
+/// `docs/invocation.md:1153`, "What the hub speaks": a `closing` answer after the exited window reroutes the command, delivered once to the resumed session.
+/// `docs/invocation.md:1182`, "Lifecycle": once the log ends in `fiber_exited`, each sent, unanswered command goes once to the resumed session, in read order.
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn a_relay_that_saw_the_exited_window_is_clean_even_when_the_log_moved_on() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1", "c_2"], &[]);

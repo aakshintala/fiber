@@ -1190,6 +1190,8 @@ fn a_refused_rewind_keeps_the_old_sessions_kept_level_for_the_retry() {
     );
 }
 
+/// `docs/invocation.md:1112`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, including commands it re-routes, and the acknowledgements come back in that order — so the re-routed acknowledgement forwards before the retiring relay's refusal.
+/// `docs/invocation.md:1162`, "What the hub speaks": a retiring relay holds its later acknowledgements back until what it re-routed is answered.
 #[test]
 fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() {
     let temp = Temp::new();

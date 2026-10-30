@@ -1130,9 +1130,9 @@ websocket for everything it does.
   continuously, so the hub never meets that grace.
 
 **A relayed command passes through these states.** `Read`: the hub read it
-from the client connection. `Writing`: a live write in flight from `Read` or
-`Queued`. `Written`: the whole line reached the session socket, and the hub
-waits for its answer. `Partial`: the write failed after the session may have
+from the client connection. `Writing`: a live write in flight from `Read`,
+`Queued`, or an already-rerouted command staying `Rerouted`. `Written`: the
+whole line reached the session socket, and the hub waits for its answer. `Partial`: the write failed after the session may have
 read a byte. `Queued`: held unsent on a retiring relay, never read by a session.
 `Rerouted`: handed to the resumed session, the one permitted re-route. Two
 terminal states end it: `Answered` sends exactly one line, and `Dropped` sends none.
