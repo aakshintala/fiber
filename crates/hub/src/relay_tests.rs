@@ -2286,6 +2286,8 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
         .expect("the relay end drains and clears its queue");
     join_within_deadline(thread);
 
+    // `docs/invocation.md:1163`, "What the hub speaks": the relay ends with
+    // no entry left, so its two queued commands drop without an answer.
     assert!(matches!(passed, crate::retire::PassOn::Dropped(2)));
     assert!(kept.lock().unwrap().is_empty());
     for id in ["c_sent", "c_unsent1", "c_unsent2"] {
@@ -3195,8 +3197,20 @@ fn a_second_exit_after_a_resumed_write_is_rejected_closing() {
         .order
         .transition(&CommandId("c_1".to_owned()), CommandState::Rerouted)
         .expect("the first handover claims the re-route");
-    // The resumed session's write reports `Written`: the claim holds, so
-    // the report is refused and the state stays `Rerouted`.
+    // The resumed session's write keeps its local attempt in `Writing`
+    // while the canonical claim holds: the `Writing` report is refused and
+    // the state stays `Rerouted`, and so is the write's `Written` outcome.
+    // A second clean exit then answers the command `closing`.
+    report(
+        &ended.order,
+        &CommandId("c_1".to_owned()),
+        CommandState::Writing,
+    );
+    assert_eq!(
+        ended.order.state(&CommandId("c_1".to_owned())),
+        Some(CommandState::Rerouted),
+        "the resumed write runs while the reroute claim holds"
+    );
     report(
         &ended.order,
         &CommandId("c_1".to_owned()),
@@ -3320,6 +3334,485 @@ fn a_written_ack_before_partial_report_finishes_answered() {
         Some(CommandState::Answered),
         "the forwarded acknowledgement finishes answered"
     );
+}
+
+/// A live relay `route` can write to, with its acknowledgement reader
+/// under the test's control: the log ends in `fiber_exited`, the entry is
+/// published with a parked stand-in thread for liveness, and the kept
+/// commands start empty. The test reads the command bytes itself, then
+/// hands the reader to [`start_relay_thread`], so the thread never mistakes
+/// the command for a session line.
+struct LiveWrite {
+    _held: fakes::TempDir,
+    starter: crate::fake::FakeStarter,
+    hub: std::sync::Arc<crate::connection::Hub>,
+    relays: std::sync::Arc<std::sync::Mutex<Relays>>,
+    order: std::sync::Arc<crate::retire::AckOrder>,
+    epoch: u64,
+    kept: Kept,
+    client: std::io::BufReader<UnixStream>,
+    client_writer: std::sync::Arc<std::sync::Mutex<UnixStream>>,
+    /// The session side of the pair: the test reads the command bytes and
+    /// writes acknowledgements here, as the session would.
+    session: Option<UnixStream>,
+    /// A hub-side clone of the entry's writer: the relay thread reads here,
+    /// as it reads the connected stream in production. Reads and writes on
+    /// opposite ends never meet, so the thread only ever sees
+    /// acknowledgements.
+    hub_reader: Option<UnixStream>,
+    stop_dummy: Option<std::sync::mpsc::Sender<()>>,
+}
+
+impl LiveWrite {
+    /// Stages `c_1` as `Read`, or as `Queued` when `queued` holds: the two
+    /// canonical schedules a live write starts from.
+    fn start(tag: &str, queued: bool) -> Self {
+        use std::sync::{Arc, Mutex};
+        let held = fakes::TempDir::new(tag);
+        let dir = held.path().join("h");
+        std::fs::create_dir_all(&dir).unwrap();
+        let workspace = dir.join("w");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let log_dir = dir
+            .join("projects")
+            .join("-p")
+            .join("sessions")
+            .join(END_SID);
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(
+            log_dir.join("events.jsonl"),
+            format!(
+                "{{\"kind\":\"session_started\",\"seq\":0,\"session_id\":\"{END_SID}\",\"payload\":{{\"workspace\":\"{}\"}}}}\n{{\"kind\":\"fiber_exited\",\"seq\":1,\"session_id\":\"{END_SID}\",\"payload\":{{}}}}\n",
+                workspace.display()
+            ),
+        )
+        .unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let timed: Arc<dyn contract::clock::Clock> = clock;
+        let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
+        let hub = Arc::new(crate::testkit::hub(&dir, Arc::new(starter.clone()), timed));
+        let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+        let order = crate::connection::lock(&relays).order.clone();
+        let epoch = crate::connection::lock(&relays).mint();
+        let kept: Kept = Arc::new(Mutex::new(Vec::new()));
+        let (entry_writer, session) = UnixStream::pair().unwrap();
+        // No read timeout anywhere on this pair: the relay thread blocks
+        // until the test's acknowledgement arrives, and a timeout would
+        // surface as a `WouldBlock` instead of waiting. Every read here
+        // follows a signal proving its bytes are on the way, and every join
+        // has a deadline.
+        let hub_reader = entry_writer.try_clone().unwrap();
+        let (stop_dummy, held_stop) = std::sync::mpsc::channel();
+        let dummy = std::thread::spawn(move || {
+            held_stop.recv().unwrap_or(());
+        });
+        crate::connection::lock(&relays).entries.push(Relay {
+            session: END_SID.to_owned(),
+            epoch,
+            writer: entry_writer,
+            kept: Arc::clone(&kept),
+            replayed: Replayed::default(),
+            thread: Some(dummy),
+            retiring: None,
+            target: RelayTarget::LiveUnreadable,
+        });
+        let c_1 = CommandId("c_1".to_owned());
+        order.enqueue(END_SID, &c_1);
+        if queued {
+            report(&order, &c_1, CommandState::Queued);
+        }
+        let (client_write, client_read) = UnixStream::pair().unwrap();
+        client_read
+            .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+            .unwrap();
+        Self {
+            _held: held,
+            starter,
+            hub,
+            relays,
+            order,
+            epoch,
+            kept,
+            client: std::io::BufReader::new(client_read),
+            client_writer: Arc::new(Mutex::new(client_write)),
+            session: Some(session),
+            hub_reader: Some(hub_reader),
+            stop_dummy: Some(stop_dummy),
+        }
+    }
+
+    /// The `reply` line `route` writes for `c_1`.
+    fn stripped() -> Map<String, Value> {
+        json!({"id": "c_1", "command": "reply", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    /// Runs `route` for `c_1` on a thread: the caller releases the write
+    /// through the armed pause hook and joins the thread.
+    fn spawn_route(&self) -> std::thread::JoinHandle<()> {
+        let hub = std::sync::Arc::clone(&self.hub);
+        let writer = std::sync::Arc::clone(&self.client_writer);
+        let relays = std::sync::Arc::clone(&self.relays);
+        std::thread::spawn(move || {
+            route(
+                &CommandId("c_1".to_owned()),
+                END_SID,
+                Self::stripped(),
+                &hub,
+                &writer,
+                &relays,
+                None,
+                false,
+                None,
+            );
+        })
+    }
+
+    /// Reads the command bytes the live write delivered: proof the session
+    /// received the line before any acknowledgement runs. Reads through
+    /// the acknowledgement handle, after the reader itself moved to the
+    /// relay thread.
+    fn read_command(&self, ack: &UnixStream) {
+        let mut probe = std::io::BufReader::new(ack.try_clone().unwrap());
+        let mut line = String::new();
+        probe.read_line(&mut line).unwrap();
+        let command: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(command["id"], "c_1", "the live write delivers the command");
+    }
+
+    /// Starts the acknowledgement reader on the hub side, after
+    /// [`LiveWrite::read_command`]: returns a handle the test writes acks
+    /// with and the thread the test joins. Opposite ends carry opposite
+    /// directions, so the thread only ever sees acknowledgements.
+    fn start_reader(&mut self) -> (UnixStream, std::thread::JoinHandle<()>) {
+        let session = self.session.as_ref().expect("the session side is held");
+        let ack = session.try_clone().unwrap();
+        let reader = self.hub_reader.take().expect("the hub side is held");
+        let thread = start_relay_thread(
+            END_SID,
+            self.epoch,
+            reader,
+            std::sync::Arc::clone(&self.hub),
+            std::sync::Arc::clone(&self.client_writer),
+            std::sync::Arc::clone(&self.relays),
+            std::sync::Arc::clone(&self.kept),
+        );
+        (ack, thread)
+    }
+
+    /// Writes one session line for the relay thread to read.
+    fn say(&self, ack: &UnixStream, line: Value) {
+        use std::io::Write;
+        let mut text = line.to_string();
+        text.push('\n');
+        let mut ack = ack.try_clone().unwrap();
+        ack.write_all(text.as_bytes()).unwrap();
+        ack.flush().unwrap();
+    }
+
+    /// The next client line.
+    fn line(&mut self) -> Value {
+        let mut text = String::new();
+        self.client
+            .read_line(&mut text)
+            .expect("the client reads a line");
+        serde_json::from_str(text.trim_end()).unwrap()
+    }
+
+    /// The ids the fake session received, in order.
+    fn received_ids(&self) -> Vec<String> {
+        self.starter
+            .received()
+            .iter()
+            .map(|text| {
+                let line: Value = serde_json::from_str(text).unwrap();
+                line["id"].as_str().unwrap().to_owned()
+            })
+            .collect()
+    }
+
+    /// Ends the relay thread: shuts the entry's writer so its read ends,
+    /// joins it past the quiet drain, and stops the stand-in thread.
+    fn end_reader(&mut self, ack: UnixStream, thread: std::thread::JoinHandle<()>) {
+        drop(ack);
+        {
+            let held = crate::connection::lock(&self.relays);
+            let at = crate::relay::relay_slot(&held.entries, END_SID, self.epoch)
+                .expect("the live entry is still published");
+            held.entries[at]
+                .writer
+                .shutdown(std::net::Shutdown::Both)
+                .unwrap_or(());
+        }
+        join_within_deadline(thread);
+        if let Some(stop) = self.stop_dummy.take() {
+            stop.send(()).unwrap_or(());
+        }
+        let dummy = crate::connection::lock(&self.relays)
+            .entries
+            .iter_mut()
+            .find(|entry| entry.session == END_SID && entry.epoch == self.epoch)
+            .and_then(|entry| entry.thread.take());
+        if let Some(dummy) = dummy {
+            join_route(dummy, "the stand-in relay thread ends");
+        }
+    }
+}
+
+/// Joins a `route` or stand-in thread, failing at the caller's line
+/// instead of hanging when it does not end.
+#[track_caller]
+fn join_route(thread: std::thread::JoinHandle<()>, what: &str) {
+    let (ended_tx, ended) = std::sync::mpsc::channel();
+    std::thread::spawn(move || ended_tx.send(thread.join().is_ok()).unwrap_or(()));
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&ended).ok(),
+        Some(true),
+        "{what}"
+    );
+}
+
+/// `docs/invocation.md:1153`, "What the hub speaks": a `closing` answer
+/// after the exited window arrives while the command is still `Writing`
+/// from `Read`. The acknowledgement consumes the attempt first, so the
+/// claim confirms `Written` and spends the one re-route; the late write
+/// result is skipped, the old `closing` is never forwarded, and the
+/// resumed session's answer is the client's one acknowledgement
+/// (`docs/invocation.md:1165`). The re-route keeps command order
+/// (`docs/invocation.md:1112`).
+#[test]
+fn a_closing_answer_consumes_an_in_flight_write_from_read() {
+    let mut harness = LiveWrite::start("rwr", false);
+    let (written_tx, written_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    crate::connection::lock(&harness.relays).after_command_write = Some(Box::new(move || {
+        written_tx.send(()).unwrap_or(());
+        release_rx.recv().unwrap_or(());
+    }));
+    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+    *crate::connection::lock(&harness.hub.after_reroute_claim) = Some(Box::new(move || {
+        claimed_tx.send(()).unwrap_or(());
+    }));
+    // Opposite ends carry opposite directions: the thread only ever sees
+    // acknowledgements, so it can start before the command bytes are
+    // drained, and starting it here keeps it off the relays lock the
+    // paused write holds.
+    let (ack, thread) = harness.start_reader();
+    let route = harness.spawn_route();
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&written_rx)
+        .expect("the live write pauses before it publishes its outcome");
+    {
+        let kept = crate::connection::lock(&harness.kept);
+        assert_eq!(kept.len(), 1, "the in-flight attempt is kept");
+        assert_eq!(
+            kept[0].2,
+            CommandState::Writing,
+            "the live write owns the attempt"
+        );
+    }
+    assert_eq!(
+        harness.order.state(&CommandId("c_1".to_owned())),
+        Some(CommandState::Writing),
+        "the canonical state is the in-flight write"
+    );
+    // The command travels hub to session and the acknowledgement travels
+    // back, so draining the command first keeps the thread's first read the
+    // acknowledgement.
+    harness.read_command(&ack);
+    harness.say(&ack, rejection("c_1", "closing"));
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&claimed_rx)
+        .expect("the closing acknowledgement claims the re-route first");
+    release_tx.send(()).unwrap();
+    join_route(route, "the paused write returns once released");
+    assert!(
+        harness.starter.await_received(1, MUST_SUCCEED_WITHIN),
+        "the command reaches the resumed session"
+    );
+    assert_eq!(
+        harness.received_ids(),
+        ["c_1"],
+        "the command is delivered exactly once"
+    );
+    let line = harness.line();
+    assert_eq!(line["kind"], "command_accepted", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    harness.end_reader(ack, thread);
+    assert_eq!(
+        harness.order.state(&CommandId("c_1".to_owned())),
+        None,
+        "the answered id is forgotten"
+    );
+}
+
+/// `docs/invocation.md:1153`, "What the hub speaks": the same race from
+/// canonical `Queued`, for a command the retiring relay passed on. The
+/// acknowledgement still consumes the `Writing` attempt first and the
+/// command is delivered exactly once, with one final acknowledgement
+/// (`docs/invocation.md:1165`).
+#[test]
+fn a_closing_answer_consumes_an_in_flight_write_from_queued() {
+    let mut harness = LiveWrite::start("rwq", true);
+    assert_eq!(
+        harness.order.state(&CommandId("c_1".to_owned())),
+        Some(CommandState::Queued),
+        "the schedule starts queued"
+    );
+    let (written_tx, written_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    crate::connection::lock(&harness.relays).after_command_write = Some(Box::new(move || {
+        written_tx.send(()).unwrap_or(());
+        release_rx.recv().unwrap_or(());
+    }));
+    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+    *crate::connection::lock(&harness.hub.after_reroute_claim) = Some(Box::new(move || {
+        claimed_tx.send(()).unwrap_or(());
+    }));
+    // Opposite ends carry opposite directions: the thread only ever sees
+    // acknowledgements, so it can start before the command bytes are
+    // drained, and starting it here keeps it off the relays lock the
+    // paused write holds.
+    let (ack, thread) = harness.start_reader();
+    let route = harness.spawn_route();
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&written_rx)
+        .expect("the live write pauses before it publishes its outcome");
+    {
+        let kept = crate::connection::lock(&harness.kept);
+        assert_eq!(kept.len(), 1, "the in-flight attempt is kept");
+        assert_eq!(
+            kept[0].2,
+            CommandState::Writing,
+            "the live write owns the attempt"
+        );
+    }
+    assert_eq!(
+        harness.order.state(&CommandId("c_1".to_owned())),
+        Some(CommandState::Writing),
+        "the canonical state is the in-flight write"
+    );
+    // The command travels hub to session and the acknowledgement travels
+    // back, so draining the command first keeps the thread's first read the
+    // acknowledgement.
+    harness.read_command(&ack);
+    harness.say(&ack, rejection("c_1", "closing"));
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&claimed_rx)
+        .expect("the closing acknowledgement claims the re-route first");
+    release_tx.send(()).unwrap();
+    join_route(route, "the paused write returns once released");
+    assert!(
+        harness.starter.await_received(1, MUST_SUCCEED_WITHIN),
+        "the command reaches the resumed session"
+    );
+    assert_eq!(
+        harness.received_ids(),
+        ["c_1"],
+        "the command is delivered exactly once"
+    );
+    let line = harness.line();
+    assert_eq!(line["kind"], "command_accepted", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    harness.end_reader(ack, thread);
+    assert_eq!(
+        harness.order.state(&CommandId("c_1".to_owned())),
+        None,
+        "the answered id is forgotten"
+    );
+}
+
+/// `docs/invocation.md:1151`, "What the hub speaks": a rejected answer
+/// consumes the in-flight `Writing` attempt and settles to nothing to
+/// forward, so the forward reports `Answered` with the original rejection;
+/// a late write result is refused against terminal `Answered`, so the
+/// command is never delivered. The forward itself runs unchanged through
+/// the ordered path the other race tests exercise on the wire.
+#[test]
+fn a_rejected_answer_consumes_an_in_flight_write() {
+    use std::sync::{Arc, Mutex};
+    let held = fakes::TempDir::new("rwj");
+    let hub = hub(&held);
+    let sid = "s_aaaaaaaaaaaaaaaa";
+    let command = json!({"id": "c_1", "command": "reply", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let kept: Kept = Arc::new(Mutex::new(vec![(
+        "c_1".to_owned(),
+        command,
+        CommandState::Writing,
+    )]));
+    let order = crate::retire::AckOrder::default();
+    let c_1 = CommandId("c_1".to_owned());
+    order.enqueue(sid, &c_1);
+    order
+        .transition(&c_1, CommandState::Writing)
+        .expect("the live write owns the in-flight attempt");
+    let ack = serde_json::to_vec(&rejection("c_1", "invalid_arguments")).unwrap();
+    assert!(
+        settle(acknowledgement(&ack).as_ref(), &kept, &hub, sid, false).is_none(),
+        "a rejected answer to an in-flight attempt settles to nothing to forward"
+    );
+    assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
+    report(&order, &c_1, CommandState::Answered);
+    assert_eq!(
+        order.state(&c_1),
+        Some(CommandState::Answered),
+        "the rejected answer finishes answered"
+    );
+    report(&order, &c_1, CommandState::Written);
+    assert_eq!(
+        order.state(&c_1),
+        Some(CommandState::Answered),
+        "the late write result cannot change the answer"
+    );
+}
+
+/// `docs/invocation.md:1147`, "What the hub speaks": a write that accepts
+/// nothing reports `Queued` when no acknowledgement got there first. The
+/// relay's end passes the queued command to the resumed session, whose
+/// accepted answer is the client's one acknowledgement
+/// (`docs/invocation.md:1151`).
+#[test]
+fn a_failed_write_before_the_acknowledgement_keeps_the_command_queued() {
+    let mut harness = LiveWrite::start("rwf", false);
+    crate::connection::lock(&harness.relays).before_command_write =
+        Some(Box::new(move |cap, _| {
+            *cap = Some(0);
+        }));
+    let route = harness.spawn_route();
+    join_route(route, "the cut write reports its outcome");
+    {
+        let kept = crate::connection::lock(&harness.kept);
+        assert_eq!(kept.len(), 1, "the failed attempt is kept");
+        assert_eq!(
+            kept[0].2,
+            CommandState::Queued,
+            "nothing accepted stays unsent"
+        );
+    }
+    assert_eq!(
+        harness.order.state(&CommandId("c_1".to_owned())),
+        Some(CommandState::Queued),
+        "the write outcome wins first"
+    );
+    let (ack, thread) = harness.start_reader();
+    harness.end_reader(ack, thread);
+    assert!(
+        harness.starter.await_received(1, MUST_SUCCEED_WITHIN),
+        "the queued command reaches the resumed session"
+    );
+    assert_eq!(
+        harness.received_ids(),
+        ["c_1"],
+        "the command is delivered exactly once"
+    );
+    let line = harness.line();
+    assert_eq!(line["kind"], "command_accepted", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
 }
 
 /// `docs/invocation.md:1154`, "What the hub speaks" (#2054): a command is delivered once; a `closing` answer to it after it already rerouted once is rejected `closing`, never routed again.
