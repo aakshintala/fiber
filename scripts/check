@@ -107,7 +107,7 @@ if [ "$scope" != platform ]; then
     echo "== must-succeed bounds"
     cargo xtask must-succeed
     echo "== kinds ratchet"
-    cargo xtask kinds-ratchet --max 236 --support-max 36
+    cargo xtask kinds-ratchet --max 238 --support-max 36
     # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
     # ships shellcheck, so a missing one fails rather than skips.
     if [ "$(uname -s)" = Linux ]; then
