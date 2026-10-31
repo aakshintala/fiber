@@ -274,7 +274,7 @@ fn a_held_end_waits_for_the_tests_release() {
         "the held end waits for the release"
     );
     release.send(()).expect("the held end is released");
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the released end ends");
 }
@@ -568,7 +568,7 @@ fn a_second_transition_during_the_stop_is_busy_then_the_move_is_terminal() {
         // The stop barrier: the move waits for the job's end, so nothing is
         // durable yet.
         assert_eq!(
-            Deadline::after(DEADLINE)
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&stops)
                 .expect("a stop arrives")
                 .0,
@@ -660,7 +660,7 @@ fn job_ends_are_written_before_moved_in_order() {
         // waits for them instead of draining them early.
         let mut stopped = 0;
         while stopped < 2 {
-            Deadline::after(DEADLINE)
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&stops)
                 .expect("a stop arrives");
             stopped += 1;
