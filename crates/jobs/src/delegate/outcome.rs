@@ -68,6 +68,7 @@ pub(crate) fn outcome(
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         Some(Termination::Timeout) => ended(job_id, &JobsError::DelegateTimedOut, process),
         Some(Termination::OutputCap) => ended(job_id, &JobsError::DelegateOutputCap, process),
@@ -81,6 +82,7 @@ pub(crate) fn outcome(
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             },
             None => without_error(job_id, exited, status, process),
         },
@@ -124,6 +126,7 @@ fn without_error(
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         _ => ended(
             job_id,
@@ -145,6 +148,7 @@ fn ended(job_id: &JobId, error: &JobsError, process: Process) -> JobCompleted {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     }
 }
 

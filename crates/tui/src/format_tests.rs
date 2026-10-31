@@ -7,11 +7,20 @@ use ratatui::text::Line;
 
 use super::{
     Kind, Kinds, content_text, count, cut, duration, heading, headline, kind, money, seconds,
-    spend_against_budget, summary, tokens, wrap, wrap_joined,
+    spend_against_budget, summary, tokens, warning_line, wrap, wrap_joined,
 };
+use crate::theme::{Role, style};
 
 fn text(kinds: &Kinds) -> String {
     Line::from(kinds.summary()).to_string()
+}
+
+#[test]
+fn a_protected_warning_line_indents_and_warns() {
+    let text = "Protected path .fiber changed while a confined call ran; Fiber restored it.";
+    let line = Line::from(warning_line(text));
+    assert_eq!(line.to_string(), format!("    {text}"));
+    assert_eq!(line.spans[1].style, style(Role::Warning));
 }
 
 #[test]
@@ -72,6 +81,7 @@ fn headline_of_a_failed_call_is_code_and_message() {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         hosts_surfaced: Vec::new(),
         provider_item: None,
         loaded: None,
@@ -94,6 +104,7 @@ fn headline_of_a_denied_call_is_its_reason() {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         hosts_surfaced: Vec::new(),
         provider_item: None,
         loaded: None,
@@ -116,6 +127,7 @@ fn headline_is_empty_for_a_completed_call() {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         hosts_surfaced: Vec::new(),
         provider_item: None,
         loaded: None,
@@ -153,6 +165,7 @@ fn content_text_joins_text_parts_and_skips_images() {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         hosts_surfaced: Vec::new(),
         provider_item: None,
         loaded: None,

@@ -281,6 +281,12 @@ path is `invalid_arguments` and a git failure is `io_failed`.
   worktree record or run boundary fails closed with `tool_error`. A message to
   a live delegate steers it without checking workspace or repository existence.
 - `worktree` outside a git repository fails with `invalid_arguments`.
+- A delegate never inherits its parent's sandbox setting. When the
+  delegate's own sandbox is on, its model-issued shell calls use the same
+  project baseline as the parent's worktrees: every worktree of one
+  repository shares one baseline, so a change one worktree's call made to
+  the shared paths is restored and reported the same way
+  (`docs/sandbox.md`, "Protected paths").
 
 ## Forks
 

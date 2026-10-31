@@ -59,6 +59,15 @@ pub(crate) struct Relays {
     /// consult this hook.
     #[cfg(test)]
     pub(crate) before_command_write: Option<BeforeCommandWrite>,
+    /// Tests only: a one-shot pause in `route` after the live command
+    /// write returns and before its outcome is published, with the relays
+    /// lock held. It pauses the serving thread in that gap so the
+    /// acknowledgement thread consumes the in-flight attempt there,
+    /// proving the late outcome changes nothing. The acknowledgement runs
+    /// over the socket and channels, never needing the held lock; no
+    /// outside seam pauses `route` between the write and its outcome.
+    #[cfg(test)]
+    pub(crate) after_command_write: Option<Box<dyn FnOnce() + Send>>,
     /// Tests only: a one-shot signal an opener calls after cloning its
     /// session's gate and dropping the relays lock, immediately before
     /// blocking on the gate. It marks the opener about to block so the

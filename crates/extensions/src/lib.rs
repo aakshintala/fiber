@@ -137,6 +137,7 @@ pub use repository::{
     approved_extension, approved_extensions, declared_items, hash, kind_name, mcp_server_item,
     pending, repository_servers,
 };
+pub use resolve::{VersionKey, minimum};
 pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
 pub use tui_vm::{KeyBinding, KeyForm, KeyRejection, RenderOut, Span, TuiVm};

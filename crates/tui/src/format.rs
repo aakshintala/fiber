@@ -501,6 +501,15 @@ pub(crate) fn dim(text: String) -> Line<'static> {
     Line::styled(text, Style::default().add_modifier(Modifier::DIM))
 }
 
+/// A protected-path warning line under a call's ledger row: indented past
+/// the gutter, in the warning colour.
+pub(crate) fn warning_line(text: &str) -> Vec<Span<'static>> {
+    vec![
+        Span::raw("    "),
+        Span::styled(text.to_owned(), style(Role::Warning)),
+    ]
+}
+
 /// The latest `usage_recorded` per `generation_id`, so a copy of a copy, or
 /// a correction, is still one call (`docs/events.md`, `usage_recorded`).
 #[derive(Debug, Clone, Default)]

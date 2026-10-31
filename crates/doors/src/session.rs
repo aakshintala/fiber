@@ -43,7 +43,6 @@ use accept::accept_loop;
 use accepted::Accepted;
 pub(crate) use accepted::Answered;
 use clients::Clients as ClientCounts;
-pub(crate) use conns::CUT;
 use conns::Conns;
 use conns::{CUT_FLUSH, GRACE};
 pub(crate) use event::envelope;
@@ -792,12 +791,15 @@ impl Session {
             self.stopped_waiting();
         }
         self.gate.wait_shells();
-        // The printer's watcher returns only on a `client::STOP` line or
+        // The printer's watcher returns only on a stop control or
         // the log's end: with nothing written and another `Arc<Log>` still
         // held, neither comes, so stop it directly. Lines already queued
         // still print first, so a normal close still prints `fiber_exited`.
-        self.printer_stop
-            .push_kept(client::control_line(&self.gate.session_id, client::STOP, 0));
+        self.printer_stop.push_kept(client::control_line(
+            &self.gate.session_id,
+            client::ControlKind::Stop,
+            0,
+        ));
         #[cfg(test)]
         self.gate.note(tests::Probe::PrinterStopQueued);
         join(self.printer);
@@ -1221,7 +1223,7 @@ fn prompt_message(prompt: String) -> Message {
 /// held (`docs/events.md`, "Rewind", "Change workspace").
 fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
     while let Ok(Some(line)) = watcher.recv() {
-        if line.kind == client::STOP {
+        if client::ControlKind::recognize(&line.kind) == Some(client::ControlKind::Stop) {
             drain(&mut watcher, out.as_mut());
             return;
         }
@@ -1242,14 +1244,14 @@ fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> bool {
     line.kind == "fiber_exited" || line.kind == "rewound" || line.kind == "moved"
 }
 
-/// Prints what `print` has not yet reached once its `STOP` arrived: the
+/// Prints what `print` has not yet reached once its stop control arrived: the
 /// durable lines the queue dropped, re-read from the log without waiting,
 /// until none is available or the copy stops as `print` stops it. The
-/// `STOP` is kept ahead of the catch-up, so returning on it would end
+/// stop control is kept ahead of the catch-up, so returning on it would end
 /// printing before those lines are recovered, including `fiber_exited`.
 fn drain(watcher: &mut Watcher, out: &mut dyn Write) {
     while let Ok(Some(line)) = watcher.try_recv() {
-        if line.kind == client::STOP {
+        if client::ControlKind::recognize(&line.kind) == Some(client::ControlKind::Stop) {
             continue;
         }
         if write_until_stop(out, &line) {

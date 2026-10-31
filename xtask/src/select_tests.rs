@@ -621,6 +621,15 @@ pub(super) fn members_with_tools() -> Members {
             library: true,
         },
     );
+    members.insert(
+        "hub".to_owned(),
+        Member {
+            dir: "crates/hub".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
     members
 }
 
