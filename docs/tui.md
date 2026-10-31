@@ -1138,6 +1138,25 @@ arrived after `sessions` was sent.
   lines; Enter on a focused row does the same. Enter again on the opened
   call, or a click on its "… N more lines (Enter to view)", opens the whole
   call in a swapped view ("Swapped views").
+- **An outer call with inner calls is one ledger row.** When an extension
+  runs a tool inside its own call, each inner call nests under the outer
+  (`docs/events.md`, "`ran_by`"). The ledger shows one row for the outer,
+  then one row per inner call, each two columns further in per level, with
+  the same glyph, kind, target and result it would draw on its own. Calls
+  nest at any depth: an inner call with calls of its own nests those under
+  it the same way. An inner call whose outer names no call of the turn
+  draws top-level, in push order.
+- **The summary counts inner calls by kind, at every depth.** An outer
+  call with inner calls never counts as a kind of its own: with codemode
+  the summary reads what the inner calls did ("Read 1 file, edited 1
+  file +3 −1, ran 1 command"), never "called 1 tool" for the script
+  itself. Edits inner calls make get the same file-change highlight and
+  `+N −N` totals.
+- **Opening an outer shows its arguments first, then its inner rows.**
+  For codemode the arguments are the script in its `source` argument,
+  drawn as dim text, at most 20 lines; then one indented row per inner
+  call. Each inner row opens inline under its row and in the swapped
+  view, as any call does.
 - **While an opened call's row, or an open ledger's group line, is above the
   conversation's top row and any of its content is on screen, that row stays
   pinned to the conversation's top row.** Scrolling into the opened output

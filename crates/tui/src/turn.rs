@@ -12,9 +12,9 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use contract::Envelope;
 use contract::events::{
-    AssistantMessageCompleted, InputItem, MessageOutcome, ReasoningCompleted, RetryScheduled,
-    SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
-    ToolCallRequested, TurnCompleted, TurnStarted, UsageRecorded,
+    Anchor, AssistantMessageCompleted, InputItem, MessageOutcome, ReasoningCompleted,
+    RetryScheduled, SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    ToolCallCompleted, ToolCallRequested, TurnCompleted, TurnStarted, UsageRecorded,
 };
 use contract::shapes::{Origin, Sender};
 use ratatui::text::Line;
@@ -430,11 +430,19 @@ impl Turn {
             Some(repair) => Value::Object(repair.repaired),
             None => requested.arguments,
         };
+        // An inner call keeps its outer call's id, so the ledger nests
+        // it under that call; a command-anchored inner or no anchor
+        // keeps none and stays top-level.
+        let outer_action_id = requested.ran_by.and_then(|ran_by| match ran_by.anchor {
+            Anchor::OuterCall(id) => Some(id),
+            Anchor::Command(_) => None,
+        });
         group.section(step).calls.push(Call {
             id: target_id(action),
             action: action.to_owned(),
             name: requested.name,
             arguments,
+            outer_action_id,
             ..Call::default()
         });
     }
