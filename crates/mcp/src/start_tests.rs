@@ -661,6 +661,10 @@ fn servers_stop_at_once() {
         panic!("waited {WITHIN:?} for the start, waiting on [{waiting}]")
     });
     assert_eq!(started.failed.len(), 0);
+    assert!(
+        started.servers.debug_sink().is_some(),
+        "the observed start retains its debug sink for later syncs"
+    );
     let grace = setups[0].fake.now() + Duration::from_millis(800);
     let (done, stopped) = std::sync::mpsc::channel();
     let servers = started.servers;

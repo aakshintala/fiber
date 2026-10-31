@@ -1905,11 +1905,11 @@ fn install_summary_lists_a_lua_only_declared_provider() {
     );
 }
 
-/// A debug path install of an extension with a binary logs the binary's
-/// `extension_release` line to the pid-named CLI log: the commit
-/// downloads the binary through the plan's sink.
+/// A debug path install logs the binary request without its manifest-declared
+/// path to the pid-named CLI log: the commit downloads it through the plan's
+/// sink.
 #[test]
-fn a_debug_path_install_logs_the_binary_line() {
+fn a_debug_path_install_omits_the_manifest_binary_path() {
     let setup = Setup::new();
     let body = b"binary-bytes".to_vec();
     let server =
@@ -1956,11 +1956,13 @@ fn a_debug_path_install_logs_the_binary_line() {
             line["data"].get("host").and_then(|host| host.as_str()) == Some(host.as_str())
         })
         .collect();
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    // docs/state.md, "Diagnostic logs": one line per actual request;
+    // manifest-binary paths are omitted.
     assert_eq!(requests.len(), 1, "one line per binary: {requests:?}");
     let data = &requests[0]["data"];
     assert_eq!(data["purpose"], "extension_release", "{data}");
-    assert_eq!(data["path"], "/bin", "{data}");
+    assert_eq!(data["host"], host, "{data}");
+    assert!(data.get("path").is_none(), "{data}");
     assert_eq!(data["status"], 200, "{data}");
     assert_eq!(data["response_bytes"], body.len(), "{data}");
     assert_eq!(requests[0]["process"], "cli");

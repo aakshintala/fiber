@@ -5,7 +5,7 @@
 
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -33,6 +33,7 @@ struct Setup {
 #[derive(Default)]
 struct Lines {
     lines: Mutex<Vec<HttpRequest>>,
+    changed: Condvar,
 }
 
 impl DebugLog for Lines {
@@ -42,12 +43,29 @@ impl DebugLog for Lines {
 
     fn http_request(&self, request: &HttpRequest) {
         self.lines.lock().unwrap().push(request.clone());
+        self.changed.notify_all();
     }
 }
 
 impl Lines {
     fn recorded(&self) -> Vec<HttpRequest> {
         self.lines.lock().unwrap().clone()
+    }
+
+    /// Waits for the observed requests with the suite's real-time deadline.
+    fn await_count(&self, count: usize) -> Vec<HttpRequest> {
+        let deadline = Deadline::after(Duration::from_secs(10));
+        let mut lines = self.lines.lock().unwrap();
+        while lines.len() < count {
+            let (updated, timeout) = self.changed.wait_timeout(lines, deadline.left()).unwrap();
+            lines = updated;
+            assert!(
+                lines.len() >= count || !timeout.timed_out(),
+                "waited {WITHIN:?} for {count} HTTP request lines, got {}",
+                lines.len()
+            );
+        }
+        lines.clone()
     }
 }
 
@@ -3068,7 +3086,7 @@ fn a_token_refresh_post_writes_an_mcp_line() {
     let opened = token_start_observed(&setup, url.clone(), token_files(&url, &auth.url(), Some(0)))
         .expect("the expired login renews");
     assert_eq!(auth.requests().len(), 1, "one refresh post");
-    let lines = setup.lines();
+    let lines = setup.lines.await_count(4);
     // The refresh runs inside the initialize exchange, before its post:
     // refresh, initialize, notifications/initialized, tools/list.
     // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
@@ -3093,7 +3111,7 @@ fn a_token_refresh_post_writes_an_mcp_line() {
         move || opened.server.stop(),
     );
     // The stop's goodbye is a fifth line, with no body either way.
-    let lines = setup.lines();
+    let lines = setup.lines.await_count(5);
     // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
     assert_eq!(lines.len(), 5, "{lines:?}");
     let goodbye = lines.last().unwrap();

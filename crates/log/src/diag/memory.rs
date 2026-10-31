@@ -69,7 +69,7 @@ fn read() -> Option<ResourcesSample> {
     // anything else left `info` untouched. The footprints arrive in bytes,
     // reported as whole KiB like Activity Monitor's figure; the disk
     // counters already are bytes.
-    (status == 0).then(|| ResourcesSample {
+    (status == 0).then_some(ResourcesSample {
         peak_kib: info.ri_lifetime_max_phys_footprint / 1024,
         current_kib: info.ri_phys_footprint / 1024,
         disk_read_bytes: info.ri_diskio_bytesread,

@@ -242,6 +242,7 @@ fn provider_purposes_keep_provider_and_gain_no_extension() {
             Some(&Identity::Provider("fake".into())),
             "{purpose:?}"
         );
+        assert_eq!(request.purpose(), purpose.into(), "{purpose:?}");
     }
 }
 

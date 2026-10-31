@@ -719,11 +719,11 @@ fn unlisted_platform_fails_before_any_download() {
     );
 }
 
-/// A debug full update logs one `extension_release` line per download to
-/// the pid-named CLI log: the channel tag, the three archives and their
-/// checksum files. The members carry no binary, so no member line follows.
+/// A debug full update logs one `extension_release` line per actual request
+/// to the pid-named CLI log: the tag redirect and result, three archives and
+/// their checksum files. The members carry no binary, so no member line follows.
 #[test]
-fn a_debug_update_logs_one_extension_release_line_per_download() {
+fn a_debug_update_logs_one_extension_release_line_per_request() {
     let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, OLD_BINARY);
     fs::write(
         world.home.join("config.json"),
@@ -743,11 +743,11 @@ fn a_debug_update_logs_one_extension_release_line_per_download() {
             line["data"].get("host").and_then(|host| host.as_str()) == Some(host.as_str())
         })
         .collect();
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    // docs/state.md, "Diagnostic logs": one line per actual request, including each redirect hop.
     assert_eq!(
         requests.len(),
-        7,
-        "the tag plus three archives and their checksums: {requests:?}"
+        8,
+        "the tag redirect and result plus three archives and their checksums: {requests:?}"
     );
     let mut paths: Vec<&str> = requests
         .iter()
@@ -764,6 +764,7 @@ fn a_debug_update_logs_one_extension_release_line_per_download() {
             "/releases/download/v0.2.0/fiber-x86_64-unknown-linux-musl.tar.gz",
             "/releases/download/v0.2.0/fiber-x86_64-unknown-linux-musl.tar.gz.sha256",
             "/releases/latest",
+            "/releases/tag/v0.2.0",
         ]
     );
     for request in &requests {
@@ -774,7 +775,12 @@ fn a_debug_update_logs_one_extension_release_line_per_download() {
         );
         let data = &request["data"];
         assert_eq!(data["purpose"], "extension_release", "{data}");
-        assert_eq!(data["status"], 200, "{data}");
+        let status = if data["path"] == "/releases/latest" {
+            302
+        } else {
+            200
+        };
+        assert_eq!(data["status"], status, "{data}");
         assert_eq!(data["attempt"], 1, "{data}");
         assert!(data.get("provider").is_none(), "{data}");
         assert!(data.get("extension").is_none(), "{data}");
