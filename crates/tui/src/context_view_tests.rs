@@ -281,6 +281,46 @@ fn categories_are_absent_until_a_rate_is_available() {
 }
 
 #[test]
+fn categories_are_absent_without_a_preamble_even_with_a_rate() {
+    // A continuation with no `preamble_built` of its own (see #3756):
+    // once its prompt supplies a rate, the empty fold's unknown sizes
+    // must not render as zero-valued categories.
+    let fold = ContextFold::default();
+    assert_eq!(categories(&fold, rate(), 20), None);
+    let sized = Some(Sized {
+        total: 20,
+        window: 100,
+        trigger: Handoff::Unknown,
+    });
+    let shown = text(&fold, rate(), sized, 80);
+    assert!(!shown.contains("system prompt"), "{shown}");
+    assert!(!shown.contains("tool definitions"), "{shown}");
+    // No category row draws: each one starts with its "■ " glyph, which
+    // the "Largest tool results" heading never carries.
+    assert!(!shown.contains("■ "), "{shown}");
+}
+
+#[test]
+fn an_empty_preamble_draws_known_zero_categories() {
+    // The other side of the unknown-sizes gate: a `preamble_built`
+    // with empty sizes is known zero, so the breakdown still draws.
+    let mut fold = ContextFold::default();
+    fold.fold(&envelope(
+        "preamble_built",
+        None,
+        json!({"model": "model/m"}),
+    ));
+    let sized = Some(Sized {
+        total: 20,
+        window: 100,
+        trigger: Handoff::Off,
+    });
+    let shown = text(&fold, rate(), sized, 80);
+    assert!(shown.contains("system prompt"), "{shown}");
+    assert!(shown.contains("automatic handoff off"), "{shown}");
+}
+
+#[test]
 fn preamble_sizes_use_utf8_bytes_and_only_non_deferred_definitions() {
     let mut fold = ContextFold::default();
     fold.fold(&preamble(

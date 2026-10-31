@@ -749,6 +749,27 @@ fn context_with_a_triggerless_preamble_keeps_the_off_row() {
     assert!(!shown.contains("handoff at"), "{shown}");
 }
 
+/// Attaching another session drops the old session's cached status, so
+/// the panel holds no window or total until the new session's own
+/// `session_status` folds (see #3756): otherwise `window()` falls back
+/// to the old session's reported window and shows its total.
+#[test]
+fn attaching_another_session_clears_the_cached_status() {
+    let mut app = attached(100, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    assert_eq!(app.panel_state().window(), Some(100));
+    app.attach(SessionId(OTHER.to_owned()));
+    assert!(app.panel_state().status().is_none());
+    assert_eq!(app.panel_state().window(), None);
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(
+        shown.contains("The context shows after the session's first request."),
+        "{shown}"
+    );
+}
+
 #[test]
 fn going_home_clears_context_state_for_the_next_attachment() {
     let mut app = attached(100, 40);

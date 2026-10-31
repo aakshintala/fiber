@@ -548,12 +548,14 @@ impl PanelState {
         self.due = true;
         self.quota.attached();
         self.workspace = None;
-        // The new attachment folds its own `preamble_built`: the old
-        // session's window and handoff point end here, so `/context`
-        // waits for the new session's fold instead of showing stale
-        // state (`docs/tui.md`, "Swapped views").
+        // The new attachment folds its own `preamble_built` and
+        // `session_status`: the old session's window, handoff point and
+        // status end here, so `/context` waits for the new session's
+        // fold instead of showing the old session's total and window
+        // (`docs/tui.md`, "Swapped views").
         self.window = None;
         self.trigger_at = None;
+        self.status = None;
         // A new attachment has no running call, so no streamed thinking.
         self.thinking_state = ThinkingState::Idle;
     }

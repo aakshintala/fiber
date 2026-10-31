@@ -23,9 +23,11 @@ use serde_json::{Value, json};
 use support::hello_inline_completed as hello;
 use support::{Deadline, pty};
 
-/// Polls under the deadline until some session log ends in `moved`,
-/// returning the old and child ids: the gate between typing `/cd` and
-/// observing the switched terminal, so no later key races the attach.
+/// Polls under the deadline until some session log ends in `moved` —
+/// the last line of a session that moved workspace (`docs/events.md`,
+/// "`moved`") — returning the old and child ids: the gate between
+/// typing `/cd` and observing the switched terminal, so no later key
+/// races the attach.
 #[track_caller]
 fn until_moved(setup: &support::Setup) -> (String, String) {
     let projects = setup.home().join("projects");

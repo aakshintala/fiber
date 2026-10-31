@@ -815,7 +815,8 @@ install still running.
   and messages, which takes the rest of the session's context total. Each
   of the first three is estimated from its bytes at the session's own
   tokens-per-byte rate, and the view says the sizes are approximate.
-  Until a request gives a rate, it shows the total alone. It is drawn
+  Until a request gives a rate, and when the session logged no
+  `preamble_built` of its own, it shows the total alone. It is drawn
   indented two columns: "268k tokens" bold, then " · 26% of the 1M window ·
   automatic handoff at 400k" dim; the bar, one █ run per category in its
   colour, ▁ in `rule` for the room left, and │ in `attention` at the handoff

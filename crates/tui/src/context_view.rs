@@ -28,6 +28,11 @@ pub(crate) enum Category {
 /// The context sizes folded from the attached session's events.
 #[derive(Debug, Default)]
 pub(crate) struct ContextFold {
+    /// Whether a `preamble_built` named the preamble sizes: without one
+    /// — a rewind, a fork or a workspace change continues another log —
+    /// a zero size is unknown, not known zero, and the view shows the
+    /// total alone (`docs/tui.md`, "Swapped views").
+    preamble: bool,
     system: u64,
     tools: u64,
     results: u64,
@@ -47,6 +52,7 @@ impl ContextFold {
                     .is_some_and(|forked_from| !forked_from.is_null());
             }
             "preamble_built" => {
+                self.preamble = true;
                 self.system = envelope
                     .payload
                     .get("system_prompt")
@@ -131,12 +137,18 @@ pub(crate) struct Largest {
     pub(crate) bytes: u64,
 }
 
-/// The categories' estimated tokens capped in display order.
+/// The categories' estimated tokens capped in display order: `None`
+/// until a rate is available, and when no `preamble_built` named the
+/// preamble sizes — then the view shows the total alone, since a zero
+/// size without a build is unknown, not known zero.
 pub(crate) fn categories(
     fold: &ContextFold,
     rate: Rate,
     total: u64,
 ) -> Option<[(Category, u64); 4]> {
+    if !fold.preamble {
+        return None;
+    }
     let mut remaining = total;
     let mut estimate = |bytes| {
         let tokens = rate.tokens(bytes)?.min(remaining);
