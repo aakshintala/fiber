@@ -10,6 +10,7 @@
 //! gives all three rows the same word and line keys.
 
 use crate::format::width as measure;
+use crate::input::is_word_char;
 use crate::keys::Edit;
 
 /// The byte where the character `chars` characters into `text` starts, or
@@ -35,51 +36,21 @@ pub(super) fn delete_before(text: &mut String, caret: &mut usize) {
     }
 }
 
-/// A word is a run of alphanumeric characters or `_`, as in the draft's
-/// pieces: anything else is a gap the cursor steps over.
-fn is_word_char(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
-}
-
 /// Applies one editing key to a single-line row: arrows and word moves,
 /// word and line-start deletes, line start and end. `ShiftEnter`, `CtrlJ`,
 /// forward `Delete` and `Paste` do nothing here (a paste is typed by the
-/// caller) and return `false`.
-pub(super) fn edit_line(text: &mut String, caret: &mut usize, edit: &Edit) -> bool {
+/// caller).
+pub(super) fn edit_line(text: &mut String, caret: &mut usize, edit: &Edit) {
     match edit {
-        Edit::Left => {
-            move_caret(text, caret, false);
-            true
-        }
-        Edit::Right => {
-            move_caret(text, caret, true);
-            true
-        }
-        Edit::WordLeft => {
-            word_left(text, caret);
-            true
-        }
-        Edit::WordRight => {
-            word_right(text, caret);
-            true
-        }
-        Edit::DeleteWord => {
-            delete_word(text, caret);
-            true
-        }
-        Edit::DeleteToLineStart => {
-            delete_to_line_start(text, caret);
-            true
-        }
-        Edit::LineStart => {
-            line_start(caret);
-            true
-        }
-        Edit::LineEnd => {
-            line_end(text, caret);
-            true
-        }
-        Edit::ShiftEnter | Edit::CtrlJ | Edit::Delete | Edit::Paste(_) => false,
+        Edit::Left => move_caret(text, caret, false),
+        Edit::Right => move_caret(text, caret, true),
+        Edit::WordLeft => word_left(text, caret),
+        Edit::WordRight => word_right(text, caret),
+        Edit::DeleteWord => delete_word(text, caret),
+        Edit::DeleteToLineStart => delete_to_line_start(text, caret),
+        Edit::LineStart => line_start(caret),
+        Edit::LineEnd => line_end(text, caret),
+        Edit::ShiftEnter | Edit::CtrlJ | Edit::Delete | Edit::Paste(_) => {}
     }
 }
 

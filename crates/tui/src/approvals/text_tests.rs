@@ -123,10 +123,9 @@ fn line_edits_leave_breaks_paste_and_forward_delete_alone() {
         Edit::Delete,
         Edit::Paste("x".to_owned()),
     ] {
-        assert!(!edit_line(&mut text, &mut caret, &edit), "{edit:?}");
+        edit_line(&mut text, &mut caret, &edit);
+        assert_eq!((text.as_str(), caret), ("ab", 2), "{edit:?}");
     }
-    assert_eq!(text, "ab");
-    assert_eq!(caret, 2);
-    assert!(edit_line(&mut text, &mut caret, &Edit::WordLeft));
+    edit_line(&mut text, &mut caret, &Edit::WordLeft);
     assert_eq!(caret, 0);
 }
