@@ -19,13 +19,26 @@ use super::{
 };
 use super::{Settings, Unavailable, check_available};
 
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../../../tests/support/sandbox_home.rs"]
+mod sandbox_home;
+
 /// A fixture root under the owner's home, not the temp dir: the sandbox
 /// grants the temp dir as writable, so a deny beneath it would overlap and
-/// report unavailable instead of confining. Each call gets a fresh random
-/// suffix and removes itself on drop.
-fn fixture(prefix: &str) -> fakes::TempDir {
+/// report unavailable instead of confining. Every fixture shares the
+/// `fiber-tools-shell-sandbox-protected` prefix, so one glob sweeps every
+/// leftover. Each call gets a fresh random suffix and removes itself on
+/// drop.
+fn fixture() -> fakes::TempDir {
     let home = std::env::var_os("HOME").expect("HOME names the owner's home");
-    fakes::TempDir::under(std::path::Path::new(&home), prefix)
+    sandbox_home::SandboxHome::new(
+        std::path::Path::new(&home),
+        "fiber-tools-shell-sandbox-protected",
+    )
+    .into_root()
 }
 
 fn disabled() -> Settings {
@@ -48,7 +61,7 @@ fn workspace_settings(fiber_home: &Path) -> Settings {
 
 #[test]
 fn disabled_reports_off() {
-    let dir = fixture("fiber-sandbox-disabled");
+    let dir = fixture();
     let unavailable =
         check_available(&disabled(), dir.path()).expect_err("disabled is unavailable");
     assert_eq!(unavailable, Unavailable::Off);
@@ -57,7 +70,7 @@ fn disabled_reports_off() {
 
 #[test]
 fn enabled_without_overlap_is_available_on_linux() {
-    let dir = fixture("fiber-sandbox-available");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     let fiber_home = dir.path().join("fiber-home");
     std::fs::create_dir_all(&workspace).expect("create workspace");
@@ -73,7 +86,7 @@ fn enabled_without_overlap_is_available_on_linux() {
 #[cfg(target_os = "linux")]
 #[test]
 fn deny_inside_the_workspace_is_unavailable_naming_the_path() {
-    let dir = fixture("fiber-sandbox-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     let denied = workspace.join("secret");
     std::fs::create_dir_all(&workspace).expect("create workspace");
@@ -114,7 +127,7 @@ fn a_relative_deny_inside_the_workspace_is_unavailable() {
             }
         }
     }
-    let dir = fixture("fiber-sandbox-relative-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     std::fs::write(workspace.join("secret"), "secret").expect("write secret");
@@ -150,7 +163,7 @@ fn a_relative_deny_inside_the_workspace_is_unavailable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn deny_inside_allow_write_is_unavailable() {
-    let dir = fixture("fiber-sandbox-allow-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let extra = dir.path().join("extra-write");
@@ -175,7 +188,7 @@ fn deny_inside_allow_write_is_unavailable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn deny_through_an_aliased_write_root_is_unavailable() {
-    let dir = fixture("fiber-sandbox-alias-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let real = dir.path().join("real-write");
@@ -202,7 +215,7 @@ fn deny_through_an_aliased_write_root_is_unavailable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn resolved_target_inside_a_write_grant_is_unavailable_with_an_arrow() {
-    let dir = fixture("fiber-sandbox-target-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let grants = dir.path().join("grants");
@@ -241,7 +254,7 @@ fn resolved_target_inside_a_write_grant_is_unavailable_with_an_arrow() {
 #[cfg(target_os = "linux")]
 #[test]
 fn an_unresolved_write_root_is_unavailable() {
-    let dir = fixture("fiber-sandbox-unresolved-write");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let missing = dir.path().join("missing-write");
@@ -256,7 +269,7 @@ fn an_unresolved_write_root_is_unavailable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn denied_paths_compare_as_a_set() {
-    let dir = fixture("fiber-sandbox-denied-paths");
+    let dir = fixture();
     let fiber_home = dir.path().join("fiber-home");
     let denied: Vec<PathBuf> = vec![dir.path().join("b"), dir.path().join("a")];
     let settings = Settings {
@@ -286,8 +299,8 @@ struct HomeFixture {
 
 #[cfg(target_os = "linux")]
 impl HomeFixture {
-    fn new(prefix: &str, deny: &[&str]) -> Self {
-        let dir = fixture(prefix);
+    fn new(deny: &[&str]) -> Self {
+        let dir = fixture();
         let home = dir.path().join("home");
         let workspace = dir.path().join("workspace");
         let fiber_home = dir.path().join("fiber-home");
@@ -334,7 +347,7 @@ impl HomeFixture {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_sibling_of_a_denied_file_stays_readable() {
-    let mut fixture = HomeFixture::new("fiber-sandbox-sibling", &["home/secret"]);
+    let mut fixture = HomeFixture::new(&["home/secret"]);
     std::fs::write(fixture.home.join("secret"), "shh").expect("write secret");
     std::fs::write(fixture.home.join("sibling"), "ok").expect("write sibling");
     // Two denies prove the point of the fix: one walk must never re-grant
@@ -359,7 +372,7 @@ fn a_sibling_of_a_denied_file_stays_readable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_missing_deny_leaves_the_parents_siblings_readable() {
-    let fixture = HomeFixture::new("fiber-sandbox-missing", &["home/.aws"]);
+    let fixture = HomeFixture::new(&["home/.aws"]);
     std::fs::write(fixture.home.join("sibling"), "ok").expect("write sibling");
     // Nothing grants the missing deny point upward: only its existing
     // parent's siblings stay readable.
@@ -374,7 +387,7 @@ fn a_missing_deny_leaves_the_parents_siblings_readable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_symlink_to_a_directory_denies_its_target_and_keeps_siblings() {
-    let dir = fixture("fiber-sandbox-dir-link");
+    let dir = fixture();
     let home = dir.path().join("home");
     let data = dir.path().join("data");
     let workspace = dir.path().join("workspace");
@@ -425,7 +438,7 @@ fn a_symlink_to_a_directory_denies_its_target_and_keeps_siblings() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_symlink_to_a_file_denies_both_paths_and_keeps_siblings() {
-    let dir = fixture("fiber-sandbox-file-link");
+    let dir = fixture();
     let home = dir.path().join("home");
     let data = dir.path().join("data");
     let workspace = dir.path().join("workspace");
@@ -481,7 +494,7 @@ fn a_symlink_to_a_file_denies_both_paths_and_keeps_siblings() {
 fn a_dangling_directory_link_with_a_suffix_keeps_siblings_readable() {
     use std::os::unix::fs::symlink;
 
-    let fixture = HomeFixture::new("fiber-sandbox-dangling-suffix", &["home/link/secret"]);
+    let fixture = HomeFixture::new(&["home/link/secret"]);
     symlink("missing-directory", fixture.home.join("link")).expect("dangle the directory link");
     std::fs::write(fixture.home.join("sibling"), "ok").expect("write sibling");
     let sibling = fixture.confined("cat sibling");
@@ -495,7 +508,7 @@ fn a_dangling_directory_link_with_a_suffix_keeps_siblings_readable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_dangling_link_created_after_setup_stays_unreadable() {
-    let fixture = HomeFixture::new("fiber-sandbox-dangling", &["home/link"]);
+    let fixture = HomeFixture::new(&["home/link"]);
     // The link dangles at setup; its target arrives after, and the confined
     // read still cannot reach it.
     std::os::unix::fs::symlink("target", fixture.home.join("link")).expect("dangle the link");
@@ -518,7 +531,7 @@ fn a_dangling_link_created_after_setup_stays_unreadable() {
 #[test]
 fn a_created_missing_deny_stays_unreadable_during_the_call() {
     use super::super::command::{MovePolicy, execute};
-    let dir = fixture("fiber-sandbox-created-missing");
+    let dir = fixture();
     let home = dir.path().join("home");
     let workspace = dir.path().join("workspace");
     let fiber_home = dir.path().join("fiber-home");
@@ -609,7 +622,7 @@ fn a_created_missing_deny_stays_unreadable_during_the_call() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_symlink_loop_makes_the_sandbox_unavailable() {
-    let dir = fixture("fiber-sandbox-loop");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let a = dir.path().join("a");
@@ -628,7 +641,7 @@ fn a_symlink_loop_makes_the_sandbox_unavailable() {
 fn a_permission_denied_during_deny_resolution_makes_the_sandbox_unavailable() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = fixture("fiber-sandbox-unresolvable-deny");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     let locked = dir.path().join("locked");
     std::fs::create_dir_all(&workspace).expect("create workspace");
@@ -652,11 +665,8 @@ fn a_permission_denied_during_deny_resolution_makes_the_sandbox_unavailable() {
 #[test]
 fn forty_hops_resolve_and_forty_one_do_not() {
     use std::os::unix::fs::symlink;
-    for (prefix, links, available) in [
-        ("fiber-sandbox-hops-ok", 40, true),
-        ("fiber-sandbox-hops-over", 41, false),
-    ] {
-        let dir = fixture(prefix);
+    for (links, available) in [(40, true), (41, false)] {
+        let dir = fixture();
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("create workspace");
         let real = dir.path().join("real");
@@ -699,7 +709,7 @@ fn forty_symlink_components_resolve_and_forty_one_fail() {
     use std::os::unix::fs::symlink;
 
     for (links, available) in [(40, true), (41, false)] {
-        let dir = fixture("fiber-sandbox-component-hops");
+        let dir = fixture();
         let start = dir.path().join("start");
         std::fs::create_dir(&start).expect("create start directory");
         let mut current = start.clone();
@@ -732,7 +742,7 @@ fn forty_symlink_components_resolve_and_forty_one_fail() {
 fn open_nofollow_never_resolves_a_symlink() {
     use std::os::unix::fs::symlink;
     use std::os::unix::io::AsFd as _;
-    let dir = fixture("fiber-sandbox-open");
+    let dir = fixture();
     let file = dir.path().join("file");
     std::fs::write(&file, "data").expect("write the file");
     let link = dir.path().join("link");
@@ -857,7 +867,7 @@ pub(crate) fn measure_read_walk(
 #[cfg(target_os = "linux")]
 #[test]
 fn a_fixture_walk_counts_every_grant_exactly() {
-    let dir = fixture("fiber-sandbox-count");
+    let dir = fixture();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).expect("create home");
     for name in ["secret", "first", "second", "third"] {
@@ -904,8 +914,8 @@ struct MacosFixture {
 
 #[cfg(target_os = "macos")]
 impl MacosFixture {
-    fn new(prefix: &str) -> Self {
-        let dir = fixture(prefix);
+    fn new() -> Self {
+        let dir = fixture();
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("create workspace");
         let settings = workspace_settings(&dir.path().join("fiber-home"));
@@ -929,7 +939,7 @@ impl MacosFixture {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_enabled_without_overlap_is_available() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-available");
+    let fixture = MacosFixture::new();
     check_available(&fixture.settings, &fixture.workspace)
         .expect("overlap-free settings are available on macOS");
 }
@@ -937,7 +947,7 @@ fn macos_enabled_without_overlap_is_available() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_missing_executable_reports_the_binary() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-missing-exec");
+    let fixture = MacosFixture::new();
     let missing = fixture.dir.path().join("no-sandbox-exec");
     let unavailable = check_available_with_exec(&fixture.settings, &fixture.workspace, &missing)
         .expect_err("a missing binary is unavailable");
@@ -959,7 +969,7 @@ fn macos_missing_executable_reports_the_binary() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_a_directory_as_the_executable_is_unavailable() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-dir-exec");
+    let fixture = MacosFixture::new();
     let unavailable =
         check_available_with_exec(&fixture.settings, &fixture.workspace, fixture.dir.path())
             .expect_err("a directory is not a usable binary");
@@ -972,7 +982,7 @@ fn macos_a_directory_as_the_executable_is_unavailable() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_deny_inside_write_is_unavailable_with_a_generic_label() {
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-overlap");
+    let mut fixture = MacosFixture::new();
     let denied = fixture.workspace.join("secret");
     std::fs::write(&denied, "secret").expect("write secret");
     fixture.settings.deny_read.push(denied.clone());
@@ -1013,7 +1023,7 @@ fn macos_deny_inside_write_is_unavailable_with_a_generic_label() {
 #[test]
 fn macos_rejected_profile_runs_nothing_and_fails_closed() {
     use super::super::command::{MovePolicy, SandboxApply, execute_confined};
-    let dir = fixture("fiber-sandbox-macos-rejected");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let side_effect = workspace.join("side-effect");
@@ -1060,7 +1070,7 @@ fn macos_rejected_profile_runs_nothing_and_fails_closed() {
 #[test]
 fn macos_unavailable_settings_never_reach_spawn() {
     use super::super::command::{MovePolicy, SandboxApply, execute};
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-no-spawn");
+    let mut fixture = MacosFixture::new();
     let missing = fixture.dir.path().join("missing-write");
     fixture.settings.allow_write.push(missing.clone());
     let clock = fakes::clock::FakeClock::new();
@@ -1101,7 +1111,7 @@ fn macos_unavailable_settings_never_reach_spawn() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_prepare_failure_names_the_unresolvable_root() {
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-unresolved");
+    let mut fixture = MacosFixture::new();
     let missing = fixture.dir.path().join("missing-write");
     fixture.settings.allow_write.push(missing.clone());
     let error = prepare(&fixture.settings, &fixture.workspace).expect_err("no grant is missing");
@@ -1116,7 +1126,7 @@ fn macos_prepare_failure_names_the_unresolvable_root() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_grants_roots_denies_and_names_no_paths() {
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-profile");
+    let mut fixture = MacosFixture::new();
     std::fs::create_dir_all(fixture.workspace.join(".git")).expect("create git dir");
     let secret = fixture.dir.path().join("secret");
     std::fs::write(&secret, "secret").expect("write secret");
@@ -1184,7 +1194,7 @@ fn macos_profile_grants_roots_denies_and_names_no_paths() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_keeps_hostile_paths_literal() {
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-literal");
+    let mut fixture = MacosFixture::new();
     let hostile = fixture.dir.path().join("we'ird (dir)");
     std::fs::create_dir_all(&hostile).expect("create hostile dir");
     let newline = fixture.dir.path().join("line\nbreak");
@@ -1216,7 +1226,7 @@ fn macos_profile_keeps_hostile_paths_literal() {
 #[test]
 fn macos_profile_denies_a_link_and_its_target() {
     use std::os::unix::fs::symlink;
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-link-deny");
+    let mut fixture = MacosFixture::new();
     let target = fixture.dir.path().join("target");
     std::fs::write(&target, "shh").expect("write target");
     let link = fixture.dir.path().join("link");
@@ -1240,7 +1250,7 @@ fn macos_profile_denies_a_link_and_its_target() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_protects_a_checkout_gitdir() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-checkout");
+    let fixture = MacosFixture::new();
     let gitdir = fixture.workspace.join(".git");
     std::fs::create_dir_all(&gitdir).expect("create git dir");
     let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
@@ -1260,7 +1270,7 @@ fn macos_profile_protects_a_checkout_gitdir() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_follows_a_worktree_pointer() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-worktree");
+    let fixture = MacosFixture::new();
     let gitdir = fixture.dir.path().join("real-gitdir");
     std::fs::create_dir_all(&gitdir).expect("create gitdir");
     std::fs::write(gitdir.join("commondir"), "../common").expect("write commondir");
@@ -1303,7 +1313,7 @@ fn macos_profile_follows_a_worktree_pointer() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_absolute_git_pointer_at_root_grants_neither() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-root");
+    let fixture = MacosFixture::new();
     std::fs::write(fixture.workspace.join(".git"), "gitdir: /\n").expect("write hostile pointer");
     let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
     let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
@@ -1331,7 +1341,7 @@ fn macos_absolute_git_pointer_at_root_grants_neither() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_git_pointer_at_a_non_git_dir_grants_neither() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-plain");
+    let fixture = MacosFixture::new();
     let plain = fixture.dir.path().join("plain");
     std::fs::create_dir_all(&plain).expect("create plain dir");
     std::fs::write(
@@ -1366,7 +1376,7 @@ fn macos_git_pointer_at_a_non_git_dir_grants_neither() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_git_pointer_with_root_commondir_grants_neither() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-common");
+    let fixture = MacosFixture::new();
     let gitdir = fixture.dir.path().join("real-gitdir");
     std::fs::create_dir_all(&gitdir).expect("create gitdir");
     std::fs::write(gitdir.join("commondir"), "/\n").expect("write hostile commondir");
