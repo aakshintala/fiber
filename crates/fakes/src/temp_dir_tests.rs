@@ -471,13 +471,30 @@ fn a_live_holder_fails_the_drop_naming_the_directory_and_the_holder() {
     let pid = holder.pid();
     assert_eq!(reported, [pid]);
     let path = dir.path().to_path_buf();
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(dir)));
+    let clock = FakeClock::new();
+    let t0 = clock.now();
+    // Past `t0` plus the bound, so the first probe is already expired and
+    // the expiry returns at once with no wall wait (`docs/testing.md`,
+    // "Values that change every run").
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(MUST_SUCCEED_WITHIN + Duration::from_secs(1));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::wait_for_holders(dir.path(), &*clock, t0, MUST_SUCCEED_WITHIN)
+    }));
     reap_holder(holder);
     remove_left(&path);
-    let Err(payload) = caught else {
-        panic!("dropping a directory with a live holder did not fail");
+    let holders = match caught {
+        Ok(holders) => holders,
+        Err(payload) => panic!("the holder wait panicked: {}", panic_message(payload)),
     };
-    let message = panic_message(payload);
+    assert!(
+        holders.contains(&pid),
+        "the expired wait missed the live holder {pid}: {holders:?}"
+    );
+    let message = super::holders_message(&path, dir.owner.as_deref(), &holders);
     assert!(
         message.contains(&path.display().to_string()),
         "the failure names no directory: {message}"
@@ -499,13 +516,30 @@ fn an_open_file_holder_fails_the_drop_naming_the_directory_and_the_holder() {
     let pid = holder.pid();
     assert_eq!(reported, [pid]);
     let path = dir.path().to_path_buf();
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(dir)));
+    let clock = FakeClock::new();
+    let t0 = clock.now();
+    // Past `t0` plus the bound, so the first probe is already expired and
+    // the expiry returns at once with no wall wait (`docs/testing.md`,
+    // "Values that change every run").
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(MUST_SUCCEED_WITHIN + Duration::from_secs(1));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::wait_for_holders(dir.path(), &*clock, t0, MUST_SUCCEED_WITHIN)
+    }));
     reap_holder(holder);
     remove_left(&path);
-    let Err(payload) = caught else {
-        panic!("dropping a directory with a live open-file holder did not fail");
+    let holders = match caught {
+        Ok(holders) => holders,
+        Err(payload) => panic!("the holder wait panicked: {}", panic_message(payload)),
     };
-    let message = panic_message(payload);
+    assert!(
+        holders.contains(&pid),
+        "the expired wait missed the live open-file holder {pid}: {holders:?}"
+    );
+    let message = super::holders_message(&path, dir.owner.as_deref(), &holders);
     assert!(
         message.contains(&path.display().to_string()),
         "the failure names no directory: {message}"
@@ -514,6 +548,7 @@ fn an_open_file_holder_fails_the_drop_naming_the_directory_and_the_holder() {
         message.contains(&format!("pid {pid}")),
         "the failure names no holder: {message}"
     );
+    assert!(message.contains("for test "), "{message}");
 }
 
 #[test]
