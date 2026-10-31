@@ -785,10 +785,11 @@ fn required_process_miss_fails_the_session_start() {
 /// Process startup and MCP startup overlap: the peer cannot ready
 /// before the MCP wrapper starts, and the MCP handshake cannot finish
 /// before the peer arrives. A serialized start fails this test, in
-/// either order, instead of merely running slower.
+/// either order, instead of merely running slower. This pins the parallel
+/// startup contract in `docs/extensions.md`, "Process extensions".
 #[test]
 fn process_and_mcp_start_in_parallel() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     // Armed before any start: the gated wrapper names the root in its
     // command line, so a failing exit still kills it with the setup.
     let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
@@ -815,7 +816,7 @@ fn process_and_mcp_start_in_parallel() {
 /// start joins, then stops and reaps the MCP server before the session fails.
 #[test]
 fn required_process_failure_stops_pending_mcp() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
     let provider = calling(&[]);
     setup.provider(&provider);
@@ -1000,7 +1001,7 @@ fn configure_held_fx(setup: &Setup, dir: &Path) -> PathBuf {
 /// established, and the deadline bounds every wait.
 #[test]
 fn required_process_spawn_failure_joins_then_stops_held_mcp() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = fakes::Watchdog::matching(&setup.root.path().display().to_string());
     let provider = calling(&[]);
     setup.provider(&provider);
