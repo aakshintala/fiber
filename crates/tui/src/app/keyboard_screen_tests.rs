@@ -473,9 +473,8 @@ fn wheel(col: u16, row: u16, down: bool) -> crate::keys::Mouse {
 }
 
 /// The wheel over the `/keys` screen moves three display lines a step,
-/// never the conversation under it (`docs/tui.md`, "Swapped
-/// views"; see #3578). Three Downs move the selection three actions
-/// down, and the wheel steps the window under it.
+/// never the conversation under it (`docs/tui.md:584`). Three Downs move
+/// the selection three actions down, and the wheel steps the window under it.
 #[test]
 fn wheel_over_keys_steps_browse_not_the_conversation() {
     let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
