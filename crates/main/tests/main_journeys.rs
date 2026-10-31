@@ -800,15 +800,21 @@ fn install_quota_provider(setup: &Setup, server_url: &str) {
 }
 
 /// A server answering every Lua purpose plus native model calls: the
-/// quota fetch reports 90% used.
-fn start_quota_server() -> ProviderServer {
-    ProviderServer::start_responding(|request| match request.path.as_str() {
-        "/lua-quota" => fakes::Response::status(200, "90"),
+/// quota fetch reports 90% used, signalling when its quota response is
+/// ready so the journey's one focus-in runs after the fetch it started.
+fn start_quota_server() -> (ProviderServer, std::sync::mpsc::Receiver<()>) {
+    let (quota_hit, quota_rx) = std::sync::mpsc::channel();
+    let server = ProviderServer::start_responding(move |request| match request.path.as_str() {
+        "/lua-quota" => {
+            let _sent = quota_hit.send(());
+            fakes::Response::status(200, "90")
+        }
         "/lua-models" | "/lua-token" => fakes::Response::status(200, "{}"),
         "/v1/responses" => support::hello(),
         _ => fakes::Response::status(500, "unrouted"),
     })
-    .unwrap()
+    .unwrap();
+    (server, quota_rx)
 }
 
 /// A quota notice in the middle of a conversation, then the next prompt
@@ -823,7 +829,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
         // so the standard `catch_unwind` wrapper applies.
         std::panic::AssertUnwindSafe(|| {
             let setup = Setup::new();
-            let server = start_quota_server();
+            let (server, quota_rx) = start_quota_server();
             install_quota_provider(&setup, &server.url());
             std::fs::create_dir_all(setup.home().join("credentials/test")).unwrap();
             std::fs::write(setup.home().join("credentials/test/work"), "test-key").unwrap();
@@ -840,40 +846,22 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             run.wait_screen("the first answered turn", |grid| {
                 grid.contents.contains("Hello.")
             });
-            // The drawn value proves the fetch landed: the fetch-less
-            // snapshot behind focus-in never re-asks when a flight lands
-            // after it, so one focus-in can miss the first turn's fetch
-            // still in flight. Re-ask on every pass until the drawn
-            // value proves `finish_quota` stored it
-            // (`quota_fetch_session.rs`,
-            // `slash_quota_opens_the_view_and_shows_the_fetched_values`;
-            // `docs/testing.md`, "Waits and timeouts"): each focus-in
-            // sends a fetch-less query that starts no new fetch, so
-            // re-asking starts no new `/lua-quota` request. The poll
-            // reads the raw output, never the grid, so the file's zero
-            // bare screen reads stand; the grid wait below is the
-            // assertion. Each pass writes one 4-byte focus-in, paced
-            // below so the loop can never fill the PTY input buffer
-            // faster than Fiber drains it; the trip cap bounds the
-            // total, and the grid wait below still decides a fetch
-            // that lands after the last pass.
-            let quota_from = run.output().len();
-            for _ in 0..600 {
-                run.write(b"\x1b[I");
-                if String::from_utf8_lossy(&run.output()[quota_from..]).contains("10%") {
-                    break;
-                }
-                assert!(
-                    !setup.deadline.left().is_zero(),
-                    "waited until the deadline for the fetched quota share to draw after focus-in"
-                );
-                #[allow(
-                    clippy::disallowed_methods,
-                    reason = "a poll pause, not a deadline (docs/testing.md, \"Waits and timeouts\")"
-                )]
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                std::thread::yield_now();
-            }
+            // The fake signals when its quota response is ready, so the one
+            // focus-in below runs after the fetch the first turn started:
+            // the named screen wait then draws the fetched share, with no
+            // wall-clock read or sleep of its own. The focus-in sends a
+            // fetch-less query that starts no new fetch, so it starts no
+            // new `/lua-quota` request (`quota_fetch_session.rs`,
+            // `quota_notice_is_a_fiber_card_entry_in_pty`;
+            // `docs/testing.md`, "Waits and timeouts"); the grid wait below
+            // is the assertion, failing naming the wait when the share never
+            // draws. One 4-byte focus-in cannot fill the PTY input buffer by
+            // construction.
+            setup.deadline.recv_or_fail(
+                &quota_rx,
+                "the fake quota response for the fetch the first turn starts",
+            );
+            run.write(b"\x1b[I");
             run.wait_screen("the fetched quota share", |grid| {
                 grid.contents.contains("10%")
             });
@@ -1580,14 +1568,6 @@ fn started(run: &mut Run) {
         }
         let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
         from = run.wait_bytes(approval, FRAME_END, "the approval frame");
-        // One paced 1-byte write per pass: each pass already blocks on
-        // a deadline wait above, and the pause keeps the re-ask below
-        // what Fiber drains.
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "a poll pause, not a deadline (docs/testing.md, \"Waits and timeouts\")"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
         run.write(b"\r");
     }
     run.turn_finished(from);
