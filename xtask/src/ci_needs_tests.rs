@@ -206,7 +206,7 @@ fn missing_jobs_are_sorted() {
 #[test]
 fn an_extra_report_job_in_the_doc_fails() {
     let doc = real_doc();
-    let from = "`bug_red_macos`.";
+    let from = "`journey_report`.";
     assert!(doc.contains(from), "the fixture drifted");
     let changed = doc.replace(from, "`bug_red_macos`, `extra`.");
     let failures = check(&real_workflow(), &changed).unwrap();
