@@ -704,9 +704,8 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         text.contains(".fiber"),
         "the result names the change: {text}"
     );
-    // The headless stderr destination and exact warning wording are not
-    // promised by `docs/sandbox.md` or `docs/events.md`; this is an
-    // implementation-level assertion retained from the ticket's scope.
+    // `docs/sandbox.md:102-106` promises this warning wording and its
+    // headless stderr destination.
     assert!(
         run.stderr.contains(
             "fiber: Protected path .fiber changed while a confined call ran; Fiber restored it."
@@ -726,8 +725,8 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         fs::read(linked.join(".fiber/note.txt")).unwrap(),
         b"linked original\n"
     );
-    // The report documents the protected path, but not the exact stderr
-    // warning wording or headless output destination.
+    // `docs/sandbox.md:102-106` promises the warning wording and its
+    // headless stderr destination for each changed path.
     assert!(
         run.stderr
             .contains("fiber: Protected path ../linked/.git changed while a confined call ran;"),

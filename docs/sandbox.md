@@ -99,7 +99,11 @@ toward either process, either process group or every process, and
 `pidfd_open` of either pid. Signals to the call's own children keep working
 on every kernel. A restore that fails is not retried and not hidden: it
 lands in the report's `failed` list with its cause, and the call's result,
-completion event and warning line carry it the same way.
+completion event and warning line carry it the same way. Each changed path
+gives the person one warning line, "Protected path `<path>` changed while a
+confined call ran; Fiber restored it.", or, when the restore failed,
+"…; Fiber could not restore it: `<cause>`.". The terminal UI draws it with
+the call; a headless run prints it on stderr as `fiber: ` and the line.
 
 ## How read denies are built
 
