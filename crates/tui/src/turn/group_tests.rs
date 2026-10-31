@@ -172,6 +172,310 @@ fn kinds_skips_outers_with_inners() {
     assert_eq!(text, format!("{left}{filler}{right}"));
 }
 
+/// A completed `codemode` outer with the script `source`.
+fn outer_call(id: usize, action: &str, source: &str) -> Call {
+    Call {
+        id,
+        action: action.to_owned(),
+        name: "codemode".to_owned(),
+        arguments: json!({"source": source}),
+        status: Some(CallStatus::Completed),
+        result: Some(Box::new(CallResult {
+            content: "done".to_owned(),
+            ..CallResult::default()
+        })),
+        timing: Timing::Started(0),
+        ..Call::default()
+    }
+}
+
+/// An opened outer draws its arguments first, then one row per inner
+/// per level, each two columns further in with the same glyph, kind,
+/// target and result it would draw on its own.
+#[test]
+fn nested_ledger_rows_draw_inners_indented() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 1_000,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(outer_call(1, "a_1", "line1\nline2")),
+                inner(
+                    Call {
+                        lines: 12,
+                        ..read_call(2, "f.rs")
+                    },
+                    "a_1",
+                ),
+                inner(edit_call(3, "e.rs", 3, 1), "a_1"),
+                inner(shell_call(4, "cargo test", Some(0), 7, "ok"), "a_1"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    assert_eq!(rows.len(), 6);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
+    assert_eq!(text[1], "        line1");
+    assert_eq!(text[2], "        line2");
+    assert!(text[3].starts_with("        ✓ read"), "{}", text[3]);
+    assert!(text[3].contains("f.rs"), "{}", text[3]);
+    assert!(text[3].ends_with("12 lines"), "{}", text[3]);
+    assert!(text[4].starts_with("        ✓ edit"), "{}", text[4]);
+    assert!(text[4].contains("e.rs"), "{}", text[4]);
+    assert!(text[4].ends_with("+3 −1"), "{}", text[4]);
+    assert!(text[5].starts_with("        ✓ shell"), "{}", text[5]);
+    assert!(text[5].contains("cargo test"), "{}", text[5]);
+    assert!(text[5].ends_with("exit 0 · 7 lines"), "{}", text[5]);
+    // The ledger rows fill the width, as before; the arguments block
+    // draws short dim lines like any opened detail.
+    for row in [&rows[0], &rows[3], &rows[4], &rows[5]] {
+        assert_eq!(cells(row), 76, "{row:?}");
+    }
+}
+
+/// An inner whose outer names no call of the section draws top-level,
+/// in push order, as a command-anchored inner does; an inner arriving
+/// before its outer still nests under it.
+#[test]
+fn nested_ledger_rows_keep_orphans_and_command_inners_on_top() {
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        first: 0,
+        last: 1_000,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                Call {
+                    lines: 1,
+                    ..read_call(0, "lone.rs")
+                },
+                with_open(outer_call(1, "a_1", "s")),
+                inner(
+                    Call {
+                        lines: 2,
+                        ..read_call(2, "in.rs")
+                    },
+                    "a_1",
+                ),
+                // No call is named `a_9`: the orphan stays top-level.
+                inner(
+                    Call {
+                        lines: 3,
+                        ..read_call(3, "orf.rs")
+                    },
+                    "a_9",
+                ),
+                // A `command_id`-anchored inner stores none, so it draws
+                // top-level like any lone call.
+                shell_call(4, "top", Some(0), 1, "x"),
+                // Arriving before its outer still lands under it.
+                inner(
+                    Call {
+                        lines: 4,
+                        ..read_call(6, "late.rs")
+                    },
+                    "a_7",
+                ),
+                with_open(outer_call(7, "a_7", "late")),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    assert_eq!(rows.len(), 9);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[0].starts_with("    1 ✓ read"), "{}", text[0]);
+    assert!(text[1].starts_with("      ✓ other"), "{}", text[1]);
+    assert_eq!(text[2], "        s");
+    assert!(text[3].starts_with("        ✓ read"), "{}", text[3]);
+    assert!(text[3].contains("in.rs"), "{}", text[3]);
+    assert!(text[4].starts_with("      ✓ read"), "{}", text[4]);
+    assert!(text[4].contains("orf.rs"), "{}", text[4]);
+    assert!(text[5].starts_with("      ✓ shell"), "{}", text[5]);
+    assert!(text[6].starts_with("      ✓ other"), "{}", text[6]);
+    assert_eq!(text[7], "        late");
+    assert!(text[8].starts_with("        ✓ read"), "{}", text[8]);
+    assert!(text[8].contains("late.rs"), "{}", text[8]);
+}
+
+/// Failed, denied, cancelled and running inners keep their glyphs.
+#[test]
+fn nested_ledger_rows_keep_inner_status_glyphs() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 1_000,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(outer_call(1, "a_1", "s")),
+                inner(failed_call(2), "a_1"),
+                inner(denied_call(3), "a_1"),
+                inner(cancelled_call(4), "a_1"),
+                inner(running_call(5, "read", json!({"path": "r.rs"})), "a_1"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    assert_eq!(rows.len(), 6);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[2].starts_with("        ✗ shell"), "{}", text[2]);
+    assert!(text[2].contains("nonzero_exit: exit 101"), "{}", text[2]);
+    assert!(text[3].starts_with("        ✗ other"), "{}", text[3]);
+    assert!(text[3].contains("denied"), "{}", text[3]);
+    assert!(text[4].starts_with("        ⊘ other"), "{}", text[4]);
+    assert!(text[4].contains("cancelled"), "{}", text[4]);
+    assert!(text[5].starts_with("        ○ read"), "{}", text[5]);
+    assert!(text[5].contains("running"), "{}", text[5]);
+}
+
+/// A chain nests at every level: C under B under A, B counting as an
+/// inner, and the summary counting C by kind alone.
+#[test]
+fn nested_two_level_chain_groups_and_counts() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 0,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(outer_call(1, "a_1", "outer")),
+                with_open(inner(shell_call(2, "cargo test", Some(0), 4, "ok"), "a_1")),
+                with_open(inner(
+                    with_content(
+                        Call {
+                            lines: 5,
+                            ..read_call(3, "deep.rs")
+                        },
+                        "deep text",
+                    ),
+                    "a_2",
+                )),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    assert_eq!(rows.len(), 8);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
+    assert_eq!(text[1], "        outer");
+    assert!(text[2].starts_with("        ✓ shell"), "{}", text[2]);
+    assert_eq!(text[3], "        {");
+    assert!(
+        text[4].contains("\"command\": \"cargo test\""),
+        "{}",
+        text[4]
+    );
+    assert_eq!(text[5], "        }");
+    assert!(text[6].starts_with("          ✓ read"), "{}", text[6]);
+    assert!(text[6].contains("deep.rs"), "{}", text[6]);
+    assert!(text[6].ends_with("5 lines"), "{}", text[6]);
+    assert_eq!(text[7], "        deep text");
+    let (summary, _) = summary_row(&group, false, 60);
+    let line = summary[0].0.to_string();
+    let left = "● Read 1 file";
+    // The group is open, so the toggle reads open.
+    let right = "0s ▾";
+    let filler = " ".repeat(60 - crate::format::width(left) - crate::format::width(right));
+    assert_eq!(line, format!("{left}{filler}{right}"));
+}
+
+/// Contradictory anchors draw every call once: each names the other
+/// as its outer, so neither is a root, and the second pass draws them
+/// top-level instead of nesting forever.
+#[test]
+fn nested_ledger_rows_draw_anchor_cycles_once() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 0,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(inner(outer_call(1, "a_1", "aa"), "a_2")),
+                with_open(inner(outer_call(2, "a_2", "bb"), "a_1")),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    // Both calls are outers-with-inners, so the summary is empty and
+    // `rows` draws nothing: read the ledger directly.
+    let mut out = crate::rows::Rows::default();
+    group.ledger(76, &crate::image::Layout::default(), &mut out);
+    let (rows, _) = out.into_parts();
+    let rows: Vec<ratatui::text::Line<'_>> = rows.into_iter().map(|(line, _)| line).collect();
+    assert_eq!(rows.len(), 4);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
+    assert_eq!(text[1], "        aa");
+    assert!(text[2].starts_with("        ✓ other"), "{}", text[2]);
+    assert_eq!(text[3], "        bb");
+}
+
+/// An opened outer draws at most twenty argument lines; the inner
+/// rows always follow.
+#[test]
+fn nested_ledger_rows_cap_the_arguments_block() {
+    let script = |n: u64| {
+        (1..=n)
+            .map(|n| format!("L{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let group_with = |lines: u64| Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 0,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(outer_call(1, "a_1", &script(lines))),
+                inner(
+                    Call {
+                        lines: 1,
+                        ..read_call(2, "f.rs")
+                    },
+                    "a_1",
+                ),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group_with(20), 76);
+    assert_eq!(rows.len(), 22);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert_eq!(text[20], "        L20");
+    assert!(text[21].starts_with("        ✓ read"), "{}", text[21]);
+    let rows = ledger_rows(&group_with(21), 76);
+    assert_eq!(rows.len(), 22);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert_eq!(text[20], "        L20");
+    assert!(
+        !text.iter().any(|row| row.contains("L21")),
+        "the twenty-first line is cut"
+    );
+    assert!(text[21].starts_with("        ✓ read"), "{}", text[21]);
+}
+
 fn summary_row(
     group: &Group,
     running: bool,
