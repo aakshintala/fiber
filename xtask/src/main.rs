@@ -495,6 +495,12 @@ fn run(args: &[String]) -> Result<bool, String> {
             }
             Ok(true)
         }
+        "flake-titles" => {
+            for title in flake_report::flake_titles(rest)? {
+                println!("{title}");
+            }
+            Ok(true)
+        }
         "logo-mask" => logo::run(rest),
         "bench-report" => {
             let event = bench::Event::parse(&flag(rest, "--event")?)?;
