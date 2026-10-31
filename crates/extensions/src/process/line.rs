@@ -10,10 +10,34 @@ use serde_json::{Map, Value};
 /// `ts`, `schema_version`, the optional turn, action and sequence
 /// carriers, and the kind-specific body. A key a consumer does not know
 /// is ignored when reading, as for the session envelope.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ProcessLineKind {
+    /// The sessionless hello, carrying the session's identity.
+    ExtensionHello,
+    /// A host request to the child.
+    ExtensionRequest,
+    /// A driven command's acceptance.
+    CommandAccepted,
+    /// A driven command's rejection.
+    CommandRejected,
+}
+
+impl ProcessLineKind {
+    /// The wire name.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::ExtensionHello => "extension_hello",
+            Self::ExtensionRequest => "extension_request",
+            Self::CommandAccepted => "command_accepted",
+            Self::CommandRejected => "command_rejected",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ProcessCallLine {
     /// The only discriminator a consumer switches on.
-    pub kind: String,
+    pub kind: ProcessLineKind,
     /// Milliseconds since the epoch.
     pub ts: u64,
     /// The schema version this line is written against.
@@ -34,7 +58,10 @@ impl ProcessCallLine {
     /// carrier absent when it does not apply, never `null`.
     pub(crate) fn to_vec(&self) -> Vec<u8> {
         let mut line = Map::with_capacity(8);
-        line.insert("kind".to_owned(), Value::String(self.kind.clone()));
+        line.insert(
+            "kind".to_owned(),
+            Value::String(self.kind.name().to_owned()),
+        );
         line.insert("ts".to_owned(), Value::from(self.ts));
         line.insert(
             "schema_version".to_owned(),
@@ -62,3 +89,7 @@ impl ProcessCallLine {
         serde_json::to_vec(&line).unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+#[path = "line_tests.rs"]
+mod tests;

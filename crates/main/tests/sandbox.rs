@@ -931,12 +931,12 @@ fn a_confined_call_cannot_open_a_socket() {
             "shell",
             &json!({"command": command}),
         )]),
-        allow_verdict(),
         hello(),
     ])
     .unwrap();
     setup.provider(&server);
-    // The reviewer allows the call, which names no subject for a rule.
+    // The call names no subject for a rule, and it is unguarded, so it
+    // takes the confined fast path with no reviewer verdict.
     fs::write(
         setup.home().join("config.json"),
         serde_json::to_string(&json!({
@@ -955,12 +955,6 @@ fn a_confined_call_cannot_open_a_socket() {
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
-    let resolved = lines
-        .iter()
-        .find(|line| line["kind"] == "permission_resolved")
-        .expect("the socket call resolves");
-    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
-    assert_eq!(resolved["payload"]["decision"], "allow");
     let completed = lines
         .iter()
         .find(|line| {
@@ -998,4 +992,231 @@ fn a_repository_sandbox_key_is_ignored_through_the_binary() {
     let out = setup.fiber_run(&["config", "get", "sandbox.enabled"]);
     assert_eq!(out.code, Some(0));
     assert!(out.stdout.contains("false"));
+}
+
+/// A guarded confined call reaches the reviewer while an unguarded one
+/// takes the fast path: through the built binary, the reviewer's allow
+/// resolves the guarded `rm` between its request and its start, and the
+/// plain `echo` runs with no resolution at all, both starting confined.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_guarded_confined_call_meets_the_reviewer_not_the_fast_path() {
+    use fakes::ProviderServer;
+    use serde_json::{Value, json};
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let workspace = setup.root.path().join("w");
+    // The guarded command cleans up after itself: the marker directory
+    // exists before the run, and the allowed call removes it, so the run
+    // leaves nothing behind while proving the call ran.
+    fs::create_dir(workspace.join("tmp")).unwrap();
+    let guarded_command = "rm -rf tmp";
+    let plain_command = "echo hi";
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "guarded_1",
+            "shell",
+            &json!({"command": guarded_command}),
+        )]),
+        allow_verdict(),
+        stream(&[function_call(
+            "plain_1",
+            "shell",
+            &json!({"command": plain_command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // The reviewer allows the guarded call; no standing rules, so the
+    // guarded call must reach the reviewer and the plain call must take
+    // the fast path without one.
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&json!({
+            "model": "fake/m",
+            "reviewer": {"model": "fake/m"},
+            "sandbox": {"enabled": true}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let run = setup.fiber_run(&["ask", "clean up"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    assert!(!lines.is_empty(), "the session writes event lines");
+    // The action ids are minted per call: tell the calls apart by the
+    // requested command, then follow each id through its events.
+    let action = |command: &str| {
+        lines
+            .iter()
+            .find(|line| {
+                line["kind"] == "tool_call_requested"
+                    && line["payload"]["arguments"].to_string().contains(command)
+            })
+            .and_then(|line| line["action_id"].as_str())
+            .unwrap_or_else(|| panic!("a request for {command}"))
+            .to_owned()
+    };
+    let guarded_id = action(guarded_command);
+    let plain_id = action(plain_command);
+    let positions = |kind: &str, id: &str| {
+        lines
+            .iter()
+            .position(|line| line["kind"] == kind && line["action_id"] == id)
+            .unwrap_or_else(|| panic!("a {kind} line for {id}"))
+    };
+    for (name, id) in [("guarded", &guarded_id), ("plain", &plain_id)] {
+        let started = &lines[positions("tool_call_started", id)];
+        assert_eq!(
+            started["payload"]["confined"], true,
+            "{name} starts confined"
+        );
+    }
+    // The guarded call reaches the reviewer: its allow resolves after its
+    // request and before its start (`docs/permissions.md`, "What the log
+    // records").
+    let resolved = lines
+        .iter()
+        .position(|line| line["kind"] == "permission_resolved" && line["action_id"] == guarded_id)
+        .expect("a resolution for the guarded call");
+    assert!(resolved > positions("tool_call_requested", &guarded_id));
+    assert!(resolved < positions("tool_call_started", &guarded_id));
+    assert_eq!(lines[resolved]["payload"]["decided_by"], "reviewer");
+    assert_eq!(lines[resolved]["payload"]["decision"], "allow");
+    // The plain call takes the fast path: no decision line of its own
+    // (`docs/permissions.md`, "What the log records": a `permission_resolved`
+    // carries what decided it, and nothing else is written down).
+    assert!(
+        lines
+            .iter()
+            .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == plain_id)
+            .is_none(),
+        "the fast path writes no resolution"
+    );
+    // The guarded call ran: it created the marker and removed it.
+    assert!(
+        !workspace.join("tmp").exists(),
+        "the guarded call cleaned up after itself"
+    );
+    let plain_end = &lines[positions("tool_call_completed", &plain_id)];
+    let plain_text = plain_end["payload"]["content"]
+        .as_array()
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    assert!(
+        plain_text.contains("hi"),
+        "the plain call ran: {plain_text}"
+    );
+}
+
+/// A declared-confined call whose sandbox fails at spawn ends failed
+/// through the normal end event: the start still carries `confined: true`,
+/// the completion names the sandbox and its cause, and the command never
+/// runs. The workspace's unreadable hooks directory leaves the project's
+/// discovery answering, so the session starts, while the protected-path
+/// snapshot cannot record the entry before spawn; the sandbox itself
+/// stays available at declaration.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_spawn_failure_starts_confined_and_names_its_cause() {
+    use fakes::ProviderServer;
+    use serde_json::{Value, json};
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let workspace = setup.root.path().join("w");
+    fakes::git::git(&workspace, &["init", "-q"]);
+    // An unreadable hooks directory: discovery still answers, so the
+    // session starts, but the pre-spawn snapshot cannot record the entry.
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(
+        workspace.join(".git/hooks"),
+        fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let marker = workspace.join("marker");
+    let command = format!("touch {}", marker.display());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "spawn_1",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&json!({
+            "model": "fake/m",
+            "sandbox": {"enabled": true}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // No standing rules and no reviewer: the plain call takes the fast
+    // path, and the failure happens at spawn, past permission.
+
+    let run = setup.fiber_run(&["ask", "leave a marker"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let id = lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_requested"
+                && line["payload"]["arguments"].to_string().contains("marker")
+        })
+        .and_then(|line| line["action_id"].as_str())
+        .unwrap_or_else(|| panic!("a request for the marker call"))
+        .to_owned();
+    let positions = |kind: &str| {
+        lines
+            .iter()
+            .position(|line| line["kind"] == kind && line["action_id"] == id)
+            .unwrap_or_else(|| panic!("a {kind} line for {id}"))
+    };
+    let started = &lines[positions("tool_call_started")];
+    assert_eq!(
+        started["payload"]["confined"], true,
+        "the failed call starts confined"
+    );
+    let end = &lines[positions("tool_call_completed")];
+    assert_eq!(end["payload"]["status"], "failed", "the call fails");
+    let text = end["payload"]["content"]
+        .as_array()
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    assert!(
+        text.contains("The sandbox could not be applied"),
+        "the end names the sandbox: {text}"
+    );
+    assert!(
+        text.contains("could not be recorded"),
+        "the end names the cause: {text}"
+    );
+    assert!(!marker.is_file(), "no command ran after the apply failure");
 }

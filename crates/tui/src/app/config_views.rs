@@ -326,6 +326,33 @@ impl App {
         })
     }
 
+    /// Opens `/login` with `provider` focused, using the same swapped-view
+    /// and install-guard rules as `open_config_view`.
+    pub(crate) fn open_login_on(&mut self, provider: &str) -> Effect {
+        if self.installing() {
+            self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
+            return Effect::None;
+        }
+        self.draft.clear();
+        self.model_picker.close();
+        self.close_session_view();
+        self.config_views.open = None;
+        let open = match self.config_views.seam.clone() {
+            Some(seam) => {
+                let Some(workspace) = self.view_workspace() else {
+                    return Effect::None;
+                };
+                Open::Login(Login::open_on(
+                    &self.config_ctx(seam.as_ref(), &workspace),
+                    provider,
+                ))
+            }
+            None => Open::Unavailable("Log in", "/login"),
+        };
+        self.config_views.open = Some(open);
+        Effect::None
+    }
+
     /// Opens `view`, closing any open, its unsaved edit dropped. With no
     /// seam the view says it is not available.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
