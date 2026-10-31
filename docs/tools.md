@@ -619,6 +619,21 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `nonzero_exit` and `process.exit_code`. A command killed by a signal
   Fiber did not send is `failed` with code `signal` and `process.signal`.
   A timeout is as above; a cancellation is `cancelled`.
+- The output the model reads ends with a closing line that says how the
+  command ended. If the command's own output does not end in a newline, a
+  newline goes first, and the closing line ends with one:
+  - `Exit code N.` for an exit, 0 included;
+  - `Killed by SIGNAME.` for a signal;
+  - `Timed out after N ms and stopped.` for a timeout;
+  - `The monitor's deadline of N ms passed; start it again if you still need it.` for a monitor's deadline;
+  - `Cancelled and stopped.` for a cancellation;
+  - `The command was stopped, and Fiber cannot tell whether it completed.` for
+    `indeterminate`.
+
+  A notice that the job could not be opened goes on the line before it. On an
+  output Fiber kept whole, `Output was still held open.` goes on the line after
+  it. `process` and `details` carry the same facts for a client, which should
+  read them there rather than parse the text.
 - `details` is `{ "command": "<command>", "exit_code": N }`, or `"signal"`
   in place of `"exit_code"` when a signal killed it, so a client draws the
   command and how it ended. A confined Linux call that changes a protected
