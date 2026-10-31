@@ -784,7 +784,7 @@ fn mcp_configure(setup: &Setup, dir: &Path, debug: bool) {
 
 #[test]
 fn at_debug_an_mcp_image_result_writes_one_picture_run() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = mcp_fixture(
         &setup,
         &format!(

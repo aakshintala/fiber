@@ -185,7 +185,7 @@ fn search_then_call_kinds() -> Vec<&'static str> {
 /// echo's result reaches the third request.
 #[test]
 fn a_deferred_search_loads_before_the_call_it_loads() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = setup.guard();
     let dir = setup.fixture(
         &json!([echo_tool()]),
@@ -258,7 +258,7 @@ fn a_deferred_search_loads_before_the_call_it_loads() {
 /// search is declared.
 #[test]
 fn a_declare_in_full_server_declares_whole_with_no_search() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
@@ -293,7 +293,7 @@ fn a_declare_in_full_server_declares_whole_with_no_search() {
 /// full and no search is declared.
 #[test]
 fn without_deferred_tools_everything_is_full_with_no_search() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
@@ -320,7 +320,7 @@ fn without_deferred_tools_everything_is_full_with_no_search() {
 /// next to the other builtins, so no search is declared.
 #[test]
 fn an_echo_deferral_key_sends_echo_whole_with_no_search() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
@@ -356,7 +356,7 @@ fn an_echo_deferral_key_sends_echo_whole_with_no_search() {
 /// notice and still declares the search next to the deferred echo.
 #[test]
 fn a_tool_search_deferral_key_logs_one_notice_and_declares() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
@@ -395,7 +395,7 @@ fn a_tool_search_deferral_key_logs_one_notice_and_declares() {
 /// declares echo whole with no search and the rows keep echo's source.
 #[test]
 fn a_reload_applies_an_echo_deferral_key() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello(), hello()]).unwrap();
