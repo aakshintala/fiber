@@ -637,6 +637,7 @@ fn wheel_steps_three_display_lines_and_keeps_a_visible_selection_while_browsing(
     screen.failed("boom".to_owned());
     assert_eq!(below(&screen, &keys), ["Not saved: boom"]);
     let grown = heights(&keys, WIDTH);
+    // docs/tui.md:2100 — each column wraps inside its own width; [2, 2] is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(&grown[..2], &[2, 2], "wrapped actions sit in view");
     select(&mut screen, &keys, 5);
     assert!(matches!(
@@ -664,6 +665,7 @@ fn wheel_pulls_a_leaving_selection_to_the_nearest_shown_action() {
     let keys = keys();
     let mut screen = keys_screen();
     let grown = heights(&keys, WIDTH);
+    // docs/tui.md:2100 — each column wraps inside its own width; [2, 2] is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(&grown[..2], &[2, 2], "wrapped actions sit in view");
     assert!(matches!(
         screen.wheel(false, &keys, WIDTH, HEIGHT),
@@ -688,6 +690,7 @@ fn wheel_pulls_a_leaving_selection_to_the_nearest_shown_action() {
 fn wheel_up_into_a_wrapped_action_moves_at_most_three_display_lines() {
     let keys = keys();
     let grown = heights(&keys, WIDTH);
+    // docs/tui.md:2100 — each column wraps inside its own width; [2, 2, 2, 1, 1, 1] is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(
         &grown[..6],
         &[2, 2, 2, 1, 1, 1],
@@ -737,6 +740,7 @@ fn a_click_on_a_continuation_line_selects_its_action() {
     let mut screen = keys_screen();
     // The delete_session action wraps into three display lines.
     let start: usize = grown.iter().take(7).sum();
+    // docs/tui.md:2100 — each column wraps inside its own width; grown[7] == 3 is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(grown[7], 3);
     let outcome = screen.click(Spot::Row(start + 1), &keys, WIDTH, HEIGHT);
     assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
@@ -783,6 +787,7 @@ fn wheel_clamps_a_selection_sitting_on_the_window_edge() {
     let keys = keys();
     let mut screen = keys_screen();
     let grown = heights(&keys, WIDTH);
+    // docs/tui.md:2100 — each column wraps inside its own width; [2, 2, 2, 1, 1] is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(&grown[..5], &[2, 2, 2, 1, 1], "wrapped actions sit in view");
     select(&mut screen, &keys, 7);
     assert!(matches!(
@@ -806,6 +811,7 @@ fn wheel_clamps_at_the_last_action() {
     let keys = keys();
     let mut screen = keys_screen();
     let grown = heights(&keys, WIDTH);
+    // docs/tui.md:2100 — each column wraps inside its own width; [2, 2, 1] is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(
         &grown[grown.len().saturating_sub(3)..],
         &[2, 2, 1],
@@ -926,6 +932,7 @@ fn wheel_moves_short_steps_at_the_ends_and_holds_at_them() {
 fn wheel_at_zero_shown_height_changes_nothing() {
     let keys = keys();
     let grown = heights(&keys, WIDTH);
+    // docs/tui.md:2100 — each column wraps inside its own width; [2, 2] is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(&grown[..2], &[2, 2], "wrapped actions sit in view");
     let mut screen = keys_screen();
     assert!(matches!(
@@ -959,6 +966,7 @@ fn wheel_at_zero_shown_height_changes_nothing() {
 fn paging_counts_from_the_action_holding_the_line_top() {
     let keys = keys();
     let grown = heights(&keys, WIDTH);
+    // docs/tui.md:2100 — each column wraps inside its own width; [2, 2, 2, 1, 1, 1, 2] is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(
         &grown[..7],
         &[2, 2, 2, 1, 1, 1, 2],
@@ -1151,6 +1159,7 @@ fn wheel_in_a_clash_keeps_the_prompt() {
 #[test]
 fn columns_share_the_draw_width_past_the_gutter_and_separators() {
     let keys = keys();
+    // docs/tui.md:2100 — each column wraps inside its own width; (16, 20, 40) is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(columns(&keys, 80), (16, 20, 40));
     // Where the share runs, the three columns with their two
     // single-space separators and the two gutter columns fill the draw
@@ -1187,8 +1196,11 @@ fn columns_share_the_draw_width_past_the_gutter_and_separators() {
 fn delete_session_wraps_after_the_comma_at_80() {
     let keys = keys();
     let grown = heights(&keys, WIDTH);
+    // docs/tui.md:2100 — each column wraps inside its own width; one height per action is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(grown.len(), BINDINGS.len());
+    // docs/tui.md:2100 — each column wraps inside its own width; grown[7] == 3 is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(grown[7], 3, "delete_session takes three display lines");
+    // docs/tui.md:2100 — each column wraps inside its own width; grown[3] == 1 is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(grown[3], 1, "clear_then_quit takes one display line");
     let screen = keys_screen();
     let frame = screen.frame(&keys, WIDTH, HEIGHT);
@@ -1227,6 +1239,7 @@ fn an_overlong_word_breaks_inside_at_a_narrow_width() {
         .expect("delete_word");
     assert_eq!(delete_word, 12);
     let grown = heights(&keys, 44);
+    // docs/tui.md:2100 — each column wraps inside its own width; grown[delete_word] == 6 is that mechanism's deterministic output on the current BINDINGS widths (Column share: splits are the policy's output, pinned by test).
     assert_eq!(grown[delete_word], 6);
     let screen = keys_screen();
     let frame = screen.frame(&keys, 44, HEIGHT);
