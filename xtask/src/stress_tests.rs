@@ -211,6 +211,12 @@ fn stress_plan_emits_one_test_line_per_distinct_test() {
         TestRef {
             package: "main".to_owned(),
             binary: None,
+            name: "hub_start::tests::starts".to_owned(),
+            unit: false,
+        },
+        TestRef {
+            package: "main".to_owned(),
+            binary: None,
             name: "hub_start::tests::offers".to_owned(),
             unit: false,
         },
@@ -219,12 +225,6 @@ fn stress_plan_emits_one_test_line_per_distinct_test() {
             binary: None,
             name: "hub_start::tests::offers".to_owned(),
             unit: true,
-        },
-        TestRef {
-            package: "main".to_owned(),
-            binary: None,
-            name: "hub_start::tests::starts".to_owned(),
-            unit: false,
         },
     ];
     assert_eq!(
