@@ -197,7 +197,7 @@ fn the_frame_targets_hold_the_cross_and_a_target_per_display_line() {
         "{targets:?}"
     );
     // Every display line of every wrapped action takes a target, not
-    // one per action.
+    // one per action (`docs/tui.md`, "Bindings").
     let grown = crate::rebind::heights(app.keys(), 80);
     let frame = app.keys_frame(60).expect("the screen is open");
     let shown = crate::swapped::rows_height(&frame, 60);
