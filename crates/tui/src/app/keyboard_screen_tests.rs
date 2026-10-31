@@ -494,8 +494,7 @@ fn wheel_over_keys_steps_browse_not_the_conversation() {
     let shown_top = frame.list.top();
     // The first two actions each wrap to two display lines at this
     // width, so three display lines from the top land on display line
-    // 3, inside the second action: the window snaps to its first line,
-    // one action short of the old three-action step
+    // 3, inside the second action, where the window rests
     // (`docs/tui.md`, "Bindings").
     let grown = crate::rebind::heights(app.keys(), 80);
     assert!(
@@ -507,7 +506,7 @@ fn wheel_over_keys_steps_browse_not_the_conversation() {
     let frame = app.keys_frame(24).expect("the screen is open");
     assert_eq!(
         frame.list.top(),
-        first_line(&app, 1),
+        3,
         "one wheel step moves three display lines, not three actions: {grown:?}"
     );
     assert_eq!(shown_top, first_line(&app, 0));
@@ -582,7 +581,7 @@ fn wheel_over_a_notice_over_keys_moves_neither_list_nor_conversation() {
     );
     assert_eq!(app.top(), top, "the wheel left the conversation");
     // Above the slab the list shows: the wheel shifts its window three
-    // display lines from the fresh top, landing inside the second
+    // display lines from the fresh top, resting inside the second
     // action (`docs/tui.md`, "Bindings").
     let frame = app.keys_frame(24).expect("the screen is open");
     assert_eq!(frame.list.selected(), before);
@@ -596,15 +595,15 @@ fn wheel_over_a_notice_over_keys_moves_neither_list_nor_conversation() {
     assert_eq!(app.top(), top, "the wheel left the conversation");
     assert_eq!(
         app.keys_frame(24).expect("the screen is open").list.top(),
-        first_line(&app, 1),
+        3,
         "outside the slab the wheel reaches the list"
     );
 }
 
 /// The wrapper shifts the Browse window three display lines per call,
-/// keeping the selection while it shows: down from the top lands
-/// inside the second action, clamping the selection to the new top,
-/// and back up keeps it.
+/// keeping the selection while it shows: down from the top rests
+/// inside the second action, moving the selection to the action at
+/// the first visible line, and back up keeps it.
 #[test]
 fn keys_screen_wheel_shifts_browse_three_display_lines() {
     let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
@@ -616,11 +615,11 @@ fn keys_screen_wheel_shifts_browse_three_display_lines() {
     );
     assert_eq!(app.keys_screen_wheel(false), Effect::None);
     let frame = app.keys_frame(24).expect("the screen is open");
-    assert_eq!(frame.list.top(), first_line(&app, 1));
+    assert_eq!(frame.list.top(), 3);
     assert_eq!(
         frame.list.selected(),
         first_line(&app, 1),
-        "the selection clamps to the new top action"
+        "the selection moves to the action at the first visible line"
     );
     assert_eq!(app.keys_screen_wheel(true), Effect::None);
     let frame = app.keys_frame(24).expect("the screen is open");
@@ -644,7 +643,7 @@ fn keys_screen_wheel_through_an_open_notice_scrolls() {
     assert_eq!(app.keys_screen_wheel(false), Effect::None);
     assert_eq!(
         app.keys_frame(24).expect("the screen is open").list.top(),
-        first_line(&app, 1),
+        3,
         "the wrapper leaves the notice swallow to the router"
     );
 }
