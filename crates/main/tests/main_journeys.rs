@@ -22,13 +22,18 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
+use support::Deadline;
 use support::Setup;
 use support::journey::shows;
-use support::pty::Run;
+use support::pty::{Grid, Run};
+use support::{TRUECOLOUR, write_json};
 
 /// The release binary under test: the path in `FIBER_JOURNEY_BIN`. Fails
 /// naming the variable when unset or not executable, and never falls back
@@ -1447,6 +1452,390 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 "the context wheel left the conversation's scroll"
             );
             quit_journey(run);
+        }),
+    );
+}
+
+/// The first row containing `needle`.
+fn find_row(rows: &[String], needle: &str) -> Option<u16> {
+    rows.iter()
+        .position(|row| row.contains(needle))
+        .map(|y| u16::try_from(y).expect("the screen fits in a u16"))
+}
+
+/// A solid-colour 120 by 80 PNG fixture.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x78, 0x00, 0x00, 0x00, 0x50, 0x08, 0x02, 0x00, 0x00, 0x00, 0x5d, 0xf9, 0x26,
+    0xde, 0x00, 0x00, 0x00, 0x82, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0xed, 0xd0, 0x31, 0x0d, 0x00,
+    0x00, 0x08, 0x03, 0xb0, 0xbd, 0xb8, 0xc5, 0x27, 0xa6, 0x70, 0x41, 0x38, 0x9a, 0x54, 0x41, 0x53,
+    0x3d, 0x1c, 0x88, 0x02, 0xd1, 0xa2, 0x11, 0x2d, 0x5a, 0xb4, 0x05, 0xd1, 0xa2, 0x11, 0x2d, 0x5a,
+    0xb4, 0x05, 0xd1, 0xa2, 0x11, 0x2d, 0x5a, 0x34, 0xa2, 0x45, 0x23, 0x5a, 0xb4, 0x68, 0x44, 0x8b,
+    0x46, 0xb4, 0x68, 0xd1, 0x88, 0x16, 0x8d, 0x68, 0xd1, 0xa2, 0x11, 0x2d, 0x1a, 0xd1, 0xa2, 0x45,
+    0x23, 0x5a, 0x34, 0xa2, 0x45, 0x8b, 0x46, 0xb4, 0x68, 0x44, 0x8b, 0x16, 0x8d, 0x68, 0xd1, 0x88,
+    0x16, 0x2d, 0x1a, 0xd1, 0xa2, 0x11, 0x2d, 0x5a, 0x34, 0xa2, 0x45, 0x23, 0x5a, 0xb4, 0x68, 0x44,
+    0x8b, 0x46, 0xb4, 0x68, 0xd1, 0x88, 0x16, 0x8d, 0x68, 0xd1, 0xa2, 0x11, 0x2d, 0x1a, 0xd1, 0xa2,
+    0x45, 0x23, 0x5a, 0x34, 0xa2, 0x45, 0x8b, 0x46, 0xb4, 0x68, 0x44, 0x8b, 0x16, 0x8d, 0x68, 0xd1,
+    0x88, 0x16, 0x2d, 0x1a, 0xd1, 0xa2, 0x11, 0x2d, 0x5a, 0x34, 0xa2, 0x45, 0x23, 0x5a, 0xb4, 0x68,
+    0x44, 0x8b, 0x46, 0xb4, 0x68, 0xd1, 0x88, 0x16, 0x8d, 0x68, 0xd1, 0xa2, 0x11, 0x2d, 0x1a, 0xd1,
+    0xa2, 0x45, 0x23, 0x5a, 0x34, 0xa2, 0xff, 0x58, 0xd9, 0xb8, 0x78, 0xc2, 0xab, 0x96, 0xaa, 0xe8,
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// A click at cell (`x`, `y`).
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// Clicks the first cell of `text` on `grid`.
+fn click_text(run: &mut Run, grid: &Grid, text: &str) {
+    let row = find_row(&grid.rows, text).expect("the text row");
+    let col = u16::try_from(
+        grid.rows[usize::from(row)]
+            .find(text)
+            .expect("the text column"),
+    )
+    .expect("the row fits in a u16");
+    click(run, col, row);
+}
+
+const FRAME_END: &[u8] = b"\x1b[?2026l";
+
+/// The scripted turns: `reads` distinct PNG reads, grouped several to a
+/// step so one turn pays one model round trip per group rather than one
+/// per read, then closing text, then the same session's text-only turn.
+/// The turn still runs one tool call per image, so the session logs one
+/// completion per read and the ledger folds them into one group row.
+fn script_reads(setup: &Setup, inline: bool, reads: usize, with_tail: bool) {
+    for n in 0..reads {
+        fs::write(setup.workspace().join(format!("pic-{n:03}.png")), PNG).unwrap();
+    }
+    // The number of reads sharing one scripted step: 255 reads become
+    // 51 model steps, while the turn still runs one tool call per image.
+    const READS_PER_STEP: usize = 5;
+    let indexes: Vec<usize> = (0..reads).collect();
+    let mut steps: Vec<Value> = indexes
+        .chunks(READS_PER_STEP)
+        .map(|chunk| {
+            json!({"tool_calls": chunk.iter().map(|n| {
+                json!({"name": "read", "arguments": {"path": format!("pic-{n:03}.png")}})
+            }).collect::<Vec<_>>()})
+        })
+        .collect();
+    if with_tail {
+        let tail = (1..=30)
+            .map(|n| format!("- T{n:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        steps.push(json!({"text": ["Seen.", tail]}));
+    } else {
+        steps.push(json!({"text": ["Seen."]}));
+    }
+    steps.push(json!({"text": ["Second."]}));
+    write_json(&setup.workspace().join("s.json"), &json!({"steps": steps}));
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+            "tui": {"inline_images": inline}}),
+    );
+}
+
+/// A fake `xdg-open`/`open` first on the child's PATH, recording its
+/// arguments in `marker`: the viewer the caption click queues.
+fn viewer_shim(setup: &Setup, marker: &Path) -> String {
+    let bin = setup.root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let body = format!("printf '%s\\n' \"$@\" >> '{}'", marker.to_str().unwrap());
+    fakes::script(&bin, "xdg-open", &body);
+    fakes::script(&bin, "open", &body);
+    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap()
+    .into_string()
+    .unwrap()
+}
+
+/// The started turn finished: approval allowed, the turn done. The
+/// done signal is the turn's completed row, which the follow keeps in
+/// view no matter how long the turn's tail grows.
+fn started(run: &mut Run) {
+    let mut from = run.ready();
+    run.write(b"go\r");
+    loop {
+        let grid = run.wait_screen("approval or done", |grid| {
+            grid.contents.contains("Allow once") || grid.contents.contains("▣ completed")
+        });
+        if grid.contents.contains("▣ completed") {
+            break;
+        }
+        let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
+        from = run.wait_bytes(approval, FRAME_END, "the approval frame");
+        run.write(b"\r");
+    }
+    run.turn_finished(from);
+}
+
+/// The session directories under the workspace, oldest first.
+fn sessions(setup: &Setup) -> Vec<PathBuf> {
+    let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    let mut ids: Vec<PathBuf> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join("events.jsonl").is_file())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The logged path and size of every image part in `events`' tool
+/// completions, in log order.
+fn logged_images(text: &str) -> Vec<(String, u64, u64)> {
+    let mut out = Vec::new();
+    for line in support::complete_lines(text) {
+        if line.get("kind").and_then(Value::as_str) != Some("tool_call_completed") {
+            continue;
+        }
+        let content = line
+            .get("payload")
+            .and_then(|payload| payload.get("content"))
+            .and_then(Value::as_array);
+        for part in content.into_iter().flatten() {
+            if part.get("type").and_then(Value::as_str) == Some("image")
+                && let (Some(path), Some(width), Some(height)) = (
+                    part.get("path").and_then(Value::as_str),
+                    part.get("width").and_then(Value::as_u64),
+                    part.get("height").and_then(Value::as_u64),
+                )
+            {
+                out.push((path.to_owned(), width, height));
+            }
+        }
+    }
+    out
+}
+
+/// The logged path and size of the image the read of `wanted` completed
+/// in `text`, matching each completion to its request by `action_id`:
+/// the completion carries the stored copy under a fresh stem, while the
+/// request carries the `pic-NNN.png` source path. Calls sharing one
+/// scripted step can complete out of order, so the past-range image is
+/// found by its requested name rather than by completion position.
+fn image_named(text: &str, wanted: &str) -> Option<(String, u64, u64)> {
+    let mut sources: HashMap<String, String> = HashMap::new();
+    for line in support::complete_lines(text) {
+        if line.get("kind").and_then(Value::as_str) != Some("tool_call_requested") {
+            continue;
+        }
+        let payload = line.get("payload");
+        if payload
+            .and_then(|payload| payload.get("name"))
+            .and_then(Value::as_str)
+            != Some("read")
+        {
+            continue;
+        }
+        let Some(action) = line.get("action_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let path = payload
+            .and_then(|payload| payload.get("arguments"))
+            .and_then(|arguments| arguments.get("path"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        sources.insert(
+            action.to_owned(),
+            path.rsplit('/').next().unwrap_or(path).to_owned(),
+        );
+    }
+    for line in support::complete_lines(text) {
+        if line.get("kind").and_then(Value::as_str) != Some("tool_call_completed") {
+            continue;
+        }
+        let Some(action) = line.get("action_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if sources.get(action).map(String::as_str) != Some(wanted) {
+            continue;
+        }
+        let content = line
+            .get("payload")
+            .and_then(|payload| payload.get("content"))
+            .and_then(Value::as_array);
+        for part in content.into_iter().flatten() {
+            if part.get("type").and_then(Value::as_str) == Some("image")
+                && let (Some(path), Some(width), Some(height)) = (
+                    part.get("path").and_then(Value::as_str),
+                    part.get("width").and_then(Value::as_u64),
+                    part.get("height").and_then(Value::as_u64),
+                )
+            {
+                return Some((path.to_owned(), width, height));
+            }
+        }
+    }
+    None
+}
+
+/// The logged path and size of the read of `wanted` in `events`' tool
+/// completions, read under the setup's deadline: the hub logs each
+/// read's image as its tool completes, so the wait holds until all
+/// `reads` images landed and the wanted source's image is among them.
+fn image_for_read(setup: &Setup, events: &Path, reads: usize, wanted: &str) -> (String, u64, u64) {
+    let events = events.to_owned();
+    let waiting = events.clone();
+    let wanted_line = wanted.to_owned();
+    fakes::wait_until("all reads to log their image", setup.deadline, move || {
+        fs::read_to_string(&waiting).ok().is_some_and(|text| {
+            logged_images(&text).len() >= reads && image_named(&text, &wanted_line).is_some()
+        })
+    });
+    let text = fs::read_to_string(events).expect("the session log");
+    image_named(&text, wanted).expect("the wanted logged image")
+}
+
+/// The caption the ledger draws for the image at `path`: its file name
+/// and logged size.
+fn caption_of(path: &str, width: u64, height: u64) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    format!("▣ {name} · {width}×{height}")
+}
+
+/// 255 distinct PNG reads past the placeholder range, keeping a unique
+/// viewer target: the journey binary's run of the gate's 255-read
+/// journey, against the release binary after merge.
+#[test]
+fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
+    run_journey(
+        "images_past_the_placeholder_range_keep_a_unique_viewer_target",
+        // As in the earlier journeys: the body borrows no server, but the
+        // standard `catch_unwind` wrapper still records the failure.
+        std::panic::AssertUnwindSafe(|| {
+            // 255 distinct PNG reads: the first 254 fill the kitty placeholder
+            // colours, so the last image is the one past the range. It keeps its
+            // own viewer target without entering the inline display path: a
+            // click opens it, and the click itself transmits nothing
+            // (`docs/tui.md`, "Images").
+            const READS: usize = 255;
+            let mut setup = Setup::new();
+            // The 255-read run and its later screen and frame waits share one
+            // bounded wall-clock budget with room for load.
+            setup.deadline = Deadline::after(Duration::from_secs(120)); // ruling: #3504
+            script_reads(&setup, true, READS, false);
+            // A standing allow rule for `read`: 255 approval panels would bury
+            // the turn, and the reads need no review.
+            fs::write(
+                setup.home().join("rules"),
+                format!(
+                    "{}\n",
+                    json!({"decision": "allow", "tool": "read", "prefix": ""})
+                ),
+            )
+            .unwrap();
+            let marker = setup.workspace().join(".viewed");
+            let shim = viewer_shim(&setup, &marker);
+            let marker_value = marker.to_str().unwrap().to_owned();
+            let bin = journey_bin();
+            let mut env: Vec<(&str, &str)> = vec![
+                ("PATH", shim.as_str()),
+                ("FIBER_TEST_VIEW_MARKER", marker_value.as_str()),
+                ("FIBER_TEST_FAKE_KEY", "sk-test"),
+            ];
+            env.extend(TRUECOLOUR.iter().copied());
+            let mut run = Run::spawn_journey(&setup, 100, 30, &bin, &[], &env);
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            started(&mut run);
+            let sessions = sessions(&setup);
+            // The past-range image is `pic-254.png`: the first 254 reads fill
+            // the kitty placeholder colours. It is selected by its requested
+            // source path, never by completion position.
+            let (path, width, height) = image_for_read(
+                &setup,
+                &sessions[0].join("events.jsonl"),
+                READS,
+                "pic-254.png",
+            );
+            let caption = caption_of(&path, width, height);
+
+            // The turn's reads share one group row above the closing text; it
+            // draws without scrolling. Opening it reveals one row per call
+            // with its image's caption, the last carrying the past-range
+            // image, so its caption is clickable without opening its call.
+            // The turn already finished in `started`, so a grid showing the
+            // group row together with the completed paint has nothing left to
+            // render: the group row's position in that grid is final
+            // (`docs/testing/screens.md`, "Screens").
+            let grid = run.wait_screen("the settled reads group", |grid| {
+                grid.contents.contains("completed")
+                    && grid.rows.iter().any(|row| row.contains("Read 255 files"))
+            });
+            let from = run.output().len();
+            click_text(&mut run, &grid, "Read 255 files");
+            run.wait_bytes(from, FRAME_END, "the opened group frame");
+            // The opened group settles the same way: the past-range caption
+            // together with the completed paint proves every call row drew and
+            // the caption row's position is final. The click uses this wait's
+            // grid, never a fresh read.
+            let grid = run.wait_screen("the settled past-range caption", |grid| {
+                grid.contents.contains("completed")
+                    && grid.rows.iter().any(|row| row.contains(&caption))
+            });
+            // The caption click opens the viewer, never a display fetch: no
+            // transmit may follow it for the past-range image.
+            // The viewer open is the click's signal, so the test waits for
+            // the marker next.
+            click_text(&mut run, &grid, &caption);
+
+            // The click opens the viewer on the private copy, as for an
+            // in-range image: the past-range target resolves.
+            let marker_file = marker.clone();
+            let session = sessions[0]
+                .file_name()
+                .expect("the session directory name")
+                .to_string_lossy();
+            let name = Path::new(&path)
+                .file_name()
+                .expect("the image file name")
+                .to_string_lossy();
+            let expected = setup
+                .home()
+                .join("cache/images")
+                .join(format!("{session}-{name}"))
+                .to_string_lossy()
+                .into_owned();
+            let expected_line = expected.clone();
+            fakes::wait_until("the viewer to open", setup.deadline, move || {
+                fs::read_to_string(&marker_file)
+                    .is_ok_and(|opened| opened.lines().any(|line| line == expected_line))
+            });
+            assert_eq!(
+                fs::read_to_string(&marker).unwrap().trim(),
+                expected,
+                "the viewer opened the private image copy"
+            );
+            // The past-range image draws no placeholder grid: the row above
+            // its caption is the previous call's row, never a grid row.
+            let at = grid
+                .rows
+                .iter()
+                .position(|row| row.contains(&caption))
+                .expect("the past-range caption row");
+            assert!(at > 0, "the caption is not the first row");
+            assert!(
+                !grid.rows[at - 1].contains('\u{10EEEE}'),
+                "no placeholder grid above the past-range caption"
+            );
+
+            run.write(b"\x03\x03\r");
+            run.wait_screen("the primary screen with the resume line", |grid| {
+                !grid.alternate_screen
+                    && !grid.hide_cursor
+                    && grid.contents.contains("fiber resume")
+            });
+            let output = run.wait();
+            assert_eq!(output.status.code(), Some(0));
         }),
     );
 }

@@ -26,7 +26,7 @@ expression: "screen(&app, 160, 48)"
     The input box              Move focus from an empty input box into the rail (in an empty box)         ←
     The input box              Search those prompts                                                       Ctrl+R
     The input box              Move by word                                                               ⌥← ⌥→, Ctrl+← Ctrl+→
-    The input box              Delete a word                                                              ⌥Backspace
+    The input box              Delete a word                                                              ⌥Backspace, Ctrl+Backspace, Ctrl+W
     The input box              Delete to the start of the line                                            Ctrl+U
     The input box              Start or end of the line (where the terminal passes them)                  Ctrl+A Ctrl+E; ⌘← ⌘→
     The input box              Open the draft, or a pasted token, in $VISUAL or $EDITOR                   Ctrl+G · click the token

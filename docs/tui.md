@@ -1916,7 +1916,7 @@ through the `input_status` slot ("Extension seams").
 | Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
 | Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
-| Delete a word | `delete_word` | ⌥Backspace | |
+| Delete a word | `delete_word` | ⌥Backspace, Ctrl+Backspace, Ctrl+W | |
 | Delete to the start of the line | `delete_to_line_start` | Ctrl+U | |
 | Start or end of the line | `line_start_end` | Ctrl+A Ctrl+E; ⌘← ⌘→ where the terminal passes them | |
 | Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | `open_in_editor` | Ctrl+G | click the token |
@@ -2007,6 +2007,10 @@ A global action acts in all six. The rest act only where they are listed:
   `model_picker`.
 - Input and Steering: `line_break`, `search_prompts`, `move_word`,
   `delete_word`, `delete_to_line_start`, `line_start_end`, `paste_image`.
+- Every row in an overlay that takes text, as well: `move_word`,
+  `delete_word`, `delete_to_line_start` and `line_start_end`. That is an
+  approval's feedback, a question form's words row and its note, and
+  `text_input`.
 - Input: `send`, `recall_prompt`, `focus_rail`.
 - Steering: `amend_steering`.
 - Conversation: `delete_session`, `focus_next_prev`, `open_focused`,
