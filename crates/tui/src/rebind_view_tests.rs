@@ -263,6 +263,7 @@ fn home_80x24_wraps_delete_session_and_down_focuses_recall_prompt() {
         "recall_prompt focused after one down: {:?}",
         rows
     );
+    insta::assert_snapshot!("keys_home_80x24_wrapped_focus", screen(&app, 80, 24));
 }
 
 #[test]
