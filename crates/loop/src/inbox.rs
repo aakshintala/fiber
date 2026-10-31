@@ -230,9 +230,8 @@ impl Loop {
             // are here the wait does not block: what is already waiting is
             // drained as when steers were kept.
             let held = !self.deferred.is_empty();
-            for delivery in std::mem::take(&mut self.deferred) {
-                self.admit_idle(delivery, &mut input)?;
-            }
+            let deferred = std::mem::take(&mut self.deferred);
+            self.admit_idle_batch(deferred, &mut input)?;
             // Steers the previous turn kept start this one, in order,
             // ahead of whatever is already waiting. This holds after any
             // outcome, not only `interrupted`. While `closing` nothing
@@ -272,9 +271,8 @@ impl Loop {
                 // held deliveries are already admitted above: what arrived
                 // since is drained without blocking or re-announcing the
                 // queue, which did not move again.
-                for delivery in self.inbox.try_iter() {
-                    self.admit_idle(delivery, &mut input)?;
-                }
+                let waiting = self.inbox.try_iter();
+                self.admit_idle_batch(waiting, &mut input)?;
                 if let Some(at) = self.warming.take_stopped() {
                     warming = None;
                     deadline = self.idle_from(at);
@@ -290,11 +288,8 @@ impl Loop {
                         if let Some(hooks) = self.hooks.clone() {
                             self.drain_state(&hooks, None)?;
                         }
-                        let mut batch = vec![first];
-                        batch.extend(self.inbox.try_iter());
-                        for delivery in batch {
-                            self.admit_idle(delivery, &mut input)?;
-                        }
+                        let batch = std::iter::once(first).chain(self.inbox.try_iter());
+                        self.admit_idle_batch(batch, &mut input)?;
                         if let Some(at) = self.warming.take_stopped() {
                             warming = None;
                             deadline = self.idle_from(at);
@@ -323,9 +318,8 @@ impl Loop {
                 if !offered {
                     return Ok(None);
                 }
-                for delivery in std::mem::take(&mut self.deferred) {
-                    self.admit_idle(delivery, &mut input)?;
-                }
+                let deferred = std::mem::take(&mut self.deferred);
+                self.admit_idle_batch(deferred, &mut input)?;
                 // A turn starting after `close` on a session message's back
                 // takes no person steer, as one `ending` starts does
                 // (`docs/tools.md`, "Messaging other sessions").
@@ -383,9 +377,8 @@ impl Loop {
             })
             .collect();
         input.pieces.extend(rest);
-        for delivery in std::mem::take(&mut self.deferred) {
-            self.admit_idle(delivery, &mut input)?;
-        }
+        let deferred = std::mem::take(&mut self.deferred);
+        self.admit_idle_batch(deferred, &mut input)?;
         // Every turn from here on starts after `close`.
         self.ending.after_close = true;
         if session_message::has_session_message(&input.pieces) {
@@ -400,9 +393,8 @@ impl Loop {
                 self.forget_input(&input);
                 return Ok(Some(input));
             }
-            for delivery in self.inbox.try_iter() {
-                self.admit_idle(delivery, &mut input)?;
-            }
+            let waiting = self.inbox.try_iter();
+            self.admit_idle_batch(waiting, &mut input)?;
             let running = self.running();
             self.record_waiting_extension_jobs()?;
             let running = self.model_running(running);
@@ -413,9 +405,8 @@ impl Loop {
             if running.is_empty() {
                 // A job's end is sent before `running` stops listing it, so
                 // what is waiting now holds the last ends.
-                for delivery in self.inbox.try_iter() {
-                    self.admit_idle(delivery, &mut input)?;
-                }
+                let waiting = self.inbox.try_iter();
+                self.admit_idle_batch(waiting, &mut input)?;
                 if input.pieces.is_empty() {
                     return Ok(None);
                 }
@@ -428,11 +419,8 @@ impl Loop {
             }
             match self.recv_until(None, false, None)? {
                 InboxRecv::Delivery(first) => {
-                    let mut batch = vec![first];
-                    batch.extend(self.inbox.try_iter());
-                    for delivery in batch {
-                        self.admit_idle(delivery, &mut input)?;
-                    }
+                    let batch = std::iter::once(first).chain(self.inbox.try_iter());
+                    self.admit_idle_batch(batch, &mut input)?;
                 }
                 InboxRecv::Closed | InboxRecv::Idle | InboxRecv::Unattended | InboxRecv::Warm => {
                     return Ok(None);
@@ -447,8 +435,9 @@ impl Loop {
         if let Some(hooks) = self.hooks.clone() {
             self.drain_state(&hooks, Some(turn))?;
         }
-        let waiting: Vec<Delivery> = self.inbox.try_iter().collect();
-        for delivery in waiting {
+        let waiting = self.inbox.try_iter();
+        let mut pending = self.inbox.pending(waiting);
+        while let Some(delivery) = pending.next() {
             self.admit_running(delivery, turn)?;
         }
         // Commands held by an approval or interaction wait start only at
@@ -560,6 +549,23 @@ impl Loop {
                 Ok(Waited::Again)
             }
         }
+    }
+
+    /// Keeps the unhandled snapshot registered while any command starts
+    /// synchronous work. Nested busy drains must not take its remainder,
+    /// but the reconnect collector must still see it.
+    // debt: raw receivers remain for waits that cannot start reconnects;
+    // require leased admission before adding another starting consumer.
+    fn admit_idle_batch(
+        &mut self,
+        deliveries: impl IntoIterator<Item = Delivery>,
+        input: &mut TurnInput,
+    ) -> Result<(), Error> {
+        let mut pending = self.inbox.pending(deliveries);
+        while let Some(delivery) = pending.next() {
+            self.admit_idle(delivery, input)?;
+        }
+        Ok(())
     }
 
     /// `delivery` while the loop is still collecting a turn's input.

@@ -15,6 +15,7 @@ mod support;
 
 use serde_json::json;
 use std::fs;
+use support::hold::Hold;
 use support::pty::Run;
 use support::{Deadline, Setup, write_json};
 
@@ -210,25 +211,13 @@ fn stop_asks_to_close_all_like_close() {
 /// The `/jobs` slash-list row, carrying its aliases.
 const JOBS_ROW: &str = "jobs /tasks /ps";
 
-/// A held background shell job: dropping the guard kills the job's
-/// group, so a failure leaks nothing.
-struct Release {
-    file: fs::File,
-    guard: fakes::Watchdog,
-}
-
 /// A setup whose scripted turn starts one background shell job, held
 /// on a FIFO: the job reports its group id on the ready FIFO, then
 /// blocks until `/close` stops it. The fake provider installs first;
 /// the scripted `config.json` lands after `setup.provider`, which
 /// rewrites it. Returns the setup with its provider server, held to
 /// the test's end, the job's ready FIFO and its release.
-fn jobs_setup() -> (
-    Setup,
-    fakes::ProviderServer,
-    fakes::children::Ready,
-    Release,
-) {
+fn jobs_setup() -> (Setup, fakes::ProviderServer, fakes::children::Ready, Hold) {
     let setup = Setup::new();
     let workspace = setup.workspace();
     // The job reports its group id here; the read opens before the
@@ -236,18 +225,10 @@ fn jobs_setup() -> (
     let ready_fifo = setup.root.path().join("ready.fifo");
     fakes::fifo(&ready_fifo);
     let ready = fakes::children::Ready::at(&ready_fifo, &|| setup.deadline.left());
-    // Held open read-write, so the job's read blocks until `/close`.
-    let hold = workspace.join("hold");
-    fakes::fifo(&hold);
-    let held = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&hold)
-        .unwrap();
     let command = format!(
         "echo $$ > '{}'; head -n 1 '{}'",
         ready_fifo.display(),
-        hold.display()
+        workspace.join("hold").display()
     );
     write_json(
         &workspace.join("s.json"),
@@ -284,10 +265,10 @@ fn jobs_setup() -> (
         ),
     )
     .unwrap();
-    // The job's guard kills its group if the test fails before the
-    // release lets the read finish.
-    let guard = fakes::Watchdog::matching(hold.to_str().unwrap());
-    (setup, server, ready, Release { file: held, guard })
+    // The helper's guard kills the job's group if the test fails before
+    // the release lets the read finish.
+    let hold = Hold::park(&setup, &command);
+    (setup, server, ready, hold)
 }
 
 /// A setup whose scripted turn answers at once: the attached session
@@ -405,8 +386,7 @@ fn running_case(command: &str) {
         &setup,
         "the closed session to exit",
     );
-    let Release { file: _held, guard } = release;
-    guard.stand_down(setup.deadline.cleanup_phase());
+    release.stand_down(setup.deadline.cleanup_phase());
     quit(run, command);
 }
 

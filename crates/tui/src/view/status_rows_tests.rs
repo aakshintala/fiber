@@ -143,8 +143,13 @@ fn waiting(session: &str) -> Line {
 
 /// A `session_status` with `context` tokens of `window`.
 fn context_status(tokens: u64, window: u64) -> Line {
+    context_status_for(SESSION, tokens, window)
+}
+
+/// A `session_status` with context for `session`.
+fn context_status_for(session: &str, tokens: u64, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "session_status",
         serde_json::json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
@@ -160,8 +165,13 @@ fn context_status(tokens: u64, window: u64) -> Line {
 
 /// A `preamble_built` naming `model` with `window`.
 fn preamble(model: &str, window: u64) -> Line {
+    preamble_for(SESSION, model, window)
+}
+
+/// A `preamble_built` for `session` naming `model` and `window`.
+fn preamble_for(session: &str, model: &str, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "preamble_built",
         serde_json::json!({
             "reason": "start", "model": model, "context_window": window,
@@ -282,6 +292,43 @@ fn row_one_shows_the_context_share_and_a_zero_window_shows_none() {
             .contains("ctx"),
         "{screen}"
     );
+}
+
+/// The input box's status row as text: the context bar lives there
+/// (`docs/tui.md`, "The input box"), found through its status target
+/// so the panel's cards cannot leak into the per-session asserts.
+fn box_row(app: &App) -> String {
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    let y = targets
+        .iter()
+        .filter(|target| matches!(target.id, TargetId::Panel(Spot::Status)))
+        .map(|target| target.rect.y)
+        .max()
+        .expect("a status row");
+    (0..100).map(|x| buf[(x, y)].symbol()).collect()
+}
+
+#[test]
+fn status_row_context_comes_from_the_attached_session_only() {
+    let mut app = attached(100, 30);
+    app.on_line(context_status(50, 100));
+    assert!(box_row(&app).contains("50%"), "{}", box_row(&app));
+
+    // The box row always carries the ctx segment: unknown figures show
+    // as dashes, so per-session sourcing asserts the figures, not the
+    // label. SESSION's half-window share is 50%.
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    app.on_line(preamble_for(OTHER, "test/model", 200));
+    let unknown = box_row(&app);
+    assert!(unknown.contains("—"), "{unknown:?}");
+    assert!(!unknown.contains("50"), "{unknown:?}");
+
+    app.on_line(context_status_for(OTHER, 12, 200));
+    let refreshed = box_row(&app);
+    assert!(refreshed.contains("6%"), "{refreshed:?}");
+    assert!(!refreshed.contains("50"), "{refreshed:?}");
 }
 
 #[test]

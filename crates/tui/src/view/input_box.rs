@@ -271,12 +271,10 @@ fn status_left(workspace: &str, room: usize) -> StatusRow {
 /// first frame.
 fn ctx_segment(app: &App) -> Segment {
     let panel = app.panel_state();
-    let window = panel.window().filter(|window| *window > 0);
-    let known = window.and_then(|window| {
-        panel
-            .status()
-            .and_then(|status| status.context.as_ref())
-            .map(|context| (window, context))
+    let known = app.session().and_then(|session| {
+        let window = panel.window_for(session).filter(|window| *window > 0)?;
+        let context = panel.status_for(session)?.context.as_ref()?;
+        Some((window, context))
     });
     let mut spans = vec![
         Span::styled("ctx", style(Role::Muted)),
@@ -471,20 +469,20 @@ fn put_status_row(
 fn row_input(app: &App, flat: bool) -> InputStatus<'_> {
     let panel = app.panel_state();
     let status = panel.status();
-    let window = panel.window().filter(|window| *window > 0);
+    let known = app.session().and_then(|session| {
+        let window = panel.window_for(session).filter(|window| *window > 0)?;
+        let context = panel.status_for(session)?.context.as_ref()?;
+        Some((window, context))
+    });
     InputStatus {
         workspace: status.map(|status| status.workspace.as_str()),
         model: panel
             .model()
             .or_else(|| status.map(|status| status.model.as_str())),
         thinking: panel.thinking(),
-        context: window.and_then(|window| {
-            status
-                .and_then(|status| status.context.as_ref())
-                .map(|context| Context {
-                    tokens: context.tokens,
-                    window,
-                })
+        context: known.map(|(window, context)| Context {
+            tokens: context.tokens,
+            window,
         }),
         flat,
     }

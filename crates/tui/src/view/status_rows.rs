@@ -211,6 +211,7 @@ fn session_segments(app: &App) -> Vec<Segment> {
             spots: vec![(at, wide, Spot::Branch)],
         });
     }
+
     if let Some(spend) = app.attached_spend() {
         // With a budget the segment reads billed spend against it, as
         // the Session card does: a subscription bills nothing per call
@@ -476,7 +477,11 @@ fn branch_name(panel: &crate::app::panel::PanelState) -> Option<BranchName<'_>> 
 fn status_input<'a>(app: &'a App, files: &'a [ChangedFile<'a>], flat: bool) -> StatusRows<'a> {
     let panel = app.panel_state();
     let status = panel.status();
-    let window = panel.window().filter(|window| *window > 0);
+    let known = app.session().and_then(|session| {
+        let window = panel.window_for(session).filter(|window| *window > 0)?;
+        let context = panel.status_for(session)?.context.as_ref()?;
+        Some((window, context))
+    });
     StatusRows {
         cards: app.panel_cards().to_vec(),
         session: SessionCard {
@@ -487,14 +492,10 @@ fn status_input<'a>(app: &'a App, files: &'a [ChangedFile<'a>], flat: bool) -> S
                 .or_else(|| status.map(|status| status.model.as_str())),
             thinking: panel.thinking(),
             thinking_now: panel.thinking_now(),
-            context: window.and_then(|window| {
-                status
-                    .and_then(|status| status.context.as_ref())
-                    .map(|context| SessionContext {
-                        tokens: context.tokens,
-                        window,
-                        trigger_at: panel.trigger_at(),
-                    })
+            context: known.map(|(window, context)| SessionContext {
+                tokens: context.tokens,
+                window,
+                trigger_at: panel.trigger_at(),
             }),
             spend: status
                 .map(|status| Spend::Status(&status.spend))
