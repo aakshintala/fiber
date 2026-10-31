@@ -203,10 +203,6 @@ impl Hubbed {
         self.client.as_ref().expect("the client is connected")
     }
 
-    fn client_mut(&mut self) -> &mut Socket {
-        self.client.as_mut().expect("the client is connected")
-    }
-
     /// Starts a session in `workspace` with `content` under command `id`,
     /// subscribes `sub_id` full to it, and waits for its first turn to
     /// complete.
@@ -771,7 +767,7 @@ fn wait_for_leaf_unheld(
     mut on_probe: impl FnMut(usize),
     on_held: impl FnOnce(),
 ) {
-    let client = hubbed.client_mut();
+    let client = hubbed.client.as_mut().expect("the client is connected");
     let wait = client.start_wait();
     // Sends and reads use the same wait; no probe renews it.
     let mut on_held = Some(on_held);
