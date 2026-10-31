@@ -381,10 +381,6 @@ fn resume_session(
 /// failure.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
-)]
-#[allow(
-    clippy::too_many_arguments,
     reason = "one resumed assembly needs its log, fold, prompt, mode, clock, signals and executable"
 )]
 pub(crate) fn assemble_resumed(
