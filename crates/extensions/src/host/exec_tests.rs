@@ -9,6 +9,8 @@
 )]
 
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -1774,41 +1776,107 @@ fn full_duplex_echo_neither_deadlocks_nor_retains() {
     );
 }
 
-/// An escaped stdin holder does not hang the run: the child forks a
-/// background sleep inheriting stdin, then exits without draining, with
-/// input larger than the pipe. The hook's deadline stops the run within
-/// the existing bounds (deadline, `GRACE`, `DRAIN`): the group is
-/// signalled first, the writer closes stdin at the run's end, and the
-/// run returns instead of parking on the full pipe.
+/// An escaped stdin holder does not hang the run: the leader exits, then an
+/// escaped child holds stdin and both output pipes while it waits on a FIFO.
+/// The test releases the child only after the run reaches its drain bound.
 #[test]
 fn an_escaped_stdin_holder_does_not_hang_the_run() {
     let (_dir, cwd) = dir("fiber-exec-stdin-holder");
     let clock = FakeClock::new();
     let ready = ready_in(&cwd);
-    // The background holder keeps fd 3, duplicated from stdin before the
-    // fork: dash gives a background job `/dev/null` stdin otherwise, and
-    // the holder would prove nothing about the run's input pipe.
+    let release_path = cwd.join("release.fifo");
+    let leader_gate_path = cwd.join("leader-gate.fifo");
+    fakes::fifo(&release_path);
+    fakes::fifo(&leader_gate_path);
+    // fd 3 keeps the run's input pipe open while the escaped child waits on
+    // the test-owned FIFO. The leader gate keeps its group alive until the
+    // child has escaped and opened that FIFO.
+    let escaped_child = r#"
+        POSIX::setsid() or die $!;
+        $SIG{HUP} = "IGNORE";
+        $SIG{TERM} = "IGNORE";
+        open my $ready, ">>", $ARGV[0] or die $!;
+        print $ready "$$\n";
+        close $ready;
+        open STDIN, "<", $ARGV[1] or die $!;
+        open my $opened, ">>", $ARGV[0] or die $!;
+        print $opened "$$\n";
+        close $opened;
+        my $line = <STDIN>;
+        die "no release" unless defined $line;
+        open my $ack, ">>", $ARGV[0] or die $!;
+        print $ack "$$\n";
+        close $ack;
+        sleep 3600 while 1;
+    "#;
     let script = format!(
-        "exec 3<&0\n(exec sleep 1000 <&3) &\necho $$ > '{}'\nexit 0\n",
-        ready.path().display()
+        "exec 3<&0\necho $$ > '{ready}'\nperl -MPOSIX -e '{escaped_child}' '{ready}' '{release}' <&3 &\nread -r _ < '{leader_gate}'\n",
+        ready = ready.path().display(),
+        release = release_path.display(),
+        leader_gate = leader_gate_path.display()
     );
+    let mut release_writer = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&release_path)
+        .expect("open the escaped holder's release fifo");
+    let mut leader_gate = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&leader_gate_path)
+        .expect("open the original leader's gate fifo");
     let deadline = clock.now() + Duration::from_millis(500);
     let mut req = sh(&script, cwd, CAP);
     req.input = Some(vec![b'y'; 1 << 18]);
     let (test_events_tx, test_events_rx) = mpsc::channel();
     req.test_events = Some(test_events_tx);
     let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
-    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
+    let pgid = ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN))[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    // At the callback's deadline the run stops, although nothing
-    // dropped its cancel; the group signal frees the parked writer.
+    let escaped_pgid = ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN))[0];
+    let escaped_watchdog = fakes::Watchdog::group(escaped_pgid);
+    let opened = ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN))[0];
+    assert_eq!(
+        opened, escaped_pgid,
+        "the escaped child opened the release fifo"
+    );
+    assert!(
+        group::alive(pgid),
+        "the original leader waits at its gate until the child escapes"
+    );
+
+    leader_gate
+        .write_all(b"exit\n")
+        .expect("release the original leader");
+    drop(leader_gate);
+    let pgid_for_wait = pgid;
+    fakes::wait_until(
+        "the original process group to empty",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || !group::alive(pgid_for_wait),
+    );
+    assert!(
+        !group::alive(pgid),
+        "the leader gate empties the original group"
+    );
+
     step_to_deadline(&clock, deadline);
-    let kill_at = clock.now() + Duration::from_millis(800);
-    // This test alone moves the fake clock. A miss reports the state the
-    // run had reached instead of only the park mismatch, not a
-    // deterministic repro: no pause point reaches the reader/supervisor
-    // order behind the flake.
-    if let Err(miss) = clock.try_advance_when_parked(Some(kill_at), None, GRACE, DEADLINE) {
+    let kill_at = clock.now() + GRACE;
+    let drain_until = clock.now() + DRAIN;
+    assert!(
+        clock.await_parked(drain_until, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "the escaped holder pins the supervisor at the drain bound"
+    );
+    release_writer
+        .write_all(b"release\n")
+        .expect("release the escaped holder");
+    let released = ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN))[0];
+    assert_eq!(released, escaped_pgid, "the escaped child read the release");
+    drop(release_writer);
+
+    // The FIFO pins the process and EOF state, so the drain bound is the
+    // only park after the deadline. The event stream remains diagnostic.
+    if let Err(miss) = clock.try_advance_when_parked(Some(drain_until), None, DRAIN, DEADLINE) {
         let parks: Vec<super::ExecTestEvent> = test_events_rx
             .try_iter()
             .filter(|event| matches!(event, super::ExecTestEvent::Park { .. }))
@@ -1834,21 +1902,30 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
             None => parks.last().copied(),
         };
         let state = match observed {
-            Some(event) => describe_park_event(&event, kill_at, None),
+            Some(event) => describe_park_event(&event, kill_at, Some(drain_until)),
             None => format!("no park observation matched the watched instant {watched:?}"),
         };
         panic!(
-            "the stdin-holder run missed its grace park at kill_at ({kill_at:?}): {miss}; {state}"
+            "the stdin-holder run missed its drain park at drain_until ({drain_until:?}): {miss}; {state}"
         );
     }
-    let ran = Deadline::after(DEADLINE)
+    let ran = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done)
-        .expect("waited {DEADLINE:?} for the stdin-holder run")
+        .expect("waited {MUST_SUCCEED_WITHIN:?} for the stdin-holder run")
         .expect("the stdin-holder run returns within its bounds");
     assert!(ran.timed_out, "the deadline stopped the run");
     assert!(
         !group::alive(pgid),
-        "the run returned only once the group was empty"
+        "the run returned only once the original group was empty"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
+    assert!(
+        fakes::kill_group(escaped_pgid, "KILL").expect("kill the escaped holder group"),
+        "the escaped holder remains until test cleanup"
+    );
+    assert!(
+        fakes::group_empties(escaped_pgid, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "the escaped holder group empties after the kill"
+    );
+    escaped_watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
