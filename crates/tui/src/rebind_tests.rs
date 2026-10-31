@@ -841,6 +841,53 @@ fn an_action_taller_than_the_window_shows_its_top_lines() {
     assert_eq!(frame.list.top(), line);
 }
 
+/// The wheel moves three display lines a step even at an action
+/// taller than the window: down from its first line and up from the
+/// first line after it each move the top, never stalling on the
+/// action's start (`docs/tui.md`, "Swapped views").
+#[test]
+fn wheel_moves_three_display_lines_at_a_taller_than_window_action() {
+    let keys = keys();
+    let width: usize = 44;
+    let height: usize = 6;
+    let grown = heights(&keys, width);
+    assert!(
+        grown[6] > height.saturating_sub(2),
+        "the tall action overflows the window: {grown:?}"
+    );
+    let first = |at: usize| grown.iter().take(at).sum::<usize>();
+    // Down from the tall action's first line: three lines down stays
+    // inside it, so the top advances three display lines.
+    let mut down = keys_screen();
+    let outcome = down.click(Spot::Row(first(6)), &keys, width, height);
+    assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
+    assert_eq!(down.frame(&keys, width, height).list.top(), first(6));
+    assert!(matches!(
+        down.wheel(false, &keys, width, height),
+        Outcome::Nothing
+    ));
+    let down_top = down.frame(&keys, width, height).list.top();
+    // Up from the first line after it: three lines up stays inside
+    // the tall action, so the top retreats three display lines. Both
+    // directions run before either asserts, so one failure names both
+    // tops.
+    let mut up = keys_screen();
+    let outcome = up.click(Spot::Row(first(7)), &keys, width, height);
+    assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
+    assert_eq!(up.frame(&keys, width, height).list.top(), first(7));
+    assert!(matches!(
+        up.wheel(true, &keys, width, height),
+        Outcome::Nothing
+    ));
+    let up_top = up.frame(&keys, width, height).list.top();
+    assert!(
+        down_top == first(6).saturating_add(3) && up_top == first(7).saturating_sub(3),
+        "the wheel stalls at the tall action: down left {down_top}, want {}; up left {up_top}, want {}",
+        first(6).saturating_add(3),
+        first(7).saturating_sub(3),
+    );
+}
+
 /// The wheel in a capture is swallowed, never a captured key: the
 /// capture waits on.
 /// (`docs/tui.md:576`).
