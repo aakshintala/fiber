@@ -323,7 +323,9 @@ disagree; a `connecting` server shows no count until it lists.
 
 `mcp_reconnect` is a driver command that restarts one failed server, as
 reload restarts changed and dead servers above, and answers with its
-outcome. It restarts only the server it names. It is rejected `busy` while
+outcome. It restarts only the server it names. A reconnect for a server that
+is already starting or `ready` starts nothing and is still accepted, so
+reconnects in quick succession start the server once. It is rejected `busy` while
 a turn runs, `invalid_arguments` for a server nothing declares, and
 `mcp_server_unapproved` for a repository's server nobody approved, with the
 advice `fiber approve`, since the session would never start it ("A
