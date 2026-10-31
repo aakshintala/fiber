@@ -720,7 +720,9 @@ fn update_nightly_floored_extension_to_newest_nightly() {
                     .unwrap(),
             )
             .unwrap();
+            // docs/extensions.md:1797, 1805-1807.
             assert_eq!(record["version"], JOURNEY_NIGHTLY_NEXT, "{record}");
+            // docs/extensions.md:1798-1799.
             assert_eq!(record["floor"], JOURNEY_NIGHTLY, "{record}");
         }),
     );

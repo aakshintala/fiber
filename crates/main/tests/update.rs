@@ -522,9 +522,11 @@ fn nightly_update_moves_a_nightly_floored_extension_to_the_newest_nightly() {
         &fs::read_to_string(setup.home().join("extensions/anthropic/.fiber.json")).unwrap(),
     )
     .unwrap();
+    // docs/extensions.md:1797, 1805-1807.
     assert_eq!(record["version"], NIGHTLY_NEXT, "{record}\n{}", run.stderr);
     // The archive adoption keeps the installed floor: the move lands on
     // the new nightly, and the old nightly stays the minimum.
+    // docs/extensions.md:1798-1799.
     assert_eq!(record["floor"], NIGHTLY, "{record}\n{}", run.stderr);
     assert_eq!(record["requested"], true, "{record}\n{}", run.stderr);
 }
@@ -560,7 +562,9 @@ fn nightly_update_keeps_a_stable_floored_extension_outside_the_archive() {
         &fs::read_to_string(setup.home().join("extensions/widgets/.fiber.json")).unwrap(),
     )
     .unwrap();
+    // docs/extensions.md:1805-1807.
     assert_eq!(record["version"], Sidecar::VERSION, "{record}");
+    // docs/extensions.md:1798-1799.
     assert_eq!(record["floor"], Sidecar::VERSION, "{record}");
 }
 

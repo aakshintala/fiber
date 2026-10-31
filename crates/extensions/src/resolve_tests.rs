@@ -263,8 +263,8 @@ fn meets_orders_stable_and_nightly_forms() {
 
 #[test]
 fn newest_within_accepts_a_nightly_minimum_where_its_base_passes() {
-    // docs/releasing.md, "Versions": a nightly minimum orders
-    // with its base triple, below the same-base stable release.
+    // Contract: docs/extensions.md:1797, 1805-1807. A nightly minimum
+    // orders with its base triple, below the same-base stable release.
     let all = tags(&["v1.2.0", "v1.5.0", "v2.0.0"]);
     // A nightly minimum orders with its base triple: the same-base
     // stable tag still wins, below the base nothing qualifies.
@@ -341,8 +341,8 @@ fn meets_orders_a_nightly_have_below_its_base_stable() {
 
 #[test]
 fn a_nightly_minimum_counts_nightly_tags_in_newest_within() {
-    // The ticket's rule: a pre-release tag counts when some minimum is
-    // itself a pre-release, and sorts below the stable release on its base.
+    // Contract: docs/extensions.md:1797, 1805-1807. A pre-release tag
+    // counts when some minimum is itself a pre-release.
     let w = wants(&[("your install", "0.0.1-nightly.20240101")]);
     let t = tags(&["v0.0.1-nightly.20240101", "v0.0.1-nightly.20240102"]);
     assert_eq!(
@@ -369,8 +369,8 @@ fn a_nightly_minimum_counts_nightly_tags_in_newest_within() {
 
 #[test]
 fn a_nightly_minimum_counts_nightly_tags_in_pick() {
-    // The lowest nightly at or above the nightly minimum wins, not the
-    // newest tag.
+    // Contract: docs/extensions.md:1782, 1805-1807. The lowest nightly
+    // at or above the nightly minimum wins, not the newest tag.
     let w = wants(&[("your install", "0.0.1-nightly.20240101")]);
     let t = tags(&["v0.0.1-nightly.20240101", "v0.0.1-nightly.20240102"]);
     assert_eq!(pick("h", &w, &t).unwrap(), "v0.0.1-nightly.20240101");
@@ -386,8 +386,8 @@ fn a_nightly_minimum_counts_nightly_tags_in_pick() {
 
 #[test]
 fn a_stable_minimum_never_takes_a_nightly_tag() {
-    // The ticket's rule counts a nightly only for a pre-release minimum:
-    // a stable floor keeps the stable-only set in both resolvers.
+    // Contract: docs/extensions.md:1805-1807. A nightly counts only
+    // when some minimum is itself a pre-release.
     let w = wants(&[("your install", "0.0.1")]);
     let t = tags(&["v0.0.1", "v0.0.1-nightly.20240102"]);
     assert_eq!(newest_within("h", &w, &t).unwrap(), "v0.0.1");
@@ -403,9 +403,9 @@ fn a_stable_minimum_never_takes_a_nightly_tag() {
 
 #[test]
 fn a_nightly_floor_prefers_stable_newest_but_nightly_lowest() {
-    // Same-base stable sorts above its nightly, so the update-everything
-    // choice takes stable while the dependency choice takes the lowest
-    // qualifying nightly.
+    // Contract: docs/extensions.md:1782, 1797, 1805-1807. Same-base
+    // stable sorts above its nightly, so newest takes stable and pick
+    // takes the lowest qualifying nightly.
     let w = wants(&[("your install", "0.0.1-nightly.20240101")]);
     let t = tags(&["v0.0.1-nightly.20240102", "v0.0.1"]);
     assert_eq!(newest_within("h", &w, &t).unwrap(), "v0.0.1");
@@ -414,8 +414,8 @@ fn a_nightly_floor_prefers_stable_newest_but_nightly_lowest() {
 
 #[test]
 fn nightly_tags_stay_ordered_and_deterministic() {
-    // Two spellings of one nightly share its key: either tag order gives
-    // the same answer, so the tag text still breaks the tie.
+    // Contract: docs/extensions.md:1784-1785, 1805-1807. Two spellings
+    // of one nightly share its key, so tag text breaks the tie.
     let w = wants(&[("your install", "0.0.1-nightly.20240101")]);
     let both = tags(&["v0.0.1-nightly.20240102", "0.0.1-nightly.20240102"]);
     let mut swapped = both.clone();
@@ -432,8 +432,8 @@ fn nightly_tags_stay_ordered_and_deterministic() {
 
 #[test]
 fn merely_pre_release_shaped_tags_stay_ignored_for_every_floor() {
-    // Only the -nightly.YYYYMMDD shape counts, for a nightly floor as
-    // for a stable one: anything else parses as no version at all.
+    // Contract: docs/extensions.md:1805-1807. Only a nightly tag counts
+    // for a pre-release floor; other pre-release shapes stay out.
     let nightly = wants(&[("your install", "0.0.1-nightly.20240101")]);
     let stable = wants(&[("your install", "0.0.1")]);
     let t = tags(&["v0.0.1-rc1", "v0.0.1-nightly.2024010", "latest"]);
@@ -485,8 +485,8 @@ fn a_cross_major_nightly_minimum_stops_naming_both() {
 
 #[test]
 fn no_minima_stay_stable_only_with_nightly_tags_present() {
-    // An empty wants holds no pre-release minimum, so nightly tags stay
-    // out of the install choice.
+    // Contract: docs/extensions.md:1805-1807. An empty wants holds no
+    // pre-release minimum, so nightly tags stay out of the install choice.
     let t = tags(&["v0.0.1-nightly.20240102", "v0.0.1"]);
     assert_eq!(newest_within("h", &wants(&[]), &t).unwrap(), "v0.0.1");
     assert_eq!(newest(&t).unwrap(), "v0.0.1");
