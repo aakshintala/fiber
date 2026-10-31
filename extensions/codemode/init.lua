@@ -37,7 +37,23 @@ fiber.tool("codemode", {
       end
       printed[#printed + 1] = table.concat(parts, "\t")
     end
-    local env = setmetatable({ print = capture }, { __index = _G })
+    -- Finished inner calls, in call order: the name, the status the script
+    -- saw, and the artifact path when the loop cut that call's output. A
+    -- call that raises instead of returning finishes nothing and leaves no
+    -- row; `artifact` is present only when the loop cut that call.
+    local ledger = {}
+    local real_tool = host.tool
+    local function observing_tool(name, call_args)
+      local outcome = real_tool(name, call_args)
+      local row = { name = name, status = outcome.status }
+      if outcome.artifact ~= nil then
+        row.artifact = outcome.artifact
+      end
+      ledger[#ledger + 1] = row
+      return outcome
+    end
+    local script_host = setmetatable({ tool = observing_tool }, { __index = host })
+    local env = setmetatable({ print = capture, host = script_host }, { __index = _G })
     local chunk, load_error = load(source, "codemode", "t", env)
     local ok, failure = true, nil
     if chunk == nil then
@@ -53,6 +69,13 @@ fiber.tool("codemode", {
       out[#out + 1] = "Script finished"
     else
       out[#out + 1] = "Script failed: " .. tostring(failure)
+    end
+    for _, row in ipairs(ledger) do
+      if row.artifact ~= nil then
+        out[#out + 1] = "- " .. row.name .. " " .. row.status .. " " .. row.artifact
+      else
+        out[#out + 1] = "- " .. row.name .. " " .. row.status
+      end
     end
     return table.concat(out, "\n")
   end,
