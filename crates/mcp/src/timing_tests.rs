@@ -153,6 +153,7 @@ fn start_observed(
             &clock,
             "0.0.0",
             Some(timing),
+            None,
         ))
         .unwrap_or(());
     });
@@ -179,6 +180,7 @@ fn launch_observed(
             &clock,
             "0.0.0",
             Some(timing),
+            None,
         ))
         .unwrap_or(());
     });
@@ -354,6 +356,7 @@ fn the_connection_ends_at_the_tool_list_before_prompts() {
             &clock,
             "0.0.0",
             Some(timing),
+            None,
         ))
         .unwrap_or(());
     });
@@ -558,6 +561,7 @@ fn held_launch(
             &clock,
             "0.0.0",
             Some(timing),
+            None,
         ))
         .unwrap_or(());
     });
@@ -846,6 +850,7 @@ fn a_missed_startup_deadline_still_completes_once() {
                 &clock,
                 "0.0.0",
                 Some(timing),
+                None,
             ))
             .unwrap_or(());
         });
@@ -896,6 +901,7 @@ fn a_shutdown_during_launch_still_completes_once() {
                 &clock,
                 "0.0.0",
                 Some(timing),
+                None,
             ))
             .unwrap_or(());
         });
@@ -1125,6 +1131,7 @@ fn held_lazy_slot(
         "0.0.0",
         crate::cache::Cached::default(),
         Some(capture.timing()),
+        None,
     )
 }
 
@@ -1315,6 +1322,7 @@ fn no_guard_drops_with_a_slot_lock_held() {
         "0.0.0",
         crate::cache::Cached::default(),
         Some(timing),
+        None,
     );
     *cell.lock().unwrap() = Some(Arc::clone(&lazy));
     match setup.serve(&lazy) {
@@ -1336,6 +1344,7 @@ fn no_guard_drops_with_a_slot_lock_held() {
             Arc::clone(&cell),
             Arc::clone(&free),
         )),
+        None,
     );
     *cell.lock().unwrap() = Some(Arc::clone(&failing));
     match setup.serve(&failing) {
@@ -1497,6 +1506,7 @@ fn a_none_returning_context_stays_safe() {
         &clock,
         "0.0.0",
         Some(timing),
+        None,
     )
     .expect("a context answering None still opens");
     assert_eq!(open.listed.tools.len(), 1);

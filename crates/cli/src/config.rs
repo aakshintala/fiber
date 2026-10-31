@@ -26,8 +26,13 @@ fn workspace_providers(
     workspace: &Path,
     project: &ProjectKey,
 ) -> Result<(Providers, Vec<Notice>), CliError> {
-    let set =
-        RepositorySet::load_pinned(home, project, workspace, Arc::new(support::clock::System));
+    let set = RepositorySet::load_pinned(
+        home,
+        project,
+        workspace,
+        Arc::new(support::clock::System),
+        None,
+    );
     Ok(Providers::load_all_repository(home, &set)?)
 }
 

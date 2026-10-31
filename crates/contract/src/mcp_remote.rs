@@ -2,7 +2,10 @@
 //! rules"): `cli` never reaches `mcp`, and `main` implements this trait over
 //! `mcp` and passes it in.
 
+use std::sync::Arc;
+
 use crate::clock::Clock;
+use crate::diag::DebugLog;
 use crate::mcp_tokens::TokenFiles;
 use crate::shapes::Failure;
 
@@ -15,11 +18,13 @@ pub trait McpRemote {
     fn token_key(&self, url: &str) -> Result<String, Failure>;
     /// Logs in to the server at `url`, showing the authorization URL
     /// through `present`. A `Failure` carries the login error's code.
+    /// `debug` observes the flow's requests; `None` stays silent.
     fn login(
         &self,
         files: &dyn TokenFiles,
         url: &str,
         present: &dyn Fn(&str),
         clock: &dyn Clock,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Result<(), Failure>;
 }

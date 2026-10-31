@@ -23,7 +23,14 @@ impl NativeHostServices {
     /// The body reads as a bytes position. A call with no deadline
     /// waits without a backstop, as a timer's does. With a script the
     /// reply comes from the case alone, exactly as the Lua half consults
-    /// it: a scripted miss never falls through to native I/O.
+    /// it: a scripted miss never falls through to native I/O, and a
+    /// scripted request records nothing. A real request records one
+    /// `http_request` line with the callback's attribution — a provider
+    /// function keeps its provider and purpose, `sign` stays silent as
+    /// the Lua half stays silent, and anything else records as the
+    /// extension's own with `Purpose::Extension`, never a model, host or
+    /// path — with the same attempt-1 and failure semantics the Lua path
+    /// observes.
     fn http(
         &self,
         method: &str,
@@ -50,7 +57,36 @@ impl NativeHostServices {
             .deadline
             .map(|end| end.saturating_duration_since(self.clock.now()) + GRACE);
         let request = crate::host::HttpRequest { timeout, ..request };
-        let (status, bytes) = crate::host::perform(&request)?;
+        // The callback's attribution, observed exactly as the Lua path
+        // observes it: a provider function keeps its provider and
+        // purpose, `sign` stays silent, and anything else is the
+        // extension's own. A silent sink, or no sink, runs the same
+        // request unobserved.
+        let observation = self.diagnostics.as_ref().and_then(|debug| {
+            if !debug.debugging() {
+                return None;
+            }
+            let attribution = match crate::host::admission::http_attribution(callback.ran_by()) {
+                crate::host::admission::HttpAttribution::Provider { provider, purpose } => {
+                    crate::host::HttpAttribution::Provider { provider, purpose }
+                }
+                crate::host::admission::HttpAttribution::Extension => {
+                    crate::host::HttpAttribution::Extension {
+                        extension: callback.extension.clone(),
+                    }
+                }
+                crate::host::admission::HttpAttribution::Silent => return None,
+            };
+            Some(crate::host::HttpObservation {
+                attribution,
+                debug: Arc::clone(debug),
+                clock: Arc::clone(&self.clock),
+            })
+        });
+        let (status, bytes) = match observation {
+            Some(observation) => crate::host::perform_observed(&request, observation)?,
+            None => crate::host::perform(&request)?,
+        };
         Ok(Some(Self::http_answer(status, bytes)))
     }
 

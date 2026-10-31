@@ -449,6 +449,11 @@ pub(crate) fn assemble_resumed(
     } else {
         None
     };
+    // The session's sink observes each `web_fetch` request at debug; at
+    // any other level the fetch stays silent.
+    let debug = diag
+        .debugging()
+        .then(|| Arc::clone(&diag) as Arc<dyn DebugLog>);
     // The recreated worktree's create line opens here, before the
     // session file attaches: a kept present worktree has no opener, so
     // it writes none.
@@ -514,6 +519,7 @@ pub(crate) fn assemble_resumed(
         skills,
         extensions.tools(),
         timing.clone(),
+        debug,
         shell_read_only.clone(),
         sandbox.clone(),
         Some(protection),

@@ -8,7 +8,7 @@
 
 use serde_json::Value;
 
-use super::{LoginError, MAX_BODY, get, origin_of};
+use super::{LoginError, MAX_BODY, Observe, get, origin_of};
 use crate::token::url_has_userinfo;
 
 /// The endpoints discovery found: where to authorize, exchange, and
@@ -26,10 +26,11 @@ pub(crate) fn discover(
     authenticate: Option<&str>,
     canonical: &str,
     origin: &str,
+    observe: &Observe,
 ) -> Result<Discovered, LoginError> {
-    let prm = protected_resource(authenticate, canonical, origin)?;
+    let prm = protected_resource(authenticate, canonical, origin, observe)?;
     let base = authorization_base(prm.as_ref(), origin)?;
-    discovered(&authorization_metadata(&base)?)
+    discovered(&authorization_metadata(&base, observe)?)
 }
 
 /// Whether `url` is an http or https URL without userinfo: every
@@ -59,8 +60,9 @@ fn resource_metadata_url(header: &str) -> Option<String> {
 /// Fetches one JSON document: a 404 means absent, a 2xx is parsed and a
 /// body past 1 MiB or not JSON fails the named step, and any other status
 /// or a transport error fails it too. Nothing fetched is retried.
-fn fetch_json(url: &str, step: &str) -> Result<Option<Value>, LoginError> {
-    let (status, _, body) = get(url).map_err(|_| LoginError::Discovery(step.to_owned()))?;
+fn fetch_json(url: &str, step: &str, observe: &Observe) -> Result<Option<Value>, LoginError> {
+    let (status, _, body) =
+        get(url, observe).map_err(|_| LoginError::Discovery(step.to_owned()))?;
     if status == 404 {
         return Ok(None);
     }
@@ -82,13 +84,14 @@ fn protected_resource(
     authenticate: Option<&str>,
     canonical: &str,
     origin: &str,
+    observe: &Observe,
 ) -> Result<Option<Value>, LoginError> {
     const STEP: &str = "protected-resource metadata";
     if let Some(url) = authenticate.and_then(resource_metadata_url) {
         if !is_usable_endpoint(&url) {
             return Err(LoginError::Discovery(STEP.to_owned()));
         }
-        return match fetch_json(&url, STEP)? {
+        return match fetch_json(&url, STEP, observe)? {
             Some(document) => Ok(Some(document)),
             None => Err(LoginError::Discovery(STEP.to_owned())),
         };
@@ -106,7 +109,7 @@ fn protected_resource(
     }
     candidates.push(format!("{origin}/.well-known/oauth-protected-resource"));
     for url in &candidates {
-        match fetch_json(url, STEP)? {
+        match fetch_json(url, STEP, observe)? {
             Some(document) => return Ok(Some(document)),
             None => continue,
         }
@@ -141,7 +144,7 @@ fn authorization_base(prm: Option<&Value>, origin: &str) -> Result<String, Login
 /// `openid-configuration`. A pathless base names its first two alike, and
 /// each URL is fetched once. A 404 continues; anything else failing is
 /// terminal at the named step.
-fn authorization_metadata(base: &str) -> Result<Value, LoginError> {
+fn authorization_metadata(base: &str, observe: &Observe) -> Result<Value, LoginError> {
     const STEP: &str = "authorization-server metadata";
     let base = base.trim_end_matches('/');
     let origin = origin_of(base).unwrap_or_else(|| base.to_owned());
@@ -163,7 +166,7 @@ fn authorization_metadata(base: &str) -> Result<Value, LoginError> {
     candidates.push(format!("{base}/.well-known/openid-configuration"));
     candidates.dedup();
     for url in &candidates {
-        match fetch_json(url, STEP)? {
+        match fetch_json(url, STEP, observe)? {
             Some(document) => return Ok(document),
             None => continue,
         }

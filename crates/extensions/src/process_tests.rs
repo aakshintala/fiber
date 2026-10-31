@@ -3860,6 +3860,413 @@ fn file_credential_resolve_times_out_on_a_held_lock() {
     assert_eq!(message, "host.oauth.refresh: the credential lock timed out");
 }
 
+/// A debug sink recording every `http_request` line it is offered.
+#[derive(Default)]
+struct Lines {
+    records: std::sync::Mutex<Vec<contract::diag::HttpRequest>>,
+}
+
+impl Lines {
+    fn records(&self) -> Vec<contract::diag::HttpRequest> {
+        self.records.lock().unwrap().clone()
+    }
+}
+
+impl contract::diag::DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &contract::diag::HttpRequest) {
+        self.records.lock().unwrap().push(request.clone());
+    }
+}
+
+/// A process `host.http` records one `extension` line with the calling
+/// extension's name and no provider, model, host or path: the same line
+/// the Lua path writes for a non-provider callback.
+#[test]
+fn process_http_records_the_calling_extension() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sink = std::sync::Arc::new(Lines::default());
+    let services = super::process::context::NativeHostServices {
+        runtime: Runtime::new(std::sync::Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock: std::sync::Arc::clone(&clock),
+        browser: std::sync::Arc::new(ClosedBrowser),
+        model: std::sync::Mutex::new(None),
+        delegate: std::sync::Mutex::new(None),
+        tool_runner: std::sync::Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: std::sync::Mutex::new(None),
+        diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
+    };
+    let context = super::process::context::ProcessContext {
+        run: super::process::context::ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let callback = crate::host::admission::CallbackContext::entry("fiber.test/proc");
+    let operation = super::process::context::HostOperation::Http {
+        method: "GET".to_owned(),
+        url: format!("{}/thing", server.url()),
+        headers: Vec::new(),
+        body: None,
+    };
+    let answer = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        operation,
+        &support::cancel::Token::new(),
+    )
+    .expect("the request succeeds");
+    assert!(answer.is_some());
+    let records = sink.records();
+    // docs/state.md, "Diagnostic logs": a process extension's host.http records the callback's purpose.
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(
+        record.identity(),
+        Some(&contract::diag::Identity::Extension(
+            "fiber.test/proc".to_owned()
+        ))
+    );
+    assert_eq!(record.purpose(), contract::diag::Purpose::Extension);
+    assert_eq!(record.status, Some(200));
+    assert_eq!(record.attempt, 1);
+    // The exact key set proves no `provider`, `host`, `path`, `model`
+    // or `first_token_ms` key, present or null.
+    let value = serde_json::to_value(record).unwrap();
+    let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "attempt",
+            "extension",
+            "headers_ms",
+            "purpose",
+            "request_bytes",
+            "response_bytes",
+            "status",
+            "total_ms",
+        ]
+    );
+}
+
+/// A process `host.http` inside a provider callback keeps the
+/// callback's provider and purpose: the same provider line the Lua half
+/// writes for the same callback.
+#[test]
+fn process_http_in_a_provider_callback_keeps_the_provider_purpose() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sink = std::sync::Arc::new(Lines::default());
+    let services = super::process::context::NativeHostServices {
+        runtime: Runtime::new(std::sync::Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock: std::sync::Arc::clone(&clock),
+        browser: std::sync::Arc::new(ClosedBrowser),
+        model: std::sync::Mutex::new(None),
+        delegate: std::sync::Mutex::new(None),
+        tool_runner: std::sync::Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: std::sync::Mutex::new(None),
+        diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
+    };
+    let context = super::process::context::ProcessContext {
+        run: super::process::context::ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let callback = crate::host::admission::CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("r_1".into()),
+        "provider acme.models".to_owned(),
+        None,
+        support::cancel::Token::new(),
+        None,
+        None,
+    );
+    let operation = super::process::context::HostOperation::Http {
+        method: "GET".to_owned(),
+        url: format!("{}/thing", server.url()),
+        headers: Vec::new(),
+        body: None,
+    };
+    let answer = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        operation,
+        &support::cancel::Token::new(),
+    )
+    .expect("the request succeeds");
+    assert!(answer.is_some());
+    let records = sink.records();
+    // docs/state.md, "Diagnostic logs": a process extension's host.http records the callback's purpose.
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(
+        record.identity(),
+        Some(&contract::diag::Identity::Provider("acme".to_owned()))
+    );
+    assert_eq!(record.purpose(), contract::diag::Purpose::ModelList);
+    assert_eq!(record.status, Some(200));
+    // The exact key set proves no `extension`, `host`, `path`, `model`
+    // or `first_token_ms` key, present or null.
+    let value = serde_json::to_value(record).unwrap();
+    let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "attempt",
+            "headers_ms",
+            "provider",
+            "purpose",
+            "request_bytes",
+            "response_bytes",
+            "status",
+            "total_ms",
+        ]
+    );
+}
+
+/// A process `host.http` inside `sign` stays silent: a provider
+/// function with no eligible purpose records nothing, as the Lua half
+/// records nothing, while the request still succeeds.
+#[test]
+fn process_http_in_a_sign_callback_stays_silent() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sink = std::sync::Arc::new(Lines::default());
+    let services = super::process::context::NativeHostServices {
+        runtime: Runtime::new(std::sync::Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock: std::sync::Arc::clone(&clock),
+        browser: std::sync::Arc::new(ClosedBrowser),
+        model: std::sync::Mutex::new(None),
+        delegate: std::sync::Mutex::new(None),
+        tool_runner: std::sync::Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: std::sync::Mutex::new(None),
+        diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
+    };
+    let context = super::process::context::ProcessContext {
+        run: super::process::context::ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let callback = crate::host::admission::CallbackContext::request(
+        "fiber.test/proc",
+        contract::RequestId("r_1".into()),
+        "provider acme.sign".to_owned(),
+        None,
+        support::cancel::Token::new(),
+        None,
+        None,
+    );
+    let operation = super::process::context::HostOperation::Http {
+        method: "GET".to_owned(),
+        url: format!("{}/thing", server.url()),
+        headers: Vec::new(),
+        body: None,
+    };
+    let answer = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        operation,
+        &support::cancel::Token::new(),
+    )
+    .expect("the request succeeds");
+    assert!(answer.is_some());
+    assert!(sink.records().is_empty());
+}
+
+/// Without a sink a process `host.http` runs the same request silently:
+/// the reply still answers, and nothing records.
+#[test]
+fn process_http_without_a_sink_stays_silent() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let services = super::process::context::NativeHostServices {
+        runtime: Runtime::new(std::sync::Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock: std::sync::Arc::clone(&clock),
+        browser: std::sync::Arc::new(ClosedBrowser),
+        model: std::sync::Mutex::new(None),
+        delegate: std::sync::Mutex::new(None),
+        tool_runner: std::sync::Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: std::sync::Mutex::new(None),
+        diagnostics: None,
+    };
+    let context = super::process::context::ProcessContext {
+        run: super::process::context::ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let callback = crate::host::admission::CallbackContext::entry("fiber.test/proc");
+    let operation = super::process::context::HostOperation::Http {
+        method: "GET".to_owned(),
+        url: format!("{}/thing", server.url()),
+        headers: Vec::new(),
+        body: None,
+    };
+    let answer = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        operation,
+        &support::cancel::Token::new(),
+    )
+    .expect("the request succeeds");
+    assert!(answer.is_some());
+}
+
+/// A scripted process `host.http` answers from the case alone and
+/// records nothing: the scripted branch returns before any observation.
+#[test]
+fn process_http_scripted_requests_stay_silent() {
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sink = std::sync::Arc::new(Lines::default());
+    let script = crate::host::script::HostScript::new(
+        vec![crate::host::script::HttpEntry {
+            request: serde_json::json!({"url": "https://scripted.test/thing"}),
+            reply: Ok((200, b"{}".to_vec())),
+        }],
+        Vec::new(),
+        Vec::new(),
+    );
+    let services = super::process::context::NativeHostServices {
+        runtime: Runtime::new(std::sync::Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock: std::sync::Arc::clone(&clock),
+        browser: std::sync::Arc::new(ClosedBrowser),
+        model: std::sync::Mutex::new(None),
+        delegate: std::sync::Mutex::new(None),
+        tool_runner: std::sync::Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: Some(script),
+        session: std::sync::Mutex::new(None),
+        diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
+    };
+    let context = super::process::context::ProcessContext {
+        run: super::process::context::ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let callback = crate::host::admission::CallbackContext::entry("fiber.test/proc");
+    let operation = super::process::context::HostOperation::Http {
+        method: "GET".to_owned(),
+        url: "https://scripted.test/thing".to_owned(),
+        headers: Vec::new(),
+        body: None,
+    };
+    let answer = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        operation,
+        &support::cancel::Token::new(),
+    )
+    .expect("the script answers");
+    assert!(answer.is_some());
+    assert!(sink.records().is_empty());
+}
+
+/// A process `host.http` that fails before the send records nothing:
+/// the failure is the reply, not a line.
+#[test]
+fn process_http_never_sent_records_nothing() {
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sink = std::sync::Arc::new(Lines::default());
+    let services = super::process::context::NativeHostServices {
+        runtime: Runtime::new(std::sync::Arc::clone(&clock)),
+        state: super::host::state::StateRegistry::standalone().store("fiber.test/proc"),
+        clock: std::sync::Arc::clone(&clock),
+        browser: std::sync::Arc::new(ClosedBrowser),
+        model: std::sync::Mutex::new(None),
+        delegate: std::sync::Mutex::new(None),
+        tool_runner: std::sync::Mutex::new(None),
+        secrets: Vec::new(),
+        host_script: None,
+        session: std::sync::Mutex::new(None),
+        diagnostics: Some(sink.clone() as std::sync::Arc<dyn contract::diag::DebugLog>),
+    };
+    let context = super::process::context::ProcessContext {
+        run: super::process::context::ProcessRun::Call,
+        workspace: std::path::PathBuf::from("/work"),
+        data_dirs: contract::events::ExtensionDataDirs {
+            machine: "/m".to_owned(),
+            project: "/p".to_owned(),
+        },
+        state: serde_json::Map::new(),
+        extension: "fiber.test/proc".to_owned(),
+        home: std::path::PathBuf::from("/home"),
+    };
+    let callback = crate::host::admission::CallbackContext::entry("fiber.test/proc");
+    let operation = super::process::context::HostOperation::Http {
+        method: "GET".to_owned(),
+        url: "not a url".to_owned(),
+        headers: Vec::new(),
+        body: None,
+    };
+    let Err((code, _)) = super::process::context::ProcessHostServices::perform(
+        &services,
+        &context,
+        &callback,
+        operation,
+        &support::cancel::Token::new(),
+    ) else {
+        panic!("the malformed URL fails");
+    };
+    assert_eq!(code, contract::ErrorCode::ConnectionFailed);
+    assert!(sink.records().is_empty());
+}
+
 /// Production services behind the seam: the state store, the clock and
 /// the runtime the launch wires, with no session dispatcher.
 fn production_services(
@@ -3878,6 +4285,7 @@ fn production_services(
         secrets: Vec::new(),
         host_script: None,
         session: std::sync::Mutex::new(None),
+        diagnostics: None,
     })
 }
 

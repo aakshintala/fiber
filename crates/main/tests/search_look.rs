@@ -21,6 +21,7 @@ mod support;
 use std::fs;
 
 use serde_json::json;
+use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
 use support::{Setup, TRUECOLOUR, write_json};
 
@@ -685,7 +686,7 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
 
 /// A held delegate at 65% context and a background job on the same FIFO.
 /// Neither can finish until the test releases its open FIFO or quits.
-fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
+fn running_setup() -> (Setup, Hold, String) {
     let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "p3");
     fs::create_dir_all(root.path().join("h")).unwrap();
     fs::create_dir_all(root.path().join("w")).unwrap();
@@ -693,14 +694,7 @@ fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
         root,
         deadline: support::Deadline::start(),
     };
-    let hold = setup.workspace().join("hold");
-    fakes::fifo(&hold);
-    let release = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&hold)
-        .unwrap();
-    let command = format!("head -n 1 {}", hold.display());
+    let command = format!("head -n 1 {}", setup.workspace().join("hold").display());
     write_json(
         &setup.workspace().join("d.json"),
         &json!({"steps": [
@@ -745,8 +739,8 @@ fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
         ),
     )
     .unwrap();
-    let guard = fakes::Watchdog::matching(hold.to_str().unwrap());
-    (setup, release, guard, command)
+    let hold = Hold::park(&setup, &command);
+    (setup, hold, command)
 }
 
 fn narrow_running(setup: &Setup) -> Run {
@@ -829,7 +823,7 @@ fn delegate_list_ready(grid: &Grid) -> bool {
 
 #[test]
 fn the_running_lists_match_the_doc() {
-    let (setup, _release, _guard, command) = running_setup();
+    let (setup, _hold, command) = running_setup();
     let mut run = narrow_running(&setup);
     open_running(&mut run, "1 delegate running", "Delegates · 1 running");
     let grid = run.wait_screen("the delegate list's rows and colours", delegate_list_ready);
@@ -1078,7 +1072,7 @@ fn panel_card_item_at(grid: &Grid, card: &str, description: &str) -> Option<(u16
 
 #[test]
 fn the_item_views_top_row_closes_them() {
-    let (setup, _release, _guard, command) = running_setup();
+    let (setup, _hold, command) = running_setup();
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");

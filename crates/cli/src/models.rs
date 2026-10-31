@@ -172,7 +172,7 @@ pub(crate) fn providers_config_and_set(
         project: project.clone(),
         overrides: Vec::new(),
     })?;
-    let set = RepositorySet::load_pinned(home, &project, workspace, clock);
+    let set = RepositorySet::load_pinned(home, &project, workspace, clock, None);
     let (providers, notices) = Providers::load_repository(home, &config, &set)?;
     Ok((providers, config, set, notices))
 }
@@ -353,6 +353,7 @@ pub fn models(
                     None,
                     StateSeed::new(),
                     repository,
+                    None,
                 )
             },
             &|providers| match &exe {
@@ -419,6 +420,7 @@ fn refresh_run(
             None,
             StateSeed::new(),
             set,
+            None,
         );
         refresh_named(
             home,

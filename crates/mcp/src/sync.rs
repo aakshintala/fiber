@@ -355,9 +355,10 @@ pub fn stage_sync(
             let clock = Arc::clone(inputs.clock);
             let version = inputs.version.to_owned();
             let timing = servers.timing();
+            let debug = servers.debug_sink();
             thread::spawn(move || {
                 let opened = open_staged(
-                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
+                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing, debug,
                 );
                 done.send((index, opened)).unwrap_or(());
             });

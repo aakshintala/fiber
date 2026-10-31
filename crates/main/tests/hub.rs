@@ -295,7 +295,7 @@ fn an_idle_hub_exits_on_its_own() {
 }
 
 #[test]
-fn a_debug_hub_writes_peak_memory_just_before_it_stops() {
+fn a_debug_hub_writes_resources_just_before_it_stops() {
     let setup = Setup::new();
     write_json(
         &setup.home().join("config.json"),
@@ -308,10 +308,13 @@ fn a_debug_hub_writes_peak_memory_just_before_it_stops() {
         panic!("fewer than two lines: {lines:?}");
     };
     assert_eq!(stopped["code"], "hub_stopped", "{lines:?}");
-    assert_eq!(peak["code"], "peak_memory", "{lines:?}");
+    assert_eq!(peak["code"], "resources", "{lines:?}");
     assert_eq!(peak["level"], "debug");
     assert_eq!(peak["process"], "hub");
     assert!(peak["data"]["peak_kib"].as_u64().unwrap() > 0, "{peak}");
+    assert!(peak["data"]["current_kib"].as_u64().unwrap() > 0, "{peak}");
+    assert!(peak["data"]["disk_read_bytes"].is_u64(), "{peak}");
+    assert!(peak["data"]["disk_write_bytes"].is_u64(), "{peak}");
 }
 
 /// The parsed lines of the hub's diagnostic log.
