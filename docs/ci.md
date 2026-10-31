@@ -151,7 +151,9 @@ issue for the test's file, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The aggregate `main` integration binary
 is keyed by its first test-module segment, as in `Flaky tests:
 main::reviewer_setup`; a root-level `main` test falls back to `Flaky tests:
-main`, while every other binary keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
+main`, while a unit-test binary is keyed per file, as in
+`Flaky tests: extensions::host::exec`, and a single-file integration binary
+keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`

@@ -87,9 +87,17 @@ naming the test and its failure, or comments on the file's open issue. The
 issue's title is `Flaky tests: ` followed by the file's key: the aggregate
 `main` integration binary names its first test-module segment, so `main
 reviewer_setup::the_setup_saves` files `Flaky tests: main::reviewer_setup`.
-A root-level `main` test falls back to `Flaky tests: main`. Every other
-binary keeps its binary title, such as `Flaky tests: main::hub_exit_window`,
-and unit-test ids such as `fakes` are not parsed specially. Each body the report writes (the issue, a
+A root-level `main` test falls back to `Flaky tests: main`. A unit-test id
+is its module path without the test name or a trailing `tests` module,
+because inline `mod tests` lives in its parent's file. Its key appends that
+path to the binary: `extensions
+host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run` gives
+`Flaky tests: extensions::host::exec`, `extensions
+host::tool_tests::a_denied_call_has_no_artifact` gives
+`Flaky tests: extensions::host::tool_tests`, and a crate-root test such as
+`extensions tests::x` or `extensions x` gives `Flaky tests: extensions`. A
+single-file integration binary such as `main::hub_exit_window` keeps its
+binary title. Each body the report writes (the issue, a
 sighting comment, a pull request comment) names the tested commit on its own
 line: `tested <sha> = main <base> + head <head>` on a pull request run, where
 the merge commit's parents are main and the pull request head, and

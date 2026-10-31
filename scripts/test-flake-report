@@ -1102,8 +1102,7 @@ printf 'main::a t1\td1\nmain::b t1\td2\n' >"$collate_two/flaky/flaky-tests-linux
 run_collate "$collate_two"
 expect_titles_sorted "$collate_two" "$(printf 'Flaky tests: main::a\nFlaky tests: main::b')"
 expect_flakes "$collate_two" 'has_flakes=true'
-# A unit-test id and the bare id give the one binary title: unit ids
-# are not parsed specially.
+# A root-level unit-test id and the bare id both keep the binary title.
 collate_unit=$tmp/collate-unit
 mkdir -p "$collate_unit/flaky"
 printf 'fiber-core tests::foo\td1\nfiber-core\td2\n' >"$collate_unit/flaky/flaky-tests-linux.txt"
@@ -1111,8 +1110,8 @@ run_collate "$collate_unit"
 expect_titles "$collate_unit" 'Flaky tests: fiber-core'
 expect_flakes "$collate_unit" 'has_flakes=true'
 # The aggregate `main` binary files one title per test-module file, while
-# a root-level `main` test and its bare id, a single-file integration
-# binary and a unit-test id with a module segment keep the binary title.
+# a root-level `main` test and a single-file integration binary keep their
+# binary title. Unit-test modules produce per-file keys.
 # The shell and Rust derivations run over the same lines and agree
 # byte-for-byte.
 collate_key=$tmp/collate-key

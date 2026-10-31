@@ -492,23 +492,35 @@ impl Classified {
 }
 
 /// The issue title for one flake line: the aggregate `main` integration
-/// binary is keyed by its first test-module segment, `Flaky tests:
-/// main::{module}`; a root-level `main` test or an empty first segment
-/// falls back to `Flaky tests: main`. Every other binary id keeps its
-/// binary title, including single-file integration ids such as
-/// `main::hub_exit_window` and unit-test ids such as `fakes`, which are
-/// not parsed specially.
+/// binary is keyed by its first test-module segment; a root-level `main`
+/// test falls back to `Flaky tests: main`. A binary id containing `::`,
+/// such as `main::hub_exit_window`, keeps its binary title. A unit-test
+/// binary is keyed by its module path without the test name or one trailing
+/// `tests` module, appended to the binary id; root-level tests use the binary
+/// id alone.
 /// Mirrors the Collate step in .github/workflows/ci.yml; scripts/test-flake-report checks the two agree.
 fn flake_title(binary: &str, test: &str) -> String {
-    if binary != "main" {
+    if binary == "main" {
+        if let Some((first, _)) = test.split_once("::")
+            && !first.is_empty()
+        {
+            return format!("Flaky tests: main::{first}");
+        }
+        return "Flaky tests: main".to_owned();
+    }
+    if binary.contains("::") {
         return format!("Flaky tests: {binary}");
     }
-    if let Some((first, _)) = test.split_once("::")
-        && !first.is_empty()
-    {
-        return format!("Flaky tests: main::{first}");
+    let module = test.rsplit_once("::").map_or("", |(module, _)| module);
+    if module == "tests" {
+        return format!("Flaky tests: {binary}");
     }
-    "Flaky tests: main".to_owned()
+    let module = module.strip_suffix("::tests").unwrap_or(module);
+    if module.is_empty() {
+        format!("Flaky tests: {binary}")
+    } else {
+        format!("Flaky tests: {binary}::{module}")
+    }
 }
 
 /// One classification per distinct title, in first-seen order across
