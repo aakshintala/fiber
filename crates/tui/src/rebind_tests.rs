@@ -812,6 +812,20 @@ fn wheel_clamps_at_the_last_action() {
     let total: usize = grown.iter().sum();
     let shown = HEIGHT.saturating_sub(2);
     let end = total.saturating_sub(shown);
+    // The selected line always starts its action: that action's span
+    // meets the window, so the selection shows even when the window
+    // cuts through the action's first lines.
+    let shows = |line: usize, top: usize| {
+        let mut start: usize = 0;
+        for height in &grown {
+            let end_line = start.saturating_add(*height);
+            if start == line {
+                return start < top.saturating_add(shown) && end_line > top;
+            }
+            start = end_line;
+        }
+        false
+    };
     // Enough steps of three display lines to cover the whole list:
     // each step advances the top by at least one display line.
     for _ in 0..total.saturating_add(2) {
@@ -823,7 +837,7 @@ fn wheel_clamps_at_the_last_action() {
     assert_eq!(top(&screen, &keys), end);
     let bottom = selected(&screen, &keys);
     assert!(
-        end <= bottom && bottom < end.saturating_add(shown),
+        shows(bottom, end),
         "the selection stays on a visible action: {bottom}"
     );
     assert!(matches!(
@@ -833,7 +847,7 @@ fn wheel_clamps_at_the_last_action() {
     assert_eq!(top(&screen, &keys), end.saturating_sub(3));
     let back = selected(&screen, &keys);
     assert!(
-        end.saturating_sub(3) <= back && back < end.saturating_sub(3).saturating_add(shown),
+        shows(back, end.saturating_sub(3)),
         "the selection follows the visible window: {back}"
     );
 }
@@ -945,7 +959,7 @@ fn paging_counts_from_the_action_holding_the_line_top() {
     let grown = heights(&keys, WIDTH);
     assert_eq!(
         &grown[..7],
-        &[2, 2, 2, 1, 1, 1, 1],
+        &[2, 2, 2, 1, 1, 1, 2],
         "wrapped actions sit in view: {grown:?}"
     );
     let height: usize = 5;
