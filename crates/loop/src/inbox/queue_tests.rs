@@ -117,6 +117,48 @@ fn reconnect(server: &str, name: &'static str, seen: mpsc::Sender<&'static str>)
 }
 
 #[test]
+fn registering_a_pending_batch_prunes_zero_owners_but_keeps_one_owner() {
+    let (_tx, rx) = mpsc::channel();
+    let mut queue = Queue::new(rx);
+    let expired = queue.pending([Delivery::Cancelled]);
+    let mut live = queue.pending([Delivery::Cancelled]);
+    drop(expired);
+    assert_eq!(queue.pending.len(), 2);
+
+    let mut newer = queue.pending([Delivery::Cancelled]);
+
+    // Expired registrations must not accumulate as admission batches end.
+    // Zero owners is expired; one owner still holds a live batch.
+    assert_eq!(queue.pending.len(), 2);
+    assert!(queue.pending.iter().all(|batch| batch.strong_count() == 1));
+    assert!(matches!(live.next(), Some(Delivery::Cancelled)));
+    assert!(matches!(newer.next(), Some(Delivery::Cancelled)));
+}
+
+#[test]
+fn taking_reconnects_prunes_zero_owners_but_keeps_one_owner() {
+    let (_tx, rx) = mpsc::channel();
+    let mut queue = Queue::new(rx);
+    let (seen, answers) = mpsc::channel();
+    let expired = queue.pending([Delivery::Cancelled]);
+    let mut live = queue.pending([reconnect("db", "live", seen)]);
+    drop(expired);
+    assert_eq!(queue.pending.len(), 2);
+
+    let joined = queue.take_reconnects("db", std::path::Path::new("/"), None);
+
+    // Collection reclaims expired registrations even without a new batch.
+    assert_eq!(queue.pending.len(), 1);
+    assert_eq!(queue.pending[0].strong_count(), 1);
+    assert_eq!(joined.len(), 1);
+    for ack in joined {
+        (ack.0)(Ok(None));
+    }
+    assert_eq!(answers.try_iter().collect::<Vec<_>>(), ["live"]);
+    assert!(live.next().is_none());
+}
+
+#[test]
 fn reconnect_collection_sees_pending_batches_without_exposing_them_to_nested_drains() {
     let (tx, rx) = mpsc::channel();
     let mut queue = Queue::new(rx);
