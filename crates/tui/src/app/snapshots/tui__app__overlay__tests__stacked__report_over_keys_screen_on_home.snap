@@ -1,28 +1,29 @@
 ---
 source: crates/tui/src/app/overlay_tests.rs
+assertion_line: 4234
 expression: text
 ---
  Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
-Enter                                                               e during a t
-Shift+Enter  Imported                                            ✕
-Esc                                                                  interrupt t
-Ctrl+C       Copied · 240                                           it
-⌥0           MCP servers
-Ctrl+N       server0
-⌥1 ⌥2 ⌥3 ⌥4  server1                                                 card N
-Delete, Bac  server2                                                d, or a live
-↑            server3                                                rom the proj
-←            server4                                                t box into t
-Ctrl+R       server5
-⌥← ⌥→, Ctrl  server6
-⌥Backspace   server7
-Ctrl+U       server8                                                 of the line
-Ctrl+A Ctrl  server9
-Ctrl+G       server10                                               ed token, in
-Ctrl+V       server11
-Ctrl+O       server12
-Shift+Tab    server13                                               nto the conv
-↓ ↑, j k                                                            r previous i
-Enter        Imported items apply on the next /reload · Esc closes
-y
+› Enter                                                             ssage during
+             Imported                                            ✕
+  Shift+Ent
+  Ctrl+J     Copied · 240
+  Esc        MCP servers                                             the turn
+             server0
+  Ctrl+C     server1
+  ⌥0         server2
+  Ctrl+N     server3
+  ⌥1 ⌥2 ⌥3   server4                                                ard N
+  ⌥5 ⌥6 ⌥7   server5
+  ⌥9         server6
+  Delete,    server7                                                a live one
+  Backspace  server8                                                ion list
+  ↑          server9                                                he project
+             server10
+  ←          server11                                               box into the
+             server12
+  Ctrl+R     server13
+  ⌥← ⌥→, Ct
+  Ctrl+→, ⌥  Imported items apply on the next /reload · Esc closes
+  ⌥Backspac
 ↑↓ move · E▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -185,9 +185,9 @@ fn keys_attached_160x40_wraps_at_the_column_width() {
 
 #[test]
 fn the_frame_targets_hold_the_cross_and_a_target_per_display_line() {
-    // Tall enough for every wrapped line to show: the draw clips to
-    // the area.
-    let mut app = attached(80, 60);
+    // Home draws the swapped view over the whole area, tall enough
+    // for every wrapped line to show: the draw clips to the area.
+    let mut app = home(80, 60);
     slash_keys(&mut app);
     let targets = drawn(&app, 80, 60);
     assert!(

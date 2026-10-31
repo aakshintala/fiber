@@ -1,28 +1,29 @@
 ---
 source: crates/tui/src/app/overlay_tests.rs
+assertion_line: 4238
 expression: text
 ---
  Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
-Enter                                                               e during a t
-Shift+Enter  Imported                                            ✕
-Esc                                                                  interrupt t
-Ctrl+C       Copied · 240                                           it
-⌥0           MCP▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-Ctrl+N       ser
-⌥1 ⌥2 ⌥3 ⌥4  ser  Quit                                       ✕       card N
-Delete, Bac  ser                                                    d, or a live
-↑            ser  1 session working                                 rom the proj
-←            ser                                                    t box into t
-Ctrl+R       ser  › Enter  leave them running
-⌥← ⌥→, Ctrl  ser    c      close all
-⌥Backspace   ser    Esc    stay
-Ctrl+U       ser                                                     of the line
-Ctrl+A Ctrl  ser  click a choice · they keep running meanwhile
-Ctrl+G       ser                                                    ed token, in
-Ctrl+V       ser▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-Ctrl+O       server12
-Shift+Tab    server13                                               nto the conv
-↓ ↑, j k                                                            r previous i
-Enter        Imported items apply on the next /reload · Esc closes
-y
+› Enter                                                             ssage during
+             Imported                                            ✕
+  Shift+Ent
+  Ctrl+J     Copied · 240
+  Esc        MCP▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄     the turn
+             ser
+  Ctrl+C     ser  Quit                                       ✕
+  ⌥0         ser
+  Ctrl+N     ser  1 session working
+  ⌥1 ⌥2 ⌥3   ser                                                    ard N
+  ⌥5 ⌥6 ⌥7   ser  › Enter  leave them running
+  ⌥9         ser    c      close all
+  Delete,    ser    Esc    stay                                     a live one
+  Backspace  ser                                                    ion list
+  ↑          ser  click a choice · they keep running meanwhile      he project
+             ser
+  ←          ser▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    box into the
+             server12
+  Ctrl+R     server13
+  ⌥← ⌥→, Ct
+  Ctrl+→, ⌥  Imported items apply on the next /reload · Esc closes
+  ⌥Backspac
 ↑↓ move · E▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
