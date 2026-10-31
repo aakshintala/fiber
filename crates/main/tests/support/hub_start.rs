@@ -118,13 +118,10 @@ fn hello_account(
 /// A caught panic's text, when it carries one: `within` panics with a
 /// `String`, like the outer timeout the diagnostic path drives.
 fn hello_panic_text(payload: &Box<dyn std::any::Any + Send>) -> Option<String> {
-    if let Some(text) = payload.downcast_ref::<&str>() {
-        Some((*text).to_owned())
-    } else if let Some(text) = payload.downcast_ref::<String>() {
-        Some(text.clone())
-    } else {
-        None
-    }
+    payload
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
 }
 
 /// Whether `text` is the outer [`bounded`] wait's own timeout for this
@@ -164,17 +161,17 @@ pub(crate) fn hello_slice(
     match outcome {
         Ok(slice) => (slice, process),
         Err(payload) => {
-            if let Some(text) = hello_panic_text(&payload) {
-                if is_hello_timeout(&text) {
-                    give_up(
-                        setup,
-                        process,
-                        &format!(
-                            "{text} ({})",
-                            hello_account(entry, setup.deadline.left(), wait.left(), slices),
-                        ),
-                    );
-                }
+            if let Some(text) = hello_panic_text(&payload)
+                && is_hello_timeout(&text)
+            {
+                give_up(
+                    setup,
+                    process,
+                    &format!(
+                        "{text} ({})",
+                        hello_account(entry, setup.deadline.left(), wait.left(), slices),
+                    ),
+                );
             }
             std::panic::resume_unwind(payload);
         }
