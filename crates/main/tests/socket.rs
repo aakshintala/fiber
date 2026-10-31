@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use fakes::{Client, ProviderServer};
 use serde_json::{Value, json};
+use support::hold::Hold;
 use support::{Deadline, KillGroup, Setup, answered, complete_lines, first_line, hello};
 
 /// `fiber session --id <id> --workspace <workspace>`, drained as `start` drains it.
@@ -1106,13 +1107,13 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     // fast-pathed (`docs/permissions.md`, "Fast paths"). It blocks reading
     // a FIFO, so the session message is taken while the call still runs
     // (`docs/loop.md`, "One step").
-    let hold = setup.workspace().join("hold");
-    fakes::fifo(&hold);
+    let command = format!("read line < '{}'", setup.workspace().join("hold").display());
+    let hold = Hold::park(&setup, &command);
     let server = ProviderServer::start([
         support::stream(&[support::function_call(
             "hold_shell",
             "shell",
-            &json!({"command": format!("read line < '{}'", hold.display())}),
+            &json!({"command": command}),
         )]),
         support::text_reply("allow"),
         support::text_reply("Done."),
@@ -1170,8 +1171,9 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     // reading, so the release runs on a thread bounded by the test's
     // deadline (`docs/testing.md`, "Waits and timeouts").
     let (released, done) = mpsc::channel();
+    let rendezvous = hold.path().to_owned();
     thread::spawn(move || {
-        released.send(fs::write(&hold, "go\n")).unwrap();
+        released.send(fs::write(&rendezvous, "go\n")).unwrap();
     });
     setup
         .deadline
