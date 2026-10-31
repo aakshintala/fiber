@@ -21,6 +21,7 @@ use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
 
 use serde_json::json;
+use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
 use support::{Setup, TRUECOLOUR, write_json};
 
@@ -30,23 +31,6 @@ const ERROR: Colour = Colour::Rgb(255, 93, 115);
 const SURFACE: Colour = Colour::Rgb(26, 26, 34);
 /// `turn` in the dark theme.
 const TURN: Colour = Colour::Rgb(16, 16, 23);
-
-/// The hold FIFO, held open read+write so a parked `head -n 1 <hold>`
-/// stays alive through every view, hint and steer assertion until the
-/// test drops it. The watchdog is armed before the open, so the first
-/// fallible step is already watched, and reaps the process group on
-/// drop.
-fn new_hold(setup: &Setup, pattern: &str) -> (fs::File, fakes::Watchdog) {
-    let hold = setup.workspace().join("hold");
-    fakes::fifo(&hold);
-    let guard = fakes::Watchdog::matching(pattern);
-    let release = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&hold)
-        .unwrap();
-    (release, guard)
-}
 
 /// The reviewer answers and the allow-rules both fixtures share: the
 /// parent's steps differ, but every tool call is allowed either way.
@@ -83,7 +67,7 @@ fn write_shared(setup: &Setup, command: &str) {
 /// without the foreground's 30-second move wait; the held job still
 /// parks the delegate until the test releases it. No tty job starts,
 /// so releasing the hold finishes the delegate alone.
-fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
+fn delegate_setup() -> (Setup, Hold) {
     let setup = Setup::new();
     let command = format!("head -n 1 {}", setup.workspace().join("hold").display());
     write_json(
@@ -113,9 +97,8 @@ fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
         ]}),
     );
     write_shared(&setup, &command);
-    let hold = setup.workspace().join("hold");
-    let (release, guard) = new_hold(&setup, hold.to_str().unwrap());
-    (setup, release, guard)
+    let hold = Hold::park(&setup, &command);
+    (setup, hold)
 }
 
 /// Dropping the helper without any release write reaps the parked holder:
@@ -173,7 +156,7 @@ fn hold_drop_releases_and_reaps_the_holder() {
 /// would push the status row's stop and outcome under the row's cut.
 /// The command returns with the setup: the panel names the job row by
 /// it, so the test clicks only the row that names it.
-fn job_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
+fn job_setup() -> (Setup, Hold, String) {
     let setup = Setup::new();
     // A shell comment with this process id keeps the watchdog's
     // pattern to this test's `head`: parallel tests hold their own.
@@ -193,8 +176,8 @@ fn job_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
         ]}),
     );
     write_shared(&setup, &command);
-    let (release, guard) = new_hold(&setup, &format!("hold #{}", std::process::id()));
-    (setup, release, guard, command)
+    let hold = Hold::park(&setup, &command);
+    (setup, hold, command)
 }
 
 /// The binary started at 160x48 and prompted, so the target item starts.
@@ -293,7 +276,7 @@ fn assert_span_tint(grid: &Grid, y: u16, needle: &str, tint: Colour) {
 
 #[test]
 fn the_delegate_view_matches_the_doc() {
-    let (setup, release, _guard) = delegate_setup();
+    let (setup, hold) = delegate_setup();
     let mut run = start_run(&setup);
     // The parent's turn completes before the click, so the panel row's
     // position is final: the completed footer proves the turn is done,
@@ -416,7 +399,7 @@ fn the_delegate_view_matches_the_doc() {
                 .contents
                 .contains("steering goes to ◆ review the parser")
     });
-    finish_and_quit(run, release, "steering goes to ◆ review the parser");
+    finish_and_quit(run, hold, "steering goes to ◆ review the parser");
 }
 
 #[test]
@@ -468,7 +451,7 @@ fn fifo_release_written_before_reader_opens_is_read() {
 
 #[test]
 fn the_job_pty_view_matches_the_doc() {
-    let (setup, release, _guard, command) = job_setup();
+    let (setup, hold, command) = job_setup();
     let mut run = start_run(&setup);
     // The Jobs card starts closed; its title toggles the list. The
     // completed turn is the session-event signal that makes the held
@@ -571,7 +554,7 @@ fn the_job_pty_view_matches_the_doc() {
         caret < col_at(&grid, y_hint, hint),
         "the hint never covers the caret"
     );
-    finish_and_quit(run, release, "type into the job");
+    finish_and_quit(run, hold, "type into the job");
 }
 
 /// Writes `release` a line so `head` reads it and exits and the one
@@ -581,8 +564,8 @@ fn the_job_pty_view_matches_the_doc() {
 /// until the held `head` reads the line, while dropping the last writer
 /// before `head` opens the FIFO strands it there forever
 /// (`docs/testing.md`, "Waits and timeouts").
-fn finish_and_quit(mut run: Run, mut release: fs::File, closed_needle: &str) {
-    release.write_all(b"\n").unwrap();
+fn finish_and_quit(mut run: Run, mut hold: Hold, closed_needle: &str) {
+    hold.release().write_all(b"\n").unwrap();
     run.wait_screen("the finish folds", |grid| {
         !grid.contents.contains("■ stop")
             && (grid.contents.contains("completed") || grid.contents.contains("failed"))
