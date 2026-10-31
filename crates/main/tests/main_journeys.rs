@@ -800,15 +800,21 @@ fn install_quota_provider(setup: &Setup, server_url: &str) {
 }
 
 /// A server answering every Lua purpose plus native model calls: the
-/// quota fetch reports 90% used.
-fn start_quota_server() -> ProviderServer {
-    ProviderServer::start_responding(|request| match request.path.as_str() {
-        "/lua-quota" => fakes::Response::status(200, "90"),
+/// quota fetch reports 90% used, signalling when the fetch's request
+/// arrives so the journey waits for the fetch the first turn started.
+fn start_quota_server() -> (ProviderServer, std::sync::mpsc::Receiver<()>) {
+    let (quota_hit, quota_rx) = std::sync::mpsc::channel();
+    let server = ProviderServer::start_responding(move |request| match request.path.as_str() {
+        "/lua-quota" => {
+            let _sent = quota_hit.send(());
+            fakes::Response::status(200, "90")
+        }
         "/lua-models" | "/lua-token" => fakes::Response::status(200, "{}"),
         "/v1/responses" => support::hello(),
         _ => fakes::Response::status(500, "unrouted"),
     })
-    .unwrap()
+    .unwrap();
+    (server, quota_rx)
 }
 
 /// A quota notice in the middle of a conversation, then the next prompt
@@ -823,7 +829,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
         // so the standard `catch_unwind` wrapper applies.
         std::panic::AssertUnwindSafe(|| {
             let setup = Setup::new();
-            let server = start_quota_server();
+            let (server, quota_rx) = start_quota_server();
             install_quota_provider(&setup, &server.url());
             std::fs::create_dir_all(setup.home().join("credentials/test")).unwrap();
             std::fs::write(setup.home().join("credentials/test/work"), "test-key").unwrap();
@@ -840,39 +846,58 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             run.wait_screen("the first answered turn", |grid| {
                 grid.contents.contains("Hello.")
             });
-            // The drawn value proves the fetch landed: the fetch-less
-            // snapshot behind focus-in never re-asks when a flight lands
-            // after it, so one focus-in can miss the first turn's fetch
-            // still in flight. Re-ask on every pass until the drawn
-            // value proves `finish_quota` stored it
-            // (`quota_fetch_session.rs`,
-            // `slash_quota_opens_the_view_and_shows_the_fetched_values`;
-            // `docs/testing.md`, "Waits and timeouts"): each focus-in
-            // sends a fetch-less query that starts no new fetch, so
-            // re-asking starts no new `/lua-quota` request. The poll
-            // reads the raw output, never the grid, so the file's zero
-            // bare screen reads stand; the grid wait below is the
-            // assertion.
-            let quota_from = run.output().len();
-            loop {
-                run.write(b"\x1b[I");
-                if String::from_utf8_lossy(&run.output()[quota_from..]).contains("10%") {
-                    break;
-                }
-                assert!(
-                    !setup.deadline.left().is_zero(),
-                    "waited until the deadline for the fetched quota share to draw after focus-in"
-                );
-                std::thread::yield_now();
-            }
+            // The fake signals when the first turn's fetch reaches it, so
+            // the waits below run after the fetch started: the signal fires
+            // when the request arrives, before the response and before
+            // `finish_quota` stores it, so one fetch-less re-query straight
+            // after it could still miss (the fetch-less snapshot never
+            // re-asks when a flight lands after it).
+            setup.deadline.recv_or_fail(
+                &quota_rx,
+                "the fake receiving the first turn's quota request",
+            );
+            // The turn must end before typing: sent earlier, `/quota`
+            // would steer the first turn instead of opening the view.
+            run.turn_finished(from);
+            // The view's `fetch: true` query either joins that flight or
+            // starts its own, and answers only once a fetch ends
+            // (`switch/quota.rs`, `answer_fetch` over `force_start_quota`
+            // and `wait_quota`), so the drawn value proves `finish_quota`
+            // stored it; the answer folds into the panel card too
+            // (`tui/src/app/panel/quota.rs`, `panel_quota`). The view
+            // draws the cached rows under `/quota · fetching` until that
+            // answer lands (`tui/src/quota_view.rs`, `frame`), so the
+            // wait also requires the fetching mark gone. `Quota` plus
+            // `10%` alone could match the panel card, which the default
+            // cards include (`crates/config/src/keys.rs`,
+            // `tui.panel.cards`), before the view opens: the wait names
+            // the view's own top row (`/quota` and `Esc returns`,
+            // `swapped.rs`, `draw_top_row`), so only the open view's
+            // fetched value passes. No wall-clock read or sleep of its own.
+            run.write(b"/quota\r");
+            run.wait_screen("the fetched quota value", |grid| {
+                grid.contents.contains("/quota")
+                    && grid.contents.contains("Esc returns")
+                    && grid.contents.contains("10%")
+                    && !grid.contents.contains("fetching")
+            });
+            run.write(b"\x1b[27u");
+            run.wait_screen("the conversation after the quota view", |grid| {
+                grid.contents.contains("Hello.")
+            });
+            // The cache is fresh from the view's fetch, so the one
+            // focus-in below sends a fetch-less query that starts no new
+            // `/lua-quota` request (`docs/testing.md`, "Waits and
+            // timeouts"); the grid wait below is the assertion, failing
+            // naming the wait when the share never draws. One 4-byte
+            // focus-in cannot fill the PTY input buffer by construction.
+            run.write(b"\x1b[I");
             run.wait_screen("the fetched quota share", |grid| {
                 grid.contents.contains("10%")
             });
-            // The reply draws while the first turn is still running, so
-            // the second prompt waits for its completed card: sent
-            // earlier, it would steer the first turn instead of starting
-            // the second.
-            run.turn_finished(from);
+            // The second prompt waits for the first turn's completed card:
+            // sent earlier, it would steer the first turn instead of
+            // starting the second.
             let from = run.output().len();
             run.write(b"second\r");
             let shown = run.wait_screen("the second turn's quota notice", |grid| {
