@@ -690,6 +690,36 @@ fn a_fork_counts_its_own_results_and_completed_handoff_clears_them() {
     assert!(after.contains("none since the last handoff"), "{after}");
 }
 
+/// A session that continues another log without a `preamble_built` of its
+/// own, as after a move, a rewind or a fork (see #3756): the total comes
+/// from its `session_status`, the window from the one that status reports,
+/// and the unknown handoff point draws no marker and no off row.
+#[test]
+fn context_without_an_own_preamble_uses_the_reported_window() {
+    let mut app = attached(100, 40);
+    app.on_line(context_status(50, 200));
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(
+        shown.contains("50 tokens · 25% of the 200 window"),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains("The context shows after the session's first request."),
+        "{shown}"
+    );
+    assert!(!shown.contains("automatic handoff"), "{shown}");
+    assert!(shown.contains("none since the last handoff"), "{shown}");
+    // A later preamble of its own replaces the inherited window and the
+    // unknown handoff point.
+    app.on_line(context_preamble());
+    let after = screen(&app, 100, 40).0;
+    assert!(
+        after.contains("50 tokens · 50% of the 100 window · automatic handoff at 80"),
+        "{after}"
+    );
+}
+
 #[test]
 fn going_home_clears_context_state_for_the_next_attachment() {
     let mut app = attached(100, 40);
