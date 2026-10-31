@@ -303,9 +303,9 @@ column has no header row: its first row is conversation. The conversation keeps
 one blank column on each side, so the turn cards start one column in from the
 rail's edge and end one column before the panel's; with the rail hidden its
 one-column grip sits at the screen's left edge and the cards start at the third
-column. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. It replaces
-a footer and status line, and the input box spans only the conversation
-column.
+column. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. While
+it shows, the input box leaves out its status line ("The narrow layout"),
+and the input box spans only the conversation column.
 
 The rail and the panel each take a share of the screen's width, kept between
 a floor and a ceiling: the rail 15%, from 22 to 48 columns, and the panel 21%,
@@ -990,17 +990,19 @@ under the conversation take its place. From the top:
    half the screen; otherwise they collapse into the status line
 3. the steering queue
 4. an extension widget row, collapsed to one line, which a click expands
-5. the input box
-6. the status line, two rows under the input box
+5. the input box, with its status line
 
-Each card contributes its segments to the status line in the configured order,
+The status line is two rows at the bottom of the input box, under its
+status row ("The input box"). It shows whenever the panel does not: in the
+narrow layout, and on a wide screen with the panel hidden by ⌥P, `/panel` or
+the rail. Each card contributes its segments to the status line in the configured order,
 and each row is cut at the terminal's right edge. The
 second row opens with "N delegates running" and "N jobs running", so they are
 never cut; each opens a list of delegate or job cards in the conversation
 area. Clicking any other segment opens its card's view, the Quota segment the quota view.
 
-The status line sits on the `panel` tint, one column in, with segments joined
-by a dim "  │  ". Each card's segments are short forms of its rows. The
+The status line sits on the slab, starting in the status row's column, with
+segments joined by a dim "  │  ". Each card's segments are short forms of its rows. The
 working directory, model, thinking level, permission mode and context are
 in the input box's status row ("The input box"), so the status line leaves
 them out. Its segments are "git" dim and the branch in `secondary`; the cost
@@ -1019,7 +1021,7 @@ waiting" in `attention`.
 
 The rail sheds before the panel. When the screen is too narrow for the rail's
 floor, the conversation's minimum and the panel, the rail hides, and "N
-waiting" joins the Session status card, or the status line in the narrow layout; a
+waiting" joins the Session status card, or the status line while the panel is not shown; a
 click on it shows the rail. A hidden rail leaves its grip at the screen's left
 edge, and dragging the grip out shows the rail again, as does ⌥R. Shown while the
 width has no room for it, the rail hides the panel, as ⌥P does; ⌥P brings the
@@ -1027,7 +1029,7 @@ panel back and the rail sheds again. A rail hidden
 for width returns when the screen grows; one the person hid, by ⌥R, `/rail` or by
 dragging it below its floor, saves `tui.rail.shown` as off and stays hidden,
 across launches, until shown. Below the narrow layout, which
-has already dropped the panel, the screen sheds the status rows, then the
+has already dropped the panel, the screen sheds the status line, then the
 working line's detail. Below a floor of about 40 by 10
 cells it shows one centred line, "Fiber needs 40×10 · now 32×8". The session
 keeps running, nothing is lost, and the screen redraws on resize.
@@ -1736,6 +1738,14 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   reply arrives. crossterm parses both replies but hands them only to a call
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
+- **Input is read in the order it arrives.** Each key, paste or mouse report
+  becomes one event, in the order its bytes came: a bound control character
+  then a letter is the binding's action, then the letter, and nothing else.
+  A byte that starts no key is dropped and reading goes on from the next
+  byte. A control character with no binding is dropped whole, a two-byte C1
+  control included. An escape sequence cut by a byte that cannot continue it
+  drops its `ESC [`, and reading goes on from that byte. Invalid UTF-8 drops
+  one byte and keeps the rest.
 - **Every action has a key.** Every action also has a mouse target or a slash
   command, except editing the draft in the input box and search, choosing
   in the model picker or the credential picker for this session only, and
@@ -1832,18 +1842,26 @@ reversed: its character in the slab's colour on the text colour. Past the
 last character it is a block in the text colour. The character under it
 stays readable in light and dark mode.
 
-The box's last row, under the draft and inside the slab, is its status row,
-in every layout: the working directory; the permission mode in
-`attention`; the model in `accent` and the thinking level in `attention`;
-and "ctx" dim, an 8-cell context bar, the size and the share of the window
-dim ("ctx ▆▆▆▆▆▆▆▆ 268k · 26%"). Segments are joined by a dim "  │  ", as
-in the status line ("The narrow layout"). The row says nothing about
-handoff: the handoff point is in the Session status card and the context
-breakdown. When the row is too wide, the working directory is cut from
-the left to keep its last part ("…/fiber"), and what still does not fit is
-cut at the slab's right edge. Clicking the ctx segment opens the context
-breakdown; clicking any other segment opens the Session status card's
-view, as the status line's segments do.
+Under the draft and inside the slab, the box ends with a rule and its
+status row, in every layout, and the status line after them while the panel
+is not shown ("The narrow layout"). The rule is ─ in `rule` from the
+stripe's next column to one column short of the slab's right edge. The
+status row has two sides. On the left: the working directory, then the
+permission mode in `attention`. Right-aligned, ending one column short of
+the slab's edge: the model in `accent` and the thinking level in
+`attention`, then "ctx" dim, an 8-cell context bar, the size and the share
+of the window dim ("ctx ▆▆▆▆▆▆▆▆ 268k · 26%"). Segments on each side are
+joined by a dim "  │  ", as in the status line ("The narrow layout"), and
+the two sides keep at least two columns between them. The row says nothing
+about handoff: the handoff point is in the Session status card and the
+context breakdown. When the row is too wide, the working directory is cut
+from the left to keep its last part ("…/fiber"), then the left side is cut
+at its right end; the right side is cut only when the slab is narrower than
+it, at the slab's right edge. Clicking the model or the thinking level
+opens the model picker, as Ctrl+L does; clicking the ctx segment opens the
+context breakdown; clicking the working directory or the permission mode
+opens the Session status card's view. An extension redraws the row
+through the `input_status` slot ("Extension seams").
 
 - Enter sends. Shift+Enter inserts a line break, with Ctrl+J for terminals
   without the kitty keyboard protocol. Pasted text keeps its line breaks. The box grows to about a third of
@@ -2477,7 +2495,7 @@ The roles, in order, with each built-in theme's values:
 | `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` | `#d0d7de` |
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
 | `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
-| `panel` | the rail's and the panel's regions, the narrow layout's status line | `#0c0c11` | `#f6f8fa` |
+| `panel` | the rail's and the panel's regions | `#0c0c11` | `#f6f8fa` |
 | `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
 | `surface_raised` | the card on screen, a hovered card | `#3a3a4a` | `#d0d7de` |
 | `card_retrying` | a rail card in RETRYING | `#262014` | `#ebe5d9` |
@@ -2772,7 +2790,7 @@ itself is a separate client of the hub, not a TUI extension.
 
 | Slot | What it draws |
 |---|---|
-| `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, the status rows, and any region an extension adds |
+| `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, and any region an extension adds |
 | `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
 | `prompt` | Only a person's prompt bubble: a non-driver message never calls it |
@@ -2790,7 +2808,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `working_line` | The working line |
 | `steering_queue` | The queued steering messages |
 | `input_box` | The input box |
-| `status_rows` | The narrow layout's status rows |
+| `status_rows` | The input box's status line |
 | `view:<name>` | A swapped view, built in or one an extension adds |
 | `overlay:<name>` | An overlay an extension adds, drawn over the conversation |
 | `approval` | The approval panel, draw-only |
@@ -2947,7 +2965,24 @@ three.
 
 Nothing draws and no renderer runs on an empty queue.
 
-**`status_rows`** draws the narrow layout's status rows.
+**`input_status`** draws the input box's status row, under its rule. A
+replaced input box is drawn whole by the extension, so `input_status` draws
+only when the input box itself is built in. A replacement draws one line, and
+further lines are dropped. A replacement keeps one target, the Session
+status view, over the row's full width. A replacement that returns no lines
+leaves the row blank; the rule stays.
+
+| Field | What it holds |
+|---|---|
+| `workspace` | The workspace's path |
+| `mode` | The permission mode |
+| `model` | The model |
+| `thinking` | The thinking level |
+| `context` | `tokens` and `window` |
+
+**`status_rows`** draws the input box's status line, while the panel is not
+shown. Like `input_status`, it draws only when the input box itself is built
+in.
 
 | Field | What it holds |
 |---|---|
