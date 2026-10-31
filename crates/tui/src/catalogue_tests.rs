@@ -9,6 +9,11 @@ use super::{Catalogue, ReadModels, Reader, Refresh};
 use crate::Input;
 use fakes::Deadline;
 
+#[test]
+fn a_default_catalogue_has_no_logged_out_providers() {
+    assert!(Catalogue::default().logged_out.is_empty());
+}
+
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
 

@@ -338,6 +338,7 @@ fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer, targets: &mut Vec<Targe
     }
     let (x, y, room) = content_row(rect);
     let (query, count) = bar_pieces(bar, room);
+    let (_, cursor) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
     let count_width = crate::format::width(&count);
     let pad = room
         .saturating_sub(
@@ -357,7 +358,7 @@ fn draw_bar(bar: &FindBar, area: Rect, buf: &mut Buffer, targets: &mut Vec<Targe
             false,
         ),
         (query, Style::new().add_modifier(Modifier::BOLD), false),
-        ("█".to_owned(), dim, false),
+        ("█".to_owned(), cursor, false),
         (" ".repeat(pad), Style::new(), false),
         (count, dim, true),
     ];
