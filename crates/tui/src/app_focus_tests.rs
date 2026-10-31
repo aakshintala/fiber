@@ -259,8 +259,13 @@ fn j_and_down_step_on_k_and_up_step_back_and_the_ends_hold() {
     assert_eq!(app.focused(), ids.get(1).copied());
     key(&mut app, Key::Char('j'));
     assert_eq!(app.focused(), ids.last().copied());
-    // The box row's ctx segment is the last stop now, holding at the
-    // bottom past the last group.
+    // The box row's status segment comes before its ctx segment: both
+    // hold at the bottom past the last group.
+    key(&mut app, Key::Down);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Panel(crate::app::panel::Spot::Status))
+    );
     key(&mut app, Key::Down);
     assert_eq!(
         app.focused(),
@@ -1162,7 +1167,9 @@ fn a_turn_is_a_stop_before_its_own_group_lines() {
             ids.first().copied().expect("a group"),
             TargetId::Turn(1),
             ids.get(1).copied().expect("a group"),
-            // The box row's ctx segment closes the order now.
+            // The box row's status and ctx segments close the order
+            // now, the directory and the mode first.
+            TargetId::Panel(crate::app::panel::Spot::Status),
             TargetId::Panel(crate::app::panel::Spot::Context),
         ]
     );

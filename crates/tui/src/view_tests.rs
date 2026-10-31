@@ -2613,8 +2613,13 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
     use crate::mouse::{Target, TargetId};
     let mut app = badged();
     // The badge's 40 characters on the row above the input box, under
-    // the status row's context target: the row's targets draw with it.
+    // the status row's status and context targets: the row's targets
+    // draw with it.
     let (_, targets) = pointed(&mut app, 40, 12, None);
+    let status = Target {
+        id: TargetId::Panel(crate::app::panel::Spot::Status),
+        rect: Rect::new(1, 10, 4, 1),
+    };
     let context = Target {
         id: TargetId::Panel(crate::app::panel::Spot::Context),
         rect: Rect::new(21, 10, 18, 1),
@@ -2629,7 +2634,7 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
         id: TargetId::Turn(0),
         rect: Rect::new(0, 0, 39, 6),
     };
-    assert_eq!(targets, vec![context, badge, turn]);
+    assert_eq!(targets, vec![status, context, badge, turn]);
     // Narrower than its text, it takes the whole row.
     let (_, targets) = pointed(&mut app, 20, 12, None);
     let badge = targets
