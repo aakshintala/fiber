@@ -864,11 +864,17 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             // (`switch/quota.rs`, `answer_fetch` over `force_start_quota`
             // and `wait_quota`), so the drawn value proves `finish_quota`
             // stored it; the answer folds into the panel card too
-            // (`tui/src/app/panel/quota.rs`, `panel_quota`). No
-            // wall-clock read or sleep of its own.
+            // (`tui/src/app/panel/quota.rs`, `panel_quota`). The view
+            // draws the cached rows under `/quota · fetching` until that
+            // answer lands (`tui/src/quota_view.rs`, `frame`), so the
+            // wait also requires the fetching mark gone: `10%` alone
+            // could match the cached draw while the fetch is still in
+            // flight. No wall-clock read or sleep of its own.
             run.write(b"/quota\r");
             run.wait_screen("the fetched quota value", |grid| {
-                grid.contents.contains("Quota") && grid.contents.contains("10%")
+                grid.contents.contains("Quota")
+                    && grid.contents.contains("10%")
+                    && !grid.contents.contains("fetching")
             });
             run.write(b"\x1b[27u");
             run.wait_screen("the conversation after the quota view", |grid| {
