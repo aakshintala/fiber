@@ -19,6 +19,6 @@ expression: "rows.join(\"\\n\")"
  ▌ › █                  steering goes to ◆ review the parser
  ▌─────────────────────────────────────────────────────────
  ▌auto                                   ctx ▆▆▆▆▆▆▆▆ — · —
+ ▌0 waiting  │  $0.00
+ ▌◆ 1 delegate running
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  0 waiting  │  $0.00
-  ◆ 1 delegate running

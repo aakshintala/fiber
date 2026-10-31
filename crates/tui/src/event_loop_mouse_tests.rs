@@ -86,7 +86,15 @@ fn long_session(turns: usize) -> Vec<Input> {
 /// following new output.
 #[track_caller]
 fn following() -> super::Loop<TestBackend> {
-    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so fixed wheel and page counts land where
+    // they did. The backend is built at the new size because a resize
+    // cannot grow a smaller `TestBackend` buffer.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 14), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, long_session(80));
@@ -890,7 +898,16 @@ fn grouped<B: ratatui::backend::Backend + crate::screen::SyncEmit>(backend: B) -
 
 #[test]
 fn clicks_open_the_ledger_then_a_call_then_the_thought() {
-    let mut lp = grouped(TestBackend::new(60, 12));
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so the collapsed group stays visible.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 14), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, thought_and_read());
     assert!(!shown(&lp).contains("src/a.rs"), "{}", shown(&lp));
     let group = row_of(&lp, "● Read");
     feed(&mut lp, vec![click(40, group)]);
@@ -1188,27 +1205,39 @@ fn a_click_on_a_handoffs_note_line_opens_the_note() {
         "trigger_at": 400_000});
     let started = json!({"input": [{"type": "message", "source": "driver",
         "content": [{"type": "text", "text": "go"}]}]});
-    let mut lp = attached(vec![
-        session("preamble_built", preamble, None),
-        session("turn_started", started, None),
-        session("handoff_started", json!({"trigger": "auto"}), None),
-        session(
-            "text_completed",
-            json!({"text": "## Note\nkeep going"}),
-            Some("a_n"),
-        ),
-        session(
-            "handoff_completed",
-            json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 402_000}),
-            None,
-        ),
-        session(
-            "assistant_message_delta",
-            json!({"text": "Continuing."}),
-            Some("a_2"),
-        ),
-        session("turn_completed", json!({"outcome": "completed"}), None),
-    ]);
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so the collapsed note stays visible.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 14), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(
+        &mut lp,
+        vec![
+            session("preamble_built", preamble, None),
+            session("turn_started", started, None),
+            session("handoff_started", json!({"trigger": "auto"}), None),
+            session(
+                "text_completed",
+                json!({"text": "## Note\nkeep going"}),
+                Some("a_n"),
+            ),
+            session(
+                "handoff_completed",
+                json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 402_000}),
+                None,
+            ),
+            session(
+                "assistant_message_delta",
+                json!({"text": "Continuing."}),
+                Some("a_2"),
+            ),
+            session("turn_completed", json!({"outcome": "completed"}), None),
+        ],
+    );
     assert!(!shown(&lp).contains("keep going"), "{}", shown(&lp));
     let note = row_of(&lp, "▸ note");
     feed(&mut lp, vec![click(4, note)]);
@@ -1586,7 +1615,13 @@ fn reads(turns: usize) -> Vec<Input> {
 
 #[test]
 fn a_click_queued_after_wheel_ups_opens_the_scrolled_group() {
-    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so the scroll clamps where it did.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 14), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, reads(3));
@@ -1604,9 +1639,16 @@ fn a_click_queued_after_wheel_ups_opens_the_scrolled_group() {
 #[test]
 fn queued_page_ups_keep_their_frames_and_fresh_targets() {
     // Queued together: the click hits turn 1's group at grid row 7,
-    // drawn after the third PageUp.
+    // drawn after the third PageUp. The taller input box shrank the
+    // conversation area by two rows: widen the screen back so the
+    // scroll lands where it did.
     let queued = || vec![page_up(), page_up(), page_up(), click(40, 7)];
-    let (mut shown_lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (mut shown_lp, _) = new_loop(TestBackend::new(60, 14), None);
+    shown_lp.app.set_size(60, 14);
+    shown_lp
+        .screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
     shown_lp
         .app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -1620,9 +1662,15 @@ fn queued_page_ups_keep_their_frames_and_fresh_targets() {
         shown(&shown_lp)
     );
     // Each PageUp keeps its frame: the three mid-batch frames and the
-    // batch's own, as four batches draw today.
+    // batch's own, as four batches draw today. The taller input box
+    // shrank the conversation area by two rows: widen the screen back
+    // so each PageUp still moves.
     let sink = Sink::default();
     let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     // Four turns, so each of the three PageUps still moves: a clamped
@@ -1643,8 +1691,9 @@ fn queued_motions_keep_their_frames() {
     let drawn = blocks(&sink.bytes());
     // The hover tint toggles between turn 2's group row and the row above
     // it, so every report changes the frame, as one batch each does today.
+    // The two box rows moved every bottom-anchored row up by two.
     let inputs: Vec<Input> = (0..10)
-        .map(|i| motion(5, if i % 2 == 0 { 5 } else { 4 }))
+        .map(|i| motion(5, if i % 2 == 0 { 3 } else { 2 }))
         .collect();
     feed(&mut lp, inputs);
     assert_eq!(blocks(&sink.bytes()) - drawn, 10);

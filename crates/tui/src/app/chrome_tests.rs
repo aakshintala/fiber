@@ -138,9 +138,9 @@ fn without_home_the_column_is_the_screen() {
     assert_eq!(app.chrome().layout(), None);
     assert_eq!(app.chrome().floor_line(), None);
     assert_eq!(app.column_width(), 160);
-    // No header row: the input box's one row with its edges is all that
-    // sits below.
-    assert_eq!(app.conversation_height(), 37);
+    // No header row: the input box's input row, status row, and rule with
+    // its edges are all that sit below.
+    assert_eq!(app.conversation_height(), 35);
     // Below the floor, without home, today's screen still draws.
     let small = plain(30, 8);
     assert_eq!(small.chrome().floor_line(), None);

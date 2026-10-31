@@ -2890,14 +2890,16 @@ fn tail_open_prepared(
     });
     app.set_size(60, 12);
     prepare(&mut app);
+    let (width, height) = app.screen_size();
     let (events_tx, events) = mpsc::channel();
     let backend = RecordBackend {
-        inner: ratatui::backend::TestBackend::new(60, 12),
+        inner: ratatui::backend::TestBackend::new(width, height),
         events: events_tx,
         block: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         release: mpsc::channel().1,
     };
-    let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let screen =
+        super::Screen::new(backend, width, height).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = super::super::Loop::for_test(app, screen);
     lp.hover = false;
     let (ours, hub_end) = pair();
@@ -3576,11 +3578,14 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     // The hub serves the replay the test feeds below: it reads every
     // `commands` a replayed turn start sends but answers none, so the
     // choreographed batches gain no input.
-    let open = tail_open(
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so the landing frame keeps its old window.
+    let open = tail_open_prepared(
         log.clone(),
         Full::ManualReplay,
         History::Windows,
         Vec::new(),
+        |app| app.set_size(60, 14),
     );
     let first = frames(&open)
         .pop()
@@ -4727,7 +4732,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
             "content": [{"type": "text", "text": "child prompt"}]}]}),
     ));
     let mut size = crate::app::App::new(std::path::PathBuf::from("/w"));
-    size.set_size(60, 12);
+    size.set_size(60, 14);
     let height = size.conversation_height();
     let mut child_pages = crate::window::Pages::new(60);
     for line in &child {
@@ -4769,17 +4774,17 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
         open_at: crate::OpenAt::Session(contract::SessionId(CHILD.to_owned()), None),
         ..Default::default()
     });
-    app.set_size(60, 12);
+    app.set_size(60, 14);
     let (events_tx, events) = mpsc::channel();
     let block = std::sync::Arc::new(AtomicBool::new(false));
     let (release_tx, release) = mpsc::channel();
     let backend = RecordBackend {
-        inner: ratatui::backend::TestBackend::new(60, 12),
+        inner: ratatui::backend::TestBackend::new(60, 14),
         events: events_tx,
         block: std::sync::Arc::clone(&block),
         release,
     };
-    let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let screen = super::Screen::new(backend, 60, 14).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = super::super::Loop::for_test(app, screen);
     lp.hover = false;
     let (ours, theirs) = pair();
