@@ -859,9 +859,20 @@ fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
             .iter()
             .any(|target| { target.id == TargetId::Panel(PanelSpot::ChangedFiles) })
     );
+    let effect = app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
+    let Effect::Send(lines) = effect else {
+        panic!("opening the list sends the numstat query, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 1);
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
     assert_eq!(
-        app.on_click(TargetId::Panel(PanelSpot::ChangedFiles)),
-        Effect::None
+        request["args"]["command"],
+        crate::changed_files_view::numstat_command(&paths)
     );
 }
 
@@ -1054,9 +1065,27 @@ fn clicking_a_panel_file_row_opens_its_diff_and_sends_the_request() {
             .any(|target| { target.id == TargetId::Panel(PanelSpot::File(0)) })
     );
     let expected = ranked(app.panel_state().changes())[0].0.to_owned();
-    let value = command(app.on_click(TargetId::Panel(PanelSpot::File(0))));
+    let effect = app.on_click(TargetId::Panel(PanelSpot::File(0)));
+    let Effect::Send(lines) = effect else {
+        panic!("opening a file sends the numstat query then its diff, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 2);
+    let numstat: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let diff: Value = serde_json::from_str(&lines[1])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
+    assert_eq!(
+        numstat["args"]["command"],
+        crate::changed_files_view::numstat_command(&paths)
+    );
     assert!(app.session_view_open());
-    assert_eq!(value["args"]["command"], diff_command(&expected));
+    assert_eq!(diff["command"], "shell");
+    assert_eq!(diff["args"]["command"], diff_command(&expected));
+    assert_eq!(diff["args"]["send"], false);
     assert!(
         screen(&app, 160, 40)
             .0
@@ -1065,12 +1094,23 @@ fn clicking_a_panel_file_row_opens_its_diff_and_sends_the_request() {
 }
 
 #[test]
-fn a_panel_file_rank_past_the_end_opens_the_list_without_sending() {
+fn a_panel_file_rank_past_the_end_opens_the_list_sending_only_the_numstat_command() {
     let mut app = files_attached(160, 40);
     many_changes(&mut app, 1);
+    let effect = app.on_click(TargetId::Panel(PanelSpot::File(5)));
+    let Effect::Send(lines) = effect else {
+        panic!("a rank past the end sends only the numstat query, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 1);
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
     assert_eq!(
-        app.on_click(TargetId::Panel(PanelSpot::File(5))),
-        Effect::None
+        request["args"]["command"],
+        crate::changed_files_view::numstat_command(&paths)
     );
     assert!(app.session_view_open());
     assert!(screen(&app, 160, 40).0.contains("Changed files"));
@@ -1088,9 +1128,20 @@ fn the_narrow_changed_files_segment_opens_the_file_list() {
             .iter()
             .any(|target| { target.id == TargetId::Panel(PanelSpot::ChangedFiles) })
     );
+    let effect = app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
+    let Effect::Send(lines) = effect else {
+        panic!("opening the list sends the numstat query, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 1);
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let paths: Vec<&str> = ranked(app.panel_state().changes())
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
     assert_eq!(
-        app.on_click(TargetId::Panel(PanelSpot::ChangedFiles)),
-        Effect::None
+        request["args"]["command"],
+        crate::changed_files_view::numstat_command(&paths)
     );
     assert!(screen(&app, 100, 30).0.contains("Changed files"));
 }
@@ -2233,4 +2284,56 @@ fn wheel_over_hooks_scrolls_the_list_not_the_conversation() {
         before,
         "a selection still on screen stays where it was"
     );
+}
+
+#[test]
+fn the_matching_numstat_answer_shows_git_figures_in_the_rows() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let (_, targets) = screen(&app, 120, 35);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == TargetId::Panel(PanelSpot::ChangedFiles) })
+    );
+    let effect = app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
+    let Effect::Send(lines) = effect else {
+        panic!("opening the list sends the numstat query, got {effect:?}");
+    };
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +2 −0"), "{shown}");
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        "5\t0\tsrc/file-0.rs\n0\t3\tsrc/file-1.rs\nExit code 1.\n",
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+}
+
+#[test]
+fn a_rejected_numstat_query_keeps_the_card_figures() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let (_, targets) = screen(&app, 120, 35);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == TargetId::Panel(PanelSpot::ChangedFiles) })
+    );
+    let effect = app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
+    let Effect::Send(lines) = effect else {
+        panic!("opening the list sends the numstat query, got {effect:?}");
+    };
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    app.on_line(rejected_diff(
+        SESSION,
+        request["id"].as_str().unwrap_or_default(),
+        "hub refused",
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
 }
