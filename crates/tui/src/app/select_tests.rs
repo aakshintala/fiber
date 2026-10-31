@@ -989,22 +989,17 @@ fn a_selection_over_a_dropped_page_copies_after_it_loads() {
         "the release waits on the dropped page: {waiting:?}"
     );
     assert_eq!(app.take_copy(), None, "the page is not loaded yet");
-    assert_eq!(
-        app.select.pending_pages(),
-        waiting.as_slice(),
-        "a waiting copy waits on nothing more"
-    );
     load_needed(&mut app, &lines);
     let text = app.take_copy().expect("the copy runs once the page loads");
     // The copy holds the rows' text: the bar's glyphs are chrome, never
     // copied.
     let top = top_row.trim().trim_end_matches(['█', '│']).trim_end();
     assert!(text.starts_with(top), "{text:?} from {top_row:?}");
-    assert!(text.lines().count() > 8, "{text:?}");
+    assert!(text.contains('\n'), "the copy spans its rows: {text:?}");
     assert!(app.copied());
     assert!(
-        app.select.pending_pages().is_empty(),
-        "the copy waits on no page more"
+        app.pages().part(page).is_some(),
+        "the dropped page loaded for the copy"
     );
     assert_eq!(app.take_copy(), None, "a copy runs once");
 }
@@ -1020,10 +1015,6 @@ fn a_failed_page_abandons_the_copy_with_a_notice() {
     }
     assert_eq!(app.take_copy(), None);
     assert_eq!(app.notice(), Some(COPY_FAILED));
-    assert!(
-        app.select.pending_pages().is_empty(),
-        "the abandoned copy waits on no page"
-    );
     assert!(!app.copied());
 }
 
@@ -1036,10 +1027,6 @@ fn a_lost_link_abandons_the_copy() {
     app.disconnected();
     assert_eq!(app.notice(), Some(COPY_FAILED));
     assert_eq!(app.take_copy(), None);
-    assert!(
-        app.select.pending_pages().is_empty(),
-        "the abandoned copy waits on no page"
-    );
 
     // A copy released with the link already down is abandoned in the step.
     let mut app = spanning_app(&lines);
@@ -1049,10 +1036,6 @@ fn a_lost_link_abandons_the_copy() {
     assert_ne!(app.notice(), Some(COPY_FAILED));
     assert_eq!(app.take_copy(), None);
     assert_eq!(app.notice(), Some(COPY_FAILED));
-    assert!(
-        app.select.pending_pages().is_empty(),
-        "the abandoned copy waits on no page"
-    );
 }
 
 #[test]

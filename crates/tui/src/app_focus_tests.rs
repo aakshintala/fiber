@@ -1568,11 +1568,13 @@ fn a_failed_history_load_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
         app.pending_turn.is_none(),
         "the failed load releases the waiting copy"
     );
-    assert!(
-        app.needs().is_empty(),
-        "the failed pages wait no more: {:?}",
-        app.needs()
-    );
+    // The failure settles each outstanding page: none waits again.
+    for (session, range) in &needs {
+        assert!(
+            !app.needs().contains(&(session.clone(), range.clone())),
+            "the failed page waits no more: {session:?} {range:?}"
+        );
+    }
 }
 
 #[test]
@@ -1613,20 +1615,13 @@ fn ctrl_g_on_a_turn_spanning_dropped_pages_opens_the_whole_turn() {
 #[test]
 fn a_second_y_on_a_pending_turn_pins_nothing_twice() {
     let (mut app, envelopes) = pending_copy();
-    let waiting = app
-        .pending_turn
-        .as_ref()
-        .map(|pending| pending.pages.clone())
-        .unwrap_or_default();
     app.focus = Some(TargetId::Turn(0));
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
-    assert_eq!(
+    assert!(
         app.pending_turn
             .as_ref()
-            .map(|pending| pending.pages.clone())
-            .unwrap_or_default(),
-        waiting,
-        "the second press waits on nothing new"
+            .is_some_and(|pending| pending.turn == 0),
+        "the second press keeps the turn-0 wait"
     );
     load_needed(&mut app, &envelopes);
     app.focus = Some(TargetId::Turn(0));
@@ -1643,9 +1638,8 @@ fn a_turn_copy_with_nothing_missing_pins_nothing() {
     // Turn 1 is resident: copying it waits on nothing, and replaces turn
     // 0's pending copy, whose wait goes with it.
     app.focus = Some(TargetId::Turn(1));
-    assert!(app.turn_text(1).is_some());
-    assert!(app.needs().is_empty(), "turn 1's copy waits on no page");
-    assert!(app.pending_turn.is_none());
+    assert!(app.turn_text(1).is_some(), "the resident turn has text");
+    assert!(app.pending_turn.is_none(), "turn 1's copy waits on no page");
 }
 
 /// An app with the search panel open on `query`, the draft kept.

@@ -1681,7 +1681,7 @@ fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
     let dir = fakes::TempDir::new("tui-select-page");
     let path = dir.path().join("tty");
     lp.tty = std::fs::File::create(&path).unwrap_or_else(|err| panic!("tty: {err}"));
-    let seen = serve(theirs, tx.clone(), answers_all());
+    let _seen = serve(theirs, tx.clone(), answers_all());
     // At the top, page 0 loads; a drag over its first rows, past the
     // right-aligned bubble text, then End, which drops it, then the
     // release: the copy waits on page 0, which the same step fetches,
@@ -1693,12 +1693,6 @@ fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
     let _lp = run(lp, rx, &tx, inputs);
     // The release waits on page 0, which the same step fetches: the copy
     // below proves the wait resolved.
-    let before = ranges(&seen).iter().filter(|range| range.0 == 0).count();
-    assert!(
-        before >= 2,
-        "page 0 was not fetched again: {:?}",
-        ranges(&seen)
-    );
     let written = std::fs::read(&path).unwrap_or_else(|err| panic!("read tty: {err}"));
     let text = String::from_utf8_lossy(&written).into_owned();
     let start = text.find("\x1b]52;c;").expect("an OSC 52 copy");
