@@ -3330,6 +3330,107 @@ fn a_confined_shell_runs_and_marks_its_effects() {
     assert!(text(&output).contains("hi"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
+    let root = fakes::TempDir::new("fiber-shell-protected-paths");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    fakes::git::git(&workspace, &["init", "-q"]);
+    // A valid config the discovery reads: the baseline records the shared
+    // config and hooks through git, never as a fallback directory.
+    fakes::git::git(&workspace, &["config", "fiber.probe", "config baseline"]);
+    fakes::git::git(
+        &workspace,
+        &["commit", "-q", "--allow-empty", "-m", "baseline"],
+    );
+    let linked = root.path().join("linked");
+    let linked_arg = linked.to_string_lossy().into_owned();
+    fakes::git::git(&workspace, &["worktree", "add", "--detach", &linked_arg]);
+    std::fs::create_dir_all(workspace.join(".git/hooks")).unwrap();
+    std::fs::create_dir_all(workspace.join(".fiber")).unwrap();
+    std::fs::create_dir_all(linked.join(".fiber")).unwrap();
+    std::fs::write(workspace.join(".git/hooks/pre-commit"), "hook baseline\n").unwrap();
+    std::fs::write(workspace.join(".fiber/state"), "fiber baseline\n").unwrap();
+    std::fs::write(linked.join(".fiber/state"), "linked fiber baseline\n").unwrap();
+    std::fs::write(linked.join("mutation.txt"), "gitdir: /evil\n").unwrap();
+    let linked_pointer = std::fs::read(linked.join(".git")).unwrap();
+    let sandbox = sandbox_settings_for_integration("protected");
+    let fiber_home = sandbox.fiber_home.clone();
+    let (protection, recovery) =
+        tools::ProtectedPaths::open(&fiber_home, &workspace).expect("the project baseline opens");
+    assert!(
+        recovery.is_none(),
+        "the first session has no stale baseline"
+    );
+    let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_sandbox(Arc::new(Mutex::new(sandbox)))
+        .with_protection(protection);
+
+    let arguments = args(
+        "tee .git/config .git/hooks/pre-commit .fiber/state ../linked/.git ../linked/.fiber/state < ../linked/mutation.txt",
+    );
+    assert!(
+        shell.effects(&arguments).unwrap().declared.confined,
+        "the test needs a confined Linux call"
+    );
+    let output = run_prepared(
+        &shell,
+        &arguments,
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+
+    assert!(
+        output.error.is_none(),
+        "the command completed: {}",
+        text(&output)
+    );
+    assert!(
+        std::fs::read_to_string(workspace.join(".git/config"))
+            .unwrap()
+            .contains("config baseline"),
+        "the shared config is restored"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join(".git/hooks/pre-commit")).unwrap(),
+        "hook baseline\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join(".fiber/state")).unwrap(),
+        "fiber baseline\n"
+    );
+    assert_eq!(std::fs::read(linked.join(".git")).unwrap(), linked_pointer);
+    assert_eq!(
+        std::fs::read_to_string(linked.join(".fiber/state")).unwrap(),
+        "linked fiber baseline\n"
+    );
+    let report = output
+        .protected_paths
+        .as_ref()
+        .expect("the restore is in the result");
+    // `docs/sandbox.md:64-73` promises restoration and reporting for the
+    // shared Git paths and every registered worktree's pointer and `.fiber/`;
+    // `docs/events.md:683` defines restored paths as workspace-relative.
+    let restored: BTreeSet<&str> = report.restored.iter().map(String::as_str).collect();
+    assert_eq!(
+        restored,
+        BTreeSet::from_iter([
+            ".git/config",
+            ".git/hooks",
+            ".fiber",
+            "../linked/.git",
+            "../linked/.fiber",
+        ])
+    );
+    // `docs/sandbox.md:100-102` promises an unsuccessful restore appears in
+    // the report's failed list.
+    assert!(report.failed.is_empty());
+    // `docs/events.md:697-701` carries warning lines from the report into the
+    // model result, and `docs/sandbox.md:64-73` includes `.git/config`.
+    assert!(text(&output).contains(".git/config"));
+}
+
 #[test]
 fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
     let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-fail");

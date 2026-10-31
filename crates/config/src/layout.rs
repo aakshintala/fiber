@@ -63,6 +63,13 @@ pub fn project_worktrees_dir(home: &Path, project: &ProjectKey) -> PathBuf {
     projects_dir(home).join(project.as_str()).join("worktrees")
 }
 
+/// `<home>/projects/<key>/protected-paths`: one project's baseline and locks.
+pub fn project_protected_paths_dir(home: &Path, project: &ProjectKey) -> PathBuf {
+    projects_dir(home)
+        .join(project.as_str())
+        .join("protected-paths")
+}
+
 /// `<home>/cache/mcp`: where MCP server output is cached.
 pub fn mcp_cache_dir(home: &Path) -> PathBuf {
     home.join("cache").join("mcp")
@@ -116,7 +123,7 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use super::{ProjectKey, project_worktrees_dir, projects_dir};
+    use super::{ProjectKey, project_protected_paths_dir, project_worktrees_dir, projects_dir};
 
     #[test]
     fn projects_dir_is_projects_under_home() {
@@ -132,6 +139,15 @@ mod tests {
         assert_eq!(
             project_worktrees_dir(&PathBuf::from("/h"), &project),
             PathBuf::from("/h/projects/proj/worktrees")
+        );
+    }
+
+    #[test]
+    fn project_protected_paths_dir_is_under_the_project() {
+        let project = ProjectKey::new("proj").unwrap();
+        assert_eq!(
+            project_protected_paths_dir(&PathBuf::from("/h"), &project),
+            PathBuf::from("/h/projects/proj/protected-paths")
         );
     }
 }

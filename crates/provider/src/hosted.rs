@@ -27,6 +27,7 @@ pub(crate) fn completed(item: Value, urls: &[&str]) -> ToolCallCompleted {
         provider_item: Some(item),
         hosts_surfaced: urls.iter().map(|url| (*url).to_owned()).collect(),
         loaded: None,
+        protected_paths: None,
     }
 }
 
@@ -54,5 +55,6 @@ pub(crate) fn failed(item: Value, code: &str) -> ToolCallCompleted {
         provider_item: Some(item),
         hosts_surfaced: Vec::new(),
         loaded: None,
+        protected_paths: None,
     }
 }

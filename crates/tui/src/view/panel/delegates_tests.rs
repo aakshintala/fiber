@@ -633,6 +633,29 @@ fn progress_finished_rows_freeze_the_last_status_at_the_first_end() {
 }
 
 #[test]
+fn a_delegate_completion_ignores_a_protected_paths_report() {
+    // Delegate completions never carry the report; a stray one must not
+    // disturb the finished rows, which show outcome alone.
+    let mut app = attached(160, 40);
+    fold_fiber(&mut app, 1);
+    delegate_status(
+        &mut app,
+        "j_1",
+        serde_json::json!({"state": "idle", "calls": 6, "started": 2000}),
+    );
+    app.on_line(session_line_at(
+        "job_completed",
+        60_000,
+        serde_json::json!({"job_id": "j_1", "status": "completed",
+            "protected_paths": {"restored": [".fiber"], "failed": []}}),
+    ));
+    assert_eq!(
+        super::rows_with_done(&app, 100)[1].line.to_string(),
+        "  6 calls · 58s · done"
+    );
+}
+
+#[test]
 fn with_a_status_the_second_row_shows_its_progress() {
     use crate::theme::Role;
     // The first row keeps the state glyph; progress is dim below it.

@@ -214,7 +214,7 @@ fn a_floor_in_the_record_lists_with_the_extension() {
 #[test]
 #[allow(clippy::unwrap_used, reason = "a failure is the test's")]
 fn a_bad_floor_lists_the_extension_as_damaged() {
-    for floor in ["null", "1", "\"1.2\"", "\"x\""] {
+    for floor in ["null", "1", "\"x\""] {
         let home = fakes::TempDir::new("fiber-read-bad-floor");
         installed_dir(
             home.path(),

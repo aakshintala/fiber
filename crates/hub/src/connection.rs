@@ -248,6 +248,14 @@ pub(crate) struct Hub {
     /// retry still runs inside the starter.
     #[cfg(test)]
     pub(crate) on_retry_contended: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot signal fired after the relay thread's
+    /// successful canonical reroute claim and before it takes the relays
+    /// lock to hand the command over. The forced-race tests arm it to
+    /// prove the acknowledgement won before the paused write publishes
+    /// its late outcome. No outside seam pauses the relay thread between
+    /// the claim and the handover.
+    #[cfg(test)]
+    pub(crate) after_reroute_claim: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: scripted process reads for the session-socket refusal
     /// paths; production always reads the kernel. The seam makes the
     /// kernel report a false ancestry for the connecting peer, pinning the
@@ -378,6 +386,8 @@ impl Hub {
             fail_spawn: Mutex::new(None),
             #[cfg(test)]
             on_retry_contended: Mutex::new(None),
+            #[cfg(test)]
+            after_reroute_claim: Mutex::new(None),
             line_cap: AtomicUsize::new(support::framing::MAX_LINE),
         }
     }

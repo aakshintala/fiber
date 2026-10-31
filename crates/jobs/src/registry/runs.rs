@@ -537,6 +537,7 @@ impl Registry {
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             },
             finished,
         );
