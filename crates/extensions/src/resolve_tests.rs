@@ -340,6 +340,159 @@ fn meets_orders_a_nightly_have_below_its_base_stable() {
 }
 
 #[test]
+fn a_nightly_minimum_counts_nightly_tags_in_newest_within() {
+    // The ticket's rule: a pre-release tag counts when some minimum is
+    // itself a pre-release, and sorts below the stable release on its base.
+    let w = wants(&[("your install", "0.0.1-nightly.20240101")]);
+    let t = tags(&["v0.0.1-nightly.20240101", "v0.0.1-nightly.20240102"]);
+    assert_eq!(
+        newest_within("h", &w, &t).unwrap(),
+        "v0.0.1-nightly.20240102"
+    );
+    // At, just below and just above the edge of the newest nightly tag.
+    let w = wants(&[("your install", "0.0.1-nightly.20231231")]);
+    assert_eq!(
+        newest_within("h", &w, &t).unwrap(),
+        "v0.0.1-nightly.20240102"
+    );
+    let w = wants(&[("your install", "0.0.1-nightly.20240102")]);
+    assert_eq!(
+        newest_within("h", &w, &t).unwrap(),
+        "v0.0.1-nightly.20240102"
+    );
+    let w = wants(&[("your install", "0.0.1-nightly.20240103")]);
+    assert!(
+        matches!(newest_within("h", &w, &t), Err(Error::NoVersion { .. })),
+        "a floor above every nightly takes none"
+    );
+}
+
+#[test]
+fn a_nightly_minimum_counts_nightly_tags_in_pick() {
+    // The lowest nightly at or above the nightly minimum wins, not the
+    // newest tag.
+    let w = wants(&[("your install", "0.0.1-nightly.20240101")]);
+    let t = tags(&["v0.0.1-nightly.20240101", "v0.0.1-nightly.20240102"]);
+    assert_eq!(pick("h", &w, &t).unwrap(), "v0.0.1-nightly.20240101");
+    // At and just above the edge of the lowest qualifying nightly.
+    let w = wants(&[("your install", "0.0.1-nightly.20240102")]);
+    assert_eq!(pick("h", &w, &t).unwrap(), "v0.0.1-nightly.20240102");
+    let w = wants(&[("your install", "0.0.1-nightly.20240103")]);
+    assert!(
+        matches!(pick("h", &w, &t), Err(Error::NoVersion { .. })),
+        "a floor above every nightly takes none"
+    );
+}
+
+#[test]
+fn a_stable_minimum_never_takes_a_nightly_tag() {
+    // The ticket's rule counts a nightly only for a pre-release minimum:
+    // a stable floor keeps the stable-only set in both resolvers.
+    let w = wants(&[("your install", "0.0.1")]);
+    let t = tags(&["v0.0.1", "v0.0.1-nightly.20240102"]);
+    assert_eq!(newest_within("h", &w, &t).unwrap(), "v0.0.1");
+    assert_eq!(pick("h", &w, &t).unwrap(), "v0.0.1");
+    // With no stable tag at all, the nightly stays out for both.
+    let only = tags(&["v0.0.1-nightly.20240102"]);
+    assert!(matches!(
+        newest_within("h", &w, &only),
+        Err(Error::NoVersion { .. })
+    ));
+    assert!(matches!(pick("h", &w, &only), Err(Error::NoVersion { .. })));
+}
+
+#[test]
+fn a_nightly_floor_prefers_stable_newest_but_nightly_lowest() {
+    // Same-base stable sorts above its nightly, so the update-everything
+    // choice takes stable while the dependency choice takes the lowest
+    // qualifying nightly.
+    let w = wants(&[("your install", "0.0.1-nightly.20240101")]);
+    let t = tags(&["v0.0.1-nightly.20240102", "v0.0.1"]);
+    assert_eq!(newest_within("h", &w, &t).unwrap(), "v0.0.1");
+    assert_eq!(pick("h", &w, &t).unwrap(), "v0.0.1-nightly.20240102");
+}
+
+#[test]
+fn nightly_tags_stay_ordered_and_deterministic() {
+    // Two spellings of one nightly share its key: either tag order gives
+    // the same answer, so the tag text still breaks the tie.
+    let w = wants(&[("your install", "0.0.1-nightly.20240101")]);
+    let both = tags(&["v0.0.1-nightly.20240102", "0.0.1-nightly.20240102"]);
+    let mut swapped = both.clone();
+    swapped.reverse();
+    assert_eq!(
+        newest_within("h", &w, &both).unwrap(),
+        newest_within("h", &w, &swapped).unwrap()
+    );
+    assert_eq!(
+        pick("h", &w, &both).unwrap(),
+        pick("h", &w, &swapped).unwrap()
+    );
+}
+
+#[test]
+fn merely_pre_release_shaped_tags_stay_ignored_for_every_floor() {
+    // Only the -nightly.YYYYMMDD shape counts, for a nightly floor as
+    // for a stable one: anything else parses as no version at all.
+    let nightly = wants(&[("your install", "0.0.1-nightly.20240101")]);
+    let stable = wants(&[("your install", "0.0.1")]);
+    let t = tags(&["v0.0.1-rc1", "v0.0.1-nightly.2024010", "latest"]);
+    for w in [&nightly, &stable] {
+        assert!(matches!(
+            newest_within("h", w, &t),
+            Err(Error::NoVersion { .. })
+        ));
+        assert!(matches!(pick("h", w, &t), Err(Error::NoVersion { .. })));
+    }
+    let mixed = tags(&["v0.0.1-rc1", "v0.0.1-nightly.20240102"]);
+    assert_eq!(
+        pick("h", &nightly, &mixed).unwrap(),
+        "v0.0.1-nightly.20240102"
+    );
+    assert_eq!(
+        newest_within("h", &nightly, &mixed).unwrap(),
+        "v0.0.1-nightly.20240102"
+    );
+}
+
+#[test]
+fn a_malformed_nightly_minimum_is_refused_in_pick() {
+    // The floor computation stops with BadVersion; the nightly shape is
+    // never silently skipped.
+    for bad in ["0.0.1-nightly.2024010", "0.0.1-nightly.202401011"] {
+        let w = wants(&[("a", bad)]);
+        assert!(
+            matches!(pick("h", &w, &tags(ALL)), Err(Error::BadVersion { .. })),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn a_cross_major_nightly_minimum_stops_naming_both() {
+    // Major pinning is unchanged: a nightly minimum carries its base
+    // triple's major.
+    for bad in ["1.0.0", "1.0.0-nightly.20240101"] {
+        let w = wants(&[("a", "0.0.1-nightly.20240101"), ("b", bad)]);
+        for err in [
+            newest_within("h", &w, &tags(ALL)).unwrap_err(),
+            pick("h", &w, &tags(ALL)).unwrap_err(),
+        ] {
+            assert!(matches!(err, Error::MajorConflict { .. }), "{err}");
+        }
+    }
+}
+
+#[test]
+fn no_minima_stay_stable_only_with_nightly_tags_present() {
+    // An empty wants holds no pre-release minimum, so nightly tags stay
+    // out of the install choice.
+    let t = tags(&["v0.0.1-nightly.20240102", "v0.0.1"]);
+    assert_eq!(newest_within("h", &wants(&[]), &t).unwrap(), "v0.0.1");
+    assert_eq!(newest(&t).unwrap(), "v0.0.1");
+}
+
+#[test]
 fn an_empty_floor_keeps_a_zero_base_nightly_minimum() {
     // docs/releasing.md, "Versions": the empty floor sorts below
     // every valid minimum, including `0.0.0-nightly.YYYYMMDD`: an equal

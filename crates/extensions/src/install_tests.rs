@@ -704,6 +704,56 @@ fn a_record_with_a_floor_round_trips_through_staging() {
 }
 
 #[test]
+fn a_record_with_a_nightly_floor_reads_back_intact() {
+    use super::Record;
+    let dirs = Dirs::new("floor-nightly");
+    // The tag verbatim, as the update writes the floor, and the same
+    // nightly without its `v`: both order in the resolver, so both read.
+    for floor in ["v0.0.1-nightly.20240102", "0.0.1-nightly.20240101"] {
+        let dir = record_dir(
+            &dirs.root,
+            &format!(
+                r#"{{"name":"acme","version":"v1.0.0","requested":true,"floor":"{floor}","source":{{"commit":"abc"}}}}"#
+            ),
+        );
+        let record = Record::read(&dir).unwrap();
+        assert_eq!(record.floor.as_deref(), Some(floor), "{floor}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn a_record_with_a_junk_floor_is_a_bad_record() {
+    use super::Record;
+    let dirs = Dirs::new("floor-junk");
+    // Null, a non-string and strings no minimum parser orders are damage,
+    // naming the record file and the bad floor.
+    for floor in [
+        "null".to_owned(),
+        "true".to_owned(),
+        r#"{"x":1}"#.to_owned(),
+        "\"x\"".to_owned(),
+        "\"1.2.3.4\"".to_owned(),
+        "\"\"".to_owned(),
+        "\"0.0.1-nightly.2024010\"".to_owned(),
+    ] {
+        let dir = record_dir(
+            &dirs.root,
+            &format!(
+                r#"{{"name":"acme","version":"v1.0.0","requested":false,"floor":{floor},"source":{{"commit":"abc"}}}}"#
+            ),
+        );
+        let err = Record::read(&dir).unwrap_err();
+        assert!(
+            matches!(err, crate::Error::BadRecord { .. }),
+            "{floor}: {err}"
+        );
+        assert!(err.to_string().contains("bad `floor`"), "{floor}: {err}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
 fn a_record_with_a_bad_floor_is_a_bad_record() {
     use super::Record;
     let dirs = Dirs::new("floor-bad");
