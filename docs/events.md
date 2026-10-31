@@ -680,6 +680,7 @@ Durable. The call's outcome.
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 | `hosts_surfaced` | array of strings | no | the hosts the result surfaced, as URLs, which become known in the session (`docs/tools.md`, "What a result carries"); absent when empty |
 | `loaded` | array of strings | no | the tools a search loaded, by name, best first, ties by name; `[]` when it matched nothing; absent on every other result, and when an `after_tool` hook failed (`docs/tools.md`, "Tool search") |
+| `protected_paths` | object | no | on a confined shell call that changed a protected path: `restored` (array of strings, workspace-relative paths restored to the recorded baseline) and `failed` (array of `path` and `message` objects, one per restore that did not succeed); absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
 
 A failed model call is an assistant message that completed with a failed
 outcome and an `error`; the retry is a new action. Its codes
@@ -692,6 +693,14 @@ English. A nonzero exit is `failed` with code `nonzero_exit`. Every error code
 is listed in `docs/errors.md`. `changes` is the one tool-neutral account of a
 change: any tool may set it, so a client shows the counts without knowing
 which tool ran (`docs/tools.md`, "What a result carries").
+
+On a confined shell call that changed a protected path,
+`tool_call_completed` carries `protected_paths`, and an adopted shell call's
+`job_completed` carries the same object. The terminal folds the warning lines
+from the field — one row beneath the call, or under the open job's output —
+and the model receives them through the result text or the completion notice.
+Resume replays the same lines from the same field, so what the person saw
+never depends on who rewrote the text (`docs/sandbox.md`, "Protected paths").
 
 A line whose content a hook changed carries `changed_by`, naming the extensions that took attribution for the change. A change no extension took attribution for carries no `changed_by` key. It appears on
 `tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
@@ -1376,6 +1385,7 @@ Durable.
 | `output_tail` | string | no | for a failed job, the tail of its output, capped; absent when a hook changed the completion notice (`notice` holds what the model was sent) |
 | `notice` | string | no | the text the model was sent, when a hook changed or withheld the completion notice |
 | `changed_by` | `changed_by` | no | when a hook changed the completion notice, and named itself |
+| `protected_paths` | object | no | on an adopted shell call that changed a protected path: `restored` (array of strings) and `failed` (array of `path` and `message` objects), as on `tool_call_completed`; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
 
 #### `jobs_pending_notified`
 

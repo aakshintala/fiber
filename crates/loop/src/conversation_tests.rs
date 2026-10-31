@@ -451,6 +451,7 @@ fn orphaned(id: &str) -> Event {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     })
 }
 
@@ -566,6 +567,7 @@ fn completed(id: &str) -> Event {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     })
 }
 
@@ -580,6 +582,7 @@ fn noticed(id: &str, notice: &str) -> Event {
         output_tail: Some("raw tail".into()),
         notice: Some(notice.into()),
         changed_by: Some(vec!["redactor".into()]),
+        protected_paths: None,
     })
 }
 
@@ -920,6 +923,7 @@ fn a_job_record_under_an_action_does_not_flush_its_call() {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -961,6 +965,7 @@ fn result(text: &str) -> Event {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -1054,6 +1059,7 @@ fn image_result() -> Event {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -1139,6 +1145,7 @@ fn pdf_result() -> Event {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -1452,6 +1459,7 @@ mod window {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         })
     }
 
@@ -1479,6 +1487,7 @@ mod window {
             changes: None,
             control: None,
             changed_by: None,
+            protected_paths: None,
             provider_item: None,
             hosts_surfaced: Vec::new(),
             loaded: None,
@@ -2204,6 +2213,7 @@ fn skilled_result(status: contract::events::CallStatus, name: &str, path: &str) 
             name: None,
         }),
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -4385,6 +4395,7 @@ fn completed_line(action: &str) -> Envelope {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,

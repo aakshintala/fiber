@@ -492,6 +492,7 @@ fn tool_result(text: &str) -> Event {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,

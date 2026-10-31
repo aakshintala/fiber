@@ -89,6 +89,7 @@ pub(crate) fn completed(text: String, error: Option<Failure>) -> ToolCallComplet
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
+        protected_paths: None,
     }
 }
 

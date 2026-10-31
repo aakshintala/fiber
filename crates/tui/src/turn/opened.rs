@@ -251,6 +251,9 @@ pub(crate) fn snapshot_completed(
                 .and_then(|process| process.signal.clone()),
             headline,
             content,
+            // The opened view shows the result text, which carries the
+            // notice: only the ledger folds the warning lines.
+            protected: Vec::new(),
         })),
         ..Call::default()
     };

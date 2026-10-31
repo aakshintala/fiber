@@ -1,0 +1,36 @@
+---
+source: crates/tui/src/app/items_tests.rs
+expression: "rows.join(\"\\n\")"
+---
+  Job  ◆ build the workspace                                                   Esc returns
+ fix the parser › ▸ build the workspace                                                    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ job j_2 · build the workspace · completed 0s                                                                      auto
+
+
+ Output since this terminal attached · /tmp/out                                              ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆        —
+                                                                                             handoff at —             —
+ Protected path .fiber changed while a confined call ran; Fiber restored it.                 then a summary, fresh con…
+                                                                                             tokens in / out          —
+                                                                                             cache hits               —
+                                                                                             cost                     —
+                                                                                             cost on subscription     —
+                                                                                             speed, last reply        —
+                                                                                             turns                    0
+                                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+⋮                                                                                         ⋮
+⋮                                                                                         ⋮
+⋮                                                                                         ⋮
+
+
+
+
+
+
+
+
+
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ › █                                                                   type into the job
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
