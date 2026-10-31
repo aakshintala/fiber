@@ -698,6 +698,89 @@ fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() 
 }
 
 #[test]
+fn reconnects_in_one_idle_batch_start_one_failing_process() {
+    fakes::within(
+        "same-batch reconnects",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            for deferred in [false, true] {
+                let mut w = world();
+                // world injects FakeClock. No elapsed time drives this case and
+                // no clock advance is needed: both requests precede admission.
+                let spawns = w._home.path().join("spawns");
+                let counter = spawns.clone();
+                w.looped = w.looped.reconnector(Arc::new(move |server, collect| {
+                    let status = std::process::Command::new("/bin/sh")
+                        .args(["-c", "printf 'spawn\\n' >> \"$1\"; exit 1", "failed-start"])
+                        .arg(&counter)
+                        .status()
+                        .expect("the failing child starts");
+                    assert!(!status.success());
+                    collect(server);
+                    Ok(Reconnected {
+                        tools: Vec::new(),
+                        removed: Vec::new(),
+                        records: vec![contract::tool::ServerRecord::Failed(
+                            contract::events::McpServerFailed {
+                                server: server.into(),
+                                reason: contract::events::ServerFailure::StartFailed,
+                                will_restart: false,
+                                error: Failure {
+                                    code: ErrorCode::McpServerUnavailable,
+                                    message: "child exited 1".into(),
+                                    retry_after_ms: None,
+                                    provider: None,
+                                },
+                            },
+                        )],
+                    })
+                }));
+                let mut answers = Vec::new();
+                // Enqueue both before wait_for_turn is called. With no hooks,
+                // its first recv and snapshot necessarily take this same batch.
+                for _ in 0..2 {
+                    let (ack, answer) = ack();
+                    let delivery = contract::inbox::Delivery::McpReconnect(
+                        contract::commands::McpServerArgs {
+                            server: "db".into(),
+                        },
+                        ack,
+                    );
+                    if deferred {
+                        w.looped.deferred.push_back(delivery);
+                    } else {
+                        w.inbox.send(delivery).unwrap();
+                    }
+                    answers.push(answer);
+                }
+                w.inbox
+                    .send(contract::inbox::Delivery::Close(Ack(Box::new(|_| {}))))
+                    .unwrap();
+                assert!(w.looped.wait_for_turn().unwrap().is_none());
+                for answer in answers {
+                    assert!(
+                        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                            .recv_or_fail(&answer, "each reconnect is accepted")
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+                // docs/mcp.md, "Servers, their state and the per-server
+                // commands": quick reconnects start the server once, failed too.
+                assert_eq!(std::fs::read_to_string(&spawns).unwrap(), "spawn\n");
+                let failed: Vec<_> = log::read(w.looped.log.dir())
+                    .unwrap()
+                    .into_iter()
+                    .filter(|line| line.kind == "mcp_server_failed")
+                    .collect();
+                assert_eq!(failed.len(), 1);
+                assert_eq!(failed[0].payload["server"], "db");
+            }
+        },
+    );
+}
+
+#[test]
 fn a_duplicate_behind_a_rejected_reconnect_keeps_its_own_verdict() {
     let mut w = world();
     let calls = Arc::new(AtomicUsize::new(0));
