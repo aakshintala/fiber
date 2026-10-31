@@ -762,6 +762,7 @@ fn subscribing_lp(name: &str) -> (fakes::TempDir, super::Loop<TestBackend>, Stri
             ..Default::default()
         },
     );
+    lp.app.set_size(60, 12);
     // The link comes up: the launch open sends the summary subscribe.
     let lines = lp.app.on_line(crate::link::Line::Hub(hello()));
     let summary = lines
@@ -1027,9 +1028,11 @@ fn attached_frame_stays_open_when_tail_fetch_is_lost() {
         "a lost tail read does not end the guard"
     );
     crate::timing::discard(lp.attached_frame);
-    // docs/state.md:432-435 promises no line when no history draw occurs.
+    // docs/state.md:432-435 promises no attached-frame line when no history draw occurs.
     assert!(
-        !log_file(home.path()).exists(),
+        op_lines(home.path())
+            .iter()
+            .all(|line| line["data"]["op"] != "tui.attached_frame"),
         "a lost tail read means no attached-frame line"
     );
 }
