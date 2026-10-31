@@ -204,6 +204,24 @@ fn the_cursor_marks_the_last_fitting_row_and_sheds_below_it() {
 }
 
 #[test]
+fn a_cursor_on_the_areas_bottom_edge_draws_nothing() {
+    // Six draft rows in a six-row home: the box clamps to the area's
+    // top, so the caret's row lands exactly on the area's bottom edge.
+    // The cursor draws nothing there, without panicking (`docs/tui.md`,
+    // "The input box").
+    let mut app = home(80, 6);
+    type_draft(&mut app, "a\nb\nc\nd\ne\nf");
+    let area = Rect::new(0, 0, 80, 6);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    let blocks: Vec<(u16, u16)> = (0..6)
+        .flat_map(|y| (0..80).map(move |x| (x, y)))
+        .filter(|(x, y)| buf[(*x, *y)].symbol() == "█")
+        .collect();
+    assert!(blocks.is_empty(), "{blocks:?}");
+}
+
+#[test]
 fn draft_rows_clip_at_the_areas_bottom_row() {
     // Eight draft rows at 80 by 10: the box shows rows 0 to 5, so the
     // row on the bottom row draws and the rows past it never reach the
