@@ -585,8 +585,13 @@ pub(crate) fn columns(keys: &Keyset, width: usize) -> (usize, usize, usize) {
     let share = |wide: usize| wide.saturating_mul(rest) / total;
     let (mut label, description) = (share(wide.0).max(1), share(wide.2).max(1));
     // The floored shares leave at most one column unused, so one step
-    // fills it: the keys take it while narrower than their widest text.
-    if label + description < rest && label < wide.0 {
+    // fills it: the keys take it while the shares leave room.
+    // No narrower-than-widest guard: in the share branch rest tops out at
+    // 124 (room <= 144 or the natural widths return early, and id takes at
+    // least room - 124), so share(34) floors to 33 at most, one below the
+    // widest label text (34) — the guard would never fire. The natural
+    // widths are pinned by natural_key_widths_are_34_20_91.
+    if label + description < rest {
         label = label.saturating_add(1);
     }
     (label, id, description)

@@ -1356,3 +1356,11 @@ fn columns_leave_no_spare_column_at_the_exact_share_boundary() {
     let keys = keys();
     assert_eq!(columns(&keys, 52), (8, 20, 20));
 }
+
+/// The natural column widths the share math rests on: longer label, id
+/// or description text moves the share boundaries below, including the
+/// dead-guard proof in `columns`.
+#[test]
+fn natural_key_widths_are_34_20_91() {
+    assert_eq!(super::columns(&keys(), 160), (34, 20, 91));
+}
