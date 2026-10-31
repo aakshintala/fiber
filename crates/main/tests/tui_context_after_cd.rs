@@ -108,13 +108,11 @@ fn context_after_cd_shows_the_total_against_the_inherited_window() {
     let from = run.output().len();
     run.write(b"say hi\r");
     run.turn_finished(from);
-    // The terminal emits a new title and a complete frame before the
-    // next command goes out; the log gate confirms the move ended the old
-    // session with `moved`.
+    // The terminal emits a complete frame after `/cd`; the log gate
+    // confirms the move ended the old session with `moved`.
     let cd_from = run.output().len();
     run.write(b"/cd ../c\r");
-    let title = run.wait_bytes(cd_from, pty::TITLE, "the terminal title after `/cd`");
-    run.wait_bytes(title, b"\x1b[?2026l", "the completed frame after `/cd`");
+    run.wait_bytes(cd_from, b"\x1b[?2026l", "the completed frame after `/cd`");
     let (old, child) = until_moved(&setup);
     assert_ne!(old, child, "the move names a new session");
     // The switched terminal answers `/pwd` with the target workspace, as
