@@ -98,6 +98,7 @@ fn status(name: &str) -> Event {
         step: None,
         git: None,
         context: None,
+        cache_expires: None,
         spend: usage(),
         delegates: 0,
         jobs: 0,

@@ -226,6 +226,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
             step: None,
             git: None,
             context: None,
+            cache_expires: None,
             spend: contract::shapes::Usage {
                 tokens: contract::shapes::Tokens {
                     input: 0,
