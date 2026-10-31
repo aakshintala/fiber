@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::{
-    Listed, Run, classify, decide_with, entry_is_file, event_requests, failing_file, runner_lists,
-    tested_line,
+    Listed, Run, classify, decide_with, entry_is_file, event_requests, failing_file, flake_titles,
+    runner_lists, tested_line,
 };
 
 const TITLE: &str = "Flaky tests: main::probe";
@@ -725,8 +725,7 @@ fn two_binaries_make_two_records() {
 
 #[test]
 fn a_unit_test_binary_id_without_colons() {
-    // A unit-test binary id has no `::`: the id up to the first space is
-    // the title, and the bare id gives the same title.
+    // A root-level test uses the binary key, and a bare id gives the same title.
     let text = "fiber-core tests::foo\tfirst detail\nfiber-core\tsecond detail\n";
     let out = classified(&[("linux", text)], &push_run());
     // docs/testing/running.md, "Flaky tests": "Within one report job a file's
@@ -796,14 +795,13 @@ fn a_root_level_main_test_falls_back_to_main() {
 
 #[test]
 fn a_single_file_integration_binary_keeps_its_title() {
-    // Every binary but the aggregate `main` keeps its binary title without
-    // inspecting the test name, even when the name holds a module segment.
+    // A single-file integration binary whose id contains `::` keeps its title.
     let text = "main::hub_exit_window helper_tests::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
     // docs/ci.md, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "Every other binary keeps
-    // its binary title, such as `Flaky tests: main::hub_exit_window`".
+    // docs/testing/running.md, "Flaky tests": "A single-file integration
+    // binary such as `main::hub_exit_window` keeps its binary title".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::hub_exit_window");
     assert_eq!(
@@ -852,18 +850,77 @@ fn an_empty_first_segment_falls_back_to_main() {
 }
 
 #[test]
-fn a_unit_test_with_a_tests_module_keeps_its_binary_title() {
-    // Unit-test ids are not parsed specially: a `*_tests` segment in the
-    // test name never renames the title.
+fn a_unit_test_file_uses_its_nested_module_path() {
+    let text = "extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    let record = titled(&out, "extensions::host::exec");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: extensions::host::exec")
+    );
+}
+
+#[test]
+fn a_tests_named_module_stays_in_the_file_path() {
+    let text = "extensions host::tool_tests::a_denied_call_has_no_artifact\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    let record = titled(&out, "extensions::host::tool_tests");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: extensions::host::tool_tests")
+    );
+}
+
+#[test]
+fn crate_root_unit_tests_keep_the_binary_key() {
+    for line in [
+        "extensions tests::x\tsome detail",
+        "extensions x\tsome detail",
+        "extensions\tsome detail",
+    ] {
+        let out = classified(&[("linux", line)], &push_run());
+        let record = titled(&out, "extensions");
+        assert_eq!(field(record, "title"), Some("Flaky tests: extensions"));
+    }
+}
+
+#[test]
+fn a_repeated_tests_module_is_reduced_once() {
+    let text = "extensions tests::tests::x\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    let record = titled(&out, "extensions::tests");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: extensions::tests")
+    );
+}
+
+#[test]
+fn a_non_trailing_tests_module_stays_in_the_file_path() {
+    let text = "extensions a::tests::inner::x\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    let record = titled(&out, "extensions::a::tests::inner");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: extensions::a::tests::inner")
+    );
+}
+
+#[test]
+fn a_unit_test_with_a_tests_module_uses_its_file_key() {
+    // A unit-test module named `process_group_tests` remains in the file key.
     let text = "fakes process_group_tests::reaps_children\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
     // docs/ci.md, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "unit-test ids such as
-    // `fakes` are not parsed specially".
+    // docs/testing/running.md, "Flaky tests": "A unit-test id is its module
+    // path without the test name or a trailing `tests` module".
     assert_eq!(out.len(), 1);
-    let record = titled(&out, "fakes");
-    assert_eq!(field(record, "title"), Some("Flaky tests: fakes"));
+    let record = titled(&out, "fakes::process_group_tests");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: fakes::process_group_tests")
+    );
     assert_eq!(
         field(record, "name"),
         Some("fakes process_group_tests::reaps_children")
@@ -1087,4 +1144,49 @@ fn unreadable_entry_type_is_an_error() {
     );
     assert_eq!(entry_is_file(path, Ok(true)), Ok(true));
     assert_eq!(entry_is_file(path, Ok(false)), Ok(false));
+}
+
+#[test]
+fn flake_titles_dedupes_files_in_first_seen_order() {
+    // The Rust side is the sole titles parser: one deduped title per
+    // line, in first-seen order across the files and then the lines.
+    // Covers the three file-key examples, `main`, a binary id
+    // containing `::`, and a bare id.
+    let dir = std::env::temp_dir().join(format!("flake-titles-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch dir");
+    let first = dir.join("flaky-tests-a.txt");
+    let second = dir.join("flaky-tests-b.txt");
+    std::fs::write(
+        &first,
+        "extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\tsome detail\n\
+         main reviewer_setup::the_setup_saves\tsome detail\n\
+         main::hub_exit_window helper_tests::case\tsome detail\n\
+         extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\trepeat detail\n",
+    )
+    .expect("a first list");
+    std::fs::write(
+        &second,
+        "extensions host::tool_tests::a_denied_call_has_no_artifact\tsome detail\n\
+         extensions tests::x\tsome detail\n\
+         extensions\n\
+         fakes process_group_tests::reaps_children\tsome detail\n",
+    )
+    .expect("a second list");
+    let paths = vec![
+        first.to_string_lossy().into_owned(),
+        second.to_string_lossy().into_owned(),
+    ];
+    let out = flake_titles(&paths).expect("titles read");
+    assert_eq!(
+        out,
+        vec![
+            "Flaky tests: extensions::host::exec".to_owned(),
+            "Flaky tests: main::reviewer_setup".to_owned(),
+            "Flaky tests: main::hub_exit_window".to_owned(),
+            "Flaky tests: extensions::host::tool_tests".to_owned(),
+            "Flaky tests: extensions".to_owned(),
+            "Flaky tests: fakes::process_group_tests".to_owned(),
+        ]
+    );
+    assert!(std::fs::remove_dir_all(&dir).is_ok());
 }
