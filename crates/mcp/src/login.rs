@@ -16,10 +16,11 @@ use discovery::discover;
 use std::io::Read;
 use std::net::{Ipv4Addr, TcpListener};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use contract::clock::Clock;
+use contract::diag::{DebugLog, HttpRequest};
 use contract::mcp_tokens::TokenFiles;
 use contract::{ErrorCode, Secret};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -31,6 +32,95 @@ use crate::token::{Token, key, store_token, url_has_userinfo};
 /// How long the login waits for the browser callback, on the injected
 /// clock: 15 minutes, the precedent `credential`'s callback waits.
 pub const CALLBACK_WAIT: Duration = Duration::from_secs(900);
+
+/// What one login request reports to: the sink the line goes to and the
+/// clock its stamps are read on. `None` debug stays silent: stamps are
+/// skipped and no line is written.
+pub(crate) struct Observe<'a> {
+    pub(crate) debug: Option<Arc<dyn DebugLog>>,
+    pub(crate) clock: &'a dyn Clock,
+}
+
+impl Observe<'_> {
+    /// The send stamp, `None` when silent so no clock is read at info.
+    fn stamp(&self) -> Option<Instant> {
+        self.debug.as_ref().map(|_| self.clock.now())
+    }
+
+    /// Writes one `mcp` line for a request that reached the client: no
+    /// identity, host, path, URL, server name or credential, attempt 1,
+    /// the posted byte length, the consumed response bytes, the status
+    /// when a response came, and the send/headers/end stamps. A sink
+    /// that stopped debugging writes nothing.
+    fn line(
+        &self,
+        start: Option<Instant>,
+        headers: Option<Instant>,
+        status: Option<u16>,
+        request_bytes: u64,
+        response_bytes: u64,
+    ) {
+        let (Some(debug), Some(start)) = (self.debug.as_ref(), start) else {
+            return;
+        };
+        if !debug.debugging() {
+            return;
+        }
+        let end = self.clock.now();
+        let millis = |instant: Instant| {
+            u64::try_from(instant.saturating_duration_since(start).as_millis()).unwrap_or(u64::MAX)
+        };
+        let mut line = HttpRequest::for_mcp();
+        line.status = status;
+        line.headers_ms = headers.map(millis);
+        line.total_ms = millis(end);
+        line.request_bytes = request_bytes;
+        line.response_bytes = response_bytes;
+        debug.http_request(&line);
+    }
+}
+
+/// The form body `send_form` would send, built here so its length is the
+/// posted byte count: keys and values percent-encoded per the URL spec's
+/// query set with space as `+`, pairs joined by `&` and `=`. The bytes
+/// sent are identical to `send_form`'s, so the content type stays
+/// `application/x-www-form-urlencoded`.
+pub(crate) fn form_body(form: &[(&str, &str)]) -> String {
+    fn encoded(out: &mut String, value: &str) {
+        for byte in value.bytes() {
+            if matches!(
+                byte,
+                b'A'..=b'Z'
+                    | b'a'..=b'z'
+                    | b'0'..=b'9'
+                    | b'!'
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'-'
+                    | b'.'
+                    | b'_'
+                    | b'~'
+            ) {
+                out.push(byte as char);
+            } else if byte == b' ' {
+                out.push('+');
+            } else {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    let mut body = String::new();
+    for (key, value) in form {
+        if !body.is_empty() {
+            body.push('&');
+        }
+        encoded(&mut body, key);
+        body.push('=');
+        encoded(&mut body, value);
+    }
+    body
+}
 
 /// The longest metadata or token body the login reads: past it the step
 /// fails, and nothing is stored. Shared with `discovery`, which caps its
@@ -182,9 +272,25 @@ fn agent() -> ureq::Agent {
 }
 
 /// A `GET`'s status, its `WWW-Authenticate` header when present, and its
-/// body capped at 1 MiB plus one byte. Discovery reads through it.
-pub(crate) fn get(url: &str) -> Result<(u16, Option<String>, Vec<u8>), ureq::Error> {
-    let mut response = agent().get(url).call()?;
+/// body capped at 1 MiB plus one byte. Discovery reads through it. When
+/// observed, the read writes one `mcp` line: without status, headers
+/// time or body bytes when no head came back, with the status, the
+/// headers time and the body bytes read however the read ended once a
+/// head arrived.
+pub(crate) fn get(
+    url: &str,
+    observe: &Observe,
+) -> Result<(u16, Option<String>, Vec<u8>), ureq::Error> {
+    let start = observe.stamp();
+    let response = match agent().get(url).call() {
+        Ok(response) => response,
+        Err(error) => {
+            observe.line(start, None, None, 0, 0);
+            return Err(error);
+        }
+    };
+    let headers = observe.stamp();
+    let mut response = response;
     let status = response.status().as_u16();
     let authenticate = response
         .headers()
@@ -192,44 +298,80 @@ pub(crate) fn get(url: &str) -> Result<(u16, Option<String>, Vec<u8>), ureq::Err
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let mut body = Vec::new();
-    response
+    let read = response
         .body_mut()
         .as_reader()
         .take(MAX_BODY as u64 + 1)
-        .read_to_end(&mut body)
-        .map_err(|_| ureq::Error::Timeout(ureq::Timeout::Global))?;
+        .read_to_end(&mut body);
+    observe.line(
+        start,
+        headers,
+        Some(status),
+        0,
+        u64::try_from(body.len()).unwrap_or(u64::MAX),
+    );
+    read.map_err(|_| ureq::Error::Timeout(ureq::Timeout::Global))?;
     Ok((status, authenticate, body))
 }
 
-/// A JSON `POST`'s status and its body capped at 1 MiB plus one byte.
-fn post_json(url: &str, body: &str) -> Result<(u16, Vec<u8>), ureq::Error> {
-    let mut response = agent()
+/// Sends a login `POST`, reads at most 1 MiB plus one byte, and records
+/// the sent and consumed body lengths on the request's `mcp` line.
+fn post(
+    url: &str,
+    content_type: &str,
+    body: &str,
+    observe: &Observe,
+) -> Result<(u16, Vec<u8>), ureq::Error> {
+    let request_bytes = u64::try_from(body.len()).unwrap_or(u64::MAX);
+    let start = observe.stamp();
+    let response = match agent()
         .post(url)
-        .header("content-type", "application/json")
-        .send(body)?;
+        .header("content-type", content_type)
+        .send(body)
+    {
+        Ok(response) => response,
+        Err(error) => {
+            observe.line(start, None, None, request_bytes, 0);
+            return Err(error);
+        }
+    };
+    let headers = observe.stamp();
+    let mut response = response;
     let status = response.status().as_u16();
     let mut bytes = Vec::new();
-    response
+    let read = response
         .body_mut()
         .as_reader()
         .take(MAX_BODY as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ureq::Error::Timeout(ureq::Timeout::Global))?;
+        .read_to_end(&mut bytes);
+    observe.line(
+        start,
+        headers,
+        Some(status),
+        request_bytes,
+        u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+    );
+    read.map_err(|_| ureq::Error::Timeout(ureq::Timeout::Global))?;
     Ok((status, bytes))
 }
 
-/// A form `POST`'s status and its body capped at 1 MiB plus one byte.
-fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(u16, Vec<u8>), ureq::Error> {
-    let mut response = agent().post(url).send_form(form.iter().copied())?;
-    let status = response.status().as_u16();
-    let mut bytes = Vec::new();
-    response
-        .body_mut()
-        .as_reader()
-        .take(MAX_BODY as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ureq::Error::Timeout(ureq::Timeout::Global))?;
-    Ok((status, bytes))
+/// A JSON `POST`'s status and body, using the common login request pipeline.
+fn post_json(url: &str, body: &str, observe: &Observe) -> Result<(u16, Vec<u8>), ureq::Error> {
+    post(url, "application/json", body, observe)
+}
+
+/// A form `POST`'s status and body; the encoded body length is counted.
+fn post_form(
+    url: &str,
+    form: &[(&str, &str)],
+    observe: &Observe,
+) -> Result<(u16, Vec<u8>), ureq::Error> {
+    post(
+        url,
+        "application/x-www-form-urlencoded",
+        &form_body(form),
+        observe,
+    )
 }
 
 /// The origin of a canonical URL: its scheme and authority, the fallback
@@ -244,7 +386,11 @@ pub(crate) fn origin_of(canonical: &str) -> Option<String> {
 
 /// Registers the public client: a 2xx with a JSON `client_id` answers it,
 /// and anything else is terminal, never retried.
-fn register(registration_endpoint: &str, redirect_uri: &str) -> Result<String, LoginError> {
+fn register(
+    registration_endpoint: &str,
+    redirect_uri: &str,
+    observe: &Observe,
+) -> Result<String, LoginError> {
     const STEP: &str = "client registration";
     let body = serde_json::json!({
         "redirect_uris": [redirect_uri],
@@ -254,7 +400,7 @@ fn register(registration_endpoint: &str, redirect_uri: &str) -> Result<String, L
         "client_name": "Fiber",
     })
     .to_string();
-    let (status, bytes) = post_json(registration_endpoint, &body)
+    let (status, bytes) = post_json(registration_endpoint, &body, observe)
         .map_err(|_| LoginError::Registration(STEP.to_owned()))?;
     if !(200..300).contains(&status) || bytes.len() > MAX_BODY {
         return Err(LoginError::Registration(STEP.to_owned()));
@@ -346,6 +492,7 @@ fn exchange(
     verifier: &str,
     canonical: &str,
     clock: &dyn Clock,
+    observe: &Observe,
 ) -> Result<(), LoginError> {
     const STEP: &str = "token exchange";
     let form = [
@@ -356,8 +503,8 @@ fn exchange(
         ("code_verifier", verifier),
         ("resource", canonical),
     ];
-    let (status, bytes) =
-        post_form(token_endpoint, &form).map_err(|_| LoginError::Exchange(STEP.to_owned()))?;
+    let (status, bytes) = post_form(token_endpoint, &form, observe)
+        .map_err(|_| LoginError::Exchange(STEP.to_owned()))?;
     if !(200..300).contains(&status) || bytes.len() > MAX_BODY {
         return Err(LoginError::Exchange(STEP.to_owned()));
     }
@@ -404,14 +551,28 @@ fn exchange(
 /// authorization shown through `present`, the loopback callback, and the
 /// exchange, stored by canonical URL. `present` receives the authorization
 /// URL once, after the listener is bound and before the wait. Nothing is
-/// stored unless the exchange succeeded after a matching `state`.
+/// stored unless the exchange succeeded after a matching `state`. The
+/// login stays silent: it writes no `http_request` line.
 pub fn login(
     files: &dyn TokenFiles,
     url: &str,
     present: &dyn Fn(&str),
     clock: &dyn Clock,
 ) -> Result<(), LoginError> {
-    login_with_random(files, url, present, clock, &|bytes| {
+    login_observed(files, url, present, clock, None)
+}
+
+/// As [`login`], writing one `mcp` line per HTTP request the flow makes
+/// on `debug`: the probe, every discovery fetch, the registration and
+/// the token exchange. `None` stays silent, as [`login`] does.
+pub fn login_observed(
+    files: &dyn TokenFiles,
+    url: &str,
+    present: &dyn Fn(&str),
+    clock: &dyn Clock,
+    debug: Option<Arc<dyn DebugLog>>,
+) -> Result<(), LoginError> {
+    login_with_random(files, url, present, clock, debug, &|bytes| {
         SystemRandom::new().fill(bytes)
     })
 }
@@ -423,6 +584,7 @@ fn login_with_random(
     url: &str,
     present: &dyn Fn(&str),
     clock: &dyn Clock,
+    debug: Option<Arc<dyn DebugLog>>,
     fill: &dyn Fn(&mut [u8]) -> Result<(), ring::error::Unspecified>,
 ) -> Result<(), LoginError> {
     if url_has_userinfo(url) {
@@ -446,12 +608,13 @@ fn login_with_random(
         .map(|addr| addr.port())
         .map_err(|_| LoginError::Unreachable("callback listener".to_owned()))?;
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    let observe = Observe { debug, clock };
     // The unauthenticated probe is read for its `WWW-Authenticate` header
     // on any status.
     let (_, authenticate, _) =
-        get(&canonical).map_err(|_| LoginError::Unreachable(canonical.clone()))?;
-    let found = discover(authenticate.as_deref(), &canonical, &origin)?;
-    let client_id = register(&found.registration_endpoint, &redirect_uri)?;
+        get(&canonical, &observe).map_err(|_| LoginError::Unreachable(canonical.clone()))?;
+    let found = discover(authenticate.as_deref(), &canonical, &origin, &observe)?;
+    let client_id = register(&found.registration_endpoint, &redirect_uri, &observe)?;
     let url = authorization_url(
         &found.authorization_endpoint,
         &client_id,
@@ -477,6 +640,7 @@ fn login_with_random(
         &verifier,
         &canonical,
         clock,
+        &observe,
     )?;
     let _ = key(&canonical);
     Ok(())

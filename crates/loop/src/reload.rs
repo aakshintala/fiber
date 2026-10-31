@@ -34,7 +34,11 @@ pub type PrepareReload =
 /// returns the registry's news with the server lines to write; the loop
 /// merges the registry, writes the lines, and answers once they are
 /// written.
-pub type ReconnectServer = Arc<dyn Fn(&str) -> Result<Reconnected, Rejection> + Send + Sync>;
+/// Before its start ends, the entry calls the collector once to join
+/// queued duplicates. The collector only retains acks; the loop answers
+/// them after the registry and server records have been published.
+pub type ReconnectServer =
+    Arc<dyn Fn(&str, &mut dyn FnMut(&str)) -> Result<Reconnected, Rejection> + Send + Sync>;
 
 /// What a reconnect restarted: the loop registry's news and the log's.
 pub struct Reconnected {
@@ -203,7 +207,15 @@ impl Loop {
             );
             return Ok(());
         };
-        match reconnect(&server) {
+        let mut joined = Vec::new();
+        let mut collect = |server: &str| {
+            joined.extend(self.inbox.take_reconnects(
+                server,
+                &self.workspace,
+                self.prompt.agents_home.as_deref(),
+            ));
+        };
+        match reconnect(&server, &mut collect) {
             Ok(reconnected) => {
                 for name in &reconnected.removed {
                     self.tools.remove(name);
@@ -219,6 +231,9 @@ impl Loop {
                     self.write(&record_event(record), None, None)?;
                 }
                 accept(ack);
+                for ack in joined {
+                    accept(ack);
+                }
                 Ok(())
             }
             Err(rejection) => {

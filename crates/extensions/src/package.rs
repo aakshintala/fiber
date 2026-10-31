@@ -44,6 +44,10 @@ pub(crate) struct ProcessProviderSession {
     pub clock: Arc<dyn contract::clock::Clock>,
     /// The configured startup allowance.
     pub startup_timeout: Duration,
+    /// The session's diagnostic sink, when it debugs: preserved onto the
+    /// host services so a child `host.http` records its `http_request`
+    /// line. `None` stays silent.
+    pub diagnostics: Option<Arc<dyn contract::diag::DebugLog>>,
 }
 
 /// The host side of a process-provider launch: what the child's host
@@ -327,76 +331,87 @@ impl Package {
         // and deadline; one initializer below builds the host services
         // from them, so the session requirement and the sessionless
         // restrictions read in one place.
-        let (runtime, context, state, drive, clock, deadline, browser, host_script, session) =
-            match mode {
-                ProcessProviderMode::Session(session) => {
-                    let host = host.ok_or_else(|| {
-                        (
-                            contract::ErrorCode::InvalidArguments,
-                            "a session process start needs its host bundle".to_owned(),
-                        )
-                    })?;
-                    let deadline = session.clock.now() + session.startup_timeout;
+        let (
+            runtime,
+            context,
+            state,
+            drive,
+            clock,
+            deadline,
+            browser,
+            host_script,
+            session,
+            diagnostics,
+        ) = match mode {
+            ProcessProviderMode::Session(session) => {
+                let host = host.ok_or_else(|| {
                     (
-                        session.runtime,
-                        session.context,
-                        session.state,
-                        session.drive,
-                        session.clock,
-                        deadline,
-                        host.browser,
-                        host.host_script,
-                        host.session,
+                        contract::ErrorCode::InvalidArguments,
+                        "a session process start needs its host bundle".to_owned(),
                     )
-                }
-                ProcessProviderMode::Sessionless => {
-                    let clock: Arc<dyn contract::clock::Clock> = Arc::clone(&options.clock);
-                    // The Call-case passes the resolved CLI context; the
-                    // credential precheck passes no host bundle but still
-                    // runs under the CLI, never under the package.
-                    let (home, workspace) = match host.as_ref() {
-                        Some(host) => (host.home.clone(), host.cwd.clone()),
-                        None => Self::cli_context(&options.dir),
-                    };
-                    let project = Self::sessionless_project(&manifest.name, &workspace)?;
-                    let state =
-                        super::host::state::StateRegistry::standalone().store(&manifest.name);
-                    let data_dirs = contract::events::ExtensionDataDirs {
-                        machine: config::extension_data_dir(&home, &slug)
-                            .display()
-                            .to_string(),
-                        project: config::project_data_dir(&home, &project, &slug)
-                            .display()
-                            .to_string(),
-                    };
-                    let context = super::process::context::ProcessContext {
-                        run: super::process::context::ProcessRun::Call,
-                        workspace,
-                        data_dirs,
-                        state: serde_json::Map::new(),
-                        extension: manifest.name.clone(),
-                        home: home.clone(),
-                    };
-                    let deadline = clock.now() + Self::DEFAULT_STARTUP_TIMEOUT;
-                    let runtime = Runtime::new(clock.clone());
-                    let browser: Arc<dyn crate::oauth::Browser> = host
-                        .as_ref()
-                        .map(|host| Arc::clone(&host.browser))
-                        .unwrap_or_else(|| Arc::new(crate::oauth::SystemBrowser::default()));
-                    let host_script = host.as_ref().and_then(|host| host.host_script.clone());
-                    (
-                        runtime,
-                        context,
-                        state,
-                        None,
-                        clock,
-                        deadline,
-                        browser,
-                        host_script,
-                        None,
-                    )
-                }
-            };
+                })?;
+                let deadline = session.clock.now() + session.startup_timeout;
+                (
+                    session.runtime,
+                    session.context,
+                    session.state,
+                    session.drive,
+                    session.clock,
+                    deadline,
+                    host.browser,
+                    host.host_script,
+                    host.session,
+                    session.diagnostics,
+                )
+            }
+            ProcessProviderMode::Sessionless => {
+                let clock: Arc<dyn contract::clock::Clock> = Arc::clone(&options.clock);
+                // The Call-case passes the resolved CLI context; the
+                // credential precheck passes no host bundle but still
+                // runs under the CLI, never under the package.
+                let (home, workspace) = match host.as_ref() {
+                    Some(host) => (host.home.clone(), host.cwd.clone()),
+                    None => Self::cli_context(&options.dir),
+                };
+                let project = Self::sessionless_project(&manifest.name, &workspace)?;
+                let state = super::host::state::StateRegistry::standalone().store(&manifest.name);
+                let data_dirs = contract::events::ExtensionDataDirs {
+                    machine: config::extension_data_dir(&home, &slug)
+                        .display()
+                        .to_string(),
+                    project: config::project_data_dir(&home, &project, &slug)
+                        .display()
+                        .to_string(),
+                };
+                let context = super::process::context::ProcessContext {
+                    run: super::process::context::ProcessRun::Call,
+                    workspace,
+                    data_dirs,
+                    state: serde_json::Map::new(),
+                    extension: manifest.name.clone(),
+                    home: home.clone(),
+                };
+                let deadline = clock.now() + Self::DEFAULT_STARTUP_TIMEOUT;
+                let runtime = Runtime::new(clock.clone());
+                let browser: Arc<dyn crate::oauth::Browser> = host
+                    .as_ref()
+                    .map(|host| Arc::clone(&host.browser))
+                    .unwrap_or_else(|| Arc::new(crate::oauth::SystemBrowser::default()));
+                let host_script = host.as_ref().and_then(|host| host.host_script.clone());
+                (
+                    runtime,
+                    context,
+                    state,
+                    None,
+                    clock,
+                    deadline,
+                    browser,
+                    host_script,
+                    None,
+                    None,
+                )
+            }
+        };
         let services = Arc::new(super::process::context::NativeHostServices {
             runtime: runtime.clone(),
             state: Arc::clone(&state),
@@ -408,6 +423,7 @@ impl Package {
             secrets: manifest.secrets.clone(),
             host_script,
             session: Mutex::new(session),
+            diagnostics,
         });
         let loaded = Self::load_with_runtime(
             PackageOptions {

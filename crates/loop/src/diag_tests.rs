@@ -39,15 +39,23 @@ fn the_first_line_writes_the_session_file_with_the_extension_prefix() {
     );
 }
 
-fn some_peak() -> Option<u64> {
-    Some(11840)
+fn some_sample() -> Option<log::diag::ResourcesSample> {
+    Some(log::diag::ResourcesSample {
+        peak_kib: 11840,
+        current_kib: 11840,
+        disk_read_bytes: 4096,
+        disk_write_bytes: 8192,
+    })
 }
 
-fn no_peak() -> Option<u64> {
+fn no_sample() -> Option<log::diag::ResourcesSample> {
     None
 }
 
-fn debug_diag(home: &fakes::TempDir, read: fn() -> Option<u64>) -> std::sync::Arc<log::diag::Diag> {
+fn debug_diag(
+    home: &fakes::TempDir,
+    read: fn() -> Option<log::diag::ResourcesSample>,
+) -> std::sync::Arc<log::diag::Diag> {
     let clock = fakes::clock::FakeClock::new();
     let diag = log::diag::Diag::new(
         home.path(),
@@ -55,7 +63,7 @@ fn debug_diag(home: &fakes::TempDir, read: fn() -> Option<u64>) -> std::sync::Ar
         log::diag::Level::Debug,
         clock as std::sync::Arc<dyn contract::clock::Clock>,
     )
-    .with_peak(read);
+    .with_resources(read);
     diag.attach(&SessionId("s-1".into()));
     std::sync::Arc::new(diag)
 }
@@ -63,17 +71,20 @@ fn debug_diag(home: &fakes::TempDir, read: fn() -> Option<u64>) -> std::sync::Ar
 #[test]
 fn the_shared_writer_puts_extension_request_and_memory_lines_in_one_file() {
     let home = fakes::TempDir::new("fiber-diag-shared");
-    let diag = SessionDiag::shared(debug_diag(&home, some_peak));
+    let diag = SessionDiag::shared(debug_diag(&home, some_sample));
     diag.extension_log("fiber.test/notes", "hello");
-    diag.peak_memory();
+    diag.resources();
     let text = fs::read_to_string(log_path(&home)).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2);
     let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     assert_eq!(first["code"], "extension_log");
-    assert_eq!(second["code"], "peak_memory");
+    assert_eq!(second["code"], "resources");
     assert_eq!(second["data"]["peak_kib"], 11840);
+    assert_eq!(second["data"]["current_kib"], 11840);
+    assert_eq!(second["data"]["disk_read_bytes"], 4096);
+    assert_eq!(second["data"]["disk_write_bytes"], 8192);
     for line in [&first, &second] {
         assert_eq!(line["process"], "session");
         assert_eq!(line["session_id"], "s-1");
@@ -83,8 +94,8 @@ fn the_shared_writer_puts_extension_request_and_memory_lines_in_one_file() {
 #[test]
 fn a_failed_memory_read_writes_nothing_and_changes_nothing_else() {
     let home = fakes::TempDir::new("fiber-diag-no-peak");
-    let diag = SessionDiag::shared(debug_diag(&home, no_peak));
-    diag.peak_memory();
+    let diag = SessionDiag::shared(debug_diag(&home, no_sample));
+    diag.resources();
     assert!(
         !log_path(&home).exists(),
         "a failed read writes no line and creates no file"
@@ -106,7 +117,7 @@ fn an_info_writer_writes_no_memory_line_and_no_debug_file() {
     );
     diag.attach(&SessionId("s-1".into()));
     let diag = SessionDiag::shared(std::sync::Arc::new(diag));
-    diag.peak_memory();
+    diag.resources();
     assert!(
         !log_path(&home).exists(),
         "an info writer creates no file for a memory sample"

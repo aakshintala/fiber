@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use config::{Config, Source};
 use contract::ErrorCode;
+use contract::diag::DebugLog as _;
 use contract::events::{McpServerFailed, Notice, ToolInfo, ToolSource};
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
@@ -281,6 +282,7 @@ pub(crate) fn start_session_tools(
     skipped: Vec<r#loop::OfferKey>,
     images: Arc<dyn contract::images::Images>,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> Result<PendingMcp, Failure> {
     let home = home.to_path_buf();
     let workspace = workspace.to_path_buf();
@@ -314,6 +316,9 @@ pub(crate) fn start_session_tools(
                 &clock,
                 env!("CARGO_PKG_VERSION"),
                 timing,
+                // The session's sink observes each MCP request at
+                // debug; at any other level the servers stay silent.
+                debug,
             );
             Ok((prepared, started))
         })
@@ -332,6 +337,8 @@ pub(crate) fn start_session_tools(
 /// driver shell, with the failures for the log and the running servers for
 /// the session's end. `timing` times every MCP connection attempt the
 /// session starts, now and in the post-offer load; `None` stays untimed.
+/// `debug` observes each `web_fetch` request the session makes; `None`
+/// stays silent.
 #[allow(
     clippy::type_complexity,
     reason = "one session's tools, as builtin's tuple carries them"
@@ -355,6 +362,7 @@ pub(crate) fn session_tools(
     skills: Arc<dyn contract::skills::Skills>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
     protection: Option<Arc<tools::ProtectedPaths>>,
@@ -382,6 +390,7 @@ pub(crate) fn session_tools(
         delegates,
         skills,
         timing.clone(),
+        debug,
         shell_read_only,
         sandbox,
         protection,
@@ -587,7 +596,15 @@ impl crate::reload::State {
                 self.log.clock().clone(),
                 Arc::clone(&waiting),
             ),
-            login: mcp_login(self.sources.clone(), waiting, self.log.clock().clone()),
+            login: mcp_login(
+                self.sources.clone(),
+                waiting,
+                self.log.clock().clone(),
+                // The session writer: `Some` at debug, `None` at info.
+                self.diag
+                    .debugging()
+                    .then(|| Arc::clone(&self.diag) as Arc<dyn contract::diag::DebugLog>),
+            ),
             reconnect: reconnect_server(
                 self.sources.clone(),
                 Arc::clone(&self.servers),
@@ -595,6 +612,7 @@ impl crate::reload::State {
                 self.artifacts.clone(),
                 Arc::clone(&self.images),
                 self.log.clock().clone(),
+                Arc::clone(&self.reconnect_flights),
             ),
         }
     }
@@ -753,11 +771,13 @@ fn fold_server_line(
 /// waiting map, so the `mcp_servers` answer shows `auth_url` while it
 /// waits, and the stored token is picked up by the reconnect the thread
 /// delivers before it answers (`docs/mcp.md`, "Servers, their state and
-/// the per-server commands").
+/// the per-server commands"). The hub keeps its login silent: `debug`
+/// is always `None` here, so the flow writes no `http_request` line.
 fn mcp_login(
     sources: config::Sources,
     waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
     clock: Arc<dyn contract::clock::Clock>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> doors::McpLogin {
     Arc::new(
         move |server: &str, deliver: Arc<dyn Fn(contract::inbox::Delivery) + Send + Sync>| {
@@ -778,7 +798,7 @@ fn mcp_login(
             let finish = |waiting: &Arc<std::sync::Mutex<HashMap<String, Option<String>>>>| {
                 support::lock(waiting).remove(server);
             };
-            let url = match cli::login_target(
+            let (url, _) = match cli::login_target(
                 &sources.home,
                 &sources.workspace,
                 server,
@@ -803,7 +823,8 @@ fn mcp_login(
                 support::lock(&waiting).insert(server.to_owned(), Some(auth_url.to_owned()));
                 extensions::SystemBrowser::default().open(auth_url);
             };
-            let outcome = mcp::login(&files, &url, &present, clock.as_ref());
+            let outcome =
+                mcp::login_observed(&files, &url, &present, clock.as_ref(), debug.clone());
             support::lock(&waiting).insert(server.to_owned(), None);
             if let Err(error) = outcome {
                 finish(&waiting);
@@ -882,8 +903,18 @@ fn reconnect_server(
     artifacts: std::path::PathBuf,
     images: Arc<dyn contract::images::Images>,
     clock: Arc<dyn contract::clock::Clock>,
+    flights: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 ) -> r#loop::ReconnectServer {
-    Arc::new(move |server: &str| {
+    struct Flight<'a> {
+        flights: &'a std::sync::Mutex<std::collections::BTreeSet<String>>,
+        server: &'a str,
+    }
+    impl Drop for Flight<'_> {
+        fn drop(&mut self) {
+            support::lock(self.flights).remove(self.server);
+        }
+    }
+    Arc::new(move |server: &str, collect: &mut dyn FnMut(&str)| {
         let (_, project) =
             cli::project_of(&sources.home, &sources.workspace).map_err(|failure| Rejection {
                 code: failure.code(),
@@ -932,7 +963,19 @@ fn reconnect_server(
                 message: failure.message,
             });
         }
-        let (used, removed, records) = if servers.has_slot(server) {
+        let adoption = if servers.has_slot(server) {
+            None
+        } else {
+            Some(adoption_spec(&config, server)?)
+        };
+        support::lock(&flights).insert(server.to_owned());
+        let flight = Flight {
+            flights: &flights,
+            server,
+        };
+        let (used, removed, records) = if let Some(spec) = adoption {
+            adopt_server(spec, &sources, &servers, &artifacts, &images, &clock)?
+        } else {
             let Some(restarted) = mcp::restart(&servers, server, &artifacts, &images) else {
                 return Err(Rejection {
                     code: contract::ErrorCode::InvalidArguments,
@@ -942,10 +985,6 @@ fn reconnect_server(
                 });
             };
             (restarted.used, restarted.removed, restarted.records)
-        } else {
-            adopt_server(
-                &config, &sources, &servers, server, &artifacts, &images, &clock,
-            )?
         };
         for name in &removed {
             declare(name.as_str(), None);
@@ -953,6 +992,8 @@ fn reconnect_server(
         for (_, tool, info) in &used {
             declare(&tool.definition().name, Some(info.clone()));
         }
+        collect(server);
+        drop(flight);
         Ok(r#loop::Reconnected {
             tools: used
                 .into_iter()
@@ -976,24 +1017,9 @@ type Adopted = (
     Vec<contract::tool::ServerRecord>,
 );
 
-/// Starts the one server the session never started and adopts its slot,
-/// so the restart serves it exactly once: a second failure stays a
-/// failure the log carries, and a success declares its tools. A declared
-/// server with nothing runnable, or a repository server the offer flow
-/// owns, is `invalid_arguments`, not a start.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one server's startup inputs, as at session start"
-)]
-fn adopt_server(
-    config: &config::Config,
-    sources: &config::Sources,
-    servers: &Arc<mcp::Servers>,
-    server: &str,
-    artifacts: &std::path::Path,
-    images: &Arc<dyn contract::images::Images>,
-    clock: &Arc<dyn contract::clock::Clock>,
-) -> Result<Adopted, Rejection> {
+/// Rejects servers the repository offer owns or that have nothing
+/// runnable before publishing an executing start.
+fn adoption_spec(config: &config::Config, server: &str) -> Result<mcp::ServerSpec, Rejection> {
     let invalid = |message: String| Rejection {
         code: contract::ErrorCode::InvalidArguments,
         message,
@@ -1012,6 +1038,19 @@ fn adopt_server(
             "The MCP server `{server}` has nothing runnable to start; fix its declaration and reload."
         )));
     };
+    Ok(spec)
+}
+
+/// Starts the validated server and adopts its slot. Failure is an outcome
+/// written by the loop, not a rejected driver command.
+fn adopt_server(
+    spec: mcp::ServerSpec,
+    sources: &config::Sources,
+    servers: &Arc<mcp::Servers>,
+    artifacts: &std::path::Path,
+    images: &Arc<dyn contract::images::Images>,
+    clock: &Arc<dyn contract::clock::Clock>,
+) -> Result<Adopted, Rejection> {
     let started = mcp::start_observed(
         vec![spec],
         &sources.workspace,
@@ -1021,6 +1060,9 @@ fn adopt_server(
         clock,
         env!("CARGO_PKG_VERSION"),
         servers.timing(),
+        // The session's sink follows the reconnect: structs keep their
+        // shape, so it is read from the servers.
+        servers.debug_sink(),
     );
     let records = started
         .failed

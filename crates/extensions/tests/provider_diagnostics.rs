@@ -26,7 +26,7 @@ use config::{Config, ProjectKey, Sources};
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::clock::Wake;
-use contract::diag::{DebugLog, HookChain, Op, ProviderRequest, Timing};
+use contract::diag::{DebugLog, HookChain, HttpRequest, Identity, Op, Purpose, Timing};
 use contract::events::CallStatus;
 use contract::events::HandoffTrigger;
 use contract::hook::{
@@ -37,6 +37,16 @@ use contract::hook::{
 use contract::shapes::{ContentPart, DeclaredEffects, Tokens, Usage};
 use contract::tool::Cancel;
 use extensions::SessionExtensions;
+use extensions::{RepositorySet, StateSeed};
+
+/// The provider a provider-purpose record names: provider purposes always
+/// carry one, so anything else is the test's failure.
+fn provider_of(record: &HttpRequest) -> String {
+    match record.identity().cloned() {
+        Some(Identity::Provider(provider)) => provider,
+        other => panic!("provider purposes carry a provider: {other:?}"),
+    }
+}
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use serde_json::{Map, json};
@@ -80,7 +90,7 @@ impl Cancel for Flag {
 /// A sink that keeps every request it is given.
 #[derive(Default)]
 struct Sink {
-    requests: Mutex<Vec<ProviderRequest>>,
+    requests: Mutex<Vec<HttpRequest>>,
 }
 
 impl DebugLog for Sink {
@@ -88,7 +98,7 @@ impl DebugLog for Sink {
         true
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &HttpRequest) {
         self.requests.lock().unwrap().push(request.clone());
     }
 }
@@ -850,12 +860,12 @@ use extensions::{CredentialPair, HostScript, HttpEntry, LuaProvider, ModelsArg};
 
 /// A sink that signals each record it is given.
 struct Watching {
-    requests: Mutex<Vec<ProviderRequest>>,
-    arrived: std::sync::mpsc::Sender<ProviderRequest>,
+    requests: Mutex<Vec<HttpRequest>>,
+    arrived: std::sync::mpsc::Sender<HttpRequest>,
 }
 
 impl Watching {
-    fn new() -> (Arc<Self>, std::sync::mpsc::Receiver<ProviderRequest>) {
+    fn new() -> (Arc<Self>, std::sync::mpsc::Receiver<HttpRequest>) {
         let (tx, rx) = std::sync::mpsc::channel();
         (
             Arc::new(Self {
@@ -866,7 +876,7 @@ impl Watching {
         )
     }
 
-    fn records(&self) -> Vec<ProviderRequest> {
+    fn records(&self) -> Vec<HttpRequest> {
         self.requests.lock().unwrap().clone()
     }
 }
@@ -876,7 +886,7 @@ impl DebugLog for Watching {
         true
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &HttpRequest) {
         self.requests.lock().unwrap().push(request.clone());
         let _ignored = self.arrived.send(request.clone());
     }
@@ -1024,8 +1034,8 @@ fn provider_purposes_record_once_per_attempt() {
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
-                serde_json::to_value(record.purpose)
+                provider_of(record),
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -1081,12 +1091,13 @@ fn two_calls_in_one_callback_emit_two_attempt_ones() {
     .expect("two HTTP calls in one callback succeed");
     assert_eq!(server.requests().len(), 2);
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 2);
     for record in &records {
-        assert_eq!(record.provider, "p");
+        assert_eq!(record.identity(), Some(&Identity::Provider("p".to_owned())));
         assert_eq!(record.attempt, 1);
         assert_eq!(
-            serde_json::to_value(record.purpose).unwrap(),
+            serde_json::to_value(record.purpose()).unwrap(),
             serde_json::Value::String("model_list".to_owned())
         );
     }
@@ -1174,7 +1185,7 @@ fn cache_hits_and_scripted_replies_emit_nothing() {
 }
 
 #[test]
-fn sign_command_and_entry_load_send_unobserved() {
+fn sign_command_and_entry_load_record_as_the_extension() {
     let server =
         fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
     let url = server.url();
@@ -1202,7 +1213,8 @@ fn sign_command_and_entry_load_send_unobserved() {
     let clock = FakeClock::new();
     let (sink, _) = Watching::new();
     let ext = observed_ext(&dir, clock, &sink);
-    // The entry script's command runs actual HTTP, unobserved.
+    // The entry script's command runs actual HTTP, recorded as the
+    // extension's own.
     let pong = fakes::within(
         "ext.command",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -1213,7 +1225,8 @@ fn sign_command_and_entry_load_send_unobserved() {
     )
     .expect("the command succeeds");
     assert_eq!(pong, "pong");
-    // Signing sends actual HTTP, unobserved even with a sink installed.
+    // Signing sends actual HTTP, unobserved even with a sink installed:
+    // `sign` has no eligible purpose and stays silent.
     let signer = LuaProvider::new(Arc::clone(&ext), "s");
     let signed: Vec<(String, String)> = fakes::within(
         "signer.sign",
@@ -1231,7 +1244,9 @@ fn sign_command_and_entry_load_send_unobserved() {
     )
     .expect("signing succeeds");
     assert!(signed.is_empty());
-    // The provider file's top-level HTTP ran at first use, unobserved.
+    // The provider file's top-level HTTP ran at first use, recorded as
+    // the extension's own: provider-file load scope is not a provider
+    // function.
     let provider = LuaProvider::new(ext, "p");
     fakes::within(
         "provider.list_models",
@@ -1251,12 +1266,43 @@ fn sign_command_and_entry_load_send_unobserved() {
         assert!(paths.contains(&path.to_owned()), "sent {path}: {paths:?}");
     }
     let records = sink.records();
-    assert_eq!(records.len(), 1, "only the models() call records");
-    assert_eq!(records[0].provider, "p");
+    // docs/state.md, "Diagnostic logs": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
+    assert_eq!(records.len(), 3, "command, load and models each record");
+    let mut own: Vec<(Option<Identity>, String)> = records
+        .iter()
+        .map(|record| {
+            (
+                record.identity().cloned(),
+                serde_json::to_value(record.purpose())
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    own.sort();
+    assert_eq!(
+        own,
+        [
+            (
+                Some(Identity::Provider("p".to_owned())),
+                "model_list".to_owned()
+            ),
+            (
+                Some(Identity::Extension("ext".to_owned())),
+                "extension".to_owned()
+            ),
+            (
+                Some(Identity::Extension("ext".to_owned())),
+                "extension".to_owned()
+            ),
+        ]
+    );
 }
 
 #[test]
-fn hook_http_sends_unobserved_with_a_sink_installed() {
+fn hook_http_records_as_the_extension_with_a_sink_installed() {
     let setup = Setup::new();
     let server =
         fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
@@ -1289,12 +1335,152 @@ fn hook_http_sends_unobserved_with_a_sink_installed() {
         },
     );
     assert_eq!(server.requests().len(), 1);
-    assert!(sink.requests.lock().unwrap().is_empty());
+    let records = sink.requests.lock().unwrap();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    assert_eq!(
+        records.len(),
+        1,
+        "the hook's request records as the extension's"
+    );
+    let record = &records[0];
+    assert_eq!(
+        record.identity(),
+        Some(&Identity::Extension("fiber.test/one".to_owned()))
+    );
+    assert_eq!(record.purpose(), Purpose::Extension);
+    assert_eq!(record.status, Some(200));
+    assert_eq!(record.attempt, 1);
+}
+
+/// Loads a repository session on a thread, as a session start does: the
+/// load itself runs off the caller's thread.
+fn load_repository(
+    home: &std::path::Path,
+    config: &Config,
+    sink: Option<Arc<dyn DebugLog>>,
+) -> SessionExtensions {
+    let home = home.to_path_buf();
+    let config = config.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+        let _sent = tx.send(SessionExtensions::load_repository(
+            &home,
+            &config,
+            FakeClock::new(),
+            locks,
+            None,
+            StateSeed::new(),
+            RepositorySet::default(),
+            sink,
+        ));
+    });
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("waited for the session to load")
+}
+
+#[test]
+fn session_load_entry_http_records_with_the_load_sink() {
+    let setup = Setup::new();
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    install_lua(
+        &setup,
+        "entry",
+        &json!({}),
+        &format!("host.http({{ url = \"{url}/entry\" }})\n"),
+    );
+    let config = common::config(&setup, &[]);
+    // The sink installs before the first entry script runs: the entry's
+    // own HTTP records as the extension's.
+    let (sink, _) = Watching::new();
+    let _session = load_repository(
+        &setup.home(),
+        &config,
+        Some(sink.clone() as Arc<dyn DebugLog>),
+    );
+    assert_eq!(server.requests().len(), 1, "the entry sent its HTTP");
+    let records = sink.records();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    assert_eq!(records.len(), 1, "the entry's request records");
+    let record = &records[0];
+    assert_eq!(
+        record.identity(),
+        Some(&Identity::Extension("fiber.test/entry".to_owned()))
+    );
+    assert_eq!(record.purpose(), Purpose::Extension);
+    assert_eq!(record.status, Some(200));
+    assert_eq!(record.attempt, 1);
+    // A test-only load installs no sink, so the same entry stays silent.
+    let (dark, _) = Watching::new();
+    let _session = load_repository(&setup.home(), &config, None);
+    assert_eq!(server.requests().len(), 2, "the entry sent its HTTP again");
+    assert!(dark.records().is_empty());
+    assert_eq!(
+        sink.records().len(),
+        1,
+        "no second line lands on the old sink"
+    );
+}
+
+#[test]
+fn load_with_diagnostics_forwards_its_sink_to_entry() {
+    let setup = Setup::new();
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    install_lua(
+        &setup,
+        "entry",
+        &json!({}),
+        &format!("host.http({{ url = \"{url}/entry\" }})\n"),
+    );
+    let config = common::config(&setup, &[]);
+    let load_with = |sink: Option<Arc<dyn DebugLog>>| {
+        let home = setup.home();
+        let config = config.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+            let _sent = tx.send(SessionExtensions::load_with_diagnostics(
+                &home,
+                &config,
+                FakeClock::new(),
+                locks,
+                None,
+                sink,
+            ));
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .expect("waited for the session to load")
+    };
+    let (sink, _) = Watching::new();
+    let _session = load_with(Some(sink.clone() as Arc<dyn DebugLog>));
+    assert_eq!(server.requests().len(), 1, "the entry sent its HTTP");
+    let records = sink.records();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    assert_eq!(records.len(), 1, "the entry's request records");
+    assert_eq!(
+        records[0].identity(),
+        Some(&Identity::Extension("fiber.test/entry".to_owned()))
+    );
+    assert_eq!(records[0].purpose(), Purpose::Extension);
+    // `None` stays silent: the same entry sends but records nothing.
+    let _session = load_with(None);
+    assert_eq!(server.requests().len(), 2, "the entry sent its HTTP again");
+    assert_eq!(
+        sink.records().len(),
+        1,
+        "no second line lands on the old sink"
+    );
 }
 
 /// The serialized keys of one record, sorted: `to_value` holds them in
 /// a map, so declaration order is pinned by the struct, not this helper.
-fn wire_keys(record: &ProviderRequest) -> Vec<String> {
+fn wire_keys(record: &HttpRequest) -> Vec<String> {
     let value = serde_json::to_value(record).unwrap();
     let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
     keys.sort();
@@ -1362,6 +1548,7 @@ fn request_lines_carry_no_url_or_content() {
     .unwrap_err();
     assert_eq!(dns_err.code(), contract::ErrorCode::ExtensionFailed);
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 3);
     for record in &records[..2] {
         assert_eq!(
@@ -1401,6 +1588,54 @@ fn request_lines_carry_no_url_or_content() {
     }
 }
 
+#[test]
+fn extension_lines_carry_the_extension_and_no_provider_or_host() {
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    let dir = ext_dir(
+        Some(&format!(
+            "fiber.command(\"ping\", {{ timeout = 60000, description = \"ping\",\n\
+               run = function(text) host.http({{ url = \"{url}/command\" }}) return \"pong\" end }})\n"
+        )),
+        &[],
+    );
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let ext = observed_ext(&dir, clock, &sink);
+    fakes::within(
+        "ext.command",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let ext = Arc::clone(&ext);
+            move || ext.command("ping", "")
+        },
+    )
+    .expect("the command succeeds");
+    let records = sink.records();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    assert_eq!(records.len(), 1);
+    // The exact key set proves no `provider`, `host`, `path`, `model`
+    // or `first_token_ms` key, present or null.
+    assert_eq!(
+        wire_keys(&records[0]),
+        [
+            "attempt",
+            "extension",
+            "headers_ms",
+            "purpose",
+            "request_bytes",
+            "response_bytes",
+            "status",
+            "total_ms",
+        ]
+    );
+    assert_eq!(
+        records[0].identity(),
+        Some(&Identity::Extension("ext".to_owned()))
+    );
+}
+
 /// A sink that records no debug lines: any record is a failure.
 struct Dark;
 
@@ -1409,7 +1644,7 @@ impl DebugLog for Dark {
         false
     }
 
-    fn provider_request(&self, _request: &ProviderRequest) {
+    fn http_request(&self, _request: &HttpRequest) {
         panic!("an info sink records nothing");
     }
 }
@@ -1477,10 +1712,14 @@ fn background_refresh_is_observed() {
     .expect("the background refresh succeeds");
     assert_eq!(server.requests().len(), 1);
     let records = sink.records();
+    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].provider, "p");
     assert_eq!(
-        serde_json::to_value(records[0].purpose).unwrap(),
+        records[0].identity(),
+        Some(&Identity::Provider("p".to_owned()))
+    );
+    assert_eq!(
+        serde_json::to_value(records[0].purpose()).unwrap(),
         serde_json::Value::String("model_list".to_owned())
     );
 }
@@ -1595,16 +1834,17 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         .recv(&cmd_rx)
         .expect("waited for the command")
         .expect("the command completes");
-    // Each request carries its own provider and purpose: two attempt-1
-    // model-list lines for p, one quota line for q, nothing for commands.
-    // The second VM's writer holds only its provider's line.
-    let mut own: Vec<(String, String, u32)> = sink_a
+    // Each request carries its own identity and purpose: two attempt-1
+    // model-list lines for p, one quota line for q, one extension line
+    // for the command. The second VM's writer holds only its provider's
+    // line.
+    let mut own: Vec<(Option<Identity>, String, u32)> = sink_a
         .records()
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
-                serde_json::to_value(record.purpose)
+                record.identity().cloned(),
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -1617,9 +1857,26 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     assert_eq!(
         own,
         [
-            ("p".to_owned(), "model_list".to_owned(), 1),
-            ("p".to_owned(), "model_list".to_owned(), 1),
-            ("q".to_owned(), "quota".to_owned(), 1),
+            (
+                Some(Identity::Provider("p".to_owned())),
+                "model_list".to_owned(),
+                1
+            ),
+            (
+                Some(Identity::Provider("p".to_owned())),
+                "model_list".to_owned(),
+                1
+            ),
+            (
+                Some(Identity::Provider("q".to_owned())),
+                "quota".to_owned(),
+                1
+            ),
+            (
+                Some(Identity::Extension("ext".to_owned())),
+                "extension".to_owned(),
+                1
+            ),
         ]
     );
     let other: Vec<(String, String)> = sink_b
@@ -1627,8 +1884,8 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
-                serde_json::to_value(record.purpose)
+                provider_of(record),
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -1637,8 +1894,8 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         })
         .collect();
     assert_eq!(other, [("r".to_owned(), "model_list".to_owned())]);
-    // A following command stays unobserved: no stale context leaks
-    // between callbacks.
+    // A following command records as the extension's own: no stale
+    // context leaks between callbacks, and no callback stays silent.
     fakes::within(
         "ext_a.command",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -1648,7 +1905,8 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         },
     )
     .expect("the following command succeeds");
-    assert_eq!(sink_a.records().len(), 3);
+    // docs/state.md, "Diagnostic logs": where the call is made decides the purpose: a provider function keeps its own, anything else records extension.
+    assert_eq!(sink_a.records().len(), 5);
 }
 
 // Session composition: discovery, background refresh and late VMs carry
@@ -1667,6 +1925,85 @@ fn models_file(url: &str) -> String {
            return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{url}\" }}}}\n\
          end }} }})\n"
     )
+}
+
+#[test]
+fn late_vm_entry_records_through_the_retained_sink() {
+    let setup = Setup::new();
+    let server =
+        fakes::ProviderServer::start_responding(|_| fakes::Response::status(200, "{}")).unwrap();
+    let url = server.url();
+    let late = install_lua(
+        &setup,
+        "late",
+        &json!({"providers": {"p": []}}),
+        &format!("host.http({{ url = \"{url}/entry\" }})\n"),
+    );
+    std::fs::create_dir_all(late.join("providers")).unwrap();
+    std::fs::write(late.join("providers/p.lua"), models_file(&url)).unwrap();
+    let clock = FakeClock::new();
+    let (sink, _) = Watching::new();
+    let session = diagnosed_session(&setup, clock.clone(), &sink);
+    // The eager entry ran at load, before the sink installed: sent, but
+    // silent.
+    assert_eq!(server.requests().len(), 1, "the eager entry sent its HTTP");
+    assert!(sink.records().is_empty());
+    // Drop the loaded handles so the late start below is a fresh VM.
+    let mut session = Arc::try_unwrap(session).unwrap_or_else(|_| panic!("shared"));
+    session.retain_lua_providers(&[]);
+    let session = Arc::new(session);
+    let config = session_config(&setup);
+    let started = fakes::within(
+        "start_provider",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            let config = config.clone();
+            let clock = clock.clone();
+            move || session.start_provider(&config, clock, Arc::new(NoLock), "fiber.test/late", "p")
+        },
+    )
+    .expect("the late VM starts");
+    fakes::within(
+        "late.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let started = Arc::clone(&started);
+            move || started.list_models(&ModelsArg::default())
+        },
+    )
+    .expect("the late VM lists its models");
+    // The fresh VM's entry ran with the retained sink installed: its own
+    // HTTP records beside the models call's provider line.
+    assert_eq!(server.requests().len(), 3, "entry, entry and models sent");
+    let mut own: Vec<(Option<Identity>, String)> = sink
+        .records()
+        .iter()
+        .map(|record| {
+            (
+                record.identity().cloned(),
+                serde_json::to_value(record.purpose())
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    own.sort();
+    assert_eq!(
+        own,
+        [
+            (
+                Some(Identity::Provider("p".to_owned())),
+                "model_list".to_owned()
+            ),
+            (
+                Some(Identity::Extension("fiber.test/late".to_owned())),
+                "extension".to_owned()
+            ),
+        ]
+    );
 }
 
 /// Installs the hook+provider extension `diag` and the provider-only
@@ -1792,7 +2129,7 @@ fn session_discovery_and_refresh_carry_the_sink() {
         .records()
         .iter()
         .map(|record| {
-            serde_json::to_value(record.purpose)
+            serde_json::to_value(record.purpose())
                 .unwrap()
                 .as_str()
                 .unwrap()
@@ -2024,8 +2361,8 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         .iter()
         .map(|record| {
             (
-                record.provider.clone(),
-                serde_json::to_value(record.purpose)
+                provider_of(record),
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()

@@ -718,3 +718,72 @@ fn unlisted_platform_fails_before_any_download() {
         world.server.requests()
     );
 }
+
+/// A debug full update logs one `extension_release` line per actual request
+/// to the pid-named CLI log: the tag redirect and result, three archives and
+/// their checksum files. The members carry no binary, so no member line follows.
+#[test]
+fn a_debug_update_logs_one_extension_release_line_per_request() {
+    let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, OLD_BINARY);
+    fs::write(
+        world.home.join("config.json"),
+        serde_json::json!({"diagnostics": {"level": "debug"}}).to_string(),
+    )
+    .unwrap();
+    let (result, err) = world.run("0.1.0", Channel::Stable, false, b"", &World::no_restart);
+    assert_eq!(result.unwrap(), 0, "{err}");
+    let name = format!("cli-{}.log", std::process::id());
+    let text = fs::read_to_string(world.home.join("logs").join(&name)).unwrap();
+    let host = world.server.url().trim_start_matches("http://").to_owned();
+    let requests: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|line: &serde_json::Value| line["code"] == "http_request")
+        .filter(|line: &serde_json::Value| {
+            line["data"].get("host").and_then(|host| host.as_str()) == Some(host.as_str())
+        })
+        .collect();
+    // docs/state.md, "Diagnostic logs": one line per actual request, including each redirect hop.
+    assert_eq!(
+        requests.len(),
+        8,
+        "the tag redirect and result plus three archives and their checksums: {requests:?}"
+    );
+    let mut paths: Vec<&str> = requests
+        .iter()
+        .map(|line| line["data"]["path"].as_str().unwrap())
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            "/releases/download/v0.2.0/fiber-docs.tar.gz",
+            "/releases/download/v0.2.0/fiber-docs.tar.gz.sha256",
+            "/releases/download/v0.2.0/fiber-extensions.tar.gz",
+            "/releases/download/v0.2.0/fiber-extensions.tar.gz.sha256",
+            "/releases/download/v0.2.0/fiber-x86_64-unknown-linux-musl.tar.gz",
+            "/releases/download/v0.2.0/fiber-x86_64-unknown-linux-musl.tar.gz.sha256",
+            "/releases/latest",
+            "/releases/tag/v0.2.0",
+        ]
+    );
+    for request in &requests {
+        assert_eq!(request["process"], "cli");
+        assert!(
+            request.get("session_id").is_none(),
+            "no session on a one-shot command: {request}"
+        );
+        let data = &request["data"];
+        assert_eq!(data["purpose"], "extension_release", "{data}");
+        let status = if data["path"] == "/releases/latest" {
+            302
+        } else {
+            200
+        };
+        assert_eq!(data["status"], status, "{data}");
+        assert_eq!(data["attempt"], 1, "{data}");
+        assert!(data.get("provider").is_none(), "{data}");
+        assert!(data.get("extension").is_none(), "{data}");
+        assert!(data.get("model").is_none(), "{data}");
+    }
+}

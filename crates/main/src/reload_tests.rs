@@ -109,6 +109,7 @@ fn empty_servers(rig: &Rig, clock: &Arc<dyn contract::clock::Clock>) -> mcp::Sta
         &config::mcp_cache_dir(&rig.home),
         clock,
         "test",
+        None,
     )
 }
 
@@ -233,6 +234,7 @@ impl Fixture {
             sandbox: parts.sandbox.clone(),
             sandbox_notice_reported,
             servers: Arc::new(empty.servers),
+            reconnect_flights: Arc::new(Mutex::new(Default::default())),
             artifacts: rig.workspace.join("artifacts"),
             images: Arc::new(DummyImages),
             prepare_progress: Mutex::new(Vec::new()),
@@ -289,6 +291,7 @@ impl Fixture {
                     &cache,
                     &clock,
                     "test",
+                    None,
                     None,
                 )
             },
@@ -1449,6 +1452,7 @@ fn assemble(base: &State, started: mcp::Started) -> State {
                 .load(std::sync::atomic::Ordering::SeqCst),
         ),
         servers: Arc::new(started.servers),
+        reconnect_flights: Arc::clone(&base.reconnect_flights),
         artifacts: base.artifacts.clone(),
         images: Arc::clone(&base.images),
         prepare_progress: Mutex::new(Vec::new()),
@@ -1551,6 +1555,7 @@ impl Fixture {
                     &cache,
                     &clock,
                     "test",
+                    None,
                     None,
                 )
             },
@@ -2259,6 +2264,7 @@ fn reload_aligns_the_resources_marker_with_the_installed_set() {
                 &cache,
                 &clock,
                 "test",
+                None,
                 None,
             )
         },

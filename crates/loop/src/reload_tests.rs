@@ -668,7 +668,7 @@ fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() 
             stale.definition(),
         ),
     );
-    w.looped = w.looped.reconnector(Arc::new(|server| {
+    w.looped = w.looped.reconnector(Arc::new(|server, _collect| {
         assert_eq!(server, "db");
         let fresh = Arc::new(NamedTool("db__list"));
         Ok(Reconnected {
@@ -695,6 +695,228 @@ fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() 
     assert!(w.looped.tools.contains_key("db__list"));
     assert!(!w.looped.tools.contains_key("db__old"));
     assert!(kinds(&w.looped).contains(&"mcp_server_ready".to_owned()));
+}
+
+#[test]
+fn reconnects_in_one_idle_batch_start_one_failing_process() {
+    fakes::within(
+        "same-batch reconnects",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            for deferred in [false, true] {
+                let mut w = world();
+                // world injects FakeClock. No elapsed time drives this case and
+                // no clock advance is needed: both requests precede admission.
+                let spawns = w._home.path().join("spawns");
+                let counter = spawns.clone();
+                w.looped = w.looped.reconnector(Arc::new(move |server, collect| {
+                    let status = std::process::Command::new("/bin/sh")
+                        .args(["-c", "printf 'spawn\\n' >> \"$1\"; exit 1", "failed-start"])
+                        .arg(&counter)
+                        .status()
+                        .expect("the failing child starts");
+                    assert!(!status.success());
+                    collect(server);
+                    Ok(Reconnected {
+                        tools: Vec::new(),
+                        removed: Vec::new(),
+                        records: vec![contract::tool::ServerRecord::Failed(
+                            contract::events::McpServerFailed {
+                                server: server.into(),
+                                reason: contract::events::ServerFailure::StartFailed,
+                                will_restart: false,
+                                error: Failure {
+                                    code: ErrorCode::McpServerUnavailable,
+                                    message: "child exited 1".into(),
+                                    retry_after_ms: None,
+                                    provider: None,
+                                },
+                            },
+                        )],
+                    })
+                }));
+                let mut answers = Vec::new();
+                // Enqueue both before wait_for_turn is called. With no hooks,
+                // its first recv and snapshot necessarily take this same batch.
+                for _ in 0..2 {
+                    let (ack, answer) = ack();
+                    let delivery = contract::inbox::Delivery::McpReconnect(
+                        contract::commands::McpServerArgs {
+                            server: "db".into(),
+                        },
+                        ack,
+                    );
+                    if deferred {
+                        w.looped.deferred.push_back(delivery);
+                    } else {
+                        w.inbox.send(delivery).unwrap();
+                    }
+                    answers.push(answer);
+                }
+                w.inbox
+                    .send(contract::inbox::Delivery::Close(Ack(Box::new(|_| {}))))
+                    .unwrap();
+                assert!(w.looped.wait_for_turn().unwrap().is_none());
+                for answer in answers {
+                    assert!(
+                        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                            .recv_or_fail(&answer, "each reconnect is accepted")
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+                // docs/mcp.md, "Servers, their state and the per-server
+                // commands": quick reconnects start the server once, failed too.
+                assert_eq!(std::fs::read_to_string(&spawns).unwrap(), "spawn\n");
+                let failed: Vec<_> = log::read(w.looped.log.dir())
+                    .unwrap()
+                    .into_iter()
+                    .filter(|line| line.kind == "mcp_server_failed")
+                    .collect();
+                assert_eq!(failed.len(), 1);
+                assert_eq!(failed[0].payload["server"], "db");
+            }
+        },
+    );
+}
+
+#[test]
+fn a_duplicate_behind_a_rejected_reconnect_keeps_its_own_verdict() {
+    let mut w = world();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    w.looped = w.looped.reconnector(Arc::new(move |server, _collect| {
+        assert_eq!(server, "unknown");
+        counted.fetch_add(1, Ordering::SeqCst);
+        Err(Rejection {
+            code: ErrorCode::InvalidArguments,
+            message: "nothing declares unknown".into(),
+        })
+    }));
+    let (duplicate, duplicate_answer) = ack();
+    w.inbox
+        .send(contract::inbox::Delivery::McpReconnect(
+            contract::commands::McpServerArgs {
+                server: "unknown".into(),
+            },
+            duplicate,
+        ))
+        .unwrap();
+    let (first, first_answer) = ack();
+    w.looped.take_reconnect("unknown".into(), first).unwrap();
+    let contract::inbox::Delivery::McpReconnect(args, second) = w.looped.inbox.try_recv().unwrap()
+    else {
+        panic!("a rejected attempt leaves the duplicate queued");
+    };
+    w.looped.take_reconnect(args.server, second).unwrap();
+    for answer in [first_answer, duplicate_answer] {
+        let failure = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&answer, "each rejection")
+            .unwrap_err();
+        assert_eq!(failure.code, ErrorCode::InvalidArguments);
+        assert_eq!(failure.message, "nothing declares unknown");
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let mut recorded = kinds(&w.looped);
+    recorded.sort();
+    assert_eq!(recorded, ["session_started"]);
+}
+
+#[test]
+fn reconnect_duplicates_accept_after_the_shared_outcome_and_a_later_retry_runs() {
+    use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
+    for ready in [false, true] {
+        let mut w = world();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let (joined, answer) = ack();
+        let (observed, publication) = mpsc::channel();
+        let log = Arc::clone(&w.looped.log);
+        let expected = if ready {
+            "mcp_server_ready"
+        } else {
+            "mcp_server_failed"
+        };
+        w.inbox
+            .send(contract::inbox::Delivery::McpReconnect(
+                contract::commands::McpServerArgs {
+                    server: "db".into(),
+                },
+                Ack(Box::new(move |outcome| {
+                    // An accepted join cannot precede the durable server outcome
+                    // (`docs/mcp.md`, "Servers, their state and the per-server commands").
+                    assert_eq!(log::read(log.dir()).unwrap().last().unwrap().kind, expected);
+                    observed.send(()).unwrap();
+                    (joined.0)(outcome);
+                })),
+            ))
+            .unwrap();
+        let pending = Arc::new(Mutex::new(answer));
+        let before = Arc::clone(&pending);
+        w.looped = w.looped.reconnector(Arc::new(move |server, collect| {
+            assert_eq!(server, "db");
+            let attempt = counted.fetch_add(1, Ordering::SeqCst);
+            collect(server);
+            let expected = if attempt == 0 {
+                mpsc::TryRecvError::Empty
+            } else {
+                mpsc::TryRecvError::Disconnected
+            };
+            assert_eq!(before.lock().unwrap().try_recv().unwrap_err(), expected);
+            let record = if ready {
+                contract::tool::ServerRecord::Ready(McpServerReady {
+                    server: server.into(),
+                })
+            } else {
+                contract::tool::ServerRecord::Failed(McpServerFailed {
+                    server: server.into(),
+                    reason: ServerFailure::StartFailed,
+                    will_restart: false,
+                    error: Failure {
+                        code: ErrorCode::McpServerUnavailable,
+                        message: "start failed".into(),
+                        retry_after_ms: None,
+                        provider: None,
+                    },
+                })
+            };
+            Ok(Reconnected {
+                tools: Vec::new(),
+                removed: Vec::new(),
+                records: vec![record],
+            })
+        }));
+        let (first, first_answer) = ack();
+        w.looped.take_reconnect("db".into(), first).unwrap();
+        assert!(
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&first_answer, "first reconnect")
+                .is_ok()
+        );
+        assert!(
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&pending.lock().unwrap(), "joined reconnect")
+                .is_ok()
+        );
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&publication, "published before accepting the join");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // The completed join is not a cached answer: a subsequent command
+        // reaches the start entry point again, even after a failed start.
+        let (retry, retry_answer) = ack();
+        w.looped.take_reconnect("db".into(), retry).unwrap();
+        assert!(
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&retry_answer, "later reconnect")
+                .is_ok()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        // Count outcomes without pinning incidental event order; the ack
+        // callback above checks the required publication-before-accept edge.
+        let mut recorded = kinds(&w.looped);
+        recorded.sort();
+        assert_eq!(recorded, [expected, expected, "session_started"]);
+    }
 }
 
 #[test]

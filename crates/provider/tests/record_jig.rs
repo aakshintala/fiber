@@ -12,7 +12,6 @@
 
 use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 #[path = "support/record.rs"]
@@ -20,12 +19,13 @@ mod support;
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/record`), so the test starts no cargo and
-/// waits on no build lock.
-fn example_path() -> PathBuf {
+/// waits on no build lock. Warming before returning means every exec site
+/// holds only a warmed path.
+fn example_path() -> fakes::WarmedJig {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.join("examples").join("record")
+    fakes::WarmedJig::warm(path.join("examples").join("record"), &[], 2)
 }
 
 /// Runs the built `record` binary with `args` and waits for it. The child
@@ -33,8 +33,8 @@ fn example_path() -> PathBuf {
 /// the wait and leaves no process behind.
 #[track_caller]
 fn run_jig(args: &[&str]) -> Output {
-    fakes::warm_up(&example_path(), &[], 2);
-    let child = Command::new(example_path())
+    let warmed = example_path();
+    let child = Command::new(warmed.path())
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

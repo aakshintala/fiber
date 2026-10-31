@@ -15,6 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
+use contract::diag::DebugLog;
 use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, ToolState};
 use contract::images::Images;
 use contract::provider::ToolDefinition;
@@ -258,6 +259,7 @@ pub(crate) fn launch_observed(
     clock: &Arc<dyn Clock>,
     version: &str,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn DebugLog>>,
 ) -> Result<crate::server::OpenServer, crate::server::StartError> {
     // One guard per launch, from starting or dialing until the tool list
     // is in hand. No clock read happens here beyond what the timing
@@ -317,6 +319,7 @@ pub(crate) fn launch_observed(
             spec.startup_timeout,
             version,
             timing.clone(),
+            debug,
             &mut connection,
         ),
     }
@@ -358,6 +361,9 @@ pub struct Servers {
     /// The timing context attempts start their connection guards from:
     /// `None` starts untimed, as before. Never logged.
     timing: Option<contract::diag::Timing>,
+    /// Where the servers' `http_request` lines go: `None` stays silent,
+    /// as before.
+    debug: Option<Arc<dyn DebugLog>>,
 }
 
 impl Servers {
@@ -433,6 +439,13 @@ impl Servers {
     /// reading it starts no guard.
     pub fn timing(&self) -> Option<contract::diag::Timing> {
         self.timing.clone()
+    }
+
+    /// The sink this start's servers write their `http_request` lines
+    /// to, for a later load that starts more servers into it: `None`
+    /// stays silent, as before.
+    pub fn debug_sink(&self) -> Option<Arc<dyn DebugLog>> {
+        self.debug.clone()
     }
 
     /// Stops the slot `name` runs on and drops it from the list, so a
@@ -514,7 +527,12 @@ pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_millis(600_000);
 /// cached lists in `cache` (`<home>/cache/mcp`) without spawning them.
 /// `version` is Fiber's own version, sent as `clientInfo`. Binary content
 /// a tool answers is written to the session artifacts dir `artifacts`, and
-/// an image is processed once through `images`.
+/// an image is processed once through `images`. `debug` observes every
+/// request the started servers make as `mcp`; `None` stays silent.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one session start's inputs plus the sink"
+)]
 pub fn start(
     specs: Vec<ServerSpec>,
     workspace: &Path,
@@ -523,19 +541,21 @@ pub fn start(
     cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
+    debug: Option<Arc<dyn DebugLog>>,
 ) -> Started {
     start_observed(
-        specs, workspace, artifacts, images, cache, clock, version, None,
+        specs, workspace, artifacts, images, cache, clock, version, None, debug,
     )
 }
 
 /// As [`start`], timing every session-start attempt's connection through
 /// `timing` and keeping the context on the servers for later attempts:
 /// cached declarations start nothing and emit nothing. `None` stays
-/// untimed, as before.
+/// untimed, as before. `debug` observes every request the started
+/// servers make as `mcp`; `None` stays silent.
 #[allow(
     clippy::too_many_arguments,
-    reason = "the observed companion adds only the Timing"
+    reason = "the observed companion adds the Timing and the sink"
 )]
 pub fn start_observed(
     specs: Vec<ServerSpec>,
@@ -546,9 +566,10 @@ pub fn start_observed(
     clock: &Arc<dyn Clock>,
     version: &str,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn DebugLog>>,
 ) -> Started {
     start_observed_tracked(
-        specs, workspace, artifacts, images, cache, clock, version, timing, None,
+        specs, workspace, artifacts, images, cache, clock, version, timing, debug, None,
     )
 }
 
@@ -558,7 +579,7 @@ pub fn start_observed(
 /// not reported. `None` tracks nothing, as before.
 #[allow(
     clippy::too_many_arguments,
-    reason = "the tracked companion adds only the outstanding set"
+    reason = "the tracked companion adds the outstanding set and the sink"
 )]
 pub(crate) fn start_observed_tracked(
     specs: Vec<ServerSpec>,
@@ -569,6 +590,7 @@ pub(crate) fn start_observed_tracked(
     clock: &Arc<dyn Clock>,
     version: &str,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn DebugLog>>,
     outstanding: Option<Arc<Mutex<BTreeSet<String>>>>,
 ) -> Started {
     let mut lazy = Vec::new();
@@ -601,6 +623,7 @@ pub(crate) fn start_observed_tracked(
         let clock = Arc::clone(clock);
         let version = version.to_owned();
         let timing = timing.clone();
+        let debug = debug.clone();
         let name = spec.name.clone();
         let outstanding = outstanding.clone();
         thread::spawn(move || {
@@ -608,7 +631,7 @@ pub(crate) fn start_observed_tracked(
             let key = spec.key();
             let staged = stage_and_write(
                 open_staged(
-                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
+                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing, debug,
                 ),
                 &cache,
                 &name,
@@ -658,6 +681,7 @@ pub(crate) fn start_observed_tracked(
             version,
             cached.clone(),
             timing.clone(),
+            debug.clone(),
         );
         let link: Weak<Slot> = Arc::downgrade(&slot);
         slots.push(slot);
@@ -688,6 +712,7 @@ pub(crate) fn start_observed_tracked(
             slots,
             resources_declared: AtomicBool::new(false),
             timing,
+            debug,
         },
         prompts: Prompts::collect(sources),
         required_failed,
@@ -754,7 +779,7 @@ pub(crate) fn open(
     let key = spec.key();
     stage_and_write(
         open_staged(
-            spec, workspace, artifacts, images, cache, clock, version, None,
+            spec, workspace, artifacts, images, cache, clock, version, None, None,
         ),
         cache,
         &name,
@@ -799,12 +824,20 @@ pub(crate) fn open_staged(
     clock: &Arc<dyn Clock>,
     version: &str,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn DebugLog>>,
 ) -> Shadowed {
     let name = spec.name.clone();
     let required = spec.required;
     let timeout = spec.startup_timeout;
     let remote = spec.remote();
-    let open = match launch_observed(&spec, workspace, clock, version, timing.clone()) {
+    let open = match launch_observed(
+        &spec,
+        workspace,
+        clock,
+        version,
+        timing.clone(),
+        debug.clone(),
+    ) {
         Ok(open) => open,
         Err(error) => {
             return Shadowed::Down {
@@ -826,6 +859,7 @@ pub(crate) fn open_staged(
         open.advertises_tools,
         open.advertises_prompts,
         timing,
+        debug,
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
     let sources = sources_of(&name, &listed_prompts, &link, spec.call_timeout);

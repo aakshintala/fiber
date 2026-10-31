@@ -148,17 +148,49 @@ fn tally_sums_terminal_operations_by_operation() {
     assert_eq!(provider, json!({"count": 0, "total_ms": 0}));
 }
 
-/// `docs/performance.md`, "Measuring": `provider_request`'s count and total
-/// `total_ms`.
+/// `docs/performance.md`, "Measuring": `http_request`'s count and total
+/// `total_ms`, over provider purposes only.
 #[test]
-fn tally_sums_provider_request_total_ms() {
+fn tally_sums_http_request_total_ms() {
     let logs = [text(vec![
-        line("provider_request", json!({"total_ms": 10, "headers_ms": 1})),
-        line("provider_request", json!({"total_ms": 32})),
+        line(
+            "http_request",
+            json!({"purpose": "model_call", "total_ms": 10, "headers_ms": 1}),
+        ),
+        line("http_request", json!({"purpose": "cost", "total_ms": 32})),
     ])];
     let (ops, provider, _) = tally(&logs);
     assert_eq!(ops, json!({}));
     assert_eq!(provider, json!({"count": 2, "total_ms": 42}));
+}
+
+/// `docs/performance.md`, "Measuring": non-provider purposes never
+/// reach the overhead aggregate, so a purpose mix cannot skew it.
+#[test]
+fn tally_counts_only_provider_purposes() {
+    let logs = [text(vec![
+        line(
+            "http_request",
+            json!({"purpose": "model_call", "total_ms": 10}),
+        ),
+        line(
+            "http_request",
+            json!({"purpose": "web_fetch", "total_ms": 7}),
+        ),
+        line("http_request", json!({"purpose": "mcp", "total_ms": 5})),
+        line(
+            "http_request",
+            json!({"purpose": "extension", "total_ms": 3}),
+        ),
+        line(
+            "http_request",
+            json!({"purpose": "extension_release", "total_ms": 2}),
+        ),
+        line("http_request", json!({"total_ms": 1})),
+    ])];
+    let (ops, provider, _) = tally(&logs);
+    assert_eq!(ops, json!({}));
+    assert_eq!(provider, json!({"count": 1, "total_ms": 10}));
 }
 
 #[test]
@@ -166,7 +198,7 @@ fn tally_does_not_count_other_codes() {
     let logs = [text(vec![
         op("startup.config", 4),
         line("info", json!({"op": "startup.config", "ms": 5})),
-        line("peak_memory", json!({"bytes": 1})),
+        line("resources", json!({"bytes": 1})),
         line("session_started", json!({"op": "tool.run", "ms": 3})),
     ])];
     let (ops, provider, _) = tally(&logs);
@@ -181,7 +213,10 @@ fn tally_notes_each_unreadable_line_and_counts_the_rest() {
         "not json".to_owned(),
         line("op_timing", json!({"op": "tool.run", "ms": "3"})),
         line("op_timing", json!({"ms": 3})),
-        line("provider_request", json!({"headers_ms": 1})),
+        line(
+            "http_request",
+            json!({"purpose": "model_call", "headers_ms": 1}),
+        ),
         op("startup.config", 6),
     ])];
     let (ops, provider, notes) = tally(&logs);
@@ -190,7 +225,7 @@ fn tally_notes_each_unreadable_line_and_counts_the_rest() {
     for note in [
         "a diagnostic line is not JSON",
         "an op_timing line has no string data.op or whole data.ms",
-        "a provider_request line has no whole data.total_ms",
+        "an http_request line has no whole data.total_ms",
     ] {
         assert!(
             notes.iter().any(|found| found == note),
@@ -332,10 +367,7 @@ fn debug_pass_tallies_a_child_homes_diagnostic_log() {
         start["ops"],
         json!({"startup.config": {"count": 1, "ms": 7}})
     );
-    assert_eq!(
-        start["provider_request"],
-        json!({"count": 0, "total_ms": 0})
-    );
+    assert_eq!(start["http_request"], json!({"count": 0, "total_ms": 0}));
 }
 
 #[test]

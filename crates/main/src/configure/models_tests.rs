@@ -663,3 +663,115 @@ fn hub_models_encodes_a_first_party_group() {
         }]),
     );
 }
+
+/// Reads `home`'s `logs/hub.log`, or nothing when the hub wrote none.
+fn hub_log(home: &Path) -> Vec<Value> {
+    let Ok(text) = std::fs::read_to_string(home.join("logs").join("hub.log")) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// A debug refresh logs the fetch's `http_request` lines to the hub
+/// log: the entry script's own HTTP runs through the hub's sink.
+#[test]
+fn hub_models_debug_refresh_logs_the_fetch_lines() {
+    let rig = Rig::new("fiber-hub-models-debug");
+    let server = fakes::ProviderServer::start([listing(&["served"])]).unwrap();
+    install_lua(
+        rig.root.path(),
+        &rig.home,
+        "acme-ext",
+        &server_models(&server.url()),
+        &json!({"acme": [format!("{}/v1", server.url())]}),
+    );
+    write_cache(&rig.home, "acme", &server.url(), &["cached"]);
+    std::fs::write(
+        rig.home.join("config.json"),
+        json!({"diagnostics": {"level": "debug"}}).to_string(),
+    )
+    .unwrap();
+    let home = rig.home.clone();
+    let workspace = rig.workspace.clone();
+    let clock = fakes::clock::FakeClock::new();
+    let catalogue = fakes::within(
+        "the debug refresh",
+        Deadline::after(Duration::from_secs(20)),
+        move || {
+            let seam = Seam::new(home);
+            seam.configure(
+                "models",
+                json!({"workspace": workspace, "refresh": "every"})
+                    .as_object()
+                    .unwrap(),
+                clock,
+            )
+            .unwrap()
+            .unwrap()
+        },
+    );
+    assert_eq!(references(&catalogue), ["acme/served"]);
+    let log = hub_log(&rig.home);
+    let requests: Vec<&Value> = log
+        .iter()
+        .filter(|line| line["code"] == "http_request")
+        .collect();
+    assert!(
+        !requests.is_empty(),
+        "the fetch's lines land in the hub log: {log:?}"
+    );
+    for request in &requests {
+        assert_eq!(request["process"], "hub");
+        let data = &request["data"];
+        assert_eq!(data["purpose"], "model_list", "{data}");
+        assert_eq!(data["provider"], "acme", "{data}");
+        assert_eq!(data["attempt"], 1, "{data}");
+        assert!(data.get("extension").is_none(), "{data}");
+        assert!(data.get("model").is_none(), "{data}");
+        assert!(data.get("host").is_none(), "{data}");
+        assert!(data.get("path").is_none(), "{data}");
+    }
+}
+
+/// An info refresh writes no `http_request` lines: without debug the
+/// hub passes no sink to the catalogue fetch.
+#[test]
+fn hub_models_info_refresh_writes_no_request_lines() {
+    let rig = Rig::new("fiber-hub-models-info");
+    let server = fakes::ProviderServer::start([listing(&["served"])]).unwrap();
+    install_lua(
+        rig.root.path(),
+        &rig.home,
+        "acme-ext",
+        &server_models(&server.url()),
+        &json!({"acme": [format!("{}/v1", server.url())]}),
+    );
+    write_cache(&rig.home, "acme", &server.url(), &["cached"]);
+    let home = rig.home.clone();
+    let workspace = rig.workspace.clone();
+    let clock = fakes::clock::FakeClock::new();
+    let catalogue = fakes::within(
+        "the info refresh",
+        Deadline::after(Duration::from_secs(20)),
+        move || {
+            let seam = Seam::new(home);
+            seam.configure(
+                "models",
+                json!({"workspace": workspace, "refresh": "every"})
+                    .as_object()
+                    .unwrap(),
+                clock,
+            )
+            .unwrap()
+            .unwrap()
+        },
+    );
+    assert_eq!(references(&catalogue), ["acme/served"]);
+    let requests: Vec<Value> = hub_log(&rig.home)
+        .into_iter()
+        .filter(|line| line["code"] == "http_request")
+        .collect();
+    assert!(requests.is_empty(), "silent without debug: {requests:?}");
+}
