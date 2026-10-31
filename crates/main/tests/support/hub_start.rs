@@ -13,6 +13,7 @@
 
 use std::fs;
 use std::net::TcpListener;
+use std::path::Path;
 use std::process::{Command, ExitStatus};
 use std::time::Duration;
 
@@ -80,14 +81,8 @@ fn give_up(setup: &Setup, mut process: HubProc, why: &str) -> ! {
     panic!("{why}: the hub {}", report(setup, status));
 }
 
-/// The bounds a hello failure observed, without inferring a cause: the
-/// wait's entry bounds (`entry`, made when the wait started), the root
-/// and started-wait bounds remaining at the failure, and each slice's
-/// `until` offset from its start (`now+`). The sightings share a loaded
-/// hub and an exhausted guard; these values say which wait ran out.
-/// The slice `until` offsets compactly: consecutive equal bounds collapse
-/// to one `bound xcount`, so the thousands of zero-length slices behind
-/// an exhausted wait stay a short line under `flake_report`'s cap.
+/// The hello durations attempted before a failure. Consecutive equal
+/// attempts collapse to one `bound xcount`, keeping failure reports short.
 fn slices_shown(slices: &[Duration]) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut rest = slices.iter().peekable();
@@ -109,13 +104,49 @@ fn slices_shown(slices: &[Duration]) -> String {
 fn hello_account(
     entry: &str,
     failing_left: Duration,
-    failing_started_left: Duration,
-    slices: &[Duration],
+    failing_wait_left: Duration,
+    attempts: &[Duration],
 ) -> String {
     format!(
-        "{entry}, failing root left {failing_left:?}, failing started-wait left {failing_started_left:?} after slices until now+{}",
-        slices_shown(slices)
+        "{entry}, failing root left {failing_left:?}, failing started-wait left {failing_wait_left:?} after hello attempts+{}",
+        slices_shown(attempts)
     )
+}
+
+/// A hello duration that leaves room for one connect race and the report
+/// before the test's root guard expires.
+fn hello_bound(root_left: Duration) -> Option<Duration> {
+    let hello_left = root_left.saturating_sub(doors::hub::CONNECT_DEADLINE + REPORT_MARGIN);
+    (!hello_left.is_zero()).then_some(hello_left.min(MUST_SUCCEED_WITHIN))
+}
+
+type ConnectAttemptFn = fn(
+    &Path,
+    &mut dyn FnMut() -> std::io::Result<()>,
+    &dyn Clock,
+    Duration,
+) -> std::io::Result<doors::hub::Hub>;
+
+/// Runs one injected action/receive attempt. Production uses
+/// `connect_within`, which starts the hello bound at acceptance, after its
+/// connect race, rather than before both waits.
+fn connect_attempt_with(
+    attempt: ConnectAttemptFn,
+    home: &Path,
+    start: &mut dyn FnMut() -> std::io::Result<()>,
+    clock: &dyn Clock,
+    hello_within: Duration,
+) -> std::io::Result<doors::hub::Hub> {
+    attempt(home, start, clock, hello_within)
+}
+
+fn connect_attempt(
+    home: &Path,
+    start: &mut dyn FnMut() -> std::io::Result<()>,
+    clock: &dyn Clock,
+    hello_within: Duration,
+) -> std::io::Result<doors::hub::Hub> {
+    connect_attempt_with(doors::hub::connect_within, home, start, clock, hello_within)
 }
 
 /// A caught panic's text, when it carries one: `within` panics with a
@@ -140,25 +171,34 @@ fn is_hello_timeout(text: &str) -> bool {
         .is_some_and(|middle| !middle.is_empty() && !middle.contains(' '))
 }
 
-/// One hello attempt through the started wait `wait`: the far end gets
-/// `bound` past now to answer, while [`bounded`] caps the attempt through
-/// the same wait. The outer wait's own timeout is caught and feeds
-/// `give_up` with its text, so the hub is snapshotted and reaped before
-/// the enriched panic; any other panic resumes unchanged, and any
-/// returned error goes back with the hub.
+/// One hello attempt, bounded by the test's root guard. The connector's
+/// own connect race and hello receive each have their own bound. The outer
+/// timeout is caught and feeds `give_up` with its text; other panics resume
+/// unchanged, and a returned error goes back with the hub.
 pub(crate) fn hello_slice(
     setup: &Setup,
     process: HubProc,
     wait: Deadline,
     bound: Duration,
     entry: &str,
-    slices: &[Duration],
+    attempts: &[Duration],
 ) -> (std::io::Result<doors::hub::Hub>, HubProc) {
     let home = setup.home();
-    let until = SystemClock.now() + bound;
+    let root = wait;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         bounded(wait, "the installed hub's hello", move || {
-            doors::hub::connect_until(&home, &mut || Ok(()), &SystemClock, until, &mut || {})
+            let current_bound = hello_bound(root.left()).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the test root leaves no room for another hello attempt",
+                )
+            })?;
+            connect_attempt(
+                &home,
+                &mut || Ok(()),
+                &SystemClock,
+                bound.min(current_bound),
+            )
         })
     }));
     match outcome {
@@ -172,7 +212,7 @@ pub(crate) fn hello_slice(
                     process,
                     &format!(
                         "{text} ({})",
-                        hello_account(entry, setup.deadline.left(), wait.left(), slices),
+                        hello_account(entry, setup.deadline.left(), wait.left(), attempts),
                     ),
                 );
             }
@@ -181,46 +221,43 @@ pub(crate) fn hello_slice(
     }
 }
 
-/// Waits for the hub's `hub_hello` in slices of
-/// [`MUST_SUCCEED_WITHIN`], looking at the hub's exit between them. `Ok`
-/// is the hello and the live hub; `Err` is the status of a hub that
-/// exited, already reaped, with the wait accounting behind the failure:
-/// the entry bounds, the root and started-wait bounds remaining at the
-/// failure, and each slice's `until` offset. The wait starts at entry,
-/// never renewed: a slice ends [`REPORT_MARGIN`] before it, while the
-/// give-up keeps its margin against the test's guard, so the report and
-/// the cleanup run first. Every failure names the bounds it observed and
-/// what the hub had written, and leaves the cause open.
+/// Waits for the hub's `hub_hello`, looking at the hub's exit between
+/// bounded attempts. `connect_within` owns the connect race, then starts a
+/// fresh hello bound at acceptance. The root deadline only caps the
+/// total test work and reserves room for a race, the hello and the report.
 fn await_hello(
     setup: &Setup,
     mut process: HubProc,
     helper_left: Duration,
 ) -> Result<(doors::hub::Hub, HubProc), (ExitStatus, String)> {
     let entry_left = setup.deadline.left();
-    let wait = setup.deadline.start_wait();
     let entry = format!(
-        "hello wait entered with helper root left {helper_left:?}, root left {entry_left:?} and started-wait left {:?}",
-        wait.left()
+        "hello wait entered with helper root left {helper_left:?}, root left {entry_left:?}"
     );
-    let mut slices: Vec<Duration> = Vec::new();
+    let mut attempts: Vec<Duration> = Vec::new();
     loop {
+        if process.child.try_wait().unwrap().is_some() {
+            let account = hello_account(
+                &entry,
+                setup.deadline.left(),
+                setup.deadline.left(),
+                &attempts,
+            );
+            return Err((process.wait(), account));
+        }
         let failing_left = setup.deadline.left();
-        if failing_left <= REPORT_MARGIN {
+        let Some(bound) = hello_bound(failing_left) else {
             give_up(
                 setup,
                 process,
                 &format!(
                     "waited for the installed hub's hello ({})",
-                    hello_account(&entry, failing_left, wait.left(), &slices),
+                    hello_account(&entry, failing_left, failing_left, &attempts),
                 ),
             );
-        }
-        let bound = wait
-            .left()
-            .saturating_sub(REPORT_MARGIN)
-            .min(MUST_SUCCEED_WITHIN);
-        slices.push(bound);
-        let (slice, back) = hello_slice(setup, process, wait, bound, &entry, &slices);
+        };
+        attempts.push(bound);
+        let (slice, back) = hello_slice(setup, process, setup.deadline, bound, &entry, &attempts);
         process = back;
         let error = match slice {
             Ok(hub) => return Ok((hub, process)),
@@ -228,7 +265,12 @@ fn await_hello(
         };
         if process.child.try_wait().unwrap().is_some() {
             let status = process.wait();
-            let account = hello_account(&entry, setup.deadline.left(), wait.left(), &slices);
+            let account = hello_account(
+                &entry,
+                setup.deadline.left(),
+                setup.deadline.left(),
+                &attempts,
+            );
             return Err((status, account));
         }
         // Only a slice's own end loops; any other error would repeat at once.
@@ -241,7 +283,12 @@ fn await_hello(
                 process,
                 &format!(
                     "the installed hub's hello failed with {error} ({})",
-                    hello_account(&entry, setup.deadline.left(), wait.left(), &slices),
+                    hello_account(
+                        &entry,
+                        setup.deadline.left(),
+                        setup.deadline.left(),
+                        &attempts,
+                    ),
                 ),
             );
         }
@@ -295,11 +342,21 @@ pub(crate) fn serve_installed(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Write;
+    use std::os::unix::net::UnixListener;
     use std::process::Command;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::thread;
     use std::time::Duration;
 
-    use super::{is_hello_timeout, report, serve_installed, slices_shown};
-    use crate::support::Setup;
+    use contract::clock::Clock;
+    use fakes::clock::{FakeClock, Miss};
+    use support::clock::Sleep;
+
+    use super::{
+        connect_attempt, hello_bound, is_hello_timeout, report, serve_installed, slices_shown,
+    };
+    use crate::support::{Deadline, Setup};
 
     #[test]
     fn slices_shown_collapses_runs_and_keeps_singles() {
@@ -334,6 +391,136 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn hello_bound_reserves_action_and_report_margin() {
+        assert_eq!(
+            hello_bound(Duration::from_secs(30)),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            hello_bound(doors::hub::CONNECT_DEADLINE + Duration::from_millis(250)),
+            None
+        );
+        assert_eq!(
+            hello_bound(
+                doors::hub::CONNECT_DEADLINE + Duration::from_millis(250) + Duration::from_secs(3)
+            ),
+            Some(Duration::from_secs(3))
+        );
+    }
+
+    /// A fake-clock action that consumes nearly the full connect race does
+    /// not consume the hello receive's bound, which starts when the socket
+    /// accepts. The worker is named and the clock advances only at its
+    /// observed parks.
+    #[test]
+    fn connect_attempt_starts_hello_bound_after_the_action() {
+        let setup = Setup::new();
+        let home = setup.home().to_path_buf();
+        fs::create_dir_all(home.join("run")).unwrap();
+        let clock = FakeClock::with_sleep(Sleep::Waits);
+        let origin = clock.origin();
+        let hello_within = Duration::from_secs(10);
+        let (id_tx, id_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let thread_clock = Arc::clone(&clock);
+        let thread_home = home.clone();
+        let worker = thread::Builder::new()
+            .name("hub-start-hello-bound".to_owned())
+            .spawn(move || {
+                id_tx.send(thread::current().id()).unwrap();
+                let result = connect_attempt(
+                    &thread_home,
+                    &mut || Ok(()),
+                    thread_clock.as_ref(),
+                    hello_within,
+                );
+                done_tx.send(result).unwrap();
+            })
+            .unwrap();
+        let worker_id = Deadline::after(Duration::from_secs(5))
+            .recv(&id_rx)
+            .expect("the connector reports its worker id");
+        let poll = Duration::from_millis(10);
+        let action_deadline = Deadline::after(Duration::from_secs(30));
+        let mut next_poll = origin + poll;
+        for _ in 0..497 {
+            clock.advance_when_parked(Some(next_poll), Some(worker_id), poll, &action_deadline);
+            next_poll += poll;
+        }
+        assert!(
+            clock
+                .mark_parked(next_poll, Deadline::after(Duration::from_secs(5)))
+                .is_some(),
+            "the connector parks just before the race deadline"
+        );
+
+        let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener = Arc::new(listener);
+        let accepted = Arc::new(Mutex::new(None));
+        let poll_listener = Arc::clone(&listener);
+        let poll_accepted = Arc::clone(&accepted);
+        clock.advance_when_parked(Some(next_poll), Some(worker_id), poll, &action_deadline);
+        fakes::wait_until(
+            "the connector to reach the hub listener",
+            Deadline::after(Duration::from_secs(5)),
+            move || match poll_listener.accept() {
+                Ok((stream, _)) => {
+                    *poll_accepted.lock().unwrap() = Some(stream);
+                    true
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
+                Err(error) => panic!("accepting the connector: {error}"),
+            },
+        );
+        // The accept happened at the fake clock's current instant. This is
+        // the receive deadline expected from connect_within.
+        let accepted_at = clock.now();
+        let expected = accepted_at + hello_within;
+        let observed = clock.try_advance_when_parked(
+            Some(expected),
+            Some(worker_id),
+            Duration::from_secs(6),
+            Duration::from_secs(5),
+        );
+        let (matched, actual) = match observed {
+            Ok(_) => (true, None),
+            Err(Miss::Mismatch {
+                watched: (_, Some(until)),
+                ..
+            }) => (false, Some(until)),
+            Err(Miss::Mismatch { .. } | Miss::NoPark) => (false, None),
+        };
+        if !matched {
+            // Let the old shared deadline expire so the worker and socket
+            // are cleaned up before asserting the regression failure.
+            let until = actual.unwrap_or(expected);
+            clock.advance_when_parked(
+                Some(until),
+                Some(worker_id),
+                until.saturating_duration_since(clock.now()),
+                &Deadline::after(Duration::from_secs(5)),
+            );
+        }
+        let mut server = accepted.lock().unwrap().take().unwrap();
+        if matched {
+            server
+                .write_all(
+                    br#"{"kind":"hub_hello","ts":1,"schema_version":1,"payload":{"fiber_version":"0.0.0"}}"#,
+                )
+                .unwrap();
+            server.write_all(b"\n").unwrap();
+        }
+        drop(server);
+        let result = Deadline::after(Duration::from_secs(5))
+            .recv_or_fail(&done_rx, "the connector's hello result");
+        worker.join().unwrap();
+        assert!(matched, "hello parks at {expected:?}, found {actual:?}");
+        let (_, line) = result.expect("the connected hub answers its hello");
+        assert_eq!(line.kind, "hub_hello");
+    }
+
     /// A missing `hub.log` reports missing, while an unreadable one
     /// reports the error instead of misdiagnosing it as missing: a
     /// directory at the log path fails the read with a non-`NotFound`
@@ -362,12 +549,8 @@ mod tests {
         );
     }
 
-    /// A hub that exits before saying hello exhausts its attempt with the
-    /// wait accounting behind the failure: the retry-exhausted panic names
-    /// the hello-wait entry, the helper and failing root bounds, the
-    /// started-wait bounds and each slice's `until`, alongside the exit.
-    /// `true` exits at once with no log line, so the single attempt (no
-    /// retry without a port-taken line) panics after the hello's bound.
+    /// A hub that exits before saying hello reports root and per-attempt
+    /// hello bounds alongside the exit, without a shared started-wait.
     #[test]
     fn serve_installed_retry_exhausted_reports_wait_accounting() {
         let setup = Setup::new();
@@ -391,12 +574,8 @@ mod tests {
             "the panic names the root bound at the failure: {message}"
         );
         assert!(
-            message.contains("started-wait left"),
-            "the panic names the started-wait bound: {message}"
-        );
-        assert!(
-            message.contains("until now+"),
-            "the panic names each slice's until: {message}"
+            message.contains("hello attempts+"),
+            "the panic names the per-attempt hello bounds: {message}"
         );
         assert!(
             message.contains("exited"),
