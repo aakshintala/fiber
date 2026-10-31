@@ -853,13 +853,6 @@ impl Pages {
         self.residency.unwant(at);
     }
 
-    /// How many pins pending copies hold (tests only: what an abandoned
-    /// copy must return to).
-    #[cfg(test)]
-    pub(crate) fn pinned(&self) -> usize {
-        self.residency.pinned()
-    }
-
     /// The width rows wrap at.
     pub(crate) fn wrap_width(&self) -> u16 {
         self.width
