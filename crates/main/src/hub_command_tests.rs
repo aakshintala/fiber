@@ -15,9 +15,9 @@ use super::*;
 #[test]
 fn fail_exits_1() {
     assert_eq!(
-        fail(failure(
+        crate::fail(crate::failed(
             ErrorCode::IoFailed,
-            "the current directory: gone".to_owned()
+            "the current directory: gone"
         )),
         1
     );
@@ -26,7 +26,7 @@ fn fail_exits_1() {
 #[test]
 fn a_usage_failure_exits_2() {
     assert_eq!(
-        fail(failure(ErrorCode::Usage, "FIBER_HOME is empty.".to_owned())),
+        crate::fail(crate::failed(ErrorCode::Usage, "FIBER_HOME is empty.")),
         2
     );
 }
@@ -171,10 +171,4 @@ fn configure_reads_a_global_debug_level() {
         configure(&home, Ok(workspace)).unwrap().level,
         log::diag::Level::Debug
     );
-}
-
-#[test]
-fn installed_is_the_login_services_mode_and_its_absence_the_client_started_one() {
-    assert_eq!(mode(true), hub::Mode::Installed);
-    assert_eq!(mode(false), hub::Mode::OnDemand);
 }
