@@ -1843,9 +1843,10 @@ about handoff: the handoff point is in the Session status card and the
 context breakdown. When the row is too wide, the working directory is cut
 from the left to keep its last part ("…/fiber"), then the left side is cut
 at its right end; the right side is cut only when the slab is narrower than
-it, at the slab's right edge. Clicking the ctx segment opens the context
-breakdown; clicking any other segment opens the Session status card's
-view, as the status line's segments do. An extension redraws the row
+it, at the slab's right edge. Clicking the model or the thinking level
+opens the model picker, as Ctrl+L does; clicking the ctx segment opens the
+context breakdown; clicking the working directory or the permission mode
+opens the Session status card's view. An extension redraws the row
 through the `input_status` slot ("Extension seams").
 
 - Enter sends. Shift+Enter inserts a line break, with Ctrl+J for terminals
