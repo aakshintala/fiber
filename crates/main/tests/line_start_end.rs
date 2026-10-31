@@ -45,13 +45,17 @@ fn ctrl_a_and_ctrl_e_move_on_the_cursor_line() {
             && grid.rows.iter().any(|row| row.contains("jz"))
     });
     // `\x01` moves to the start of the cursor's line: typing lands
-    // before it, not at the draft's start.
+    // before it, not at the draft's start. The block is the input
+    // cursor over the next character.
     run.write(b"\x01X");
     let grid = run.wait_screen("the line-start edit", |grid| {
-        grid.rows.iter().any(|row| row.contains("Xjz"))
+        grid.rows.iter().any(|row| row.contains("X█z"))
     });
+    // The cursor block stands in for one character, so strip it before
+    // checking the typed text stayed on the cursor's line.
+    let bare: Vec<String> = grid.rows.iter().map(|row| row.replace('█', "")).collect();
     assert!(
-        !grid.rows.iter().any(|row| row.contains("Xqx")),
+        !bare.iter().any(|row| row.contains("Xqx")),
         "the start edit left the cursor's line: {}",
         grid.contents
     );
@@ -66,8 +70,9 @@ fn ctrl_a_and_ctrl_e_move_on_the_cursor_line() {
     let grid = run.wait_screen("the first line's end", |grid| {
         grid.rows.iter().any(|row| row.contains("qxQ"))
     });
+    let bare: Vec<String> = grid.rows.iter().map(|row| row.replace('█', "")).collect();
     assert!(
-        !grid.rows.iter().any(|row| row.contains("YQ")),
+        !bare.iter().any(|row| row.contains("YQ")),
         "the end edit left the cursor's line: {}",
         grid.contents
     );
