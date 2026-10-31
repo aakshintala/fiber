@@ -948,7 +948,8 @@ fn deadline_read_line(reader: &mut BufReader<UnixStream>, what: &str) -> String 
             let result = reader.read_line(&mut text);
             tx.send((result, text)).unwrap_or(());
         });
-        let (result, text) = Deadline::after(DEADLINE).recv_or_fail(&rx, what);
+        let (result, text) = Deadline::after(DEADLINE) // ruling: #3708
+            .recv_or_fail(&rx, what);
         if let Err(error) = result {
             panic!("never received {what}: {error}");
         }
