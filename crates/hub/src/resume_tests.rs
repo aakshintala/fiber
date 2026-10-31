@@ -931,16 +931,22 @@ struct Client {
     read: BufReader<UnixStream>,
 }
 
-/// One blocking socket line on a worker thread, taken through one
-/// `Deadline` for the whole wait: calling code that blocks is a wait too
-/// (`docs/testing.md`, "Waits and timeouts"), so the read runs on a
-/// scoped thread and this receives its result with a deadline.
-/// `#[track_caller]` reports the test's line through `recv_or_fail`;
-/// a `panic!` inside a closure would report the closure instead. The
-/// socket keeps its read timeout, so a lost peer still releases the
-/// scoped thread and bounds the scope's join.
+/// One blocking socket line on a worker thread, taken through the caller's
+/// `Deadline`: calling code that blocks is a wait too (`docs/testing.md`,
+/// "Waits and timeouts"), so the read runs on a scoped thread and this
+/// receives its result with a deadline. `#[track_caller]` reports the test's
+/// line through `recv_or_fail`; a `panic!` inside a closure would report the
+/// closure instead. The socket keeps its read timeout, so a lost peer still
+/// releases the scoped thread and bounds the scope's join. Consecutive reads
+/// that drain one stream share the one deadline their wait made with
+/// `start_wait` (`docs/testing.md`, "Waits and timeouts"); a one-line wait
+/// passes a fresh bound.
 #[track_caller]
-fn deadline_read_line(reader: &mut BufReader<UnixStream>, what: &str) -> String {
+fn deadline_read_line_through(
+    reader: &mut BufReader<UnixStream>,
+    what: &str,
+    wait: &Deadline,
+) -> String {
     let (tx, rx) = mpsc::channel();
     thread::scope(|scope| {
         scope.spawn(|| {
@@ -948,14 +954,20 @@ fn deadline_read_line(reader: &mut BufReader<UnixStream>, what: &str) -> String 
             let result = reader.read_line(&mut text);
             tx.send((result, text)).unwrap_or(());
         });
-        let (result, text) = Deadline::after(DEADLINE) // ruling: #3708
-            .recv_or_fail(&rx, what);
+        let (result, text) = wait.recv_or_fail(&rx, what);
         if let Err(error) = result {
             panic!("never received {what}: {error}");
         }
         assert!(!text.is_empty(), "the hub closed before {what}");
         text
     })
+}
+
+/// One blocking socket line on a worker thread, taken through a fresh
+/// bound for a one-line wait; see `deadline_read_line_through`.
+#[track_caller]
+fn deadline_read_line(reader: &mut BufReader<UnixStream>, what: &str) -> String {
+    deadline_read_line_through(reader, what, &Deadline::after(DEADLINE)) // ruling: #3708
 }
 
 impl Client {
@@ -1596,11 +1608,18 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
     }
     Deadline::after(DEADLINE).recv_or_fail(&played, "the scripted replay");
     let mut reader = BufReader::new(client_read);
-    let mut text = deadline_read_line(&mut reader, "the replay acknowledgement");
+    // One bound for the whole replay wait: the acknowledgement and the fold
+    // marker are consecutive reads draining one stream (`docs/testing.md`,
+    // "Waits and timeouts"). docs/invocation.md:473 promises at `full` the
+    // client receives `stream_reopened` before the new fold, so the
+    // acknowledgement-before-fold order below pins that promise.
+    let replay_wait = Deadline::after(DEADLINE).start_wait(); // ruling: #3708
+    let mut text =
+        deadline_read_line_through(&mut reader, "the replay acknowledgement", &replay_wait);
     let first: Value = serde_json::from_str(&text).unwrap();
     if level == "full" && accepted {
         assert_reopened(&first, last_seq);
-        text = deadline_read_line(&mut reader, "the fold marker");
+        text = deadline_read_line_through(&mut reader, "the fold marker", &replay_wait);
         assert_eq!(
             serde_json::from_str::<Value>(&text).unwrap()["kind"],
             "fold_marker"
@@ -1780,22 +1799,35 @@ fn a_first_exit_re_routes_and_the_resumed_session_answers() {
     );
     Deadline::after(DEADLINE).recv_or_fail(&played, "the scripted replay");
     let mut reader = BufReader::new(client_read);
-    let mut text = deadline_read_line(&mut reader, "the resumed session's reopening");
+    // One bound for the whole reopening wait: the reopening and the fold
+    // marker are consecutive reads draining one stream (`docs/testing.md`,
+    // "Waits and timeouts"). docs/invocation.md:473 promises at `full` the
+    // client receives `stream_reopened` before the new fold.
+    let reopen_wait = Deadline::after(DEADLINE).start_wait(); // ruling: #3708
+    let mut text =
+        deadline_read_line_through(&mut reader, "the resumed session's reopening", &reopen_wait);
     assert_reopened(&serde_json::from_str(&text).unwrap(), Some(41));
-    text = deadline_read_line(&mut reader, "the fold marker");
+    text = deadline_read_line_through(&mut reader, "the fold marker", &reopen_wait);
     assert_eq!(
         serde_json::from_str::<Value>(&text).unwrap()["kind"],
         "fold_marker"
     );
     Deadline::after(DEADLINE).recv_or_fail(&answered, "the resumed answer");
     // The resumed session's replay reopens the stream again before the
-    // re-routed command's answer.
-    text = deadline_read_line(&mut reader, "the stream reopening");
+    // re-routed command's answer. One bound for the whole answer wait: both
+    // reads are consecutive and drain one stream (`docs/testing.md`, "Waits
+    // and timeouts").
+    let answer_wait = Deadline::after(DEADLINE).start_wait(); // ruling: #3708
+    text = deadline_read_line_through(&mut reader, "the stream reopening", &answer_wait);
     assert_eq!(
         serde_json::from_str::<Value>(&text).unwrap()["kind"],
         "stream_reopened"
     );
-    text = deadline_read_line(&mut reader, "the re-routed command's acceptance");
+    text = deadline_read_line_through(
+        &mut reader,
+        "the re-routed command's acceptance",
+        &answer_wait,
+    );
     let accepted: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(accepted["kind"], "command_accepted");
     assert_eq!(accepted["payload"]["command_id"], "c_next");
