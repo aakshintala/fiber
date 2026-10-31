@@ -1469,8 +1469,12 @@ fn a_deadline_while_the_body_is_read_keeps_status_and_partial_bytes() {
 #[test]
 fn a_cancel_while_the_body_is_read_keeps_status_and_partial_bytes() {
     let server = serve([stall()]);
-    let rig = Rig::new();
+    let (headers_tx, headers_rx) = mpsc::channel();
+    let rig = Rig::new().with(|tool| tool.signaling_headers_received(headers_tx));
     let call = rig.start(&server.url());
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&headers_rx)
+        .expect("the client received response headers");
     assert!(rig.clock.await_parked(
         rig.clock.origin() + Duration::from_secs(60),
         fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
