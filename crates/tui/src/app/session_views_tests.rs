@@ -724,6 +724,35 @@ fn context_without_an_own_preamble_uses_the_reported_window() {
     );
 }
 
+/// A forked child keeps the total and window from its own status but
+/// cannot reuse the parent's preamble sizes or tool results (see #3756).
+#[test]
+fn forked_context_does_not_reuse_parent_preamble_sizes() {
+    let mut app = attached(100, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_request_started());
+    app.on_line(context_usage(None));
+    app.on_line(context_status(50, 100));
+    for line in context_tool("read", "parent result") {
+        app.on_line(line);
+    }
+
+    app.attach(SessionId(OTHER.to_owned()));
+    app.on_line(session_line(
+        OTHER,
+        "session_started",
+        json!({"forked_from": {"session_id": SESSION, "seq": 8}}),
+        None,
+    ));
+    app.on_line(context_status_for(OTHER, 12, 200));
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(shown.contains("12 tokens · 6% of the 200 window"), "{shown}");
+    assert!(!shown.contains("system prompt"), "{shown}");
+    assert!(!shown.contains("tool definitions"), "{shown}");
+    assert!(!shown.contains("parent result"), "{shown}");
+}
+
 /// An own `preamble_built` without a handoff point means automatic
 /// handoff is off, not unknown (see #3756): the breakdown keeps the
 /// existing off row.
