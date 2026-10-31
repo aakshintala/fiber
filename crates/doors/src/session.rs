@@ -1292,3 +1292,7 @@ fn drain(watcher: &mut Watcher, out: &mut dyn Write) {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "session_reconnect_tests.rs"]
+mod reconnect_tests;

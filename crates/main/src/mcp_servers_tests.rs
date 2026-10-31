@@ -132,6 +132,98 @@ fn userinfo_is_a_named_config_error_without_exposing_credentials() {
 }
 
 #[test]
+fn reconnect_validation_precedes_the_flight_and_each_start_clears_it() {
+    use std::sync::{Arc, Mutex};
+    fakes::within(
+        "reconnect flights",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            let setup = Setup::new();
+            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+            let servers = empty_servers(&setup.rig, &clock);
+            let flights = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+            let reconnect = super::reconnect_server(
+                sources_of(&setup.rig),
+                Arc::clone(&servers),
+                Arc::new(|_, _| {}),
+                setup.rig.root.path().join("artifacts"),
+                Arc::new(DummyImages),
+                clock,
+                Arc::clone(&flights),
+            );
+            let mut collections = 0;
+            let mut collect = |server: &str| {
+                assert_eq!(server, "db");
+                assert!(flights.lock().unwrap().contains(server));
+                collections += 1;
+            };
+            for (config, code) in [
+                (
+                    json!({"mcp":{"servers":{}}}),
+                    contract::ErrorCode::InvalidArguments,
+                ),
+                (
+                    json!({"mcp":{"servers":{"db":{}}}}),
+                    contract::ErrorCode::InvalidArguments,
+                ),
+                (
+                    json!({"mcp":{"servers":{"db":{"command":[]}}}}),
+                    contract::ErrorCode::ConfigInvalid,
+                ),
+            ] {
+                setup.global(&config);
+                let failure = reconnect("db", &mut collect)
+                    .err()
+                    .expect("invalid config never starts");
+                assert_eq!(failure.code, code);
+                assert!(flights.lock().unwrap().is_empty());
+            }
+            setup.global(&json!({}));
+            setup.repository(&json!({"mcp":{"servers":{"db":{"command":"/bin/sh"}}}}));
+            let failure = reconnect("db", &mut collect)
+                .err()
+                .expect("repository offer owns this server");
+            assert_eq!(failure.code, contract::ErrorCode::McpServerUnapproved);
+            assert!(failure.message.contains("fiber approve"));
+            assert!(flights.lock().unwrap().is_empty());
+            setup.repository(&json!({}));
+            let fixture = setup.rig.root.path().join("ready");
+            std::fs::create_dir(&fixture).unwrap();
+            std::fs::write(
+                fixture.join("tools.json"),
+                r#"[{"name":"list","inputSchema":{"type":"object"}}]"#,
+            )
+            .unwrap();
+            std::fs::write(fixture.join("fail-start"), "").unwrap();
+            setup.global(&json!({"mcp":{"servers":{"db":{"command":fakes::mcp_fixture(),"args":[fixture]}}}}));
+            let failed =
+                reconnect("db", &mut collect).expect("a failed start is an accepted attempt");
+            assert!(matches!(
+                &failed.records[..],
+                [contract::tool::ServerRecord::Failed(_)]
+            ));
+            assert!(flights.lock().unwrap().is_empty());
+            std::fs::remove_file(fixture.join("fail-start")).unwrap();
+            let ready = reconnect("db", &mut collect).expect("retry after the failed start");
+            assert!(
+                servers.running("db"),
+                "the retry adopted its running server"
+            );
+            assert_eq!(ready.tools.len(), 1);
+            assert_eq!(ready.tools[0].1.definition().name, "mcp__db__list");
+            assert!(flights.lock().unwrap().is_empty());
+            let again = reconnect("db", &mut collect).expect("ready server is a no-op");
+            assert!(again.records.is_empty());
+            assert!(flights.lock().unwrap().is_empty());
+            assert_eq!(
+                collections, 3,
+                "validated attempts collect; rejected commands never publish a flight"
+            );
+        },
+    );
+}
+
+#[test]
 fn no_servers_starts_nothing() {
     let setup = Setup::new();
     let specs = setup.specs();
