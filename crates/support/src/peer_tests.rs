@@ -15,6 +15,7 @@ use std::os::unix::net::UnixStream;
 
 use super::{
     EffectiveUid, IncompleteWalk, KernelProcessRead, Pid, ProcessInfo, ProcessRead, ReadError,
+    path_from_cstr, within_dir,
 };
 
 /// A scripted process tree: parents, owners and argument vectors by pid,
@@ -781,4 +782,36 @@ fn kernel_reader_reads_a_root_owned_non_init_process() {
         return;
     }
     panic!("every root-owned candidate exited before its reads");
+}
+
+#[test]
+fn within_dir_matches_the_directory_itself_and_what_it_holds() {
+    use std::path::Path;
+    let dir = Path::new("/tmp/fh-aaaa1111");
+    assert!(within_dir(dir, Path::new("/tmp/fh-aaaa1111")));
+    assert!(within_dir(dir, Path::new("/tmp/fh-aaaa1111/logs/hub.log")));
+    assert!(within_dir(dir, Path::new("/tmp/fh-aaaa1111/h")));
+    assert!(!within_dir(dir, Path::new("/tmp/fh-aaaa11112")));
+    assert!(!within_dir(dir, Path::new("/tmp/fh-aaaa1111-sibling")));
+    assert!(!within_dir(dir, Path::new("/tmp")));
+    assert!(!within_dir(dir, Path::new("/tmp/other")));
+    assert!(!within_dir(dir, Path::new("/var/tmp/fh-aaaa1111")));
+    let slashed = Path::new("/tmp/fh-aaaa1111/");
+    assert!(within_dir(slashed, Path::new("/tmp/fh-aaaa1111/h")));
+}
+
+#[test]
+fn path_from_cstr_reads_to_the_first_nul() {
+    use std::path::Path;
+    assert_eq!(
+        path_from_cstr(b"/private/tmp/fh-aaaa1111\0tail"),
+        Some(Path::new("/private/tmp/fh-aaaa1111").to_path_buf())
+    );
+    assert_eq!(path_from_cstr(b"\0"), None);
+    assert_eq!(path_from_cstr(b""), None);
+    assert_eq!(path_from_cstr(b"no-nul"), None);
+    assert_eq!(
+        path_from_cstr(b"/x\0\0"),
+        Some(Path::new("/x").to_path_buf())
+    );
 }
