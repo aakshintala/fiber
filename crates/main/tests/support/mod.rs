@@ -138,6 +138,19 @@ pub(crate) fn write_line(
     what: &str,
 ) -> io::Result<()> {
     let wait = deadline.start_wait();
+    write_line_through(stream, &wait, bytes, what)
+}
+
+/// Writes all of `bytes` through an already-started wait, without renewing
+/// its bound. At zero, it returns a `TimedOut` error naming `what` without
+/// writing.
+#[track_caller]
+pub(crate) fn write_line_through(
+    stream: &mut UnixStream,
+    wait: &Deadline,
+    bytes: &[u8],
+    what: &str,
+) -> io::Result<()> {
     let mut rest = bytes;
     while !rest.is_empty() {
         let left = wait.left();
@@ -986,6 +999,20 @@ impl Socket {
         }
         let mut write = self.write.lock().unwrap();
         if let Err(error) = write_line(&mut write, self.deadline, &bytes, "sending a line") {
+            panic!("writing the socket: {error}");
+        }
+    }
+
+    /// Writes one socket line through an already-started wait without
+    /// renewing its bound.
+    #[track_caller]
+    pub(crate) fn send_through(&self, wait: &Deadline, line: &str) {
+        let mut bytes = line.as_bytes().to_vec();
+        if !line.ends_with('\n') {
+            bytes.push(b'\n');
+        }
+        let mut write = self.write.lock().unwrap();
+        if let Err(error) = write_line_through(&mut write, wait, &bytes, "sending a line") {
             panic!("writing the socket: {error}");
         }
     }
