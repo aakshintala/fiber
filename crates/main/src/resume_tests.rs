@@ -27,6 +27,7 @@ use super::{
     recreatable, resume_refused,
 };
 use crate::failed;
+use crate::session_command::ResumeStart;
 
 /// A session directory whose first line is `session_started` with
 /// `worktree`, holding its lock as a live session would.
@@ -54,6 +55,21 @@ fn session_with(dir: &Path, worktree: Option<Worktree>) -> Log {
     )
     .unwrap();
     log
+}
+
+#[test]
+fn resume_start_rejects_a_log_from_another_session_directory() {
+    let home = fakes::TempDir::new("main-resume-start-mismatch");
+    let sessions = home.path().join("sessions");
+    let log_dir = sessions.join("s_0123456789abcdef");
+    let other_id = SessionId("s_0123456789abcde0".to_owned());
+    let log = Arc::new(session_with(&log_dir, None));
+    let folded = r#loop::resumed(log.dir()).unwrap();
+    let dir = log::SessionDir::new(&sessions, &other_id);
+
+    let result = ResumeStart::new(dir, log, folded, None);
+
+    assert!(result.is_err());
 }
 
 #[test]
