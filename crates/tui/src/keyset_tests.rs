@@ -63,6 +63,24 @@ fn ctrl_n_starts_a_new_session_outside_search_and_overlays() {
 }
 
 #[test]
+fn ctrl_a_ctrl_e_and_the_super_arrows_move_on_the_line() {
+    // All four default strokes resolve to their line edits, so the
+    // super arrows keep working where the terminal passes them.
+    for (name, edit) in [
+        ("ctrl+a", Edit::LineStart),
+        ("ctrl+e", Edit::LineEnd),
+        ("super+left", Edit::LineStart),
+        ("super+right", Edit::LineEnd),
+    ] {
+        assert_eq!(
+            at(&[], name, Context::Input),
+            super::Resolved::Edit(edit),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn space_types_where_no_action_binds_it() {
     assert_eq!(
         at(&[], "space", Context::Input),

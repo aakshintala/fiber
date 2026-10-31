@@ -17,7 +17,7 @@ Ctrl+R                      search_prompts Search those prompts
 ⌥← ⌥→, Ctrl+← Ctrl+→, ⌥B ⌥F move_word Move by word
 ⌥Backspace                  delete_word Delete a word
 Ctrl+U                      delete_to_line_start Delete to the start of the line
-⌘← ⌘→                       line_start_end Start or end of the line
+Ctrl+A Ctrl+E, ⌘← ⌘→        line_start_end Start or end of the line
 Ctrl+G                      open_in_editor Open the draft, or a pasted token, in
 Ctrl+V                      paste_image Paste an image
 Ctrl+O                      toggle_ledgers Open or close the ledgers

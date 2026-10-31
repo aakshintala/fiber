@@ -1927,7 +1927,7 @@ through the `input_status` slot ("Extension seams").
 | Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
 | Delete a word | `delete_word` | ⌥Backspace | |
 | Delete to the start of the line | `delete_to_line_start` | Ctrl+U | |
-| Start or end of the line | `line_start_end` | ⌘← ⌘→, where the terminal passes them | |
+| Start or end of the line | `line_start_end` | Ctrl+A Ctrl+E; ⌘← ⌘→ where the terminal passes them | |
 | Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | `open_in_editor` | Ctrl+G | click the token |
 | Paste an image | `paste_image` | Ctrl+V | |
 | Open or close the ledgers | `toggle_ledgers` | Ctrl+O | click a group's line |
