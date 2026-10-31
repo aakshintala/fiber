@@ -9,7 +9,7 @@ mod writer;
 pub(crate) use writer::Flight;
 #[cfg(test)]
 pub(crate) use writer::write_loop;
-pub(crate) use writer::{Prelude, STOP, control_line, spawn_writer, write_line};
+pub(crate) use writer::{ControlKind, Prelude, control_line, spawn_writer, write_line};
 
 use std::io::{BufReader, Write};
 use std::net::Shutdown;
