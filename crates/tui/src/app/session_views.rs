@@ -515,12 +515,13 @@ impl App {
                 epoch_ms(self),
             )),
             Open::Context(list) => {
-                let sized = self.panel_state.status().and_then(|status| {
+                let sized = self.session().and_then(|session| {
+                    let status = self.panel_state.status_for(session)?;
                     let context = status.context.as_ref()?;
                     Some(Sized {
                         total: context.tokens,
-                        window: self.panel_state.window()?,
-                        trigger: self.panel_state.trigger_at(),
+                        window: self.panel_state.window_for(session)?,
+                        trigger: self.panel_state.handoff(),
                     })
                 });
                 Some(context_view::frame(
