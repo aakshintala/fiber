@@ -581,7 +581,7 @@ fn crate_edge_table_has_no_self_or_test_only_targets() {
 }
 
 fn calls_architecture(rules: &str) -> String {
-    format!("# Architecture\n\n## The call rules\n{SUPPORT_QUOTE}\n{rules}")
+    format!("# Architecture\n\nCall rules fixture.\n\n## The call rules\n{SUPPORT_QUOTE}\n{rules}")
 }
 
 fn call_row(
@@ -615,7 +615,7 @@ fn crate_edges_allows_a_granted_edge_and_rejects_an_unlisted_target() {
             &calls,
             &architecture,
         ),
-        Ok(vec!["alpha → gamma: docs/architecture.md:6, \"The call rules\", does not grant it: \"`alpha` depends on `beta`.\"".to_owned()])
+        Ok(vec!["alpha → gamma: docs/architecture.md:8, \"The call rules\", does not grant it: \"`alpha` depends on `beta`.\"".to_owned()])
     );
 }
 
@@ -639,10 +639,10 @@ fn crate_edges_allows_support_for_other_sources_but_not_from_support() {
         ),
         Ok(vec![
             format!(
-                "support → contract: docs/architecture.md:4, \"The call rules\", does not grant it: \"{SUPPORT_QUOTE}\""
+                "support → contract: docs/architecture.md:6, \"The call rules\", does not grant it: \"{SUPPORT_QUOTE}\""
             ),
             format!(
-                "support → support: docs/architecture.md:4, \"The call rules\", does not grant it: \"{SUPPORT_QUOTE}\""
+                "support → support: docs/architecture.md:6, \"The call rules\", does not grant it: \"{SUPPORT_QUOTE}\""
             ),
         ])
     );
@@ -677,10 +677,10 @@ fn crate_edges_rejects_fakes_even_when_other_targets_are_granted() {
         ),
         Ok(vec![
             format!(
-                "all → fakes: docs/architecture.md:6, \"The call rules\", does not grant it: \"{ALL_QUOTE}\""
+                "all → fakes: docs/architecture.md:8, \"The call rules\", does not grant it: \"{ALL_QUOTE}\""
             ),
             format!(
-                "cli → fakes: docs/architecture.md:5, \"The call rules\", does not grant it: \"{CLI_QUOTE}\""
+                "cli → fakes: docs/architecture.md:7, \"The call rules\", does not grant it: \"{CLI_QUOTE}\""
             ),
         ])
     );
@@ -723,7 +723,7 @@ fn crate_edges_requires_quotes_inside_the_section_and_collapses_whitespace() {
     let wrapped = calls_architecture("`alpha`  depends\n    on `beta`.\n");
     assert_eq!(
         crate_edges(&edge_set(&[("alpha", "gamma")]), &calls, &wrapped),
-        Ok(vec!["alpha → gamma: docs/architecture.md:5, \"The call rules\", does not grant it: \"`alpha` depends on `beta`.\"".to_owned()])
+        Ok(vec!["alpha → gamma: docs/architecture.md:7, \"The call rules\", does not grant it: \"`alpha` depends on `beta`.\"".to_owned()])
     );
 }
 
@@ -753,10 +753,10 @@ fn crate_edges_sorts_failures_and_deduplicates_shared_quotes() {
         ),
         Ok(vec![
             format!(
-                "alpha → bad: docs/architecture.md:5, \"The call rules\", does not grant it: \"{QUOTE}\" \"{SECOND_QUOTE}\""
+                "alpha → bad: docs/architecture.md:7, \"The call rules\", does not grant it: \"{QUOTE}\" \"{SECOND_QUOTE}\""
             ),
             format!(
-                "alpha → worse: docs/architecture.md:5, \"The call rules\", does not grant it: \"{QUOTE}\" \"{SECOND_QUOTE}\""
+                "alpha → worse: docs/architecture.md:7, \"The call rules\", does not grant it: \"{QUOTE}\" \"{SECOND_QUOTE}\""
             ),
         ])
     );
