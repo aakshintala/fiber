@@ -124,10 +124,9 @@ pub(crate) fn request(spec: &Table) -> mlua::Result<ToolRequest> {
 }
 
 /// The inner call's outcome as the model would see it: `status`, `content`,
-/// and `reason` or `error` when the call did not complete. It carries no
-/// `details`, `artifact` or `changes`, because the model does not see them.
-/// A field `ToolCallCompleted` gains later never reaches the script unless
-/// this names it.
+/// `artifact` when present, and `reason` or `error` when the call did not
+/// complete. `details` and `changes` stay out. A field `ToolCallCompleted`
+/// gains later never reaches the script unless this names it.
 pub(crate) fn outcome(completed: &ToolCallCompleted) -> Result<Value, String> {
     let fail = |e: serde_json::Error| format!("host.tool: {e}");
     let mut table = Map::new();
@@ -142,6 +141,9 @@ pub(crate) fn outcome(completed: &ToolCallCompleted) -> Result<Value, String> {
         "content".to_owned(),
         serde_json::to_value(&completed.content).map_err(fail)?,
     );
+    if let Some(artifact) = &completed.artifact {
+        table.insert("artifact".to_owned(), Value::String(artifact.clone()));
+    }
     match (&completed.reason, &completed.error) {
         (Some(reason), _) => {
             table.insert("reason".to_owned(), Value::String(reason.clone()));
