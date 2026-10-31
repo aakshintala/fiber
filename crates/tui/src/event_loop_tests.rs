@@ -3179,7 +3179,7 @@ fn attached_frame_stops_at_the_first_draw_holding_history() {
         .filter_map(|line| serde_json::from_str(line).ok())
         .filter(|line: &serde_json::Value| line["data"]["op"] == "tui.attached_frame")
         .collect();
-    // docs/state.md:431-434 promises one line at the first attached-history draw.
+    // docs/state.md:432-435 promises one line at the first attached-history draw.
     assert_eq!(attached.len(), 1, "one attached-frame line: {attached:?}");
 }
 
@@ -3211,7 +3211,7 @@ fn attached_frame_waits_for_an_attached_session() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:431-434 ends the scope at a draw holding attached-session history.
+    // docs/state.md:432-435 ends the scope at a draw holding attached-session history.
     assert!(!path.exists(), "a home frame writes no attached-frame line");
 }
 
@@ -3244,6 +3244,6 @@ fn attached_frame_is_discarded_without_a_stream() {
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    // docs/state.md:431-434: an attach with no stream writes no line.
+    // docs/state.md:432-435: an attach with no stream writes no line.
     assert!(!path.exists(), "no stream means no attached-frame line");
 }

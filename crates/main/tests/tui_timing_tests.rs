@@ -283,11 +283,11 @@ fn a_debug_resume_records_first_render_log_read_and_transcript_once_each() {
     // No `tui.frame` assertion: a loaded machine can push a real frame
     // past 16 ms, so absence would flake; suppression is pinned in the
     // `log` crate and over-budget wiring in the `tui` crate.
-    // docs/state.md:429-431 promises one first-render line.
+    // docs/state.md:430-432 promises one first-render line.
     assert_terminal_wire(&ops(&setup, pid, "tui.first_render"), "tui.first_render");
-    // docs/state.md:434-439 promises one first-page read line.
+    // docs/state.md:435-440 promises one first-page read line.
     assert_terminal_wire(&ops(&setup, pid, "tui.log_read"), "tui.log_read");
-    // docs/state.md:437-439 promises one transcript line after a successful load.
+    // docs/state.md:438-440 promises one transcript line after a successful load.
     assert_terminal_wire(&ops(&setup, pid, "tui.transcript"), "tui.transcript");
     for line in op_lines(&setup, pid) {
         if line["process"] != "tui" {
@@ -383,9 +383,9 @@ fn a_debug_resume_records_extension_and_attached_frame() {
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
-    // docs/state.md:427-428 promises one line when the TUI loader exists.
+    // docs/state.md:428-429 promises one line when the TUI loader exists.
     assert_terminal_wire(&ops(&setup, pid, "tui.extensions"), "tui.extensions");
-    // docs/state.md:431-434 promises one line at the first attached-history draw.
+    // docs/state.md:432-435 promises one line at the first attached-history draw.
     assert_terminal_wire(
         &ops(&setup, pid, "tui.attached_frame"),
         "tui.attached_frame",
