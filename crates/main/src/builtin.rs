@@ -84,6 +84,7 @@ pub(crate) fn builtin(
         None,
         Default::default(),
         sandbox,
+        None,
     )
 }
 
@@ -124,8 +125,14 @@ pub(crate) fn builtin_timed(
     timing: Option<Timing>,
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
+    protection: Option<Arc<tools::ProtectedPaths>>,
 ) -> Result<SessionTools, Failure> {
     let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
+    // A successful write or edit advances the baseline its path landed in,
+    // so the call's end restores to the approved content.
+    if let Some(protection) = &protection {
+        files = files.with_protection(Arc::clone(protection));
+    }
     // The scan's clone comes before `timing` moves; the shell's clone is
     // taken alongside, for the same reason.
     let scan_timing = timing.clone();
@@ -148,6 +155,12 @@ pub(crate) fn builtin_timed(
         .with_read_only(shell_read_only)
         .with_sandbox(sandbox)
         .non_interactive();
+    // Confined Linux spawns take their end-of-call guard from the session's
+    // shared handle; the driver shell below never runs confined, so it
+    // takes none.
+    if let Some(protection) = &protection {
+        shell = shell.with_protection(Arc::clone(protection));
+    }
     // The model's shell moves commands into jobs, so it times a
     // background start as `jobs.start`. The driver shell never moves,
     // so it stays untimed.

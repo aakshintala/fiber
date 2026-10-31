@@ -3573,6 +3573,8 @@ fn a_malformed_full_subscribe_to_an_exited_delegate_is_refused() {
     assert!(starter.resumed().is_empty(), "no process starts");
 }
 
+/// `docs/invocation.md:710`, "Lifecycle": a `full` subscribe naming a delegate whose run has finished replays that run's log instead of opening the session: `command_accepted` carries `last_seq`, then the fold follows, with no live tail after it.
+/// `docs/invocation.md:1157`, "What the hub speaks": the replayed acknowledgement releases the queue, after the handover ahead is answered when exiting.
 #[test]
 fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queue() {
     // The `Reroute` arm routes with `from` and `exited` set: the replay
@@ -3597,6 +3599,20 @@ fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queu
         &contract::CommandId("c_1".to_owned()),
         &stripped,
     );
+    // The fixture stands in for the relay's write and the re-route claim:
+    // the command was written, then handed to the resumed session.
+    order
+        .transition(
+            &contract::CommandId("c_1".to_owned()),
+            crate::relay::CommandState::Written,
+        )
+        .unwrap();
+    order
+        .transition(
+            &contract::CommandId("c_1".to_owned()),
+            crate::relay::CommandState::Rerouted,
+        )
+        .unwrap();
     order.mark_rerouted("c_1", SID, epoch);
     crate::relay::route(
         &contract::CommandId("c_1".to_owned()),
@@ -3785,7 +3801,7 @@ fn a_zero_byte_command_write_is_retried_after_a_clean_exit() {
     }));
     client.send("c_2", "reply");
     assert_eq!(client.acknowledged("the retried command's answer"), "c_2");
-    // docs/invocation.md:728 promises a command is delivered once.
+    // docs/invocation.md:1148 promises a command is delivered once.
     assert_eq!(
         received(&starter)
             .iter()
@@ -3798,6 +3814,7 @@ fn a_zero_byte_command_write_is_retried_after_a_clean_exit() {
 
 /// Where a cut write stops: after the JSON body, or after its first
 /// byte. Both accept bytes the session may have read.
+#[derive(Clone, Copy)]
 enum CutAt {
     Body,
     FirstByte,
@@ -3845,14 +3862,21 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
             CutAt::FirstByte => 1,
         });
     }));
+    // The cut write runs on the relay thread: this fires once the torn
+    // bytes leave the hub, without waiting for the fake to record them.
+    // The fake's reader only returns the unterminated fragment at EOF, so
+    // waiting for its receipt here would hold the stop that releases it.
+    let (written_tx, written_rx) = mpsc::channel();
+    crate::connection::lock(&relays).after_command_write = Some(Box::new(move || {
+        written_tx.send(()).unwrap_or(());
+    }));
     client.send("c_2", "prompt");
-    // The route's cut write runs before the session ends: the fake
-    // records the torn bytes, so ending it now cannot turn the failure
-    // into a zero-byte one.
-    assert!(
-        starter.await_received(2, DEADLINE),
-        "the cut bytes reached the session"
-    );
+    // The route's cut write runs before the session ends: the hook fires
+    // once the torn bytes are written, so ending it now cannot turn the
+    // failure into a zero-byte one.
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&written_rx)
+        .expect("the cut write ran");
     if let Some(last) = last {
         temp.append(last);
     }
@@ -3874,14 +3898,28 @@ fn cut_write_case(last: Option<&str>, cut: CutAt) {
     // Two lines arrived on the session, the subscribe and the torn
     // fragment: the bytes arrived once and were never delivered again.
     // Raw lines, not parsed ones: a mid-body fragment parses to nothing.
-    // docs/invocation.md:728 promises a command is delivered once.
+    // docs/invocation.md:1148 promises a command is delivered once.
+    let got = starter.received();
     assert_eq!(
-        starter.received().len(),
+        got.len(),
         2,
         "the cut bytes arrive once and are never delivered again"
     );
-    // Exactly one answer for the cut command: the relay left above, so
-    // the drain answered once and a second answer would already be
-    // buffered; a non-blocking read finds nothing more.
+    // The torn fragment is the cut command's bytes: the whole line minus
+    // its feed, or its first byte when the write was cut there.
+    match cut {
+        CutAt::Body => {
+            let fragment: Value = serde_json::from_str(&got[1]).unwrap();
+            assert_eq!(fragment["id"], "c_2", "{fragment}");
+            assert_eq!(fragment["command"], "prompt", "{fragment}");
+        }
+        CutAt::FirstByte => {
+            assert_eq!(got[1], "{\n", "only the first byte reached the session");
+        }
+    }
+    // Exactly one answer for the cut command (`docs/invocation.md:374-376`):
+    // the relay left above, so the drain answered once and a second
+    // answer would already be buffered; a non-blocking read finds
+    // nothing more.
     client.assert_no_more("the cut command");
 }

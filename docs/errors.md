@@ -433,6 +433,7 @@ code: its message gives the count and lists each item.
 | `model_unconfigured` | event | a model's base URL names a per-account host whose setting has a value that is not a host, so the model is left out of the model list; the message names the model and the setting. When the setting has no value the terminal raises nothing at launch and the model picker counts the model instead (`docs/tui.md`, "Swapped views"); `fiber models` prints the provider, the setting and the count of models it leaves out (`docs/model-routing.md`, "A per-account host") |
 | `no_jobs_running` | event | `/jobs` ran in an attached session with no running jobs (`docs/tui.md`, "Slash commands") |
 | `no_model` | event | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
+| `protected_paths_restored` | event | a protected path changed while a confined call ran; startup recovery restored it, and the message names each path |
 | `repository_code_skipped` | event | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `reviewer_selection_failed` | event | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one; the message names the cause |
 | `skill_invalid` | event | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |

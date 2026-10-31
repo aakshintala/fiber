@@ -587,6 +587,7 @@ impl DelegateMessage {
             | ErrorCode::PairingFailed
             | ErrorCode::PathChanged
             | ErrorCode::PausedTooLong
+            | ErrorCode::ProtectedPathsRestored
             | ErrorCode::ProviderUnavailable
             | ErrorCode::QuotaExceeded
             | ErrorCode::RateLimited

@@ -50,6 +50,7 @@ impl Drop for Unreported {
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             });
         }
     }
