@@ -93,7 +93,7 @@ impl Responses {
         )
     }
     /// Builds the observed call for `request`: as the plain request, writing
-    /// one `provider_request` line when the call was sent. At `info` the
+    /// one `http_request` line when the call was sent. At `info` the
     /// call runs exactly as an unobserved one does, with no model cloned.
     pub fn call_observed(
         &self,

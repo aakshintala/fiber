@@ -5,14 +5,14 @@
 //! start or on a departure, it records the instant; while the count stays 0
 //! it waits on the injected clock until that instant plus `idle_exit`, and
 //! while a client is open it waits with no deadline. At expiry with 0
-//! clients it writes `peak_memory` at the debug level, then `hub_stopped`,
+//! clients it writes `resources` at the debug level, then `hub_stopped`,
 //! removes `run/hub` while still holding the lock when the path is still
 //! its own socket (see `Held::stop`), and returns 0. On the
 //! first SIGTERM, SIGINT or SIGHUP it shuts down every client connection and
 //! exits, unless a `stop` with `sessions` is answering: then it aborts the
 //! sessions stop first and waits only for the answer's flush, bounded by
 //! `SESSIONS_ABORT_FLUSH`.
-//! relay stream, writes `peak_memory` at the debug level, then
+//! relay stream, writes `resources` at the debug level, then
 //! `hub_stopped`, removes `run/hub` on the same condition, and returns 128
 //! plus the signal. Each websocket gets a close message saying the hub is
 //! stopping before its stream shuts down.
@@ -152,13 +152,13 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
                 // logged after it.
                 hub.environments.close();
                 hub.diag
-                    .peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
+                    .resources_then_info("hub_stopped", "The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
             Idle::Expired => {
                 hub.environments.close();
                 hub.diag
-                    .peak_memory_then_info("hub_stopped", "The hub stopped: idle.");
+                    .resources_then_info("hub_stopped", "The hub stopped: idle.");
                 return Exit::Idle;
             }
             Idle::Woken => {}

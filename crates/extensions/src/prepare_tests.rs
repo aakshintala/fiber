@@ -17,8 +17,66 @@ use contract::clock::Clock as _;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
-use super::{INSTALL_STEP_DEADLINE, binary_name, download, download_with, platform};
+use super::{
+    INSTALL_STEP_DEADLINE, Observe, binary_name, download_observed, download_with, platform,
+};
+use contract::diag::{DebugLog, HttpRequest, Purpose};
 use support::group::{GRACE, GROUP_POLL};
+
+/// The silent observe on `clock`: no sink, so the download writes no line.
+fn silent(clock: &FakeClock) -> Observe<'_> {
+    Observe { debug: None, clock }
+}
+
+/// Every `http_request` line the observed downloads write, in order.
+#[derive(Default)]
+struct Lines {
+    lines: std::sync::Mutex<Vec<HttpRequest>>,
+}
+
+impl DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+impl Lines {
+    fn recorded(&self) -> Vec<HttpRequest> {
+        self.lines.lock().unwrap().clone()
+    }
+}
+
+/// The observed downloads on `clock`, with the sink their lines go to.
+fn observed(clock: &FakeClock) -> (Arc<Lines>, Observe<'_>) {
+    let lines = Arc::new(Lines::default());
+    let observe = Observe {
+        debug: Some(Arc::clone(&lines) as Arc<dyn DebugLog>),
+        clock,
+    };
+    (lines, observe)
+}
+
+/// The `extension_release` shape every download line holds: no
+/// provider, extension or model identity, no token timing, one GET,
+/// nothing posted, and the headers before the end.
+fn assert_release_shape(line: &HttpRequest) {
+    assert_eq!(line.purpose(), Purpose::ExtensionRelease, "{line:?}");
+    assert_eq!(line.identity(), None, "no identity: {line:?}");
+    assert_eq!(line.model, None, "no model: {line:?}");
+    assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
+    assert_eq!(line.attempt, 1, "every download sends once: {line:?}");
+    assert_eq!(line.request_bytes, 0, "a download posts nothing: {line:?}");
+    if let Some(headers) = line.headers_ms {
+        assert!(
+            headers <= line.total_ms,
+            "headers land before the end: {line:?}"
+        );
+    }
+}
 
 /// How long a test waits on the run before it fails.
 const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
@@ -49,7 +107,13 @@ fn a_manifest_name_with_no_file_fails_before_any_download() {
     .unwrap();
     let dir = fakes::TempDir::new("fiber-prepare-no-file");
     let clock = FakeClock::new();
-    let err = super::prepare(dir.path(), &manifest, clock.as_ref()).unwrap_err();
+    let err = super::prepare(
+        dir.path(),
+        &manifest,
+        clock.as_ref(),
+        &silent(clock.as_ref()),
+    )
+    .unwrap_err();
     let crate::Error::Download { name, why } = err else {
         panic!("a nameless binary fails as its download failed: {err}");
     };
@@ -81,7 +145,13 @@ fn prepare_over_an_old_url_named_file_leaves_it_in_place() {
     std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
     std::fs::write(&stale, b"stale").unwrap();
     let clock = FakeClock::new();
-    super::prepare(dir.path(), &manifest, clock.as_ref()).unwrap();
+    super::prepare(
+        dir.path(),
+        &manifest,
+        clock.as_ref(),
+        &silent(clock.as_ref()),
+    )
+    .unwrap();
     assert_eq!(std::fs::read(&stale).unwrap(), b"stale");
     assert_eq!(
         std::fs::read(dir.path().join("bin").join("acme")).unwrap(),
@@ -112,7 +182,8 @@ fn download_in_child(
 ) -> Option<(fakes::ProviderServer, fakes::ConnectProxy)> {
     if std::env::var_os(PROXY_CHILD).is_some() {
         let url = std::env::var(PROXY_CHILD_URL).unwrap();
-        let bytes = download("probe", &url).unwrap();
+        let clock = FakeClock::new();
+        let bytes = download_observed("probe", &url, &silent(clock.as_ref())).unwrap();
         assert_eq!(bytes, b"{}");
         return None;
     }
@@ -186,11 +257,13 @@ fn a_held_download_fails_within_the_limit() {
         "a held download",
         Deadline::after(DOWNLOAD_WITHIN),
         move || {
+            let clock = FakeClock::new();
             download_with(
                 "probe",
                 &url,
                 None,
                 net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+                &silent(clock.as_ref()),
             )
             .unwrap_err()
         },
@@ -211,11 +284,13 @@ fn a_stalled_download_body_fails_and_closes() {
         "a stalled download",
         Deadline::after(DOWNLOAD_WITHIN),
         move || {
+            let clock = FakeClock::new();
             download_with(
                 "probe",
                 &url,
                 None,
                 net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+                &silent(clock.as_ref()),
             )
             .unwrap_err()
         },
@@ -262,6 +337,7 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
                 &worker_dir,
                 &manifest,
                 worker_clock.as_ref(),
+                &silent(worker_clock.as_ref()),
             ));
         })
         .unwrap();
@@ -329,7 +405,13 @@ fn a_missing_install_step_program_is_the_spawn_error() {
     }))
     .unwrap();
     let clock = FakeClock::new();
-    let err = super::prepare(dir.path(), &manifest, clock.as_ref()).unwrap_err();
+    let err = super::prepare(
+        dir.path(),
+        &manifest,
+        clock.as_ref(),
+        &silent(clock.as_ref()),
+    )
+    .unwrap_err();
     assert!(
         matches!(err, crate::Error::InstallStep { .. }),
         "a missing program fails as its install step failed: {err}"
@@ -412,7 +494,12 @@ fn a_binary_checksum_mismatch_in_pre_stage_renames_nothing() {
     let plan = stage_install(&home, "github.com/acme/widget", &repo, clock.as_ref());
     let mut failed = None;
     for item in plan.items() {
-        if let Err(err) = super::prepare(item.staged(), &item.manifest, clock.as_ref()) {
+        if let Err(err) = super::prepare(
+            item.staged(),
+            &item.manifest,
+            clock.as_ref(),
+            &silent(clock.as_ref()),
+        ) {
             failed = Some(err);
             break;
         }
@@ -455,7 +542,13 @@ fn a_prepared_commit_downloads_nothing() {
     let clock = FakeClock::new();
     let mut plan = stage_install(&home, "github.com/acme/widget", &repo, clock.as_ref());
     for item in plan.items() {
-        super::prepare(item.staged(), &item.manifest, clock.as_ref()).unwrap();
+        super::prepare(
+            item.staged(),
+            &item.manifest,
+            clock.as_ref(),
+            &silent(clock.as_ref()),
+        )
+        .unwrap();
     }
     let before = server.requests().len();
     assert_eq!(before, 1, "the pre-stage downloads the binary once");
@@ -491,7 +584,7 @@ fn prepare_binary_downloads_the_binary_but_runs_no_install_step() {
     .unwrap();
     let dir = fakes::TempDir::new("fiber-prepare-binary-only");
     let clock = FakeClock::new();
-    super::prepare_binary(dir.path(), &manifest).unwrap();
+    super::prepare_binary(dir.path(), &manifest, &silent(clock.as_ref())).unwrap();
     assert_eq!(
         std::fs::read(dir.path().join("bin").join("acme")).unwrap(),
         body
@@ -504,5 +597,169 @@ fn prepare_binary_downloads_the_binary_but_runs_no_install_step() {
     assert!(
         dir.path().join("step-ran").exists(),
         "the commit's install step runs the step"
+    );
+}
+
+#[test]
+fn manifest_binary_observation_keeps_host_but_omits_path() {
+    let body = b"binary";
+    let digest = super::hex(ring::digest::digest(&ring::digest::SHA256, body).as_ref());
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, body.to_vec())]).unwrap();
+    let url = format!("{}/private/package-token/asset", server.url());
+    let manifest: config::Manifest = serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "v1.0.0",
+        "fiber": "0.1.0",
+        "api": 1,
+        "binaries": { platform(): { "url": url, "sha256": digest } },
+    }))
+    .unwrap();
+    let dir = fakes::TempDir::new("fiber-manifest-binary-observation");
+    let clock = FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    super::prepare_binary(dir.path(), &manifest, &observe).unwrap();
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line for this actual binary request, with its manifest path omitted.
+    assert_eq!(lines.len(), 1, "one request: {lines:?}");
+    let line = &lines[0];
+    assert_release_shape(line);
+    let host = server.url().trim_start_matches("http://").to_owned();
+    assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
+    assert_eq!(line.path, None, "manifest paths stay private: {line:?}");
+    assert_eq!(line.status, Some(200), "{line:?}");
+    assert_eq!(line.response_bytes, body.len() as u64, "{line:?}");
+    assert!(
+        !serde_json::to_string(line)
+            .unwrap()
+            .contains("package-token"),
+        "the manifest path is absent from the serialized line: {line:?}"
+    );
+}
+
+/// An observed download writes one `extension_release` line per actual
+/// request, including the redirect hop, and strips queries from each path.
+#[test]
+fn an_observed_download_writes_one_extension_release_line_per_hop() {
+    let mut redirect = fakes::Response::status(302, "");
+    redirect
+        .headers
+        .push(("location".into(), "/tool?x=1".into()));
+    let server =
+        fakes::ProviderServer::start([redirect, fakes::Response::status(200, "{}")]).unwrap();
+    let url = format!("{}/start?x=1#frag", server.url());
+    let clock = FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    let bytes = download_observed("probe", &url, &observe).unwrap();
+    assert_eq!(bytes, b"{}");
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, each redirect included.
+    assert_eq!(lines.len(), 2, "one line per request: {lines:?}");
+    let host = server.url().trim_start_matches("http://").to_owned();
+    for line in &lines {
+        assert_release_shape(line);
+        assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
+    }
+    // The fragment never reaches the server, and neither query reaches a line.
+    assert_eq!(lines[0].path.as_deref(), Some("/start"), "{:?}", lines[0]);
+    assert_eq!(lines[0].status, Some(302), "{:?}", lines[0]);
+    assert_eq!(lines[0].response_bytes, 0, "{:?}", lines[0]);
+    assert_eq!(lines[1].path.as_deref(), Some("/tool"), "{:?}", lines[1]);
+    assert_eq!(lines[1].status, Some(200), "{:?}", lines[1]);
+    assert_eq!(lines[1].response_bytes, 2, "{:?}", lines[1]);
+}
+
+#[test]
+fn redirect_resolution_handles_empty_query_only_and_relative_references() {
+    let base = "https://example.test/a/b?old=1".parse().unwrap();
+    for (location, expected) in [
+        ("", "https://example.test/a/b?old=1"),
+        ("#fragment", "https://example.test/a/b?old=1"),
+        ("?new=2", "https://example.test/a/b?new=2"),
+        (".", "https://example.test/a/"),
+        ("../c", "https://example.test/c"),
+        ("../../../c", "https://example.test/c"),
+        ("//cdn.example.test/a", "https://cdn.example.test/a"),
+    ] {
+        let actual = super::redirect_uri(&base, location).unwrap();
+        assert_eq!(actual.to_string(), expected, "{location}");
+    }
+}
+
+/// A refused download writes a statusless line: no response arrived,
+/// so no status or headers, and zero bytes.
+#[test]
+fn a_refused_download_writes_a_statusless_line() {
+    // A server that is gone before the download sends: the port
+    // refuses the connection.
+    let closed = {
+        let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+        server.url()
+    };
+    let clock = FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    let err = download_observed("probe", &format!("{closed}/tool"), &observe).unwrap_err();
+    assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
+    assert_eq!(
+        lines.len(),
+        1,
+        "post-send without a response still lines: {lines:?}"
+    );
+    let line = &lines[0];
+    assert_release_shape(line);
+    assert_eq!(line.status, None, "no response arrived: {line:?}");
+    assert_eq!(line.headers_ms, None, "no headers arrived: {line:?}");
+    assert_eq!(line.response_bytes, 0, "{line:?}");
+}
+
+/// A failed status keeps its status on the line: the response arrived,
+/// but no body follows it.
+#[test]
+fn a_failed_status_keeps_its_status() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(500, "nope")]).unwrap();
+    let url = format!("{}/tool", server.url());
+    let clock = FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    let err = download_observed("probe", &url, &observe).unwrap_err();
+    assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let line = &lines[0];
+    assert_release_shape(line);
+    assert_eq!(line.status, Some(500), "{line:?}");
+    assert_eq!(line.response_bytes, 0, "{line:?}");
+}
+
+/// A body that stalls mid-read keeps what it consumed: the status
+/// arrived with the prefix before the read failed.
+#[test]
+fn a_stalled_body_keeps_its_status_and_consumed_bytes() {
+    let server = fakes::ProviderServer::start([fakes::Response::stall(200, "abc", 1000)]).unwrap();
+    let url = format!("{}/tool", server.url());
+    let clock = FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    // The limits bound the stall: the read fails once they fire, with
+    // the prefix already consumed.
+    let err = download_with(
+        "probe",
+        &url,
+        None,
+        net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+        &observe,
+    )
+    .unwrap_err();
+    assert!(matches!(err, crate::Error::Download { .. }), "{err:?}");
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": post-send failure and body-read rules are the Lua provider's.
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let line = &lines[0];
+    assert_release_shape(line);
+    assert_eq!(line.status, Some(200), "{line:?}");
+    assert_eq!(
+        line.response_bytes, 3,
+        "the stalled prefix counts: {line:?}"
     );
 }

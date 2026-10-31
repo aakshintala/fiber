@@ -48,6 +48,7 @@ impl contract::McpRemote for Remote {
         _url: &str,
         _present: &dyn Fn(&str),
         _clock: &dyn contract::clock::Clock,
+        _debug: Option<std::sync::Arc<dyn contract::diag::DebugLog>>,
     ) -> Result<(), contract::shapes::Failure> {
         unreachable!("doctor logs in to no MCP server")
     }

@@ -33,6 +33,7 @@ const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abc
 /// is fixed, so two names over one URL share one file.
 struct FakeRemote {
     calls: Mutex<Vec<String>>,
+    debugs: Mutex<Vec<bool>>,
     fail: Option<(ErrorCode, String)>,
 }
 
@@ -40,6 +41,7 @@ impl FakeRemote {
     fn ok() -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
+            debugs: Mutex::new(Vec::new()),
             fail: None,
         }
     }
@@ -47,6 +49,7 @@ impl FakeRemote {
     fn failing(code: ErrorCode, message: &str) -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
+            debugs: Mutex::new(Vec::new()),
             fail: Some((code, message.to_owned())),
         }
     }
@@ -67,8 +70,10 @@ impl McpRemote for FakeRemote {
         url: &str,
         present: &dyn Fn(&str),
         _clock: &dyn contract::clock::Clock,
+        _debug: Option<std::sync::Arc<dyn contract::diag::DebugLog>>,
     ) -> Result<(), Failure> {
         self.calls.lock().unwrap().push(url.to_owned());
+        self.debugs.lock().unwrap().push(_debug.is_some());
         present("https://auth.example/authorize?test=1");
         match &self.fail {
             None => Ok(()),
@@ -287,6 +292,50 @@ fn a_login_passes_the_effective_url_and_reports_the_file() {
         ["https://auth.example/authorize?test=1"]
     );
     assert_eq!(ran.err, format!("fiber: stored credentials/mcp/{KEY}\n"));
+}
+
+/// Sets the global `diagnostics.level`, merging into the file the
+/// declarations already wrote.
+fn set_diagnostics_level(setup: &Setup, level: &str) {
+    let path = setup.home().join("config.json");
+    let mut config: serde_json::Value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(json!({}));
+    config["diagnostics"] = json!({"level": level});
+    fs::write(&path, config.to_string()).unwrap();
+}
+
+#[test]
+fn a_login_at_debug_passes_a_writer() {
+    let setup = Setup::new();
+    setup.declare_remote(Layer::Global, "docs", URL);
+    set_diagnostics_level(&setup, "debug");
+    let remote = FakeRemote::ok();
+    let browser = FakeBrowser::new();
+    let (ran, _) = login(&setup, "docs", &remote, &browser, &|| {});
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.to_string())
+    );
+    assert_eq!(remote.debugs.lock().unwrap().as_slice(), [true]);
+}
+
+#[test]
+fn a_login_at_info_passes_no_writer() {
+    let setup = Setup::new();
+    setup.declare_remote(Layer::Global, "docs", URL);
+    set_diagnostics_level(&setup, "info");
+    let remote = FakeRemote::ok();
+    let browser = FakeBrowser::new();
+    let (ran, _) = login(&setup, "docs", &remote, &browser, &|| {});
+    assert!(
+        ran.result.is_ok(),
+        "{:?}",
+        ran.result.err().map(|e| e.to_string())
+    );
+    assert_eq!(remote.debugs.lock().unwrap().as_slice(), [false]);
 }
 
 #[test]

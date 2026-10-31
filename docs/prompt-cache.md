@@ -253,7 +253,7 @@ prices these differently, so no cost can be computed without the split.
 ## Cache diagnostics
 
 An opt-in setting, `cache.diagnostics` (`docs/configuration.md`,
-"Keys"), asks each debug `provider_request` line for a model call to
+"Keys"), asks each debug `http_request` line for a model call to
 say what prefix the request sent and what cache use the response
 reported, so a miss can be told from noise. With the setting off, the
 default, the lines hold what they always held (`docs/state.md`,

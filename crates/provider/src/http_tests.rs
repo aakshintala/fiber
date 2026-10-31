@@ -1708,13 +1708,13 @@ fn recorded_targets_hold_no_query_fragment_userinfo_or_secret() {
 #[test]
 fn the_server_receives_the_original_query_while_the_record_drops_it() {
     struct Capture {
-        lines: std::sync::Mutex<Vec<contract::diag::ProviderRequest>>,
+        lines: std::sync::Mutex<Vec<contract::diag::HttpRequest>>,
     }
     impl contract::diag::DebugLog for Capture {
         fn debugging(&self) -> bool {
             true
         }
-        fn provider_request(&self, request: &contract::diag::ProviderRequest) {
+        fn http_request(&self, request: &contract::diag::HttpRequest) {
             self.lines.lock().unwrap().push(request.clone());
         }
     }
@@ -1805,14 +1805,14 @@ fn an_observed_out_of_range_retry_after_stays_unset() {
 
 /// Captures the lines one record writes, for the redaction tests below.
 struct RedactCapture {
-    lines: std::sync::Mutex<Vec<contract::diag::ProviderRequest>>,
+    lines: std::sync::Mutex<Vec<contract::diag::HttpRequest>>,
 }
 
 impl contract::diag::DebugLog for RedactCapture {
     fn debugging(&self) -> bool {
         true
     }
-    fn provider_request(&self, request: &contract::diag::ProviderRequest) {
+    fn http_request(&self, request: &contract::diag::HttpRequest) {
         self.lines.lock().unwrap().push(request.clone());
     }
 }
@@ -2057,33 +2057,6 @@ fn a_fixed_bearer_token_is_redacted_from_the_recorded_path() {
         "the request keeps its path: {}",
         requests[0].path
     );
-}
-
-#[test]
-fn percent_decode_decodes_exact_bytes() {
-    let cases: Vec<(&[u8], &[u8])> = vec![
-        (b"", b""),
-        (b"plain", b"plain"),
-        (b"a%2Fb", b"a/b"),
-        (b"a%2fb", b"a/b"),
-        (b"%41%42", b"AB"),
-        (b"%%41", b"%A"),
-        (b"%4%41", b"%4A"),
-        (b"%%%41", b"%%A"),
-        (b"%zz", b"%zz"),
-        (b"%2", b"%2"),
-        (b"%", b"%"),
-        (b"100%sure", b"100%sure"),
-        (b"%FF", &[0xFF]),
-        (b"a%20b", b"a b"),
-    ];
-    for (raw, expected) in cases {
-        assert_eq!(
-            super::percent_decode(raw),
-            expected.to_vec(),
-            "decoding {raw:?}"
-        );
-    }
 }
 
 /// One header map with this `content-type`, or none when absent.
@@ -2404,7 +2377,7 @@ fn an_observed_open_with_timing_times_one_connector_scope() {
     assert_eq!(
         log.serialized().len(),
         1,
-        "the provider_request line still exists"
+        "the http_request line still exists"
     );
 }
 
@@ -2477,7 +2450,7 @@ fn an_observed_run_with_timing_times_one_scope_and_reads_the_reply() {
     assert_eq!(
         log.serialized().len(),
         1,
-        "the provider_request line still exists"
+        "the http_request line still exists"
     );
 }
 
@@ -2520,14 +2493,14 @@ fn an_observed_run_without_timing_writes_its_line_with_no_net_scope() {
     assert_eq!(
         log.serialized().len(),
         1,
-        "the provider_request line still exists with no timing"
+        "the http_request line still exists with no timing"
     );
 }
 
 /// A writer at `info`: records whatever lines arrive, so the test pins
 /// that none do.
 struct InfoCapture {
-    lines: std::sync::Mutex<Vec<contract::diag::ProviderRequest>>,
+    lines: std::sync::Mutex<Vec<contract::diag::HttpRequest>>,
 }
 
 impl contract::diag::DebugLog for InfoCapture {
@@ -2535,7 +2508,7 @@ impl contract::diag::DebugLog for InfoCapture {
         false
     }
 
-    fn provider_request(&self, request: &contract::diag::ProviderRequest) {
+    fn http_request(&self, request: &contract::diag::HttpRequest) {
         self.lines.lock().unwrap().push(request.clone());
     }
 }

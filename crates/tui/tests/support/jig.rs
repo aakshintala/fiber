@@ -19,12 +19,13 @@ pub(crate) fn events_file() -> PathBuf {
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/<name>`), so the test starts no cargo and
-/// waits on no build lock.
-pub(crate) fn example_path(name: &str) -> PathBuf {
+/// waits on no build lock. Warming before returning means every exec site
+/// holds only a warmed path.
+pub(crate) fn example_path(name: &str) -> fakes::WarmedJig {
     let mut path = std::env::current_exe().expect("the test binary path");
     path.pop();
     path.pop();
-    path.join("examples").join(name)
+    fakes::WarmedJig::warm(path.join("examples").join(name), &[], 2)
 }
 
 /// Runs the built `binary` with `args` and waits for it. The child is in
@@ -32,8 +33,8 @@ pub(crate) fn example_path(name: &str) -> PathBuf {
 /// `finished` and leaves no process behind.
 #[track_caller]
 pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
-    fakes::warm_up(&example_path(binary), &[], 2);
-    let child = Command::new(example_path(binary))
+    let warmed = example_path(binary);
+    let child = Command::new(warmed.path())
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

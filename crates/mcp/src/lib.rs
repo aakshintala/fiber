@@ -33,7 +33,7 @@ mod tool;
 mod wait;
 
 pub use effects::Hints;
-pub use login::{CALLBACK_WAIT, LoginError, login};
+pub use login::{CALLBACK_WAIT, LoginError, login, login_observed};
 pub use prompt::Prompts;
 pub use registry::stop_every_start;
 pub use resources::{RESOURCES_TOOL, resources_definition};
