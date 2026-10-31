@@ -654,9 +654,11 @@ Its first row is the filter: "Type to search" dim until something is
 typed, then "›" dim and the query bold, with a dim block cursor either
 way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
 under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
-while every model shows, and "⟳ refresh all" dim at the right end. Each
-provider is a section, a blank row between them: the provider's name dim,
-then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
+while every model shows, and "⟳ refresh all" dim at the right end. These
+counts include models only, not logged-out or not-installed provider rows.
+Each provider has a section heading, with a blank row between sections.
+The heading is the provider's name in dim, then "· updated 2m ago" dim,
+or "⟳ refreshing" and a spinner in
 `attention` while its list refreshes. In the choosing picker, a provider
 with models left out for a placeholder with no value shows one count row
 after its heading and before its models, indented four columns and
@@ -688,20 +690,38 @@ thinking" dim for a model with none. On the focused model the levels are in
 ("[high]"); elsewhere they are dim. ← and → move between the focused
 model's chips. A model chosen for this session only gets a third row,
 "ⓢ this session only · nothing saved" dim. While a query is typed, the
-characters of each id it matched are underlined and bold; a query that
-matches no model, no count row and no not-installed row shows one
-line, "No models match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+characters of each matching id are underlined and bold. If no model, count,
+logged-out or not-installed row matches, one dim line reads "No models
+match" and no provider sections appear. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
 Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 
-Below the last provider section, after a blank row, the choosing picker
-lists each first-party provider no installed extension declares, one row
+After the model sections and their left-out count rows, the choosing picker
+lists each installed provider with provider data but no credential, one row
+per provider in provider-name order. It never lists the scripted provider.
+When model sections precede these rows, a blank row separates them. A
+login-capable provider's row shows the gutter, its name in `accent`, and
+" · not logged in" dim. Enter or clicking its name closes the picker and
+opens `/login` with that provider focused. After a successful login, the
+provider's models appear the next time you open the picker. A provider with
+a `credential_label` instead shows its declared environment variables or
+file paths in a dim suffix, such as " · set AWS_ACCESS_KEY_ID to log in".
+Enter or clicking its name sends nothing. The row still takes focus. These rows
+appear only in the choosing picker, before
+not-installed rows. Typing filters them by provider name, and "Show all"
+does not hide them. ↑ and ↓ move through models, logged-out providers and
+not-installed rows. The picker adds no login status line. Existing no-model
+status remains unchanged. `/thinking` and `/scoped-models` list no logged-out
+rows.
+
+After any logged-out rows, the choosing picker lists each first-party provider no installed extension declares, one row
 each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
-`accent`, " · not installed" dim. The scripted provider is never listed
-(`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
-`/scoped-models` list none. Typing filters these rows by provider name as it
-filters models, and a query that matches no model, no count row and no not-installed row
-still shows the one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
-walk the models and then these rows; no row is focused until ↓ or a click
+`accent`, " · not installed" dim. When other list rows precede them, a
+blank row separates them. The scripted provider is never listed
+(`docs/model-routing.md`, "The scripted provider"). Typing filters these
+rows by provider name as it filters models. If no model, count, logged-out
+or not-installed row matches, the picker shows "No models match". "Show
+all" leaves both row groups as they are. ↑ and ↓ walk models, logged-out
+providers and then these rows; no row is focused until ↓ or a click
 puts it there, so Enter with no row focused does what it does with none
 listed (a query that hides every model focuses nothing). The focused row
 reads as a focused model does, with "› " in its gutter, bold, on the bar.
