@@ -1026,7 +1026,7 @@ fn attach_held(gate: &Arc<super::Gate>, held: &Arc<Held>, watcher: log::Watcher)
         }
         injector.push_kept(crate::client::control_line(
             &leaving.session_id,
-            crate::client::STOP,
+            crate::client::ControlKind::Stop,
             0,
         ));
         if let Ok(id) = id_rx.recv() {
@@ -1098,7 +1098,11 @@ fn a_disconnect_stops_a_writer_whose_queue_is_full() {
     for _ in 0..1_200 {
         log.append(&notice(), None, None).unwrap();
     }
-    injector.push_kept(crate::client::control_line(&id, crate::client::STOP, 0));
+    injector.push_kept(crate::client::control_line(
+        &id,
+        crate::client::ControlKind::Stop,
+        0,
+    ));
     let (mut peer, stream) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(DEADLINE)).unwrap();
     thread::spawn(move || {
@@ -1170,7 +1174,11 @@ fn an_acknowledgement_survives_a_lagged_queue() {
         "a kept acknowledgement is returned before catch-up"
     );
     drop(log);
-    injector.push_kept(crate::client::control_line(&id, crate::client::STOP, 0));
+    injector.push_kept(crate::client::control_line(
+        &id,
+        crate::client::ControlKind::Stop,
+        0,
+    ));
     Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("the writer ends once the log is dropped and it is told to stop");
@@ -1561,7 +1569,11 @@ fn a_full_subscribers_latest_status_survives_a_queue_saturated_after_registratio
         .expect("the latest status reaches a subscriber whose queue saturated");
     assert_eq!(status["payload"]["name"], "latest");
     drop(log);
-    injector.push_kept(crate::client::control_line(&id, crate::client::STOP, 0));
+    injector.push_kept(crate::client::control_line(
+        &id,
+        crate::client::ControlKind::Stop,
+        0,
+    ));
     Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("the writer ends once the log is dropped and it is told to stop");
@@ -7143,7 +7155,7 @@ impl Flying {
     fn stop(&self) {
         self.injector.push_kept(crate::client::control_line(
             &self.gate.session_id,
-            crate::client::STOP,
+            crate::client::ControlKind::Stop,
             0,
         ));
     }
@@ -7243,7 +7255,11 @@ fn an_own_answer_queued_ahead_of_cut_is_written_and_not_cut() {
         );
         injector.push_kept(answer);
         cut_owed(gate);
-        injector.push_kept(crate::client::control_line(&gate.session_id, super::CUT, 0));
+        injector.push_kept(crate::client::control_line(
+            &gate.session_id,
+            crate::client::ControlKind::Cut,
+            0,
+        ));
     });
     flying.opened.log.end_watchers();
     flying.wait_ended();
@@ -7294,7 +7310,11 @@ fn a_stop_before_the_end_ends_the_writer_unless_the_session_is_stopping() {
 fn a_cut_with_nothing_owed_leaves_the_flush_unmarked() {
     reset();
     let flying = Flying::start(|_, injector, gate| {
-        injector.push_kept(crate::client::control_line(&gate.session_id, super::CUT, 0));
+        injector.push_kept(crate::client::control_line(
+            &gate.session_id,
+            crate::client::ControlKind::Cut,
+            0,
+        ));
     });
     flying.stop();
     flying.wait_ended();
@@ -7360,7 +7380,7 @@ fn past_end_cut_line_is_dropped() {
         .expect("the writer reads past the log's end");
     flying.injector.push_kept(crate::client::control_line(
         &flying.gate.session_id,
-        super::CUT,
+        crate::client::ControlKind::Cut,
         0,
     ));
     flying.injector.push_kept(flying.answer("c_1"));
@@ -7395,10 +7415,9 @@ fn past_end_level_line_without_a_switch_changes_nothing() {
     Deadline::after(DEADLINE)
         .recv(&past_end)
         .expect("the writer reads past the log's end");
-    // `client::level::LEVEL` is private to the client module; this is its value.
     flying.injector.push_kept(crate::client::control_line(
         &flying.gate.session_id,
-        "doors.level",
+        crate::client::ControlKind::Level,
         0,
     ));
     flying.injector.push_kept(flying.answer("c_1"));

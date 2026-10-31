@@ -170,6 +170,7 @@ impl Listed {
 
                         notice: None,
                         changed_by: None,
+                        protected_paths: None,
                     },
                     claim: Claim(Box::new(|| Some(Vec::new()))),
                     delegate,
@@ -245,6 +246,7 @@ fn notice(id: &str) -> Delivery {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         claim: Claim(Box::new(|| Some(Vec::new()))),
         delegate: None,
@@ -977,6 +979,7 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         Some(DelegateFinished {
             job_id: JobId("j_1".into()),
@@ -1612,6 +1615,7 @@ fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         claim: Claim(Box::new({
             let asked = Arc::clone(asked);
@@ -1724,6 +1728,7 @@ fn queued_ahead_notice(
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         claim: Claim(Box::new({
             let asked = Arc::clone(asked);
@@ -1828,6 +1833,7 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             },
             claim: Claim(Box::new({
                 let asked = Arc::clone(&asked);
@@ -2125,6 +2131,7 @@ fn settle_under_shutdown_runs_no_hook_and_writes_its_end_raw() {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         Some(DelegateFinished {
             job_id: JobId("j_1".into()),
@@ -2175,6 +2182,7 @@ fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         }])
         .unwrap();
     assert_eq!(hooks.calls(), 0);

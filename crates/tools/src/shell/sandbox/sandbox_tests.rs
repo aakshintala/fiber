@@ -6,7 +6,6 @@
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
 use std::sync::mpsc;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
@@ -20,13 +19,26 @@ use super::{
 };
 use super::{Settings, Unavailable, check_available};
 
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../../../tests/support/sandbox_home.rs"]
+mod sandbox_home;
+
 /// A fixture root under the owner's home, not the temp dir: the sandbox
 /// grants the temp dir as writable, so a deny beneath it would overlap and
-/// report unavailable instead of confining. Each call gets a fresh random
-/// suffix and removes itself on drop.
-fn fixture(prefix: &str) -> fakes::TempDir {
+/// report unavailable instead of confining. Every fixture shares the
+/// `fiber-tools-shell-sandbox-protected` prefix, so one glob sweeps every
+/// leftover. Each call gets a fresh random suffix and removes itself on
+/// drop.
+fn fixture() -> fakes::TempDir {
     let home = std::env::var_os("HOME").expect("HOME names the owner's home");
-    fakes::TempDir::under(std::path::Path::new(&home), prefix)
+    sandbox_home::SandboxHome::new(
+        std::path::Path::new(&home),
+        "fiber-tools-shell-sandbox-protected",
+    )
+    .into_root()
 }
 
 fn disabled() -> Settings {
@@ -49,7 +61,7 @@ fn workspace_settings(fiber_home: &Path) -> Settings {
 
 #[test]
 fn disabled_reports_off() {
-    let dir = fixture("fiber-sandbox-disabled");
+    let dir = fixture();
     let unavailable =
         check_available(&disabled(), dir.path()).expect_err("disabled is unavailable");
     assert_eq!(unavailable, Unavailable::Off);
@@ -58,7 +70,7 @@ fn disabled_reports_off() {
 
 #[test]
 fn enabled_without_overlap_is_available_on_linux() {
-    let dir = fixture("fiber-sandbox-available");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     let fiber_home = dir.path().join("fiber-home");
     std::fs::create_dir_all(&workspace).expect("create workspace");
@@ -74,7 +86,7 @@ fn enabled_without_overlap_is_available_on_linux() {
 #[cfg(target_os = "linux")]
 #[test]
 fn deny_inside_the_workspace_is_unavailable_naming_the_path() {
-    let dir = fixture("fiber-sandbox-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     let denied = workspace.join("secret");
     std::fs::create_dir_all(&workspace).expect("create workspace");
@@ -115,7 +127,7 @@ fn a_relative_deny_inside_the_workspace_is_unavailable() {
             }
         }
     }
-    let dir = fixture("fiber-sandbox-relative-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     std::fs::write(workspace.join("secret"), "secret").expect("write secret");
@@ -151,7 +163,7 @@ fn a_relative_deny_inside_the_workspace_is_unavailable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn deny_inside_allow_write_is_unavailable() {
-    let dir = fixture("fiber-sandbox-allow-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let extra = dir.path().join("extra-write");
@@ -176,7 +188,7 @@ fn deny_inside_allow_write_is_unavailable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn deny_through_an_aliased_write_root_is_unavailable() {
-    let dir = fixture("fiber-sandbox-alias-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let real = dir.path().join("real-write");
@@ -203,7 +215,7 @@ fn deny_through_an_aliased_write_root_is_unavailable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn resolved_target_inside_a_write_grant_is_unavailable_with_an_arrow() {
-    let dir = fixture("fiber-sandbox-target-overlap");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let grants = dir.path().join("grants");
@@ -242,7 +254,7 @@ fn resolved_target_inside_a_write_grant_is_unavailable_with_an_arrow() {
 #[cfg(target_os = "linux")]
 #[test]
 fn an_unresolved_write_root_is_unavailable() {
-    let dir = fixture("fiber-sandbox-unresolved-write");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let missing = dir.path().join("missing-write");
@@ -257,7 +269,7 @@ fn an_unresolved_write_root_is_unavailable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn denied_paths_compare_as_a_set() {
-    let dir = fixture("fiber-sandbox-denied-paths");
+    let dir = fixture();
     let fiber_home = dir.path().join("fiber-home");
     let denied: Vec<PathBuf> = vec![dir.path().join("b"), dir.path().join("a")];
     let settings = Settings {
@@ -287,8 +299,8 @@ struct HomeFixture {
 
 #[cfg(target_os = "linux")]
 impl HomeFixture {
-    fn new(prefix: &str, deny: &[&str]) -> Self {
-        let dir = fixture(prefix);
+    fn new(deny: &[&str]) -> Self {
+        let dir = fixture();
         let home = dir.path().join("home");
         let workspace = dir.path().join("workspace");
         let fiber_home = dir.path().join("fiber-home");
@@ -322,9 +334,10 @@ impl HomeFixture {
             None,
             &self.settings,
             &self.workspace,
+            None,
         )
         .expect("a confined spawn succeeds");
-        let super::super::command::Ran::Finished(finished) = ran else {
+        let super::super::command::Ran::Finished(finished, _) = ran else {
             panic!("a Stay call finishes in the foreground");
         };
         finished
@@ -334,7 +347,7 @@ impl HomeFixture {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_sibling_of_a_denied_file_stays_readable() {
-    let mut fixture = HomeFixture::new("fiber-sandbox-sibling", &["home/secret"]);
+    let mut fixture = HomeFixture::new(&["home/secret"]);
     std::fs::write(fixture.home.join("secret"), "shh").expect("write secret");
     std::fs::write(fixture.home.join("sibling"), "ok").expect("write sibling");
     // Two denies prove the point of the fix: one walk must never re-grant
@@ -359,7 +372,7 @@ fn a_sibling_of_a_denied_file_stays_readable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_missing_deny_leaves_the_parents_siblings_readable() {
-    let fixture = HomeFixture::new("fiber-sandbox-missing", &["home/.aws"]);
+    let fixture = HomeFixture::new(&["home/.aws"]);
     std::fs::write(fixture.home.join("sibling"), "ok").expect("write sibling");
     // Nothing grants the missing deny point upward: only its existing
     // parent's siblings stay readable.
@@ -374,7 +387,7 @@ fn a_missing_deny_leaves_the_parents_siblings_readable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_symlink_to_a_directory_denies_its_target_and_keeps_siblings() {
-    let dir = fixture("fiber-sandbox-dir-link");
+    let dir = fixture();
     let home = dir.path().join("home");
     let data = dir.path().join("data");
     let workspace = dir.path().join("workspace");
@@ -425,7 +438,7 @@ fn a_symlink_to_a_directory_denies_its_target_and_keeps_siblings() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_symlink_to_a_file_denies_both_paths_and_keeps_siblings() {
-    let dir = fixture("fiber-sandbox-file-link");
+    let dir = fixture();
     let home = dir.path().join("home");
     let data = dir.path().join("data");
     let workspace = dir.path().join("workspace");
@@ -481,7 +494,7 @@ fn a_symlink_to_a_file_denies_both_paths_and_keeps_siblings() {
 fn a_dangling_directory_link_with_a_suffix_keeps_siblings_readable() {
     use std::os::unix::fs::symlink;
 
-    let fixture = HomeFixture::new("fiber-sandbox-dangling-suffix", &["home/link/secret"]);
+    let fixture = HomeFixture::new(&["home/link/secret"]);
     symlink("missing-directory", fixture.home.join("link")).expect("dangle the directory link");
     std::fs::write(fixture.home.join("sibling"), "ok").expect("write sibling");
     let sibling = fixture.confined("cat sibling");
@@ -495,7 +508,7 @@ fn a_dangling_directory_link_with_a_suffix_keeps_siblings_readable() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_dangling_link_created_after_setup_stays_unreadable() {
-    let fixture = HomeFixture::new("fiber-sandbox-dangling", &["home/link"]);
+    let fixture = HomeFixture::new(&["home/link"]);
     // The link dangles at setup; its target arrives after, and the confined
     // read still cannot reach it.
     std::os::unix::fs::symlink("target", fixture.home.join("link")).expect("dangle the link");
@@ -518,7 +531,7 @@ fn a_dangling_link_created_after_setup_stays_unreadable() {
 #[test]
 fn a_created_missing_deny_stays_unreadable_during_the_call() {
     use super::super::command::{MovePolicy, execute};
-    let dir = fixture("fiber-sandbox-created-missing");
+    let dir = fixture();
     let home = dir.path().join("home");
     let workspace = dir.path().join("workspace");
     let fiber_home = dir.path().join("fiber-home");
@@ -568,9 +581,10 @@ fn a_created_missing_deny_stays_unreadable_during_the_call() {
                 None,
                 &settings,
                 &workspace,
+                None,
             )
             .expect("a confined spawn succeeds");
-            let super::super::command::Ran::Finished(finished) = ran else {
+            let super::super::command::Ran::Finished(finished, _) = ran else {
                 panic!("a Stay call finishes in the foreground");
             };
             let _sent = tx.send(finished);
@@ -608,7 +622,7 @@ fn a_created_missing_deny_stays_unreadable_during_the_call() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_symlink_loop_makes_the_sandbox_unavailable() {
-    let dir = fixture("fiber-sandbox-loop");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let a = dir.path().join("a");
@@ -627,7 +641,7 @@ fn a_symlink_loop_makes_the_sandbox_unavailable() {
 fn a_permission_denied_during_deny_resolution_makes_the_sandbox_unavailable() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = fixture("fiber-sandbox-unresolvable-deny");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     let locked = dir.path().join("locked");
     std::fs::create_dir_all(&workspace).expect("create workspace");
@@ -651,11 +665,8 @@ fn a_permission_denied_during_deny_resolution_makes_the_sandbox_unavailable() {
 #[test]
 fn forty_hops_resolve_and_forty_one_do_not() {
     use std::os::unix::fs::symlink;
-    for (prefix, links, available) in [
-        ("fiber-sandbox-hops-ok", 40, true),
-        ("fiber-sandbox-hops-over", 41, false),
-    ] {
-        let dir = fixture(prefix);
+    for (links, available) in [(40, true), (41, false)] {
+        let dir = fixture();
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("create workspace");
         let real = dir.path().join("real");
@@ -698,7 +709,7 @@ fn forty_symlink_components_resolve_and_forty_one_fail() {
     use std::os::unix::fs::symlink;
 
     for (links, available) in [(40, true), (41, false)] {
-        let dir = fixture("fiber-sandbox-component-hops");
+        let dir = fixture();
         let start = dir.path().join("start");
         std::fs::create_dir(&start).expect("create start directory");
         let mut current = start.clone();
@@ -731,7 +742,7 @@ fn forty_symlink_components_resolve_and_forty_one_fail() {
 fn open_nofollow_never_resolves_a_symlink() {
     use std::os::unix::fs::symlink;
     use std::os::unix::io::AsFd as _;
-    let dir = fixture("fiber-sandbox-open");
+    let dir = fixture();
     let file = dir.path().join("file");
     std::fs::write(&file, "data").expect("write the file");
     let link = dir.path().join("link");
@@ -856,7 +867,7 @@ pub(crate) fn measure_read_walk(
 #[cfg(target_os = "linux")]
 #[test]
 fn a_fixture_walk_counts_every_grant_exactly() {
-    let dir = fixture("fiber-sandbox-count");
+    let dir = fixture();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).expect("create home");
     for name in ["secret", "first", "second", "third"] {
@@ -903,8 +914,8 @@ struct MacosFixture {
 
 #[cfg(target_os = "macos")]
 impl MacosFixture {
-    fn new(prefix: &str) -> Self {
-        let dir = fixture(prefix);
+    fn new() -> Self {
+        let dir = fixture();
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("create workspace");
         let settings = workspace_settings(&dir.path().join("fiber-home"));
@@ -928,7 +939,7 @@ impl MacosFixture {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_enabled_without_overlap_is_available() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-available");
+    let fixture = MacosFixture::new();
     check_available(&fixture.settings, &fixture.workspace)
         .expect("overlap-free settings are available on macOS");
 }
@@ -936,7 +947,7 @@ fn macos_enabled_without_overlap_is_available() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_missing_executable_reports_the_binary() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-missing-exec");
+    let fixture = MacosFixture::new();
     let missing = fixture.dir.path().join("no-sandbox-exec");
     let unavailable = check_available_with_exec(&fixture.settings, &fixture.workspace, &missing)
         .expect_err("a missing binary is unavailable");
@@ -958,7 +969,7 @@ fn macos_missing_executable_reports_the_binary() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_a_directory_as_the_executable_is_unavailable() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-dir-exec");
+    let fixture = MacosFixture::new();
     let unavailable =
         check_available_with_exec(&fixture.settings, &fixture.workspace, fixture.dir.path())
             .expect_err("a directory is not a usable binary");
@@ -971,7 +982,7 @@ fn macos_a_directory_as_the_executable_is_unavailable() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_deny_inside_write_is_unavailable_with_a_generic_label() {
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-overlap");
+    let mut fixture = MacosFixture::new();
     let denied = fixture.workspace.join("secret");
     std::fs::write(&denied, "secret").expect("write secret");
     fixture.settings.deny_read.push(denied.clone());
@@ -1012,7 +1023,7 @@ fn macos_deny_inside_write_is_unavailable_with_a_generic_label() {
 #[test]
 fn macos_rejected_profile_runs_nothing_and_fails_closed() {
     use super::super::command::{MovePolicy, SandboxApply, execute_confined};
-    let dir = fixture("fiber-sandbox-macos-rejected");
+    let dir = fixture();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let side_effect = workspace.join("side-effect");
@@ -1059,7 +1070,7 @@ fn macos_rejected_profile_runs_nothing_and_fails_closed() {
 #[test]
 fn macos_unavailable_settings_never_reach_spawn() {
     use super::super::command::{MovePolicy, SandboxApply, execute};
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-no-spawn");
+    let mut fixture = MacosFixture::new();
     let missing = fixture.dir.path().join("missing-write");
     fixture.settings.allow_write.push(missing.clone());
     let clock = fakes::clock::FakeClock::new();
@@ -1078,6 +1089,7 @@ fn macos_unavailable_settings_never_reach_spawn() {
         None,
         &fixture.settings,
         &fixture.workspace,
+        None,
     ) else {
         panic!("unavailable settings fail");
     };
@@ -1099,7 +1111,7 @@ fn macos_unavailable_settings_never_reach_spawn() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_prepare_failure_names_the_unresolvable_root() {
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-unresolved");
+    let mut fixture = MacosFixture::new();
     let missing = fixture.dir.path().join("missing-write");
     fixture.settings.allow_write.push(missing.clone());
     let error = prepare(&fixture.settings, &fixture.workspace).expect_err("no grant is missing");
@@ -1114,7 +1126,7 @@ fn macos_prepare_failure_names_the_unresolvable_root() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_grants_roots_denies_and_names_no_paths() {
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-profile");
+    let mut fixture = MacosFixture::new();
     std::fs::create_dir_all(fixture.workspace.join(".git")).expect("create git dir");
     let secret = fixture.dir.path().join("secret");
     std::fs::write(&secret, "secret").expect("write secret");
@@ -1182,7 +1194,7 @@ fn macos_profile_grants_roots_denies_and_names_no_paths() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_keeps_hostile_paths_literal() {
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-literal");
+    let mut fixture = MacosFixture::new();
     let hostile = fixture.dir.path().join("we'ird (dir)");
     std::fs::create_dir_all(&hostile).expect("create hostile dir");
     let newline = fixture.dir.path().join("line\nbreak");
@@ -1214,7 +1226,7 @@ fn macos_profile_keeps_hostile_paths_literal() {
 #[test]
 fn macos_profile_denies_a_link_and_its_target() {
     use std::os::unix::fs::symlink;
-    let mut fixture = MacosFixture::new("fiber-sandbox-macos-link-deny");
+    let mut fixture = MacosFixture::new();
     let target = fixture.dir.path().join("target");
     std::fs::write(&target, "shh").expect("write target");
     let link = fixture.dir.path().join("link");
@@ -1238,7 +1250,7 @@ fn macos_profile_denies_a_link_and_its_target() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_protects_a_checkout_gitdir() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-checkout");
+    let fixture = MacosFixture::new();
     let gitdir = fixture.workspace.join(".git");
     std::fs::create_dir_all(&gitdir).expect("create git dir");
     let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
@@ -1258,7 +1270,7 @@ fn macos_profile_protects_a_checkout_gitdir() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_profile_follows_a_worktree_pointer() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-worktree");
+    let fixture = MacosFixture::new();
     let gitdir = fixture.dir.path().join("real-gitdir");
     std::fs::create_dir_all(&gitdir).expect("create gitdir");
     std::fs::write(gitdir.join("commondir"), "../common").expect("write commondir");
@@ -1301,7 +1313,7 @@ fn macos_profile_follows_a_worktree_pointer() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_absolute_git_pointer_at_root_grants_neither() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-root");
+    let fixture = MacosFixture::new();
     std::fs::write(fixture.workspace.join(".git"), "gitdir: /\n").expect("write hostile pointer");
     let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
     let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
@@ -1329,7 +1341,7 @@ fn macos_absolute_git_pointer_at_root_grants_neither() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_git_pointer_at_a_non_git_dir_grants_neither() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-plain");
+    let fixture = MacosFixture::new();
     let plain = fixture.dir.path().join("plain");
     std::fs::create_dir_all(&plain).expect("create plain dir");
     std::fs::write(
@@ -1364,7 +1376,7 @@ fn macos_git_pointer_at_a_non_git_dir_grants_neither() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_git_pointer_with_root_commondir_grants_neither() {
-    let fixture = MacosFixture::new("fiber-sandbox-macos-hostile-common");
+    let fixture = MacosFixture::new();
     let gitdir = fixture.dir.path().join("real-gitdir");
     std::fs::create_dir_all(&gitdir).expect("create gitdir");
     std::fs::write(gitdir.join("commondir"), "/\n").expect("write hostile commondir");
@@ -1591,6 +1603,1739 @@ fn macos_a_line_past_the_stash_budget_is_a_miss() {
         assert_eq!(
             kept, input,
             "the boundary keeps a {length}-byte prefix byte-identical"
+        );
+    }
+}
+
+// The protected paths across confined calls: one baseline per project,
+// compare, restore and report at a call's end. The production helper is
+// the only seam these tests use.
+
+use super::protected::{ProtectedPaths, Report, baseline};
+
+/// A Fiber home for the protection state, beside the fixture.
+fn protected_home(dir: &fakes::TempDir) -> std::path::PathBuf {
+    dir.path().join("fiber-home")
+}
+
+/// Opens the handle for `workspace`, failing the test on a setup error.
+fn open_handle(
+    home: &std::path::Path,
+    workspace: &std::path::Path,
+) -> std::sync::Arc<ProtectedPaths> {
+    let (handle, startup) = ProtectedPaths::open(home, workspace).expect("open recovers");
+    assert!(
+        startup.is_none(),
+        "a fresh project recovers nothing, got {startup:?}"
+    );
+    handle
+}
+
+/// The baseline file of the one project under `home`.
+fn baseline_file(home: &std::path::Path) -> std::path::PathBuf {
+    let projects = home.join("projects");
+    let mut found = Vec::new();
+    for project in std::fs::read_dir(&projects).expect("projects lists") {
+        let project = project.expect("project entry reads");
+        let candidate = project.path().join("protected-paths").join("baseline.json");
+        if candidate.is_file() {
+            found.push(candidate);
+        }
+    }
+    assert_eq!(found.len(), 1, "one project holds one baseline");
+    found.pop().expect("one baseline")
+}
+
+/// A linked worktree on a detached head at `name` under the repository.
+fn linked(repo: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let path = repo.join(name);
+    fakes::git::git(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            path.to_str().expect("path is UTF-8"),
+        ],
+    );
+    path
+}
+
+#[test]
+fn baseline_covers_shared_state_once_and_each_worktree_pointer_and_fiber() {
+    let repo = fakes::git::repo("fiber-protected-baseline");
+    let other = linked(repo.path(), "wt1");
+    let home = protected_home(&repo);
+    let handle = open_handle(&home, repo.path());
+    let begin = handle.begin(repo.path()).expect("begin snapshots");
+    let raw = std::fs::read_to_string(baseline_file(&home)).expect("baseline reads");
+    let baseline: serde_json::Value = serde_json::from_str(&raw).expect("baseline is JSON");
+    let entries = baseline
+        .get("entries")
+        .and_then(|entries| entries.as_array())
+        .expect("baseline holds entries");
+    let paths: Vec<&str> = entries
+        .iter()
+        .filter_map(|entry| entry.get("path").and_then(|path| path.as_str()))
+        .collect();
+    let main_git = std::fs::canonicalize(repo.path().join(".git")).expect("main git dir resolves");
+    let other_git = std::fs::canonicalize(other.join(".git")).expect("linked git pointer resolves");
+    let main_fiber = std::fs::canonicalize(repo.path())
+        .expect("main worktree resolves")
+        .join(".fiber");
+    let other_fiber = std::fs::canonicalize(&other)
+        .expect("linked worktree resolves")
+        .join(".fiber");
+    assert!(
+        paths.iter().any(|path| path.ends_with("/config")),
+        "the shared config is recorded, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path.ends_with("/hooks")),
+        "the shared hooks are recorded, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| Path::new(path) == main_git),
+        "the main checkout's own directory is never snapshotted, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| Path::new(path) == other_git),
+        "the linked worktree's pointer is recorded, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| Path::new(path) == main_fiber),
+        "the main checkout's fiber dir is recorded, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| Path::new(path) == other_fiber),
+        "the linked worktree's fiber dir is recorded, got {paths:?}"
+    );
+    let shared: Vec<&&str> = paths
+        .iter()
+        .filter(|path| path.ends_with("/config") || path.ends_with("/hooks"))
+        .collect();
+    assert_eq!(
+        shared.len(),
+        2,
+        "shared state is stored once, got {paths:?}"
+    );
+    let report = begin.guard.finish();
+    assert!(report.is_empty(), "an untouched call reports nothing");
+}
+
+#[test]
+fn a_call_from_another_worktree_reuses_the_same_baseline() {
+    let repo = fakes::git::repo("fiber-protected-shared");
+    let other = linked(repo.path(), "wt1");
+    let home = protected_home(&repo);
+    let handle = open_handle(&home, repo.path());
+    let first = handle.begin(repo.path()).expect("first call snapshots");
+    let before = std::fs::read(baseline_file(&home)).expect("baseline reads");
+    let second = handle.begin(&other).expect("second call reuses");
+    let after = std::fs::read(baseline_file(&home)).expect("baseline reads");
+    assert_eq!(before, after, "an active call fixes the baseline");
+    assert!(
+        second.guard.recovered.is_empty(),
+        "a reused baseline recovers nothing"
+    );
+    let first_report = first.guard.finish();
+    assert!(first_report.is_empty(), "an untouched call reports nothing");
+    let second_report = second.guard.finish();
+    assert!(
+        second_report.is_empty(),
+        "an untouched call reports nothing"
+    );
+}
+
+#[test]
+fn changed_bytes_new_entries_deletions_and_modes_are_restored() {
+    let workspace = fakes::TempDir::new("fiber-protected-restore");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(fiber.join("sub")).expect("fiber dir created");
+    std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
+    std::fs::write(fiber.join("sub").join("nested.txt"), b"nested").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    // A confined call's damage: changed bytes, a new file, a new directory,
+    // a deletion, a file swapped for a directory, and changed permissions.
+    std::fs::write(fiber.join("keep.txt"), b"changed").expect("file changed");
+    std::fs::write(fiber.join("added.txt"), b"new").expect("file added");
+    std::fs::create_dir_all(fiber.join("newdir")).expect("dir added");
+    std::fs::remove_file(fiber.join("sub").join("nested.txt")).expect("file deleted");
+    std::fs::write(fiber.join("sub").join("other.txt"), b"other").expect("file written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            fiber.join("keep.txt"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .expect("mode changed");
+    }
+    let report = begin.guard.finish();
+    assert_eq!(
+        std::fs::read(fiber.join("keep.txt")).expect("file reads"),
+        b"original",
+        "changed bytes are restored"
+    );
+    assert!(!fiber.join("added.txt").exists(), "a new file is removed");
+    assert!(!fiber.join("newdir").exists(), "a new dir is removed");
+    assert_eq!(
+        std::fs::read(fiber.join("sub").join("nested.txt")).expect("file reads"),
+        b"nested",
+        "a deletion is recreated"
+    );
+    assert!(
+        !fiber.join("sub").join("other.txt").exists(),
+        "a new nested file is removed"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(fiber.join("keep.txt"))
+            .expect("file stats")
+            .permissions()
+            .mode()
+            & 0o7777;
+        assert_ne!(mode, 0o600, "changed permissions are restored");
+    }
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert!(
+        report.failed.is_empty(),
+        "nothing fails, got {:?}",
+        report.failed
+    );
+    assert_eq!(
+        report.warning_lines().len(),
+        1,
+        "one notice per changed path"
+    );
+}
+
+#[test]
+fn created_paths_for_missing_entries_are_removed() {
+    let workspace = fakes::TempDir::new("fiber-protected-missing");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(fiber.join("made")).expect("dir created");
+    std::fs::write(fiber.join("made").join("file.txt"), b"x").expect("file written");
+    let report = begin.guard.finish();
+    assert!(!fiber.exists(), "a created fiber dir is removed");
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+}
+
+#[test]
+fn an_untouched_call_reports_nothing() {
+    let workspace = fakes::TempDir::new("fiber-protected-quiet");
+    std::fs::create_dir_all(workspace.path().join(".fiber")).expect("fiber dir created");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    let report = begin.guard.finish();
+    assert!(report.is_empty(), "no change means no report");
+    assert!(
+        report.warning_lines().is_empty(),
+        "no change means no notice"
+    );
+    assert!(
+        Report {
+            restored: Vec::new(),
+            failed: Vec::new(),
+        }
+        .is_empty(),
+        "no change means no report and no details"
+    );
+}
+
+#[test]
+fn recovery_restores_and_drops_a_stale_baseline() {
+    let workspace = fakes::TempDir::new("fiber-protected-stale");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    // A call that dies before its end: the guard drops without finishing,
+    // and the operating system releases the active lock with it.
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    std::fs::write(fiber.join("keep.txt"), b"changed").expect("file changed");
+    drop(begin.guard);
+    let baseline = baseline_file(&home);
+    assert!(baseline.is_file(), "a dead call leaves its baseline");
+    let (_, startup) = ProtectedPaths::open(&home, workspace.path()).expect("open recovers");
+    let report = startup.expect("a stale baseline reports");
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(fiber.join("keep.txt")).expect("file reads"),
+        b"original",
+        "startup recovery restores the stale change"
+    );
+    assert!(!baseline.exists(), "startup recovery drops the baseline");
+    let (_, quiet) = ProtectedPaths::open(&home, workspace.path()).expect("open recovers");
+    assert!(quiet.is_none(), "a dropped baseline recovers nothing");
+}
+
+#[test]
+fn recovery_leaves_a_live_baseline_untouched() {
+    let workspace = fakes::TempDir::new("fiber-protected-live");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    std::fs::write(fiber.join("keep.txt"), b"changed").expect("file changed");
+    let (_, startup) = ProtectedPaths::open(&home, workspace.path()).expect("open recovers");
+    assert!(startup.is_none(), "a live baseline is left for its holders");
+    assert_eq!(
+        std::fs::read(fiber.join("keep.txt")).expect("file reads"),
+        b"changed",
+        "a live baseline restores nothing at startup"
+    );
+    let report = begin.guard.finish();
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(fiber.join("keep.txt")).expect("file reads"),
+        b"original",
+        "the holder's end restores"
+    );
+}
+
+#[test]
+fn a_stale_baseline_is_recovered_before_a_new_snapshot() {
+    let workspace = fakes::TempDir::new("fiber-protected-resnapshot");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let first = handle.begin(workspace.path()).expect("begin snapshots");
+    std::fs::write(fiber.join("keep.txt"), b"changed").expect("file changed");
+    drop(first.guard);
+    let second = handle.begin(workspace.path()).expect("begin recovers");
+    assert_eq!(
+        second.guard.recovered.restored,
+        vec![".fiber".to_owned()],
+        "the stale change is recovered and reported"
+    );
+    assert_eq!(
+        std::fs::read(fiber.join("keep.txt")).expect("file reads"),
+        b"original",
+        "the new snapshot records the restored value"
+    );
+    let report = second.guard.finish();
+    // The end carries the stale recovery with the call's own changes,
+    // each path named once: nothing further changed past the recovery.
+    assert_eq!(
+        report.restored,
+        vec![".fiber".to_owned()],
+        "the end names the recovered path once"
+    );
+}
+
+#[test]
+fn colliding_project_slugs_do_not_share_protected_baselines() {
+    let root = fakes::TempDir::new("fiber-protected-colliding-project-slugs");
+    let hyphenated = root.path().join("a-b");
+    let nested = root.path().join("a/b");
+    let hyphenated_fiber = hyphenated.join(".fiber");
+    let nested_fiber = nested.join(".fiber");
+    std::fs::create_dir_all(&hyphenated_fiber).expect("hyphenated project");
+    std::fs::create_dir_all(&nested_fiber).expect("nested project");
+    let hyphenated_file = hyphenated_fiber.join("keep.txt");
+    let nested_file = nested_fiber.join("keep.txt");
+    std::fs::write(&hyphenated_file, b"hyphenated original").expect("first protected file");
+    std::fs::write(&nested_file, b"nested original").expect("second protected file");
+
+    let home = protected_home(&root);
+    let first_identity = baseline::identity(&hyphenated)
+        .expect("first identity")
+        .path;
+    let second_identity = baseline::identity(&nested).expect("second identity").path;
+    let first_slug = first_identity.to_string_lossy().replace('/', "-");
+    let second_slug = second_identity.to_string_lossy().replace('/', "-");
+    assert_eq!(
+        first_slug, second_slug,
+        "the identities share the project slug"
+    );
+    let first_paths = baseline::state_paths(&home, &hyphenated).expect("first state paths");
+    let second_paths = baseline::state_paths(&home, &nested).expect("second state paths");
+    assert_eq!(
+        first_paths.dir,
+        home.join("projects")
+            .join(first_slug)
+            .join("protected-paths"),
+        "protected state uses the project key, without a second key scheme"
+    );
+    assert_eq!(
+        first_paths.dir, second_paths.dir,
+        "the slug collision is real"
+    );
+    assert_ne!(
+        first_paths.identity_marker, second_paths.identity_marker,
+        "the baseline's absolute protected path records the identity"
+    );
+
+    let first = open_handle(&home, &hyphenated);
+    let second = open_handle(&home, &nested);
+    let active = first.begin(&hyphenated).expect("first call begins");
+    assert!(
+        second.begin(&nested).is_err(),
+        "a different identity cannot join a live baseline"
+    );
+    assert!(
+        ProtectedPaths::open(&home, &nested).is_err(),
+        "a different identity cannot open another project's live baseline"
+    );
+    assert!(
+        second.note_approved_write(&nested, &nested_file).is_err(),
+        "an approved write cannot update another project's baseline"
+    );
+    std::fs::write(&hyphenated_file, b"damaged first project").expect("first path changed");
+    drop(active.guard); // Simulate a call that ended before recovery ran.
+
+    assert!(
+        ProtectedPaths::open(&home, &nested).is_err(),
+        "a colliding identity cannot discard another project's stale baseline"
+    );
+    let (_first, startup) =
+        ProtectedPaths::open(&home, &hyphenated).expect("the baseline's identity can recover it");
+    assert_eq!(
+        startup
+            .expect("the first project's baseline is recovered")
+            .restored,
+        vec![".fiber".to_owned()]
+    );
+    assert_eq!(
+        std::fs::read(&hyphenated_file).expect("first file reads"),
+        b"hyphenated original",
+        "the original identity can still restore its protected path"
+    );
+
+    let (second, startup) = ProtectedPaths::open(&home, &nested).expect("second project opens");
+    assert!(
+        startup.is_none(),
+        "the state directory is free after recovery"
+    );
+    assert_eq!(
+        std::fs::read(&nested_file).expect("second file reads"),
+        b"nested original",
+        "the second identity's protected path is untouched"
+    );
+    let active = second
+        .begin(&nested)
+        .expect("second call snapshots its own project");
+    std::fs::write(&nested_file, b"damaged second project").expect("second path changed");
+    assert_eq!(active.guard.finish().restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(&nested_file).expect("second file reads after restore"),
+        b"nested original",
+        "the second identity restores only its own baseline"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_baseline_identity_is_recognized_through_a_workspace_symlink() {
+    let root = fakes::TempDir::new("fiber-protected-identity-symlink");
+    let project = root.path().join("project");
+    let fiber = project.join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"original").expect("protected file");
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&project, &alias).expect("workspace symlink");
+
+    let home = protected_home(&root);
+    let handle = open_handle(&home, &project);
+    let active = handle.begin(&project).expect("call begins");
+    std::fs::write(&protected, b"changed").expect("protected file changed");
+    drop(active.guard);
+
+    let (_alias_handle, startup) = ProtectedPaths::open(&home, &alias).expect("alias opens");
+    let report = startup.expect("the recorded baseline belongs to this project");
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(&protected).expect("protected file reads"),
+        b"original",
+        "the alias finds and restores the same project's baseline"
+    );
+}
+
+#[test]
+fn a_workspace_no_project_key_can_name_fails_before_spawn() {
+    let dir = fakes::TempDir::new("fiber-protected-bad-key");
+    let home = protected_home(&dir);
+    let handle = open_handle(&home, dir.path());
+    // A NUL byte survives the slug but no project key can name it.
+    let bad = dir.path().join("no\0key");
+    let error = handle.begin(&bad).expect_err("no key names the workspace");
+    assert!(
+        error.to_string().contains("is not a project key"),
+        "the failure names the key: {error}"
+    );
+    assert!(
+        !home.join("projects").exists(),
+        "the failed begin records nothing"
+    );
+}
+
+/// No baseline file exists under `home`.
+fn no_baseline_yet(home: &std::path::Path) {
+    let projects = home.join("projects");
+    if let Ok(entries) = std::fs::read_dir(&projects) {
+        for project in entries.flatten() {
+            assert!(
+                !project
+                    .path()
+                    .join("protected-paths")
+                    .join("baseline.json")
+                    .is_file(),
+                "no baseline is recorded yet"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_approved_write_advances_the_baseline() {
+    let workspace = fakes::TempDir::new("fiber-protected-approved");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    // An unrelated path is a no-op, even before any baseline exists.
+    handle
+        .note_approved_write(workspace.path(), &workspace.path().join("unrelated.txt"))
+        .expect("an unrelated path is a no-op");
+    no_baseline_yet(&home);
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    // Fiber's own write lands, then advances the entry under the lock.
+    std::fs::write(&protected, b"approved").expect("file written");
+    handle
+        .note_approved_write(workspace.path(), &protected)
+        .expect("an approved write advances");
+    handle
+        .note_approved_write(workspace.path(), &workspace.path().join("unrelated.txt"))
+        .expect("an unrelated path is a no-op");
+    let report = begin.guard.finish();
+    assert!(
+        report.is_empty(),
+        "an approved write is never restored away"
+    );
+    assert_eq!(
+        std::fs::read(&protected).expect("file reads"),
+        b"approved",
+        "the approved value stands"
+    );
+}
+
+#[test]
+fn a_shell_side_change_after_an_approved_write_still_restores() {
+    let workspace = fakes::TempDir::new("fiber-protected-approved-shell");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    std::fs::write(&protected, b"approved").expect("file written");
+    handle
+        .note_approved_write(workspace.path(), &protected)
+        .expect("an approved write advances");
+    // The shell then changes the same path: the approved value is what
+    // the call's end compares against.
+    std::fs::write(&protected, b"shell").expect("file written");
+    let report = begin.guard.finish();
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(&protected).expect("file reads"),
+        b"approved",
+        "the shell change is restored to the approved value"
+    );
+}
+
+#[test]
+fn a_symlink_to_a_matching_file_is_restored_as_a_file() {
+    // A symlink to a file with identical bytes and permissions is a
+    // changed symlink, never an unchanged file: the compare checks the
+    // entry type without following links.
+    let workspace = fakes::TempDir::new("fiber-protected-symlink-file");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"same bytes").expect("file written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o644))
+            .expect("mode set");
+    }
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    let target = fiber.join("target.txt");
+    std::fs::write(&target, b"same bytes").expect("target written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+            .expect("mode set");
+    }
+    std::fs::remove_file(&protected).expect("file removed");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("target.txt", &protected).expect("symlink created");
+    assert_eq!(
+        std::fs::read(&protected).expect("symlink reads through"),
+        b"same bytes",
+        "the fixture really matches through the link"
+    );
+    let report = begin.guard.finish();
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert!(
+        std::fs::symlink_metadata(&protected)
+            .expect("metadata reads")
+            .file_type()
+            .is_file(),
+        "the symlink is restored to its baseline file type"
+    );
+    assert_eq!(
+        std::fs::read(&protected).expect("file reads"),
+        b"same bytes",
+        "the baseline bytes stand"
+    );
+}
+
+#[test]
+fn a_baseline_read_failure_at_finish_is_reported_not_empty() {
+    // A compare or baseline-read failure at finish never becomes an empty
+    // report: it lands as a `failed` entry naming the baseline and its
+    // cause (`docs/sandbox.md`, "Protected paths").
+    let workspace = fakes::TempDir::new("fiber-protected-finish-fail");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    std::fs::write(baseline_file(&home), b"not json").expect("baseline corrupted");
+    let report = begin.guard.finish();
+    assert!(
+        report.restored.is_empty(),
+        "nothing is reported as restored: {report:?}"
+    );
+    assert_eq!(
+        report.failed.len(),
+        1,
+        "the failure is reported: {report:?}"
+    );
+    assert_eq!(report.failed[0].path, "baseline.json");
+    assert!(
+        !report.failed[0].message.is_empty(),
+        "the error is named: {report:?}"
+    );
+    assert!(
+        !report.is_empty(),
+        "a failed restore is never reported as success: {report:?}"
+    );
+    assert!(
+        !report.is_empty(),
+        "the result carries the failure: {report:?}"
+    );
+    assert_eq!(
+        report.warning_lines().len(),
+        1,
+        "the warning carries the failure"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_baseline_update_reaches_the_caller_and_keeps_the_approved_write() {
+    // The read-only state directory blocks atomic replacement but leaves the
+    // old baseline file writable. This exercises the in-memory guard path and
+    // ensures another session fails closed on the invalidated disk baseline.
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let workspace = fakes::TempDir::new("fiber-protected-approved-fail");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    std::fs::write(&protected, b"approved").expect("approved lands");
+    let state_dir = baseline_file(&home)
+        .parent()
+        .expect("the baseline has a parent")
+        .to_path_buf();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o555))
+        .expect("state directory becomes read-only");
+    let error = handle
+        .note_approved_write(workspace.path(), &protected)
+        .expect_err("the baseline failure propagates");
+    let other_handle = open_handle(&home, workspace.path());
+    let other_error = other_handle
+        .begin(workspace.path())
+        .expect_err("another session fails closed on the invalid baseline");
+    let report = begin.guard.finish();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o755))
+        .expect("state directory becomes writable again");
+
+    assert!(!error.is_empty(), "the failure names its cause: {error}");
+    assert!(
+        !other_error.message.is_empty(),
+        "the other session fails closed with a cause"
+    );
+    assert_eq!(
+        std::fs::read(&protected).expect("file reads"),
+        b"approved",
+        "the approved write survives the holder's end"
+    );
+    assert!(
+        report.restored.is_empty(),
+        "nothing is restored over the approved write: {report:?}"
+    );
+    assert!(
+        report
+            .failed
+            .iter()
+            .any(|failure| failure.path == "baseline.json"),
+        "the baseline failure is named: {report:?}"
+    );
+
+    let begin = handle
+        .begin(workspace.path())
+        .expect("the pending entry is persisted before the next call");
+    assert_eq!(
+        std::fs::read(&protected).expect("file reads"),
+        b"approved",
+        "the stale on-disk baseline is never used"
+    );
+    begin.guard.finish();
+}
+
+#[test]
+fn an_unreadable_protected_file_fails_begin_before_spawn() {
+    // Capture that cannot be recorded fails before spawn: an unreadable
+    // protected file is never snapshotted as empty bytes.
+    let workspace = fakes::TempDir::new("fiber-protected-unreadable");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"secret").expect("file written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o000))
+            .expect("mode removed");
+    }
+    if std::fs::read(&protected).is_ok() {
+        // A privileged runner still reads through the mode: nothing here
+        // can fail, so the test proves nothing and stops.
+        return;
+    }
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let error = handle
+        .begin(workspace.path())
+        .expect_err("an unrecordable baseline stops the call");
+    assert!(!error.to_string().is_empty(), "the failure names its cause");
+}
+
+#[test]
+fn an_unreadable_protected_file_fails_the_end_compare() {
+    // The baseline records the readable file, but the end cannot read it
+    // back: the compare fails with the path and its cause, and nothing is
+    // reported as restored over the unreadable file.
+    let workspace = fakes::TempDir::new("fiber-protected-unreadable-end");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"original").expect("file written");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o000))
+            .expect("mode removed");
+    }
+    if std::fs::read(&protected).is_ok() {
+        // A privileged runner still reads through the mode: nothing here
+        // can fail, so the test proves nothing and stops.
+        return;
+    }
+    let report = begin.guard.finish();
+    assert!(
+        report.restored.is_empty(),
+        "nothing is reported as restored: {report:?}"
+    );
+    assert_eq!(
+        report.failed.len(),
+        1,
+        "the compare failure is reported: {report:?}"
+    );
+    assert_eq!(report.failed[0].path, ".fiber");
+    assert!(
+        report.failed[0].message.contains("could not be compared"),
+        "the error names its cause: {report:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&protected).is_ok(),
+        "the unreadable file is left alone"
+    );
+}
+
+#[test]
+fn setup_fails_closed_when_the_state_cannot_be_recorded() {
+    let workspace = fakes::TempDir::new("fiber-protected-unwritable");
+    let file = workspace.path().join("file-home");
+    std::fs::write(&file, b"x").expect("file written");
+    let error = ProtectedPaths::open(&file, workspace.path()).expect_err("no state is recorded");
+    assert!(
+        !error.to_string().is_empty(),
+        "the failure names its cause: {error}"
+    );
+}
+
+#[test]
+fn a_corrupt_baseline_fails_the_call_closed() {
+    let workspace = fakes::TempDir::new("fiber-protected-corrupt");
+    std::fs::create_dir_all(workspace.path().join(".fiber")).expect("fiber dir created");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    let baseline = baseline_file(&home);
+    drop(begin.guard);
+    std::fs::write(&baseline, b"not json").expect("baseline corrupted");
+    let error = handle
+        .begin(workspace.path())
+        .expect_err("a corrupt baseline stops the call");
+    assert!(!error.to_string().is_empty(), "the failure names its cause");
+}
+
+#[test]
+fn broken_git_discovery_fails_begin_before_spawn() {
+    // A repository git cannot read is incomplete discovery, not a plain
+    // directory: the call fails before spawn instead of running with a
+    // workspace-only baseline that leaves the shared config, hooks and
+    // worktree pointers unprotected.
+    let repo = fakes::git::repo("fiber-protected-broken-discovery");
+    let home = protected_home(&repo);
+    let handle = open_handle(&home, repo.path());
+    std::fs::write(repo.path().join(".git/config"), b"garbage{{{").expect("config broken");
+    let listed = baseline::enumerate(repo.path()).expect_err("no listing from broken git");
+    assert!(
+        listed.contains("could not be listed"),
+        "the listing failure names its cause: {listed}"
+    );
+    let error = handle
+        .begin(repo.path())
+        .expect_err("broken discovery stops the call");
+    assert!(
+        error.to_string().contains("could not be read"),
+        "the failure names its cause: {error}"
+    );
+}
+
+#[test]
+fn an_empty_worktree_listing_fails_closed() {
+    // `git worktree list` proved the repository, so a listing that names
+    // no checkout is incomplete discovery, never a single checkout.
+    let workspace = fakes::TempDir::new("fiber-protected-empty-list");
+    let error = baseline::parse_worktrees(workspace.path(), b"")
+        .expect_err("an empty listing stops the call");
+    assert!(
+        error.contains("listed none"),
+        "the failure names its cause: {error}"
+    );
+    let names = baseline::parse_worktrees(
+        workspace.path(),
+        b"worktree /repo\nHEAD abc\n\nworktree /repo/wt\nHEAD abc\n",
+    )
+    .expect("a listing names its checkouts");
+    assert_eq!(names.len(), 2, "every listed checkout is kept");
+    assert!(names[0].main, "the first checkout stays the main one");
+    assert!(!names[1].main, "later checkouts are linked ones");
+}
+
+#[test]
+fn symlinks_renames_and_type_swaps_are_restored() {
+    let workspace = fakes::TempDir::new("fiber-protected-links");
+    let fiber = workspace.path().join(".fiber");
+    std::fs::create_dir_all(fiber.join("dir")).expect("dir created");
+    std::fs::write(fiber.join("dir").join("file.txt"), b"data").expect("file written");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("dir/file.txt", fiber.join("link")).expect("link created");
+    let home = protected_home(&workspace);
+    let handle = open_handle(&home, workspace.path());
+    let begin = handle.begin(workspace.path()).expect("begin snapshots");
+    // Rename the directory away, replace the link with a file, and add a
+    // new symlink the baseline never recorded.
+    std::fs::rename(fiber.join("dir"), fiber.join("moved")).expect("dir renamed");
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(fiber.join("link")).expect("link removed");
+        std::fs::write(fiber.join("link"), b"now a file").expect("file written");
+        std::os::unix::fs::symlink("moved", fiber.join("extra")).expect("link created");
+    }
+    let report = begin.guard.finish();
+    assert!(
+        fiber.join("dir").join("file.txt").is_file(),
+        "the rename is undone"
+    );
+    assert!(!fiber.join("moved").exists(), "the renamed dir is gone");
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            std::fs::read_link(fiber.join("link")).expect("link reads"),
+            std::path::Path::new("dir/file.txt"),
+            "the link target is restored"
+        );
+        assert!(
+            !fiber.join("extra").exists(),
+            "an unrecorded link is removed"
+        );
+    }
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+}
+
+#[test]
+fn overlapping_calls_share_one_baseline_and_restore_once() {
+    let repo = fakes::git::repo("fiber-protected-overlap");
+    let other = linked(repo.path(), "wt1");
+    let fiber = repo.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("note.txt"), b"original").expect("note written");
+    let home = protected_home(&repo);
+    let handle = open_handle(&home, repo.path());
+    // Plain receivers are Send but not Sync, so each one waits
+    // behind a mutex to cross the scoped-thread boundary.
+    let (a_running_tx, a_running_rx) = mpsc::channel::<()>();
+    let (b_started_tx, b_started_rx) = mpsc::channel::<()>();
+    let (a_done_tx, a_done_rx) = mpsc::channel::<()>();
+    let a_running_rx = std::sync::Mutex::new(a_running_rx);
+    let b_started_rx = std::sync::Mutex::new(b_started_rx);
+    let a_done_rx = std::sync::Mutex::new(a_done_rx);
+    let wait = |what: &str, rx: &std::sync::Mutex<mpsc::Receiver<()>>| {
+        let rx = rx.lock().expect("the rendezvous locks");
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap_or_else(|_| panic!("{what}"));
+    };
+    std::thread::scope(|scope| {
+        // B starts while A holds the baseline: it reuses the fixed
+        // snapshot and ends with nothing to restore.
+        scope.spawn(|| {
+            wait("A takes its baseline first", &a_running_rx);
+            let begin = handle.begin(&other).expect("B reuses the live baseline");
+            assert!(
+                begin.guard.recovered.is_empty(),
+                "a reused baseline recovers nothing"
+            );
+            let baseline = std::fs::read(baseline_file(&home)).expect("the baseline reads");
+            b_started_tx.send(()).expect("B signals");
+            wait("A ends first", &a_done_rx);
+            assert_eq!(
+                std::fs::read(baseline_file(&home)).expect("the baseline reads"),
+                baseline,
+                "the baseline never moves while calls hold it"
+            );
+            let report = begin.guard.finish();
+            assert!(report.is_empty(), "B restores nothing back");
+        });
+        // A runs on this thread: it restores exactly once.
+        let begin = handle.begin(repo.path()).expect("A takes the baseline");
+        a_running_tx.send(()).expect("A signals");
+        wait("B reuses the baseline", &b_started_rx);
+        std::fs::write(fiber.join("note.txt"), b"changed").expect("note changed");
+        let report = begin.guard.finish();
+        assert_eq!(report.restored, vec![".fiber".to_owned()]);
+        assert_eq!(
+            std::fs::read(fiber.join("note.txt")).expect("note reads"),
+            b"original",
+            "A restores"
+        );
+        a_done_tx.send(()).expect("A signals");
+    });
+}
+
+#[cfg(target_os = "linux")]
+mod linux_signal {
+    use super::super::protected::{ProtectedPaths, linux_policy, supervisor, supervisor_rules};
+    use super::{open_handle, protected_home};
+
+    /// The supervisor under test: distinct session and hub identities, so
+    /// every rule names both.
+    fn two_process() -> super::super::protected::Supervisor {
+        super::super::protected::Supervisor {
+            session_pid: 100,
+            session_pgid: 300,
+            hub_pid: 200,
+            hub_pgid: 400,
+        }
+    }
+
+    fn syscalls(rules: &[(i64, Vec<seccompiler::SeccompRule>)]) -> Vec<i64> {
+        let mut syscalls: Vec<i64> = rules.iter().map(|(syscall, _)| *syscall).collect();
+        syscalls.sort_unstable();
+        syscalls
+    }
+
+    #[test]
+    fn the_narrow_rule_names_only_the_ruled_targets() {
+        let rules = supervisor_rules(&two_process()).expect("rules build");
+        assert_eq!(
+            syscalls(&rules),
+            {
+                let mut syscalls: Vec<i64> = vec![
+                    libc::SYS_kill,
+                    libc::SYS_pidfd_open,
+                    libc::SYS_tgkill,
+                    libc::SYS_tkill,
+                ];
+                syscalls.sort_unstable();
+                syscalls
+            },
+            "only the ruled syscalls are filtered"
+        );
+    }
+
+    #[test]
+    fn kill_covers_processes_groups_and_everyone_but_never_zero() {
+        let rules = supervisor_rules(&two_process()).expect("rules build");
+        let kill = rules
+            .iter()
+            .find(|(syscall, _)| *syscall == libc::SYS_kill)
+            .expect("kill is filtered");
+        // Five distinct targets: the two processes, the two groups as
+        // negative pids, and -1 for every process (`docs/sandbox.md:94-100`,
+        // the below-ABI-6 target set).
+        assert_eq!(kill.1.len(), 5, "kill names five targets, got {kill:?}");
+        let debug = format!("{kill:?}");
+        for pid in [100u64, 200] {
+            assert!(
+                debug.contains(&format!("value: {pid}")),
+                "kill names pid {pid}"
+            );
+        }
+        for pgid in [300u64, 400] {
+            let neg = 0u64.wrapping_sub(pgid);
+            assert!(
+                debug.contains(&format!("value: {neg}")),
+                "kill names group -{pgid}"
+            );
+            assert!(
+                !debug.contains(&format!("value: {pgid}")),
+                "a group is never a bare pid"
+            );
+        }
+        assert!(
+            debug.contains(&format!("value: {}", u64::MAX)),
+            "kill names -1"
+        );
+        assert!(
+            !debug.contains("value: 0"),
+            "pid 0 stays open for the call's own group"
+        );
+    }
+
+    #[test]
+    fn neighbors_of_the_targets_are_not_matched() {
+        let rules = supervisor_rules(&two_process()).expect("rules build");
+        let debug = format!("{rules:?}");
+        for pid in [99u64, 101, 199, 201, 299, 301, 399, 401] {
+            assert!(
+                !debug.contains(&format!("value: {pid}")),
+                "pid {pid} is not a target"
+            );
+        }
+    }
+
+    #[test]
+    fn tgkill_covers_both_arguments_and_pidfd_open_covers_only_pids() {
+        let rules = supervisor_rules(&two_process()).expect("rules build");
+        let tgkill = rules
+            .iter()
+            .find(|(syscall, _)| *syscall == libc::SYS_tgkill)
+            .expect("tgkill is filtered");
+        // `docs/sandbox.md:94-100`: tgkill covers both args, pidfd_open covers
+        // only pids, tkill covers tids.
+        assert_eq!(tgkill.1.len(), 4, "tgkill names both args, got {tgkill:?}");
+        let pidfd = rules
+            .iter()
+            .find(|(syscall, _)| *syscall == libc::SYS_pidfd_open)
+            .expect("pidfd_open is filtered");
+        assert_eq!(pidfd.1.len(), 2, "pidfd_open names two pids, got {pidfd:?}");
+        let tkill = rules
+            .iter()
+            .find(|(syscall, _)| *syscall == libc::SYS_tkill)
+            .expect("tkill is filtered");
+        assert_eq!(tkill.1.len(), 2, "tkill names two tids, got {tkill:?}");
+    }
+
+    #[test]
+    fn one_process_collapses_the_hub_slot() {
+        let single = super::super::protected::Supervisor {
+            session_pid: 100,
+            session_pgid: 300,
+            hub_pid: 100,
+            hub_pgid: 300,
+        };
+        let rules = supervisor_rules(&single).expect("rules build");
+        let kill = rules
+            .iter()
+            .find(|(syscall, _)| *syscall == libc::SYS_kill)
+            .expect("kill is filtered");
+        // `docs/sandbox.md:94-100`: one process collapses the hub slot, so
+        // kill names three targets.
+        assert_eq!(
+            kill.1.len(),
+            3,
+            "one process names three targets, got {kill:?}"
+        );
+    }
+
+    /// The project's `protected-paths` directory: the one project under `home`.
+    fn state_dir(home: &std::path::Path) -> std::path::PathBuf {
+        let mut found = Vec::new();
+        for project in std::fs::read_dir(home.join("projects")).expect("projects lists") {
+            let project = project.expect("project entry reads");
+            found.push(project.path().join("protected-paths"));
+        }
+        assert_eq!(found.len(), 1, "one project holds one state dir");
+        found.pop().expect("one state dir")
+    }
+
+    /// A foreign process holds the active lock at `lock`, then dies without
+    /// releasing it, proving the operating system releases the lock with
+    /// the dead process.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dead_holders_lock_releases_and_startup_recovers() {
+        use std::os::unix::process::CommandExt as _;
+        let workspace = fakes::TempDir::new("fiber-protected-crash");
+        let fiber = workspace.path().join(".fiber");
+        std::fs::create_dir_all(&fiber).expect("fiber dir created");
+        std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
+        let home = protected_home(&workspace);
+        let handle = open_handle(&home, workspace.path());
+        // A call takes its baseline, damages a protected path, and dies
+        // before its end: dropping the guard releases the descriptor, as
+        // the operating system releases a dead process's descriptors.
+        let begin = handle.begin(workspace.path()).expect("begin snapshots");
+        std::fs::write(fiber.join("keep.txt"), b"changed").expect("file changed");
+        let active = state_dir(&home).join("active.lock");
+        drop(begin.guard);
+        // The holder is a foreign process blocked on stdin, holding the
+        // active lock: `echo ready` proves it holds the lock, and `read`
+        // holds it until the test kills the group. No wall-clock sleep or
+        // poll decides when to proceed (`docs/testing.md`, "Waits and
+        // timeouts").
+        let mut child = std::process::Command::new("flock");
+        child
+            .arg("-s")
+            .arg(&active)
+            .arg("sh")
+            .arg("-c")
+            .arg("echo ready; read line")
+            .process_group(0)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let mut child = child
+            .spawn()
+            .expect("flock holds the active lock in a dead-end process");
+        let pid = child.id();
+        let _held_stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("piped stdout");
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            let mut lines = std::io::BufReader::new(stdout).lines();
+            let ready = lines.next().map(|line| line.expect("the holder signals"));
+            if ready.as_deref() == Some("ready") {
+                let _sent = ready_tx.send(());
+            }
+        });
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&ready_rx)
+            .unwrap_or_else(|_| panic!("the holder takes the lock"));
+        // SIGKILL to the holder's group: the spawned child leads its own
+        // group, and flock forks the holder keeping the inherited lock
+        // descriptor, so killing the parent alone leaves the lock held. The
+        // wait reaps the direct child on every path past this point.
+        support::group::signal(pid, rustix::process::Signal::KILL).expect("the holder dies");
+        child.wait().expect("the holder reaps");
+        // Nobody holds the active lock anymore: the kernel frees the last
+        // descriptor at death. One blocking take proves the release, on a
+        // thread with the test's deadline, never a poll loop.
+        let (released_tx, released_rx) = std::sync::mpsc::channel();
+        let released = active.clone();
+        std::thread::spawn(move || {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&released)
+                .expect("the lock opens");
+            file.lock().expect("the dead holder released the lock");
+            file.unlock().expect("the probe releases");
+            let _sent = released_tx.send(());
+        });
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&released_rx)
+            .unwrap_or_else(|_| panic!("the dead holder released the lock"));
+        // The next session start restores the abandoned damage and drops
+        // the stale baseline.
+        let (_, startup) = ProtectedPaths::open(&home, workspace.path()).expect("open recovers");
+        let report = startup.expect("a stale baseline reports");
+        assert_eq!(report.restored, vec![".fiber".to_owned()]);
+        assert_eq!(
+            std::fs::read(fiber.join("keep.txt")).expect("file reads"),
+            b"original",
+            "startup recovery restores"
+        );
+        assert!(
+            !state_dir(&home).join("baseline.json").exists(),
+            "startup recovery drops the baseline"
+        );
+    }
+
+    #[test]
+    fn the_policy_matches_the_kernel_capability() {
+        use landlock::{Access as _, Compatible as _, RulesetAttr as _};
+        let supported = landlock::Ruleset::default()
+            .set_compatibility(landlock::CompatLevel::HardRequirement)
+            .handle_access(landlock::AccessFs::from_all(landlock::ABI::V6))
+            .and_then(|ruleset| ruleset.create())
+            .is_ok();
+        let policy = linux_policy().expect("policy selects");
+        if supported {
+            assert_eq!(
+                policy,
+                super::super::protected::LinuxPolicy::LandlockSignalScope,
+                "ABI 6 and above uses Landlock signal scope"
+            );
+        } else {
+            let super::super::protected::LinuxPolicy::SupervisorSeccomp(rules) = policy else {
+                panic!("below ABI 6 uses the supervisor seccomp policy");
+            };
+            // `docs/sandbox.md:94-100`: below ABI 6 the policy denies kill,
+            // tkill, tgkill and pidfd_open.
+            assert_eq!(syscalls(&rules).len(), 4);
+        }
+    }
+
+    #[test]
+    fn collection_names_this_process() {
+        let collected = supervisor();
+        assert_eq!(collected.session_pid, std::process::id());
+        assert!(collected.session_pgid != 0, "the session group is real");
+        assert!(collected.hub_pid != 0, "the hub slot is real");
+    }
+
+    #[test]
+    fn the_compiled_filter_keeps_socket_denials_beside_supervisor_rules() {
+        let rules = supervisor_rules(&two_process()).expect("rules build");
+        let program = super::super::compile_seccomp(&rules).expect("filter compiles");
+        // Instruction classes from the kernel's filter header: the low
+        // three bits name the class, so a jump comparing a number keeps
+        // working whatever addressing the compiler chose.
+        const JUMP: u16 = 0x05;
+        const RETURN: u16 = 0x06;
+        // Every denied call is compared by number: a jump on the syscall
+        // number reaches the refusal below, so a dropped entry with no
+        // comparison to make cannot deny.
+        for denied in [
+            libc::SYS_socket,
+            libc::SYS_connect,
+            libc::SYS_bind,
+            libc::SYS_listen,
+            libc::SYS_accept,
+            libc::SYS_accept4,
+            libc::SYS_io_uring_setup,
+        ] {
+            let want = u32::try_from(denied).expect("denied syscall number fits in u32");
+            assert!(
+                program
+                    .iter()
+                    .any(|instruction| instruction.code & 0x07 == JUMP && instruction.k == want),
+                "the filter compares {denied}"
+            );
+        }
+        // The refusal the comparisons reach: EPERM, the errno the sandbox
+        // promises for denied calls.
+        const EPERM_RETURN: u32 = 0x0005_0000 | libc::EPERM as u32;
+        assert!(
+            program
+                .iter()
+                .any(|instruction| instruction.code & 0x07 == RETURN
+                    && instruction.k == EPERM_RETURN),
+            "the filter returns EPERM"
+        );
+    }
+}
+
+#[cfg(test)]
+mod protected_mutant_regressions {
+    use super::super::protected::{ProtectedPaths, baseline};
+    use std::path::{Path, PathBuf};
+
+    fn home(dir: &fakes::TempDir) -> PathBuf {
+        dir.path().join("fiber-home")
+    }
+
+    fn open(home: &Path, workspace: &Path) -> std::sync::Arc<ProtectedPaths> {
+        ProtectedPaths::open(home, workspace)
+            .expect("open protected paths")
+            .0
+    }
+
+    fn baseline_file(home: &Path) -> PathBuf {
+        let mut paths = Vec::new();
+        for project in std::fs::read_dir(home.join("projects")).expect("projects list") {
+            paths.push(
+                project
+                    .expect("project entry")
+                    .path()
+                    .join("protected-paths/baseline.json"),
+            );
+        }
+        assert_eq!(paths.len(), 1, "one project baseline exists");
+        paths.pop().expect("one project baseline")
+    }
+
+    #[test]
+    fn active_calls_distinguish_missing_from_corrupt_baselines() {
+        let workspace = fakes::TempDir::new("fiber-protected-active-missing");
+        std::fs::create_dir_all(workspace.path().join(".fiber")).expect("fiber dir");
+        let home = home(&workspace);
+        let handle = open(&home, workspace.path());
+        let active = handle.begin(workspace.path()).expect("first call begins");
+        let baseline = baseline_file(&home);
+        std::fs::remove_file(&baseline).expect("baseline removed while active");
+        let missing = handle
+            .begin(workspace.path())
+            .expect_err("a missing active baseline fails closed");
+        assert!(
+            missing
+                .message
+                .contains("baseline is missing while confined calls are active"),
+            "missing has its specific cause: {missing}"
+        );
+
+        std::fs::write(&baseline, b"not json").expect("baseline corrupted");
+        let corrupt = handle
+            .begin(workspace.path())
+            .expect_err("corrupt active baseline fails closed");
+        assert!(
+            !corrupt.message.contains("baseline is missing"),
+            "corrupt data keeps its parse cause: {corrupt}"
+        );
+        active.guard.finish();
+    }
+
+    #[test]
+    fn approved_writes_ignore_a_missing_baseline_but_propagate_corruption() {
+        let workspace = fakes::TempDir::new("fiber-protected-approved-missing");
+        let fiber = workspace.path().join(".fiber");
+        std::fs::create_dir_all(&fiber).expect("fiber dir");
+        let protected = fiber.join("keep.txt");
+        std::fs::write(&protected, b"original").expect("protected file");
+        let home = home(&workspace);
+        let handle = open(&home, workspace.path());
+        let active = handle.begin(workspace.path()).expect("call begins");
+        let baseline = baseline_file(&home);
+        std::fs::remove_file(&baseline).expect("baseline removed");
+        handle
+            .note_approved_write(workspace.path(), &protected)
+            .expect("missing baseline is a no-op");
+        std::fs::write(&baseline, b"not json").expect("baseline corrupted");
+        let error = handle
+            .note_approved_write(workspace.path(), &protected)
+            .expect_err("corrupt baseline is not a no-op");
+        assert!(
+            !error.contains("missing"),
+            "the parse cause survives: {error}"
+        );
+        active.guard.finish();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approved_writes_match_paths_resolved_through_a_workspace_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = fakes::TempDir::new("fiber-protected-approved-alias");
+        let workspace = dir.path().join("workspace");
+        let fiber = workspace.join(".fiber");
+        std::fs::create_dir_all(&fiber).expect("fiber dir");
+        let protected = fiber.join("keep.txt");
+        std::fs::write(&protected, b"original").expect("protected file");
+        let alias = dir.path().join("workspace-alias");
+        symlink(&workspace, &alias).expect("workspace alias");
+        let home = home(&dir);
+        let handle = open(&home, &alias);
+        let active = handle.begin(&alias).expect("call begins through alias");
+
+        std::fs::write(&protected, b"approved").expect("approved write");
+        let resolved = std::fs::canonicalize(&protected).expect("file resolves through alias");
+        handle
+            .note_approved_write(&alias, &resolved)
+            .expect("the resolved spelling advances its entry");
+        std::fs::write(&protected, b"shell").expect("shell changes the file");
+        let report = active.guard.finish();
+        assert_eq!(report.restored, vec![".fiber".to_owned()]);
+        assert_eq!(
+            std::fs::read(&protected).expect("protected file restored"),
+            b"approved",
+            "canonical and lexical workspace spellings identify one protected entry"
+        );
+    }
+
+    #[test]
+    fn an_approved_descendant_does_not_replace_a_baseline_file_with_a_directory() {
+        let workspace = fakes::TempDir::new("fiber-protected-approved-descendant");
+        let protected = workspace.path().join(".fiber");
+        std::fs::write(&protected, b"original file").expect("baseline file");
+        let home = home(&workspace);
+        let handle = open(&home, workspace.path());
+        let active = handle.begin(workspace.path()).expect("call begins");
+        std::fs::remove_file(&protected).expect("file replaced");
+        std::fs::create_dir(&protected).expect("replacement directory");
+        let child = protected.join("approved.txt");
+        std::fs::write(&child, b"approved").expect("approved descendant");
+        handle
+            .note_approved_write(workspace.path(), &child)
+            .expect("a non-protected descendant is ignored");
+        let report = active.guard.finish();
+        assert_eq!(
+            std::fs::read(&protected).expect("baseline file restored"),
+            b"original file",
+            "the approved descendant cannot advance a file entry"
+        );
+        assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    }
+
+    #[test]
+    fn a_missing_baseline_at_call_end_is_reported() {
+        let workspace = fakes::TempDir::new("fiber-protected-end-missing");
+        std::fs::create_dir_all(workspace.path().join(".fiber")).expect("fiber dir");
+        let home = home(&workspace);
+        let active = open(&home, workspace.path())
+            .begin(workspace.path())
+            .expect("call begins");
+        std::fs::remove_file(baseline_file(&home)).expect("baseline removed");
+        let report = active.guard.finish();
+        assert_eq!(report.failed.len(), 1, "missing baseline is reported");
+        assert_eq!(report.failed[0].path, "baseline.json");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicate_recovery_and_end_failures_name_the_path_once() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let workspace = fakes::TempDir::new("fiber-protected-duplicate-failure");
+        let fiber = workspace.path().join(".fiber");
+        std::fs::create_dir(&fiber).expect("fiber dir");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o555))
+            .expect("baseline is not writable");
+        let home = home(&workspace);
+        let handle = open(&home, workspace.path());
+        let first = handle.begin(workspace.path()).expect("first call begins");
+        drop(first.guard);
+
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o755))
+            .expect("allow unexpected child creation");
+        let extra = fiber.join("extra");
+        std::fs::write(&extra, b"unexpected").expect("extra child");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o555))
+            .expect("make directory non-writable");
+        if std::fs::remove_file(&extra).is_ok() {
+            // A privileged runner can remove a child from a read-only
+            // directory; it cannot exercise this recovery failure.
+            std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o755))
+                .expect("restore directory mode");
+            return;
+        }
+
+        let active = handle
+            .begin(workspace.path())
+            .expect("stale recovery fails, then fresh snapshot succeeds");
+        assert_eq!(
+            active.guard.recovered.failed.len(),
+            1,
+            "the start failure joins this call's report"
+        );
+        std::fs::set_permissions(&extra, std::fs::Permissions::from_mode(0o000))
+            .expect("make the newly snapshotted child unreadable");
+        let report = active.guard.finish();
+        std::fs::set_permissions(&extra, std::fs::Permissions::from_mode(0o644))
+            .expect("restore child mode");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o755))
+            .expect("restore directory mode");
+        assert_eq!(report.failed.len(), 1, "duplicate failure is merged");
+        assert_eq!(report.failed[0].path, ".fiber");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clearing_pending_keeps_new_worktrees_protected() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let repo = fakes::git::repo("fiber-protected-cleared-pending");
+        let home = home(&repo);
+        let handle = open(&home, repo.path());
+        let first = handle.begin(repo.path()).expect("first call begins");
+        let config = repo.path().join(".git/config");
+        let mut approved = std::fs::read(&config).expect("git config reads");
+        approved.extend_from_slice(b"\n# approved write\n");
+        std::fs::write(&config, &approved).expect("approved config write");
+        let state_dir = baseline_file(&home)
+            .parent()
+            .expect("baseline has parent")
+            .to_path_buf();
+        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o555))
+            .expect("state dir read-only");
+        let update = handle.note_approved_write(repo.path(), &config);
+        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o755))
+            .expect("state dir writable");
+        if update.is_ok() {
+            first.guard.finish();
+            return;
+        }
+        first.guard.finish();
+
+        let linked = repo.path().join("wt1");
+        fakes::git::git(
+            repo.path(),
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().expect("UTF-8 path"),
+            ],
+        );
+        let pointer = linked.join(".git");
+        let original_pointer = std::fs::read(&pointer).expect("linked pointer reads");
+        let second = handle
+            .begin(repo.path())
+            .expect("new call snapshots new worktree");
+        std::fs::write(&pointer, b"damaged pointer").expect("pointer damaged");
+        let report = second.guard.finish();
+        assert_eq!(
+            std::fs::read(&pointer).expect("pointer restored"),
+            original_pointer,
+            "persisted pending state must not hide newly discovered worktrees"
+        );
+        assert!(
+            report.restored.iter().any(|path| path == "wt1/.git"),
+            "new pointer is reported: {report:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn denied_metadata_is_not_mistaken_for_a_missing_snapshot_entry() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = fakes::TempDir::new("fiber-protected-snapshot-metadata");
+        let blocked = dir.path().join("blocked");
+        std::fs::create_dir(&blocked).expect("parent directory");
+        std::fs::write(blocked.join("entry"), b"data").expect("entry");
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))
+            .expect("parent unreadable");
+        let path = blocked.join("entry");
+        if std::fs::symlink_metadata(&path).is_ok() {
+            std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))
+                .expect("restore parent mode");
+            return;
+        }
+        assert!(
+            baseline::snapshot_kind(&path).is_err(),
+            "permission failure is not recorded as Missing"
+        );
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))
+            .expect("restore parent mode");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshots_preserve_permission_bits_not_just_file_contents() {
+        use super::super::protected::baseline::EntryKind;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = fakes::TempDir::new("fiber-protected-snapshot-mode");
+        let path = dir.path().join("file");
+        std::fs::write(&path, b"same").expect("file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o751))
+            .expect("specific mode");
+        let EntryKind::File { mode, .. } = baseline::snapshot_kind(&path).expect("snapshot") else {
+            panic!("regular file keeps its kind");
+        };
+        assert_eq!(mode & 0o7777, 0o751, "all permission bits are captured");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unchanged_link_to_the_same_target_is_not_reported() {
+        let workspace = fakes::TempDir::new("fiber-protected-unchanged-link");
+        let fiber = workspace.path().join(".fiber");
+        std::fs::create_dir(&fiber).expect("fiber dir");
+        let target = fiber.join("target");
+        let link = fiber.join("link");
+        std::fs::write(&target, b"target").expect("target file");
+        std::os::unix::fs::symlink("target", &link).expect("symlink");
+        let handle = open(&home(&workspace), workspace.path());
+        let active = handle.begin(workspace.path()).expect("call begins");
+        let report = active.guard.finish();
+        assert!(report.is_empty(), "unchanged link is quiet: {report:?}");
+        assert_eq!(
+            std::fs::read_link(&link).expect("link reads"),
+            Path::new("target")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mode_only_damage_is_restored_with_the_recorded_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let workspace = fakes::TempDir::new("fiber-protected-mode-only");
+        let fiber = workspace.path().join(".fiber");
+        std::fs::create_dir(&fiber).expect("fiber dir");
+        let protected = fiber.join("keep.txt");
+        std::fs::write(&protected, b"same bytes").expect("protected file");
+        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o640))
+            .expect("baseline mode");
+        let active = open(&home(&workspace), workspace.path())
+            .begin(workspace.path())
+            .expect("call begins");
+        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o600))
+            .expect("mode changed only");
+        let report = active.guard.finish();
+        assert_eq!(report.restored, vec![".fiber".to_owned()]);
+        assert_eq!(
+            std::fs::metadata(&protected)
+                .expect("file stats")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o640,
+            "unchanged bytes do not hide changed permissions"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_extra_child_that_cannot_be_inspected_is_not_claimed_removed() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let workspace = fakes::TempDir::new("fiber-protected-remove-denied");
+        let fiber = workspace.path().join(".fiber");
+        std::fs::create_dir(&fiber).expect("fiber dir");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o400))
+            .expect("baseline directory mode");
+        if std::fs::read_dir(&fiber).is_err() {
+            std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o700))
+                .expect("restore directory mode");
+            return;
+        }
+        let active = open(&home(&workspace), workspace.path())
+            .begin(workspace.path())
+            .expect("call begins");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o700))
+            .expect("allow child creation");
+        let extra = fiber.join("extra");
+        std::fs::write(&extra, b"unexpected").expect("extra child");
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o400))
+            .expect("deny child lookup");
+        if std::fs::symlink_metadata(&extra).is_ok() {
+            std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o700))
+                .expect("restore directory mode");
+            return;
+        }
+        let report = active.guard.finish();
+        std::fs::set_permissions(&fiber, std::fs::Permissions::from_mode(0o700))
+            .expect("restore directory mode");
+        assert_eq!(report.failed.len(), 1, "inspection failure is reported");
+        assert_eq!(report.failed[0].path, ".fiber");
+        assert!(extra.exists(), "the uninspected child remains");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn supervisor_ids_match_the_kernel_queries() {
+        use super::super::protected::{parent_pid, process_group};
+        use rustix::process::{Pid, getpgid, getppid};
+
+        let current = std::process::id();
+        let pid = Pid::from_raw(i32::try_from(current).expect("pid fits"))
+            .expect("current pid is positive");
+        let current_group =
+            u32::try_from(getpgid(None).expect("current process group").as_raw_pid())
+                .expect("group fits");
+        let target_group = u32::try_from(
+            getpgid(Some(pid))
+                .expect("target process group")
+                .as_raw_pid(),
+        )
+        .expect("group fits");
+        let expected_parent =
+            u32::try_from(getppid().expect("parent pid").as_raw_pid()).expect("parent pid fits");
+        assert_eq!(process_group(None), Some(current_group));
+        assert_eq!(process_group(Some(current)), Some(target_group));
+        assert_eq!(parent_pid(), Some(expected_parent));
+    }
+
+    #[test]
+    fn broken_git_discovery_keeps_git_diagnostic_text() {
+        let repo = fakes::git::repo("fiber-protected-git-diagnostic");
+        std::fs::write(repo.path().join(".git/config"), b"garbage{{{\n").expect("config broken");
+        let error = match baseline::identity(repo.path()) {
+            Err(error) => error,
+            Ok(_) => panic!("broken git cannot be identified"),
+        };
+        assert!(
+            error.contains("fatal:"),
+            "git diagnostic is preserved: {error}"
+        );
+    }
+
+    #[test]
+    fn a_directory_pointer_in_a_linked_worktree_is_snapshotted() {
+        let repo = fakes::git::repo("fiber-protected-directory-pointer");
+        let linked = repo.path().join("wt1");
+        fakes::git::git(
+            repo.path(),
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().expect("UTF-8 path"),
+            ],
+        );
+        let pointer = linked.join(".git");
+        std::fs::remove_file(&pointer).expect("linked pointer removed");
+        std::fs::create_dir(&pointer).expect("replacement directory pointer");
+        std::fs::write(pointer.join("marker"), b"keep me").expect("pointer content");
+        let entries = baseline::snapshot(repo.path()).expect("repository snapshot");
+        let pointer = std::fs::canonicalize(&pointer).expect("pointer path resolves");
+        assert!(
+            entries
+                .iter()
+                .any(|entry| Path::new(&entry.path) == pointer),
+            "a non-shared directory pointer is protected"
         );
     }
 }

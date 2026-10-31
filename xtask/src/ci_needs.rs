@@ -9,7 +9,7 @@ pub(crate) const WORKFLOW: &str = ".github/workflows/ci.yml";
 pub(crate) const CI_DOC: &str = "docs/ci.md";
 /// Jobs that report without gating `ci` directly; named in docs/ci.md,
 /// "The merge gate".
-pub(crate) const REPORT_JOBS: [&str; 7] = [
+pub(crate) const REPORT_JOBS: [&str; 9] = [
     "backstop_report",
     "bench_comment",
     "cache_prune",
@@ -17,6 +17,8 @@ pub(crate) const REPORT_JOBS: [&str; 7] = [
     "flake_report",
     "bug_red_linux",
     "bug_red_macos",
+    "journey",
+    "journey_report",
 ];
 
 /// The sentence that declares the report jobs in `docs/ci.md`.

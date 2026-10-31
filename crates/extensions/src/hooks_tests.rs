@@ -2372,6 +2372,7 @@ fn completed(n: u64) -> contract::events::Event {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         hosts_surfaced: vec![],
         provider_item: None,
         loaded: None,

@@ -46,16 +46,65 @@ the person's `sandbox.deny_read` paths.
   default. This blocks the hub, session socket, `docker.sock` and
   ssh-agent. There is no setting that grants a socket; a command that
   needs one runs with `unconfined: true` and is reviewed.
-- Ask the sandbox to protect `.git/config`, hooks, a worktree's `.git` file
-  or `.fiber/` on Linux. This slice does not claim that protection; slice 4
-  owns it. A confined call in this slice can write those paths when they sit
-  inside a writable root.
+- Change the shared `.git/config` and hooks, a worktree's `.git` pointer
+  file or workspace-local `.fiber/` without trace. A confined call can write
+  those paths when they sit inside a writable root, but Fiber records them
+  before the call and restores them after it, reporting each change
+  ("Protected paths" below).
 - Signal a process outside it below Landlock ABI 6. From ABI 6, Landlock
   signal scoping covers every process outside the sandbox; below it a
   confined call can still `kill` same-user processes outside, though it
   cannot drive them. This is the measured limit of the Linux policy, stated
-  here so no stronger protection is promised below ABI 6. This slice adds no
-  supervisor-signal seccomp rule.
+  here so no stronger protection is promised below ABI 6. Below ABI 6 the
+  narrow supervisor-signal seccomp rule in "Protected paths" below covers
+  the session and its hub instead.
+
+## Protected paths
+
+A confined call can still change the paths the session depends on: the
+shared `.git/config` and hooks, each registered worktree's `.git` pointer,
+and workspace-local `.fiber/`. Those paths stay writable inside the sandbox,
+so Fiber records them before the call and restores them after it.
+
+Each confined call starts by checking the project's baseline. The baseline
+is one JSON file per project under Fiber home, recording the protected
+paths and their contents. The baseline and its two locks live at `projects/<key>/protected-paths/`,
+under the project's own key. When no confined call is running, the call
+compares the live paths against the baseline, restores each difference,
+folds the result into its own report, and takes a fresh snapshot. When
+other calls are running, the call reuses their baseline unchanged. An approved
+Fiber `write` or `edit` to a protected path advances the baseline. If that
+update cannot be written, the tool returns an error, but Fiber keeps the new
+entries in session memory so active calls in that session cannot restore stale
+bytes. Fiber refuses to start another confined call in that session until it
+can persist those entries.
+
+A session that died mid-call leaves a stale baseline behind. The next
+session's first call finds no active holder, restores what the dead session
+changed, reports it with its own report, and only then takes its snapshot.
+A live baseline is never touched while a call holds it.
+
+Two locks guard the baseline. The baseline lock is exclusive and short: a
+call holds it only while it reads, compares or writes the file, never while
+a command runs. The active lock is shared and lasts the whole call: each
+call holds it from start to its final report, including after adoption, so
+the baseline stays fixed while any call is active. Every probe is
+non-blocking, so a call ending under the baseline lock cannot deadlock a
+call starting under the active lock.
+
+The restore also runs under the sandbox's own limits, which depend on the
+kernel. From Landlock ABI 6, signal scoping covers every process outside
+the sandbox and no seccomp signal rule is added. Below ABI 6, signals aimed
+at the session or its hub fail with `EPERM`: `kill`, `tkill` and `tgkill`
+toward either process, either process group or every process, and
+`pidfd_open` of either pid. Signals to the call's own children keep working
+on every kernel. A restore that fails is not retried and not hidden: it
+lands in the report's `failed` list with its cause, and the call's result,
+completion event and warning line carry it the same way. Each changed path
+gives the person one warning line, "Protected path `<path>` changed while a
+confined call ran; Fiber restored it.", or, when the restore failed,
+"…; Fiber could not restore it: `<cause>`.". The terminal UI draws it with
+the call; a headless run prints it on stderr as `fiber: ` and the line.
 
 ## How read denies are built
 

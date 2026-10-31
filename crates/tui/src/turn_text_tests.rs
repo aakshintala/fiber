@@ -1,6 +1,6 @@
 //! Tests for whole-turn paging (`docs/tui.md`, "History and paging"): which
-//! pages hold a turn at its boundaries, and that pinning a turn's pages and
-//! releasing them are observable in the pinned set.
+//! pages hold a turn at its boundaries, and that requesting a turn's pages
+//! and releasing them are observable in what the next load asks for.
 
 use super::{pages_for_turn, request_turn};
 use crate::window::Pages;
@@ -35,15 +35,38 @@ fn pages_for_turn_keeps_a_cut_pages_tail_with_its_turn() {
 #[test]
 fn request_turn_pins_only_what_its_copy_does_not_hold() {
     let mut pages = fold_all(&turn_cut_session());
-    assert!(pages.page_count() > 1, "no page cut");
     pages.trim(usize::MAX / 2, 1);
     assert!(pages.part(0).is_none(), "page 0 stays resident");
     let missing = request_turn(&mut pages, 0, &[]);
     assert_eq!(missing, vec![0]);
-    assert_eq!(pages.pinned(), 1);
-    // The pending copy holds page 0 already: asking again pins nothing.
+    // The pending copy's page is asked for: it loads before the copy runs.
+    let page = pages
+        .index()
+        .pages()
+        .first()
+        .expect("page 0 exists")
+        .clone();
+    let want = (page.session.clone(), page.first_seq..=page.last_seq);
+    let asked = pages.needs(usize::MAX / 2, 1);
+    assert!(
+        asked.contains(&want),
+        "the copy waits on page 0 in its session: {asked:?}"
+    );
+    // The pending copy holds page 0 already: asking again waits on the
+    // same page.
     assert_eq!(request_turn(&mut pages, 0, &missing), vec![0]);
-    assert_eq!(pages.pinned(), 1);
+    let again = pages.needs(usize::MAX / 2, 1);
+    assert!(
+        again.contains(&want),
+        "the second press waits on nothing new: {again:?}"
+    );
+    // Releasing page 0 ends that need.
+    pages.unwant(0);
+    let released = pages.needs(usize::MAX / 2, 1);
+    assert!(
+        !released.contains(&want),
+        "the released page waits no more: {released:?}"
+    );
 }
 
 /// One line of a session that cuts pages, numbered from `seq`.

@@ -142,7 +142,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   It is never sent to the model and the loop never reads it. A client that does
   not recognise a tool's `details` shows `content` instead: tool identity is an
   opaque name and an extension can replace any tool, so no client may depend
-  on one tool's `details`.
+  on one tool's `details`. A confined Linux shell result includes
+  `protected_paths: { restored, failed }` when it restores a protected path or
+  cannot restore one. The shell names each changed path in `content`; the loop
+  also carries the report on the completion event.
 - `changes`: the lines each file gained and lost, as
   `{ path, added, removed }` per file, on a call that changed files. It is the
   one tool-neutral account of a change: a client draws a group's "+442 −12"
@@ -616,9 +619,29 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `nonzero_exit` and `process.exit_code`. A command killed by a signal
   Fiber did not send is `failed` with code `signal` and `process.signal`.
   A timeout is as above; a cancellation is `cancelled`.
+- The output the model reads ends with a closing line that says how the
+  command ended. If the command's own output is non-empty and does not end
+  in a newline, a newline goes first. An empty output gets the closing line
+  alone. The closing line ends with a newline:
+  - `Exit code N.` for an exit, 0 included;
+  - `Killed by SIGNAME.` for a signal;
+  - `Timed out after N ms and stopped.` for a timeout;
+  - `The monitor's deadline of N ms passed; start it again if you still need it.` for a monitor's deadline;
+  - `Cancelled and stopped.` for a cancellation;
+  - `The command was stopped, and Fiber cannot tell whether it completed.` for
+    `indeterminate`.
+
+  A notice that the job could not be opened goes on the line before it. On an
+  output Fiber kept whole, `Output was still held open.` goes on the line after
+  it. `process` and `details` carry the same facts for a client, which should
+  read them there rather than parse the text.
 - `details` is `{ "command": "<command>", "exit_code": N }`, or `"signal"`
   in place of `"exit_code"` when a signal killed it, so a client draws the
-  command and how it ended. When the command is a single built-in `grep`
+  command and how it ended. A confined Linux call that changes a protected
+  path also adds `protected_paths: { restored, failed }`; it lists restored
+  paths and any restore failures. The shell names each changed path in its
+  closing output, without changing the command's exit result. When the command
+  is a single built-in `grep`
   over files that prints lines ("Search"), `details` also holds `"matches"`: one
   `{ "path", "lines" }` per file in the order printed, each line a
   `{ "line", "text", "spans" }`: its line number, its text, and the

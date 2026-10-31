@@ -204,14 +204,21 @@ fn invalid_utf8_drops_one_byte_and_keeps_the_rest() {
 
 #[test]
 fn a_csi_with_a_stray_byte_drops_esc_bracket_and_reads_on() {
-    assert_eq!(feed_all(&[b"\x1b[\x01a"]), vec![Event::Key(Key::Char('a'))]);
+    assert_eq!(
+        feed_all(&[b"\x1b[\x01a"]),
+        vec![Event::Edit(Edit::LineStart), Event::Key(Key::Char('a'))]
+    );
 }
 
 #[test]
-fn control_characters_are_dropped_whole() {
-    // Ctrl+A, and C1's first control as two bytes: neither is a key, and
-    // the byte after each is read.
-    assert_eq!(feed_all(&[b"\x01a"]), vec![Event::Key(Key::Char('a'))]);
+fn bound_control_edits_and_unbound_control_drops_read_on() {
+    // Ctrl+A is a bound line-start edit, and the byte after it is still
+    // read; C1's first control as two bytes is not a key, and the byte
+    // after it is still read.
+    assert_eq!(
+        feed_all(&[b"\x01a"]),
+        vec![Event::Edit(Edit::LineStart), Event::Key(Key::Char('a'))]
+    );
     assert_eq!(feed_all(&[b"\xc2\x80b"]), vec![Event::Key(Key::Char('b'))]);
 }
 
@@ -968,6 +975,8 @@ fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
         ("alt+right", edit(Edit::WordRight)),
         ("ctrl+right", edit(Edit::WordRight)),
         ("alt+f", edit(Edit::WordRight)),
+        ("ctrl+a", edit(Edit::LineStart)),
+        ("ctrl+e", edit(Edit::LineEnd)),
         ("super+left", edit(Edit::LineStart)),
         ("super+right", edit(Edit::LineEnd)),
         ("delete", edit(Edit::Delete)),
@@ -1050,7 +1059,10 @@ fn default_event_matches_the_parity_table() {
             key(Key::Char('\u{c9}')),
         ),
         // Anything else reads as nothing.
-        (modified(Code::Char('a'), ctrl), None),
+        (
+            modified(Code::Char('a'), ctrl),
+            Some(Event::Edit(Edit::LineStart)),
+        ),
         (modified(Code::Space, ctrl), None),
         (modified(Code::Char('o'), alt), None),
         (modified(Code::Space, shift), None),

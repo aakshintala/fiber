@@ -1603,9 +1603,9 @@ fn run_skips_bare_typing_in_the_input_box() {
     assert!(canned.runs.borrow().is_empty());
     assert_eq!(app.draft(), "a A");
     // A modified character still reaches the binding first.
-    assert_eq!(press(&mut app, "ctrl+a"), Effect::None);
+    assert_eq!(press(&mut app, "ctrl+y"), Effect::None);
     // docs/tui.md:2953-2966: an eligible run binding runs before every built-in early path; a handled run settles with nothing built in running.
-    assert_eq!(*canned.runs.borrow(), vec![("ctrl+a".to_owned(), false)]);
+    assert_eq!(*canned.runs.borrow(), vec![("ctrl+y".to_owned(), false)]);
 }
 
 #[test]

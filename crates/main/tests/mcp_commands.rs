@@ -159,7 +159,7 @@ fn a_secret_piped_on_stdin_is_stored_beside_the_configuration() {
 
 #[test]
 fn a_repo_add_is_approved_here_and_skipped_in_a_fresh_home() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let provider = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&provider);
     // The fixture server: `tools.json` and the script the declaration

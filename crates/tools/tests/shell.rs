@@ -60,6 +60,9 @@ fn quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
+#[path = "support/sandbox_home.rs"]
+mod sandbox_home;
+
 fn args(command: &str) -> Map<String, Value> {
     let mut map = Map::new();
     map.insert("command".into(), Value::String(command.into()));
@@ -3294,29 +3297,23 @@ fn a_shell_guards_git_reads_by_repository() {
     );
 }
 
-fn sandbox_settings_for_integration(name: &str) -> tools::SandboxSettings {
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    tools::SandboxSettings {
+fn sandbox_settings_for_integration() -> (sandbox_home::SandboxHome, tools::SandboxSettings) {
+    let home = sandbox_home::SandboxHome::protected();
+    let settings = tools::SandboxSettings {
         enabled: true,
         allow_write: Vec::new(),
         deny_read: Vec::new(),
-        fiber_home: home.join(format!(
-            "fiber-tools-shell-sandbox-{name}-{}",
-            std::process::id()
-        )),
-    }
+        fiber_home: home.fiber_home().to_path_buf(),
+    };
+    (home, settings)
 }
 
 #[test]
 fn a_confined_shell_runs_and_marks_its_effects() {
     let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-run");
     let workspace = dir.path().to_path_buf();
-    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(sandbox_settings_for_integration(
-        "run",
-    )));
+    let (_home, settings) = sandbox_settings_for_integration();
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(settings));
     let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox);
     let mut args = Map::new();
     args.insert("command".into(), Value::String("echo hi".into()));
@@ -3330,22 +3327,120 @@ fn a_confined_shell_runs_and_marks_its_effects() {
     assert!(text(&output).contains("hi"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
+    let root = fakes::TempDir::new("fiber-shell-protected-paths");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    fakes::git::git(&workspace, &["init", "-q"]);
+    // A valid config the discovery reads: the baseline records the shared
+    // config and hooks through git, never as a fallback directory.
+    fakes::git::git(&workspace, &["config", "fiber.probe", "config baseline"]);
+    fakes::git::git(
+        &workspace,
+        &["commit", "-q", "--allow-empty", "-m", "baseline"],
+    );
+    let linked = root.path().join("linked");
+    let linked_arg = linked.to_string_lossy().into_owned();
+    fakes::git::git(&workspace, &["worktree", "add", "--detach", &linked_arg]);
+    std::fs::create_dir_all(workspace.join(".git/hooks")).unwrap();
+    std::fs::create_dir_all(workspace.join(".fiber")).unwrap();
+    std::fs::create_dir_all(linked.join(".fiber")).unwrap();
+    std::fs::write(workspace.join(".git/hooks/pre-commit"), "hook baseline\n").unwrap();
+    std::fs::write(workspace.join(".fiber/state"), "fiber baseline\n").unwrap();
+    std::fs::write(linked.join(".fiber/state"), "linked fiber baseline\n").unwrap();
+    std::fs::write(linked.join("mutation.txt"), "gitdir: /evil\n").unwrap();
+    let linked_pointer = std::fs::read(linked.join(".git")).unwrap();
+    let (home, sandbox) = sandbox_settings_for_integration();
+    let fiber_home = home.fiber_home().to_path_buf();
+    let (protection, recovery) =
+        tools::ProtectedPaths::open(&fiber_home, &workspace).expect("the project baseline opens");
+    assert!(
+        recovery.is_none(),
+        "the first session has no stale baseline"
+    );
+    let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_sandbox(Arc::new(Mutex::new(sandbox)))
+        .with_protection(protection);
+
+    let arguments = args(
+        "tee .git/config .git/hooks/pre-commit .fiber/state ../linked/.git ../linked/.fiber/state < ../linked/mutation.txt",
+    );
+    assert!(
+        shell.effects(&arguments).unwrap().declared.confined,
+        "the test needs a confined Linux call"
+    );
+    let output = run_prepared(
+        &shell,
+        &arguments,
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+
+    assert!(
+        output.error.is_none(),
+        "the command completed: {}",
+        text(&output)
+    );
+    assert!(
+        std::fs::read_to_string(workspace.join(".git/config"))
+            .unwrap()
+            .contains("config baseline"),
+        "the shared config is restored"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join(".git/hooks/pre-commit")).unwrap(),
+        "hook baseline\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join(".fiber/state")).unwrap(),
+        "fiber baseline\n"
+    );
+    assert_eq!(std::fs::read(linked.join(".git")).unwrap(), linked_pointer);
+    assert_eq!(
+        std::fs::read_to_string(linked.join(".fiber/state")).unwrap(),
+        "linked fiber baseline\n"
+    );
+    let report = output
+        .protected_paths
+        .as_ref()
+        .expect("the restore is in the result");
+    // `docs/sandbox.md:64-73` promises restoration and reporting for the
+    // shared Git paths and every registered worktree's pointer and `.fiber/`;
+    // `docs/events.md:683` defines restored paths as workspace-relative.
+    let restored: BTreeSet<&str> = report.restored.iter().map(String::as_str).collect();
+    assert_eq!(
+        restored,
+        BTreeSet::from_iter([
+            ".git/config",
+            ".git/hooks",
+            ".fiber",
+            "../linked/.git",
+            "../linked/.fiber",
+        ])
+    );
+    // `docs/sandbox.md:100-102` promises an unsuccessful restore appears in
+    // the report's failed list.
+    assert!(report.failed.is_empty());
+    // `docs/events.md:697-701` carries warning lines from the report into the
+    // model result, and `docs/sandbox.md:64-73` includes `.git/config`.
+    assert!(text(&output).contains(".git/config"));
+}
+
 #[test]
 fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
     let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-fail");
     let workspace = dir.path().to_path_buf();
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
+    let home_root = fakes::TempDir::new("fiber-tools-shell-sandbox-protected");
+    let fiber_home = home_root.path().join("fiber-home");
+    assert!(fiber_home.starts_with(std::env::temp_dir()));
+    assert!(fiber_home.starts_with(home_root.path()));
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
         enabled: true,
         allow_write: vec![workspace.join("missing-write")],
         deny_read: Vec::new(),
-        fiber_home: home.join(format!(
-            "fiber-tools-shell-sandbox-fail-{}",
-            std::process::id()
-        )),
+        fiber_home,
     }));
     let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
     let effects = shell
@@ -3363,7 +3458,7 @@ fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
 #[test]
 fn an_unconfined_call_reads_what_a_confined_call_is_refused() {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    let root = fakes::TempDir::under(&home, "fiber-tools-shell-unconfined");
+    let root = fakes::TempDir::under(&home, "fiber-tools-shell-sandbox-protected");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let secret = root.path().join("secret");
@@ -3432,7 +3527,8 @@ fn an_unconfined_call_reads_what_a_confined_call_is_refused() {
 fn a_confined_spawn_failure_fails_once_without_an_unconfined_retry() {
     let dir = fakes::TempDir::new("fiber-tools-shell-fail-once");
     let workspace = dir.path().to_path_buf();
-    let sandbox = Arc::new(Mutex::new(sandbox_settings_for_integration("fail-once")));
+    let (_home, settings) = sandbox_settings_for_integration();
+    let sandbox = Arc::new(Mutex::new(settings));
     let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
     let marker = workspace.join("marker");
     let command = format!("touch {} && echo hi", quote(&marker));
@@ -3476,9 +3572,9 @@ struct MacosConfined {
 
 #[cfg(target_os = "macos")]
 impl MacosConfined {
-    fn new(prefix: &str, deny: &[&str]) -> Self {
+    fn new(deny: &[&str]) -> Self {
         let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-        let root = fakes::TempDir::under(&home, prefix);
+        let root = fakes::TempDir::under(&home, "fiber-tools-shell-sandbox-protected");
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let sandbox = Arc::new(Mutex::new(SandboxSettings {
@@ -3520,7 +3616,7 @@ impl MacosConfined {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_confined_shell_enforces_read_write_boundaries() {
-    let confined = MacosConfined::new("fiber-macos-shell-boundaries", &["secret"]);
+    let confined = MacosConfined::new(&["secret"]);
     std::fs::write(confined.root.path().join("secret"), "shh").unwrap();
     std::fs::write(confined.root.path().join("sibling"), "ok").unwrap();
     let effects = confined
@@ -3569,7 +3665,7 @@ fn macos_confined_shell_enforces_read_write_boundaries() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_confined_shell_blocks_symlink_and_child_process_escapes() {
-    let confined = MacosConfined::new("fiber-macos-shell-escapes", &[]);
+    let confined = MacosConfined::new(&[]);
     let effects = confined
         .shell
         .effects(&args("echo hi"))
@@ -3614,7 +3710,7 @@ fn macos_confined_shell_blocks_symlink_and_child_process_escapes() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_confined_shell_refuses_a_configured_credential_file() {
-    let confined = MacosConfined::new("fiber-macos-shell-credential", &["credential"]);
+    let confined = MacosConfined::new(&["credential"]);
     std::fs::write(confined.root.path().join("credential"), "token-shh").unwrap();
     std::fs::write(confined.root.path().join("sibling"), "ok").unwrap();
 
@@ -3646,7 +3742,7 @@ fn macos_confined_shell_refuses_a_configured_credential_file() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_confined_git_commit_works_in_a_checkout() {
-    let confined = MacosConfined::new("fiber-macos-shell-git", &[]);
+    let confined = MacosConfined::new(&[]);
     let repo = &confined.workspace;
     fakes::git::git(repo, &["init", "-q"]);
     fakes::git::git(repo, &["config", "user.email", "confined@example.com"]);
@@ -3694,7 +3790,7 @@ fn macos_confined_git_commit_works_in_a_checkout() {
 #[test]
 fn macos_confined_git_commit_works_in_a_worktree() {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    let root = fakes::TempDir::under(&home, "fiber-macos-shell-worktree");
+    let root = fakes::TempDir::under(&home, "fiber-tools-shell-sandbox-protected");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     fakes::git::git(&repo, &["init", "-q"]);
@@ -3773,7 +3869,7 @@ fn macos_confined_git_commit_works_in_a_worktree() {
 #[test]
 fn macos_confined_shell_cannot_reach_sockets() {
     use std::os::unix::net::UnixListener;
-    let confined = MacosConfined::new("fiber-macos-shell-sockets", &[]);
+    let confined = MacosConfined::new(&[]);
     let effects = confined
         .shell
         .effects(&args("echo hi"))
@@ -3837,7 +3933,7 @@ fn macos_confined_shell_cannot_reach_sockets() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_confined_ps_and_pgrep_fail() {
-    let confined = MacosConfined::new("fiber-macos-shell-ps", &[]);
+    let confined = MacosConfined::new(&[]);
 
     let listed = confined.run("ps -p 1");
     assert!(listed.error.is_some(), "ps fails confined");
@@ -3854,7 +3950,7 @@ fn macos_confined_ps_and_pgrep_fail() {
 #[test]
 fn macos_declared_confined_call_failing_before_spawn_never_runs() {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    let root = fakes::TempDir::under(&home, "fiber-macos-shell-fail-closed");
+    let root = fakes::TempDir::under(&home, "fiber-tools-shell-sandbox-protected");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let sandbox = Arc::new(Mutex::new(SandboxSettings {
@@ -3961,7 +4057,7 @@ fn start_confined(
 #[test]
 fn macos_confined_background_call_moves_only_after_its_marker() {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    let root = fakes::TempDir::under(&home, "fiber-macos-shell-bg");
+    let root = fakes::TempDir::under(&home, "fiber-tools-shell-sandbox-protected");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let jobs = FakeJobs::new(root.path());
@@ -4024,7 +4120,7 @@ fn macos_confined_background_call_moves_only_after_its_marker() {
 #[test]
 fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    let root = fakes::TempDir::under(&home, "fiber-macos-shell-quiet");
+    let root = fakes::TempDir::under(&home, "fiber-tools-shell-sandbox-protected");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let jobs = FakeJobs::new(root.path());
@@ -4105,7 +4201,7 @@ fn macos_confined_quiet_call_hands_off_right_after_its_marker() {
 #[test]
 fn macos_confined_stty_on_a_pty_succeeds() {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    let root = fakes::TempDir::under(&home, "fiber-macos-shell-tty");
+    let root = fakes::TempDir::under(&home, "fiber-tools-shell-sandbox-protected");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let jobs = FakeJobs::new(root.path());
