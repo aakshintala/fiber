@@ -5,11 +5,12 @@
 
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
+use contract::diag::{DebugLog, HttpRequest};
 use fakes::clock::FakeClock;
 use fakes::{Deadline, ProviderServer, Request, Response};
 use serde_json::{Map, Value, json};
@@ -25,17 +26,69 @@ const SESSION: &str = "1868a90c";
 
 struct Setup {
     fake: Arc<FakeClock>,
+    lines: Arc<Lines>,
+}
+
+/// Every `http_request` line the observed servers write, in order.
+#[derive(Default)]
+struct Lines {
+    lines: Mutex<Vec<HttpRequest>>,
+    changed: Condvar,
+}
+
+impl DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+        self.changed.notify_all();
+    }
+}
+
+impl Lines {
+    fn recorded(&self) -> Vec<HttpRequest> {
+        self.lines.lock().unwrap().clone()
+    }
+
+    /// Waits for the observed requests with the suite's real-time deadline.
+    fn await_count(&self, count: usize) -> Vec<HttpRequest> {
+        let deadline = Deadline::after(Duration::from_secs(10));
+        let mut lines = self.lines.lock().unwrap();
+        while lines.len() < count {
+            let (updated, timeout) = self.changed.wait_timeout(lines, deadline.left()).unwrap();
+            lines = updated;
+            assert!(
+                lines.len() >= count || !timeout.timed_out(),
+                "waited {WITHIN:?} for {count} HTTP request lines, got {}",
+                lines.len()
+            );
+        }
+        lines.clone()
+    }
 }
 
 impl Setup {
     fn new() -> Self {
         Self {
             fake: FakeClock::new(),
+            lines: Arc::new(Lines::default()),
         }
     }
 
     fn clock(&self) -> Arc<dyn Clock> {
         self.fake.clone()
+    }
+
+    /// The sink the observed starts write their `mcp` lines to.
+    fn sink(&self) -> Option<Arc<dyn DebugLog>> {
+        Some(Arc::clone(&self.lines) as Arc<dyn DebugLog>)
+    }
+
+    /// Every `mcp` line recorded so far, in order.
+    fn lines(&self) -> Vec<HttpRequest> {
+        self.lines.recorded()
     }
 
     /// Starts the remote server at the fake's `/mcp`, expecting success,
@@ -58,8 +111,41 @@ impl Setup {
                 &clock,
                 timeout,
                 "0.0.0",
+                None,
             )
         })
+        .expect("the remote server starts");
+        let OpenServer { server, listed, .. } = opened;
+        (Arc::new(server), listed)
+    }
+
+    /// As [`Setup::start`], writing one `mcp` line per request the server
+    /// answers on this setup's sink: the observed start.
+    #[track_caller]
+    fn observed(
+        &self,
+        server: &ProviderServer,
+        timeout: Duration,
+    ) -> (Arc<crate::server::Server>, crate::cache::Cached) {
+        let url = format!("{}/mcp", server.url());
+        let clock = self.clock();
+        let debug = self.sink();
+        let opened = fakes::within(
+            "the remote start",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                super::start(
+                    &url,
+                    Arc::new(crate::test_support::FakeTokens::default()),
+                    None,
+                    net::LIMITS,
+                    &clock,
+                    timeout,
+                    "0.0.0",
+                    debug,
+                )
+            },
+        )
         .expect("the remote server starts");
         let OpenServer { server, listed, .. } = opened;
         (Arc::new(server), listed)
@@ -80,6 +166,7 @@ impl Setup {
                 &clock,
                 timeout,
                 "0.0.0",
+                None,
             )
         });
         match started {
@@ -104,6 +191,7 @@ impl Setup {
                 &clock,
                 timeout,
                 "0.0.0",
+                None,
             )
         })
         .expect("the remote server starts");
@@ -173,6 +261,7 @@ fn token_start(
             &clock,
             Duration::from_secs(5),
             "0.0.0",
+            None,
         )
     })
 }
@@ -967,6 +1056,7 @@ fn initialized_ack_wait_ends_at_the_startup_deadline() {
             &clock,
             startup,
             "0.0.0",
+            None,
         ))
         .unwrap();
     });
@@ -1050,6 +1140,7 @@ fn a_pump_401_without_waiters_is_not_sticky() {
         setup.clock(),
         None,
         net::LIMITS,
+        None,
     ));
     let shared = Arc::new(crate::wait::Shared::default());
     let (sender, incoming) = std::sync::mpsc::sync_channel(crate::server::WRITE_QUEUE);
@@ -1115,6 +1206,7 @@ fn startup_deadlines_end_both_token_lock_waits_and_stalled_token_posts() {
                 &clock,
                 Duration::from_secs(5),
                 "0.0.0",
+                None,
             ))
             .unwrap();
         });
@@ -1487,6 +1579,7 @@ fn a_stalled_handshake_misses_its_startup_deadline_and_shuts_its_socket() {
             &clock,
             startup,
             "0.0.0",
+            None,
         );
         done.send(answer).expect("collected");
     });
@@ -2295,6 +2388,7 @@ fn the_pump_does_not_delete_an_expired_session() {
         Setup::new().clock(),
         None,
         net::LIMITS,
+        None,
     ));
     link.set_session(SESSION.to_owned());
     let shared = Arc::new(crate::wait::Shared::default());
@@ -2331,6 +2425,7 @@ fn link_keep_refuses_a_socket_for_a_closed_link() {
         Setup::new().clock(),
         None,
         net::LIMITS,
+        None,
     );
     link.close();
     let (socket, _peer) = socket_pair();
@@ -2354,6 +2449,7 @@ fn link_keep_refuses_a_socket_for_an_abandoned_exchange() {
         Setup::new().clock(),
         None,
         net::LIMITS,
+        None,
     );
     link.abandon(7);
     let (socket, _peer) = socket_pair();
@@ -2377,6 +2473,7 @@ fn link_close_shuts_every_live_socket() {
         Setup::new().clock(),
         None,
         net::LIMITS,
+        None,
     );
     let (first, first_peer) = socket_pair();
     let (second, second_peer) = socket_pair();
@@ -2421,6 +2518,7 @@ fn a_stop_during_a_stalled_handshake_shuts_it_down() {
             &clock,
             Duration::from_secs(5),
             "0.0.0",
+            None,
         );
         done.send(answer).expect("collected");
     });
@@ -2465,6 +2563,7 @@ fn a_start_through_a_proxy_tunnels_to_the_server() {
             &clock,
             Duration::from_secs(5),
             "0.0.0",
+            None,
         )
     })
     .expect("the start tunnels");
@@ -2498,6 +2597,7 @@ fn the_pump_posts_in_order_before_starting_exchanges() {
             &clock,
             Duration::from_secs(5),
             "0.0.0",
+            None,
         );
         done.send(answer).expect("collected");
     });
@@ -2536,6 +2636,7 @@ fn link_debug_redacts_url_secrets_and_the_session_id() {
         Setup::new().clock(),
         None,
         net::LIMITS,
+        None,
     );
     link.set_session("sess-abc-123".to_owned());
     let printed = format!("{:?}", link);
@@ -2720,5 +2821,385 @@ fn a_streamed_elicitation_gets_exactly_one_answer() {
         answer.get("result"),
         Some(&json!({"action": "accept", "content": {"name": "prod"}})),
         "asked means accept with the content",
+    );
+}
+
+/// The `mcp` shape every transport line carries: the fixed purpose with
+/// no identity, host or path, the first attempt, and the stamps ordered.
+fn assert_mcp_shape(line: &HttpRequest) {
+    assert_eq!(line.purpose(), contract::diag::Purpose::Mcp);
+    assert_eq!(line.identity(), None, "no identity: {line:?}");
+    assert_eq!(line.model, None, "no model: {line:?}");
+    assert_eq!(line.host, None, "no host: {line:?}");
+    assert_eq!(line.path, None, "no path: {line:?}");
+    assert_eq!(line.attempt, 1, "every exchange sends once: {line:?}");
+    if let Some(headers) = line.headers_ms {
+        assert!(
+            headers <= line.total_ms,
+            "headers land before the end: {line:?}"
+        );
+    }
+}
+
+#[test]
+fn an_observed_start_writes_one_mcp_line_per_post() {
+    // docs/state.md, "Diagnostic logs": one line per MCP POST the transport sends.
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(standard()).unwrap();
+    let (remote, _) = setup.observed(&server, Duration::from_secs(5));
+    let lines = setup.lines.await_count(3);
+    assert_eq!(
+        lines.len(),
+        3,
+        "initialize, notifications/initialized, tools/list: {lines:?}"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    for (line, request) in lines.iter().zip(requests.iter()) {
+        assert_mcp_shape(line);
+        assert_eq!(
+            line.request_bytes,
+            request.body.len() as u64,
+            "the posted length: {line:?}"
+        );
+    }
+    // The stamps read the frozen fake clock: everything lands at zero.
+    for line in &lines {
+        assert_eq!(line.headers_ms, Some(0), "{line:?}");
+        assert_eq!(line.total_ms, 0, "{line:?}");
+    }
+    assert_eq!(lines[0].status, Some(200));
+    assert!(lines[0].response_bytes > 0, "{:?}", lines[0]);
+    assert_eq!(lines[1].status, Some(202));
+    assert_eq!(lines[1].response_bytes, 0, "a 202 carries no body");
+    // The list streams: the counted bytes are the whole event. The id is
+    // the client's, read back out of the recorded request.
+    let list_id: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    let list_id = list_id.get("id").unwrap().clone();
+    let listed = event(&result(
+        &list_id,
+        json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
+    ));
+    assert_eq!(lines[2].status, Some(200));
+    assert_eq!(
+        lines[2].response_bytes,
+        listed.len() as u64,
+        "the stream's counted bytes: {:?}",
+        lines[2]
+    );
+    let before = lines.len();
+    setup
+        .call(
+            &remote,
+            "tools/call",
+            Duration::from_secs(5),
+            &fakes::CancelToken::new(),
+        )
+        .expect("the call answers");
+    // The answer can reach the caller before the exchange thread writes its final diagnostic line.
+    let lines = setup.lines.await_count(before + 1);
+    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
+    assert_eq!(lines.len(), before + 1, "one call writes one line");
+    let line = lines.last().unwrap();
+    assert_mcp_shape(line);
+    assert_eq!(line.status, Some(200));
+    let calls: Vec<_> = server
+        .requests()
+        .into_iter()
+        .filter(|request| body_method(request) == "tools/call")
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        line.request_bytes,
+        calls[0].body.len() as u64,
+        "the call's posted length: {line:?}"
+    );
+    assert!(line.response_bytes > 0, "{line:?}");
+    fakes::within(
+        "remote stop",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || remote.stop(),
+    );
+}
+
+#[test]
+fn a_refused_exchange_writes_a_statusless_line() {
+    let setup = Setup::new();
+    // A port nothing listens on: the initialize POST is refused.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("the listener binds");
+    let port = listener.local_addr().expect("the address").port();
+    drop(listener);
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    let clock = setup.clock();
+    let debug = setup.sink();
+    let start = fakes::within(
+        "the refused start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+                debug,
+            )
+        },
+    );
+    assert!(start.is_err(), "a refused server never starts");
+    let lines = setup.lines();
+    // docs/state.md, "Diagnostic logs": a failure after the send writes one line without status or headers_ms.
+    assert_eq!(lines.len(), 1, "one refused post writes one line");
+    let line = &lines[0];
+    assert_mcp_shape(line);
+    assert_eq!(line.status, None, "no head ever came: {line:?}");
+    assert_eq!(line.headers_ms, None, "{line:?}");
+    assert_eq!(line.response_bytes, 0, "{line:?}");
+    assert!(line.request_bytes > 0, "{line:?}");
+}
+
+#[test]
+fn an_initialize_4xx_writes_the_post_and_probe_lines() {
+    let setup = Setup::new();
+    let server = ProviderServer::start(vec![
+        Response::status(405, ""),
+        Response::status(404, "gone"),
+    ])
+    .unwrap();
+    let url = format!("{}/mcp", server.url());
+    let clock = setup.clock();
+    let debug = setup.sink();
+    let start = fakes::within(
+        "the probed start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+                debug,
+            )
+        },
+    );
+    assert!(start.is_err(), "a legacy-only server never starts");
+    let lines = setup.lines();
+    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
+    assert_eq!(lines.len(), 2, "the post and its probe: {lines:?}");
+    let post = &lines[0];
+    assert_mcp_shape(post);
+    assert_eq!(post.status, Some(405), "{post:?}");
+    assert_eq!(post.response_bytes, 0, "the 405 body is never read");
+    let posts = server.requests();
+    assert_eq!(posts.len(), 2);
+    assert_eq!(post.request_bytes, posts[0].body.len() as u64, "{post:?}");
+    assert_eq!(posts[1].method, "GET", "the probe follows: {posts:?}");
+    let probe = &lines[1];
+    assert_mcp_shape(probe);
+    assert_eq!(probe.status, Some(404), "{probe:?}");
+    assert_eq!(probe.request_bytes, 0, "a GET posts nothing");
+    assert_eq!(probe.response_bytes, 0, "only a first event counts");
+}
+
+#[test]
+fn the_pump_stop_with_a_session_writes_the_delete_line() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(standard()).unwrap();
+    let (remote, _) = setup.observed(&server, Duration::from_secs(5));
+    let is_goodbye = |request: &HttpRequest| {
+        request.status == Some(200) && request.request_bytes == 0 && request.response_bytes == 0
+    };
+    let before = setup
+        .lines()
+        .iter()
+        .filter(|request| is_goodbye(request))
+        .count();
+    fakes::within(
+        "remote stop",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || remote.stop(),
+    );
+    // The stop joins the pump after its goodbye, so the line is written.
+    let lines = setup.lines();
+    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends. In this fixture only the DELETE has an empty body and a 200 response.
+    let goodbyes: Vec<_> = lines.iter().filter(|request| is_goodbye(request)).collect();
+    assert_eq!(
+        goodbyes.len(),
+        before + 1,
+        "the goodbye writes one line: {lines:?}"
+    );
+    let line = goodbyes.last().unwrap();
+    assert_mcp_shape(line);
+    assert_eq!(line.status, Some(200), "{line:?}");
+    assert_eq!(line.request_bytes, 0, "a DELETE posts nothing");
+    assert_eq!(line.response_bytes, 0, "the goodbye body is never read");
+    assert_eq!(
+        server
+            .requests()
+            .iter()
+            .filter(|request| request.method == "DELETE")
+            .count(),
+        1,
+        "the line is the one goodbye request"
+    );
+}
+
+/// An observed token start: as [`token_start`], writing one `mcp` line
+/// per request on the setup's sink.
+fn token_start_observed(
+    setup: &Setup,
+    url: String,
+    files: Arc<crate::test_support::FakeTokens>,
+) -> Result<OpenServer, StartError> {
+    let clock = setup.clock();
+    let debug = setup.sink();
+    fakes::within(
+        "OAuth remote start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            super::start(
+                &url,
+                files,
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+                debug,
+            )
+        },
+    )
+}
+
+#[test]
+fn a_token_refresh_post_writes_an_mcp_line() {
+    let reply =
+        json!({"access_token":"at-2", "refresh_token":"rt-2", "expires_in":3600}).to_string();
+    let auth = ProviderServer::start(vec![Response::status(200, reply.clone())]).unwrap();
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let opened = token_start_observed(&setup, url.clone(), token_files(&url, &auth.url(), Some(0)))
+        .expect("the expired login renews");
+    assert_eq!(auth.requests().len(), 1, "one refresh post");
+    let lines = setup.lines.await_count(4);
+    // The refresh runs inside the initialize exchange, before its post:
+    // refresh, initialize, notifications/initialized, tools/list.
+    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    let refreshed = lines
+        .iter()
+        .find(|line| line.request_bytes == auth.requests()[0].body.len() as u64)
+        .expect("the refresh post wrote its line");
+    assert_mcp_shape(refreshed);
+    assert_eq!(refreshed.status, Some(200), "{refreshed:?}");
+    assert_eq!(
+        refreshed.response_bytes,
+        reply.len() as u64,
+        "the token reply is read whole: {refreshed:?}"
+    );
+    for line in &lines {
+        assert_mcp_shape(line);
+    }
+    fakes::within(
+        "remote stop",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || opened.server.stop(),
+    );
+    // The stop's goodbye is a fifth line, with no body either way.
+    let lines = setup.lines.await_count(5);
+    // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
+    assert_eq!(lines.len(), 5, "{lines:?}");
+    let goodbye = lines.last().unwrap();
+    assert_mcp_shape(goodbye);
+    assert_eq!(goodbye.status, Some(200), "{goodbye:?}");
+    assert_eq!(goodbye.request_bytes, 0, "{goodbye:?}");
+    assert_eq!(goodbye.response_bytes, 0, "{goodbye:?}");
+}
+
+/// A sink that never debugs: its server stays silent.
+struct Quiet {
+    lines: Mutex<Vec<HttpRequest>>,
+}
+
+impl DebugLog for Quiet {
+    fn debugging(&self) -> bool {
+        false
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+#[test]
+fn an_info_sink_records_nothing() {
+    let setup = Setup::new();
+    let quiet = Arc::new(Quiet {
+        lines: Mutex::new(Vec::new()),
+    });
+    let server = ProviderServer::start_responding(standard()).unwrap();
+    let url = format!("{}/mcp", server.url());
+    let clock = setup.clock();
+    let debug = Some(Arc::clone(&quiet) as Arc<dyn DebugLog>);
+    let opened = fakes::within(
+        "the remote start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+                debug,
+            )
+        },
+    )
+    .expect("the remote server starts");
+    let remote = Arc::new(opened.server);
+    setup
+        .call(
+            &remote,
+            "tools/call",
+            Duration::from_secs(5),
+            &fakes::CancelToken::new(),
+        )
+        .expect("the call answers");
+    fakes::within(
+        "remote stop",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || remote.stop(),
+    );
+    assert!(
+        quiet.lines.lock().unwrap().is_empty(),
+        "an info sink records nothing"
+    );
+}
+
+#[test]
+fn form_body_encodes_like_the_client_sends() {
+    // The query percent-encode set with space as `+`: what `send_form`
+    // would send, byte for byte.
+    assert_eq!(crate::login::form_body(&[]), "");
+    assert_eq!(crate::login::form_body(&[("a", "b")]), "a=b");
+    assert_eq!(
+        crate::login::form_body(&[("grant_type", "refresh_token"), ("space key", "a b")]),
+        "grant_type=refresh_token&space+key=a+b"
+    );
+    assert_eq!(
+        crate::login::form_body(&[("url", "http://127.0.0.1:7/mcp?x=1&y=2")]),
+        "url=http%3A%2F%2F127.0.0.1%3A7%2Fmcp%3Fx%3D1%26y%3D2"
+    );
+    assert_eq!(
+        crate::login::form_body(&[("mark", "!()*'~-._"), ("plus", "a+b"), ("snow", "☃")]),
+        "mark=!()*%27~-._&plus=a%2Bb&snow=%E2%98%83"
     );
 }

@@ -270,7 +270,7 @@ fn a_debug_retry_times_one_request_and_two_attempts() {
     assert_wire(&p7_lines(&setup), &session_id);
     let attempts: Vec<u64> = log_lines(&setup)
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .filter_map(|line| line["data"]["attempt"].as_u64())
         .collect();
     assert_eq!(attempts, vec![1, 2]);

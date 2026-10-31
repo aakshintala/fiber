@@ -280,10 +280,22 @@ fn load_session_extensions(
     seed: extensions::StateSeed,
     set: extensions::RepositorySet,
     launch: &Option<SessionLaunch>,
+    diag: &Arc<log::diag::Diag>,
 ) -> Result<extensions::SessionExtensions, Failure> {
     let Some(launch) = launch else {
+        // The sink installs before the first entry script runs, so an
+        // entry's own `host.http` still records; at info no writer
+        // passes and entry requests stay unobserved.
         return Ok(extensions::SessionExtensions::load_repository(
-            home, config, clock, locks, host, seed, set,
+            home,
+            config,
+            clock,
+            locks,
+            host,
+            seed,
+            set,
+            diag.debugging()
+                .then(|| Arc::clone(diag) as Arc<dyn contract::diag::DebugLog>),
         ));
     };
     let start = extensions::StartContext {
@@ -297,7 +309,7 @@ fn load_session_extensions(
         drive: None,
         event_cursor: launch.event_cursor,
     };
-    let set = extensions::SessionExtensions::load_session(
+    let set = extensions::SessionExtensions::load_session_with_diagnostics(
         home,
         config,
         clock,
@@ -307,6 +319,11 @@ fn load_session_extensions(
         set,
         start,
         BTreeSet::new(),
+        // The sink installs before the first child starts, so a process
+        // callback's own `host.http` still records; at info no writer
+        // passes and process requests stay unobserved.
+        diag.debugging()
+            .then(|| Arc::clone(diag) as Arc<dyn contract::diag::DebugLog>),
     );
     if let Some(notice) = set
         .notices()
@@ -407,6 +424,11 @@ fn parts_inner(
                 Err(failure) => (Err(failure), mcp_servers::Specs::default()),
             };
             let timing = diag.debugging().then(|| diag.timings());
+            // The session's sink observes each MCP request at debug; at
+            // any other level the servers stay silent.
+            let debug = diag
+                .debugging()
+                .then(|| Arc::clone(&diag) as Arc<dyn contract::diag::DebugLog>);
             let artifacts = log::SessionDir::new(&sessions, &launch.id).artifacts();
             let images = crate::builtin::session_images(fiber, &artifacts, timing.clone());
             let pending = mcp_servers::start_session_tools(
@@ -419,6 +441,7 @@ fn parts_inner(
                 repository.skipped.clone(),
                 images,
                 timing,
+                debug,
             )?;
             (Some(mcp), Some(pending))
         }
@@ -440,7 +463,17 @@ fn parts_inner(
         ),
         skipped: repository.skipped.clone(),
     };
-    let set = session_extensions::repository_set(&home, &project, &workspace, &repository, &clock);
+    let set = session_extensions::repository_set(
+        &home,
+        &project,
+        &workspace,
+        &repository,
+        &clock,
+        // A repository copy the load prepares records its binary
+        // download on the session sink; at info no writer passes.
+        diag.debugging()
+            .then(|| Arc::clone(&diag) as Arc<dyn contract::diag::DebugLog>),
+    );
     let (mut providers, notices) =
         Providers::load_repository(&home, &config, &set).map_err(|e| failed(e.code(), e))?;
     startup_notices.extend(notices);
@@ -457,6 +490,7 @@ fn parts_inner(
         seed,
         set,
         &launch,
+        &diag,
     )?;
     drop(extensions_timing);
     // A required repository extension that did not load fails the start

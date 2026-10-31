@@ -17,7 +17,9 @@ use std::thread;
 use std::time::Instant;
 
 use contract::clock::{Clock, Wake};
+use contract::diag::{DebugLog, HttpRequest};
 use contract::tool::Cancel;
+use support::counted::Counted;
 use ureq::config::Config;
 use ureq::http::Uri;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
@@ -237,12 +239,30 @@ pub(super) struct Get<'a> {
     pub(super) pinned: Option<&'a [SocketAddr]>,
     /// The proxy to tunnel through, or `None` for a direct connection.
     pub(super) proxy: Option<ureq::Proxy>,
+    /// Where the request's `http_request` line goes, or `None` when the
+    /// fetch stays silent. A hop that never starts writes no line.
+    pub(super) observe: Option<Observe>,
+}
+
+/// What one GET reports to: the sink the line goes to and the clock its
+/// stamps are read on.
+pub(super) struct Observe {
+    pub(super) debug: Arc<dyn DebugLog>,
+    pub(super) clock: Arc<dyn Clock>,
+    #[cfg(test)]
+    pub(super) headers_received: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Hop {
     /// Sends one GET, then runs `read` on the response head and body. The
     /// body is not read unless `read` reads it. A failure is the message of
-    /// what went wrong, for the caller to read together with any stop.
+    /// what went wrong, for the caller to read together with any stop. When
+    /// the request observes, the hop writes one `web_fetch` line: without
+    /// status, headers time or body bytes when no head came back, and with
+    /// the status, the headers time and the body bytes read however the
+    /// read ended once a head arrived. The stamps start at the client-call
+    /// boundary, so a stop before it writes no line; a stop after a full
+    /// body read keeps the completed line.
     pub(super) fn get<T>(
         self: &Arc<Self>,
         request: &Get<'_>,
@@ -262,10 +282,30 @@ impl Hop {
             Pinned(request.pinned.map(<[SocketAddr]>::to_vec)),
             net::LIMITS,
         );
-        let response = agent
-            .get(request.uri.clone())
-            .call()
-            .map_err(|error| error.to_string())?;
+        // The client-call boundary: everything stamped below starts here,
+        // and only a request that reaches it writes a line.
+        let start = request.observe.as_ref().map(|observe| observe.clock.now());
+        let response = match agent.get(request.uri.clone()).call() {
+            Ok(response) => response,
+            Err(error) => {
+                if let (Some(observe), Some(start)) = (request.observe.as_ref(), start) {
+                    observe_request(observe, start, None, None, 0);
+                }
+                return Err(error.to_string());
+            }
+        };
+        let headers = request.observe.as_ref().map(|observe| {
+            #[cfg(test)]
+            if let Some(signal) = &observe.headers_received {
+                match signal.send(()) {
+                    Ok(()) => {}
+                    Err(std::sync::mpsc::SendError(())) => {
+                        // The test may stop listening; its signal must not fail the fetch.
+                    }
+                }
+            }
+            observe.clock.now()
+        });
         let header = |name: &str| {
             response
                 .headers()
@@ -278,9 +318,43 @@ impl Hop {
             location: header("location"),
             content_length: response.body().content_length(),
         };
-        let mut body = response.into_body().into_reader();
-        read(head, &mut body).map_err(|error| error.to_string())
+        let status = head.status;
+        let mut reader = response.into_body().into_reader();
+        let mut body = Counted::new(&mut reader);
+        let result = read(head, &mut body);
+        if let (Some(observe), Some(start), Some(headers)) =
+            (request.observe.as_ref(), start, headers)
+        {
+            observe_request(observe, start, Some(headers), Some(status), body.consumed());
+        }
+        result.map_err(|error| error.to_string())
     }
+}
+
+/// Writes one `web_fetch` line for a request that reached the client-call
+/// boundary: `status` and the headers stamp only when a head arrived, and
+/// `response_bytes` counting the body bytes read however the read ended. A
+/// sink that stopped debugging writes nothing.
+fn observe_request(
+    observe: &Observe,
+    start: Instant,
+    headers: Option<Instant>,
+    status: Option<u16>,
+    response_bytes: u64,
+) {
+    if !observe.debug.debugging() {
+        return;
+    }
+    let end = observe.clock.now();
+    let millis = |instant: Instant| {
+        u64::try_from(instant.saturating_duration_since(start).as_millis()).unwrap_or(u64::MAX)
+    };
+    let mut line = HttpRequest::for_web_fetch();
+    line.status = status;
+    line.headers_ms = headers.map(millis);
+    line.total_ms = millis(end);
+    line.response_bytes = response_bytes;
+    observe.debug.http_request(&line);
 }
 
 /// Answers every lookup with the addresses fetch has already checked, so no

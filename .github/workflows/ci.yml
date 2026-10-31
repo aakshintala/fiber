@@ -530,6 +530,12 @@ jobs:
       - name: Record the start time
         id: clock
         run: echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - &reclaim-disk
+        name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - *toolchain
       - *cache-restore
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
@@ -578,8 +584,17 @@ jobs:
               package_args+=(-p "$package")
             fi
           done <<<"$PACKAGES"
-          cargo build -q -p fakes --example process-extension
-          cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=warn
+          run_log=/dev/shm/stress-run.log
+          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=warn; } 2>&1 | tee "$run_log"; then
+            :
+          else
+            status=$?
+            echo
+            if grep -sFq 'No space left on device' "$run_log"; then
+              echo "::error title=Runner out of disk::Stress run did not complete: the runner ran out of disk; no test result"
+            fi
+            exit "$status"
+          fi
       - name: Record the stress cost
         if: always()
         env:
@@ -839,6 +854,7 @@ jobs:
       SHARD_TOTAL: ${{ needs.select.outputs.shard_total }}
     steps:
       - *checkout-full
+      - *reclaim-disk
       - *toolchain
       - *cache-restore
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
@@ -889,7 +905,8 @@ jobs:
           )
           # 12 GiB is ample above a normal nextest run and leaves 4 GiB of the 16 GiB runner for the host.
           # OOMPolicy=kill fails the whole scope instead of letting nextest count a killed test as caught.
-          if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}"; then
+          run_log=/dev/shm/mutants-run-$SHARD.log
+          if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}" 2>&1 | tee "$run_log"; then
             :
           else
             status=$?
@@ -900,6 +917,10 @@ jobs:
               awk 'NF { print; exit }' "$last_log"
             else
               echo "No scenario log found in mutants.out/log."
+            fi
+            echo
+            if grep -sFq 'No space left on device' "$run_log" || grep -rqsF 'No space left on device' mutants.out/log; then
+              echo "::error title=Runner out of disk::Mutants shard $SHARD did not complete: the runner ran out of disk; no mutant result"
             fi
             exit "$status"
           fi

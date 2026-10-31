@@ -65,7 +65,17 @@ fn run(
         version: version.to_owned(),
         commit: commit.to_owned(),
     };
-    let names = extensions::install_release(home, &release, clock)?;
+    // The release downloads record on the one-shot writer at debug;
+    // building it is best-effort and never fails the install. Without
+    // one the observed install stays silent, as before.
+    let writer = std::env::current_dir()
+        .ok()
+        .and_then(|workspace| crate::debug_writer::cli_writer(home, &workspace));
+    let observe = extensions::Observe {
+        debug: writer,
+        clock,
+    };
+    let names = extensions::install_release_observed(home, &release, clock, &observe)?;
     // A closed stderr leaves nobody to tell.
     for name in &names {
         writeln!(err, "fiber: installed {}", config::short_name(name)).unwrap_or(());

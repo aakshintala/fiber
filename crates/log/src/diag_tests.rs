@@ -20,12 +20,23 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use contract::clock::Wake;
-use contract::diag::{Op, Purpose};
+use contract::diag::{Op, ProviderPurpose};
 
 use super::*;
 use fakes::Deadline;
 
-type Reader = fn() -> Option<u64>;
+type Reader = fn() -> Option<ResourcesSample>;
+
+/// A deterministic sample: the caller names the peak, and the disk
+/// counters are non-zero, so a writer that hard-codes zeros fails.
+fn sample(peak_kib: u64) -> ResourcesSample {
+    ResourcesSample {
+        peak_kib,
+        current_kib: peak_kib,
+        disk_read_bytes: 4096,
+        disk_write_bytes: 8192,
+    }
+}
 
 /// The wall-clock limit on every channel receive below.
 const LIMIT: Duration = Duration::from_secs(30);
@@ -71,24 +82,16 @@ fn session() -> SessionId {
     SessionId("s_0123456789abcdef".into())
 }
 
-fn request() -> ProviderRequest {
-    ProviderRequest {
-        provider: "fake".into(),
-        model: Some("m".into()),
-        purpose: Purpose::ModelCall,
-        host: Some("127.0.0.1:50731".into()),
-        path: None,
-        status: Some(200),
-        attempt: 1,
-        request_bytes: 2214,
-        response_bytes: 913,
-        headers_ms: Some(41),
-        first_token_ms: None,
-        total_ms: 180,
-        prefix_hashes: None,
-        cache_read: None,
-        cache_write: None,
-    }
+fn request() -> HttpRequest {
+    let mut request = HttpRequest::for_provider("fake", ProviderPurpose::ModelCall);
+    request.model = Some("m".into());
+    request.host = Some("127.0.0.1:50731".into());
+    request.status = Some(200);
+    request.request_bytes = 2214;
+    request.response_bytes = 913;
+    request.headers_ms = Some(41);
+    request.total_ms = 180;
+    request
 }
 
 #[test]
@@ -144,27 +147,35 @@ fn a_session_info_line_has_today_s_bytes_and_creates_logs_mode_0700() {
 #[test]
 fn at_info_debug_lines_write_nothing_and_create_nothing() {
     let home = Home::new("ld-info-quiet");
-    for process in [Process::Hub, Process::Session, Process::Ask, Process::Tui] {
-        let diag = home.diag(process, Level::Info).with_peak(|| Some(7));
+    for process in [
+        Process::Hub,
+        Process::Session,
+        Process::Ask,
+        Process::Tui,
+        Process::Cli,
+    ] {
+        let diag = home
+            .diag(process, Level::Info)
+            .with_resources(|| Some(sample(7)));
         assert!(!diag.debugging());
-        diag.provider_request(&request());
-        diag.peak_memory();
+        diag.http_request(&request());
+        diag.resources();
     }
     assert!(!home.path().join("logs").exists());
 }
 
 #[test]
-fn at_debug_a_provider_request_is_one_line_with_data_last() {
+fn at_debug_an_http_request_is_one_line_with_data_last() {
     let home = Home::new("ld-debug-request");
     let diag = home.diag(Process::Ask, Level::Debug);
     assert!(diag.debugging());
     diag.attach(&SessionId("s_7f3a".into()));
-    diag.provider_request(&request());
+    diag.http_request(&request());
     assert_eq!(
         home.text("ask-s_7f3a.log"),
         "{\"ts\":1700000000000,\"level\":\"debug\",\"process\":\"ask\",\
-         \"session_id\":\"s_7f3a\",\"code\":\"provider_request\",\
-         \"message\":\"A provider request ended.\",\"data\":{\"provider\":\"fake\",\
+         \"session_id\":\"s_7f3a\",\"code\":\"http_request\",\
+         \"message\":\"An HTTP request ended.\",\"data\":{\"provider\":\"fake\",\
          \"model\":\"m\",\"purpose\":\"model_call\",\"host\":\"127.0.0.1:50731\",\
          \"status\":200,\"attempt\":1,\"request_bytes\":2214,\"response_bytes\":913,\
          \"headers_ms\":41,\"total_ms\":180}}\n"
@@ -172,32 +183,38 @@ fn at_debug_a_provider_request_is_one_line_with_data_last() {
 }
 
 #[test]
-fn at_debug_peak_memory_writes_the_reader_s_value_as_given() {
-    let readers: [(Reader, &str); 2] = [(|| Some(0), "0"), (|| Some(11_840), "11840")];
-    for (peak, want) in readers {
+fn at_debug_resources_writes_the_reader_s_values_as_given() {
+    let readers: [(Reader, &str, &str); 2] = [
+        (|| Some(sample(0)), "0", "0"),
+        (|| Some(sample(11_840)), "11840", "11840"),
+    ];
+    for (peak, peak_want, current_want) in readers {
         let home = Home::new("ld-debug-peak");
         let diag = home
             .diag(Process::Hub, Level::Info)
             .with_level(Level::Debug)
-            .with_peak(peak);
-        diag.peak_memory();
+            .with_resources(peak);
+        diag.resources();
         assert_eq!(
             home.text("hub.log"),
             format!(
                 "{{\"ts\":1700000000000,\"level\":\"debug\",\"process\":\"hub\",\
-                 \"code\":\"peak_memory\",\"message\":\"The process's peak memory so far.\",\
-                 \"data\":{{\"peak_kib\":{want}}}}}\n"
+                 \"code\":\"resources\",\"message\":\"The process's memory and disk I/O so far.\",\
+                 \"data\":{{\"peak_kib\":{peak_want},\"current_kib\":{current_want},\
+                 \"disk_read_bytes\":4096,\"disk_write_bytes\":8192}}}}\n"
             ),
-            "{want}"
+            "{peak_want}"
         );
     }
 }
 
 #[test]
-fn a_failed_memory_read_writes_nothing() {
+fn a_failed_resources_read_writes_nothing() {
     let home = Home::new("ld-peak-none");
-    let diag = home.diag(Process::Session, Level::Debug).with_peak(|| None);
-    diag.peak_memory();
+    let diag = home
+        .diag(Process::Session, Level::Debug)
+        .with_resources(|| None);
+    diag.resources();
     assert!(!home.path().join("logs").exists());
 }
 
@@ -291,10 +308,10 @@ fn a_failed_write_is_silent() {
     fs::write(home.path().join("logs"), b"not a directory").unwrap();
     let diag = home
         .diag(Process::Session, Level::Debug)
-        .with_peak(|| Some(1));
+        .with_resources(|| Some(sample(1)));
     diag.line(Severity::Info, None, "extension_log", "x: y");
-    diag.provider_request(&request());
-    diag.peak_memory();
+    diag.http_request(&request());
+    diag.resources();
     assert_eq!(
         fs::read(home.path().join("logs")).unwrap(),
         b"not a directory"
@@ -357,6 +374,26 @@ fn a_line_racing_attach_lands_whole_in_the_file_its_order_implies() {
     assert_eq!(after["session_id"], "s_0123456789abcdef");
 }
 
+/// A one-shot command's writer: `logs/cli-<pid>.log` with `process`
+/// `cli` and no `session_id`, and `attach` leaves its file alone because
+/// such a command never has a session.
+#[test]
+fn a_cli_writer_names_its_pid_file_and_carries_no_session() {
+    let home = Home::new("ld-cli");
+    let diag = home.diag(Process::Cli, Level::Debug);
+    assert!(diag.debugging());
+    diag.attach(&session());
+    diag.line(Severity::Info, None, "first", "First.");
+    diag.resources();
+    let name = pid_file("cli");
+    let text = home.text(&name);
+    for line in text.lines() {
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(parsed["process"], "cli");
+        assert!(parsed.get("session_id").is_none(), "{line}");
+    }
+    assert!(text.contains("\"code\":\"resources\""), "{text}");
+}
 /// `for_session` writes to the session's file with its id and leaves the
 /// original writing the pid-named file with none: the complete contents
 /// of both files, byte for byte.
@@ -404,12 +441,12 @@ fn a_second_writer_waits_for_the_pair() {
     });
     let pair = home
         .diag(Process::Hub, Level::Debug)
-        .with_peak(|| Some(7))
+        .with_resources(|| Some(sample(7)))
         .with_between(between);
     let worker = thread::Builder::new()
         .name("log-test-pair".to_owned())
         .spawn(move || {
-            pair.peak_memory_then_info("hub_stopped", "The hub stopped.");
+            pair.resources_then_info("hub_stopped", "The hub stopped.");
         })
         .unwrap();
     Deadline::after(LIMIT).recv_or_fail(&seam_rx, "the pair pauses between its two appends");
@@ -450,15 +487,16 @@ fn a_second_writer_waits_for_the_pair() {
     Deadline::after(LIMIT).recv_or_fail(&done_rx, "the second writer finishes after the release");
     writer.join().unwrap();
     worker.join().unwrap();
-    // docs/state.md:288-292 promises `peak_memory` just before each
+    // docs/state.md promises `resources` just before each
     // `hub_stopped` at debug; the controlled pause holds the files lock
     // until the release above, so the competing `second` line lands after
     // that documented pair.
     assert_eq!(
         home.text("hub.log"),
         "{\"ts\":1700000000000,\"level\":\"debug\",\"process\":\"hub\",\
-         \"code\":\"peak_memory\",\"message\":\"The process's peak memory so far.\",\
-         \"data\":{\"peak_kib\":7}}\n\
+         \"code\":\"resources\",\"message\":\"The process's memory and disk I/O so far.\",\
+         \"data\":{\"peak_kib\":7,\"current_kib\":7,\
+         \"disk_read_bytes\":4096,\"disk_write_bytes\":8192}}\n\
          {\"ts\":1700000000000,\"level\":\"info\",\"process\":\"hub\",\
          \"code\":\"hub_stopped\",\"message\":\"The hub stopped.\"}\n\
          {\"ts\":1700000000000,\"level\":\"info\",\"process\":\"hub\",\
@@ -466,13 +504,13 @@ fn a_second_writer_waits_for_the_pair() {
     );
 }
 
-/// `peak_memory_then_info` holds one lock across both lines: the seam
+/// `resources_then_info` holds one lock across both lines: the seam
 /// runs between the pair's two appends and reports whether the state
 /// lock is still held, which only the single-lock implementation can
 /// satisfy. No threads, no waits: the property is read directly off
 /// the lock.
 #[test]
-fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
+fn resources_then_info_writes_its_pair_with_nothing_between() {
     let home = Home::new("ld-pair-forced");
     let calls = Arc::new(Mutex::new(Vec::new()));
     let between: Arc<dyn Fn(bool) + Send + Sync> = Arc::new({
@@ -480,9 +518,9 @@ fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
         move |held| calls.lock().unwrap().push(held)
     });
     home.diag(Process::Hub, Level::Debug)
-        .with_peak(|| Some(7))
+        .with_resources(|| Some(sample(7)))
         .with_between(between)
-        .peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
+        .resources_then_info("hub_stopped", "The hub stopped: signal.");
     assert_eq!(*calls.lock().unwrap(), [true]);
     let lines: Vec<serde_json::Value> = fs::read_to_string(home.file("hub.log"))
         .unwrap()
@@ -494,9 +532,12 @@ fn peak_memory_then_info_writes_its_pair_with_nothing_between() {
             .iter()
             .map(|line| line["code"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["peak_memory", "hub_stopped"],
+        ["resources", "hub_stopped"],
     );
     assert_eq!(lines[0]["data"]["peak_kib"], 7);
+    assert_eq!(lines[0]["data"]["current_kib"], 7);
+    assert_eq!(lines[0]["data"]["disk_read_bytes"], 4096);
+    assert_eq!(lines[0]["data"]["disk_write_bytes"], 8192);
 }
 
 /// A clock that counts its monotonic reads, proving `timed` reads none

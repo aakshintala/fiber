@@ -120,7 +120,9 @@ fn approved_url(
 /// unless its current content is approved, with the approval and the URL
 /// read from the same entry (`approved_url`). The hub's `mcp_login`
 /// entry shares this check, so the two cannot diverge (`docs/mcp.md`,
-/// "Servers, their state and the per-server commands").
+/// "Servers, their state and the per-server commands"). Returns the
+/// loaded configuration with the target, so the caller builds its
+/// one-shot writer without a second `Config::load`.
 pub fn login_target(
     home: &Path,
     workspace: &Path,
@@ -128,7 +130,7 @@ pub fn login_target(
     between: &dyn Fn(),
     clock: &Arc<dyn Clock>,
     overrides: &[String],
-) -> Result<String, CliError> {
+) -> Result<(String, Config), CliError> {
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
         home: home.to_path_buf(),
@@ -145,8 +147,9 @@ pub fn login_target(
     };
     if from_repository {
         approved_url(home, workspace, &project, server, &url, between, clock)
+            .map(|url| (url, config))
     } else {
-        Ok(url)
+        Ok((url, config))
     }
 }
 
@@ -168,14 +171,17 @@ pub(crate) fn run_login(
     clock: &Arc<dyn Clock>,
 ) -> Result<(), CliError> {
     let Streams { out: _, err } = streams;
-    let url = login_target(home, workspace, server, between, clock, &[])?;
+    let (url, config) = login_target(home, workspace, server, between, clock, &[])?;
     if remote.has_userinfo(&url) {
         return Err(userinfo(server));
     }
     let key = remote.token_key(&url)?;
     let files = McpTokenFiles::new(home.to_path_buf());
     let files_ref: &dyn TokenFiles = &files;
-    if let Err(error) = remote.login(files_ref, &url, &|url| browser.open(url), &**clock) {
+    // The one-shot writer: `Some` at debug, `None` at info — never
+    // `None`-at-debug on this HTTP path.
+    let debug = crate::debug_writer::debug_writer_for(home, &config, clock);
+    if let Err(error) = remote.login(files_ref, &url, &|url| browser.open(url), &**clock, debug) {
         if error.code == contract::ErrorCode::ConfigInvalid {
             // Only the PKCE refusal reaches here with this code: the
             // `url` and userinfo checks above already ran, so prefixing

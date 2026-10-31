@@ -55,7 +55,9 @@ pub fn dep_dirs(
 /// The VM of the extension `name`, installed in `dir`, set up as a session
 /// runs it: its settings checked, its session, secrets, memory cap and hook
 /// timeout. Its entry script has not run yet. Also returns the notices for
-/// the repository's settings keys its manifest does not let it read.
+/// the repository's settings keys its manifest does not let it read. The
+/// session's diagnostic sink, when debugging, installs before any Lua runs,
+/// so an entry script's `host.http` still records; `None` stays silent.
 #[allow(
     clippy::too_many_arguments,
     reason = "VM startup receives the session's existing services and shared state"
@@ -69,6 +71,7 @@ pub(super) fn start_vm(
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
     state: Arc<crate::host::state::StateRegistry>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> Result<(LuaExtension, Vec<Notice>), Error> {
     let repo: Vec<&str> = manifest.repo_settings.iter().map(String::as_str).collect();
     let (_, ignored) = config.extensions().merged(name, &repo)?;
@@ -80,6 +83,9 @@ pub(super) fn start_vm(
             locks,
         })
         .with_secrets(manifest.secrets.clone());
+    if let Some(debug) = debug {
+        extension = extension.with_diagnostics(debug);
+    }
     // A repository copy reads its own `.fiber-depends`: the predicate
     // below is where those copies live, so a pinned copy never reads a
     // personal install of the same dependency.
@@ -116,6 +122,7 @@ pub(super) fn provider_handles(
     config: &Config,
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> Result<(), Error> {
     if entry.providers.is_empty() {
         return Ok(());
@@ -132,6 +139,7 @@ pub(super) fn provider_handles(
                 clock,
                 locks,
                 session.state.clone(),
+                debug,
             )?;
             session.notices.append(&mut notices);
             let lua = lua.with_browser(session.browser.clone());
@@ -213,6 +221,7 @@ impl SessionExtensions {
                     clock,
                     locks,
                     self.state.clone(),
+                    None,
                 )?;
                 // A disabled provider-only extension's late VM skips its
                 // entry script, as the session's one does: only providers

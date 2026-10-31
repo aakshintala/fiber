@@ -164,12 +164,26 @@ fn register(action: &str, id: &str, args: Value) -> Value {
 /// `hello_marker` before anything else, so the test reads the exact
 /// session identity the owner was spawned under.
 fn tool_hook_plan(hello_marker: &str) -> Value {
+    tool_hook_http_plan(hello_marker, None)
+}
+
+/// As [`tool_hook_plan`], but the hook first sends one `host.http` to
+/// `http_url`: the hook still replaces the content, and the request is
+/// the extension's own fetch on the way through.
+fn tool_hook_http_plan(hello_marker: &str, http_url: Option<&str>) -> Value {
     let tool_branch = json!([
         {"send": {"id": "a-tool", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": "probe-ok"}}},
     ]);
-    let hook_branch = json!([
-        {"send": {"id": "a-hook", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": {"content": "probe-ok|p"}}}},
-    ]);
+    let hook_branch = match http_url {
+        Some(url) => json!([
+            {"send": {"id": "h-http", "command": "call", "args": {"call": "host.http", "args": [{"url": format!("{url}/proc")}]}}},
+            {"read": {"expect": {"kind": "command_accepted", "payload": {"command_id": "h-http"}}}},
+            {"send": {"id": "a-hook", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": {"content": "probe-ok|p"}}}},
+        ]),
+        None => json!([
+            {"send": {"id": "a-hook", "command": "reply", "args": {"request_id": {"$ref": "req.payload.request_id"}, "result": {"content": "probe-ok|p"}}}},
+        ]),
+    };
     let dispatch = json!([
         {"if": {"path": "req.payload.registration", "equals": "t1", "then": tool_branch, "else": [
             {"if": {"path": "req.payload.registration", "equals": "h1", "then": hook_branch}},
@@ -224,6 +238,68 @@ fn process_tool_runs_and_its_after_tool_hook_changes_the_outcome() {
     );
     assert_eq!(completed["changed_by"], json!(["fiber.test/probe"]));
     assert_eq!(outputs_sent(&server), ["probe-ok|p"]);
+}
+
+/// A process extension's own `host.http` records one `extension` line:
+/// the process extension's name with the extension purpose and no
+/// provider, model, host or path, while the hook still changes the
+/// outcome around it.
+#[test]
+fn process_hook_http_records_the_extension_line() {
+    let setup = Setup::new();
+    let server = calling(&[function_call("call_probe", "probe", &json!({}))]);
+    setup.provider(&server);
+    let path = setup.home().join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("the provider wrote config"))
+            .expect("config is JSON");
+    config["diagnostics"] = json!({"level": "debug"});
+    support::write_json(&path, &config);
+    let http = ProviderServer::start_responding(|request| match request.path.as_str() {
+        "/proc" => fakes::Response::status(200, "{}"),
+        _ => fakes::Response::status(500, "unrouted"),
+    })
+    .unwrap();
+    let hello_marker = setup.workspace().join("hello.json");
+    process_with(
+        &setup,
+        "probe",
+        &json!({}),
+        &tool_hook_http_plan(hello_marker.to_str().unwrap(), Some(&http.url())),
+    );
+    let run = ask(&setup, "probe the session");
+    let completed = run.payload("tool_call_completed");
+    assert_eq!(completed["status"], "completed");
+    assert_eq!(
+        completed["content"],
+        json!([{"type": "text", "text": "probe-ok|p"}])
+    );
+    assert_eq!(http.requests().len(), 1);
+    assert_eq!(http.requests()[0].path.as_str(), "/proc");
+    let id = run.lines[0]["session_id"].as_str().unwrap();
+    let text = std::fs::read_to_string(setup.home().join("logs").join(format!("ask-{id}.log")))
+        .expect("the ask log exists");
+    let requests: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a log line is JSON"))
+        .filter(|line: &Value| line["code"] == "http_request")
+        .collect();
+    let extension: Vec<&Value> = requests
+        .iter()
+        .filter(|line| line["data"]["purpose"] == "extension")
+        .collect();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    assert_eq!(extension.len(), 1, "one extension request: {requests:?}");
+    let line = extension[0];
+    assert_eq!(line["data"]["extension"], "fiber.test/probe");
+    assert_eq!(line["data"]["status"], 200);
+    assert!(
+        line["data"].get("provider").is_none(),
+        "no provider: {line}"
+    );
+    assert!(line["data"].get("model").is_none(), "no model: {line}");
+    assert!(line["data"].get("host").is_none(), "no host: {line}");
+    assert!(line["data"].get("path").is_none(), "no path: {line}");
 }
 
 /// The hello a process extension receives carries the session's real

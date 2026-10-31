@@ -16,7 +16,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use contract::diag::{DebugLog, ProviderRequest};
+use contract::diag::{DebugLog, HttpRequest, Identity};
 use contract::events::CacheLifetime;
 use contract::provider::{ModelCall, ModelRequest};
 use fakes::{Deadline, ProviderServer, Response};
@@ -26,7 +26,7 @@ use serde_json::json;
 /// Captures the lines records write.
 struct Capture {
     debugging: bool,
-    lines: Mutex<Vec<ProviderRequest>>,
+    lines: Mutex<Vec<HttpRequest>>,
 }
 
 impl Capture {
@@ -37,7 +37,7 @@ impl Capture {
         })
     }
 
-    fn lines(&self) -> Vec<ProviderRequest> {
+    fn lines(&self) -> Vec<HttpRequest> {
         self.lines.lock().unwrap().clone()
     }
 
@@ -54,7 +54,7 @@ impl DebugLog for Capture {
         self.debugging
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &HttpRequest) {
         self.lines.lock().unwrap().push(request.clone());
     }
 }
@@ -237,9 +237,12 @@ fn each_protocol_writes_one_complete_record() {
         let lines = log.lines();
         assert_eq!(lines.len(), 1, "one call writes one line on {protocol}");
         let line = &lines[0];
-        assert_eq!(line.provider, protocol);
+        assert_eq!(
+            line.identity(),
+            Some(&Identity::Provider(protocol.to_owned()))
+        );
         assert_eq!(line.model.as_deref(), Some("m"));
-        assert_eq!(line.purpose, contract::diag::Purpose::ModelCall);
+        assert_eq!(line.purpose(), contract::diag::Purpose::ModelCall);
         let host = server.url().split_once("://").unwrap().1.to_owned();
         assert_eq!(line.host.as_deref(), Some(host.as_str()), "on {protocol}");
         assert_eq!(line.path.as_deref(), Some(expected_path(protocol)));

@@ -778,7 +778,7 @@ fn build(mut opts: Build) -> World {
     if opts.observe {
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&attempts);
-        let provider_requests = Arc::clone(&provider);
+        let model_calls = Arc::clone(&provider);
         let saw = Arc::clone(&factory_saw);
         let cancel_at = opts.cancel_at_attempt;
         let cancel_signal = Arc::clone(&cancel);
@@ -792,7 +792,7 @@ fn build(mut opts: Build) -> World {
             if cancel_at == Some(seen.lock().unwrap().len()) {
                 cancel_signal.cancel();
             }
-            provider_requests.call(request)
+            model_calls.call(request)
         });
         looped = looped.observed(Some(observe));
         world_attempts = attempts;

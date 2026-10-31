@@ -410,6 +410,11 @@ impl State {
             &self.sources.workspace,
             &scope,
             &now.loader.clock,
+            // A reloaded repository copy's binary download records on
+            // the session sink; at info no writer passes.
+            self.diag
+                .debugging()
+                .then(|| self.diag.clone() as Arc<dyn contract::diag::DebugLog>),
         );
         let mut extensions = self.current.get().reload_repository(
             &self.sources.home,
@@ -417,6 +422,12 @@ impl State {
             now.loader.clock.clone(),
             now.loader.locks.clone(),
             set,
+            // The sink installs before the first entry script runs, so
+            // a reloaded entry's own `host.http` still records; at info
+            // no writer passes and entry requests stay unobserved.
+            self.diag
+                .debugging()
+                .then(|| self.diag.clone() as Arc<dyn contract::diag::DebugLog>),
         );
         // A required repository extension that did not load rejects the
         // reload before anything is published: `current` is unchanged.
