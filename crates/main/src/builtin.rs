@@ -82,6 +82,7 @@ pub(crate) fn builtin(
         delegates,
         skills,
         None,
+        None,
         Default::default(),
         sandbox,
         None,
@@ -104,8 +105,9 @@ pub(crate) fn session_images(
 
 /// One session's built-in tools with an optional image-child timing: the
 /// same registration as [`builtin`], timing each entered image or PDF
-/// count/cut call as `picture.run` when `timing` is present. `images` is
-/// the shared child already used by MCP startup.
+/// count/cut call as `picture.run` when `timing` is present and observing
+/// each `web_fetch` request as `web_fetch` when `debug` is present.
+/// `images` is the shared child already used by MCP startup.
 #[allow(
     clippy::too_many_arguments,
     reason = "one session's built-ins need Fiber home and the recorded executable alongside the session's own paths"
@@ -123,6 +125,7 @@ pub(crate) fn builtin_timed(
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
     timing: Option<Timing>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
     protection: Option<Arc<tools::ProtectedPaths>>,
@@ -175,6 +178,12 @@ pub(crate) fn builtin_timed(
     // One socket client for both session tools: each call connects afresh.
     let sessions: Arc<dyn contract::sessions::Sessions> =
         Arc::new(doors::SessionSockets::new(home, Arc::clone(clock)));
+    let mut web_fetch = tools::WebFetch::new(artifacts.to_path_buf(), Arc::clone(clock));
+    // The session's sink observes each actual request as `web_fetch`; any
+    // other level stays silent.
+    if let Some(debug) = debug {
+        web_fetch = web_fetch.with_diagnostics(debug);
+    }
     let mut built = vec![
         registered(tools::AskUser)?,
         registered(delegates.message())?,
@@ -207,10 +216,7 @@ pub(crate) fn builtin_timed(
         })))?,
         registered(shell)?,
         registered(tools::Skill::new(skills))?,
-        registered(tools::WebFetch::new(
-            artifacts.to_path_buf(),
-            Arc::clone(clock),
-        ))?,
+        registered(web_fetch)?,
         registered(files.write())?,
         registered(jobs::JobsTool::new(Arc::clone(jobs)))?,
     ];

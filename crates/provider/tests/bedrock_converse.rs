@@ -971,7 +971,7 @@ impl contract::diag::DebugLog for Debugging {
         true
     }
 
-    fn provider_request(&self, _: &contract::diag::ProviderRequest) {}
+    fn http_request(&self, _: &contract::diag::HttpRequest) {}
 }
 
 #[test]
@@ -992,14 +992,14 @@ fn an_observed_call_names_its_generation_from_the_request_id_too() {
 
 /// A debug writer that keeps each line a call writes.
 #[derive(Default)]
-struct Kept(std::sync::Mutex<Vec<contract::diag::ProviderRequest>>);
+struct Kept(std::sync::Mutex<Vec<contract::diag::HttpRequest>>);
 
 impl contract::diag::DebugLog for Kept {
     fn debugging(&self) -> bool {
         true
     }
 
-    fn provider_request(&self, line: &contract::diag::ProviderRequest) {
+    fn http_request(&self, line: &contract::diag::HttpRequest) {
         self.0.lock().unwrap().push(line.clone());
     }
 }

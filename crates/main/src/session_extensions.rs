@@ -47,13 +47,15 @@ pub(crate) struct RepositoryScope {
 
 /// Loads the repository set the session starts or reloads from: the
 /// scope's workspace, or the launch directory when it names none, minus
-/// the content the session skipped.
+/// the content the session skipped. A repository extension the load
+/// prepares reports its binary download on `debug`; `None` stays silent.
 pub(crate) fn repository_set(
     home: &Path,
     project: &config::ProjectKey,
     launch: &Path,
     scope: &RepositoryScope,
     clock: &Arc<dyn contract::clock::Clock>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> extensions::RepositorySet {
     let workspace = scope
         .workspace
@@ -64,7 +66,7 @@ pub(crate) fn repository_set(
         .iter()
         .map(|key| (key.name.clone(), key.hash.clone()))
         .collect();
-    extensions::RepositorySet::load(home, project, &workspace, &skipped, fetch(clock))
+    extensions::RepositorySet::load(home, project, &workspace, &skipped, fetch(clock), debug)
 }
 
 /// `extension_required_failed` naming the first missing required

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::{START_BOUND, warm_up, warm_up_within};
+use super::{START_BOUND, WarmedJig, warm_up, warm_up_within};
 use crate::{MUST_SUCCEED_WITHIN, TempDir, fifo};
 
 #[test]
@@ -83,6 +83,36 @@ fn a_start_that_misses_the_bound_names_the_start_not_the_exchange() {
     assert!(
         message.contains("start"),
         "the failure names the start wait, not the exchange: {message}"
+    );
+}
+
+#[test]
+fn warm_warms_before_it_returns() {
+    let binary = PathBuf::from("/bin/sh");
+    let shown = binary.display().to_string();
+    let failed = std::panic::catch_unwind(|| {
+        WarmedJig::warm(binary, &["-c", "exit 3"], 2);
+    })
+    .expect_err("a warm with the wrong exit fails");
+    let message = panic_message(failed);
+    assert!(
+        message.contains(&shown),
+        "the failure names the jig: {message}"
+    );
+    assert!(
+        message.contains("start"),
+        "the failure names the start wait: {message}"
+    );
+}
+
+#[test]
+fn path_yields_the_warmed_path() {
+    let binary = PathBuf::from("/bin/sh");
+    let warmed = WarmedJig::warm(binary.clone(), &["-c", "exit 3"], 3);
+    assert_eq!(
+        warmed.path(),
+        binary.as_path(),
+        "the accessor yields the path the warm covered"
     );
 }
 

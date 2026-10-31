@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use config::{Config, Source};
 use contract::ErrorCode;
+use contract::diag::DebugLog as _;
 use contract::events::{McpServerFailed, Notice, ToolInfo, ToolSource};
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
@@ -281,6 +282,7 @@ pub(crate) fn start_session_tools(
     skipped: Vec<r#loop::OfferKey>,
     images: Arc<dyn contract::images::Images>,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> Result<PendingMcp, Failure> {
     let home = home.to_path_buf();
     let workspace = workspace.to_path_buf();
@@ -314,6 +316,9 @@ pub(crate) fn start_session_tools(
                 &clock,
                 env!("CARGO_PKG_VERSION"),
                 timing,
+                // The session's sink observes each MCP request at
+                // debug; at any other level the servers stay silent.
+                debug,
             );
             Ok((prepared, started))
         })
@@ -332,6 +337,8 @@ pub(crate) fn start_session_tools(
 /// driver shell, with the failures for the log and the running servers for
 /// the session's end. `timing` times every MCP connection attempt the
 /// session starts, now and in the post-offer load; `None` stays untimed.
+/// `debug` observes each `web_fetch` request the session makes; `None`
+/// stays silent.
 #[allow(
     clippy::type_complexity,
     reason = "one session's tools, as builtin's tuple carries them"
@@ -355,6 +362,7 @@ pub(crate) fn session_tools(
     skills: Arc<dyn contract::skills::Skills>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,
     timing: Option<contract::diag::Timing>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
     protection: Option<Arc<tools::ProtectedPaths>>,
@@ -382,6 +390,7 @@ pub(crate) fn session_tools(
         delegates,
         skills,
         timing.clone(),
+        debug,
         shell_read_only,
         sandbox,
         protection,
@@ -587,7 +596,15 @@ impl crate::reload::State {
                 self.log.clock().clone(),
                 Arc::clone(&waiting),
             ),
-            login: mcp_login(self.sources.clone(), waiting, self.log.clock().clone()),
+            login: mcp_login(
+                self.sources.clone(),
+                waiting,
+                self.log.clock().clone(),
+                // The session writer: `Some` at debug, `None` at info.
+                self.diag
+                    .debugging()
+                    .then(|| Arc::clone(&self.diag) as Arc<dyn contract::diag::DebugLog>),
+            ),
             reconnect: reconnect_server(
                 self.sources.clone(),
                 Arc::clone(&self.servers),
@@ -754,11 +771,13 @@ fn fold_server_line(
 /// waiting map, so the `mcp_servers` answer shows `auth_url` while it
 /// waits, and the stored token is picked up by the reconnect the thread
 /// delivers before it answers (`docs/mcp.md`, "Servers, their state and
-/// the per-server commands").
+/// the per-server commands"). The hub keeps its login silent: `debug`
+/// is always `None` here, so the flow writes no `http_request` line.
 fn mcp_login(
     sources: config::Sources,
     waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
     clock: Arc<dyn contract::clock::Clock>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> doors::McpLogin {
     Arc::new(
         move |server: &str, deliver: Arc<dyn Fn(contract::inbox::Delivery) + Send + Sync>| {
@@ -779,7 +798,7 @@ fn mcp_login(
             let finish = |waiting: &Arc<std::sync::Mutex<HashMap<String, Option<String>>>>| {
                 support::lock(waiting).remove(server);
             };
-            let url = match cli::login_target(
+            let (url, _) = match cli::login_target(
                 &sources.home,
                 &sources.workspace,
                 server,
@@ -804,7 +823,8 @@ fn mcp_login(
                 support::lock(&waiting).insert(server.to_owned(), Some(auth_url.to_owned()));
                 extensions::SystemBrowser::default().open(auth_url);
             };
-            let outcome = mcp::login(&files, &url, &present, clock.as_ref());
+            let outcome =
+                mcp::login_observed(&files, &url, &present, clock.as_ref(), debug.clone());
             support::lock(&waiting).insert(server.to_owned(), None);
             if let Err(error) = outcome {
                 finish(&waiting);
@@ -1040,6 +1060,9 @@ fn adopt_server(
         clock,
         env!("CARGO_PKG_VERSION"),
         servers.timing(),
+        // The session's sink follows the reconnect: structs keep their
+        // shape, so it is read from the servers.
+        servers.debug_sink(),
     );
     let records = started
         .failed

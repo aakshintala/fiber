@@ -14,7 +14,7 @@ use crate::Error;
 use crate::git::{Origin, full_name, split};
 use crate::install::{Paths, Provenance, Record, Scratch, commit_all, io, remove, slug, stage};
 use crate::installed::{Damaged, Installed, Lock, lock, read};
-use crate::prepare::prepare;
+use crate::prepare::{Observe, prepare};
 use crate::resolve::{meets, newest, newest_within, pick, root_meets};
 
 /// What is asked for.
@@ -137,9 +137,25 @@ pub struct Plan<'c> {
     scratch: Scratch,
     _lock: Option<Lock>,
     clock: &'c dyn Clock,
+    /// What the commit's binary downloads report on: the sink the
+    /// `extension_release` lines are written to. `None` stays silent.
+    /// Set with [`Plan::with_diagnostics`]; planning itself downloads
+    /// nothing.
+    debug: Option<std::sync::Arc<dyn contract::diag::DebugLog>>,
 }
 
 impl Plan<'_> {
+    /// Carries the commit's binary downloads on `debug`: the sink the
+    /// `extension_release` lines are written to. Planning itself
+    /// downloads nothing, so this changes no plan.
+    pub fn with_diagnostics(
+        mut self,
+        debug: Option<std::sync::Arc<dyn contract::diag::DebugLog>>,
+    ) -> Self {
+        self.debug = debug;
+        self
+    }
+
     /// The extensions to install, the one asked for and its dependencies.
     pub fn items(&self) -> impl Iterator<Item = &Item> {
         self.items.values()
@@ -161,7 +177,11 @@ impl Plan<'_> {
     /// Returns their names, the one asked for
     /// first.
     pub fn commit(mut self) -> Result<Vec<String>, Error> {
-        self.commit_run(|manifest, target, clock| prepare(target, manifest, clock))
+        let observe = Observe {
+            debug: self.debug.clone(),
+            clock: self.clock,
+        };
+        self.commit_run(move |manifest, target, clock| prepare(target, manifest, clock, &observe))
     }
 
     /// Puts every extension in place like [`Plan::commit`], but every
@@ -303,6 +323,7 @@ fn empty<'c>(home: &Path, clock: &'c dyn Clock) -> Result<Plan<'c>, Error> {
         scratch,
         _lock: Some(lock),
         clock,
+        debug: None,
     })
 }
 

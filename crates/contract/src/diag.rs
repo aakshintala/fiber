@@ -1,5 +1,5 @@
 //! The debug level's seam (`docs/state.md`, "Diagnostic logs"): what one
-//! `provider_request` line records, the operations an `op_timing` line may
+//! `http_request` line records, the operations an `op_timing` line may
 //! name, and the sinks a caller hands them to. Like
 //! [`crate::clock::Clock`], it defines the seam and contains no behaviour;
 //! `log::diag::Diag` writes the lines.
@@ -32,7 +32,26 @@ pub struct PrefixHashes {
     pub messages: Vec<String>,
 }
 
-/// Why Fiber made a provider request.
+/// Whose request it was: exactly one identity per line. A provider's
+/// purposes carry the provider's registered name; `extension` carries
+/// the extension's registered name; every other purpose carries none.
+/// One enum, so a line cannot name both (`docs/code-quality.md`,
+/// "Types").
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Identity {
+    /// A provider's request: `model_call`, `model_list`, `quota`,
+    /// `token_refresh` or `cost`.
+    Provider(String),
+    /// One Lua or process `host.http` call outside a provider function.
+    Extension(String),
+}
+
+/// Why Fiber made an HTTP request. A provider function keeps the
+/// provider purpose it already had; every Lua or process `host.http`
+/// call outside a provider function records `Extension`, each MCP-client
+/// request records `Mcp`, and release tag, checksum and binary downloads
+/// record `ExtensionRelease`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Purpose {
@@ -46,21 +65,78 @@ pub enum Purpose {
     TokenRefresh,
     /// A provider's `cost()` lookup.
     Cost,
+    /// One `web_fetch` request: each actual HTTP request, including each
+    /// redirect hop, writes its own line.
+    WebFetch,
+    /// One MCP-client request: each POST, and each GET or DELETE the
+    /// streamable HTTP transport sends, plus login, discovery and token
+    /// requests.
+    Mcp,
+    /// One Lua or process `host.http` call outside a provider function:
+    /// a hook, command, timer, tool or the entry script.
+    Extension,
+    /// One extension release tag lookup, checksum or binary download.
+    ExtensionRelease,
 }
 
-/// The `data` of one `provider_request` line. The fields serialize in the
+/// A provider-only purpose. A provider identity cannot be paired with
+/// `web_fetch`, `mcp`, `extension` or `extension_release`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderPurpose {
+    /// A model call: a turn's, the reviewer's or a cache-warming refresh.
+    ModelCall,
+    /// A provider's model-list refresh.
+    ModelList,
+    /// A quota read.
+    Quota,
+    /// An OAuth token refresh.
+    TokenRefresh,
+    /// A provider's `cost()` lookup.
+    Cost,
+}
+
+impl From<ProviderPurpose> for Purpose {
+    fn from(purpose: ProviderPurpose) -> Self {
+        match purpose {
+            ProviderPurpose::ModelCall => Self::ModelCall,
+            ProviderPurpose::ModelList => Self::ModelList,
+            ProviderPurpose::Quota => Self::Quota,
+            ProviderPurpose::TokenRefresh => Self::TokenRefresh,
+            ProviderPurpose::Cost => Self::Cost,
+        }
+    }
+}
+
+impl Purpose {
+    /// The eligible purpose of a provider `function` name (`models`,
+    /// `quota`, `credential` or `cost`): `sign` and anything else records
+    /// nothing, as the Lua and process adapters' silence shows.
+    pub fn for_provider_function(function: &str) -> Option<ProviderPurpose> {
+        match function {
+            "models" => Some(ProviderPurpose::ModelList),
+            "quota" => Some(ProviderPurpose::Quota),
+            "credential" => Some(ProviderPurpose::TokenRefresh),
+            "cost" => Some(ProviderPurpose::Cost),
+            _ => None,
+        }
+    }
+}
+
+/// The `data` of one `http_request` line. The fields serialize in the
 /// order declared here, and an absent option is left out, never `null`.
 /// Nothing here may hold a credential, header value, query string, prompt or
 /// model text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ProviderRequest {
-    /// The provider's name.
-    pub provider: String,
+pub struct HttpRequest {
+    /// Whose request it was, absent on purposes that carry no identity.
+    /// Flattened, so the wire keeps the `provider` or `extension` key.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    identity: Option<Identity>,
     /// The model, on a model call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Why the request was made.
-    pub purpose: Purpose,
+    /// Why the request was made. Set only by the matching constructor.
+    purpose: Purpose,
     /// The URL's authority, without userinfo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
@@ -98,14 +174,92 @@ pub struct ProviderRequest {
     pub cache_write: Option<BTreeMap<String, u64>>,
 }
 
-/// Where debug lines go. `provider_request` writes nothing when
+/// Builds one `HttpRequest` skeleton per purpose class: identity and
+/// purpose are fixed, every other field starts absent or zero and the
+/// caller stamps the request's own values. Provider purposes keep the
+/// provider name and never an extension; `web_fetch` and `mcp` carry no
+/// identity, model, host or path; `extension` carries the extension's
+/// registered name; `extension_release` carries the sanitized host and
+/// path of a release URL, which holds a tag and an asset name and no
+/// secret.
+impl HttpRequest {
+    /// The identity fixed by this request's constructor.
+    pub fn identity(&self) -> Option<&Identity> {
+        self.identity.as_ref()
+    }
+
+    /// The purpose fixed by this request's constructor.
+    pub fn purpose(&self) -> Purpose {
+        self.purpose
+    }
+
+    /// One request on a provider's purposes: `model_call`, `model_list`,
+    /// `quota`, `token_refresh` or `cost`.
+    pub fn for_provider(provider: impl Into<String>, purpose: ProviderPurpose) -> Self {
+        Self {
+            identity: Some(Identity::Provider(provider.into())),
+            purpose: purpose.into(),
+            ..Self::for_web_fetch()
+        }
+    }
+
+    /// One `web_fetch` request.
+    pub fn for_web_fetch() -> Self {
+        Self {
+            identity: None,
+            model: None,
+            purpose: Purpose::WebFetch,
+            host: None,
+            path: None,
+            status: None,
+            attempt: 1,
+            request_bytes: 0,
+            response_bytes: 0,
+            headers_ms: None,
+            first_token_ms: None,
+            total_ms: 0,
+            prefix_hashes: None,
+            cache_read: None,
+            cache_write: None,
+        }
+    }
+
+    /// One MCP-client request.
+    pub fn for_mcp() -> Self {
+        Self {
+            purpose: Purpose::Mcp,
+            ..Self::for_web_fetch()
+        }
+    }
+
+    /// One `host.http` call outside a provider function.
+    pub fn for_extension(extension: impl Into<String>) -> Self {
+        Self {
+            identity: Some(Identity::Extension(extension.into())),
+            purpose: Purpose::Extension,
+            ..Self::for_web_fetch()
+        }
+    }
+
+    /// One extension release tag lookup, checksum or binary download.
+    pub fn for_extension_release(host: Option<String>, path: Option<String>) -> Self {
+        Self {
+            purpose: Purpose::ExtensionRelease,
+            host,
+            path,
+            ..Self::for_web_fetch()
+        }
+    }
+}
+
+/// Where debug lines go. `http_request` writes nothing when
 /// [`DebugLog::debugging`] is false, so a caller may skip building the value.
 pub trait DebugLog: Send + Sync {
     /// Whether debug lines are written.
     fn debugging(&self) -> bool;
 
-    /// Writes one `provider_request` line, when debugging.
-    fn provider_request(&self, request: &ProviderRequest);
+    /// Writes one `http_request` line, when debugging.
+    fn http_request(&self, request: &HttpRequest);
 }
 
 /// Builds one observed model call for `request`: the loop calls the

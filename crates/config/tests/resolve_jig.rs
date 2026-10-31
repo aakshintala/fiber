@@ -11,7 +11,6 @@ mod common;
 
 use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -30,18 +29,19 @@ const JIG_DEADLINE: Duration = Duration::from_secs(50);
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/resolve`), so the test starts no cargo and
-/// waits on no build lock.
-fn example_path() -> PathBuf {
+/// waits on no build lock. Warming before returning means every exec site
+/// holds only a warmed path.
+fn example_path() -> fakes::WarmedJig {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.join("examples").join("resolve")
+    fakes::WarmedJig::warm(path.join("examples").join("resolve"), &[], 1)
 }
 
 #[track_caller]
 fn resolve(setup: &Setup, args: &[&str]) -> Output {
-    fakes::warm_up(&example_path(), &[], 1);
-    let child = Command::new(example_path())
+    let warmed = example_path();
+    let child = Command::new(warmed.path())
         .arg(setup.workspace())
         .arg(PROJECT)
         .args(args)

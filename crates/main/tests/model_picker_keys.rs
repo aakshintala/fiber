@@ -578,3 +578,204 @@ fn hovering_a_home_chip_tints_it_and_moving_off_restores_it() {
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
 }
+
+/// Installs a Lua provider `cat` whose entry script and model list each
+/// come over one `host.http` fetch, with a credential-presence env key,
+/// a Lua credential callback and a silent signer, and makes `cat/m1` the configured model: the picker
+/// catalogue answers from the fake server, so a catalogue load is the
+/// entry's fetch plus the models fetch.
+fn install_lua_catalogue_provider(setup: &Setup, server_url: &str, debug: bool) {
+    let source = setup.root.path().join("luasrc");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": "cat", "version": "0.1.0", "fiber": "0.1.0", "api": 1,
+                "providers": {"cat": [format!("{server_url}/v1")]}}),
+    );
+    fs::create_dir_all(source.join("providers")).unwrap();
+    fs::write(
+        source.join("init.lua"),
+        format!("local r = host.http({{ url = \"{server_url}/lua-entry\" }})\n"),
+    )
+    .unwrap();
+    fs::write(
+        source.join("providers/cat.lua"),
+        format!(
+            "fiber.provider(\"cat\", {{\n\
+               models = {{ timeout = 60000, run = function()\n\
+                 local r = host.http({{ url = \"{server_url}/lua-models\" }})\n\
+                 return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{server_url}/v1\", context_window = 100000 }}}}\n\
+               end }},\n\
+               credential = {{ timeout = 60000, run = function()\n\
+                 return {{ token = \"tok\", expires_at = 1893456000 }}\n\
+               end }},\n\
+               sign = {{ timeout = 60000, run = function(request) return {{}} end }},\n\
+             }})\n"
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let mut config = json!({
+        "model": "cat/m1",
+        "hub": {"idle_exit_ms": 200},
+        "providers": {"cat": {"credentials": {"default": {"env": "FIBER_TEST_CAT_KEY"}}}}
+    });
+    if debug {
+        config["diagnostics"] = json!({"level": "debug"});
+    }
+    support::write_json(&setup.home().join("config.json"), &config);
+}
+
+/// Every diagnostic line under the home's `logs/`, parsed.
+fn all_log_lines(setup: &Setup) -> Vec<Value> {
+    let mut lines = Vec::new();
+    let logs = setup.home().join("logs");
+    if !logs.exists() {
+        return lines;
+    }
+    let mut files: Vec<_> = fs::read_dir(&logs)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    files.sort();
+    for path in files {
+        let text = fs::read_to_string(&path).unwrap();
+        for line in text.lines() {
+            lines.push(serde_json::from_str(line).unwrap());
+        }
+    }
+    lines
+}
+
+/// Opens the picker on a Lua catalogue and quits: the picker shows the
+/// fetched `m1`, and the closed run exits cleanly.
+fn open_catalogue_and_quit(setup: &Setup) {
+    let mut run = Run::spawn(
+        setup,
+        120,
+        32,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_CAT_KEY", "sk-test"),
+        ],
+    );
+    run.ready();
+    run.wait_screen("home with its chip", |screen| shows(screen, "[cat/m1]"));
+    run.write(b"\x0c");
+    run.wait_screen("the open picker", |screen| shows(screen, "Type to search"));
+    run.wait_screen("the answered catalogue", |screen| {
+        shows(screen, "m1") && !shows(screen, "Reading the model lists")
+    });
+    run.write(b"\x1b[27u");
+    run.wait_screen("home again", |screen| {
+        !shows(screen, "Type to search") && shows(screen, "[cat/m1]")
+    });
+    run.write(b"\x03\x03");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// A TUI catalogue refresh at debug records the models fetch: the
+/// production `Process::Tui` sink reaches the provider's `models()`
+/// function, writing one `model_list` line with the provider's name and
+/// no `extension`, `model`, `host` or `path`.
+#[test]
+fn tui_catalogue_records_the_entry_fetch_at_debug() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(|request| match request.path.as_str() {
+        "/lua-models" | "/lua-entry" => fakes::Response::status(200, "{}"),
+        _ => fakes::Response::status(500, "unrouted"),
+    })
+    .unwrap();
+    install_lua_catalogue_provider(&setup, &server.url(), true);
+    open_catalogue_and_quit(&setup);
+    assert!(
+        server
+            .requests()
+            .iter()
+            .any(|request| request.path.as_str() == "/lua-models"),
+        "the catalogue fetched the models"
+    );
+    assert!(
+        server
+            .requests()
+            .iter()
+            .any(|request| request.path.as_str() == "/lua-entry"),
+        "the catalogue load ran the entry"
+    );
+    let lines = all_log_lines(&setup);
+    let fetched: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "model_list")
+        .collect();
+    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
+    assert_eq!(fetched.len(), 1, "one models fetch: {fetched:?}");
+    let line = fetched[0];
+    assert_eq!(line["data"]["provider"], "cat");
+    assert_eq!(line["data"]["status"], 200);
+    assert!(
+        line["data"].get("extension").is_none(),
+        "no extension: {line}"
+    );
+    assert!(line["data"].get("model").is_none(), "no model: {line}");
+    assert!(line["data"].get("host").is_none(), "no host: {line}");
+    assert!(line["data"].get("path").is_none(), "no path: {line}");
+    let entered: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "extension")
+        .collect();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    assert_eq!(entered.len(), 1, "one entry fetch: {entered:?}");
+    let line = entered[0];
+    assert_eq!(line["data"]["extension"], "cat");
+    assert_eq!(line["data"]["status"], 200);
+    assert!(
+        line["data"].get("provider").is_none(),
+        "no provider: {line}"
+    );
+    assert!(line["data"].get("model").is_none(), "no model: {line}");
+    assert!(line["data"].get("host").is_none(), "no host: {line}");
+    assert!(line["data"].get("path").is_none(), "no path: {line}");
+}
+
+/// A TUI catalogue refresh at info records nothing: the picker still
+/// answers from the same fetch, but no writer observes it.
+#[test]
+fn tui_catalogue_stays_silent_at_info() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(|request| match request.path.as_str() {
+        "/lua-models" | "/lua-entry" => fakes::Response::status(200, "{}"),
+        _ => fakes::Response::status(500, "unrouted"),
+    })
+    .unwrap();
+    install_lua_catalogue_provider(&setup, &server.url(), false);
+    open_catalogue_and_quit(&setup);
+    assert!(
+        server
+            .requests()
+            .iter()
+            .any(|request| request.path.as_str() == "/lua-models"),
+        "the catalogue fetched the models"
+    );
+    let lines = all_log_lines(&setup);
+    let requests: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "http_request")
+        .collect();
+    assert!(
+        requests.is_empty(),
+        "no request records at info: {requests:?}"
+    );
+}
