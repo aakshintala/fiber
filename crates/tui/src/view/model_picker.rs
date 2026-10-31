@@ -168,16 +168,6 @@ fn id_spans(id: &str, hits: &[bool]) -> Vec<Span<'static>> {
     spans
 }
 
-/// The id spans for indexes in `hits`, which are sorted by character.
-fn id_spans_at(id: &str, hits: &[usize]) -> Vec<Span<'static>> {
-    let flags = id
-        .chars()
-        .enumerate()
-        .map(|(at, _)| hits.binary_search(&at).is_ok())
-        .collect::<Vec<_>>();
-    id_spans(id, &flags)
-}
-
 /// One choosing model's first row: the gutter, the id in `accent`,
 /// each role dim in brackets, "● current" bold in `accent` on the
 /// session's model, "· scoped" dim while every model shows, and the

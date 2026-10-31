@@ -382,7 +382,7 @@ fn logged_out_rows_follow_models_and_filter_by_provider_name() {
     type_filter(&mut app, "zed");
     let view = app.model_picker_view().expect("open");
     assert_eq!(view.logged_out.len(), 1);
-    assert_eq!(view.logged_out[0].hits, [0, 1, 2]);
+    assert_eq!(view.logged_out[0].hits, [true, true, true, false]);
     assert!(!view.no_match);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);

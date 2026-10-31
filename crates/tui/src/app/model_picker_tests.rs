@@ -1081,7 +1081,7 @@ fn focus_logged_out(app: &mut App, login: bool) {
         assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     }
     assert_eq!(
-        app.model_picker.logout_target(),
+        app.model_picker.logged_out_target(),
         Some(("zed".to_owned(), login))
     );
 }
@@ -1165,7 +1165,7 @@ fn a_login_handoff_during_a_remote_install_keeps_the_picker_and_reports_the_guar
     );
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     assert_eq!(
-        app.model_picker.logout_target(),
+        app.model_picker.logged_out_target(),
         Some(("zed".to_owned(), true))
     );
 

@@ -14,6 +14,7 @@ use super::{
 use crate::app::{App, Effect};
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry, Price};
 use crate::keys::{Edit, Key, Mouse, MouseKind};
+use crate::model_picker::{InstallRow, PickerView, Progress};
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
 use crate::theme::Role;
@@ -678,6 +679,43 @@ fn page_steps_cover_the_window_less_one() {
     assert_eq!(page_step(&view, 48), 4);
     // A short screen fits one model: a page moves one.
     assert_eq!(page_step(&view, 10), 1);
+}
+
+#[test]
+fn failed_install_error_rows_take_space_in_the_focus_window() {
+    // A failed install keeps its error row below the provider (`docs/tui.md:740-742`).
+    let view = PickerView {
+        filter: String::new(),
+        count: String::new(),
+        toggle: None,
+        buttons_at: 1,
+        sections: Vec::new(),
+        no_match: false,
+        status: Vec::new(),
+        footer: Vec::new(),
+        refresh: true,
+        spinner: String::new(),
+        focused: Some(2),
+        top: 0,
+        logged_out: Vec::new(),
+        installs: vec![
+            InstallRow {
+                at: 2,
+                provider: "failed".to_owned(),
+                hits: Vec::new(),
+                progress: Some(Progress::Failed("no network".to_owned())),
+            },
+            InstallRow {
+                at: 3,
+                provider: "next".to_owned(),
+                hits: Vec::new(),
+                progress: None,
+            },
+        ],
+        outcomes: Vec::new(),
+    };
+
+    assert_eq!(window(&view, 2), (0, 1));
 }
 
 #[test]

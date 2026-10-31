@@ -369,6 +369,16 @@ fn logged_out_rows_list_in_the_choosing_picker_only() {
 }
 
 #[test]
+fn no_match_does_not_admit_hidden_logged_out_rows_outside_choose_mode() {
+    for mode in [Mode::Thinking, Mode::Scope] {
+        let mut picker = with_logged_out(picker(mode, &[], &[]), &[("alpha", true)]);
+        picker.push_query('q');
+        assert!(picker.shown_logged_out().is_empty());
+        assert!(!picker.layout().unwrap().contains(&RowAt::NoMatch));
+    }
+}
+
+#[test]
 fn a_query_filters_logged_out_rows_by_provider_name() {
     let mut picker = with_logged_out(
         picker(Mode::Choose, &[], &[]),
@@ -552,7 +562,7 @@ fn the_walk_orders_models_logged_out_rows_then_installs() {
 }
 
 #[test]
-fn logout_target_and_click_distinguish_login_capability_and_name_cell() {
+fn logged_out_target_and_click_distinguish_login_capability_and_name_cell() {
     let mut picker = with_logged_out(
         picker(Mode::Choose, &[], &[]),
         &[("alpha", true), ("vertex", false)],
@@ -560,14 +570,17 @@ fn logout_target_and_click_distinguish_login_capability_and_name_cell() {
     let alpha = row_of(&picker, &RowAt::LoggedOut("alpha".to_owned()));
     let vertex = row_of(&picker, &RowAt::LoggedOut("vertex".to_owned()));
 
-    assert_eq!(picker.logout_click(alpha, 1), None);
-    assert_eq!(picker.logout_target(), Some(("alpha".to_owned(), true)));
+    assert_eq!(picker.logged_out_click(alpha, 1), None);
+    assert_eq!(picker.logged_out_target(), Some(("alpha".to_owned(), true)));
     assert_eq!(
-        picker.logout_click(alpha, 0),
+        picker.logged_out_click(alpha, 0),
         Some(("alpha".to_owned(), true))
     );
-    assert_eq!(picker.logout_click(vertex, 0), None);
-    assert_eq!(picker.logout_target(), Some(("vertex".to_owned(), false)));
+    assert_eq!(picker.logged_out_click(vertex, 0), None);
+    assert_eq!(
+        picker.logged_out_target(),
+        Some(("vertex".to_owned(), false))
+    );
 }
 
 #[test]
@@ -578,10 +591,23 @@ fn pruning_keeps_logged_out_focus_until_both_provider_lists_drop_it() {
     );
     picker.go(Stop::LoggedOut("beta".to_owned()));
     picker.prune_focus();
-    assert_eq!(picker.logout_target(), Some(("beta".to_owned(), true)));
+    assert_eq!(picker.logged_out_target(), Some(("beta".to_owned(), true)));
 
     picker.catalogue.logged_out.clear();
     picker.prune_focus();
+    assert_eq!(picker.installs.focus, None);
+    assert_eq!(picker.focus(), Some(Stop::Model(0)));
+}
+
+#[test]
+fn pruning_keeps_a_catalogued_install_focus_hidden_by_the_query() {
+    let mut picker = picker(Mode::Choose, &["acme/m1"], &["openai"]);
+    picker.go(Stop::Install("openai".to_owned()));
+    picker.push_query('a');
+
+    picker.prune_focus();
+
+    assert_eq!(picker.installs.focus.as_deref(), Some("openai"));
     assert_eq!(picker.focus(), Some(Stop::Model(0)));
 }
 
@@ -709,7 +735,7 @@ fn selecting_a_frame_logged_out_row_focuses_it_without_installing() {
     );
     let row = row_of(&picker, &RowAt::LoggedOut("beta".to_owned()));
     picker.select_frame_row(row);
-    assert_eq!(picker.logout_target(), Some(("beta".to_owned(), true)));
+    assert_eq!(picker.logged_out_target(), Some(("beta".to_owned(), true)));
     assert_eq!(picker.install_target(), None);
     assert!(picker.choice(false).is_none());
 }

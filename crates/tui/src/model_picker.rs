@@ -209,8 +209,8 @@ pub(crate) struct LoggedOutRow {
     pub(crate) at: usize,
     /// The provider's name, control characters turned to spaces.
     pub(crate) provider: String,
-    /// Character indexes matched by the query.
-    pub(crate) hits: Vec<usize>,
+    /// One flag per provider-name character: whether the query matched it.
+    pub(crate) hits: Vec<bool>,
     /// The credential sources to set, only for providers without `/login` support.
     pub(crate) hint: Option<String>,
 }
@@ -1157,11 +1157,7 @@ impl ModelPicker {
                     logged_out.push(LoggedOutRow {
                         at,
                         provider: controls_to_space(provider),
-                        hits: filter::id_hits(provider, &open.query)
-                            .into_iter()
-                            .enumerate()
-                            .filter_map(|(index, hit)| hit.then_some(index))
-                            .collect(),
+                        hits: filter::id_hits(provider, &open.query),
                         hint: (!row.login).then(|| controls_to_space(&row.hint)),
                     });
                 }

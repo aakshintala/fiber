@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use super::overlay::Row;
-use super::{gutter, id_spans, id_spans_at};
+use super::{gutter, id_spans};
 use crate::format::width as cells;
 use crate::model_picker::{InstallRow, LoggedOutRow, Outcome, Progress, credential_text};
 use crate::mouse::TargetId;
@@ -36,7 +36,7 @@ pub(super) fn logged_out_row(row: &LoggedOutRow, focused: bool) -> Row {
         None => " · not logged in".to_owned(),
     };
     let mut spans = vec![gutter(focused)];
-    spans.extend(id_spans_at(&row.provider, &row.hits));
+    spans.extend(id_spans(&row.provider, &row.hits));
     spans.push(Span::styled(suffix, dim()));
     Row {
         spans,

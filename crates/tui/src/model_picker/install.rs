@@ -288,7 +288,7 @@ impl ModelPicker {
     }
 
     /// The focused logged-out provider and whether `/login` supports it.
-    pub(crate) fn logout_target(&self) -> Option<(String, bool)> {
+    pub(crate) fn logged_out_target(&self) -> Option<(String, bool)> {
         let Stop::LoggedOut(name) = self.focus()? else {
             return None;
         };
@@ -302,20 +302,18 @@ impl ModelPicker {
 
     /// Clicks `row`: a logged-out row takes focus; its name cell answers
     /// the provider only when `/login` supports it.
-    pub(crate) fn logout_click(&mut self, row: usize, cell: usize) -> Option<(String, bool)> {
+    pub(crate) fn logged_out_click(&mut self, row: usize, cell: usize) -> Option<(String, bool)> {
         let layout = self.layout()?;
         let Some(RowAt::LoggedOut(name)) = layout.get(row) else {
             return None;
         };
         let name = name.clone();
-        let login = self
-            .catalogue
-            .logged_out
-            .iter()
-            .find(|provider| provider.provider == name)
-            .map(|provider| provider.login)?;
-        self.installs.focus = Some(name.clone());
-        (cell == 0 && login).then_some((name, login))
+        self.installs.focus = Some(name);
+        if cell == 0 {
+            self.logged_out_target().filter(|(_, login)| *login)
+        } else {
+            None
+        }
     }
 
     /// Clicks `cell` of `row`: on a not-installed row the click focuses it,

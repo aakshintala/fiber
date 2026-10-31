@@ -182,7 +182,7 @@ impl App {
                 }
                 // A login-capable provider name hands off to `/login`;
                 // label-only rows are focused but take no action.
-                if let Some((provider, true)) = self.model_picker.logout_click(row, cell) {
+                if let Some((provider, true)) = self.model_picker.logged_out_click(row, cell) {
                     return self.open_login_on(&provider);
                 }
                 match self.model_picker.click_cell(row, cell) {
@@ -1032,7 +1032,7 @@ impl App {
                 }
                 // Login-capable logged-out providers reuse the swapped
                 // `/login` view; a credential-label row stays focused.
-                if let Some((provider, true)) = self.model_picker.logout_target() {
+                if let Some((provider, true)) = self.model_picker.logged_out_target() {
                     return Some(self.open_login_on(&provider));
                 }
                 Some(match self.model_picker.choice(false) {
