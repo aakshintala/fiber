@@ -16,18 +16,14 @@ use serde_json::json;
 use support::pty::Run;
 use support::{Setup, write_json};
 
-/// A bare home and workspace with a scripted turn: the draft the test
-/// types never runs, but the terminal still opens on the input box.
+/// A bare home and workspace with a text-only scripted turn: the draft
+/// the test types never runs, but the terminal still opens on the input
+/// box.
 fn configure(setup: &Setup) {
     write_json(
         &setup.workspace().join("s.json"),
-        &json!({"steps":[{"tool_calls":[{"name":"shell","arguments":{"command":"echo ledger-probe-9d2c"}}]},{"text":["Complete."]}]}),
+        &json!({"steps":[{"text":["Complete."]}]}),
     );
-    std::fs::write(
-        setup.home().join("rules"),
-        "{\"decision\":\"allow\",\"tool\":\"shell\",\"prefix\":\"echo\"}\n",
-    )
-    .unwrap();
     let config = json!({"model":"scripted/s.json","hub":{"idle_exit_ms":200},"tui":{"rail":{"shown":false},"panel":{"cards":[]}}});
     write_json(&setup.home().join("config.json"), &config);
 }
@@ -50,6 +46,11 @@ fn ctrl_a_and_ctrl_e_move_on_the_cursor_line() {
     run.write(b"\x01X");
     let grid = run.wait_screen("the line-start edit", |grid| {
         grid.rows.iter().any(|row| row.contains("X█z"))
+            && !grid
+                .rows
+                .iter()
+                .map(|row| row.replace('█', ""))
+                .any(|row| row.contains("Xqx"))
     });
     // The cursor block stands in for one character, so strip it before
     // checking the typed text stayed on the cursor's line.
@@ -69,6 +70,11 @@ fn ctrl_a_and_ctrl_e_move_on_the_cursor_line() {
     run.write(b"\x1b[A\x05Q");
     let grid = run.wait_screen("the first line's end", |grid| {
         grid.rows.iter().any(|row| row.contains("qxQ"))
+            && !grid
+                .rows
+                .iter()
+                .map(|row| row.replace('█', ""))
+                .any(|row| row.contains("YQ"))
     });
     let bare: Vec<String> = grid.rows.iter().map(|row| row.replace('█', "")).collect();
     assert!(
