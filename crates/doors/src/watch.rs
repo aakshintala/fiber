@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use contract::events::EventKind;
 use contract::{Envelope, SessionId};
 
 use crate::SessionError;
@@ -76,7 +77,9 @@ pub fn watch_after(
         if let Some(seq) = envelope.seq.map(|seq| seq.0) {
             last_seq = Some(seq);
         }
-        let exited = envelope.kind == "fiber_exited";
+        // A name this build does not know is `Unknown`, which never
+        // ends the watch: only the session's own last line does.
+        let exited = EventKind::from_name(&envelope.kind) == EventKind::FiberExited;
         on_line(&envelope);
         if exited {
             return Ok(Watched::Exited);

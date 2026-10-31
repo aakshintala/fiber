@@ -13,6 +13,7 @@ use std::path::Path;
 use contract::commands::{
     Command, CommandLine, ContentArgs, CredentialArgs, SentPart, SubscribeArgs, SubscribeLevel,
 };
+use contract::events::EventKind;
 use contract::shapes::Failure;
 use contract::{CommandId, Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
@@ -86,10 +87,10 @@ pub fn attach(
             let Some((_, envelope)) = next_envelope(&mut reader) else {
                 return Err(ended(id));
             };
-            if answers(&envelope, "command_rejected", &switch) {
+            if answers(&envelope, EventKind::CommandRejected, &switch) {
                 return Err(rejection(&envelope.payload));
             }
-            if answers(&envelope, "command_accepted", &switch) {
+            if answers(&envelope, EventKind::CommandAccepted, &switch) {
                 break;
             }
         }
@@ -109,20 +110,24 @@ pub fn attach(
         let Some((raw, envelope)) = next_envelope(&mut reader) else {
             return Err(ended(id));
         };
-        if answers(&envelope, "command_rejected", &command) {
+        if answers(&envelope, EventKind::CommandRejected, &command) {
             // The prompt's own rejection, read from its payload so its
             // code and message match the handshake's.
             return Err(rejection(&envelope.payload));
         }
-        if envelope.kind == "command_accepted" || envelope.kind == "command_rejected" {
+        // The kind is parsed once: a name this build does not know is
+        // `Unknown`, which matches nothing below and is skipped or
+        // printed like any other line outside the turn.
+        let kind = EventKind::from_name(&envelope.kind);
+        if kind == EventKind::CommandAccepted || kind == EventKind::CommandRejected {
             continue;
         }
         if starts_turn(&envelope, &command) {
             printing = true;
-        } else if printing && envelope.kind == "turn_completed" {
+        } else if printing && kind == EventKind::TurnCompleted {
             emit(out, &raw)?;
             return Ok(exit_code(&envelope));
-        } else if printing && envelope.kind == "fiber_exited" {
+        } else if printing && kind == EventKind::FiberExited {
             return Err(ended(id));
         }
         if printing {
@@ -286,15 +291,15 @@ pub(crate) fn next_envelope(reader: &mut BufReader<UnixStream>) -> Option<(Vec<u
 }
 
 /// Whether `envelope` answers `command` with `kind`.
-fn answers(envelope: &Envelope, kind: &str, command: &str) -> bool {
-    envelope.kind == kind
+fn answers(envelope: &Envelope, kind: EventKind, command: &str) -> bool {
+    EventKind::from_name(&envelope.kind) == kind
         && envelope.payload.get("command_id").and_then(Value::as_str) == Some(command)
 }
 
 /// Whether `envelope` is the `turn_started` carrying this prompt's command
 /// id in its input.
 fn starts_turn(envelope: &Envelope, command: &str) -> bool {
-    envelope.kind == "turn_started"
+    EventKind::from_name(&envelope.kind) == EventKind::TurnStarted
         && envelope
             .payload
             .get("input")
