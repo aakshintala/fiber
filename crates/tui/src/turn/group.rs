@@ -628,9 +628,25 @@ impl Group {
                     None => roots.push(index),
                 }
             }
-            // Each call draws once: a contradictory anchor cannot nest
-            // forever, and calls a cycle strands outside every tree still
-            // draw, flat and top-level in push order.
+            // Reachable from the roots through the children. Calls no
+            // tree reaches — a contradictory anchor strands them outside
+            // every tree — still draw, flat and top-level in push order.
+            // A call hidden inside a closed outer stays hidden: it is
+            // reached, only not drawn.
+            let mut reached = vec![false; section.calls.len()];
+            let mut stack: Vec<usize> = roots.clone();
+            while let Some(index) = stack.pop() {
+                if reached.get(index).is_some_and(|reached| *reached) {
+                    continue;
+                }
+                if let Some(slot) = reached.get_mut(index) {
+                    *slot = true;
+                }
+                if let Some(inners) = children.get(index) {
+                    stack.extend(inners.iter().copied());
+                }
+            }
+            // Each call draws once, so no anchor cycle nests forever.
             let mut drawn = vec![false; section.calls.len()];
             for root in roots {
                 self.call_tree(
@@ -647,7 +663,8 @@ impl Group {
                 );
             }
             for index in 0..section.calls.len() {
-                let stranded = drawn.get(index).is_some_and(|drawn| !drawn);
+                let stranded = reached.get(index).is_some_and(|reached| !reached)
+                    && drawn.get(index).is_some_and(|drawn| !drawn);
                 if stranded {
                     self.call_tree(
                         section,
