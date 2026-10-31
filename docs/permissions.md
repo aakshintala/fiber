@@ -104,7 +104,7 @@ it. A hook can never approve a call (`docs/extensions.md`, "Hooks").
    `credentials/` is refused. See [Credentials](#credentials).
 2. **A standing deny** matching this call: refused. No model call, no question.
 3. **A standing ask** matching this call: a human is asked.
-4. **A fast path** — see below: allowed, with no model call. The confined fast path is checked before the others: a confined call that does not declare `review_when_confined` is allowed here, and a guarded confined call skips every fast path and goes on to step 5.
+4. **A fast path** — see below: allowed, with no model call. The confined fast path is checked before the others, and it is the only fast path a confined call ever meets: a confined call that does not declare `review_when_confined` is allowed here, and a guarded one goes on to step 5.
 5. **A session grant** matching this call: allowed.
 6. **A standing allow** matching this call: allowed.
 7. Otherwise **reviewed** by the reviewer.
