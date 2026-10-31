@@ -5,11 +5,18 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::shapes::Failure;
 
 use crate::failed;
+
+/// Process-wide inputs shared by session startup and hub clients.
+pub(crate) struct Process {
+    pub(crate) clock: Arc<dyn contract::clock::Clock>,
+    pub(crate) exe: Result<PathBuf, Failure>,
+}
 
 /// Fiber home with today's home map.
 pub(crate) fn startup_home() -> Result<PathBuf, Failure> {

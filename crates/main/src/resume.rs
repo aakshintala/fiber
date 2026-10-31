@@ -122,10 +122,10 @@ pub(crate) fn ask_resume(
     resuming: Resuming,
     overrides: Vec<String>,
     prompt: String,
-    clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
+    let clock = Arc::clone(&process.clock);
     let (home, workspace) = match crate::startup::startup() {
         Ok(directories) => directories,
         Err(e) => return ask_failed(e),
@@ -188,7 +188,7 @@ pub(crate) fn ask_resume(
         false,
         clock,
         signals,
-        fiber,
+        process,
     )
 }
 
@@ -237,7 +237,7 @@ pub(crate) fn session_resume(
     prompt: Option<String>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
     let (home, workspace) = match crate::startup::startup() {
         Ok(directories) => directories,
@@ -253,7 +253,7 @@ pub(crate) fn session_resume(
     let one_turn = prompt.is_some();
     resume_session(
         log, &sessions, &dir, id, overrides, credential, prompt, one_turn, true, clock, signals,
-        fiber,
+        process,
     )
 }
 
@@ -279,7 +279,7 @@ fn resume_session(
     enter_present: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
     // One reads for the process, cancelled when this returns whatever the
     // result: the guard drops after `end`, so a signal during the end is
@@ -356,7 +356,7 @@ fn resume_session(
         one_turn,
         clock,
         signals,
-        fiber,
+        process,
         Arc::clone(&reads),
         opened,
     );
@@ -394,7 +394,7 @@ fn resumed_session(
     one_turn: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
     reads: Arc<crate::switch::Reads>,
     opened: Option<doors::WorktreeOpener>,
 ) -> Result<i32, Failure> {
@@ -414,12 +414,10 @@ fn resumed_session(
         .as_deref()
         .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
     crate::shutdown::arm(signals, &reads);
-    let fiber_path = fiber
-        .clone()
-        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
+    let fiber_path = process.exe.clone()?;
     // The diagnostic process: a one-turn resume is an ask; a resumed
     // session keeps its session identity.
-    let process = if one_turn {
+    let diag_process = if one_turn {
         log::diag::Process::Ask
     } else {
         log::diag::Process::Session
@@ -437,7 +435,7 @@ fn resumed_session(
         Arc::clone(&clock),
         None,
         Arc::clone(&reads),
-        process,
+        diag_process,
         seed,
         crate::session_extensions::RepositoryScope {
             workspace: Some(std::path::PathBuf::from(&folded.workspace)),

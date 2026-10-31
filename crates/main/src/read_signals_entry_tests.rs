@@ -36,14 +36,16 @@ fn refused(
 
 #[test]
 fn models_entry_returns_the_registration_error_before_any_command() {
-    let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::clock::System);
+    let process = super::startup::Process {
+        clock: Arc::new(crate::clock::System),
+        exe: Err(super::failed(ErrorCode::IoFailed, "the test binary")),
+    };
     let code = models_entry(
         super::cli::ModelsArgs {
             search: None,
             json: false,
         },
-        clock,
-        Err("the test binary".to_owned()),
+        &process,
         refused,
     );
     // Through `fail`: `io_failed` exits 1, never 2.

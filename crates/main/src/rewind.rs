@@ -83,7 +83,7 @@ pub(crate) fn session_forked(
     adopted: Option<contract::shapes::Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
     let context = match context() {
         Ok(context) => context,
@@ -189,7 +189,7 @@ pub(crate) fn session_forked(
         adopted.or_else(|| worktree.clone()),
         clock,
         signals,
-        fiber,
+        process,
         None,
         None,
         Some(parent.clone()),
@@ -265,7 +265,7 @@ pub(crate) fn session_rewound(
     old: SessionId,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
     let context = match context() {
         Ok(context) => context,
@@ -281,7 +281,7 @@ pub(crate) fn session_rewound(
     }
     let last = log::last_line(old_dir.path());
     if last.as_ref().is_some_and(|line| line.kind == "moved") {
-        return session_moved(new, old, last, context, clock, signals, fiber);
+        return session_moved(new, old, last, context, clock, signals, process);
     }
     let (mut point, summary) = match r#loop::rewound_from(last, &new, &old) {
         Ok(point) => point,
@@ -335,7 +335,7 @@ pub(crate) fn session_rewound(
         worktree.clone(),
         clock,
         signals,
-        fiber,
+        process,
         None,
         None,
         None,
@@ -383,7 +383,7 @@ fn session_moved(
     context: Context,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
     let not_moved = || {
         ask_failed(failed(
@@ -442,7 +442,7 @@ fn session_moved(
         None,
         clock,
         signals,
-        fiber,
+        process,
         None,
         None,
         None,

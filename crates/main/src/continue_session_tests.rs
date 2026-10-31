@@ -519,8 +519,14 @@ fn entry_child() {
         login_shell: false,
         supervised: false,
     };
-    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let code = crate::session_command::run(args, clock, Err("no fiber in test".to_owned()));
+    let process = crate::startup::Process {
+        clock: fakes::clock::FakeClock::new(),
+        exe: Err(crate::failed(
+            contract::ErrorCode::IoFailed,
+            "no fiber in test",
+        )),
+    };
+    let code = crate::session_command::run(args, &process);
     std::process::exit(code);
 }
 

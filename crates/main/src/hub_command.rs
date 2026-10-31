@@ -13,11 +13,8 @@ use contract::shapes::Failure;
 use crate::{cli, settings};
 
 /// Runs a `fiber hub` command.
-pub(crate) fn run(
-    command: cli::HubCommands,
-    exe: Result<PathBuf, String>,
-    clock: &dyn contract::clock::Clock,
-) -> i32 {
+pub(crate) fn run(command: cli::HubCommands, process: &crate::startup::Process) -> i32 {
+    let clock = process.clock.as_ref();
     match command {
         cli::HubCommands::Add {
             name,
@@ -25,31 +22,41 @@ pub(crate) fn run(
             default,
         } => ::cli::hub_add(&name, &address, default, clock),
         cli::HubCommands::Remove { name } => ::cli::hub_remove(&name),
-        cli::HubCommands::Install { port } => ::cli::hub_install(port, &crate::clock::System),
+        cli::HubCommands::Install { port } => ::cli::hub_install(port, clock),
         cli::HubCommands::Uninstall => ::cli::hub_uninstall(),
-        cli::HubCommands::Status { json } => ::cli::hub_status(json, &crate::clock::System),
-        cli::HubCommands::Refresh { hub } => {
-            client_command(hub.as_deref(), &exe, clock, ::cli::hub_refresh)
-        }
+        cli::HubCommands::Status { json } => ::cli::hub_status(json, clock),
+        cli::HubCommands::Refresh { hub } => client_command(
+            hub.as_deref(),
+            &process.exe,
+            process.clock.as_ref(),
+            ::cli::hub_refresh,
+        ),
         cli::HubCommands::Pair {
             device,
             address,
             hub,
-        } => client_command(hub.as_deref(), &exe, clock, |connect| {
-            ::cli::hub_pair(&device, address.as_ref(), connect)
-        }),
-        cli::HubCommands::Token(cli::TokenCommands::List { hub }) => {
-            client_command(hub.as_deref(), &exe, clock, ::cli::hub_token_list)
-        }
-        cli::HubCommands::Token(cli::TokenCommands::Revoke { device, hub }) => {
-            client_command(hub.as_deref(), &exe, clock, |connect| {
-                ::cli::hub_token_revoke(&device, connect)
-            })
-        }
+        } => client_command(
+            hub.as_deref(),
+            &process.exe,
+            process.clock.as_ref(),
+            |connect| ::cli::hub_pair(&device, address.as_ref(), connect),
+        ),
+        cli::HubCommands::Token(cli::TokenCommands::List { hub }) => client_command(
+            hub.as_deref(),
+            &process.exe,
+            process.clock.as_ref(),
+            ::cli::hub_token_list,
+        ),
+        cli::HubCommands::Token(cli::TokenCommands::Revoke { device, hub }) => client_command(
+            hub.as_deref(),
+            &process.exe,
+            process.clock.as_ref(),
+            |connect| ::cli::hub_token_revoke(&device, connect),
+        ),
         // `--installed` is the login service's hub; without it a client
         // started the hub.
         cli::HubCommands::Serve { installed } => serve(
-            exe,
+            process,
             if installed {
                 hub::Mode::Installed
             } else {
@@ -61,7 +68,7 @@ pub(crate) fn run(
 
 fn client_command(
     named: Option<&str>,
-    exe: &Result<PathBuf, String>,
+    exe: &Result<PathBuf, Failure>,
     clock: &dyn contract::clock::Clock,
     run: impl FnOnce(&mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>) -> i32,
 ) -> i32 {
@@ -72,16 +79,16 @@ fn client_command(
     run(&mut || crate::connect_hub(&home, &target, exe, clock))
 }
 
-fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
+fn serve(process: &crate::startup::Process, mode: hub::Mode) -> i32 {
     let home = match crate::startup::startup_home() {
         Ok(home) => home,
         Err(error) => return crate::fail(error),
     };
-    let exe = match exe {
-        Ok(exe) => exe,
-        Err(message) => return crate::fail(doors::failure(ErrorCode::IoFailed, message)),
+    let exe = match &process.exe {
+        Ok(exe) => exe.clone(),
+        Err(failure) => return crate::fail(failure.clone()),
     };
-    let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::clock::System);
+    let clock = Arc::clone(&process.clock);
     let configure = {
         let home = home.clone();
         move || match crate::startup::startup_workspace() {

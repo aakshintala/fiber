@@ -38,7 +38,7 @@ pub(crate) fn session_continues(
     workspace: &Path,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
     supervised: bool,
 ) -> i32 {
     // One reads for the process, cancelled when this returns whatever the
@@ -90,7 +90,7 @@ pub(crate) fn session_continues(
         Some(recorded),
         clock,
         signals,
-        fiber,
+        process,
         None,
         None,
         None,

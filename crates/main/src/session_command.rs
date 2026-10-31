@@ -96,11 +96,8 @@ pub(crate) fn command_update_wiring(
 /// that: the signals' bound thread reads no relative path. With `--resume`
 /// the workspace is the launch directory the hub selected, and the session
 /// enters the recorded worktree itself instead of starting one. Stdin is never read.
-pub(crate) fn run(
-    args: cli::SessionArgs,
-    clock: Arc<dyn contract::clock::Clock>,
-    fiber: Result<PathBuf, String>,
-) -> i32 {
+pub(crate) fn run(args: cli::SessionArgs, process: &crate::startup::Process) -> i32 {
+    let clock = Arc::clone(&process.clock);
     crate::startup_log::as_session();
     if let Err(e) = std::env::set_current_dir(&args.workspace) {
         // The hub spawns a continues session with the recorded worktree
@@ -145,7 +142,7 @@ pub(crate) fn run(
             args.prompt,
             clock,
             &signals,
-            fiber,
+            process,
         );
     }
     if let Some(from) = args.rewound_from {
@@ -154,7 +151,7 @@ pub(crate) fn run(
             SessionId(from),
             clock,
             &signals,
-            fiber,
+            process,
         );
     }
     if let Some(old) = args.continues {
@@ -170,7 +167,7 @@ pub(crate) fn run(
             &args.workspace,
             clock,
             &signals,
-            fiber,
+            process,
             args.supervised,
         );
     }
@@ -220,7 +217,7 @@ pub(crate) fn run(
             adopted,
             clock,
             &signals,
-            fiber,
+            process,
         );
     }
     // A delegate's stdin is its lifeline: the parent holds the write end
@@ -247,7 +244,7 @@ pub(crate) fn run(
         adopted,
         clock,
         &signals,
-        fiber,
+        process,
         None,
         parent,
         args.supervised,
@@ -276,7 +273,7 @@ pub(crate) fn new_session(
     adopted: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
     case_run: Option<Arc<extensions::case::CaseRun>>,
     parent: Option<Parent>,
     supervised: bool,
@@ -292,7 +289,7 @@ pub(crate) fn new_session(
     let host = case_run.as_ref().map(|case| case.host_script());
     if !worktree || adopted.is_some() {
         return match run_new(
-            id, overrides, prompt, one_turn, adopted, clock, signals, fiber, host, case_run,
+            id, overrides, prompt, one_turn, adopted, clock, signals, process, host, case_run,
             parent, None, reads, supervised, inherited,
         ) {
             Ok(code) => code,
@@ -331,7 +328,7 @@ pub(crate) fn new_session(
         Some(worktree),
         clock,
         signals,
-        fiber,
+        process,
         host,
         case_run,
         parent,
@@ -362,7 +359,7 @@ pub(crate) fn run_new(
     worktree: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
     host: Option<Arc<extensions::HostScript>>,
     case_run: Option<Arc<extensions::case::CaseRun>>,
     parent: Option<Parent>,
@@ -378,25 +375,21 @@ pub(crate) fn run_new(
     // Armed before the parts are read: from now a signal cancels the one
     // reads every startup credential command runs through.
     shutdown::arm(signals, &reads);
-    let fiber_path = fiber
-        .clone()
-        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
+    let fiber_path = process.exe.clone()?;
     // A rewind's new session runs where the old one did, with the model,
     // credential and thinking level the old log's latest build recorded,
     // as a resume keeps its recorded ones (`docs/events.md`, "Rewind").
     // The diagnostic process: a one-turn run without a rewind or a parent
     // is an ask; a delegate child runs one turn but keeps the session's
     // identity, as does a rewind continuing its session's log.
-    let process = if one_turn && rewound.is_none() && parent.is_none() {
+    let diag_process = if one_turn && rewound.is_none() && parent.is_none() {
         log::diag::Process::Ask
     } else {
         log::diag::Process::Session
     };
     let mut parts = match &rewound {
         Some(start) => {
-            let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+            let (home, workspace) = crate::startup::startup()?;
             let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
             // The point's session lives beside the child, or in the
             // recorded parent project when the continuation names one: a
@@ -440,7 +433,7 @@ pub(crate) fn run_new(
                 Arc::clone(&clock),
                 host,
                 Arc::clone(&reads),
-                process,
+                diag_process,
                 seed,
                 crate::session_extensions::RepositoryScope::default(),
                 crate::parts::SessionLaunch {
@@ -468,7 +461,7 @@ pub(crate) fn run_new(
                 Arc::clone(&clock),
                 host,
                 Arc::clone(&reads),
-                process,
+                diag_process,
                 extensions::StateSeed::new(),
                 crate::session_extensions::RepositoryScope::default(),
                 crate::parts::SessionLaunch {
@@ -954,7 +947,7 @@ pub(crate) fn run_new_with(
     worktree: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
     host: Option<Arc<extensions::HostScript>>,
     case_run: Option<Arc<extensions::case::CaseRun>>,
     parent: Option<Parent>,
@@ -966,7 +959,7 @@ pub(crate) fn run_new_with(
 ) -> Result<i32, Failure> {
     let _hold = OpenedHold::set(opened);
     run_new(
-        id, overrides, prompt, one_turn, worktree, clock, signals, fiber, host, case_run, parent,
+        id, overrides, prompt, one_turn, worktree, clock, signals, process, host, case_run, parent,
         rewound, reads, supervised, inherited,
     )
 }

@@ -54,7 +54,7 @@ pub(crate) fn resume(
     selector: Option<String>,
     credential: Option<String>,
     hub: Option<String>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
     if let Some(code) = needs_tty() {
         return code;
@@ -64,13 +64,13 @@ pub(crate) fn resume(
         Err(e) => return crate::fail(e),
     };
     let Some(selector) = selector else {
-        return crate::terminal(fiber, target, tui::OpenAt::List, None, Vec::new());
+        return crate::terminal(process, target, tui::OpenAt::List, None, Vec::new());
     };
     let home = match crate::startup::startup_home() {
         Ok(home) => home,
         Err(e) => return crate::fail(e),
     };
-    let clock = crate::clock::System;
+    let clock = process.clock.as_ref();
     let mut local = || {
         let workspace = crate::startup::startup_workspace()?;
         let project = worktree::project(&workspace);
@@ -79,7 +79,7 @@ pub(crate) fn resume(
         log::resolve(&sessions, &selector, &in_project).map_err(|e| crate::failed(e.code(), e))
     };
     let mut listed = |name: &str| {
-        let mut connect = || crate::connect_hub(&home, &target, &fiber, &clock);
+        let mut connect = || crate::connect_hub(&home, &target, &process.exe, clock);
         ::cli::resolve_listed(&selector, name, &mut connect).map_err(Failure::from)
     };
     let id = match route(&target, &mut local, &mut listed) {
@@ -88,7 +88,7 @@ pub(crate) fn resume(
     };
     log::crash::attach(&id);
     crate::terminal(
-        fiber,
+        process,
         target,
         tui::OpenAt::Session(id, credential),
         None,
@@ -104,7 +104,7 @@ pub(crate) fn resume(
 /// listed one resolves it against the hub's `sessions` answer with
 /// `active: true`. With no session it is a usage error naming `fiber`,
 /// and the terminal never starts.
-pub(crate) fn continue_latest(fiber: Result<PathBuf, String>, hub: Option<String>) -> i32 {
+pub(crate) fn continue_latest(process: &crate::startup::Process, hub: Option<String>) -> i32 {
     if let Some(code) = needs_tty() {
         return code;
     }
@@ -116,7 +116,7 @@ pub(crate) fn continue_latest(fiber: Result<PathBuf, String>, hub: Option<String
         Ok(home) => home,
         Err(e) => return crate::fail(e),
     };
-    let clock = crate::clock::System;
+    let clock = process.clock.as_ref();
     let mut local = || {
         let workspace = crate::startup::startup_workspace()?;
         let project = worktree::project(&workspace);
@@ -125,7 +125,7 @@ pub(crate) fn continue_latest(fiber: Result<PathBuf, String>, hub: Option<String
         select_latest(&sessions, &in_project)
     };
     let mut listed = |name: &str| {
-        let mut connect = || crate::connect_hub(&home, &target, &fiber, &clock);
+        let mut connect = || crate::connect_hub(&home, &target, &process.exe, clock);
         listed_latest(name, &mut connect)
     };
     let id = match route(&target, &mut local, &mut listed) {
@@ -134,7 +134,7 @@ pub(crate) fn continue_latest(fiber: Result<PathBuf, String>, hub: Option<String
     };
     log::crash::attach(&id);
     crate::terminal(
-        fiber,
+        process,
         target,
         tui::OpenAt::Session(id, None),
         None,
@@ -165,7 +165,7 @@ fn listed_latest(
 /// the terminal. A listed target opens home on that hub; without a flag
 /// or a default the local hub opens the launch directory as before.
 pub(crate) fn home(
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
     hub: Option<String>,
     model: Option<String>,
     overrides: Vec<String>,
@@ -180,7 +180,7 @@ pub(crate) fn home(
         Ok(target) => target,
         Err(e) => return crate::fail(e),
     };
-    crate::terminal(fiber, target, tui::OpenAt::Home, model, overrides)
+    crate::terminal(process, target, tui::OpenAt::Home, model, overrides)
 }
 
 /// The per-run layer entries that select a hub: one whose dotted key's
