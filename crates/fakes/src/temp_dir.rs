@@ -7,11 +7,24 @@ use std::hash::BuildHasher;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use crate::MUST_SUCCEED_WITHIN;
+use crate::deadline::Deadline;
+use crate::process_group::{pids_exit, stop_closed};
 
 /// How many names [`TempDir::new`] tries before giving up.
 const ATTEMPTS: usize = 64;
+
+/// How long [`command_line`] waits for its `ps` when the drop names a
+/// holder: the test has already failed, so a hung `ps` must not add a
+/// must-succeed wait per holder.
+const COMMAND_LINE_TIMEOUT: Duration = Duration::from_secs(5);
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 static STATE: LazyLock<RandomState> = LazyLock::new(RandomState::new);
@@ -19,9 +32,18 @@ static STATE: LazyLock<RandomState> = LazyLock::new(RandomState::new);
 /// A directory under the system temporary directory, owned by the caller.
 ///
 /// Drop removes it, including a nested directory left mode `0o000` or
-/// `0o555`. A directory the caller already removed is left alone.
+/// `0o555`, once no live process holds it: a holder still running past the
+/// bound fails the test naming the directory and the holder. A directory
+/// the caller already removed is left alone.
 pub struct TempDir {
     path: PathBuf,
+    owner: Option<String>,
+}
+
+/// The name of the thread creating the directory, best-effort: the test's
+/// name on a test thread, for the drop failure to name.
+fn creating_thread_name() -> Option<String> {
+    thread::current().name().map(str::to_owned)
 }
 
 impl TempDir {
@@ -40,7 +62,10 @@ impl TempDir {
     /// under a short parent such as `/tmp`: socket paths are limited to SUN_LEN bytes.
     pub fn under(parent: &Path, prefix: &str) -> Self {
         let path = create(parent, prefix, std::iter::from_fn(suffix));
-        Self { path }
+        Self {
+            path,
+            owner: creating_thread_name(),
+        }
     }
 
     /// Writes `content` to `rel` under the directory, creating parent
@@ -69,14 +94,104 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        if fs::remove_dir_all(&self.path).is_ok() {
+        // A drop while unwinding never waits and never panics: the original
+        // failure is already on its way out, so this only tries to remove.
+        if thread::panicking() {
+            remove(&self.path);
             return;
         }
-        // A directory the test already removed makes both calls below
-        // no-ops.
-        restore_modes(&self.path);
-        match fs::remove_dir_all(&self.path) {
+        let holders = wait_for_holders(&self.path, Deadline::after(MUST_SUCCEED_WITHIN));
+        if !holders.is_empty() {
+            fail_on_holders(&self.path, self.owner.as_deref(), &holders);
+        }
+        remove(&self.path);
+    }
+}
+
+/// Removes `path`, making a read-only tree writable first. A directory the
+/// test already removed makes the second removal a no-op. Failure is
+/// ignored: only a live holder fails the drop.
+fn remove(path: &Path) {
+    if fs::remove_dir_all(path).is_ok() {
+        return;
+    }
+    restore_modes(path);
+    match fs::remove_dir_all(path) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+/// Panics naming the directory, the test that created it and every holder
+/// pid with its command line, from a final fresh scan.
+#[allow(
+    clippy::panic,
+    reason = "the drop names the holders that outlived the test; a failure past the bound fails the test"
+)]
+fn fail_on_holders(path: &Path, owner: Option<&str>, holders: &[u32]) -> ! {
+    panic!("{}", holders_message(path, owner, holders))
+}
+
+/// The drop failure: the directory, the creating test and every holder pid
+/// with its command line, from a final fresh scan.
+fn holders_message(path: &Path, owner: Option<&str>, holders: &[u32]) -> String {
+    let holders = holders
+        .iter()
+        .map(|pid| {
+            let command = command_line(*pid);
+            format!("pid {pid} ({command})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "temp dir {} for test {} outlived by {holders}",
+        path.display(),
+        owner.unwrap_or("an unnamed test")
+    )
+}
+
+/// The command line of one process for the drop failure, or `<gone>` when it
+/// cannot be read: a best-effort diagnostic, never a wait.
+fn command_line(pid: u32) -> String {
+    const GONE: &str = "<gone>";
+    let mut child = match Command::new("ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return GONE.to_owned(),
+    };
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => return GONE.to_owned(),
+    };
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut out = String::new();
+        let read = std::io::Read::read_to_string(&mut stdout, &mut out).map(|_| out);
+        match done.send(read) {
             Ok(()) | Err(_) => {}
+        }
+    });
+    match Deadline::after(COMMAND_LINE_TIMEOUT).recv(&finished) {
+        Ok(Ok(out)) => {
+            let line = out.trim();
+            if line.is_empty() {
+                GONE.to_owned()
+            } else {
+                line.to_owned()
+            }
+        }
+        Ok(Err(_)) | Err(_) => {
+            match child.kill() {
+                Ok(()) | Err(_) => {}
+            }
+            match child.wait() {
+                Ok(_) | Err(_) => {}
+            }
+            GONE.to_owned()
         }
     }
 }
@@ -106,6 +221,129 @@ fn restore_modes(path: &Path) {
         };
         restore_modes(&entry.path());
     }
+}
+
+/// The pids still holding `path` once `deadline` runs out: scans, waits the
+/// listed pids out under what remains of the deadline, and rescans until
+/// nothing holds it or the deadline expires. A spent deadline returns the
+/// first scan at once, so a post-bound fake clock never waits: per
+/// [`Deadline::left`], a wait handed zero takes only an already-arrived
+/// result, then runs its own timeout branch.
+fn wait_for_holders(path: &Path, deadline: Deadline) -> Vec<u32> {
+    loop {
+        let holders = holder_pids(path);
+        if holders.is_empty() {
+            return holders;
+        }
+        if deadline.left().is_zero() {
+            return holders;
+        }
+        match pids_exit(&holders, deadline) {
+            true | false => {}
+        }
+        pause();
+    }
+}
+
+/// One poll pause between rescan probes, holding no lock, like the existing
+/// liveness loops.
+fn pause() {
+    let (_stop, stopped) = mpsc::channel::<()>();
+    let _closed = stop_closed(&stopped);
+}
+
+/// The live holder pids of `path`: processes other than this one whose
+/// working directory, executable image or (Linux only) open file resolves
+/// under it. Vanished or unreadable processes are skipped, so a process
+/// that exits mid-scan never fails it.
+fn holder_pids(path: &Path) -> Vec<u32> {
+    let Ok(dir) = fs::canonicalize(path) else {
+        return Vec::new();
+    };
+    let own = std::process::id();
+    let mut holders = Vec::new();
+    for pid in candidate_pids() {
+        if !scanned_pid(pid, own) {
+            continue;
+        }
+        if holds(&dir, pid) {
+            holders.push(pid);
+        }
+    }
+    holders.sort();
+    holders
+}
+
+/// Whether `pid` is even a scan candidate: an id of 1 or less reaches
+/// processes the test does not own, and the test's own process is never
+/// its own holder.
+fn scanned_pid(pid: u32, own: u32) -> bool {
+    pid > 1 && pid != own
+}
+
+/// Every pid the scan filters: the `/proc` entries naming one.
+#[cfg(target_os = "linux")]
+fn candidate_pids() -> Vec<u32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut pids = Vec::new();
+    for entry in entries.flatten() {
+        if let Some(pid) = parse_pid(&entry.file_name()) {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+/// The pid a `/proc` entry names: all digits, fitting in a pid.
+#[cfg(target_os = "linux")]
+fn parse_pid(name: &std::ffi::OsStr) -> Option<u32> {
+    let name = name.to_str()?;
+    if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    name.parse().ok()
+}
+
+/// Whether `pid` holds `dir`: its working directory, its executable image
+/// or one of its open files resolves under it.
+#[cfg(target_os = "linux")]
+fn holds(dir: &Path, pid: u32) -> bool {
+    let proc = Path::new("/proc").join(pid.to_string());
+    for file in ["cwd", "exe"] {
+        if let Ok(target) = fs::read_link(proc.join(file))
+            && support::peer::within_dir(dir, &target)
+        {
+            return true;
+        }
+    }
+    let Ok(fds) = fs::read_dir(proc.join("fd")) else {
+        return false;
+    };
+    for fd in fds.flatten() {
+        if let Ok(target) = fs::read_link(fd.path())
+            && support::peer::within_dir(dir, &target)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every pid the scan filters: whatever the kernel lists.
+#[cfg(target_os = "macos")]
+fn candidate_pids() -> Vec<u32> {
+    support::peer::all_pids()
+}
+
+/// Whether `pid` holds `dir`: its working directory or executable image
+/// resolves under it.
+#[cfg(target_os = "macos")]
+fn holds(dir: &Path, pid: u32) -> bool {
+    support::peer::dirs_of(support::peer::Pid(pid))
+        .iter()
+        .any(|candidate| support::peer::within_dir(dir, candidate))
 }
 
 /// Eight lowercase hex digits. A process-wide counter is hashed so two calls

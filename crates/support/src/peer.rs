@@ -7,6 +7,9 @@
 use std::collections::HashSet;
 use std::os::unix::net::UnixStream;
 
+#[cfg(any(target_os = "macos", test))]
+use std::os::unix::ffi::OsStrExt;
+
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("socket process attribution is supported only on Linux and macOS");
 
@@ -348,6 +351,26 @@ fn argv_of(pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
     parse_cmdline_argv(&read_proc(pid, "cmdline")?, pid)
 }
 
+/// Whether `candidate` is `dir` itself or lives under it. The match ends at
+/// a directory separator, so a sibling lane's longer same-prefixed directory
+/// never matches.
+#[must_use]
+pub fn within_dir(dir: &std::path::Path, candidate: &std::path::Path) -> bool {
+    candidate.starts_with(dir)
+}
+
+/// The path the kernel wrote into a NUL-terminated byte buffer: the bytes up
+/// to the first NUL, never an empty path.
+#[cfg(any(target_os = "macos", test))]
+fn path_from_cstr(bytes: &[u8]) -> Option<std::path::PathBuf> {
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    let path = bytes.get(..end)?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(path)))
+}
+
 /// The parent pid and effective uid of one process from the kernel's
 /// `proc_bsdshortinfo` (`bsd/sys/proc_info.h`): `pbsi_ppid` is the parent,
 /// and `pbsi_uid` is the effective uid beside the real `pbsi_ruid`.
@@ -502,6 +525,135 @@ fn argv_of(pid: Pid) -> Result<Vec<Vec<u8>>, ReadError> {
         // buffer, and the fill passes the sized mutable output buffer.
         unsafe { libc::sysctl(mib.as_mut_ptr(), 3, old, length, std::ptr::null_mut(), 0) }
     })
+}
+
+/// Every pid the kernel lists right now, best-effort: whatever
+/// `proc_listallpids` reports, skipping nothing. The holder scan filters and
+/// matches these; it never kills.
+#[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
+#[allow(
+    unsafe_code,
+    reason = "proc_listallpids into a caller-sized pid buffer: the size probe passes no buffer, and the fill passes a buffer the probe sized"
+)]
+#[must_use]
+pub fn all_pids() -> Vec<u32> {
+    // SAFETY: the size probe passes a null buffer with no room, so the
+    // kernel writes nothing and reports how many pids it holds.
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    let Ok(count) = usize::try_from(count) else {
+        return Vec::new();
+    };
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut buffer: Vec<libc::pid_t> = vec![0; count];
+    let Ok(size) = libc::c_int::try_from(buffer.len() * std::mem::size_of::<libc::pid_t>()) else {
+        return Vec::new();
+    };
+    // SAFETY: `buffer` is `count` whole pids alive for the call, and `size`
+    // is its whole length; the kernel fills it or fails.
+    let filled =
+        unsafe { libc::proc_listallpids(buffer.as_mut_ptr().cast::<libc::c_void>(), size) };
+    let Ok(filled) = usize::try_from(filled) else {
+        return Vec::new();
+    };
+    buffer.truncate(filled.min(buffer.len()));
+    buffer
+        .into_iter()
+        .filter_map(|pid| u32::try_from(pid).ok())
+        .collect()
+}
+
+/// The current directory and executable image of one macOS process,
+/// best-effort: whatever the kernel reports, skipping what it does not, so a
+/// vanished or foreign-owned process contributes nothing. The holder scan
+/// matches these against the directory; it never kills.
+#[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
+#[must_use]
+pub fn dirs_of(pid: Pid) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = current_dir_of(pid) {
+        dirs.push(dir);
+    }
+    if let Some(image) = image_of(pid) {
+        dirs.push(image);
+    }
+    dirs
+}
+
+/// The current directory of one macOS process from its vnode info, or
+/// nothing when the kernel does not report it.
+#[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
+#[allow(
+    unsafe_code,
+    reason = "proc_pidinfo PROC_PIDVNODEPATHINFO into a caller-sized proc_vnodepathinfo: the pid converts losslessly, the flavor and zero arg are fixed, and the buffer is exactly one structure the kernel fills or fails"
+)]
+fn current_dir_of(pid: Pid) -> Option<std::path::PathBuf> {
+    let pid_arg = libc::c_int::try_from(pid.0).ok()?;
+    let mut info = std::mem::MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_vnodepathinfo>()).ok()?;
+    // SAFETY: `pid_arg` is the wanted pid, the flavor and zero arg select
+    // the vnode-path info of that pid, and `info` with `size` is one whole
+    // `proc_vnodepathinfo` of plain integers the kernel fills or fails.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid_arg,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            info.as_mut_ptr().cast::<libc::c_void>(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    // SAFETY: the call above filled every byte or failed, and the size
+    // check holds a whole structure.
+    let info = unsafe { info.assume_init() };
+    // SAFETY: `vip_path` is one contiguous kernel-filled path of plain
+    // bytes; reading it never outruns the structure.
+    let raw = unsafe {
+        std::slice::from_raw_parts(
+            info.pvi_cdir.vip_path.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(&info.pvi_cdir.vip_path),
+        )
+    };
+    path_from_cstr(raw)
+}
+
+/// The executable image of one macOS process from `proc_pidpath`, or nothing
+/// when the kernel does not report it.
+#[cfg(target_os = "macos")]
+// Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+#[cfg_attr(false, mutants::skip)]
+#[allow(
+    unsafe_code,
+    reason = "proc_pidpath into a caller-sized byte buffer: the pid converts losslessly, the buffer is MAXPATHLEN zeroed bytes alive for the call, and the size is its whole length"
+)]
+fn image_of(pid: Pid) -> Option<std::path::PathBuf> {
+    let pid_arg = libc::c_int::try_from(pid.0).ok()?;
+    let length = usize::try_from(libc::MAXPATHLEN).ok()?;
+    let mut buffer: Vec<libc::c_char> = vec![0; length];
+    let Ok(size) = u32::try_from(buffer.len()) else {
+        return None;
+    };
+    // SAFETY: `buffer` is `length` whole bytes alive for the call, and
+    // `size` is its whole length; the kernel fills it or fails.
+    let read =
+        unsafe { libc::proc_pidpath(pid_arg, buffer.as_mut_ptr().cast::<libc::c_void>(), size) };
+    if read < 0 {
+        return None;
+    }
+    // SAFETY: the buffer was zeroed and the kernel filled at most `length`
+    // bytes, so a NUL ends it; reading to that NUL never outruns it.
+    let raw = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), buffer.len()) };
+    path_from_cstr(raw)
 }
 
 #[cfg(test)]
