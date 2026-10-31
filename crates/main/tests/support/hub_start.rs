@@ -48,7 +48,10 @@ fn port_taken(log: &str, port: u16) -> bool {
 fn report(setup: &Setup, status: Option<ExitStatus>) -> String {
     let path = setup.home().join("logs").join("hub.log");
     let (detail, tail) = match fs::read(&path) {
-        Err(_) => ("hub.log missing".to_owned(), String::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ("hub.log missing".to_owned(), String::new())
+        }
+        Err(error) => (format!("hub.log unreadable ({error})"), String::new()),
         Ok(bytes) if bytes.is_empty() => ("hub.log empty (0 bytes)".to_owned(), String::new()),
         Ok(bytes) => {
             let text = String::from_utf8_lossy(&bytes);
@@ -181,16 +184,18 @@ pub(crate) fn hello_slice(
 /// Waits for the hub's `hub_hello` in slices of
 /// [`MUST_SUCCEED_WITHIN`], looking at the hub's exit between them. `Ok`
 /// is the hello and the live hub; `Err` is the status of a hub that
-/// exited, already reaped. The wait starts at entry, never renewed: a
-/// slice ends [`REPORT_MARGIN`] before it, while the give-up keeps its
-/// margin against the test's guard, so the report and the cleanup run
-/// first. Every failure names the bounds it observed and what the hub had
-/// written, and leaves the cause open.
+/// exited, already reaped, with the wait accounting behind the failure:
+/// the entry bounds, the root and started-wait bounds remaining at the
+/// failure, and each slice's `until` offset. The wait starts at entry,
+/// never renewed: a slice ends [`REPORT_MARGIN`] before it, while the
+/// give-up keeps its margin against the test's guard, so the report and
+/// the cleanup run first. Every failure names the bounds it observed and
+/// what the hub had written, and leaves the cause open.
 fn await_hello(
     setup: &Setup,
     mut process: HubProc,
     helper_left: Duration,
-) -> Result<(doors::hub::Hub, HubProc), ExitStatus> {
+) -> Result<(doors::hub::Hub, HubProc), (ExitStatus, String)> {
     let entry_left = setup.deadline.left();
     let wait = setup.deadline.start_wait();
     let entry = format!(
@@ -222,7 +227,9 @@ fn await_hello(
             Err(error) => error,
         };
         if process.child.try_wait().unwrap().is_some() {
-            return Err(process.wait());
+            let status = process.wait();
+            let account = hello_account(&entry, setup.deadline.left(), wait.left(), &slices);
+            return Err((status, account));
         }
         // Only a slice's own end loops; any other error would repeat at once.
         if !matches!(
@@ -268,7 +275,7 @@ pub(crate) fn serve_installed(
         let process = HubProc::spawn_command(setup.deadline, &mut command);
         match await_hello(setup, process, helper_left) {
             Ok((hub, process)) => return Served { port, hub, process },
-            Err(status) => {
+            Err((status, account)) => {
                 let log = setup.hub_log();
                 let added = log.get(logged..).unwrap_or_default();
                 if attempt < attempts && port_taken(added, port) {
@@ -276,7 +283,7 @@ pub(crate) fn serve_installed(
                     continue;
                 }
                 panic!(
-                    "the installed hub's hello on 127.0.0.1:{port}, attempt {attempt} of {attempts} with helper root left {helper_left:?} and failing root left {:?}: the hub {}",
+                    "the installed hub's hello on 127.0.0.1:{port}, attempt {attempt} of {attempts} with helper root left {helper_left:?} and failing root left {:?} ({account}): the hub {}",
                     setup.deadline.left(),
                     report(setup, Some(status))
                 );
@@ -287,9 +294,12 @@ pub(crate) fn serve_installed(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::process::Command;
     use std::time::Duration;
 
-    use super::{is_hello_timeout, slices_shown};
+    use super::{is_hello_timeout, report, serve_installed, slices_shown};
+    use crate::support::Setup;
 
     #[test]
     fn slices_shown_collapses_runs_and_keeps_singles() {
@@ -322,6 +332,76 @@ mod tests {
         assert!(!is_hello_timeout(
             "could not start a thread for the installed hub's hello: boom"
         ));
+    }
+
+    /// A missing `hub.log` reports missing, while an unreadable one
+    /// reports the error instead of misdiagnosing it as missing: a
+    /// directory at the log path fails the read with a non-`NotFound`
+    /// error on every platform.
+    #[test]
+    fn report_distinguishes_missing_from_unreadable_hub_log() {
+        let setup = Setup::new();
+        let missing = report(&setup, None);
+        assert!(
+            missing.contains("hub.log missing"),
+            "a fresh home holds no hub.log: {missing}"
+        );
+        assert!(
+            !missing.contains("unreadable"),
+            "absence is not an error: {missing}"
+        );
+        fs::create_dir_all(setup.home().join("logs").join("hub.log")).unwrap();
+        let unreadable = report(&setup, None);
+        assert!(
+            unreadable.contains("hub.log unreadable"),
+            "a directory at the log path is not missing: {unreadable}"
+        );
+        assert!(
+            !unreadable.contains("hub.log missing"),
+            "an error reports distinctly from absence: {unreadable}"
+        );
+    }
+
+    /// A hub that exits before saying hello exhausts its attempt with the
+    /// wait accounting behind the failure: the retry-exhausted panic names
+    /// the hello-wait entry, the helper and failing root bounds, the
+    /// started-wait bounds and each slice's `until`, alongside the exit.
+    /// `true` exits at once with no log line, so the single attempt (no
+    /// retry without a port-taken line) panics after the hello's bound.
+    #[test]
+    fn serve_installed_retry_exhausted_reports_wait_accounting() {
+        let setup = Setup::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            serve_installed(&setup, 1, &mut || 1, &mut |_| Command::new("true"))
+        }));
+        let message = outcome
+            .err()
+            .and_then(|payload| payload.downcast::<String>().ok().map(|boxed| *boxed))
+            .expect("the exited hub exhausts its one attempt");
+        assert!(
+            message.contains("hello wait entered"),
+            "the panic names the hello wait's entry bounds: {message}"
+        );
+        assert!(
+            message.contains("helper root left"),
+            "the panic names the helper root bound at entry: {message}"
+        );
+        assert!(
+            message.contains("failing root left"),
+            "the panic names the root bound at the failure: {message}"
+        );
+        assert!(
+            message.contains("started-wait left"),
+            "the panic names the started-wait bound: {message}"
+        );
+        assert!(
+            message.contains("until now+"),
+            "the panic names each slice's until: {message}"
+        );
+        assert!(
+            message.contains("exited"),
+            "the panic names the hub's exit: {message}"
+        );
     }
 
     #[test]
