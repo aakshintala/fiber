@@ -185,6 +185,8 @@ impl<B: Backend> Loop<B> {
             on_attach: Box::new(|_| {}),
             clock,
             timing: crate::timing::Timing::info(),
+            attached_frame: None,
+            summary_span: None,
             files_out,
             search: None,
             reader,
@@ -3141,4 +3143,109 @@ fn the_signal_thread_sends_each_taken_signal() {
         | Input::Tick
         | Input::KittyFailed => panic!("the signal thread sent something else"),
     }
+}
+
+/// The attached-frame guard ends only after a successful draw with the
+/// attached session's history and a live hub stream.
+#[test]
+fn attached_frame_stops_at_the_first_draw_holding_history() {
+    let home = fakes::TempDir::new("event-loop-attached-frame");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let diag = Arc::new(log::diag::Diag::new(
+        home.path(),
+        log::diag::Process::Tui,
+        log::diag::Level::Debug,
+        clock,
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app = crate::app::testkit::attached(60, 12);
+    let mut seq = 0;
+    crate::app::testkit::long_turns(&mut lp.app, &mut seq, 1);
+    let (stream, _peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub.store(stream);
+    lp.timing = crate::timing::Timing::new(diag);
+    lp.attached_frame = lp.timing.attached_frame();
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(lp.frame_inner(&rx), None);
+    assert!(
+        lp.attached_frame.is_none(),
+        "the drawn history stops the guard"
+    );
+    let path = home
+        .path()
+        .join("logs")
+        .join(format!("tui-{}.log", std::process::id()));
+    let text = std::fs::read_to_string(path).unwrap_or_else(|err| panic!("read log: {err}"));
+    let attached: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|line: &serde_json::Value| line["data"]["op"] == "tui.attached_frame")
+        .collect();
+    // docs/state.md:432-435 promises one line at the first attached-history draw.
+    assert_eq!(attached.len(), 1, "one attached-frame line: {attached:?}");
+}
+
+/// A home frame with a hub stream does not finish the attached-frame
+/// guard; loop teardown discards it without a line.
+#[test]
+fn attached_frame_waits_for_an_attached_session() {
+    let home = fakes::TempDir::new("event-loop-attached-frame-home");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let diag = Arc::new(log::diag::Diag::new(
+        home.path(),
+        log::diag::Process::Tui,
+        log::diag::Level::Debug,
+        clock,
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (stream, _peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub.store(stream);
+    lp.timing = crate::timing::Timing::new(diag);
+    lp.attached_frame = lp.timing.attached_frame();
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(lp.frame_inner(&rx), None);
+    assert!(
+        lp.attached_frame.is_some(),
+        "a home draw does not stop the guard"
+    );
+    crate::timing::discard(lp.attached_frame.take());
+    let path = home
+        .path()
+        .join("logs")
+        .join(format!("tui-{}.log", std::process::id()));
+    // docs/state.md:432-435 ends the scope at a draw holding attached-session history.
+    assert!(!path.exists(), "a home frame writes no attached-frame line");
+}
+
+/// A drawn attached screen with no stream leaves the attached-frame guard
+/// open, then discards it at loop teardown.
+#[test]
+fn attached_frame_is_discarded_without_a_stream() {
+    let home = fakes::TempDir::new("event-loop-attached-frame-no-stream");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let diag = Arc::new(log::diag::Diag::new(
+        home.path(),
+        log::diag::Process::Tui,
+        log::diag::Level::Debug,
+        clock,
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app = crate::app::testkit::attached(60, 12);
+    let mut seq = 0;
+    crate::app::testkit::long_turns(&mut lp.app, &mut seq, 1);
+    lp.timing = crate::timing::Timing::new(diag);
+    lp.attached_frame = lp.timing.attached_frame();
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(lp.frame_inner(&rx), None);
+    assert!(
+        lp.attached_frame.is_some(),
+        "a missing stream leaves the guard open"
+    );
+    crate::timing::discard(lp.attached_frame.take());
+    let path = home
+        .path()
+        .join("logs")
+        .join(format!("tui-{}.log", std::process::id()));
+    // docs/state.md:432-435: an attach with no stream writes no line.
+    assert!(!path.exists(), "no stream means no attached-frame line");
 }
