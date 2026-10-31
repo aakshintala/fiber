@@ -541,10 +541,7 @@ impl Run {
     }
 
     pub(crate) fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
+        kinds(&self.lines)
     }
 
     pub(crate) fn first(&self, kind: &str) -> &Value {
@@ -1726,11 +1723,6 @@ pub(crate) fn kinds(lines: &[Value]) -> Vec<&str> {
         .map(|line| line["kind"].as_str().unwrap())
         .filter(|kind| !UNORDERED_KINDS.contains(kind))
         .collect()
-}
-
-/// The ordered event kinds, also setting aside the hub's attention lines.
-pub(crate) fn kinds_without_attention(lines: &[Value]) -> Vec<&str> {
-    kinds(lines)
 }
 
 /// The relation a cited doc line promises between an exact kind pair. The
