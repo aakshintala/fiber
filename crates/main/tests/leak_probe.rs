@@ -36,7 +36,10 @@ fn the_shell_tool_leak_is_named_by_pid() {
     // directory itself, and a 120 s ceiling, so it always exits.
     // A failure, such as the directory being gone, ends it.
     // The program holds no single quote, so it embeds in one.
-    let program = "import os,sys,time; os.setsid(); d=sys.argv[1]; t=os.path.join(d,\"ask.pid.tmp\"); p=os.path.join(d,\"ask.pid\"); s=time.time(); open(t,\"w\").write(str(os.getpid())); os.rename(t,p);\nwhile not os.path.exists(os.path.join(d,\"stop\")) and os.path.isdir(d) and time.time()-s<120:\n time.sleep(0.05)";
+    // It leaves its inherited working directory for the probe directory:
+    // without the chdir the leaker's cwd under the session home makes the
+    // TempDir holder wait refuse a deliberate leak.
+    let program = "import os,sys,time; os.setsid(); d=sys.argv[1]; os.chdir(d); t=os.path.join(d,\"ask.pid.tmp\"); p=os.path.join(d,\"ask.pid\"); s=time.time(); open(t,\"w\").write(str(os.getpid())); os.rename(t,p);\nwhile not os.path.exists(os.path.join(d,\"stop\")) and os.path.isdir(d) and time.time()-s<120:\n time.sleep(0.05)";
     // The shell waits for the PID file before it exits: the file lands
     // strictly after `setsid`, so the group is already empty when the
     // shell exits and the call ends as one step, not a background job.
