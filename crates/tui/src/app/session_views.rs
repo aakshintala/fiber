@@ -84,6 +84,8 @@ pub(in crate::app) struct SessionViews {
     request: Option<(String, String)>,
     diff: Option<(String, Diff)>,
     diff_list: List,
+    figures_request: Option<String>,
+    figures: Option<changed_files_view::NumstatAnswer>,
     hooks_request: Option<String>,
     hooks_rows: Option<Vec<contract::events::HookInfo>>,
 }
@@ -137,6 +139,7 @@ impl App {
         self.session_views.request = None;
         self.session_views.diff = None;
         self.session_views.diff_list = List::default();
+        self.session_views.figures_request = None;
         self.session_views.open = Some(match view {
             SessionView::Usage => Open::Usage(List::default()),
             SessionView::Quota => Open::Quota(List::default()),
@@ -161,16 +164,82 @@ impl App {
         // a late answer folds nowhere.
         self.rewind = super::rewind::Rewind::default();
         self.session_views.hooks_request = None;
+        if matches!(view, SessionView::ChangedFiles) {
+            return self.send_figures_request();
+        }
         Effect::None
     }
 
-    /// Opens Changed files and fetches `rank` from the current card ordering.
+    /// Opens Changed files and fetches `rank` from the displayed
+    /// figures ordering. The open sends the numstat query first, so a
+    /// file click yields its line then the diff line, in that order.
     pub(in crate::app) fn open_changed_file(&mut self, rank: usize) -> Effect {
         let effect = self.open_session_view(SessionView::ChangedFiles);
         if !self.session_view_open() {
             return effect;
         }
-        self.session_view_file_rank(rank)
+        match (effect, self.session_view_file_rank(rank)) {
+            (Effect::Send(mut first), Effect::Send(mut second)) => {
+                first.append(&mut second);
+                Effect::Send(first)
+            }
+            (first, Effect::None) => first,
+            (Effect::None, second) => second,
+            (first, _) => first,
+        }
+    }
+
+    /// Sends the Changed files figures query over the card's listed
+    /// paths, like `open_hooks` sends its query: a late answer after
+    /// another open folds nowhere, and with no driver the view opens
+    /// showing the card's figures.
+    fn send_figures_request(&mut self) -> Effect {
+        self.session_views.figures_request = None;
+        self.session_views.figures = None;
+        let Some(session) = self.session().cloned() else {
+            return Effect::None;
+        };
+        if !self.connected() {
+            return Effect::None;
+        }
+        let paths: Vec<&str> = changed_files_view::ranked(self.panel_state.changes())
+            .into_iter()
+            .map(|(path, _, _)| path)
+            .collect();
+        if paths.is_empty() {
+            return Effect::None;
+        }
+        let id = super::mint();
+        let line = shell::command(
+            &id,
+            &session,
+            &changed_files_view::numstat_command(&paths),
+            false,
+        )
+        .to_string();
+        self.session_views.figures_request = Some(id);
+        Effect::Send(vec![line])
+    }
+
+    /// The Changed files rows' figures: the numstat answer resolved
+    /// over the card's sums, or the card's sums until it answers. The
+    /// list and the Enter rank share this, so rows and fetching
+    /// always agree.
+    fn displayed_figures(&self) -> changed_files_view::ResolvedFigures {
+        match self.session_views.figures.as_ref() {
+            Some(answer) => changed_files_view::resolve_figures(
+                self.panel_state.changes(),
+                Some(answer.raw.as_str()),
+                &answer.lines,
+                self.workspace_root(),
+            ),
+            None => changed_files_view::resolve_figures(
+                self.panel_state.changes(),
+                None,
+                &std::collections::BTreeMap::new(),
+                self.workspace_root(),
+            ),
+        }
     }
 
     /// Whether a session view is open.
@@ -491,6 +560,7 @@ impl App {
                 };
                 Some(changed_files_view::frame(
                     self.panel_state.changes(),
+                    Some(&self.displayed_figures()),
                     chosen,
                     list,
                 ))
@@ -564,9 +634,10 @@ impl App {
     }
 
     /// Starts the selected file's diff request, or leaves an empty list when
-    /// `rank` no longer names a file in the card ordering.
+    /// `rank` no longer names a file in the displayed figures ordering.
     fn session_view_file_rank(&mut self, rank: usize) -> Effect {
-        let Some((path, _, _)) = changed_files_view::ranked(self.panel_state.changes())
+        let displayed = self.displayed_figures();
+        let Some((path, _, _)) = changed_files_view::ranked(&displayed.figures)
             .get(rank)
             .copied()
         else {
@@ -685,6 +756,10 @@ impl App {
 
     /// A session answer fills only the diff request that still owns its id.
     fn session_views_answered(&mut self, accepted: &CommandAccepted) {
+        if self.session_views.figures_request.as_deref() == Some(accepted.command_id.0.as_str()) {
+            self.session_views.figures_request = None;
+            self.session_views.figures = self.answered_figures(accepted);
+        }
         let Some((id, path)) = self.session_views.request.as_ref() else {
             return;
         };
@@ -697,6 +772,57 @@ impl App {
             Some((path, changed_files_view::answer(accepted.result.as_ref())));
     }
 
+    /// Folds a numstat answer into stored figures: git's raw output
+    /// plus the workspace line counts for the paths it omits.
+    /// Anything but a readable numstat answer stores nothing, so
+    /// the rows keep the card's figures and the view opens normally.
+    fn answered_figures(
+        &self,
+        accepted: &CommandAccepted,
+    ) -> Option<changed_files_view::NumstatAnswer> {
+        let Some(contract::events::CommandResult::Shell {
+            output, process, ..
+        }) = accepted.result.as_ref()
+        else {
+            return None;
+        };
+        if process.signal.is_some() || process.timed_out {
+            return None;
+        }
+        if output.is_empty() && process.exit_code != Some(0) {
+            return None;
+        }
+        let body = changed_files_view::numstat_body(output, process.exit_code);
+        if !changed_files_view::numstat_fully_parsed(body) {
+            return None;
+        }
+        let raw = body.to_owned();
+        let parsed = changed_files_view::parse_numstat(&raw);
+        let omitted: Vec<&str> = self
+            .panel_state
+            .changes()
+            .keys()
+            .filter(|path| {
+                changed_files_view::lookup(&parsed, path, self.workspace_root()).is_none()
+            })
+            .map(String::as_str)
+            .collect();
+        let lines = match self.workspace_root() {
+            Some(root) => changed_files_view::count_lines(root, &omitted),
+            None => std::collections::BTreeMap::new(),
+        };
+        Some(changed_files_view::NumstatAnswer { raw, lines })
+    }
+
+    /// The local launch workspace, when the terminal has one: the
+    /// root the Changed files paths read against.
+    fn workspace_root(&self) -> Option<&std::path::Path> {
+        match self.home.as_ref().map(|home| &home.launch.location) {
+            Some(crate::LaunchLocation::Local { workspace, .. }) => Some(workspace),
+            _ => None,
+        }
+    }
+
     /// A session rejection fills only the diff request that still owns its id.
     fn session_views_rejected(&mut self, rejected: &CommandRejected) {
         let Some(id) = rejected.command_id.as_ref() else {
@@ -707,6 +833,9 @@ impl App {
 
     /// A hub `command_rejected` for the current diff request shows its message.
     pub(in crate::app) fn session_views_refused(&mut self, id: &str, message: &str) {
+        if self.session_views.figures_request.as_deref() == Some(id) {
+            self.session_views.figures_request = None;
+        }
         let Some((request, path)) = self.session_views.request.as_ref() else {
             return;
         };

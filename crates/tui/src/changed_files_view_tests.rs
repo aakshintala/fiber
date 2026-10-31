@@ -62,6 +62,12 @@ fn app_with_files() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.set_size(80, 24);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
     app.on_line(Line::Session(Envelope {
         kind: "tool_call_completed".to_owned(),
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
@@ -81,21 +87,21 @@ fn app_with_files() -> App {
         .cloned()
         .unwrap_or_default(),
     }));
+    let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
+        panic!("opening the list sends the numstat query");
+    };
+    assert_eq!(lines.len(), 1);
+    let request: serde_json::Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     assert_eq!(
-        app.open_session_view(SessionView::ChangedFiles),
-        Effect::None
+        request["args"]["command"],
+        numstat_command(&["src/a.rs", "src/b.rs"])
     );
     app
 }
 
 fn app_with_diff() -> App {
     let mut app = app_with_files();
-    app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    }));
     let Effect::Send(lines) = app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()) else {
         panic!("choosing a file sends its shell request");
     };
@@ -125,7 +131,7 @@ fn app_with_diff() -> App {
 fn a_file_row_is_its_path_bold_then_dim_dot_added_and_removed() {
     use crate::swapped::Ink;
     use crate::theme::Role;
-    let frame = frame(&changes(&[("src/a.rs", 4, 2)]), None, List::default());
+    let frame = frame(&changes(&[("src/a.rs", 4, 2)]), None, None, List::default());
     assert_eq!(
         frame.rows[0],
         [
@@ -308,14 +314,19 @@ fn resolve_figures_prefers_git_counts_untracked_lines_then_card() {
     let answered = "7\t1\tsrc/a.rs\n-\t-\tbin/x\n";
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
-    let displayed = resolve_figures(&card, Some(answered), &lines);
-    assert_eq!(displayed.get("src/a.rs"), Some(&(7, 1)));
+    let displayed = resolve_figures(&card, Some(answered), &lines, None);
+    assert_eq!(displayed.figures.get("src/a.rs"), Some(&(7, 1)));
     // A binary path keeps the card's figures.
-    assert_eq!(displayed.get("bin/x"), Some(&(1, 1)));
+    assert_eq!(displayed.figures.get("bin/x"), Some(&(1, 1)));
     // An answered-but-omitted path resolves to its line count as added.
-    assert_eq!(displayed.get("new.txt"), Some(&(3, 0)));
+    assert_eq!(displayed.figures.get("new.txt"), Some(&(3, 0)));
     // An answered-but-omitted and uncounted path keeps the card's figures.
-    assert_eq!(displayed.get("gone.txt"), Some(&(2, 0)));
+    assert_eq!(displayed.figures.get("gone.txt"), Some(&(2, 0)));
+    // Only the counted omitted path draws the untracked row form.
+    assert!(displayed.untracked.contains("new.txt"));
+    assert!(!displayed.untracked.contains("gone.txt"));
+    assert!(!displayed.untracked.contains("bin/x"));
+    assert!(!displayed.untracked.contains("src/a.rs"));
 }
 
 #[test]
@@ -323,7 +334,12 @@ fn resolve_figures_without_an_answer_keeps_the_card() {
     let card = changes(&[("src/a.rs", 4, 2)]);
     let mut lines = BTreeMap::new();
     lines.insert("src/a.rs".to_owned(), 9u64);
-    assert_eq!(resolve_figures(&card, None, &lines), card);
+    assert_eq!(resolve_figures(&card, None, &lines, None).figures, card);
+    assert!(
+        resolve_figures(&card, None, &lines, None)
+            .untracked
+            .is_empty()
+    );
 }
 
 #[test]
@@ -384,9 +400,9 @@ fn numstat_command_output_parses_and_resolves_against_git() {
     let card = changes(&[("a.rs", 5, 5), ("new.txt", 9, 9)]);
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
-    let displayed = resolve_figures(&card, Some(&stdout), &lines);
-    assert_eq!(displayed.get("a.rs"), Some(&(2, 1)));
-    assert_eq!(displayed.get("new.txt"), Some(&(3, 0)));
+    let displayed = resolve_figures(&card, Some(&stdout), &lines, None);
+    assert_eq!(displayed.figures.get("a.rs"), Some(&(2, 1)));
+    assert_eq!(displayed.figures.get("new.txt"), Some(&(3, 0)));
 }
 
 #[test]
@@ -464,7 +480,7 @@ fn a_missing_or_non_shell_answer_cannot_be_read() {
 #[test]
 fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     let changes = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
-    let list = frame(&changes, None, List::default());
+    let list = frame(&changes, None, None, List::default());
     assert_eq!(list.title, "Changed files");
     assert_eq!(row(&list, 0), "src/a.rs · +4 −2");
     assert_eq!(row(&list, 1), "src/b.rs · +1 −0");
@@ -473,6 +489,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
 
     let reading = frame(
         &changes,
+        None,
         Some(("src/a.rs", &Diff::Reading)),
         List::default(),
     );
@@ -488,14 +505,19 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     };
     assert_eq!(
         row(
-            &frame(&changes, Some(("src/a.rs", &diff)), List::default()),
+            &frame(&changes, None, Some(("src/a.rs", &diff)), List::default()),
             0
         ),
         "+new"
     );
     assert_eq!(
         row(
-            &frame(&changes, Some(("src/a.rs", &Diff::Empty)), List::default()),
+            &frame(
+                &changes,
+                None,
+                Some(("src/a.rs", &Diff::Empty)),
+                List::default()
+            ),
             0
         ),
         "No changes against HEAD."
@@ -503,7 +525,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     let failed = Diff::Failed("denied".to_owned());
     assert_eq!(
         row(
-            &frame(&changes, Some(("src/a.rs", &failed)), List::default()),
+            &frame(&changes, None, Some(("src/a.rs", &failed)), List::default()),
             0
         ),
         "denied"
@@ -513,7 +535,7 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         cut: Some("artifacts/full.diff".to_owned()),
     };
     assert_eq!(
-        frame(&changes, Some(("src/a.rs", &cut)), List::default()).below,
+        frame(&changes, None, Some(("src/a.rs", &cut)), List::default()).below,
         ["Cut: the whole diff is in artifacts/full.diff"]
     );
 }
@@ -532,6 +554,7 @@ fn diff_frame_of(lines: &[&str]) -> crate::swapped::Frame {
     };
     frame(
         &changes(&[("src/a.rs", 1, 1)]),
+        None,
         Some(("src/a.rs", &diff)),
         List::default(),
     )
@@ -612,4 +635,75 @@ fn an_unpaired_run_marks_nothing() {
             .all(|(_, _, ink)| !matches!(ink, crate::swapped::Ink::Marked(_))),
         "{frame:?}"
     );
+}
+
+#[test]
+fn answered_rows_show_git_figures_and_the_untracked_row_form() {
+    use crate::swapped::Ink;
+    let card = changes(&[("src/a.rs", 4, 2), ("new.txt", 4, 1)]);
+    let mut lines = BTreeMap::new();
+    lines.insert("new.txt".to_owned(), 3u64);
+    let resolved = resolve_figures(&card, Some("7\t1\tsrc/a.rs\n"), &lines, None);
+    let frame = frame(&card, Some(&resolved), None, List::default());
+    assert_eq!(row(&frame, 0), "src/a.rs · +7 −1");
+    assert_eq!(row(&frame, 1), "new.txt · untracked, wholly added");
+    assert_eq!(
+        frame.rows[1],
+        [
+            ("new.txt".to_owned(), None, Ink::Heading),
+            (" · ".to_owned(), None, Ink::Muted),
+            ("untracked, wholly added".to_owned(), None, Ink::Muted),
+        ]
+    );
+    assert_eq!(frame.below, ["2 files changed  +10 −1"]);
+}
+
+#[test]
+fn count_lines_counts_newlines_and_skips_unreadable_files() {
+    let dir = fakes::TempDir::new("tui-changed-files-count-lines");
+    std::fs::write(dir.path().join("a.rs"), "one\ntwo\nthree\n")
+        .unwrap_or_else(|error| panic!("write counted file: {error}"));
+    let counts = super::count_lines(dir.path(), &["a.rs", "missing.rs"]);
+    assert_eq!(counts.get("a.rs"), Some(&3u64));
+    assert!(!counts.contains_key("missing.rs"));
+}
+
+#[test]
+fn numstat_fully_parsed_rejects_garbage_lines() {
+    assert!(super::numstat_fully_parsed("7\t1\tsrc/a.rs\n-\t-\tbin/x\n"));
+    assert!(!super::numstat_fully_parsed("7\t1\tsrc/a.rs\ngarbage\n"));
+    assert!(super::numstat_fully_parsed(""));
+}
+
+#[test]
+fn numstat_body_strips_only_the_answer_s_own_closing_line() {
+    assert_eq!(
+        super::numstat_body("7\t1\tsrc/a.rs\nExit code 0.\n", Some(0)),
+        "7\t1\tsrc/a.rs\n"
+    );
+    assert_eq!(super::numstat_body("Exit code 0.\n", Some(0)), "");
+    assert_eq!(
+        super::numstat_body("7\t1\tsrc/a.rs\n", Some(0)),
+        "7\t1\tsrc/a.rs\n"
+    );
+    assert_eq!(
+        super::numstat_body("7\t1\tsrc/a.rs\nExit code 1.\n", Some(0)),
+        "7\t1\tsrc/a.rs\nExit code 1.\n"
+    );
+}
+
+#[test]
+fn resolve_figures_matches_git_s_relative_paths_against_absolute_card_paths() {
+    let dir = fakes::TempDir::new("tui-changed-files-workspace-root");
+    let absolute = dir
+        .path()
+        .join("a.rs")
+        .to_str()
+        .unwrap_or_else(|| panic!("workspace path"))
+        .to_owned();
+    let card = changes(&[(absolute.as_str(), 4, 2)]);
+    let lines = BTreeMap::new();
+    let displayed = resolve_figures(&card, Some("7\t1\ta.rs\n"), &lines, Some(dir.path()));
+    assert_eq!(displayed.figures.get(absolute.as_str()), Some(&(7, 1)));
+    assert!(displayed.untracked.is_empty());
 }
