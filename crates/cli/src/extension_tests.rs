@@ -569,6 +569,7 @@ fn first_party_install_returns_the_install_summary_and_missing_login_without_ask
                 FIBER_VERSION,
                 &origin,
                 &*clock,
+                None,
             )
             .unwrap();
             assert_eq!(answer.installed, [FIRST_PARTY]);
@@ -607,6 +608,7 @@ fn first_party_install_rejects_scripted_before_fetching() {
         FIBER_VERSION,
         &origin,
         &*fakes::clock::FakeClock::new(),
+        None,
     )
     .unwrap_err();
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
@@ -633,6 +635,7 @@ fn first_party_install_keeps_fetch_failures_and_cleans_staging() {
                 FIBER_VERSION,
                 &origin,
                 &*clock,
+                None,
             )
             .unwrap_err();
             assert_eq!(error.code(), ErrorCode::ExtensionNotFound);
@@ -673,6 +676,7 @@ fn first_party_install_reinstalls_an_installed_provider() {
                     FIBER_VERSION,
                     &origin,
                     &*clock,
+                    None,
                 )
                 .unwrap();
                 assert_eq!(answer.installed, [FIRST_PARTY]);
@@ -723,6 +727,7 @@ fn first_party_install_rejects_an_unreadable_existing_provider_before_commit() {
                 FIBER_VERSION,
                 &fixture_origin(repo.path()),
                 &*clock,
+                None,
             )
             .unwrap_err();
             assert_eq!(error.code(), ErrorCode::ConfigInvalid);
@@ -761,6 +766,7 @@ fn first_party_install_rejects_an_unreadable_cache_before_commit() {
                 FIBER_VERSION,
                 &fixture_origin(repo.path()),
                 &*clock,
+                None,
             )
             .unwrap_err();
             assert_eq!(error.code(), ErrorCode::IoFailed);
@@ -803,6 +809,7 @@ fn first_party_install_checks_present_empty_and_unreadable_keys_without_exposing
                 FIBER_VERSION,
                 &origin,
                 &*clock,
+                None,
             )
             .unwrap();
             assert!(answer.login.is_empty());
@@ -814,6 +821,7 @@ fn first_party_install_checks_present_empty_and_unreadable_keys_without_exposing
                 FIBER_VERSION,
                 &origin,
                 &*clock,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -832,6 +840,7 @@ fn first_party_install_checks_present_empty_and_unreadable_keys_without_exposing
                 FIBER_VERSION,
                 &origin,
                 &*clock,
+                None,
             )
             .unwrap();
             assert_eq!(answer.login.len(), 1);
@@ -874,6 +883,7 @@ fn first_party_install_rejects_a_staged_dependency_with_an_unreadable_addendum()
                 FIBER_VERSION,
                 &fixture_origin(repo.path()),
                 &*clock,
+                None,
             )
             .unwrap_err();
             assert_eq!(error.code(), ErrorCode::ConfigInvalid);
@@ -1893,4 +1903,67 @@ fn install_summary_lists_a_lua_only_declared_provider() {
         err.contains("Provider p: http://a.test/v1, http://b.test/v1\n"),
         "{err}"
     );
+}
+
+/// A debug path install logs the binary request without its manifest-declared
+/// path to the pid-named CLI log: the commit downloads it through the plan's
+/// sink.
+#[test]
+fn a_debug_path_install_omits_the_manifest_binary_path() {
+    let setup = Setup::new();
+    let body = b"binary-bytes".to_vec();
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, body.clone())]).unwrap();
+    let url = format!("{}/bin", server.url());
+    let mut manifest = manifest("example.com/acme/tool");
+    manifest["binaries"] = serde_json::json!({
+        extensions::platform(): {"url": url, "sha256": fakes::ustar::sha256(&body)},
+    });
+    let source = setup.source("tool", &manifest, &[]);
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::json!({"diagnostics": {"level": "debug"}}).to_string(),
+    )
+    .unwrap();
+    struct Read;
+    impl std::io::Read for Read {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Ok(0)
+        }
+    }
+    impl BufRead for Read {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            Ok(&[])
+        }
+        fn consume(&mut self, _amount: usize) {}
+    }
+    let (_, got) = run_install(
+        &setup.home(),
+        Request::Path(source),
+        &Origin::github(),
+        false,
+        &mut Read,
+    );
+    assert_eq!(got.unwrap(), 0);
+    let name = format!("cli-{}.log", std::process::id());
+    let text = fs::read_to_string(setup.home().join("logs").join(&name)).unwrap();
+    let host = server.url().trim_start_matches("http://").to_owned();
+    let requests: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|line: &serde_json::Value| line["code"] == "http_request")
+        .filter(|line: &serde_json::Value| {
+            line["data"].get("host").and_then(|host| host.as_str()) == Some(host.as_str())
+        })
+        .collect();
+    // docs/state.md, "Diagnostic logs": one line per actual request;
+    // manifest-binary paths are omitted.
+    assert_eq!(requests.len(), 1, "one line per binary: {requests:?}");
+    let data = &requests[0]["data"];
+    assert_eq!(data["purpose"], "extension_release", "{data}");
+    assert_eq!(data["host"], host, "{data}");
+    assert!(data.get("path").is_none(), "{data}");
+    assert_eq!(data["status"], 200, "{data}");
+    assert_eq!(data["response_bytes"], body.len(), "{data}");
+    assert_eq!(requests[0]["process"], "cli");
 }

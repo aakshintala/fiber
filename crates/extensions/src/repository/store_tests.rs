@@ -835,3 +835,80 @@ fn the_hold_blocks_an_exclusive_lock_until_it_drops() {
     let probe = File::options().read(true).open(&marker).unwrap();
     assert!(probe.try_lock().is_ok());
 }
+
+/// Every `http_request` line the observed store writes, in order.
+#[derive(Default)]
+struct Lines {
+    lines: std::sync::Mutex<Vec<contract::diag::HttpRequest>>,
+}
+
+impl contract::diag::DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &contract::diag::HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+/// A store copy whose binary download fails writes the download's
+/// `extension_release` line on the store's sink: the approval fails
+/// with the download error, and post-send without a response carries
+/// no status and zero bytes.
+#[test]
+fn a_store_prepare_with_a_sink_writes_the_binary_line() {
+    let repo = Repo::new();
+    // A server that is gone before the approval runs: the port refuses
+    // the download, so the approval fails after the line.
+    let closed = {
+        let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+        server.url()
+    };
+    let mut binaries = serde_json::Map::new();
+    binaries.insert(
+        crate::prepare::platform(),
+        serde_json::json!({"url": format!("{closed}/bin"), "sha256": "0".repeat(64)}),
+    );
+    let item = extension(
+        &repo,
+        &serde_json::json!({"binaries": binaries, "install": ["sh", "-c", "true"]}),
+    );
+    let hash = hashed(&item);
+    let lines = Arc::new(Lines::default());
+    let observed = Store::new(
+        &repo.home(),
+        &ProjectKey::new(KEY).unwrap(),
+        fakes::clock::FakeClock::new(),
+    )
+    .with_diagnostics(Some(Arc::clone(&lines) as Arc<dyn contract::diag::DebugLog>));
+    let err = observed.approve(&item, &hash).unwrap_err();
+    assert!(
+        matches!(err, Error::Download { .. }),
+        "the refused binary fails the approval: {err:?}"
+    );
+    let lines = lines.lines.lock().unwrap().clone();
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
+    assert_eq!(lines.len(), 1, "one line per binary: {lines:?}");
+    let line = &lines[0];
+    assert_eq!(
+        line.purpose(),
+        contract::diag::Purpose::ExtensionRelease,
+        "{line:?}"
+    );
+    assert_eq!(
+        line.host.as_deref(),
+        Some(closed.trim_start_matches("http://")),
+        "the manifest host stays: {line:?}"
+    );
+    assert_eq!(
+        line.path, None,
+        "manifest binary paths stay private: {line:?}"
+    );
+    assert_eq!(line.status, None, "no response arrived: {line:?}");
+    assert_eq!(line.attempt, 1, "{line:?}");
+    assert_eq!(line.request_bytes, 0, "{line:?}");
+    assert_eq!(line.response_bytes, 0, "{line:?}");
+    assert_eq!(line.identity(), None, "no identity: {line:?}");
+    assert_eq!(line.model, None, "no model: {line:?}");
+}

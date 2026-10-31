@@ -413,6 +413,33 @@ impl SessionExtensions {
         Self::load_with_state(home, config, clock, locks, host, StateSeed::new())
     }
 
+    /// Loads extensions with the session's diagnostic sink installed
+    /// before any Lua runs, so an entry script's `host.http` still
+    /// records: the sink flows to the VM starts below before the first
+    /// `hooks()` call runs entry. `None` on test-only loads, which record
+    /// nothing.
+    pub fn load_with_diagnostics(
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+        host: Option<Arc<crate::host::script::HostScript>>,
+        debug: Option<Arc<dyn DebugLog>>,
+    ) -> Self {
+        Self::load_registry(
+            home,
+            config,
+            clock,
+            locks,
+            host,
+            crate::host::state::StateRegistry::new(StateSeed::new()),
+            crate::RepositorySet::default(),
+            BTreeSet::new(),
+            None,
+            debug,
+        )
+    }
+
     /// Loads extensions with their folded state installed before any Lua runs.
     pub fn load_with_state(
         home: &Path,
@@ -432,12 +459,20 @@ impl SessionExtensions {
             crate::RepositorySet::default(),
             BTreeSet::new(),
             None,
+            None,
         )
     }
 
     /// Loads extensions with the repository set the session approved, in
     /// place of the personal installs of the same names. The set's holds
     /// move into the session, so its copies live for the session's life.
+    /// The session's diagnostic sink, when debugging, installs before any
+    /// Lua runs, so an entry script's `host.http` still records; `None`
+    /// stays silent.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a repository load carries its context and existing shared services"
+    )]
     pub fn load_repository(
         home: &Path,
         config: &Config,
@@ -446,6 +481,7 @@ impl SessionExtensions {
         host: Option<Arc<crate::host::script::HostScript>>,
         seed: StateSeed,
         repository: crate::RepositorySet,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Self {
         Self::load_registry(
             home,
@@ -457,6 +493,7 @@ impl SessionExtensions {
             repository,
             BTreeSet::new(),
             None,
+            debug,
         )
     }
 
@@ -483,6 +520,31 @@ impl SessionExtensions {
         start: StartContext,
         restart: BTreeSet<String>,
     ) -> Self {
+        Self::load_session_with_diagnostics(
+            home, config, clock, locks, host, seed, repository, start, restart, None,
+        )
+    }
+
+    /// As [`SessionExtensions::load_session`], with the session's
+    /// diagnostic sink installed before any child starts, so a process
+    /// callback's own `host.http` still records; test-only session loads
+    /// pass `None` and stay silent.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one live session load carries its context and existing shared services"
+    )]
+    pub fn load_session_with_diagnostics(
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+        host: Option<Arc<crate::host::script::HostScript>>,
+        seed: StateSeed,
+        repository: crate::RepositorySet,
+        start: StartContext,
+        restart: BTreeSet<String>,
+        debug: Option<Arc<dyn DebugLog>>,
+    ) -> Self {
         let session = Self::load_registry(
             home,
             config,
@@ -493,6 +555,7 @@ impl SessionExtensions {
             repository,
             restart,
             Some(&start),
+            debug,
         );
         *lock(&session.latest_reason) = start.reason;
         session
@@ -536,6 +599,7 @@ impl SessionExtensions {
             crate::RepositorySet::default(),
             self.started_lazy(),
             None,
+            None,
         )
     }
 
@@ -544,7 +608,10 @@ impl SessionExtensions {
     /// session, so its copies live until the next reload replaces them. An
     /// old approved hook stays running when its replacement is unapproved,
     /// skipped or failed: only an approved and materialized replacement
-    /// swaps the snapshot, and the old copy stays held until then.
+    /// swaps the snapshot, and the old copy stays held until then. The
+    /// session's diagnostic sink, when debugging, installs before any Lua
+    /// runs, so an entry script's `host.http` still records; `None` stays
+    /// silent.
     pub fn reload_repository(
         &self,
         home: &Path,
@@ -552,6 +619,7 @@ impl SessionExtensions {
         clock: Arc<dyn Clock>,
         locks: Arc<dyn PathLock>,
         mut repository: crate::RepositorySet,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Self {
         for (name, snapshot) in &self.hook_snapshots {
             let has_new_approved = matches!(
@@ -571,7 +639,8 @@ impl SessionExtensions {
                 continue;
             }
             let project = config.extensions().project().clone();
-            let store = crate::repository::Store::new(home, &project, Arc::clone(&clock));
+            let store = crate::repository::Store::new(home, &project, Arc::clone(&clock))
+                .with_diagnostics(debug.clone());
             if let Ok(hold) = store.try_hold_finished(&snapshot.hash) {
                 repository.holds.push(hold);
                 repository.hooks.insert(
@@ -590,6 +659,7 @@ impl SessionExtensions {
             repository,
             self.started_lazy(),
             None,
+            debug,
         )
     }
 
@@ -658,6 +728,7 @@ impl SessionExtensions {
         repository: crate::RepositorySet,
         restart: BTreeSet<String>,
         start: Option<&StartContext>,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Self {
         let mut session = Self {
             runtime: Runtime::new(Arc::clone(&clock)),
@@ -789,6 +860,7 @@ impl SessionExtensions {
                         Arc::clone(&clock),
                         Arc::clone(&locks),
                         Arc::clone(&session.state),
+                        debug.clone(),
                     ) {
                         Ok(started) => started,
                         Err(e) => {
@@ -860,6 +932,7 @@ impl SessionExtensions {
                         home,
                         &host,
                         start,
+                        debug.clone(),
                         name,
                         version,
                         slug,
@@ -946,6 +1019,7 @@ impl SessionExtensions {
                     Arc::clone(&clock),
                     Arc::clone(&locks),
                     Arc::clone(&session.state),
+                    debug.clone(),
                 ) {
                     Ok((extension, mut ignored)) => {
                         session.notices.append(&mut ignored);
@@ -1085,6 +1159,7 @@ impl SessionExtensions {
                 config,
                 Arc::clone(&clock),
                 Arc::clone(&locks),
+                debug.clone(),
             ) {
                 session.failed(&s.name, &e);
                 continue;
@@ -1195,6 +1270,7 @@ impl SessionExtensions {
                 config,
                 Arc::clone(&clock),
                 Arc::clone(&locks),
+                debug.clone(),
             ) {
                 session.failed(&s.name, &e);
                 continue;
@@ -1301,6 +1377,7 @@ impl SessionExtensions {
         home: &Path,
         host: &Option<Arc<crate::host::script::HostScript>>,
         start: &StartContext,
+        debug: Option<Arc<dyn DebugLog>>,
         name: String,
         version: String,
         slug: String,
@@ -1374,6 +1451,7 @@ impl SessionExtensions {
                 drive: start.drive.clone(),
                 clock: Arc::clone(clock),
                 startup_timeout: Duration::from_millis(allowance),
+                diagnostics: debug,
             }),
             Some(crate::package::ProcessProviderHost {
                 home: home.to_path_buf(),

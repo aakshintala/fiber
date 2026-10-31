@@ -675,7 +675,7 @@ fn settle(
     // owned context: no timer starts and nothing is written until the
     // admitted worker executes. Every other host call carries none.
     let http = match &request {
-        host::Request::Http(_) => super::http_observation(hub, &target),
+        host::Request::Http(_) => super::http_observation(hub, &target, &start.name),
         host::Request::Ask(_)
         | host::Request::Tool(_)
         | host::Request::Drive(_)

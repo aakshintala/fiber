@@ -89,6 +89,7 @@ impl McpRemote for FakeRemote {
         _url: &str,
         _present: &dyn Fn(&str),
         _clock: &dyn contract::clock::Clock,
+        _debug: Option<std::sync::Arc<dyn contract::diag::DebugLog>>,
     ) -> Result<(), Failure> {
         Err(crate::failed(
             contract::ErrorCode::IoFailed,
