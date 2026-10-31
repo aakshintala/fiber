@@ -24,6 +24,8 @@ use serde_json::{Map, json};
 
 use super::Shell;
 use super::sandbox::Settings;
+#[cfg(target_os = "linux")]
+use super::sandbox::protected::ProtectedPaths;
 
 struct NeverCancelled;
 
@@ -96,6 +98,128 @@ fn sandbox_disabled_error(output: &Output) -> &str {
         .as_ref()
         .map(|error| error.message.as_str())
         .expect("the call fails")
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_read_only_call_needs_no_writable_protection_state() {
+    let dir = fixture("fiber-read-only-protection");
+    let workspace = dir.path().join("workspace");
+    let fiber_home = dir.path().join("fiber-home");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    std::fs::create_dir_all(&fiber_home).expect("create Fiber home");
+    std::fs::write(workspace.join("note.txt"), "readable").expect("write note");
+    let (protection, startup) =
+        ProtectedPaths::open(&fiber_home, &workspace).expect("open protection");
+    assert!(startup.is_none());
+    // A read-only call needs no baseline. Refuse baseline storage so an
+    // unnecessary transaction is visible as a failed tool call.
+    std::fs::write(fiber_home.join("projects"), "not a directory").expect("block protection state");
+    let shell = Shell::new(workspace.clone(), fakes::clock::FakeClock::new())
+        .with_sandbox(Arc::new(Mutex::new(Settings {
+            enabled: true,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home,
+        })))
+        .with_protection(protection);
+    let args = arguments("cat note.txt", &workspace);
+    let prepared = shell.effects(&args).expect("prepare read-only call");
+    assert!(prepared.declared.confined);
+    assert_eq!(
+        prepared.declared.effects,
+        vec![contract::shapes::Effect::Reads]
+    );
+    let output = fakes::within(
+        "the confined read-only call finishes without baseline storage",
+        fakes::Deadline::after(std::time::Duration::from_secs(10)),
+        move || shell.run_with_effects(&args, &prepared, &NeverCancelled, &NoEmit, &NoAsk),
+    );
+    assert!(output.error.is_none(), "read succeeds: {:?}", output.error);
+    assert!(fakes::text_of(&output).starts_with("readable"));
+    assert_eq!(output.process.as_ref().and_then(|p| p.exit_code), Some(0));
+    assert!(output.protected_paths.is_none());
+    assert!(
+        output
+            .details
+            .as_ref()
+            .unwrap()
+            .get("protected_paths")
+            .is_none()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn only_confined_non_read_only_effects_restore_and_report_changes() {
+    use contract::shapes::Effect::{Executes, Reads};
+
+    for (confined, declared) in [
+        (true, vec![]),
+        (true, vec![Reads, Executes]),
+        (false, vec![Executes]),
+    ] {
+        let dir = fixture("fiber-effects-protection");
+        let workspace = dir.path().join("workspace");
+        let fiber_home = dir.path().join("fiber-home");
+        std::fs::create_dir_all(workspace.join(".fiber")).expect("create protected directory");
+        std::fs::write(workspace.join(".fiber/note.txt"), "original").expect("write note");
+        let (protection, _) =
+            ProtectedPaths::open(&fiber_home, &workspace).expect("open protection");
+        let shell = Shell::new(workspace.clone(), fakes::clock::FakeClock::new())
+            .with_sandbox(Arc::new(Mutex::new(Settings {
+                enabled: true,
+                allow_write: Vec::new(),
+                deny_read: Vec::new(),
+                fiber_home,
+            })))
+            .with_protection(protection);
+        let args = arguments("printf changed > .fiber/note.txt; printf ran", &workspace);
+        // Empty effects are not proof of a read-only call; a mixed call
+        // must not inherit the exemption of its Reads component either.
+        let mut prepared = effects_with(confined);
+        prepared.declared.effects = declared;
+        let output = fakes::within(
+            "the call finishes and reports its protected-path changes",
+            fakes::Deadline::after(std::time::Duration::from_secs(10)),
+            move || shell.run_with_effects(&args, &prepared, &NeverCancelled, &NoEmit, &NoAsk),
+        );
+        assert!(output.error.is_none(), "call succeeds: {:?}", output.error);
+        assert_eq!(output.process.as_ref().and_then(|p| p.exit_code), Some(0));
+        let text = fakes::text_of(&output);
+        assert!(text.starts_with("ran"), "the command ran: {text}");
+        if confined {
+            let expected = contract::shapes::ProtectedPaths {
+                restored: vec![".fiber".to_owned()],
+                failed: Vec::new(),
+            };
+            assert_eq!(output.protected_paths, Some(expected));
+            assert_eq!(
+                output.details.as_ref().unwrap().get("protected_paths"),
+                Some(&json!({"restored": [".fiber"], "failed": []})),
+            );
+            assert!(text.contains("Protected path .fiber changed while a confined call ran;"));
+            assert_eq!(
+                std::fs::read_to_string(workspace.join(".fiber/note.txt")).unwrap(),
+                "original",
+            );
+        } else {
+            assert!(output.protected_paths.is_none());
+            assert!(
+                output
+                    .details
+                    .as_ref()
+                    .unwrap()
+                    .get("protected_paths")
+                    .is_none()
+            );
+            assert!(!text.contains("Protected path"));
+            assert_eq!(
+                std::fs::read_to_string(workspace.join(".fiber/note.txt")).unwrap(),
+                "changed",
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

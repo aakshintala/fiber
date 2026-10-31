@@ -20,6 +20,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     config/<extension>.json       an extension's settings for this project
     worktrees/<id>/               one git worktree per session that asked for one
     worktrees/<id>.lock           its lock file, held while a process runs in it
+    protected-paths/               the protected-path baseline and its two locks (docs/sandbox.md)
     approvals/<content-hash>      one file per extension or hook approval or never
     servers/<content-hash>        one record per MCP server copy this project approved
     data/<extension>/             an extension's data for this project

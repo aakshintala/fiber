@@ -40,6 +40,7 @@ fn completed(id: &str, status: Outcome) -> JobCompleted {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     }
 }
 

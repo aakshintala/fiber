@@ -48,6 +48,10 @@ pub use shell::sandbox::SetupError as SandboxSetupError;
 pub use shell::sandbox::check_available as sandbox_check_available;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use shell::sandbox::prepare;
+pub use shell::sandbox::protected::{
+    ProtectedPaths, ProtectedPathsOpenError, Report as ProtectedReport,
+    RestoreFailure as ProtectedRestoreFailure,
+};
 pub use shell::sandbox::{Settings as SandboxSettings, Unavailable as SandboxUnavailable};
 pub use skill::Skill;
 pub use tool_search::ToolSearch;
