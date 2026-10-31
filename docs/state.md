@@ -432,10 +432,7 @@ What is recorded:
   failure before the draw discards it and writes none. `tui.attached_frame` covers
   the same entry through the first draw that holds the attached session's
   history, written once per process; an attach with no stream, or one that ends
-  before that draw, writes none. `tui.attached_frame`
-  starts at the `tui.first_render` entry and ends at the first draw holding
-  attached-session history; it writes once per process. Without a stream, or
-  if the draw never happens, it writes none. `tui.log_read` covers the first
+  before that draw, writes none. `tui.log_read` covers the first
   attach's first fetched
   page, the first `page_in` `hub.fetch` attempt, to completion whatever its outcome,
   and `tui.transcript` covers the first successful `app.load` folding that
