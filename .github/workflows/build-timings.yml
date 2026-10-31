@@ -3,7 +3,9 @@ name: Build timings
 # Measures where Fiber's own build time goes (#3789, step 1). Manual only:
 # `gh workflow run build-timings.yml --ref <branch>`, never on a push or a
 # pull request. It builds the whole workspace with `--timings` on Linux
-# x86_64 and macOS arm64 from a warm dependency cache, times an incremental
+# x86_64 and macOS arm64 from a warm dependency cache (the workspace's own
+# outputs are cleaned after the restore, so the measured build recompiles
+# Fiber's crates while the dependencies stay warm), times an incremental
 # rebuild after touching one file each in `crates/tui` and `crates/support`,
 # and uploads both timing reports as artifacts. Its numbers are the evidence
 # later fix tickets pick from; it judges nothing and stays out of `ci.yml`'s
@@ -49,11 +51,24 @@ jobs:
       - name: Full workspace build with timings
         run: |
           mkdir -p "$RUNNER_TEMP/build-timings"
+          # The shared cache restores the workspace's own build outputs as
+          # well as the dependencies', which would make this build a no-op
+          # on a commit CI already built. Clean the workspace members so the
+          # measured build recompiles Fiber's crates while the dependencies
+          # stay warm.
+          args=()
+          while IFS= read -r spec; do
+            args+=(-p "$spec")
+          done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | "\(.name)@\(.version)"')
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "cargo metadata listed no workspace members"
+            exit 1
+          fi
+          cargo clean "${args[@]}"
           start=$(date +%s)
           cargo build --workspace --all-targets --timings 2>&1 | tee "$RUNNER_TEMP/build-timings/full-build.log"
           end=$(date +%s)
-          echo "full build took $((end - start)) s on ${{ matrix.runner }} from a warm dependency cache"
-          echo "full build took $((end - start)) s on ${{ matrix.runner }} from a warm dependency cache" >>"$GITHUB_STEP_SUMMARY"
+          echo "full build took $((end - start)) s on ${{ matrix.runner }} from a warm dependency cache" | tee -a "$GITHUB_STEP_SUMMARY"
           cp target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/build-timings/cargo-timing-full.html"
 
       - name: Incremental rebuild after touching tui and support
@@ -62,8 +77,7 @@ jobs:
           start=$(date +%s)
           cargo build --workspace --all-targets --timings 2>&1 | tee "$RUNNER_TEMP/build-timings/incremental-build.log"
           end=$(date +%s)
-          echo "incremental rebuild took $((end - start)) s on ${{ matrix.runner }} after touching one file each in crates/tui and crates/support"
-          echo "incremental rebuild took $((end - start)) s on ${{ matrix.runner }} after touching one file each in crates/tui and crates/support" >>"$GITHUB_STEP_SUMMARY"
+          echo "incremental rebuild took $((end - start)) s on ${{ matrix.runner }} after touching one file each in crates/tui and crates/support" | tee -a "$GITHUB_STEP_SUMMARY"
           cp target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/build-timings/cargo-timing-incremental.html"
 
       - name: Upload the timing reports
