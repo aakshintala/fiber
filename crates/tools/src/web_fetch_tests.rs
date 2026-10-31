@@ -56,6 +56,11 @@ impl WebFetch {
         self.wrap = Some(wrap);
         self
     }
+
+    fn signaling_headers_received(mut self, signal: mpsc::Sender<()>) -> Self {
+        self.headers_received = Some(signal);
+        self
+    }
 }
 
 fn response(status: u16, content_type: Option<&str>, body: impl Into<Vec<u8>>) -> Response {
@@ -1420,8 +1425,12 @@ fn a_cancel_while_the_body_is_read_stops_the_call() {
 #[test]
 fn a_deadline_while_the_body_is_read_keeps_status_and_partial_bytes() {
     let server = serve([stall()]);
-    let rig = Rig::new();
+    let (headers_tx, headers_rx) = mpsc::channel();
+    let rig = Rig::new().with(|tool| tool.signaling_headers_received(headers_tx));
     let call = rig.start(&server.url());
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&headers_rx)
+        .expect("the client received response headers");
     assert!(rig.clock.await_parked(
         rig.clock.origin() + Duration::from_secs(60),
         fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1506,6 +1515,7 @@ fn a_stop_after_a_full_body_read_keeps_the_completed_line() {
             observe: Some(Observe {
                 debug: Arc::clone(&rig.lines) as Arc<dyn DebugLog>,
                 clock: Arc::clone(&clock),
+                headers_received: None,
             }),
         };
         hop.get(&request, |head, body| {

@@ -68,6 +68,8 @@ pub struct WebFetch {
     /// The diagnostic sink, when debugging: each actual request writes one
     /// `web_fetch` line. `None` stays silent.
     debug: Option<Arc<dyn contract::diag::DebugLog>>,
+    #[cfg(test)]
+    headers_received: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl WebFetch {
@@ -85,6 +87,8 @@ impl WebFetch {
             proxy: None,
             wrap: None,
             debug: None,
+            #[cfg(test)]
+            headers_received: None,
         }
     }
 
@@ -282,6 +286,8 @@ impl WebFetch {
             observe: self.debug.as_ref().map(|debug| http::Observe {
                 debug: Arc::clone(debug),
                 clock: Arc::clone(&self.clock),
+                #[cfg(test)]
+                headers_received: self.headers_received.clone(),
             }),
         };
         let stopped = || hop.stopped().is_some();

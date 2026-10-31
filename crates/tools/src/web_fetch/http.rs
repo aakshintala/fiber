@@ -249,6 +249,8 @@ pub(super) struct Get<'a> {
 pub(super) struct Observe {
     pub(super) debug: Arc<dyn DebugLog>,
     pub(super) clock: Arc<dyn Clock>,
+    #[cfg(test)]
+    pub(super) headers_received: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Hop {
@@ -292,7 +294,13 @@ impl Hop {
                 return Err(error.to_string());
             }
         };
-        let headers = request.observe.as_ref().map(|observe| observe.clock.now());
+        let headers = request.observe.as_ref().map(|observe| {
+            #[cfg(test)]
+            if let Some(signal) = &observe.headers_received {
+                let _ = signal.send(());
+            }
+            observe.clock.now()
+        });
         let header = |name: &str| {
             response
                 .headers()
