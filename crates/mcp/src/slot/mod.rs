@@ -14,6 +14,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use contract::clock::Clock;
+use contract::diag::DebugLog;
 use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::Failure;
 use contract::tool::Cancel;
@@ -40,6 +41,9 @@ pub(crate) struct Slot {
     /// The timing context an attempt starts its connection guard from:
     /// `None` starts untimed, as before. Never logged.
     timing: Option<contract::diag::Timing>,
+    /// Where the server's `http_request` lines go: `None` stays silent,
+    /// as before.
+    debug: Option<Arc<dyn DebugLog>>,
     /// One in-flight start at a time: the flag with its wake. The flag is
     /// set and cleared under the mutex but never held across a start,
     /// so a concurrent start or stop waits for the attempt's outcome
@@ -310,6 +314,10 @@ impl Slot {
 impl Slot {
     /// One slot from its parts, in `state`: `resources` is fixed here
     /// from the lists the slot was declared from and never changes after.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one slot's parts plus the attempt's Timing and sink"
+    )]
     fn new(
         spec: ServerSpec,
         workspace: &Path,
@@ -318,6 +326,7 @@ impl Slot {
         version: &str,
         state: State,
         timing: Option<contract::diag::Timing>,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Arc<Self> {
         let resources = match &state {
             State::NotStarted { cached } => cached.resources,
@@ -332,6 +341,7 @@ impl Slot {
             version: version.to_owned(),
             resources,
             timing,
+            debug,
             lease: Mutex::new(false),
             wake: Condvar::new(),
             #[cfg(test)]
@@ -356,11 +366,16 @@ impl Slot {
         version: &str,
         cached: Cached,
     ) -> Arc<Self> {
-        Self::lazy_observed(spec, workspace, cache, clock, version, cached, None)
+        Self::lazy_observed(spec, workspace, cache, clock, version, cached, None, None)
     }
 
     /// As [`Slot::lazy`], keeping `timing` for the first attempt's
-    /// connection guard: `None` starts untimed, as before.
+    /// connection guard: `None` starts untimed, as before. `debug`
+    /// observes the attempt's requests as `mcp`; `None` stays silent.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the observed companion adds Timing and the sink"
+    )]
     pub(crate) fn lazy_observed(
         spec: ServerSpec,
         workspace: &Path,
@@ -369,6 +384,7 @@ impl Slot {
         version: &str,
         cached: Cached,
         timing: Option<contract::diag::Timing>,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Arc<Self> {
         Self::new(
             spec,
@@ -378,16 +394,18 @@ impl Slot {
             version,
             State::NotStarted { cached },
             timing,
+            debug,
         )
     }
 
     /// A slot for a server already running, holding its raw `listed`
     /// lists for the removed-tool and cache checks, keeping `timing` for
     /// a later restart or renewal attempt's connection guard: `None` stays
-    /// untimed.
+    /// untimed. `debug` observes that attempt's requests as `mcp`;
+    /// `None` stays silent.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the observed companion adds Timing plus the advertises_tools and advertises_prompts flags"
+        reason = "the observed companion adds Timing and the sink plus the advertises_tools and advertises_prompts flags"
     )]
     pub(crate) fn running_observed(
         spec: ServerSpec,
@@ -400,6 +418,7 @@ impl Slot {
         advertises_tools: bool,
         advertises_prompts: bool,
         timing: Option<contract::diag::Timing>,
+        debug: Option<Arc<dyn DebugLog>>,
     ) -> Arc<Self> {
         Self::new(
             spec,
@@ -416,6 +435,7 @@ impl Slot {
                 restarted: false,
             },
             timing,
+            debug,
         )
     }
 
@@ -620,6 +640,7 @@ impl Slot {
             &self.clock,
             &self.version,
             timing,
+            self.debug.clone(),
         ) {
             Ok(open) => {
                 // The session keeps the tools it declared, because a tool

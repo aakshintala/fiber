@@ -87,10 +87,10 @@ impl SessionDiag {
         self.preamble_done = true;
     }
 
-    /// Writes the `peak_memory` line when debugging: best-effort, like
+    /// Writes the `resources` line when debugging: best-effort, like
     /// every diagnostic write. A failed read writes nothing.
-    pub(crate) fn peak_memory(&self) {
-        self.log.peak_memory();
+    pub(crate) fn resources(&self) {
+        self.log.resources();
     }
 
     /// Appends one `extension_log` line. A write failure is ignored: it

@@ -329,6 +329,7 @@ fn refused_descendant_leaves_the_environment_fallback_in_play() {
         &project,
         &setup.workspace(),
         fakes::clock::FakeClock::new(),
+        None,
     );
     let (mut providers, _) =
         extensions::Providers::load_all_repository(&setup.home(), &set).unwrap();

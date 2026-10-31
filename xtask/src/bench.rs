@@ -529,7 +529,7 @@ fn size_lines(head: Option<&results::Results>, base: &Base, base_commit: &str) -
 }
 
 /// The debug-run section, from the head's `op_breakdown`: one table row per
-/// operation with `provider_request` last, then each workload's error and
+/// operation with `http_request` last, then each workload's error and
 /// notes as bullets. Empty without `op_breakdown`, so a file without it
 /// renders as before. Reported only: nothing here reaches the failures.
 fn breakdown_lines(head: Option<&results::Results>) -> Vec<String> {
@@ -577,8 +577,8 @@ fn breakdown_rows(metric: &Value) -> Result<(Vec<String>, Vec<String>), String> 
             .and_then(Value::as_object)
             .ok_or_else(|| format!("{workload} has no ops"))?;
         let provider = entry
-            .get("provider_request")
-            .ok_or_else(|| format!("{workload} has no provider_request"))?;
+            .get("http_request")
+            .ok_or_else(|| format!("{workload} has no http_request"))?;
         let requests = whole(provider, "count", workload)?;
         let total_ms = whole(provider, "total_ms", workload)?;
         if ops.is_empty() && requests == 0 {
@@ -592,7 +592,7 @@ fn breakdown_rows(metric: &Value) -> Result<(Vec<String>, Vec<String>), String> 
                 ));
             }
             rows.push(format!(
-                "| {workload} | {ms:.1} | provider_request total_ms | {requests} | {total_ms} |"
+                "| {workload} | {ms:.1} | http_request total_ms | {requests} | {total_ms} |"
             ));
         }
         if let Some(error) = entry.get("error") {

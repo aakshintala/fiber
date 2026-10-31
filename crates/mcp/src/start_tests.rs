@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::diag::{DebugLog, HttpRequest};
 use contract::events::ServerFailure;
 use contract::events::ToolSource;
 use contract::events::ToolState;
@@ -19,6 +20,23 @@ use super::{DEFAULT_STARTUP_TIMEOUT, start, start_observed_tracked};
 use crate::effects::Hints;
 use crate::error::McpError;
 use crate::test_support::{FakeImages, Setup, WITHIN};
+
+/// Every `http_request` line the test's servers write, in order: stdio
+/// servers make no HTTP requests, so the stop test's sink stays empty.
+#[derive(Default)]
+struct Lines {
+    lines: Mutex<Vec<HttpRequest>>,
+}
+
+impl DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
 
 #[test]
 fn a_login_failure_has_login_advice_for_optional_and_required_servers() {
@@ -531,6 +549,7 @@ fn a_server_that_misses_its_deadline_is_left_out() {
                 &cache,
                 &clock,
                 "0.0.0",
+                None,
             ))
             .expect("collected");
         });
@@ -603,6 +622,10 @@ fn servers_stop_at_once() {
     // a missed deadline names exactly the servers that did not report.
     let outstanding: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
     let watching = Arc::clone(&outstanding);
+    // The sink observes the stop: stdio servers make no HTTP requests,
+    // so it stays empty through the start and the stop.
+    let lines = Arc::new(Lines::default());
+    let debug = Some(Arc::clone(&lines) as Arc<dyn DebugLog>);
     let (opened, started) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         opened
@@ -615,6 +638,7 @@ fn servers_stop_at_once() {
                 &clock,
                 "0.0.0",
                 None,
+                debug,
                 Some(watching),
             ))
             .expect("collected");
@@ -630,6 +654,10 @@ fn servers_stop_at_once() {
         panic!("waited {WITHIN:?} for the start, waiting on [{waiting}]")
     });
     assert_eq!(started.failed.len(), 0);
+    assert!(
+        started.servers.debug_sink().is_some(),
+        "the observed start retains its debug sink for later syncs"
+    );
     let grace = setups[0].fake.now() + Duration::from_millis(800);
     let (done, stopped) = std::sync::mpsc::channel();
     let servers = started.servers;
@@ -646,6 +674,10 @@ fn servers_stop_at_once() {
     Deadline::after(WITHIN)
         .recv(&stopped)
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
+    assert!(
+        lines.lines.lock().unwrap().is_empty(),
+        "stdio servers write no http_request line",
+    );
 }
 
 #[test]
@@ -789,6 +821,7 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
             &cache,
             &clock,
             "0.0.0",
+            None,
         ))
         .expect("collected");
     });

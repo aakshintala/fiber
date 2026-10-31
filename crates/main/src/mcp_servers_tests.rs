@@ -168,6 +168,7 @@ fn empty_servers(
         &config::mcp_cache_dir(&rig.home),
         clock,
         "test",
+        None,
     );
     assert!(started.failed.is_empty());
     std::sync::Arc::new(started.servers)
@@ -1119,6 +1120,7 @@ fn pending(
         Vec::new(),
         std::sync::Arc::new(DummyImages),
         None,
+        None,
     )
     .expect("the pending MCP start")
 }
@@ -1170,6 +1172,7 @@ fn wired(
                 &delegates,
                 skills,
                 extension_tools,
+                None,
                 None,
                 Default::default(),
                 std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
@@ -1293,6 +1296,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
                 &delegates,
                 skills(),
                 Vec::new(),
+                None,
                 None,
                 Default::default(),
                 std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
