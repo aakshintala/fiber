@@ -15,7 +15,7 @@ use contract::{ActionId, Envelope, SCHEMA_VERSION, SessionId};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::{Diff, answer, diff_command, frame, ranked};
+use super::{Diff, answer, diff_command, frame, numstat_command, ranked, resolve_figures};
 use crate::app::{App, Effect, SessionView};
 use crate::keys::Key;
 use crate::link::Line;
@@ -262,6 +262,131 @@ fn diff_command_under_sh_reads_only_a_literal_untracked_star_path() {
         .unwrap_or_else(|error| panic!("diff output was not UTF-8: {error}"));
     assert!(stdout.contains("literal-star-only"), "{stdout}");
     assert!(!stdout.contains("tracked changed"), "{stdout}");
+}
+
+#[test]
+fn numstat_command_lists_the_given_paths_in_one_numstat_call() {
+    let command = numstat_command(&["src/a.rs", "src/b c.rs"]);
+    assert!(command.starts_with("git "), "{command}");
+    assert!(command.contains("--numstat"), "{command}");
+    assert!(command.contains("HEAD --"), "{command}");
+    assert!(command.contains("'src/a.rs'"), "{command}");
+    assert!(command.contains("'src/b c.rs'"), "{command}");
+    assert!(!command.contains("ls-files"), "{command}");
+    assert!(!command.contains("--no-index"), "{command}");
+    assert!(!command.contains("&&"), "{command}");
+    assert_eq!(command.matches("git ").count(), 1, "{command}");
+}
+
+#[test]
+fn numstat_command_quotes_embedded_quotes() {
+    let command = numstat_command(&["src/a'b.rs"]);
+    assert!(command.ends_with("'src/a'\\''b.rs'"), "{command}");
+}
+
+#[test]
+fn parse_numstat_reads_counts_and_marks_binary() {
+    use super::{NumstatFigure, parse_numstat};
+    let parsed = parse_numstat("10\t3\tsrc/a.rs\n-\t-\tbin/x\nnot a row\n\n7\t0\tmy file.rs\n");
+    assert_eq!(parsed.get("src/a.rs"), Some(&NumstatFigure::Counted(10, 3)));
+    assert_eq!(parsed.get("bin/x"), Some(&NumstatFigure::Binary));
+    assert_eq!(
+        parsed.get("my file.rs"),
+        Some(&NumstatFigure::Counted(7, 0))
+    );
+    assert_eq!(parsed.len(), 3);
+}
+
+#[test]
+fn resolve_figures_prefers_git_counts_untracked_lines_then_card() {
+    let card = changes(&[
+        ("src/a.rs", 4, 2),
+        ("bin/x", 1, 1),
+        ("new.txt", 4, 1),
+        ("gone.txt", 2, 0),
+    ]);
+    let answered = "7\t1\tsrc/a.rs\n-\t-\tbin/x\n";
+    let mut lines = BTreeMap::new();
+    lines.insert("new.txt".to_owned(), 3u64);
+    let displayed = resolve_figures(&card, Some(answered), &lines);
+    assert_eq!(displayed.get("src/a.rs"), Some(&(7, 1)));
+    // A binary path keeps the card's figures.
+    assert_eq!(displayed.get("bin/x"), Some(&(1, 1)));
+    // An answered-but-omitted path resolves to its line count as added.
+    assert_eq!(displayed.get("new.txt"), Some(&(3, 0)));
+    // An answered-but-omitted and uncounted path keeps the card's figures.
+    assert_eq!(displayed.get("gone.txt"), Some(&(2, 0)));
+}
+
+#[test]
+fn resolve_figures_without_an_answer_keeps_the_card() {
+    let card = changes(&[("src/a.rs", 4, 2)]);
+    let mut lines = BTreeMap::new();
+    lines.insert("src/a.rs".to_owned(), 9u64);
+    assert_eq!(resolve_figures(&card, None, &lines), card);
+}
+
+#[test]
+fn numstat_command_output_parses_and_resolves_against_git() {
+    let dir = fakes::TempDir::new("tui-changed-files-numstat");
+    let root = dir.path();
+    let setup = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap_or_else(|error| panic!("run git {args:?}: {error}"));
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    setup(&["init", "-q"]);
+    setup(&["config", "user.email", "fiber@example.invalid"]);
+    setup(&["config", "user.name", "Fiber test"]);
+    std::fs::write(root.join("a.rs"), "one\ntwo\n")
+        .unwrap_or_else(|error| panic!("write a.rs: {error}"));
+    setup(&["add", "--", "a.rs"]);
+    setup(&["commit", "-qm", "initial"]);
+    std::fs::write(root.join("a.rs"), "one\nTWO\nthree\n")
+        .unwrap_or_else(|error| panic!("change a.rs: {error}"));
+    std::fs::write(root.join("new.txt"), "x\ny\nz\n")
+        .unwrap_or_else(|error| panic!("write new.txt: {error}"));
+
+    let command = numstat_command(&["a.rs", "new.txt"]);
+    let mut child = Command::new("/bin/sh");
+    child
+        .args(["-c", command.as_str()])
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = child
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn numstat command: {error}"));
+    let watchdog = fakes::Watchdog::matching(&command);
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let output = child
+            .wait_with_output()
+            .unwrap_or_else(|error| panic!("wait for numstat command: {error}"));
+        done.send(output).unwrap_or(());
+    });
+    let output = Deadline::after(Duration::from_secs(10))
+        .recv(&finished)
+        .expect("waited for the shell numstat command");
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
+    let stdout = String::from_utf8(output.stdout)
+        .unwrap_or_else(|error| panic!("numstat output was not UTF-8: {error}"));
+    assert!(output.status.success(), "numstat failed: {stdout}");
+    // The card's sums are deliberately wrong: the resolved figures
+    // must be git's, not the card's.
+    let card = changes(&[("a.rs", 5, 5), ("new.txt", 9, 9)]);
+    let mut lines = BTreeMap::new();
+    lines.insert("new.txt".to_owned(), 3u64);
+    let displayed = resolve_figures(&card, Some(&stdout), &lines);
+    assert_eq!(displayed.get("a.rs"), Some(&(2, 1)));
+    assert_eq!(displayed.get("new.txt"), Some(&(3, 0)));
 }
 
 #[test]

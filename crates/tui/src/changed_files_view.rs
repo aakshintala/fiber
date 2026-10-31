@@ -33,6 +33,96 @@ pub(crate) fn diff_command(path: &str) -> String {
     )
 }
 
+/// The shell line for the view-open figures query (`docs/tui.md`,
+/// "Swapped views"): one `git diff --numstat HEAD` limited to the
+/// listed paths. Single quotes keep paths literal to the shell;
+/// embedded quotes close, escape a quote, and reopen the word, as in
+/// `diff_command`. A missing git, a non-repository cwd, a non-zero
+/// exit or unparsable output all mean the same to the caller: no
+/// answer, so the rows keep the card's figures.
+#[allow(
+    dead_code,
+    reason = "no caller until the view-open send lands with the session_views wiring"
+)]
+pub(crate) fn numstat_command(paths: &[&str]) -> String {
+    let quoted: Vec<String> = paths
+        .iter()
+        .map(|path| format!("'{}'", path.replace('\'', "'\\''")))
+        .collect();
+    format!(
+        "git --no-optional-locks --literal-pathspecs diff --numstat --no-color --no-ext-diff HEAD -- {}",
+        quoted.join(" ")
+    )
+}
+
+/// One numstat row's figure: counted lines, or a binary path git
+/// reports as dashes in both columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumstatFigure {
+    Counted(u64, u64),
+    Binary,
+}
+
+/// Folds `git diff --numstat HEAD` output into per-path figures.
+/// Binary rows and unparsable lines are dropped: binary paths keep
+/// the card's figures and garbage never renames a row.
+fn parse_numstat(output: &str) -> BTreeMap<String, NumstatFigure> {
+    let mut figures = BTreeMap::new();
+    for line in output.lines() {
+        let mut columns = line.split('\t');
+        let (Some(added), Some(removed), Some(path)) =
+            (columns.next(), columns.next(), columns.next())
+        else {
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+        let figure = match (added.parse::<u64>(), removed.parse::<u64>()) {
+            (Ok(added), Ok(removed)) => NumstatFigure::Counted(added, removed),
+            _ if added == "-" && removed == "-" => NumstatFigure::Binary,
+            _ => continue,
+        };
+        figures.insert(path.to_owned(), figure);
+    }
+    figures
+}
+
+/// Displayed figures for the card's paths: git's where the numstat
+/// answer counts the path, the card's where git calls it binary, the
+/// untracked line count where the answer omits the path, and the
+/// card's everywhere else. `None` is no answer yet: until the
+/// numstat answer arrives, and whenever it never does, every row
+/// shows the card's figures. An answered path git omits is
+/// untracked, per the doc: numstat never lists one.
+///
+/// `frame` resolves with no answer today, which is the card's
+/// figures; the view-open send will pass the answer and the
+/// untracked counts here.
+pub(crate) fn resolve_figures(
+    changes: &BTreeMap<String, (u64, u64)>,
+    numstat: Option<&str>,
+    untracked_lines: &BTreeMap<String, u64>,
+) -> BTreeMap<String, (u64, u64)> {
+    let parsed = numstat.map(parse_numstat).unwrap_or_default();
+    let answered = numstat.is_some();
+    changes
+        .iter()
+        .map(|(path, card)| {
+            let figure = match parsed.get(path) {
+                Some(NumstatFigure::Counted(added, removed)) => (*added, *removed),
+                Some(NumstatFigure::Binary) => *card,
+                None if answered => match untracked_lines.get(path) {
+                    Some(lines) => (*lines, 0),
+                    None => *card,
+                },
+                None => *card,
+            };
+            (path.clone(), figure)
+        })
+        .collect()
+}
+
 /// The diff currently being read, read, empty or failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Diff {
@@ -81,7 +171,11 @@ pub(crate) fn frame(
     if let Some((path, diff)) = chosen {
         return diff_frame(path, diff, list);
     }
-    let paths = ranked(changes);
+    // Displayed figures: the card's until the view-open numstat
+    // answer arrives, so today this is the card's figures and the
+    // rows read exactly as before.
+    let displayed = resolve_figures(changes, None, &BTreeMap::new());
+    let paths = ranked(&displayed);
     let rows = paths
         .iter()
         .map(|(path, added, removed)| {
@@ -102,7 +196,7 @@ pub(crate) fn frame(
             ]
         })
         .collect();
-    let (files, added, removed) = totals(changes);
+    let (files, added, removed) = totals(&displayed);
     Frame {
         title: "Changed files".to_owned(),
         command: "diff against HEAD".to_owned(),
