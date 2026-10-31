@@ -165,8 +165,13 @@ fn context_status_for(session: &str, tokens: u64, window: u64) -> Line {
 
 /// A `preamble_built` naming `model` with `window`.
 fn preamble(model: &str, window: u64) -> Line {
+    preamble_for(SESSION, model, window)
+}
+
+/// A `preamble_built` for `session` naming `model` and `window`.
+fn preamble_for(session: &str, model: &str, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "preamble_built",
         serde_json::json!({
             "reason": "start", "model": model, "context_window": window,
@@ -282,6 +287,7 @@ fn status_row_context_comes_from_the_attached_session_only() {
     );
 
     app.attach(contract::SessionId(OTHER.to_owned()));
+    app.on_line(preamble_for(OTHER, "test/model", 200));
     let attached_without_status = super::status(&app, 100);
     assert!(!attached_without_status.is_empty());
     assert!(

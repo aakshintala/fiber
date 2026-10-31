@@ -291,15 +291,20 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
 /// A `preamble_built` with `trigger`: `None` leaves automatic handoff
 /// off.
 fn preamble_line(trigger: Option<u64>) -> Line {
+    preamble_line_for("s_aaaaaaaaaaaaaaaa", 1000, trigger)
+}
+
+/// A `preamble_built` for `session` with `window` and `trigger`.
+fn preamble_line_for(session: &str, window: u64, trigger: Option<u64>) -> Line {
     let mut payload = serde_json::json!({
-        "reason": "start", "model": "test/model", "context_window": 1000,
+        "reason": "start", "model": "test/model", "context_window": window,
         "thinking": "high", "tool_choice": "auto", "cache_lifetime": "5m",
         "system_prompt": "", "tools": [],
     });
     if let Some(trigger) = trigger {
         payload["trigger_at"] = trigger.into();
     }
-    session_line("preamble_built", payload)
+    timed_line_for(session, "preamble_built", 0, payload)
 }
 
 /// A waiting `session_status` for another live session than the
@@ -583,6 +588,7 @@ fn session_card_uses_context_from_the_attached_session_only() {
     );
 
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    app.on_line(preamble_line_for("s_bbbbbbbbbbbbbbbb", 200, Some(80)));
     let attached_without_status = texts(&app, 40);
     assert!(
         attached_without_status

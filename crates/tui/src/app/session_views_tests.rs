@@ -481,11 +481,15 @@ fn a_delegate_started_line_adds_a_delegate_row_for_its_calls() {
 }
 
 fn context_preamble() -> Line {
+    context_preamble_for(SESSION, 100)
+}
+
+fn context_preamble_for(session: &str, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "preamble_built",
         json!({
-            "reason": "start", "model": "model/m", "context_window": 100,
+            "reason": "start", "model": "model/m", "context_window": window,
             "trigger_at": 80, "system_prompt": "sys",
             "tools": [{"name": "read", "registered_by": "builtin", "deferred": false,
                 "definition": {"a": 1}}],
@@ -724,10 +728,10 @@ fn context_without_an_own_preamble_uses_the_reported_window() {
     );
 }
 
-/// A forked child keeps the total and window from its own status but
+/// A rewound child keeps the total and window from its own status but
 /// cannot reuse the parent's preamble sizes or tool results (see #3756).
 #[test]
-fn forked_context_does_not_reuse_parent_preamble_sizes() {
+fn rewound_context_does_not_reuse_parent_preamble_sizes() {
     let mut app = attached(100, 40);
     app.on_line(context_preamble());
     app.on_line(context_request_started());
@@ -736,12 +740,23 @@ fn forked_context_does_not_reuse_parent_preamble_sizes() {
     for line in context_tool("read", "parent result") {
         app.on_line(line);
     }
+    open_context(&mut app);
+    let parent_view = screen(&app, 100, 40).0;
+    assert!(parent_view.contains("system prompt"), "{parent_view}");
+    assert!(parent_view.contains("tool definitions"), "{parent_view}");
+    assert!(parent_view.contains("tool results"), "{parent_view}");
+    assert!(parent_view.contains("read"), "{parent_view}");
 
     app.attach(SessionId(OTHER.to_owned()));
     app.on_line(session_line(
         OTHER,
         "session_started",
-        json!({"forked_from": {"session_id": SESSION, "seq": 8}}),
+        json!({
+            "workspace": "/w",
+            "variables": {"path": "", "names": [], "source": "inherited"},
+            "forked_from": {"session_id": SESSION, "seq": 8},
+            "rewind": {"note": "", "summary": null},
+        }),
         None,
     ));
     app.on_line(context_status_for(OTHER, 12, 200));
@@ -785,9 +800,9 @@ fn context_with_a_triggerless_preamble_keeps_the_off_row() {
     assert!(!shown.contains("handoff at"), "{shown}");
 }
 
-/// Attaching another session preserves the old status payload but will
-/// not use its context window until the new session reports its own
-/// `session_status` (see #3756).
+/// Attaching another session preserves the old status payload but cannot
+/// pair its context total with the new session's own preamble window
+/// before that session reports `session_status` (see #3756).
 #[test]
 fn attaching_another_session_does_not_use_cached_status_for_context() {
     let mut app = attached(100, 40);
@@ -801,12 +816,12 @@ fn attaching_another_session_does_not_use_cached_status_for_context() {
     assert!(app.panel_state().status_for(&parent).is_some());
     assert!(app.panel_state().status_for(&child).is_none());
     assert_eq!(app.panel_state().window_for(&child), None);
+    app.on_line(context_preamble_for(OTHER, 200));
+    assert_eq!(app.panel_state().window_for(&child), Some(200));
     open_context(&mut app);
     let shown = screen(&app, 100, 40).0;
-    assert!(
-        shown.contains("The context shows after the session's first request."),
-        "{shown}"
-    );
+    assert!(!shown.contains("50 tokens"), "{shown}");
+    assert!(!shown.contains("25% of the 200 window"), "{shown}");
 
     app.on_line(context_status_for(OTHER, 50, 200));
     assert!(app.panel_state().status_for(&child).is_some());
