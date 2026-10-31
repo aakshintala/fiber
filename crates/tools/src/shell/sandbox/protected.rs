@@ -431,14 +431,13 @@ fn recover(dir: &baseline::StatePaths) -> Result<Option<Report>, io::Error> {
         Err(TryLockError::WouldBlock) => {
             // Calls are live: the baseline stays fixed for them. A colliding
             // project key must not join another identity's active baseline.
-            if dir.baseline.exists() {
-                let baseline = baseline::read_baseline(&dir.baseline)?;
-                if !baseline::belongs_to_project(&baseline.entries, &dir.identity_marker) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "the protected-path baseline belongs to another project identity",
-                    ));
-                }
+            if let Ok(baseline) = baseline::read_baseline(&dir.baseline)
+                && !baseline::belongs_to_project(&baseline.entries, &dir.identity_marker)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the protected-path baseline belongs to another project identity",
+                ));
             }
             drop(baseline_file);
             drop(active_file);

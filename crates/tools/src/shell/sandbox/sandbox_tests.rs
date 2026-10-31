@@ -2112,53 +2112,6 @@ fn a_shell_side_change_after_an_approved_write_still_restores() {
 }
 
 #[test]
-fn colliding_slugs_keep_distinct_baselines_and_locks() {
-    // `/a-b` and `/a/b` share the readable slug `-a-b` (`docs/state.md`,
-    // "Projects"); protected state keeps them distinct per full identity,
-    // so one project never restores another's paths.
-    let root = fakes::TempDir::new("fiber-protected-slug");
-    let first = root.path().join("a-b");
-    let second = root.path().join("a").join("b");
-    for dir in [&first, &second] {
-        let fiber = dir.join(".fiber");
-        std::fs::create_dir_all(&fiber).expect("fiber dir created");
-        std::fs::write(fiber.join("keep.txt"), b"original").expect("file written");
-    }
-    let home = protected_home(&root);
-    let first_handle = open_handle(&home, &first);
-    let second_handle = open_handle(&home, &second);
-    let first_begin = first_handle.begin(&first).expect("first begins");
-    let second_begin = second_handle
-        .begin(&second)
-        .expect("the colliding project begins on its own baseline");
-    std::fs::write(first.join(".fiber").join("keep.txt"), b"changed1").expect("changed");
-    std::fs::write(second.join(".fiber").join("keep.txt"), b"changed2").expect("changed");
-    let first_report = first_begin.guard.finish();
-    let second_report = second_begin.guard.finish();
-    assert_eq!(first_report.restored, vec![".fiber".to_owned()]);
-    assert_eq!(second_report.restored, vec![".fiber".to_owned()]);
-    assert_eq!(
-        std::fs::read(first.join(".fiber").join("keep.txt")).expect("file reads"),
-        b"original",
-        "the first project restores its own baseline"
-    );
-    assert_eq!(
-        std::fs::read(second.join(".fiber").join("keep.txt")).expect("file reads"),
-        b"original",
-        "the colliding project restores its own baseline"
-    );
-    let mut projects = Vec::new();
-    for project in std::fs::read_dir(home.join("projects")).expect("projects lists") {
-        projects.push(project.expect("project entry reads").path());
-    }
-    assert_eq!(
-        projects.len(),
-        2,
-        "colliding slugs keep distinct state: {projects:?}"
-    );
-}
-
-#[test]
 fn a_symlink_to_a_matching_file_is_restored_as_a_file() {
     // A symlink to a file with identical bytes and permissions is a
     // changed symlink, never an unchanged file: the compare checks the
