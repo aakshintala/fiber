@@ -26,10 +26,10 @@ use support::{HubProc, SessionGuard, Setup, Socket, bounded, connect_hub, run_to
 
 /// A session that has run one turn and exited, and a hub that resumes it.
 struct World {
+    guard: Option<SessionGuard>,
     setup: Setup,
     id: String,
     hub: Arc<Mutex<Option<HubProc>>>,
-    guard: Option<SessionGuard>,
     // Held so the provider outlives the test.
     _server: ProviderServer,
 }

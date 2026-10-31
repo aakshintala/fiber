@@ -57,16 +57,19 @@ memory and exact rows are judged against the table alone"
     continue
   fi
   tmp=$(mktemp -d)
+  trap 'rm -rf "${tmp-}"' EXIT
   if gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$tmp" &&
     [ -f "$tmp/head.json" ]; then
     mkdir -p "$out"
     cp "$tmp/head.json" "$out/head.json"
     printf '%s\n' "$sha" > "$out/commit"
     echo "stored-results: the stored results for $short stand in for the base"
+    rm -rf "${tmp-}"
     exit 0
   fi
   echo "stored-results: downloading $name failed; \
 memory and exact rows are judged against the table alone"
+  rm -rf "${tmp-}"
   exit 0
 done
 short=$(git rev-parse --short "$base")
