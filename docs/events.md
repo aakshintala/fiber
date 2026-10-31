@@ -495,7 +495,6 @@ sent the latest.
 | `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request that reported its input tokens, and `window`, the model's context window (integers) |
-| `cache_expires` | integer | no | after the first model request: when the session's prompt cache expires, as `ts`: the end of its latest model request, a warming refresh included, plus its cache lifetime (`docs/prompt-cache.md`, "Cache lifetime") |
 | `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |
 | `delegates` | integer | yes | delegates running |
 | `jobs` | integer | yes | jobs running, delegates excluded |
