@@ -203,6 +203,10 @@ impl Hubbed {
         self.client.as_ref().expect("the client is connected")
     }
 
+    fn client_mut(&mut self) -> &mut Socket {
+        self.client.as_mut().expect("the client is connected")
+    }
+
     /// Starts a session in `workspace` with `content` under command `id`,
     /// subscribes `sub_id` full to it, and waits for its first turn to
     /// complete.
@@ -759,6 +763,136 @@ fn two_successive_target_requests_keep_a_stable_prefix() {
     hubbed.finish();
 }
 
+/// Exit evidence precedes lock release: only an empty Hub `held` answer
+/// permits the real delete (docs/invocation.md, "Deleting a session").
+fn wait_for_leaf_unheld(hubbed: &mut Hubbed, leaf: &str, on_held: impl FnOnce()) {
+    let client = hubbed.client_mut();
+    let wait = client.start_wait();
+    // Sends and reads share the expiry fixed here; no probe renews it.
+    client.set_deadline(Deadline::after(wait.left()));
+    let mut on_held = Some(on_held);
+    let mut held = Value::Null;
+    let mut probe = 0;
+    let (_pause_sender, pause) = mpsc::channel::<()>();
+    loop {
+        let what = format!("leaf {leaf}'s session lock to be released; last held: {held}");
+        assert!(
+            !wait.left().is_zero(),
+            "waited until the deadline for {what}"
+        );
+        let id = format!("c_leaf_unheld_{leaf}_{probe}");
+        client.send(&command(
+            &id,
+            None,
+            "delete",
+            json!({"session": leaf, "dry_run": true}),
+        ));
+        let mut lines = Vec::new();
+        let answer = loop {
+            let line = client
+                .next_through(&wait, &what, &lines)
+                .unwrap_or_else(|| panic!("the socket closed while waiting for {what}"));
+            if line["payload"]["command_id"] == id {
+                break line;
+            }
+            lines.push(line);
+        };
+        assert_eq!(answer["kind"], "command_accepted", "{what}: {answer}");
+        held = answer["payload"]["result"]["held"].clone();
+        if held
+            .as_array()
+            .expect("the Hub answers held ids")
+            .is_empty()
+        {
+            return;
+        }
+        if let Some(on_held) = on_held.take() {
+            on_held();
+        }
+        // This receive only paces probes; it never renews the full wait.
+        let poll = Deadline::after(std::time::Duration::from_millis(50).min(wait.left()));
+        let _paused = poll.recv(&pause);
+        probe += 1;
+    }
+}
+
+#[test]
+fn the_leaf_wait_requires_an_empty_answer_after_observing_held() {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    let setup = Setup::new();
+    let (mine, mut peer) = UnixStream::pair().unwrap();
+    let mut hubbed = Hubbed {
+        hub: Arc::new(Mutex::new(None)),
+        client: Some(Socket::from(setup.deadline, mine)),
+        guards: Vec::new(),
+        home: setup.home(),
+        cleanup_failure: None,
+    };
+    // A foreign command's empty answer cannot release the wait. The
+    // callback is one-shot even when the Hub observes held twice.
+    for (id, held) in [
+        ("foreign", json!([])),
+        ("c_leaf_unheld_s_leaf_0", json!(["s_leaf"])),
+        ("c_leaf_unheld_s_leaf_1", json!(["s_leaf", "s_other"])),
+        ("c_leaf_unheld_s_leaf_2", json!([])),
+    ] {
+        writeln!(
+            peer,
+            "{}",
+            json!({"kind": "command_accepted", "payload": {
+                "command_id": id, "result": {"held": held}
+            }})
+        )
+        .unwrap();
+    }
+    let mut observations = 0;
+    wait_for_leaf_unheld(&mut hubbed, "s_leaf", || observations += 1);
+    assert_eq!(observations, 1, "held must be observed before returning");
+    let mut requests = BufReader::new(peer);
+    let wait = setup.deadline.start_wait();
+    for probe in 0..3 {
+        let request = read_line(&mut requests, wait, "the dry-run probe")
+            .unwrap()
+            .unwrap();
+        let request: Value = serde_json::from_str(&request).unwrap();
+        assert_eq!(request["id"], format!("c_leaf_unheld_s_leaf_{probe}"));
+        assert_eq!(request["command"], "delete");
+        assert_eq!(
+            request["args"],
+            json!({"session": "s_leaf", "dry_run": true})
+        );
+    }
+}
+
+#[test]
+fn the_leaf_wait_expiry_names_the_session_and_last_held_answer() {
+    use std::os::unix::net::UnixStream;
+
+    let setup = Setup::new();
+    let (mine, _peer) = UnixStream::pair().unwrap();
+    let mut hubbed = Hubbed {
+        hub: Arc::new(Mutex::new(None)),
+        client: Some(Socket::from(
+            Deadline::after(std::time::Duration::ZERO),
+            mine,
+        )),
+        guards: Vec::new(),
+        home: setup.home(),
+        cleanup_failure: None,
+    };
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for_leaf_unheld(&mut hubbed, "s_busy", || {
+            panic!("no held answer was received")
+        });
+    }))
+    .expect_err("a spent deadline cannot permit deletion");
+    let message = payload_message(&expired);
+    assert!(message.contains("s_busy"), "{message}");
+    assert!(message.contains("last held: null"), "{message}");
+}
+
 /// Runs `fiber sessions delete --yes <id>`: stdin null, in `workspace`.
 fn delete(setup: &Setup, workspace: &Path, id: &str) -> std::process::Output {
     let mut command = setup.fiber(&["sessions", "delete", "--yes", id]);
@@ -936,7 +1070,7 @@ fn a_rewind_to_a_pre_move_point_reads_across_projects() {
     let layout = Layout::new(&setup);
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
-    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let mut hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
     let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     hubbed.prompt("c_two", &old, "two");
     // The pre-move point: the old session's latest turn start.
@@ -973,6 +1107,7 @@ fn a_rewind_to_a_pre_move_point_reads_across_projects() {
     // Resume works on the rewind child, and the leaf deletes clean.
     hubbed.prompt("c_three", &next, "three");
     hubbed.close("c_close_next", &next);
+    wait_for_leaf_unheld(&mut hubbed, &next, || {});
     let log = session_log_path(&setup, &next);
     let output = delete(&setup, &layout.repo_b, &next);
     assert!(output.status.success(), "delete the leaf: {output:?}");
@@ -986,7 +1121,7 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
     let layout = Layout::new(&setup);
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
-    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let mut hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
     let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     hubbed.prompt("c_two", &old, "two");
     // The pre-move point: the old session's latest turn start.
@@ -1044,9 +1179,15 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
         move || matches!(log::try_hold(&probe_dir).unwrap(), log::Hold::Held(_)),
     );
     // The probe drops its temporary guard; the test retains the lock here.
-    let log::Hold::Held(_leaf_held_by_test) = log::try_hold(&dir).unwrap() else {
+    let log::Hold::Held(leaf_guard) = log::try_hold(&dir).unwrap() else {
         panic!("the test could not take the leaf {next}'s session lock");
     };
+    let mut leaf_held_by_test = Some(leaf_guard);
+    wait_for_leaf_unheld(&mut hubbed, &next, || drop(leaf_held_by_test.take()));
+    assert!(
+        leaf_held_by_test.is_none(),
+        "the wait observed the held leaf"
+    );
     let output = delete(&setup, &layout.repo_b, &next);
     assert!(output.status.success(), "delete the leaf: {output:?}");
     assert!(!log.exists(), "the leaf's log is gone");
@@ -1262,7 +1403,7 @@ fn the_old_worktree_survives_the_move_and_a_later_prune_removes_it() {
     fakes::git::git(&layout.repo_a, &["commit", "--quiet", "-m", "first"]);
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
-    let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
+    let mut hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
     // Start the old session in a Fiber-managed worktree of repo_a.
     let client = hubbed.client();
     client.send(&command(
@@ -1297,6 +1438,7 @@ fn the_old_worktree_survives_the_move_and_a_later_prune_removes_it() {
     // worktree under the unchanged shared-lock and dirty rules, while the
     // plain target workspace and the young old log stay.
     hubbed.close("c_close", &child);
+    wait_for_leaf_unheld(&mut hubbed, &child, || {});
     let output = delete(&setup, &layout.repo_b, &child);
     assert!(output.status.success(), "delete the leaf: {output:?}");
     // Prune scopes to its working directory's project: the old worktree
