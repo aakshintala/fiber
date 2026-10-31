@@ -263,3 +263,36 @@ fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
         "{loaded}"
     );
 }
+
+#[test]
+fn a_long_script_keeps_its_start_and_its_finished_ledger_suffix() {
+    let source = "local small = host.tool(\"read\", { path = \"small.txt\" })\n\
+        print(\"MARKER\")\n\
+        print(string.rep(\"Q\", 20000))";
+    let setup = reviewed_setup(&calling(source), &allow());
+    std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    // The ordinary 16 KiB cap cuts the outer result: the model-facing text
+    // begins with the printed start and names the cut.
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(completed["payload"]["artifact"].is_string());
+    let text = completed_text(completed);
+    assert!(
+        text.starts_with(&format!("MARKER\n{}", "Q".repeat(100))),
+        "the kept head holds the printed start: {text:?}"
+    );
+    assert!(
+        text.contains("bytes cut"),
+        "the middle names the cut: {text:?}"
+    );
+    // Head/tail keep preserves the status line and the ledger suffix for a
+    // normal ledger size: the uncut call's row carries no path.
+    assert!(
+        text.ends_with("Script finished\n- read completed"),
+        "the kept tail holds the status and ledger: {text:?}"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
