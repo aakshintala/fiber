@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# The self-test for the journey report (`.github/workflows/ci.yml` jobs
+# `journey` and `journey_report`, `.github/workflows/journey-report.yml`,
+# `docs/ci.md`, "The journey suite"). It extracts the `File or comment on
+# the journey issues` step's own script from both workflow files, fails when
+# either copy is missing or the two differ, and drives the script against a
+# stub `gh` that records each write and answers each open lookup from the
+# case's fixture. Every write path is proven: a create carrying the `bug`
+# label for each failing journey, a comment on the open issue, and the
+# recheck commenting instead of creating when the issue appears between the
+# lookup and the create. Every no-write path is proven: an empty or missing
+# failures file writes nothing, a failed open lookup or recheck files
+# nothing for that journey, and a blank failures line is skipped. A missing
+# `FAILURES` environment fails the step. Nothing reaches the GitHub API.
+#
+# Usage: scripts/test-journey-report
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-journey-report: $1" >&2
+  exit 1
+}
+
+# The step is the one whose name is given below: its `run: |` block, every
+# line indented past the `run:` key. No YAML parser: the name is unique in
+# each file.
+extract() {
+  awk -v name="$1" '
+    index($0, "- name: " name) { armed = 1; next }
+    armed && !started && $0 ~ /^ *run: \|$/ { started = 1; match($0, /[^ ]/); indent = RSTART - 1; next }
+    started {
+      if ($0 ~ /^ *$/) { print ""; next }
+      match($0, /[^ ]/)
+      if (RSTART - 1 <= indent) exit
+      print substr($0, indent + 3)
+    }
+  ' "$2" >"$3"
+}
+extract "File or comment on the journey issues" .github/workflows/ci.yml "$tmp/ci-step.sh"
+extract "File or comment on the journey issues" .github/workflows/journey-report.yml "$tmp/nightly-step.sh"
+grep -Fq 'open_number() {' "$tmp/ci-step.sh" || fail "the journey report step's script was not found in .github/workflows/ci.yml"
+grep -Fq 'open_number() {' "$tmp/nightly-step.sh" || fail "the journey report step's script was not found in .github/workflows/journey-report.yml"
+
+# The nightly report is the same report step as main: trailing blank lines
+# aside (YAML `|` clipping drops them), the two copies are identical, so
+# the cases below drive one copy.
+strip_trailing() {
+  awk '{ line[NR] = $0 } END { last = NR; while (last > 0 && line[last] == "") last--; for (i = 1; i <= last; i++) print line[i] }' "$1"
+}
+strip_trailing "$tmp/ci-step.sh" >"$tmp/ci-step.norm"
+strip_trailing "$tmp/nightly-step.sh" >"$tmp/nightly-step.norm"
+cmp -s "$tmp/ci-step.norm" "$tmp/nightly-step.norm" || fail "the journey report step differs between ci.yml and journey-report.yml"
+
+# The stub, written ahead of the step so it needs no executable on PATH.
+# A write becomes one file, numbered in order. A comment file holds
+# `comment <number>` then the body exactly; a create file holds
+# `create <title>`, the body, then `label=<label>`. The open lookup answers
+# $STUB_OPEN every call, or $STUB_OPEN_FIRST once then $STUB_OPEN_REST;
+# STUB_OPEN_FAIL fails every open call and STUB_OPEN_REST_FAIL fails the
+# calls after the first. Entries are `number|title` lines.
+cat >"$tmp/stub.sh" <<'EOF'
+gh() {
+  case "$1" in
+    issue)
+      verb=$2
+      shift 2
+      case "$verb" in
+        list)
+          search=""
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              --search) search=$2; shift 2 ;;
+              *) shift ;;
+            esac
+          done
+          title=${search#in:title \"}
+          title=${title%\"}
+          n=0
+          if [ -f "$STUB_CALLS/../open-calls" ]; then n=$(cat "$STUB_CALLS/../open-calls"); fi
+          echo "$((n + 1))" >"$STUB_CALLS/../open-calls"
+          if [ -n "${STUB_OPEN_FAIL:-}" ]; then return 1; fi
+          if [ "$n" -gt 0 ] && [ -n "${STUB_OPEN_REST_FAIL:-}" ]; then return 1; fi
+          if [ "$n" -gt 0 ] && [ -n "${STUB_OPEN_REST:-}" ]; then entries=$STUB_OPEN_REST; else entries=${STUB_OPEN_FIRST:-$STUB_OPEN}; fi
+          while IFS= read -r entry || [ -n "$entry" ]; do
+            [ -n "$entry" ] || continue
+            number=${entry%%|*}
+            name=${entry#*|}
+            if [ "$name" = "$title" ]; then printf '%s\n' "$number"; return 0; fi
+          done <<<"$entries"
+          ;;
+        comment) header="comment $1"; shift ;;
+        create) header="create" ;;
+        *) echo "stub gh: unexpected issue verb: $verb" >&2; return 1 ;;
+      esac
+      if [ "$verb" = comment ]; then
+        body=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --body) body=$2 ;;
+            *) echo "stub gh: unexpected argument: $1" >&2; return 1 ;;
+          esac
+          shift 2
+        done
+        n=$(find "$STUB_CALLS" -type f | wc -l | tr -d ' ')
+        printf '%s\n%s' "$header" "$body" >"$STUB_CALLS/$n"
+      elif [ "$verb" = create ]; then
+        title=""
+        body=""
+        label=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --title) title=$2 ;;
+            --body) body=$2 ;;
+            --label) label=$2 ;;
+            *) echo "stub gh: unexpected argument: $1" >&2; return 1 ;;
+          esac
+          shift 2
+        done
+        n=$(find "$STUB_CALLS" -type f | wc -l | tr -d ' ')
+        printf '%s %s\n%s\nlabel=%s' "$header" "$title" "$body" "$label" >"$STUB_CALLS/$n"
+      fi
+      ;;
+    *) echo "stub gh: unexpected call: $*" >&2; return 1 ;;
+  esac
+}
+EOF
+cat "$tmp/stub.sh" "$tmp/ci-step.norm" >"$tmp/run.sh"
+
+sha=1111111111111111111111111111111111111111
+url=https://github.example/aakshintala/fiber/actions/runs/1
+
+# The expected body for one journey: the commit, the run URL, then every
+# failing journey in this run as a dash list.
+body() {
+  # shellcheck disable=SC2016 # the backticks are literal markdown in the issue body; printf expands the %s.
+  printf 'Journey `%s` failed at %s: %s\nFailing journeys in this run:\n%s' "$1" "$sha" "$url" "$2"
+}
+
+# run_step DIR OPEN: runs the writer step and prints its exit code. OPEN is
+# the open-issue fixture; further VAR=value arguments reach the
+# environment. FAILURES names the case's failures file.
+run_step() {
+  dir=$1
+  open=$2
+  shift 2
+  code=0
+  # shellcheck disable=SC2086
+  env -i PATH="$PATH" HOME="$dir" \
+    GITHUB_STEP_SUMMARY="$dir/summary" \
+    GH_TOKEN=test GH_REPO=aakshintala/fiber COMMIT="$sha" RUN_URL="$url" \
+    FAILURES="$dir/failures.txt" \
+    STUB_OPEN="$open" STUB_CALLS="$dir/calls" \
+    "$@" \
+    bash --noprofile --norc -eo pipefail "$tmp/run.sh" >"$dir/out" 2>"$dir/err" || code=$?
+  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$dir: the step printed to stderr"; }
+  echo "$code"
+}
+
+writes() {
+  find "$1/calls" -type f | wc -l | tr -d ' '
+}
+
+expect_write() {
+  got=$(cat "$1/calls/$2")
+  [ "$got" = "$3" ] || {
+    echo "--- want:" >&2
+    printf '%s\n' "$3" >&2
+    echo "--- got:" >&2
+    printf '%s\n' "$got" >&2
+    fail "$1: the write differs"
+  }
+}
+
+expect_summary() {
+  got=$(cat "$1/summary" 2>/dev/null || true)
+  [ "$got" = "$2" ] || {
+    echo "--- want summary:" >&2
+    printf '%s\n' "$2" >&2
+    echo "--- got summary:" >&2
+    printf '%s\n' "$got" >&2
+    fail "$1: the summary differs"
+  }
+}
+
+expect_exit() {
+  [ "$2" = "$3" ] || fail "$1: want exit $3, got $2"
+}
+
+expect_writes() {
+  got=$(writes "$1")
+  [ "$got" = "$2" ] || fail "$1: want $2 writes, got $got"
+}
+
+setup_case() {
+  dir=$tmp/$1
+  mkdir -p "$dir/calls"
+  : >"$dir/summary"
+}
+
+# Two failing journeys and no open issue: one labelled create per journey,
+# each naming the commit, the run URL and both failing journeys.
+setup_case create-two
+printf 'qa\nqb\n' >"$tmp/create-two/failures.txt"
+listed=$(printf -- '- %s\n- %s' qa qb)
+code=$(run_step "$tmp/create-two" "")
+expect_exit create-two "$code" 0
+expect_writes "$tmp/create-two" 2
+expect_write "$tmp/create-two" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed")")"
+expect_write "$tmp/create-two" 1 "$(printf 'create Journey failure: qb\n%s\nlabel=bug' "$(body qb "$listed")")"
+expect_summary "$tmp/create-two" ""
+
+# One journey already open: a comment on it, a create for the other.
+setup_case comment-and-create
+printf 'qa\nqb\n' >"$tmp/comment-and-create/failures.txt"
+code=$(run_step "$tmp/comment-and-create" "9|Journey failure: qa")
+expect_exit comment-and-create "$code" 0
+expect_writes "$tmp/comment-and-create" 2
+expect_write "$tmp/comment-and-create" 0 "$(printf 'comment 9\n%s' "$(body qa "$listed")")"
+expect_write "$tmp/comment-and-create" 1 "$(printf 'create Journey failure: qb\n%s\nlabel=bug' "$(body qb "$listed")")"
+
+# The issue appears between the lookup and the create: the recheck comments
+# instead of creating a duplicate.
+setup_case race-recheck
+printf 'qc\n' >"$tmp/race-recheck/failures.txt"
+listed_qc=$(printf -- '- %s' qc)
+code=$(run_step "$tmp/race-recheck" "" STUB_OPEN_FIRST="" STUB_OPEN_REST="11|Journey failure: qc")
+expect_exit race-recheck "$code" 0
+expect_writes "$tmp/race-recheck" 1
+expect_write "$tmp/race-recheck" 0 "$(printf 'comment 11\n%s' "$(body qc "$listed_qc")")"
+
+# A failed open lookup files nothing for that journey and notes it.
+setup_case lookup-fail
+printf 'qa\n' >"$tmp/lookup-fail/failures.txt"
+code=$(run_step "$tmp/lookup-fail" "" STUB_OPEN_FAIL=1)
+expect_exit lookup-fail "$code" 0
+expect_writes "$tmp/lookup-fail" 0
+expect_summary "$tmp/lookup-fail" "the open-issue search for Journey failure: qa failed, so nothing is filed"
+
+# A failed recheck files nothing either.
+setup_case recheck-fail
+printf 'qa\n' >"$tmp/recheck-fail/failures.txt"
+code=$(run_step "$tmp/recheck-fail" "" STUB_OPEN_FIRST="" STUB_OPEN_REST_FAIL=1)
+expect_exit recheck-fail "$code" 0
+expect_writes "$tmp/recheck-fail" 0
+expect_summary "$tmp/recheck-fail" "the open-issue recheck for Journey failure: qa failed, so nothing is filed"
+
+# A pass writes nothing: an empty failures file ...
+setup_case pass-empty
+: >"$tmp/pass-empty/failures.txt"
+code=$(run_step "$tmp/pass-empty" "")
+expect_exit pass-empty "$code" 0
+expect_writes "$tmp/pass-empty" 0
+expect_summary "$tmp/pass-empty" "no journey failed: nothing to file"
+
+# ... and a missing one (a skipped nightly uploads no artifact).
+setup_case pass-missing
+code=$(run_step "$tmp/pass-missing" "")
+expect_exit pass-missing "$code" 0
+expect_writes "$tmp/pass-missing" 0
+expect_summary "$tmp/pass-missing" "no journey failed: nothing to file"
+
+# A blank line names no journey: only the real name is filed.
+setup_case blank-line
+printf 'qa\n\n' >"$tmp/blank-line/failures.txt"
+code=$(run_step "$tmp/blank-line" "")
+expect_exit blank-line "$code" 0
+expect_writes "$tmp/blank-line" 1
+expect_write "$tmp/blank-line" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$(printf -- '- %s' qa)")")"
+
+# A last line without a trailing newline still files.
+setup_case no-trailing-newline
+printf 'qd' >"$tmp/no-trailing-newline/failures.txt"
+code=$(run_step "$tmp/no-trailing-newline" "")
+expect_exit no-trailing-newline "$code" 0
+expect_writes "$tmp/no-trailing-newline" 1
+expect_write "$tmp/no-trailing-newline" 0 "$(printf 'create Journey failure: qd\n%s\nlabel=bug' "$(body qd "$(printf -- '- %s' qd)")")"
+
+# A missing FAILURES environment fails the step instead of filing nothing.
+setup_case env-missing
+printf 'qa\n' >"$tmp/env-missing/failures.txt"
+code=0
+env -i PATH="$PATH" HOME="$tmp/env-missing" \
+  GITHUB_STEP_SUMMARY="$tmp/env-missing/summary" \
+  GH_TOKEN=test GH_REPO=aakshintala/fiber COMMIT="$sha" RUN_URL="$url" \
+  STUB_CALLS="$tmp/env-missing/calls" \
+  bash --noprofile --norc -eo pipefail "$tmp/run.sh" >"$tmp/env-missing/out" 2>"$tmp/env-missing/err" || code=$?
+grep -Fq "FAILURES" "$tmp/env-missing/err" || fail "env-missing: the failure does not name FAILURES"
+expect_exit env-missing "$code" 1
+expect_writes "$tmp/env-missing" 0
+
+echo "scripts/test-journey-report: ok"

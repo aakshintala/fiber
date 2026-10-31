@@ -458,7 +458,7 @@ After the backstop passes on `main`, and in the nightly before it publishes,
 the journey suite drives that commit's release binary through the paths a
 person walks (`docs/testing.md`, "Journeys"). A failure opens an issue, or
 comments on the open one. It never blocks a merge, and it is not part of the
-gate.
+gate. In the nightly, a failure reports and does not stop the publish.
 
 ## Toolchain
 
