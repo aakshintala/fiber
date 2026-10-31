@@ -23,15 +23,13 @@ use serde_json::{Value, json};
 use support::{Setup, function_call, hello, is_status, run_to_exit, stream, text_reply};
 
 /// Runs `fiber ask` with `args` to its exit: its exit code, parsed stdout
-/// lines and stderr text.
+/// lines and stderr text. The exit wait gets its own bound, minted here,
+/// so one slow step does not use up a later step's time.
 fn run_ask(setup: &Setup, args: &[&str]) -> (Option<i32>, Vec<Value>, String) {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
-    let output = run_to_exit(
-        setup.deadline,
-        &format!("fiber {} to exit", args.join(" ")),
-        command,
-    );
+    let wait = setup.deadline.start_wait();
+    let output = run_to_exit(wait, &format!("fiber {} to exit", args.join(" ")), command);
     let lines = String::from_utf8(output.stdout)
         .unwrap()
         .lines()
@@ -183,12 +181,11 @@ fn diagnose(
 fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
     let setup = Setup::new_with_fm_root();
     let marker = setup.workspace().join("marker");
-    // The second call blocks the turn on the marker: the session cannot end
-    // until every live run printed, so the drain can replay none.
-    let unblock = format!(
-        "echo hi; for i in $(seq 1 200); do if [ \"$(wc -l < {:?})\" -ge 2 ]; then break; fi; sleep 0.2; done; echo done",
-        marker
-    );
+    // The second call answers at once. The turn stays alive on the held
+    // third model response while the mid-session run is awaited, so the
+    // session cannot end before every live run printed and the drain can
+    // replay none.
+    let unblock = "echo hi";
     let model = ProviderServer::start([
         stream(&[
             json!({"type": "response.output_item.done", "item": {
@@ -236,9 +233,10 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
         let _ignored = done_tx.send(run_to_exit(deadline, "fiber ask to exit", command));
     });
     // The first run parked on the held server; the mid-session run happened
-    // exactly once. The wait's bound is the test's deadline; the held
-    // fake's own limit outlasts it, so the fake's 500 never fires first.
-    if !held.await_requests(1, setup.deadline) {
+    // exactly once. This wait's bound is minted here; the held fake's own
+    // limit outlasts it, so the fake's 500 never fires first.
+    let park_wait = setup.deadline.start_wait();
+    if !held.await_requests(1, park_wait) {
         panic!(
             "waited for the watcher to park mid-session; {}",
             diagnose(&setup, &marker, held.requests().len(), &model)
@@ -246,20 +244,60 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
     }
     // `docs/extensions.md:1651-1657` ("When a session ends"): the drain replays
     // each watcher's `(cursor, end]` range, one run per line, so one parked
-    // run means one marker line.
+    // run means one marker line. The read fails with the same diagnostic
+    // payload the assertion carries, so a missing marker names the state.
+    let parked = match fs::read_to_string(&marker) {
+        Ok(text) => text,
+        Err(error) => panic!(
+            "the parked run's marker line was unreadable ({error}); {}",
+            diagnose(&setup, &marker, held.requests().len(), &model)
+        ),
+    };
     assert_eq!(
-        fs::read_to_string(&marker).unwrap(),
+        parked,
         "run\n",
         "the watcher parked exactly once; {}",
         diagnose(&setup, &marker, held.requests().len(), &model)
     );
+    // Free exactly one held model response while the hold stays on, so the
+    // third request stays held. Only the second request can be waiting: the
+    // first was answered at once and the third is unsent until stream 2 is
+    // consumed and call_2 returns (`docs/loop.md`, "One step").
+    model.release_one();
+    // The third model request proves stream 2 was consumed and call_2 ran
+    // while the ask stays alive. Its bound is minted here.
+    let model_wait = setup.deadline.start_wait();
+    if !model.await_requests(3, model_wait) {
+        panic!(
+            "waited for the third model request after the model permit, proving stream 2 was consumed and call_2 ran while the ask stays alive; {}",
+            diagnose(&setup, &marker, held.requests().len(), &model)
+        );
+    }
+    // Free every held callback: if the first run is still parked it ends
+    // here, and if it already timed out the second run already parked. Both
+    // orders reach the held second request while the third model request
+    // stays held, which proves live execution: the ask cannot exit and the
+    // drain cannot run while the third model request stays held.
+    held.release();
+    // The mid-session run's held request proves it executed live, not as a
+    // drain replay. Its bound is minted here. Marker bytes ride in the
+    // wait-failure diagnostics; no mid-session marker count is asserted.
+    let held_wait = setup.deadline.start_wait();
+    if !held.await_requests(2, held_wait) {
+        panic!(
+            "waited for the mid-session run's held request while the third model response stays held; {}",
+            diagnose(&setup, &marker, held.requests().len(), &model)
+        );
+    }
+    // Freeing the last held model response lets the turn end: the queued
+    // offer executes once live while the turn waits on it, so both live
+    // runs print before the exit and the drain replays neither.
     model.release();
-    // Freeing the parked run lets the queued second offer execute while the
-    // turn waits on it: whichever lands first, both live runs print before
-    // the exit, so the drain replays neither.
     let held_requests_at_release = held.requests().len();
     drop(held);
-    let output = match setup.deadline.recv(&done_rx) {
+    // The exit wait's bound is minted here, after the final release.
+    let completion_wait = setup.deadline.start_wait();
+    let output = match completion_wait.recv(&done_rx) {
         Ok(output) => output,
         Err(mpsc::RecvTimeoutError::Timeout) => panic!(
             "waited until the deadline for `fiber ask` to exit; {}",
@@ -280,8 +318,15 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
     // (`docs/extensions.md:1651-1657`, "When a session ends": one run per
     // watcher per line in `(cursor, end]`, so the two queued offers plus the
     // parked run mean three marker lines and no drain replay).
+    let drained = match fs::read_to_string(&marker) {
+        Ok(text) => text,
+        Err(error) => panic!(
+            "the final marker was unreadable ({error}); {}",
+            diagnose(&setup, &marker, held_requests_at_release, &model)
+        ),
+    };
     assert_eq!(
-        fs::read_to_string(&marker).unwrap(),
+        drained,
         "run\nrun\nrun\n",
         "every live run executed and the drain replayed none; {}",
         diagnose(&setup, &marker, held_requests_at_release, &model)
