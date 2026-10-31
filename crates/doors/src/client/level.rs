@@ -18,11 +18,7 @@ use support::lock;
 use super::writer::{Flight, write_counted};
 use super::{Conn, control_line, reject};
 
-/// The control kind the reader pushes to switch its writer: never written
-/// to the client.
-pub(crate) const LEVEL: &str = "doors.level";
-
-/// What the writer switches to at its next [`LEVEL`] line.
+/// What the writer switches to at its next [`crate::client::ControlKind::Level`] line.
 pub(crate) struct Switch {
     pub(crate) watcher: log::Watcher,
     pub(crate) summary: bool,
@@ -88,7 +84,7 @@ impl Outbox {
 
     /// Pushes the writer's STOP line into the current queue.
     pub(crate) fn stop(&self, session: &SessionId) {
-        self.push_kept(control_line(session, super::STOP, 0));
+        self.push_kept(control_line(session, crate::client::ControlKind::Stop, 0));
     }
 }
 
@@ -233,10 +229,13 @@ pub(super) fn change(
         conn.gone = true;
         return;
     }
-    outbox.swap(control_line(&conn.gate.session_id, LEVEL, 0), injector);
+    outbox.swap(
+        control_line(&conn.gate.session_id, crate::client::ControlKind::Level, 0),
+        injector,
+    );
 }
 
-/// Writer side, on a [`LEVEL`] line: takes the next [`Switch`] with
+/// Writer side, on a [`crate::client::ControlKind::Level`] line: takes the next [`Switch`] with
 /// `try_recv` (never `recv`); on a lowering drains `writing.watcher`
 /// through `switch.cutoff`; waits for a label-bearing switch's deferred
 /// response, then writes it before the prelude snapshots; installs the
