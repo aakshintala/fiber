@@ -332,18 +332,26 @@ fn collapse_whitespace(text: &str) -> String {
 }
 
 fn section_body_start_line(markdown: &str, heading: &str) -> Option<usize> {
-    markdown
-        .lines()
-        .enumerate()
-        .find_map(|(line_number, line)| {
-            let hashes = line
-                .chars()
-                .take_while(|character| *character == '#')
-                .count();
-            let rest = line.get(hashes..)?;
-            (hashes > 0 && rest.starts_with(' ') && rest.trim() == heading)
-                .then_some(line_number + 2)
-        })
+    for (line_number, line) in markdown.lines().enumerate() {
+        if !line.starts_with('#') {
+            continue;
+        }
+        let hashes = line
+            .chars()
+            .take_while(|character| *character == '#')
+            .count();
+        let Some(rest) = line.get(hashes..) else {
+            continue;
+        };
+        if !rest.starts_with(' ') {
+            continue;
+        }
+        if rest.trim() != heading {
+            continue;
+        }
+        return Some(line_number + 2);
+    }
+    None
 }
 
 /// Each normal workspace edge not granted by a quoted call rule.
