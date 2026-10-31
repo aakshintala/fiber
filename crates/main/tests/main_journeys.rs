@@ -852,9 +852,13 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             // re-asking starts no new `/lua-quota` request. The poll
             // reads the raw output, never the grid, so the file's zero
             // bare screen reads stand; the grid wait below is the
-            // assertion.
+            // assertion. Each pass writes one 4-byte focus-in, paced
+            // below so the loop can never fill the PTY input buffer
+            // faster than Fiber drains it; the trip cap bounds the
+            // total, and the grid wait below still decides a fetch
+            // that lands after the last pass.
             let quota_from = run.output().len();
-            loop {
+            for _ in 0..600 {
                 run.write(b"\x1b[I");
                 if String::from_utf8_lossy(&run.output()[quota_from..]).contains("10%") {
                     break;
@@ -863,6 +867,11 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
                     !setup.deadline.left().is_zero(),
                     "waited until the deadline for the fetched quota share to draw after focus-in"
                 );
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "a poll pause, not a deadline (docs/testing.md, \"Waits and timeouts\")"
+                )]
+                std::thread::sleep(std::time::Duration::from_millis(20));
                 std::thread::yield_now();
             }
             run.wait_screen("the fetched quota share", |grid| {
@@ -1571,6 +1580,14 @@ fn started(run: &mut Run) {
         }
         let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
         from = run.wait_bytes(approval, FRAME_END, "the approval frame");
+        // One paced 1-byte write per pass: each pass already blocks on
+        // a deadline wait above, and the pause keeps the re-ask below
+        // what Fiber drains.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "a poll pause, not a deadline (docs/testing.md, \"Waits and timeouts\")"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(20));
         run.write(b"\r");
     }
     run.turn_finished(from);
