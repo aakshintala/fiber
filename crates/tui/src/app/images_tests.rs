@@ -603,6 +603,43 @@ fn a_draw_past_the_placeholder_range_queues_no_display_fetch() {
 }
 
 #[test]
+fn a_click_past_the_placeholder_range_opens_its_viewer() {
+    // 255 distinct images fill the placeholder colours, so the last
+    // keeps a unique viewer-only id past the range.
+    let mut app = inline_app();
+    for n in 0..255 {
+        started_with_image(&mut app, &format!("artifacts/pic-{n:03}.png"));
+    }
+    let id = (1..=300)
+        .find(|id| {
+            app.screen
+                .pages()
+                .image(*id)
+                .is_some_and(|part| part.path == "artifacts/pic-254.png")
+        })
+        .expect("the past-range image is noted");
+    assert!(id > 255, "the past-range image keeps a viewer-only id");
+    // Its draw queues no display fetch: a viewer-only id never enters
+    // the display path, so no placeholder grid draws above its caption
+    // (`docs/tui.md`, "Images").
+    app.images_drawn(&drawn(id));
+    assert!(
+        app.take_image_out().display.is_empty(),
+        "viewer-only ids never enter the display path"
+    );
+    // A click on its caption opens the viewer on its path.
+    let lines = sent(app.view_image(id));
+    assert_eq!(lines.len(), 1);
+    let value: Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(value.get("command"), Some(&json!("read_file")));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": SESSION, "path": "artifacts/pic-254.png"}))
+    );
+}
+
+#[test]
 fn a_draw_with_the_link_down_asks_nothing() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 24);
