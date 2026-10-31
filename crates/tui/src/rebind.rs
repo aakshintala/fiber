@@ -297,7 +297,7 @@ impl KeysScreen {
         let top_action = action_at(self.top.min(total_lines.saturating_sub(1)), &grown);
         match key {
             Key::Up => self.selected = self.selected.saturating_sub(1),
-            Key::Down => self.selected = self.selected.saturating_add(1).min(total - 1),
+            Key::Down => self.selected = self.selected.saturating_add(1),
             Key::PageUp => {
                 let page = fits_from(top_action, &grown, shown)
                     .saturating_sub(1)
@@ -308,7 +308,7 @@ impl KeysScreen {
                 let page = fits_from(top_action, &grown, shown)
                     .saturating_sub(1)
                     .max(1);
-                self.selected = self.selected.saturating_add(page).min(total - 1);
+                self.selected = self.selected.saturating_add(page);
             }
             Key::Char(_)
             | Key::Backspace
@@ -349,15 +349,16 @@ impl KeysScreen {
         }
         self.selected = self.selected.min(total - 1);
         let total_lines: usize = grown.iter().sum();
-        let mut top = action_at(self.top.min(total_lines.saturating_sub(1)), grown);
-        top = top.min(self.selected);
-        loop {
-            let fits = fits_from(top, grown, shown).max(1);
-            if self.selected < top.saturating_add(fits) {
-                break;
-            }
-            top = top.saturating_add(1);
-        }
+        let first =
+            action_at(self.top.min(total_lines.saturating_sub(1)), grown).min(self.selected);
+        // The search runs over a finite range, so a flipped comparison
+        // below lands on the wrong top instead of spinning past the end.
+        let top = (first..=self.selected)
+            .find(|&top| {
+                let fits = fits_from(top, grown, shown).max(1);
+                self.selected < top.saturating_add(fits)
+            })
+            .unwrap_or(self.selected);
         self.top = grown.iter().take(top).sum();
     }
 
@@ -436,15 +437,13 @@ impl KeysScreen {
             self.top.min(end).saturating_add(3).min(end)
         };
         self.top = next;
-        let selected = self.selected.min(total - 1);
+        let selected = self.selected;
         let start: usize = grown.iter().take(selected).sum();
         let height = grown.get(selected).copied().unwrap_or(0);
         if start.saturating_add(height) <= next {
             self.selected = action_at(next, &grown);
         } else if start >= next.saturating_add(shown) {
             self.selected = action_at(next.saturating_add(shown).saturating_sub(1), &grown);
-        } else {
-            self.selected = selected;
         }
         Outcome::Nothing
     }
@@ -576,7 +575,7 @@ pub(crate) fn columns(keys: &Keyset, width: usize) -> (usize, usize, usize) {
         wide.1 = wide.1.max(crate::format::width(binding.id));
         wide.2 = wide.2.max(crate::format::width(binding.description));
     }
-    let room = width.saturating_sub(GUTTER + 2);
+    let room = width.saturating_sub(GUTTER).saturating_sub(2);
     if wide.0 + wide.1 + wide.2 <= room {
         return wide;
     }
@@ -689,15 +688,12 @@ fn join_at(line: usize, columns: [&[(String, Join)]; 3]) -> Join {
     if line == 0 {
         return Join::Break;
     }
-    let mut wrap = Join::Wrap;
     for column in columns {
-        match column.get(line).map(|(_, join)| join) {
-            Some(Join::WrapSpace) => return Join::WrapSpace,
-            Some(Join::Wrap) => wrap = Join::Wrap,
-            _ => {}
+        if let Some(Join::WrapSpace) = column.get(line).map(|(_, join)| join) {
+            return Join::WrapSpace;
         }
     }
-    wrap
+    Join::Wrap
 }
 
 /// The clash prompt's line: the captured key's label and the action
