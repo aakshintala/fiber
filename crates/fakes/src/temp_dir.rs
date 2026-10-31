@@ -45,6 +45,9 @@ pub struct TempDir {
 
 /// The name of the thread creating the directory, best-effort: the test's
 /// name on a test thread, for the drop failure to name.
+// Exempt: feeds only the drop failure message text naming the creating test; no consumer reads it.
+// (`docs/testing/mutants.md`, "Proving a test bites").
+#[cfg_attr(false, mutants::skip)]
 fn creating_thread_name() -> Option<String> {
     thread::current().name().map(str::to_owned)
 }
@@ -155,6 +158,9 @@ fn holders_message(path: &Path, owner: Option<&str>, holders: &[u32]) -> String 
 
 /// The command line of one process for the drop failure, or `<gone>` when it
 /// cannot be read: a best-effort diagnostic, never a wait.
+// Exempt: feeds only the drop failure message text naming each holder pid; no consumer reads it.
+// (`docs/testing/mutants.md`, "Proving a test bites").
+#[cfg_attr(false, mutants::skip)]
 fn command_line(pid: u32) -> String {
     const GONE: &str = "<gone>";
     let mut child = match Command::new("ps")
@@ -251,6 +257,9 @@ fn wait_for_holders(path: &Path, clock: &dyn Clock, start: Instant, bound: Durat
 
 /// One poll pause between rescan probes, holding no lock, like the existing
 /// liveness loops.
+// Exempt: only paces the holder rescan loop; the bound ends it either way, so no consumer
+// sees a difference (`docs/testing/mutants.md`, "Proving a test bites").
+#[cfg_attr(false, mutants::skip)]
 fn pause() {
     let (_stop, stopped) = mpsc::channel::<()>();
     let _closed = stop_closed(&stopped);
@@ -304,9 +313,6 @@ fn candidate_pids() -> Vec<u32> {
 #[cfg(target_os = "linux")]
 fn parse_pid(name: &std::ffi::OsStr) -> Option<u32> {
     let name = name.to_str()?;
-    if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
     name.parse().ok()
 }
 
@@ -337,6 +343,8 @@ fn holds(dir: &Path, pid: u32) -> bool {
 
 /// Every pid the scan filters: whatever the kernel lists.
 #[cfg(target_os = "macos")]
+// Mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn candidate_pids() -> Vec<u32> {
     support::peer::all_pids()
 }
@@ -344,6 +352,8 @@ fn candidate_pids() -> Vec<u32> {
 /// Whether `pid` holds `dir`: its working directory or executable image
 /// resolves under it.
 #[cfg(target_os = "macos")]
+// Mutants run on Linux, where it is not compiled.
+#[cfg_attr(false, mutants::skip)]
 fn holds(dir: &Path, pid: u32) -> bool {
     support::peer::dirs_of(support::peer::Pid(pid))
         .iter()
