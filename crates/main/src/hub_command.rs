@@ -4,7 +4,6 @@
 //! builds the session starter and runs the hub, which reads configuration
 //! once it holds the `run/` lock; a start failure prints one line on stderr.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -68,7 +67,7 @@ fn client_command(
 ) -> i32 {
     let (home, target) = match crate::hub_target(named) {
         Ok(target) => target,
-        Err(error) => return fail(error),
+        Err(error) => return crate::fail(error),
     };
     run(&mut || crate::connect_hub(&home, &target, exe, clock))
 }
@@ -76,11 +75,11 @@ fn client_command(
 fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
     let home = match crate::startup::startup_home() {
         Ok(home) => home,
-        Err(error) => return fail(error),
+        Err(error) => return crate::fail(error),
     };
     let exe = match exe {
         Ok(exe) => exe,
-        Err(message) => return fail(failure(ErrorCode::IoFailed, message)),
+        Err(message) => return crate::fail(doors::failure(ErrorCode::IoFailed, message)),
     };
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::clock::System);
     let configure = {
@@ -112,7 +111,7 @@ fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
 /// `hub.port` is ignored (`docs/invocation.md`, "The hub").
 fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<hub::Settings, Failure> {
     let workspace = workspace.map_err(|error| {
-        failure(
+        doors::failure(
             ErrorCode::IoFailed,
             format!("the current directory: {error}"),
         )
@@ -124,7 +123,7 @@ fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<hub::Se
         project,
         overrides: Vec::new(),
     })
-    .map_err(|error| failure(error.code(), error.to_string()))?;
+    .map_err(|error| doors::failure(error.code(), error.to_string()))?;
     Ok(hub::Settings {
         idle_exit: settings::hub_idle_exit(&config),
         level: if config::diagnostics_debug(&config) {
@@ -141,7 +140,7 @@ fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<hub::Se
 /// from the loaded configuration, else `None`.
 fn port(home: &Path, config: &config::Config) -> Result<Option<hub::PortSettings>, Failure> {
     let number = config::get_global(home, "hub.port")
-        .map_err(|error| failure(error.code(), error.to_string()))?
+        .map_err(|error| doors::failure(error.code(), error.to_string()))?
         .and_then(|value| value.as_u64())
         .and_then(|number| u16::try_from(number).ok());
     let Some(number) = number else {
@@ -165,25 +164,8 @@ fn port(home: &Path, config: &config::Config) -> Result<Option<hub::PortSettings
 fn finish(served: Result<i32, hub::StartError>) -> i32 {
     match served {
         Ok(code) => code,
-        Err(error) => fail(failure(error.code(), error.to_string())),
+        Err(error) => crate::fail(doors::failure(error.code(), error.to_string())),
     }
-}
-
-fn failure(code: ErrorCode, message: String) -> Failure {
-    Failure {
-        code,
-        message,
-        retry_after_ms: None,
-        provider: None,
-    }
-}
-
-/// Prints `fiber: <message>` on stderr and gives the failure's exit code:
-/// 2 for `usage`, otherwise 1.
-fn fail(failure: Failure) -> i32 {
-    // A closed stderr leaves nobody to tell.
-    writeln!(std::io::stderr(), "fiber: {}", failure.message).unwrap_or(());
-    doors::exit_code(&failure)
 }
 
 #[cfg(test)]

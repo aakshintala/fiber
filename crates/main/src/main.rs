@@ -544,12 +544,9 @@ fn mcp_declaration(args: &cli::McpAddArgs) -> Result<::cli::McpDeclaration, Stri
     }
 }
 
-#[allow(
-    clippy::print_stderr,
-    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
-)]
 fn fail(e: Failure) -> i32 {
-    eprintln!("fiber: {}", e.message);
+    // A closed stderr leaves nobody to tell.
+    writeln!(io::stderr(), "fiber: {}", e.message).unwrap_or(());
     doors::exit_code(&e)
 }
 
