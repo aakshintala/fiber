@@ -2065,7 +2065,7 @@ because the second Ctrl+C always quits ("Input and focus"). Either entry gives
 a `notice` and keeps the defaults.
 
 `/keys` opens the rebinding screen: every action with its keys, id and
-description, the unbound ones included. Selecting an action, pressing Enter
+description, the unbound ones included. Each column wraps inside its own width, as in the key map, so every key stays readable. Every display line of a wrapped action takes a mouse target, and a click on any line selects the action; the focused action keeps the bar on every wrapped display line with › on the first, the /keys exception to the Swapped-views gutter-only rule. Selecting an action, pressing Enter
 and then a key binds it, so only a key the terminal actually delivers can be
 bound; an action with variants takes one key for each variant, in order. A key
 already bound to another action shows inline, with a choice to swap or cancel.

@@ -191,6 +191,7 @@ impl Picker {
             State::Waiting(_) => "Reading the labels…".to_owned(),
         };
         Frame {
+            joins: Vec::new(),
             title: "Credentials".to_owned(),
             command: "/credential".to_owned(),
             rows,

@@ -1092,10 +1092,11 @@ fn a_swapped_view_on_home_tints_the_focused_row_and_lifts_the_hovered_row() {
     use crate::theme::hover_bg;
     use ratatui::style::Modifier;
     // The `/keys` screen on home draws through the swapped-view early
-    // return, with one target per row (`docs/tui.md`, "Swapped views")
-    // and one row per action (`docs/tui.md`, "Bindings": every action
-    // with its keys, id and description — the table lists dozens, so at
-    // least two rows exist to focus one and hover another).
+    // return, with one target per display line and every action wrapped
+    // to its tallest column count (`docs/tui.md`, "Bindings": every
+    // display line of a wrapped action takes a mouse target — the first
+    // action wraps to two lines, so at least three display lines exist
+    // to bar two and hover another).
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -1122,30 +1123,51 @@ fn a_swapped_view_on_home_tints_the_focused_row_and_lifts_the_hovered_row() {
             .map(|target| (target.id, target.rect))
             .collect()
     };
-    assert!(rows.len() >= 2, "two rows to focus and hover: {rows:?}");
+    assert!(
+        rows.len() >= 3,
+        "three lines to bar two and hover one: {rows:?}"
+    );
     let (focus_id, focus_rect) = rows[0];
-    let (hover_id, hover_rect) = rows[1];
+    let (_, cont_rect) = rows[1];
+    let (hover_id, hover_rect) = rows[2];
     assert_ne!(focus_rect.y, hover_rect.y);
     app.focus = Some(focus_id);
-    // The unhovered frame: the focused row's base for the hover math.
+    // The unhovered frame: the focused lines' base for the hover math.
     let mut base = Buffer::empty(area);
     crate::view::render(&app, area, &mut base, None);
-    // Hover the second row's first cell.
+    // Hover the first line outside the focused action.
     let pointer = (hover_rect.x, hover_rect.y);
     let mut buf = Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, Some(pointer));
     assert_eq!(hit(&targets, pointer.0, pointer.1), Some(hover_id));
-    // The focused row keeps the focus style, with no hover lift: the
+    // The focused action keeps the focus style on every display line,
+    // with the gutter mark on the first only and no hover lift: the
     // pointer sits elsewhere.
-    for dx in 0..focus_rect.width {
-        let at = (focus_rect.x.saturating_add(dx), focus_rect.y);
-        let cell = &buf[at];
-        assert!(
-            cell.modifier.contains(Modifier::REVERSED),
-            "focused cell {dx}"
-        );
-        assert_eq!(cell.bg, base[at].bg, "focused cell {dx} unlifted");
+    for rect in [focus_rect, cont_rect] {
+        for dx in 0..rect.width {
+            let at = (rect.x.saturating_add(dx), rect.y);
+            let cell = &buf[at];
+            assert!(
+                cell.modifier.contains(Modifier::REVERSED),
+                "focused cell {dx}"
+            );
+            assert_eq!(cell.bg, base[at].bg, "focused cell {dx} unlifted");
+        }
     }
+    let first: String = (0..area.width)
+        .map(|x| buf[(x, focus_rect.y)].symbol().to_owned())
+        .collect();
+    assert!(
+        first.starts_with("› "),
+        "gutter mark on the focused first line: {first:?}"
+    );
+    let second: String = (0..area.width)
+        .map(|x| buf[(x, cont_rect.y)].symbol().to_owned())
+        .collect();
+    assert!(
+        second.starts_with("  "),
+        "no gutter mark on the continuation: {second:?}"
+    );
     // The hovered row lifts each cell over its unhovered background,
     // with no focus style: focus sits elsewhere.
     for dx in 0..hover_rect.width {
