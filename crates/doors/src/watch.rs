@@ -10,7 +10,7 @@ use contract::events::EventKind;
 use contract::{Envelope, SessionId};
 
 use crate::SessionError;
-use crate::attach::{Unsubscribed, next_envelope, subscribe_full};
+use crate::attach::{OutputKind, Unsubscribed, classify_output, next_envelope, subscribe_full};
 
 /// What a watch ended on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,9 +77,18 @@ pub fn watch_after(
         if let Some(seq) = envelope.seq.map(|seq| seq.0) {
             last_seq = Some(seq);
         }
-        // A name this build does not know is `Unknown`, which never
-        // ends the watch: only the session's own last line does.
-        let exited = EventKind::from_name(&envelope.kind) == EventKind::FiberExited;
+        // The kind is parsed once and the match names every outcome, so
+        // a new kind stops compiling here: only the session's own last
+        // line ends the watch, and a name this build does not know is
+        // `Unknown`, always delivered like any other line.
+        let exited = match classify_output(&EventKind::from_name(&envelope.kind)) {
+            OutputKind::FiberExited => true,
+            OutputKind::CommandAccepted
+            | OutputKind::CommandRejected
+            | OutputKind::TurnStarted
+            | OutputKind::TurnCompleted
+            | OutputKind::Other => false,
+        };
         on_line(&envelope);
         if exited {
             return Ok(Watched::Exited);

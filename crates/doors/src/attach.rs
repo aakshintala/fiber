@@ -87,11 +87,20 @@ pub fn attach(
             let Some((_, envelope)) = next_envelope(&mut reader) else {
                 return Err(ended(id));
             };
-            if answers(&envelope, EventKind::CommandRejected, &switch) {
-                return Err(rejection(&envelope.payload));
-            }
-            if answers(&envelope, EventKind::CommandAccepted, &switch) {
-                break;
+            // The kind is parsed once; the match names every outcome, so
+            // a new kind stops compiling here until its wait behavior is
+            // decided. Anything but this switch's own answers is ignored.
+            match classify_output(&EventKind::from_name(&envelope.kind)) {
+                OutputKind::CommandRejected if answers_command(&envelope, &switch) => {
+                    return Err(rejection(&envelope.payload));
+                }
+                OutputKind::CommandAccepted if answers_command(&envelope, &switch) => break,
+                OutputKind::CommandAccepted
+                | OutputKind::CommandRejected
+                | OutputKind::TurnStarted
+                | OutputKind::TurnCompleted
+                | OutputKind::FiberExited
+                | OutputKind::Other => {}
             }
         }
     }
@@ -110,25 +119,29 @@ pub fn attach(
         let Some((raw, envelope)) = next_envelope(&mut reader) else {
             return Err(ended(id));
         };
-        if answers(&envelope, EventKind::CommandRejected, &command) {
-            // The prompt's own rejection, read from its payload so its
-            // code and message match the handshake's.
-            return Err(rejection(&envelope.payload));
-        }
-        // The kind is parsed once: a name this build does not know is
-        // `Unknown`, which matches nothing below and is skipped or
-        // printed like any other line outside the turn.
-        let kind = EventKind::from_name(&envelope.kind);
-        if kind == EventKind::CommandAccepted || kind == EventKind::CommandRejected {
-            continue;
-        }
-        if starts_turn(&envelope, &command) {
-            printing = true;
-        } else if printing && kind == EventKind::TurnCompleted {
-            emit(out, &raw)?;
-            return Ok(exit_code(&envelope));
-        } else if printing && kind == EventKind::FiberExited {
-            return Err(ended(id));
+        // The kind is parsed once; the match names every outcome, so a
+        // new kind stops compiling here until its print behavior is
+        // decided. A name this build does not know is `Unknown`, an
+        // `Other` like any other line outside the turn's boundaries.
+        match classify_output(&EventKind::from_name(&envelope.kind)) {
+            OutputKind::CommandRejected if answers_command(&envelope, &command) => {
+                // The prompt's own rejection, read from its payload so
+                // its code and message match the handshake's.
+                return Err(rejection(&envelope.payload));
+            }
+            OutputKind::CommandAccepted | OutputKind::CommandRejected => continue,
+            OutputKind::TurnStarted if starts_turn(&envelope, &command) => {
+                printing = true;
+            }
+            OutputKind::TurnCompleted if printing => {
+                emit(out, &raw)?;
+                return Ok(exit_code(&envelope));
+            }
+            OutputKind::FiberExited if printing => return Err(ended(id)),
+            OutputKind::TurnStarted
+            | OutputKind::TurnCompleted
+            | OutputKind::FiberExited
+            | OutputKind::Other => {}
         }
         if printing {
             emit(out, &raw)?;
@@ -290,25 +303,126 @@ pub(crate) fn next_envelope(reader: &mut BufReader<UnixStream>) -> Option<(Vec<u
     }
 }
 
-/// Whether `envelope` answers `command` with `kind`.
-fn answers(envelope: &Envelope, kind: EventKind, command: &str) -> bool {
-    EventKind::from_name(&envelope.kind) == kind
-        && envelope.payload.get("command_id").and_then(Value::as_str) == Some(command)
+/// What the session-output readers do with one envelope kind. The prompt
+/// loop's answers, the turn's boundaries, the session's end, or nothing.
+/// [`classify_output`] names every [`EventKind`] with no wildcard, so a new
+/// kind stops compiling at both readers until its behavior is decided; a
+/// name this build does not know is [`EventKind::Unknown`], always `Other`.
+pub(crate) enum OutputKind {
+    /// This command's acknowledgement or another command's: never printed.
+    CommandAccepted,
+    /// This command's rejection is its code and message; any other is skipped.
+    CommandRejected,
+    /// The prompt's own `turn_started` starts printing; any other is skipped.
+    TurnStarted,
+    /// The turn's `turn_completed` ends printing with its exit code.
+    TurnCompleted,
+    /// The session's last line ends the read.
+    FiberExited,
+    /// Every other known kind, and every unknown name: skipped outside the
+    /// turn, printed inside it.
+    Other,
+}
+
+/// Sorts one parsed kind into what the session-output readers do with it.
+/// Exhaustive with no wildcard: adding an [`EventKind`] breaks this match
+/// until the new kind is placed.
+pub(crate) fn classify_output(kind: &EventKind) -> OutputKind {
+    match kind {
+        EventKind::CommandAccepted => OutputKind::CommandAccepted,
+        EventKind::CommandRejected => OutputKind::CommandRejected,
+        EventKind::TurnStarted => OutputKind::TurnStarted,
+        EventKind::TurnCompleted => OutputKind::TurnCompleted,
+        EventKind::FiberExited => OutputKind::FiberExited,
+        EventKind::Unknown(_) => OutputKind::Other,
+        EventKind::FiberStarted
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::StepStarted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified => OutputKind::Other,
+    }
+}
+
+/// Whether `envelope`'s payload answers `command`: the caller matches the
+/// answer kind first, so this checks the id alone.
+fn answers_command(envelope: &Envelope, command: &str) -> bool {
+    envelope.payload.get("command_id").and_then(Value::as_str) == Some(command)
 }
 
 /// Whether `envelope` is the `turn_started` carrying this prompt's command
-/// id in its input.
+/// id in its input: the caller matches the kind first, so this checks the
+/// input alone.
 fn starts_turn(envelope: &Envelope, command: &str) -> bool {
-    EventKind::from_name(&envelope.kind) == EventKind::TurnStarted
-        && envelope
-            .payload
-            .get("input")
-            .and_then(Value::as_array)
-            .is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item.get("command_id").and_then(Value::as_str) == Some(command))
-            })
+    envelope
+        .payload
+        .get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.get("command_id").and_then(Value::as_str) == Some(command))
+        })
 }
 
 /// The exit code for `envelope`'s outcome: 0 for `completed`, 1 for the rest.
