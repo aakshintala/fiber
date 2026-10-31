@@ -3685,6 +3685,24 @@ fn in_flight_closing_delivers_once(tag: &str, queued: bool) {
     let line = harness.line();
     assert_eq!(line["kind"], "command_accepted", "{line}");
     assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    // The resumed relay's reader forwards the accepted answer before its
+    // cleanup forgets the id, so the state read below races that reader:
+    // take its thread before the entry can go away, end the resumed fake
+    // session, and join the reader before asserting the queue is clean.
+    let resumed = crate::connection::lock(&harness.relays)
+        .entries
+        .iter_mut()
+        .find(|entry| entry.session == END_SID && entry.epoch > harness.epoch)
+        .and_then(|entry| entry.thread.take())
+        .expect("the resumed relay is still published");
+    assert!(
+        harness.starter.stop(
+            &contract::SessionId(END_SID.to_owned()),
+            MUST_SUCCEED_WITHIN
+        ),
+        "the resumed fake session ended"
+    );
+    join_within_deadline(resumed);
     harness.end_reader(ack, thread);
     assert_eq!(
         harness.order.state(&CommandId("c_1".to_owned())),
