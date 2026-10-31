@@ -2015,6 +2015,34 @@ fn colliding_project_slugs_do_not_share_protected_baselines() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_baseline_identity_is_recognized_through_a_workspace_symlink() {
+    let root = fakes::TempDir::new("fiber-protected-identity-symlink");
+    let project = root.path().join("project");
+    let fiber = project.join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir");
+    let protected = fiber.join("keep.txt");
+    std::fs::write(&protected, b"original").expect("protected file");
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&project, &alias).expect("workspace symlink");
+
+    let home = protected_home(&root);
+    let handle = open_handle(&home, &project);
+    let active = handle.begin(&project).expect("call begins");
+    std::fs::write(&protected, b"changed").expect("protected file changed");
+    drop(active.guard);
+
+    let (_alias_handle, startup) = ProtectedPaths::open(&home, &alias).expect("alias opens");
+    let report = startup.expect("the recorded baseline belongs to this project");
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(&protected).expect("protected file reads"),
+        b"original",
+        "the alias finds and restores the same project's baseline"
+    );
+}
+
 #[test]
 fn a_workspace_no_project_key_can_name_fails_before_spawn() {
     let dir = fakes::TempDir::new("fiber-protected-bad-key");
