@@ -69,13 +69,21 @@
 #
 # It answers `initialize`, `tools/list`, `tools/call`, `prompts/list`,
 # `prompts/get` and `ping`, appends
-# every received line to `requests.log`, and writes its working directory
-# to `cwd.txt` and its pid to `pid.txt`. Anything else shaped as a request
+# every received line to `requests.log`, writes its starting working
+# directory to `cwd.txt`, leaves that directory for `/` at once so a
+# server that outlives the test never holds the spawner's directory, and
+# writes its pid to `pid.txt`. Anything else shaped as a request
 # gets JSON-RPC error -32601; notifications get no answer.
 set -u
 
 dir="$1"
 pwd -P > "$dir/cwd.txt"
+# The spawner starts the server with its working directory under the test
+# home; leave it for a neutral directory at once, so a server that
+# outlives the test never holds the home through its working directory.
+# Everything below reaches its files through "$dir" by absolute path, and
+# `pid.txt` lands only after the move, so a waiter on it never races it.
+cd /
 printf '%s\n' "$$" > "$dir/pid.txt"
 # A `grandchild` file starts a child that ignores SIGTERM and holds
 # stdout open, before anything is read: stopping the server must take it

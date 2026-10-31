@@ -161,6 +161,78 @@ fn the_mcp_fixture_fails_its_start_on_a_fail_start_file() {
     );
 }
 
+/// The live directories the kernel reports for `pid`: its working
+/// directory and executable image on Linux, whatever the vnode lookup
+/// reports on macOS. The same match the holder scan runs, so a server the
+/// scan would name fails the assert below first and fast.
+#[cfg(target_os = "linux")]
+fn live_dirs(pid: u32) -> Vec<std::path::PathBuf> {
+    let proc = Path::new("/proc").join(pid.to_string());
+    ["cwd", "exe"]
+        .into_iter()
+        .filter_map(|file| std::fs::read_link(proc.join(file)).ok())
+        .collect()
+}
+
+/// The live directories the kernel reports for `pid`: whatever the vnode
+/// lookup reports, the same match the holder scan runs on macOS.
+#[cfg(target_os = "macos")]
+fn live_dirs(pid: u32) -> Vec<std::path::PathBuf> {
+    support::peer::dirs_of(support::peer::Pid(pid))
+}
+
+/// The fixture server never holds its home through its working directory:
+/// spawned the way production starts it, with its working directory under
+/// the home, it leaves for a neutral directory at once, so the home drops
+/// cleanly while the server still runs.
+#[test]
+fn the_mcp_fixture_server_leaves_its_home_directory() {
+    let home = TempDir::new("fiber-fixture-leaves-home");
+    let mut child = Command::new(mcp_fixture())
+        .arg(home.path())
+        .current_dir(home.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    // `pid.txt` lands only after the server leaves its starting directory,
+    // so the read below never races the move.
+    crate::wait_until("the fixture server to start", Deadline::after(DEADLINE), {
+        let started = home.path().join("pid.txt");
+        move || started.exists()
+    });
+    let dirs = live_dirs(pid);
+    assert!(
+        !dirs.is_empty(),
+        "the kernel reports no directory for server pid {pid}"
+    );
+    let canonical = std::fs::canonicalize(home.path()).unwrap();
+    assert!(
+        dirs.iter()
+            .all(|dir| !support::peer::within_dir(&canonical, dir)),
+        "server pid {pid} still holds {} through: {}",
+        home.path().display(),
+        dirs.iter()
+            .map(|dir| dir.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    // The point of the move: the home drops while the server still runs.
+    let path = home.path().to_path_buf();
+    drop(home);
+    assert!(
+        !path.exists(),
+        "the home survives with the server still running: {}",
+        path.display()
+    );
+    match child.kill() {
+        Ok(()) | Err(_) => {}
+    }
+    let _ = waited(child);
+}
+
 /// The accessor returns the checked-in script beside the crate, the same
 /// path every caller executes: looking it up warms that original once, so
 /// the first-exec stall never eats a test's own deadline.
