@@ -22,6 +22,13 @@ use super::{MovePolicy, MoveReason, StopKind};
 use fakes::children::{Ready, ignores_sigterm};
 use support::group::alive;
 
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../../tests/support/sandbox_home.rs"]
+mod sandbox_home;
+
 #[test]
 fn bump_advances_the_sequence() {
     let mut inner = Inner::default();
@@ -1987,28 +1994,40 @@ fn cat_with_discard_redirect_or_true_reads() {
     );
 }
 
-fn sandbox_settings_for_test(
-    _workspace: &std::path::Path,
-    name: &str,
-) -> crate::shell::sandbox::Settings {
-    let home = std::env::var_os("HOME").map_or_else(
+#[test]
+fn sandbox_home_is_owned_and_removed_on_drop() {
+    let (home, settings) = sandbox_settings_for_test();
+    drop(settings);
+    let root = home.root().to_path_buf();
+    let fiber_home = home.fiber_home().to_path_buf();
+    assert_eq!(fiber_home, root.join("fiber-home"));
+    assert!(fiber_home.starts_with(&root));
+    std::fs::create_dir_all(&fiber_home).expect("the test builds the home");
+    std::fs::write(fiber_home.join("marker"), "x").expect("the test marks the home");
+    drop(home);
+    assert!(!root.exists(), "dropping the home removes the tree");
+}
+
+fn sandbox_settings_for_test() -> (sandbox_home::SandboxHome, crate::shell::sandbox::Settings) {
+    let parent = std::env::var_os("HOME").map_or_else(
         || std::path::PathBuf::from("/tmp"),
         std::path::PathBuf::from,
     );
-    let fiber_home = home.join(format!("fiber-sandbox-cmd-{name}-{}", std::process::id()));
-    crate::shell::sandbox::Settings {
+    let home = sandbox_home::SandboxHome::new(&parent, "fiber-tools-shell-sandbox-protected");
+    let settings = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: Vec::new(),
         deny_read: Vec::new(),
-        fiber_home,
-    }
+        fiber_home: home.fiber_home().to_path_buf(),
+    };
+    (home, settings)
 }
 
 #[test]
 fn sandbox_enabled_runs_a_confined_echo() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-echo");
     let work = dir.path().to_path_buf();
-    let sandbox = sandbox_settings_for_test(&work, "echo");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let ran = fakes::within(
         "a confined echo",
         Deadline::after(JOB_DEADLINE),
@@ -2179,7 +2198,7 @@ fn sandbox_install_failure_aborts_spawn_without_running() {
     let work = dir.path().to_path_buf();
     let ps = fakes::script(dir.path(), "ps", "exit 0");
     let marker = work.join("marker");
-    let sandbox = sandbox_settings_for_test(&work, "install-fail");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let command = format!("touch {} && echo hi", marker.display());
     let result = super::execute_inner(
         std::path::Path::new("/bin/sh"),
@@ -2238,7 +2257,7 @@ fn confined_socket_probe() {
 fn sandbox_denies_sockets_with_abi2_rules_on_this_host() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-socket");
     let work = dir.path().to_path_buf();
-    let sandbox = sandbox_settings_for_test(&work, "socket");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let executable = std::env::current_exe().expect("the test executable");
     let quoted = executable.display().to_string().replace('\'', "'\\''");
     let command = format!(

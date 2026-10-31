@@ -60,6 +60,9 @@ fn quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
+#[path = "support/sandbox_home.rs"]
+mod sandbox_home;
+
 fn args(command: &str) -> Map<String, Value> {
     let mut map = Map::new();
     map.insert("command".into(), Value::String(command.into()));
@@ -3294,29 +3297,27 @@ fn a_shell_guards_git_reads_by_repository() {
     );
 }
 
-fn sandbox_settings_for_integration(name: &str) -> tools::SandboxSettings {
-    let home = std::env::var_os("HOME").map_or_else(
+fn sandbox_settings_for_integration() -> (sandbox_home::SandboxHome, tools::SandboxSettings) {
+    let parent = std::env::var_os("HOME").map_or_else(
         || std::path::PathBuf::from("/tmp"),
         std::path::PathBuf::from,
     );
-    tools::SandboxSettings {
+    let home = sandbox_home::SandboxHome::new(&parent, "fiber-tools-shell-sandbox-protected");
+    let settings = tools::SandboxSettings {
         enabled: true,
         allow_write: Vec::new(),
         deny_read: Vec::new(),
-        fiber_home: home.join(format!(
-            "fiber-tools-shell-sandbox-{name}-{}",
-            std::process::id()
-        )),
-    }
+        fiber_home: home.fiber_home().to_path_buf(),
+    };
+    (home, settings)
 }
 
 #[test]
 fn a_confined_shell_runs_and_marks_its_effects() {
     let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-run");
     let workspace = dir.path().to_path_buf();
-    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(sandbox_settings_for_integration(
-        "run",
-    )));
+    let (_home, settings) = sandbox_settings_for_integration();
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(settings));
     let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox);
     let mut args = Map::new();
     args.insert("command".into(), Value::String("echo hi".into()));
@@ -3355,8 +3356,8 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
     std::fs::write(linked.join(".fiber/state"), "linked fiber baseline\n").unwrap();
     std::fs::write(linked.join("mutation.txt"), "gitdir: /evil\n").unwrap();
     let linked_pointer = std::fs::read(linked.join(".git")).unwrap();
-    let sandbox = sandbox_settings_for_integration("protected");
-    let fiber_home = sandbox.fiber_home.clone();
+    let (home, sandbox) = sandbox_settings_for_integration();
+    let fiber_home = home.fiber_home().to_path_buf();
     let (protection, recovery) =
         tools::ProtectedPaths::open(&fiber_home, &workspace).expect("the project baseline opens");
     assert!(
@@ -3533,7 +3534,8 @@ fn an_unconfined_call_reads_what_a_confined_call_is_refused() {
 fn a_confined_spawn_failure_fails_once_without_an_unconfined_retry() {
     let dir = fakes::TempDir::new("fiber-tools-shell-fail-once");
     let workspace = dir.path().to_path_buf();
-    let sandbox = Arc::new(Mutex::new(sandbox_settings_for_integration("fail-once")));
+    let (_home, settings) = sandbox_settings_for_integration();
+    let sandbox = Arc::new(Mutex::new(settings));
     let shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(sandbox.clone());
     let marker = workspace.join("marker");
     let command = format!("touch {} && echo hi", quote(&marker));
