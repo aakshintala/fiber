@@ -234,12 +234,3 @@ fn a_summary_with_two_tests_uses_the_plural() {
         "### Stress job: 2 tests, 30 runs each\n```\nloop::turns resumes_after_pause\nlog writer::tests::flushes_on_drop\n```\n"
     );
 }
-
-#[test]
-fn throwaway_3810_probe() {
-    assert_eq!(throwaway_3810_add(1), 2);
-}
-
-fn throwaway_3810_add(a: u32) -> u32 {
-    a + 1
-}
