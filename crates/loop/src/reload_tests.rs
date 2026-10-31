@@ -668,7 +668,7 @@ fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() 
             stale.definition(),
         ),
     );
-    w.looped = w.looped.reconnector(Arc::new(|server| {
+    w.looped = w.looped.reconnector(Arc::new(|server, _collect| {
         assert_eq!(server, "db");
         let fresh = Arc::new(NamedTool("db__list"));
         Ok(Reconnected {

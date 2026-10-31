@@ -191,18 +191,7 @@ fn reconnecting_a_repository_server_is_invalid_arguments() {
     let config = setup.rig.config(Vec::<String>::new());
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let servers = empty_servers(&setup.rig, &clock);
-    let images: std::sync::Arc<dyn contract::images::Images> = std::sync::Arc::new(DummyImages);
-    let error = super::adopt_server(
-        &config,
-        &sources_of(&setup.rig),
-        &servers,
-        "db",
-        &setup.rig.root.path().join("artifacts"),
-        &images,
-        &clock,
-    )
-    .err()
-    .expect("a repository server never adopts");
+    let error = super::adoption_spec(&config, "db").expect_err("a repository server never adopts");
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
     assert!(
         error.message.contains("is a repository server"),
