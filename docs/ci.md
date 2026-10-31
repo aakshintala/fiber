@@ -152,7 +152,9 @@ issue for the test's file, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The aggregate `main` integration binary
 is keyed by its first test-module segment, as in `Flaky tests:
 main::reviewer_setup`; a root-level `main` test falls back to `Flaky tests:
-main`, while every other binary keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
+main`, while a unit-test binary is keyed per file, as in
+`Flaky tests: extensions::host::exec`, and a single-file integration binary
+keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
@@ -535,7 +537,7 @@ regenerates it and fails when the committed copy differs.
 
 ## Manually dispatched workflows
 
-Three workflows never run on a push or a pull request. Someone starts them with
+Four workflows never run on a push or a pull request. Someone starts them with
 `gh workflow run <file> --ref <branch>`, and GitHub allows that only once the
 workflow file is on `main`.
 
@@ -552,6 +554,10 @@ workflow file is on `main`.
   process and for the fiber processes alone, the fiber processes' self time per
   function (`fiber-symbols.txt`), and the harness's JSON. Its timings run under perf,
   so they are not budget evidence.
+- `build-timings.yml` builds the whole workspace with `--timings` on Linux
+  x86_64 and macOS arm64 from a warm dependency cache, times an incremental
+  rebuild after touching one file each in `crates/tui` and `crates/support`,
+  and uploads both timing reports as artifacts (#3789, step 1).
 
 ## Job time limits
 
