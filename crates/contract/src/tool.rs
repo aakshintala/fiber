@@ -13,7 +13,7 @@ use crate::emit::Emit;
 use crate::events::{Answer, Control, FileChange, Interaction, McpServerFailed, McpServerReady};
 use crate::jobs::JobRecord;
 use crate::provider::ToolDefinition;
-use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process};
+use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process, ProtectedPaths};
 
 /// Every name a built-in tool can register under, `web_search` included
 /// whether or not the session's model hosts a search. An extension tool
@@ -257,6 +257,10 @@ pub struct Output {
     pub process: Option<Process>,
     /// Data for clients; never sent to the model.
     pub details: Option<Value>,
+    /// The protected paths a confined shell call restored or failed to
+    /// restore; `None` when none changed. The loop copies it into the
+    /// call's completion.
+    pub protected_paths: Option<ProtectedPaths>,
     /// On a call that changed files, one entry per file.
     pub changes: Option<Vec<FileChange>>,
     /// Instructions to the loop.

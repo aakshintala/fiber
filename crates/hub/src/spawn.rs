@@ -132,7 +132,7 @@ impl Starter for SpawnStarter {
 /// the process environment is the snapshot, and no hub query runs;
 /// absent → an in-process `fiber ask`, which queries the hub so the
 /// session agrees with `fiber models` (issue #2909).
-pub const HUB_SESSION_MARKER: &str = "FIBER_HUB_SESSION";
+pub use contract::HUB_SESSION_MARKER;
 
 /// The hub's current environment onto the session command: exactly its
 /// variables (`docs/invocation.md`, "A session's environment"), with the

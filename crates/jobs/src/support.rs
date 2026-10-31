@@ -72,6 +72,7 @@ pub(crate) fn ended_ok(id: &str) -> contract::events::JobCompleted {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     }
 }
 

@@ -513,6 +513,7 @@ fn resumed_session(
         web_search,
         shell_read_only,
         sandbox,
+        protection,
         repository,
         ..
     } = parts;
@@ -598,6 +599,7 @@ fn resumed_session(
         timing.clone(),
         shell_read_only.clone(),
         sandbox.clone(),
+        Some(protection),
     ) {
         Ok(tools) => tools,
         Err(failure) => {

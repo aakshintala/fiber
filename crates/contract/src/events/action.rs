@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::shapes::{Choice, ContentPart, DeclaredEffects, Failure, Process, Question, True};
+use crate::shapes::{
+    Choice, ContentPart, DeclaredEffects, Failure, Process, ProtectedPaths, Question, True,
+};
 use crate::{ActionId, CommandId, ProviderCallId, RequestId};
 
 /// Text added since the last delta, on `assistant_message_delta` and
@@ -313,6 +315,10 @@ pub struct ToolCallCompleted {
     /// The tools a search loaded, by name, best first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loaded: Option<Vec<String>>,
+    /// The protected paths a confined call restored or failed to restore;
+    /// absent when none changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protected_paths: Option<ProtectedPaths>,
 }
 
 /// One file a call changed.

@@ -8,7 +8,7 @@ use serde::de::{Deserializer, MapAccess, Visitor};
 use serde_json::{Map, Value};
 use std::fmt;
 
-use super::{Kept, KeptState, Replayed, valid_session_id};
+use super::{CommandState, Kept, Replayed, valid_session_id};
 use crate::connection::{Hub, lock};
 
 /// Whether `kept` still holds `id`: an acknowledgement for one it does
@@ -19,17 +19,24 @@ pub(super) fn kept_has(kept: &Kept, id: &str) -> bool {
 
 /// What settling an acknowledged command decides: either the command is
 /// routed again, an accepted `rewind` or `change_workspace` starts the
-/// session it names, or an accepted `subscribe` becomes the kept
-/// subscription.
+/// session it names, an accepted `subscribe` becomes the kept
+/// subscription, or a command the hub only partly wrote is answered
+/// `indeterminate`, suppressing whatever the session sent for it.
 pub(super) enum Settled {
     Reroute(String, Map<String, Value>),
     Rewound(SessionId),
     Subscribed(Map<String, Value>),
+    Indeterminate(String),
 }
 
 /// Settles a kept command `line` acknowledges: it is no longer kept. A
-/// `closing` rejection of it returns it, to be routed again, once this
-/// thread has seen the exited window, whether in this answer
+/// command the hub only partly wrote may still have reached the session,
+/// and end-of-file framing delivers its cut bytes as a final line, so any
+/// answer the session sends for it is suspect: the hub suppresses it and
+/// settles one `indeterminate` answer instead, and the command is never
+/// routed again (`docs/invocation.md`, "Lifecycle"). A `closing`
+/// rejection of any other command returns it, to be routed again, once
+/// this thread has seen the exited window, whether in this answer
 /// (`crate::resume::exited`) or an earlier one (`exiting`). An accepted
 /// `subscribe` returns its line, to become the kept subscription.
 pub(super) fn settle(
@@ -51,18 +58,14 @@ pub(super) fn settle(
     };
     // The kept lock is released before the caller takes the relays lock:
     // `route` takes relays and then kept, so the reverse order deadlocks.
+    if state == CommandState::Partial {
+        return Some(Settled::Indeterminate(id));
+    }
     match &ack.verdict {
         Verdict::Closing
             if exiting || crate::resume::exited(&hub.home, &SessionId(session.to_owned())) =>
         {
-            // A command the hub only partly wrote may have run: its own
-            // closing answer reaches the client, and the command is never
-            // routed again.
-            if state == KeptState::Partial {
-                None
-            } else {
-                Some(Settled::Reroute(id, command))
-            }
+            Some(Settled::Reroute(id, command))
         }
         Verdict::Accepted
             if command.get("command").and_then(Value::as_str) == Some("subscribe") =>

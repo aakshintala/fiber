@@ -36,6 +36,7 @@ use contract::rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
 use contract::shapes::{
     ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender as From, Tokens, Usage,
 };
+use contract::shapes::{ProtectedPathFailure, ProtectedPaths};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Settle, Tool};
 use contract::{
     ActionId, CommandId, Envelope, ErrorCode, GenerationId, JobId, RequestId, Seq, SessionId,
@@ -106,6 +107,7 @@ fn failed(id: &str) -> JobCompleted {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     }
 }
 
@@ -1603,6 +1605,7 @@ fn a_notice_reads_its_status_exit_signal_error_and_output() {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     };
     assert_eq!(
         notice_text(&done),
@@ -1627,6 +1630,37 @@ fn a_notice_reads_its_status_exit_signal_error_and_output() {
         format!("Fiber: background job {JOB} ended: cancelled.")
     );
     assert_eq!(notice_text(&failed(JOB)), rendered(JOB));
+}
+
+#[test]
+fn a_notice_names_restored_and_unrestored_protected_paths() {
+    let mut restored = failed(JOB);
+    restored.protected_paths = Some(ProtectedPaths {
+        restored: vec![".fiber".to_owned()],
+        failed: Vec::new(),
+    });
+    assert_eq!(
+        notice_text(&restored),
+        format!(
+            "{}\nProtected path .fiber changed while a confined call ran; Fiber restored it.",
+            rendered(JOB)
+        )
+    );
+    let mut unrestored = failed(JOB);
+    unrestored.protected_paths = Some(ProtectedPaths {
+        restored: Vec::new(),
+        failed: vec![ProtectedPathFailure {
+            path: ".git/config".to_owned(),
+            message: "permission denied".to_owned(),
+        }],
+    });
+    assert_eq!(
+        notice_text(&unrestored),
+        format!(
+            "{}\nProtected path .git/config changed while a confined call ran; Fiber could not restore it: permission denied.",
+            rendered(JOB)
+        )
+    );
 }
 
 // Running: a notice joins at the next step boundary.
