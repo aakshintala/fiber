@@ -38,12 +38,6 @@ impl Pins {
     pub(crate) fn pages(&self) -> impl Iterator<Item = usize> + '_ {
         self.counts.keys().copied()
     }
-
-    /// Every pin held, summed over the pages.
-    #[cfg(test)]
-    pub(crate) fn total(&self) -> usize {
-        self.counts.values().sum()
-    }
 }
 
 #[cfg(test)]
