@@ -2896,7 +2896,8 @@ fn an_observed_start_writes_one_mcp_line_per_post() {
             &fakes::CancelToken::new(),
         )
         .expect("the call answers");
-    let lines = setup.lines();
+    // The answer can reach the caller before the exchange thread writes its final diagnostic line.
+    let lines = setup.lines.await_count(before + 1);
     // docs/state.md, "Diagnostic logs": one line per POST the transport sends, and one per GET or DELETE it sends.
     assert_eq!(lines.len(), before + 1, "one call writes one line");
     let line = lines.last().unwrap();
