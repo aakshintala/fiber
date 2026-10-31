@@ -1029,7 +1029,24 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
     );
     hubbed.prompt("c_three", &next, "three");
     hubbed.close("c_close_next", &next);
+    // A second writer may retain the lock after exit evidence. The Hub
+    // refuses deletion while that writer holds it (docs/invocation.md,
+    // "Deleting a session").
     let log = session_log_path(&setup, &next);
+    let dir = log
+        .parent()
+        .expect("the leaf log lives in its session directory")
+        .to_path_buf();
+    let probe_dir = dir.clone();
+    fakes::wait_until(
+        &format!("the leaf {next}'s session lock to become available"),
+        setup.deadline.start_wait(),
+        move || matches!(log::try_hold(&probe_dir).unwrap(), log::Hold::Held(_)),
+    );
+    // The probe drops its temporary guard; the test retains the lock here.
+    let log::Hold::Held(_leaf_held_by_test) = log::try_hold(&dir).unwrap() else {
+        panic!("the test could not take the leaf {next}'s session lock");
+    };
     let output = delete(&setup, &layout.repo_b, &next);
     assert!(output.status.success(), "delete the leaf: {output:?}");
     assert!(!log.exists(), "the leaf's log is gone");
