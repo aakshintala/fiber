@@ -27,6 +27,8 @@ const SIBLINGS_IN_ROOT: usize = 15;
 /// The home fixture one `prepare` runs against: a root outside the
 /// system temp directory, which the sandbox grants as writable, so a deny
 /// beneath it would overlap and report unavailable instead of confining.
+/// The root carries the shared `fiber-tools-shell-sandbox-protected`
+/// prefix, so one glob sweeps every leftover.
 pub(crate) struct Fixture {
     /// Held so the root lives until `prepare` returns.
     _dir: fakes::TempDir,
@@ -41,7 +43,7 @@ pub(crate) struct Fixture {
 /// ancestor walk grants.
 pub(crate) fn fixture() -> Result<Fixture, String> {
     let home = std::env::var_os("HOME").ok_or("HOME is not set".to_owned())?;
-    let dir = fakes::TempDir::under(Path::new(&home), "fiber-bench-sandbox");
+    let dir = fakes::TempDir::under(Path::new(&home), "fiber-tools-shell-sandbox-protected");
     let fiber_home = dir.path().join("fiber-home");
     std::fs::create_dir_all(fiber_home.join("credentials"))
         .map_err(|err| format!("creating the fixture deny: {err}"))?;

@@ -2373,7 +2373,7 @@ fn an_unchanged_command_reports_a_transaction_only_with_enabled_protection() {
         (true, false, None),
     ] {
         let dir = fakes::TempDir::new("fiber-command-empty-protection");
-        let home = fakes::TempDir::under(&real_home(), "fiber-command-empty-protection-home");
+        let home = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
         let work = dir.path().to_path_buf();
         let (sandbox, handle) = protected_pair(home.path(), &work, enabled);
         let ran = fakes::within(
@@ -2415,7 +2415,7 @@ fn an_unchanged_command_reports_a_transaction_only_with_enabled_protection() {
 #[test]
 fn a_confined_call_restores_its_protected_paths_and_reports() {
     let dir = fakes::TempDir::new("fiber-protected-exec");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-exec-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let fiber = work.join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
@@ -2462,7 +2462,7 @@ fn a_confined_call_restores_its_protected_paths_and_reports() {
 #[test]
 fn an_unconfined_call_takes_no_guard() {
     let dir = fakes::TempDir::new("fiber-protected-unconfined");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-unconfined-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let (sandbox, handle) = protected_pair(home_dir.path(), &work, false);
     let clock = FakeClock::new();
@@ -2494,7 +2494,7 @@ fn an_unconfined_call_takes_no_guard() {
 #[test]
 fn a_failed_baseline_fails_the_confined_call_closed() {
     let dir = fakes::TempDir::new("fiber-protected-setup-fail");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-setup-fail-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let fiber = work.join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
@@ -2545,7 +2545,7 @@ fn a_failed_baseline_fails_the_confined_call_closed() {
 #[test]
 fn an_adopted_call_ends_its_guard_exactly_once() {
     let dir = fakes::TempDir::new("fiber-protected-adopted");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-adopted-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let fiber = work.join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
@@ -2653,7 +2653,7 @@ fn an_adopted_call_ends_its_guard_exactly_once() {
 #[test]
 fn a_failed_job_open_preserves_the_guard_on_resume() {
     let dir = fakes::TempDir::new("fiber-protected-resume");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-resume-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let fiber = work.join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
