@@ -685,27 +685,17 @@ jobs:
             [ -f "$FLAKY_DIR/flaky-tests-ubuntu-24.04.txt" ] || fail_closed "the flaky-tests-ubuntu-24.04 list is missing: no report"
             [ "$(cat "$FLAKY_DIR/collection-complete-ubuntu-24.04.txt" 2>/dev/null)" = true ] || fail_closed "the ubuntu-24.04 collection is incomplete: no report"
           fi
-          titles=$RUNNER_TEMP/flake-titles.txt
-          : > "$titles"
+          has_flakes=false
           if [ -d "$FLAKY_DIR" ]; then
             for file in "$FLAKY_DIR"/flaky-tests-*.txt; do
               [ -f "$file" ] || continue
-              while IFS= read -r line || [ -n "$line" ]; do
-                [ -n "$line" ] || continue
-                name=${line%%$'\t'*}
-                # Legacy `Flaky test: <binary> <test>` tickets are never matched.
-                # The aggregate main key mirrors flake_title in xtask/src/flake_report.rs; scripts/test-flake-report checks the two agree.
-                title="Flaky tests: ${name%% *}"
-                case $name in
-                  'main '?*::*)
-                    tname=${name#main }
-                    title="Flaky tests: main::${tname%%::*}" ;;
-                esac
-                grep -Fxq "$title" "$titles" || printf '%s\n' "$title" >> "$titles"
-              done < "$file"
+              if [ -s "$file" ]; then
+                has_flakes=true
+                break
+              fi
             done
           fi
-          if [ -s "$titles" ]; then
+          if [ "$has_flakes" = true ]; then
             echo "has_flakes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_flakes=false" >> "$GITHUB_OUTPUT"
@@ -720,6 +710,13 @@ jobs:
       - name: Install the toolchain
         if: steps.collate.outputs.has_flakes == 'true'
         run: rustup toolchain install
+      # The Rust side is the sole titles parser: flake-titles reads the
+      # downloaded lists and writes one deduped title per line to the
+      # file the lookup steps below read.
+      - name: Derive this run's flake titles
+        if: steps.collate.outputs.has_flakes == 'true'
+        run: |
+          cargo xtask flake-titles "$RUNNER_TEMP"/flaky/flaky-tests-*.txt >"$RUNNER_TEMP/flake-titles.txt"
       # Complete exact-title open and closed lookups land as files, never
       # as arguments. Each raw response is stored, then normalized with jq
       # reading the file, so a large closed listing never becomes an
