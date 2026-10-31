@@ -488,40 +488,60 @@ fn narrow_status_rows_match_the_doc() {
             && grid.contents.contains("1 delegate running")
             && grid.contents.contains("1 job running")
     });
-    // The last two content rows: the session's segments, then the
-    // running counts.
+    // The last two content rows: the running counts, then the segments
+    // row above them. Neither carries a ctx segment: context lives on
+    // the input box's status row (`docs/tui.md`, "The input box").
     let second = (0u16..40)
         .rev()
         .find(|y| grid.rows[*y as usize].contains("1 job running"))
         .unwrap_or_else(|| panic!("a counts row"));
     let first = second - 1;
     assert!(
-        grid.rows[first as usize].contains("ctx"),
-        "the segments row"
+        !grid.rows[first as usize].contains("ctx"),
+        "no ctx on the segments row"
     );
-    // Each status row sits on the panel tint one column in: the middle
-    // of the row carries the tint, past the grip and the cut edge.
+    assert!(
+        !grid.rows[second as usize].contains("ctx"),
+        "no ctx on the counts row"
+    );
+    // Each status row sits on the slab one column in: the status line
+    // sits on the slab (`docs/tui.md`, "The narrow layout"), past the
+    // stripe and the cut edge.
     for y in [first, second] {
         for x in 1..90 {
-            assert_eq!(grid.cell(x, y).bg, PANEL, "tint cell ({x}, {y})");
+            assert_eq!(grid.cell(x, y).bg, SURFACE, "tint cell ({x}, {y})");
         }
     }
-    // The first row runs to the terminal's right edge: cut at 99.
+    // The first row shows its segments whole: short of the terminal's
+    // right edge, so nothing is cut (`docs/tui.md`, "The narrow
+    // layout").
     let line: String = (1..100).map(|x| grid.cell(x, first).symbol).collect();
     let line = line.trim_end();
-    assert_eq!(line.chars().count(), 99, "{line:?}");
+    assert_eq!(
+        line, "▌0 waiting  │  $0.00  │  cache 0%  │  ± 3 files +3 −0",
+        "{line:?}"
+    );
     assert!(line.contains("  │  "), "{line:?}");
     let at = locate(line, "  │  ");
     for x in 1 + at..1 + at + 5 {
         assert!(grid.cell(x, first).dim, "joiner cell ({x}, {first})");
     }
-    let ctx = locate(line, "ctx");
+    // The ctx bar sits on the input box's status row above the status
+    // line: `ctx` with its eight-cell bar (`docs/tui.md`, "The input
+    // box").
+    let status = (0u16..first)
+        .rev()
+        .find(|y| grid.rows[*y as usize].contains("ctx"))
+        .unwrap_or_else(|| panic!("the input box status row"));
+    let bar: String = (1..100).map(|x| grid.cell(x, status).symbol).collect();
+    let bar = bar.trim_end();
+    let ctx = locate(bar, "ctx");
     assert_eq!(
         (0..8)
-            .filter(|n| grid.cell(1 + ctx + 4 + n, first).symbol.as_str() == "▆")
+            .filter(|n| grid.cell(1 + ctx + 4 + n, status).symbol.as_str() == "▆")
             .count(),
         8,
-        "{line:?}"
+        "{bar:?}"
     );
     let Release {
         file: release,

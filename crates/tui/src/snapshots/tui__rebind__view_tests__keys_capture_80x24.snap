@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/rebind_view_tests.rs
+assertion_line: 111
 expression: "screen(&app, 80, 24)"
 ---
   Keys  /keys                                                        Esc returns
@@ -20,9 +21,9 @@ expression: "screen(&app, 80, 24)"
  Ctrl+A Ctrl+E, ⌘← ⌘→               line_start_end Start or end of the line
  Ctrl+G                             open_in_editor Open the draft, or a pasted t
  Ctrl+V                             paste_image Paste an image
- Ctrl+O                             toggle_ledgers Open or close the ledgers
- Shift+Tab                          navigate Move focus from the input box into
  Press the key for Start a new session · Esc cancel
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

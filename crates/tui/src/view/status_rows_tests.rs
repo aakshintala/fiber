@@ -232,12 +232,19 @@ fn row_one_follows_the_card_order_and_is_cut_at_the_edge() {
         100,
     ));
     let (screen, _) = draw(&app, 100, 30);
-    // The draw lays the row one column in, past the grip.
-    let row: &str = screen.lines().next_back().unwrap_or_default().trim_start();
+    // The draw lays the row one column in, past the grip; the slab
+    // floor is last, so row one sits one up, carrying the box's `▌`
+    // stripe ("The input box"). Cards keep their order, minus the
+    // segments that moved to the status row.
+    let row: &str = screen
+        .lines()
+        .rev()
+        .nth(1)
+        .unwrap_or_default()
+        .trim_start()
+        .trim_start_matches('\u{258c}');
     assert!(
-        row.starts_with(
-            "\u{00b1} 2 files +13 \u{2212}5  \u{2502}  0 waiting  \u{2502}  /w  \u{2502}  a-model-with-a-very-long-name"
-        ),
+        row.starts_with("\u{00b1} 2 files +13 \u{2212}5  \u{2502}  0 waiting  \u{2502}  $1.50  \u{2502}  cache 0%"),
         "{row}"
     );
     assert!(!row.contains("and-going"), "{row}");
@@ -260,7 +267,21 @@ fn row_one_shows_the_context_share_and_a_zero_window_shows_none() {
     app.on_line(context_status(50, 0));
     app.on_line(preamble("test/model", 0));
     let (screen, _) = draw(&app, 100, 30);
-    assert!(!screen.contains("ctx"), "{screen}");
+    // With a zero window the input box's status row ("The input box")
+    // keeps the `ctx` segment with its bar, size and share blank.
+    assert!(
+        screen.contains("ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586} \u{2014} \u{00b7} \u{2014}"),
+        "{screen}"
+    );
+    assert!(
+        !screen
+            .lines()
+            .rev()
+            .nth(1)
+            .unwrap_or_default()
+            .contains("ctx"),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -322,8 +343,10 @@ fn an_empty_row_two_takes_no_row() {
     let (screen, _) = draw(&app, 100, 30);
     let rows: Vec<&str> = screen.lines().collect();
     let bottom = rows.len() - 1;
-    assert!(rows[bottom].contains("$1.50"), "{}", screen);
-    assert_eq!(rows[bottom - 2], " ▌ › █", "{}", screen);
+    // The slab floor is last, so row one sits one up, above the status
+    // row, the rule and the input row.
+    assert!(rows[bottom - 1].contains("$1.50"), "{}", screen);
+    assert_eq!(rows[bottom - 4], " ▌ › █", "{}", screen);
 }
 
 /// A `session_status` with billed `cost` and `subscription` spend.
@@ -425,8 +448,16 @@ fn n_waiting_leads_row_one_while_the_rail_is_not_drawn() {
     app.on_line(waiting(OTHER));
     app.on_key(Key::AltR, fakes::clock::FakeClock::new().now());
     let (screen, targets) = draw(&app, 110, 30);
-    // The grip leaves column 0 blank, so the row starts with a space.
-    let row: &str = screen.lines().next_back().unwrap_or_default().trim_start();
+    // Row one sits inside the box now, so it carries the box's `▌`
+    // stripe ("The input box"); the slab floor is last, so row one
+    // sits one up.
+    let row: &str = screen
+        .lines()
+        .rev()
+        .nth(1)
+        .unwrap_or_default()
+        .trim_start()
+        .trim_start_matches('\u{258c}');
     assert!(row.starts_with("1 waiting  \u{2502}  "), "{row}");
     assert!(
         targets
@@ -466,7 +497,8 @@ fn the_waiting_target_covers_only_its_segment() {
         waiting[0],
         Rect::new(
             column.x.saturating_add(1),
-            29,
+            // The slab floor takes the last row, so row one sits one up.
+            28,
             u16::try_from("1 waiting".len()).unwrap_or(u16::MAX),
             1
         )
@@ -509,15 +541,16 @@ fn no_narrow_rows_drawn_outside_the_narrow_layout() {
     assert!(!screen.contains('▸'), "{screen}");
     assert!(!screen.contains('▾'), "{screen}");
     // The rail takes 30 columns at this width, so the input box starts
-    // there.
+    // there. The rule and status row sit under the input row, above
+    // the slab floor.
     assert_eq!(
-        screen.lines().rev().nth(1),
+        screen.lines().rev().nth(3),
         Some("                              ▌ › █")
     );
     // The row above the input box is blank inside the column: past the
     // drawn cursor.
     assert_eq!(
-        buf.cell((5, 38))
+        buf.cell((5, 36))
             .map(|cell| cell.symbol().to_owned())
             .as_deref(),
         Some(" ")
@@ -745,10 +778,11 @@ fn the_draft_cursor_sits_above_one_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(1));
     let at = cursor.expect("a cursor on the input row");
-    // The input row, its lower surface edge, then the one status row.
-    assert_eq!(usize::from(at.y), rows.len() - 3);
+    // The input row, the rule, the status row, then the one status
+    // line row above the slab floor.
+    assert_eq!(usize::from(at.y), rows.len() - 5);
     assert!(rows[usize::from(at.y)].contains('›'), "{rows:?}");
-    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+    assert!(rows[rows.len() - 2].contains("$1.50"), "{rows:?}");
 }
 
 #[test]
@@ -757,11 +791,12 @@ fn the_draft_cursor_sits_above_two_status_rows() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(2));
     let at = cursor.expect("a cursor on the input row");
-    // The input row, its lower surface edge, then row 1 and row 2.
-    assert_eq!(usize::from(at.y), rows.len() - 4);
+    // The input row, the rule, the status row, then row 1 and row 2
+    // above the slab floor.
+    assert_eq!(usize::from(at.y), rows.len() - 6);
     assert!(rows[usize::from(at.y)].contains('›'), "{rows:?}");
-    assert!(rows[rows.len() - 2].contains("$1.50"), "{rows:?}");
-    assert!(rows[rows.len() - 1].contains("1 job running"), "{rows:?}");
+    assert!(rows[rows.len() - 3].contains("$1.50"), "{rows:?}");
+    assert!(rows[rows.len() - 2].contains("1 job running"), "{rows:?}");
 }
 
 #[test]
@@ -781,22 +816,30 @@ fn the_draft_cursor_tracks_the_kept_status_rows_on_short_screens() {
         let keep = app.narrow_fit().map(|fit| fit.status).unwrap_or(0);
         kept.insert(keep);
         let at = cursor.expect("a cursor on the input row");
-        // The cursor stays on the input row while the lower surface edge
-        // and kept status rows move beneath it.
-        assert_eq!(usize::from(at.y), usize::from(height) - keep - 2);
+        // The cursor stays on the input row while the rule, the status
+        // row and kept status rows move beneath it, above the floor.
+        assert_eq!(usize::from(at.y), usize::from(height) - keep - 4);
         assert!(rows[usize::from(at.y)].contains('›'), "{height}: {rows:?}");
         let below = &rows[usize::from(at.y) + 1..];
-        assert_eq!(below.len(), keep + 1, "{height}: {rows:?}");
+        assert_eq!(below.len(), keep + 3, "{height}: {rows:?}");
         assert!(
-            below[0].trim_start().chars().all(|cell| cell == '▀'),
+            below[0].trim_start().starts_with("\u{258c}\u{2500}"),
             "{height}: {rows:?}"
         );
+        assert!(below[1].contains("/w"), "{height}: {rows:?}");
         if keep >= 1 {
-            assert!(below[1].contains("$1.50"), "{height}: {rows:?}");
+            assert!(below[2].contains("$1.50"), "{height}: {rows:?}");
         }
         if keep >= 2 {
-            assert!(below[2].contains("1 job running"), "{height}: {rows:?}");
+            assert!(below[3].contains("1 job running"), "{height}: {rows:?}");
         }
+        assert!(
+            below[below.len() - 1]
+                .trim_start()
+                .chars()
+                .all(|cell| cell == '▀'),
+            "{height}: {rows:?}"
+        );
     }
     // The sweep covers each side of both shedding boundaries.
     assert!(
@@ -884,17 +927,18 @@ fn the_approval_panel_draws_above_the_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     // An approval has no text cursor.
     assert!(cursor.is_none());
-    // The panel's bottom edge sits above the status row.
-    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+    // The status line shows only while the panel does not ("The narrow
+    // layout"), so the panel's bottom row is the slab floor.
+    assert!(!rows.iter().any(|row| row.contains("$1.50")), "{rows:?}");
     assert!(
-        rows[rows.len() - 2]
+        rows[rows.len() - 1]
             .trim_start()
             .chars()
             .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
-        rows[rows.len() - 5].contains("Deny  type to add feedback"),
+        rows[rows.len() - 4].contains("Deny  type to add feedback"),
         "{rows:?}"
     );
 }
@@ -957,22 +1001,23 @@ fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(1));
     let at = cursor.expect("a caret in the words row");
-    // The caret's row holds the typed words, above the panel's last row,
-    // its bottom edge, and the status row beneath it.
+    // The caret's row holds the typed words, above the panel's last
+    // row; the status line shows only while the panel does not ("The
+    // narrow layout"), so the slab floor is last.
     assert!(rows[usize::from(at.y)].contains("qx"), "{rows:?}");
     assert!(usize::from(at.y) < rows.len() - 3, "{rows:?}");
     assert!(
-        rows[rows.len() - 2]
+        rows[rows.len() - 1]
             .trim_start()
             .chars()
             .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
-        rows[rows.len() - 3].contains("type to answer in words"),
+        rows[rows.len() - 2].contains("type to answer in words"),
         "{rows:?}"
     );
-    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+    assert!(!rows.iter().any(|row| row.contains("$1.50")), "{rows:?}");
 }
 
 #[test]
@@ -1091,39 +1136,18 @@ fn status_row_one_lists_every_segment_in_its_roles() {
     let rows = crate::view::status_rows::status(&app, 160);
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
+    // The working directory, model, thinking level, permission mode and
+    // context live in the input box's status row ("The input box"), so
+    // the status line leaves them out ("The narrow layout").
     assert_eq!(
         row.line.to_string(),
-        "/Users/you/work/fiber  \u{2502}  git main  \u{2502}  test/model high  \u{2502}  auto  \u{2502}  ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586} 268.0k  \u{2502}  $4.12  \u{2502}  cache 9%  \u{2502}  tools \u{2717} github down  \u{2502}  \u{00b1} 2 files +13 \u{2212}5"
+        "git main  \u{2502}  $4.12  \u{2502}  cache 9%  \u{2502}  tools \u{2717} github down  \u{2502}  \u{00b1} 2 files +13 \u{2212}5"
     );
     // The joiner is dim.
     assert_eq!(style_of(row, "  \u{2502}  "), style(Role::Muted));
     // "git" dim, the branch in secondary, spotted alone.
     assert_eq!(style_of(row, "git"), style(Role::Muted));
     assert_eq!(style_of(row, "main"), style(Role::Secondary));
-    // The model in accent, thinking and auto in attention.
-    assert_eq!(style_of(row, "test/model"), style(Role::Accent));
-    assert_eq!(style_of(row, "high"), style(Role::Attention));
-    assert_eq!(style_of(row, "auto"), style(Role::Attention));
-    // "ctx" dim, five cells of fill in info over three in rule: 268k
-    // of the 400k handoff over eight cells.
-    assert_eq!(style_of(row, "ctx"), style(Role::Muted));
-    assert_eq!(
-        row.line
-            .spans
-            .iter()
-            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Info))
-            .count(),
-        5
-    );
-    assert_eq!(
-        row.line
-            .spans
-            .iter()
-            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Rule))
-            .count(),
-        3
-    );
-    assert_eq!(style_of(row, "268.0k"), ratatui::style::Style::default());
     // Dim `cache` with its share, dim `tools` with its error value,
     // dim `±` with the added and removed totals.
     assert_eq!(style_of(row, "cache"), style(Role::Muted));
@@ -1135,30 +1159,30 @@ fn status_row_one_lists_every_segment_in_its_roles() {
     assert_eq!(
         row.spots,
         [
-            (30, 4, Spot::Branch),
-            (68, 19, Spot::Context),
-            (92, 5, Spot::Usage),
-            (108, 2, Spot::Usage),
-            (115, 19, Spot::Tools),
-            (139, 16, Spot::ChangedFiles),
+            (4, 4, Spot::Branch),
+            (13, 5, Spot::Usage),
+            (29, 2, Spot::Usage),
+            (36, 19, Spot::Tools),
+            (60, 16, Spot::ChangedFiles),
         ]
     );
 }
 
-/// Row 1 cut at 100: the text ends in `…` keeping its styles, past the
-/// terminal's right edge, and only the visible targets keep.
+/// Row 1 cut at 61: the shorter row still ends in `…` keeping its
+/// styles, past the terminal's right edge, and only the visible
+/// targets keep.
 #[test]
 fn status_row_one_cut_at_the_edge() {
     let app = full_app();
-    let rows = crate::view::status_rows::status(&app, 100);
+    let rows = crate::view::status_rows::status(&app, 61);
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
-    assert_eq!(crate::format::width(&row.line.to_string()), 99);
+    assert_eq!(crate::format::width(&row.line.to_string()), 60);
     assert!(row.line.to_string().ends_with('\u{2026}'));
-    assert!(row.line.to_string().starts_with("/Users/you/work/fiber"));
+    assert!(row.line.to_string().starts_with("git main"));
     for (start, wide, _) in &row.spots {
-        assert!(usize::from(*start) < 99, "{}", row.line);
-        assert!(start.saturating_add(*wide) <= 99, "{}", row.line);
+        assert!(usize::from(*start) < 60, "{}", row.line);
+        assert!(start.saturating_add(*wide) <= 60, "{}", row.line);
     }
     // The branch survives the cut; the changed files do not.
     assert!(row.spots.iter().any(|(_, _, spot)| *spot == Spot::Branch));
@@ -1189,7 +1213,8 @@ fn status_row_one_at_the_floors() {
 
 /// The 8-cell bar fills toward the handoff point with no marker: at
 /// zero, below, at and past the trigger, and against the window with
-/// none.
+/// none. It lives in the input box's status row ("The input box"), so
+/// row one carries no bar and no `ctx`.
 #[test]
 fn the_narrow_bar_fills_without_a_marker() {
     use crate::theme::{Role, style};
@@ -1199,14 +1224,12 @@ fn the_narrow_bar_fills_without_a_marker() {
     // marker anywhere in the row: every `│` is the dim joiner.
     app.on_line(full_status());
     let row = &crate::view::status_rows::status(&app, 100)[0];
-    assert_eq!(
+    assert!(
+        row.line.spans.iter().all(|span| span.content != "\u{2586}"),
+        "{}",
         row.line
-            .spans
-            .iter()
-            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Info))
-            .count(),
-        5
     );
+    assert!(!row.line.to_string().contains("ctx"), "{}", row.line);
     assert!(
         row.line
             .spans
@@ -1215,10 +1238,17 @@ fn the_narrow_bar_fills_without_a_marker() {
         "{}",
         row.line
     );
+    // The bar fills in the input box's status row instead.
+    let (screen, _) = draw(&app, 100, 30);
+    assert!(
+        screen.contains("ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}"),
+        "{screen}"
+    );
 }
 
-/// Without a status the row count matches the base's: the model with
-/// the waiting segment draws one row, and nothing held draws no row.
+/// Without a status the row count matches the base's: the waiting
+/// segment draws one row, and nothing held draws no row. The model
+/// lives in the input box's status row ("The input box"), not here.
 #[test]
 fn without_a_status_the_row_count_matches_the_base() {
     // The preamble's model with no status: one row with the waiting
@@ -1227,7 +1257,7 @@ fn without_a_status_the_row_count_matches_the_base() {
     app.on_line(preamble("test/model", 100));
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].line.to_string(), "0 waiting  \u{2502}  test/model");
+    assert_eq!(rows[0].line.to_string(), "0 waiting");
     // The waiting segment opens the row and carries its target.
     assert_eq!(waiting_spots(&app, 100), vec![(0, 9)]);
     // Nothing held: only the waiting segment's row, while the rail is
@@ -1238,8 +1268,9 @@ fn without_a_status_the_row_count_matches_the_base() {
     assert_eq!(rows[0].line.to_string(), "0 waiting");
 }
 
-/// A status with nothing else takes one row: the working directory
-/// always names one segment.
+/// A status with nothing else takes one row: the waiting segment
+/// opens it. The working directory names its segment in the input
+/// box's status row ("The input box"), not here ("The narrow layout").
 #[test]
 fn a_status_with_nothing_else_takes_one_row() {
     let mut app = attached(100, 30);
@@ -1247,11 +1278,11 @@ fn a_status_with_nothing_else_takes_one_row() {
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
     assert!(rows[0].line.to_string().starts_with("0 waiting"));
-    assert!(rows[0].line.to_string().contains("/w"));
+    assert!(!rows[0].line.to_string().contains("/w"));
 }
 
-/// The status rows draw on the `panel` tint one column in; with no
-/// colour no tint is laid.
+/// The status rows draw on the slab's `surface` tint one column in;
+/// with no colour no tint is laid.
 #[test]
 fn status_rows_draw_on_the_panel_tint() {
     use crate::theme::Role;
@@ -1260,10 +1291,12 @@ fn status_rows_draw_on_the_panel_tint() {
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let mut buf = ratatui::buffer::Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    let bottom = buf.area.bottom().saturating_sub(1);
-    // The row's cells sit on the panel tint from column 1.
-    assert_eq!(buf[(1, bottom)].bg, Role::Panel.color());
-    assert_eq!(buf[(98, bottom)].bg, Role::Panel.color());
+    // The slab floor takes the last row, so row one sits one up, on
+    // the slab's surface tint ("The input box" is a `surface` slab).
+    let bottom = buf.area.bottom().saturating_sub(2);
+    // The row's cells sit on the surface tint from column 1.
+    assert_eq!(buf[(1, bottom)].bg, Role::Surface.color());
+    assert_eq!(buf[(98, bottom)].bg, Role::Surface.color());
     // With no colour the tint goes and the text stays.
     crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let mut bare = ratatui::buffer::Buffer::empty(area);
@@ -1349,12 +1382,12 @@ fn the_tools_segment_joins_down_servers_with_a_space() {
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
     // Sorted: gateway before relay, one space between the values; the
-    // row is cut at the edge, so the second value's head shows.
+    // shorter row shows both values whole ("The narrow layout").
     assert!(
         rows[0]
             .line
             .to_string()
-            .contains("tools \u{2717} gateway down \u{2717} relay d\u{2026}"),
+            .contains("tools \u{2717} gateway down \u{2717} relay down"),
         "{}",
         rows[0].line
     );

@@ -5,16 +5,19 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
-use crate::app::panel::Spot;
+use crate::app::panel::{Branch, Spot};
+use crate::ext::{
+    BranchName, ChangedFile, ChangedFiles, Input, Quota, RawSpan, SessionCard, SessionContext,
+    SlotDraw, Spend, StatusRows, WidgetCard,
+};
 use crate::format;
 use crate::mouse::{Target, TargetId};
 use crate::text::to_u16;
 use crate::theme::{Role, style};
-use crate::view::panel::{Card, bar_spans, branch_text, cards, fit_spans};
+use crate::view::panel::{Card, branch_text, cards, fit_spans};
 
 /// One status-line row: its line and the targets on it (column offset,
 /// width, spot).
@@ -36,15 +39,16 @@ pub(crate) fn status(app: &App, width: u16) -> Vec<StatusRow> {
 }
 
 /// One card's segments: its spans with the spots on them at
-/// segment-relative offsets.
-struct Segment {
-    spans: Vec<Span<'static>>,
-    spots: Vec<(usize, usize, Spot)>,
+/// segment-relative offsets. Shared with the input box's status row,
+/// which joins and cuts its sides the same way.
+pub(super) struct Segment {
+    pub(super) spans: Vec<Span<'static>>,
+    pub(super) spots: Vec<(usize, usize, Spot)>,
 }
 
 impl Segment {
     /// A segment of `spans` with no spot.
-    fn plain(spans: Vec<Span<'static>>) -> Self {
+    pub(super) fn plain(spans: Vec<Span<'static>>) -> Self {
         Segment {
             spans,
             spots: Vec::new(),
@@ -52,7 +56,7 @@ impl Segment {
     }
 
     /// A segment of `spans` opening `spot` across the whole segment.
-    fn spotted(spans: Vec<Span<'static>>, spot: Spot) -> Self {
+    pub(super) fn spotted(spans: Vec<Span<'static>>, spot: Spot) -> Self {
         let wide: usize = spans.iter().map(|span| format::width(&span.content)).sum();
         Segment {
             spans,
@@ -62,15 +66,16 @@ impl Segment {
 }
 
 /// Segments joined by a dim `  │  `: each segment's spans with the spots
-/// on them, at their column offsets.
-struct Joined {
-    spans: Vec<Span<'static>>,
-    spots: Vec<(u16, u16, Spot)>,
+/// on them, at their column offsets. Shared with the input box's
+/// status row, which joins its sides the same way.
+pub(super) struct Joined {
+    pub(super) spans: Vec<Span<'static>>,
+    pub(super) spots: Vec<(u16, u16, Spot)>,
 }
 
 /// Appends `segment`'s spans, joined by a dim `  │  `, recording its
 /// spots shifted past the joiner.
-fn push_segment(joined: &mut Joined, segment: Segment) {
+pub(super) fn push_segment(joined: &mut Joined, segment: Segment) {
     if !joined.spans.is_empty() {
         joined
             .spans
@@ -94,7 +99,9 @@ fn push_segment(joined: &mut Joined, segment: Segment) {
 /// A status row cut to `width - 1`: its line over the joined spans, each
 /// keeping its style and ending in `…` past the width, and its targets
 /// clamped to the visible columns. A row that fits keeps every cell.
-fn cut_row(joined: Joined, width: usize) -> StatusRow {
+/// Shared with the input box's status row, which cuts each side the
+/// same way.
+pub(super) fn cut_row(joined: Joined, width: usize) -> StatusRow {
     let text = width.saturating_sub(1);
     let wide: usize = joined
         .spans
@@ -167,10 +174,11 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
 }
 
 /// The Session card's status segments: "N waiting" while the rail is not
-/// drawn, the working directory, "git" and the branch, the model and
-/// thinking level, the permission mode, the context bar, the spend, the
-/// cache share, and the tools line. Every new segment needs the status,
-/// so the row count matches the base's for every state.
+/// drawn, "git" and the branch, the spend, the cache share, and the
+/// tools line. The working directory, the model and thinking level, the
+/// permission mode and the context bar moved to the input box's status
+/// row (`docs/tui.md`, "The input box"). A card with no kept segment
+/// leaves no row.
 fn session_segments(app: &App) -> Vec<Segment> {
     let panel = app.panel_state();
     let status = panel.status();
@@ -183,9 +191,6 @@ fn session_segments(app: &App) -> Vec<Segment> {
             )],
             Spot::Waiting,
         ));
-    }
-    if let Some(status) = status {
-        out.push(Segment::plain(vec![Span::raw(status.workspace.clone())]));
     }
     if let Some(branch) = status.and_then(|_| branch_text(app)) {
         let spans = vec![
@@ -205,31 +210,6 @@ fn session_segments(app: &App) -> Vec<Segment> {
             spans,
             spots: vec![(at, wide, Spot::Branch)],
         });
-    }
-    let model = panel
-        .model()
-        .or_else(|| status.map(|status| status.model.as_str()));
-    if let Some(model) = model {
-        let mut spans = vec![Span::styled(model.to_owned(), style(Role::Accent))];
-        if let Some(thinking) = panel.thinking() {
-            spans.push(Span::raw(" ".to_owned()));
-            spans.push(Span::styled(thinking.to_owned(), style(Role::Attention)));
-        }
-        out.push(Segment::plain(spans));
-    }
-    if status.is_some() {
-        out.push(Segment::plain(vec![Span::styled(
-            crate::view::panel::PERMISSION_MODE,
-            style(Role::Attention),
-        )]));
-    }
-    let window = panel.window().filter(|window| *window > 0);
-    if let Some((window, context)) = window.and_then(|window| {
-        status
-            .and_then(|status| status.context.as_ref())
-            .map(|context| (window, context))
-    }) {
-        out.push(context_segment(context.tokens, window, panel.trigger_at()));
     }
     if let Some(spend) = app.attached_spend() {
         // With a budget the segment reads billed spend against it, as
@@ -296,21 +276,6 @@ fn session_segments(app: &App) -> Vec<Segment> {
         }
     }
     out
-}
-
-/// The context segment: "ctx" dim, an 8-cell bar with the size, opening
-/// the context breakdown. The bar shares the panel's fill against the
-/// handoff goal, with no handoff marker: the trigger folds into the
-/// window it would otherwise govern.
-fn context_segment(tokens: u64, window: u64, trigger: Option<u64>) -> Segment {
-    let mut spans = vec![
-        Span::styled("ctx", style(Role::Muted)),
-        Span::raw(" ".to_owned()),
-    ];
-    spans.extend(bar_spans(tokens, trigger.unwrap_or(window), None, 8));
-    spans.push(Span::raw(" ".to_owned()));
-    spans.push(Span::raw(crate::view::panel::short_tokens(tokens)));
-    Segment::spotted(spans, Spot::Context)
 }
 
 /// The Changed files card's status segment: `±` dim, the file count and
@@ -452,54 +417,233 @@ pub(crate) fn delegates(app: &App, width: u16) -> Vec<(Line<'static>, Option<Spo
         .collect()
 }
 
-/// How many status rows draw at the column's bottom.
-pub(crate) fn kept(app: &App) -> usize {
-    app.narrow_fit().map_or(0, |fit| fit.status)
+/// How many built-in status rows draw: the narrow layout's kept rows
+/// while narrow, every status row on wide with the panel hidden, none
+/// with the panel shown. The input box draws them under its status row,
+/// and the terminal cursor counts them there too.
+pub(crate) fn kept(app: &App, width: u16) -> usize {
+    if let Some(fit) = app.narrow_fit() {
+        return fit.status;
+    }
+    if lines_live(app) {
+        status(app, width).len()
+    } else {
+        0
+    }
 }
 
-/// The bottom the input box or its replacement panel draws above: the
-/// column's bottom less the kept status rows. Drawing and the terminal
-/// cursor share it, so the caret never lands on a status row.
-pub(crate) fn input_bottom(app: &App, area: Rect) -> u16 {
-    area.bottom().saturating_sub(to_u16(kept(app))).max(area.y)
+/// Whether the status lines draw: the column has a layout and its panel
+/// is not shown — narrow, or wide with the panel hidden. With the panel
+/// shown the cards carry the same figures.
+fn lines_live(app: &App) -> bool {
+    app.chrome()
+        .layout()
+        .is_some_and(|layout| layout.panel.is_none())
 }
 
-/// Draws the status line at the bottom of the column: row 1 above row 2,
-/// keeping the first `fit.status` rows of the narrow layout's fit. Each
-/// row sits on the `panel` tint one column in, ending at the terminal's
-/// right edge; with no colour no tint is laid.
-pub(super) fn draw_status(
+/// Every changed file in the order the built-in ranks them: the Changed
+/// files card's ranking, borrowed for the status fold.
+fn ranked_files(changes: &std::collections::BTreeMap<String, (u64, u64)>) -> Vec<ChangedFile<'_>> {
+    crate::changed_files_view::ranked(changes)
+        .into_iter()
+        .map(|(path, added, removed)| ChangedFile {
+            path,
+            added,
+            removed,
+        })
+        .collect()
+}
+
+/// The branch the Session card and the status line show: the last
+/// query's answer, else the status's git (`docs/tui.md`, "Git").
+fn branch_name(panel: &crate::app::panel::PanelState) -> Option<BranchName<'_>> {
+    match panel.branch() {
+        Some(Branch::Named(name)) => Some(BranchName::Named(name.as_str())),
+        Some(Branch::Detached) => Some(BranchName::Detached),
+        Some(Branch::Absent) => None,
+        None => panel
+            .status()
+            .and_then(|status| status.git.as_ref())
+            .map(|git| match git.branch.as_deref() {
+                Some(name) => BranchName::Named(name),
+                None => BranchName::Detached,
+            }),
+    }
+}
+
+/// The status rows' renderer input: the same figures the Session card
+/// draws, folded the way its rows read them.
+fn status_input<'a>(app: &'a App, files: &'a [ChangedFile<'a>], flat: bool) -> StatusRows<'a> {
+    let panel = app.panel_state();
+    let status = panel.status();
+    let window = panel.window().filter(|window| *window > 0);
+    StatusRows {
+        cards: app.panel_cards().to_vec(),
+        session: SessionCard {
+            workspace: status.map(|status| status.workspace.as_str()),
+            branch: status.and_then(|_| branch_name(panel)),
+            model: panel
+                .model()
+                .or_else(|| status.map(|status| status.model.as_str())),
+            thinking: panel.thinking(),
+            thinking_now: panel.thinking_now(),
+            context: window.and_then(|window| {
+                status
+                    .and_then(|status| status.context.as_ref())
+                    .map(|context| SessionContext {
+                        tokens: context.tokens,
+                        window,
+                        trigger_at: panel.trigger_at(),
+                    })
+            }),
+            spend: status
+                .map(|status| Spend::Status(&status.spend))
+                .or_else(|| app.attached_spend().map(|cost| Spend::Attached { cost })),
+            budget: panel.budget(),
+            speed: panel.speed(),
+            turns: panel.turns(),
+            tools_down: panel.down(),
+            // The input leaves waiting out at zero; the built-in row
+            // keeps drawing whatever the rail reports.
+            waiting: app.rail_waiting().filter(|waiting| *waiting > 0),
+            flat,
+        },
+        changed_files: ChangedFiles { files, flat },
+        delegates_running: panel.running_delegates().len(),
+        jobs_running: panel.running_jobs().len(),
+        widgets: panel
+            .widgets()
+            .iter()
+            .map(|widget| WidgetCard {
+                extension: widget.extension.as_str(),
+                widget: widget.widget.as_str(),
+                lines: widget.lines.as_slice(),
+                open: app.widget_open(),
+                flat,
+            })
+            .collect(),
+        waiting: app.rail_waiting().filter(|waiting| *waiting > 0),
+        quota: super::panel::quota::segment_spans(app)
+            .is_some()
+            .then_some(Quota {
+                rows: panel.quota.rows.as_slice(),
+                notice_at: panel.quota.notice_at,
+            }),
+        flat,
+    }
+}
+
+/// The built-in status line as extension spans: every row, unshed, one
+/// span line each. The paint below sheds them; the renderer sees the
+/// whole line.
+fn lines_builtin_spans(app: &App, width: u16) -> Vec<Vec<RawSpan>> {
+    status(app, width)
+        .into_iter()
+        .map(|row| crate::ext::spans::from_ratatui(&row.line.spans))
+        .collect()
+}
+
+/// How many rows the status line reserves under the input box's status
+/// row: a replacement's line count, or the kept built-in rows. None
+/// with the panel shown.
+pub(crate) fn count(app: &App, width: u16) -> usize {
+    if !lines_live(app) {
+        return 0;
+    }
+    let bound = super::notice_rows::frame_bound(app);
+    let ranked = ranked_files(app.panel_state().changes());
+    let folded = status_input(app, &ranked, bound.flat);
+    let builtin = &|_: &Input<'_>, width: u16| lines_builtin_spans(app, width);
+    match bound.slot_lines(
+        SlotDraw::Count,
+        "status_rows",
+        &Input::StatusRows(folded),
+        width,
+        builtin,
+    ) {
+        Some(lines) => lines.len(),
+        None => kept(app, width),
+    }
+}
+
+/// Draws the status line under the input box's status row: a
+/// replacement's lines bottom-up with no target, or the kept built-in
+/// rows starting in the status row's column with their targets. Rows
+/// that would land above the area shed from the top; every kept row is
+/// still reserved, so the caret math holds. Moves `bottom` above them.
+pub(super) fn paint(
     app: &App,
     area: Rect,
     buf: &mut Buffer,
     bottom: &mut u16,
     targets: &mut Vec<Target>,
 ) {
-    let end = input_bottom(app, area);
-    let mut y = area.bottom();
-    let boxed = crate::surface::boxed();
-    for row in status(app, area.width).into_iter().take(kept(app)).rev() {
+    if !lines_live(app) {
+        return;
+    }
+    let bound = super::notice_rows::frame_bound(app);
+    let ranked = ranked_files(app.panel_state().changes());
+    let folded = status_input(app, &ranked, bound.flat);
+    let builtin = &|_: &Input<'_>, width: u16| lines_builtin_spans(app, width);
+    let Some(fitted) = bound.slot_lines(
+        SlotDraw::Paint,
+        "status_rows",
+        &Input::StatusRows(folded),
+        area.width,
+        builtin,
+    ) else {
+        paint_builtin(app, area, buf, bottom, targets);
+        return;
+    };
+    // A replacement owns its rows with no target: keys still switch
+    // cards. The first line lands lowest, as a steering replacement's
+    // first row does.
+    let total = fitted.len().min(usize::from(u16::MAX));
+    let room = bottom.saturating_sub(area.y) as usize;
+    let keep = total.min(room);
+    *bottom = bottom.saturating_sub(to_u16(keep)).max(area.y);
+    let x = area.x.saturating_add(1);
+    let wide = area.width.saturating_sub(1);
+    for (dy, line) in fitted.iter().take(keep).enumerate() {
+        let row = bottom.saturating_add(to_u16(dy));
+        buf.set_line(x, row, &line.line, wide);
+    }
+}
+
+/// Paints the kept built-in rows bottom-up, the last kept row lowest,
+/// each starting in the status row's column with its targets.
+fn paint_builtin(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    bottom: &mut u16,
+    targets: &mut Vec<Target>,
+) {
+    let rows = status(app, area.width)
+        .into_iter()
+        .take(kept(app, area.width))
+        .collect::<Vec<_>>();
+    // Shed the top rows when short, as the notice rows do; reserve
+    // every kept row either way.
+    let room = bottom.saturating_sub(area.y) as usize;
+    let skip = rows.len().saturating_sub(room);
+    let mut y = *bottom;
+    *bottom = y.saturating_sub(to_u16(rows.len())).max(area.y);
+    let x = area.x.saturating_add(1);
+    let wide = area.width.saturating_sub(1);
+    for row in rows.iter().skip(skip).rev() {
         let Some(at) = y.checked_sub(1).filter(|at| *at >= area.y) else {
-            continue;
+            break;
         };
-        if !boxed {
-            buf.set_style(
-                Rect::new(area.x, at, area.width, 1),
-                Style::new().bg(Role::Panel.color()),
-            );
-        }
-        let x = area.x.saturating_add(1);
-        let wide = area.width.saturating_sub(1);
         buf.set_line(x, at, &row.line, wide);
         y = at;
-        for (start, wide, spot) in row.spots {
+        for (start, wide, spot) in &row.spots {
             targets.push(Target {
-                id: TargetId::Panel(spot),
-                rect: Rect::new(x.saturating_add(start), at, wide, 1),
+                id: TargetId::Panel(*spot),
+                rect: Rect::new(x.saturating_add(*start), at, *wide, 1),
             });
         }
     }
-    *bottom = end;
 }
 
 /// Draws the widget row above the input box and its completion panel: a
