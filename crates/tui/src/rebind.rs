@@ -381,11 +381,13 @@ impl KeysScreen {
         }
     }
 
-    /// Shifts the window three actions for a wheel step while browsing,
-    /// clearing the transient message as a stroke does; in Capture or
-    /// Clash the wheel is swallowed, never a captured key. The selection
-    /// stays while it shows, else moves to the nearest shown action.
-    /// `width` is the draw width in columns, `height` the view's rows.
+    /// Shifts the window three display lines for a wheel step while
+    /// browsing, clearing the transient message as a stroke does; in
+    /// Capture or Clash the wheel is swallowed, never a captured key.
+    /// The scroll stays action-indexed: the stepped line snaps to the
+    /// action holding it. The selection stays while it shows, else moves
+    /// to the nearest shown action. `width` is the draw width in
+    /// columns, `height` the view's rows.
     pub(crate) fn wheel(
         &mut self,
         up: bool,
@@ -403,11 +405,16 @@ impl KeysScreen {
         if total == 0 {
             return Outcome::Nothing;
         }
-        self.top = if up {
-            self.top.saturating_sub(3)
+        let top_line: usize = grown.iter().take(self.top).sum();
+        let total_lines: usize = grown.iter().sum();
+        let stepped = if up {
+            top_line.saturating_sub(3)
         } else {
-            self.top.saturating_add(3).min(total - 1)
+            top_line
+                .saturating_add(3)
+                .min(total_lines.saturating_sub(1))
         };
+        self.top = action_at(stepped, &grown);
         if self.selected < self.top {
             self.selected = self.top;
         } else {

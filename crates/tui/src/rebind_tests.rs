@@ -604,22 +604,26 @@ fn a_row_click_selects_while_browsing_only() {
     );
 }
 
-/// The wheel steps three actions a step while browsing, keeping a
-/// still-visible selection where it was and clearing the transient
-/// message as a stroke does.
+/// The wheel steps three display lines a step while browsing, keeping
+/// a still-visible selection where it was and clearing the transient
+/// message as a stroke does: the first two actions each wrap to two
+/// lines, so one step down from the top lands inside the second
+/// action, not on the fourth.
 /// (`docs/tui.md:576`).
 #[test]
-fn wheel_steps_three_actions_and_keeps_a_visible_selection_while_browsing() {
+fn wheel_steps_three_display_lines_and_keeps_a_visible_selection_while_browsing() {
     let keys = keys();
     let mut screen = keys_screen();
     screen.failed("boom".to_owned());
     assert_eq!(below(&screen, &keys), ["Not saved: boom"]);
+    let grown = heights(&keys, WIDTH);
+    assert_eq!(&grown[..2], &[2, 2], "wrapped actions sit in view");
     select(&mut screen, &keys, 5);
     assert!(matches!(
         screen.wheel(false, &keys, WIDTH, HEIGHT),
         Outcome::Nothing
     ));
-    assert_eq!(top(&screen, &keys), first_line(&keys, 3));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 1));
     assert_eq!(selected(&screen, &keys), first_line(&keys, 5));
     assert!(below(&screen, &keys).is_empty());
     assert!(matches!(
@@ -632,28 +636,31 @@ fn wheel_steps_three_actions_and_keeps_a_visible_selection_while_browsing() {
 
 /// The wheel pulls a selection that leaves the window to the nearest
 /// shown action: down from the top the selection rides the new top,
-/// and back up it stays while shown.
+/// and back up it stays while shown. The step is three display lines,
+/// so from the top it lands inside the second action.
 #[test]
 fn wheel_pulls_a_leaving_selection_to_the_nearest_shown_action() {
     let keys = keys();
     let mut screen = keys_screen();
+    let grown = heights(&keys, WIDTH);
+    assert_eq!(&grown[..2], &[2, 2], "wrapped actions sit in view");
     assert!(matches!(
         screen.wheel(false, &keys, WIDTH, HEIGHT),
         Outcome::Nothing
     ));
-    assert_eq!(top(&screen, &keys), first_line(&keys, 3));
-    assert_eq!(selected(&screen, &keys), first_line(&keys, 3));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 1));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 1));
     assert!(matches!(
         screen.wheel(true, &keys, WIDTH, HEIGHT),
         Outcome::Nothing
     ));
     assert_eq!(top(&screen, &keys), first_line(&keys, 0));
-    assert_eq!(selected(&screen, &keys), first_line(&keys, 3));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 1));
 }
 
 /// A click on a continuation line selects its action, a click on the
 /// next action's first line selects that one, and a click past the
-/// last line selects the last action.
+/// last line selects the last action (`docs/tui.md`, "Bindings").
 #[test]
 fn a_click_on_a_continuation_line_selects_its_action() {
     let keys = keys();
@@ -698,28 +705,44 @@ fn a_click_above_the_window_resets_the_scroll_for_the_next_page() {
 }
 
 /// A wheel step clamps a selection sitting on the window's edge into
-/// the window: the last shown action keeps it.
+/// the window: the last shown action keeps it. The step is three
+/// display lines, so from the top the window snaps to the second
+/// action and the window of six lines holds the first four.
 #[test]
 fn wheel_clamps_a_selection_sitting_on_the_window_edge() {
     let keys = keys();
     let mut screen = keys_screen();
+    let grown = heights(&keys, WIDTH);
+    assert_eq!(&grown[..5], &[2, 2, 2, 1, 1], "wrapped actions sit in view");
     select(&mut screen, &keys, 7);
     assert!(matches!(
         screen.wheel(false, &keys, WIDTH, 8),
         Outcome::Nothing
     ));
     let frame = screen.frame(&keys, WIDTH, 8);
-    assert_eq!(frame.list.top(), first_line(&keys, 3));
-    assert_eq!(frame.list.selected(), first_line(&keys, 6));
+    assert_eq!(frame.list.top(), first_line(&keys, 1));
+    assert_eq!(frame.list.selected(), first_line(&keys, 4));
 }
 
 /// The wheel clamps at the last action: wheeling down to the bottom
-/// holds there, and up steps three back with the selection staying.
+/// holds there, and up steps three display lines back with the
+/// selection staying. Each step moves three display lines, so reaching
+/// the tail takes more steps than the old three-actions step, and the
+/// step back lands inside the third-to-last action.
 #[test]
 fn wheel_clamps_at_the_last_action() {
     let keys = keys();
     let mut screen = keys_screen();
-    for _ in 0..14 {
+    let grown = heights(&keys, WIDTH);
+    assert_eq!(
+        &grown[grown.len().saturating_sub(3)..],
+        &[2, 2, 1],
+        "the tail takes one line back inside the third-to-last action"
+    );
+    // Enough steps of three display lines to cover the whole list:
+    // each step advances the snapped top by at least one display line.
+    let total: usize = grown.iter().sum();
+    for _ in 0..total.saturating_add(2) {
         assert!(matches!(
             screen.wheel(false, &keys, WIDTH, HEIGHT),
             Outcome::Nothing
@@ -739,7 +762,7 @@ fn wheel_clamps_at_the_last_action() {
     ));
     assert_eq!(
         top(&screen, &keys),
-        first_line(&keys, BINDINGS.len().saturating_sub(4))
+        first_line(&keys, BINDINGS.len().saturating_sub(3))
     );
     assert_eq!(
         selected(&screen, &keys),

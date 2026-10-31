@@ -438,10 +438,10 @@ impl App {
         Effect::None
     }
 
-    /// Shifts the `/keys` screen's list three rows for a wheel step while
-    /// browsing; Capture and Clash swallow through the wrapper. The
-    /// router swallows the wheel over the notice overlay's own slab
-    /// before calling. Away from `bindings_press`.
+    /// Shifts the `/keys` screen's list three display lines for a wheel
+    /// step while browsing; Capture and Clash swallow through the
+    /// wrapper. The router swallows the wheel over the notice overlay's
+    /// own slab before calling. Away from `bindings_press`.
     pub(crate) fn keys_screen_wheel(&mut self, up: bool) -> Effect {
         let height = self.keys_height();
         let width = self.keys_width();
