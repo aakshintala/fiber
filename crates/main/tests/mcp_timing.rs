@@ -248,7 +248,7 @@ fn assert_timing_shape(lines: &[Value]) {
 
 #[test]
 fn debug_ask_times_stdio_connect() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = fixture(&setup, &json!([echo_tool()]));
     let server = calling("mcp__fx__echo");
     setup.provider(&server);
@@ -335,7 +335,7 @@ fn debug_ask_times_http_connect() {
 
 #[test]
 fn info_ask_writes_no_op_timing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = fixture(&setup, &json!([echo_tool()]));
     let server = calling("mcp__fx__echo");
     setup.provider(&server);
@@ -367,7 +367,7 @@ fn wipe_logs(home: &Path) {
 
 #[test]
 fn cached_first_use_times_one() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = fixture(&setup, &json!([echo_tool()]));
     let server = calling("mcp__fx__echo");
     setup.provider(&server);
@@ -406,7 +406,7 @@ fn session_id(run: &Run) -> String {
 
 #[test]
 fn resumed_first_use_times_one() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = fixture(&setup, &json!([echo_tool()]));
     let server = calling("mcp__fx__echo");
     setup.provider(&server);
@@ -434,7 +434,7 @@ fn resumed_first_use_times_one() {
 
 #[test]
 fn approved_repository_start_times_connect_and_skipped_writes_none() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     // The fixture server behind a pinned copy, as `mcp_commands` pins it.
     let dir = setup.root.path().join("fx");
     fs::create_dir_all(&dir).unwrap();
@@ -542,7 +542,7 @@ fn install_provider(home: &Path, root: &Path, server: &ProviderServer) {
 
 #[test]
 fn required_failure_writes_connect_before_attach() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let provider = ProviderServer::start([hello()]).unwrap();
     setup.provider(&provider);
     let dir = setup.root.path().join("fx");
