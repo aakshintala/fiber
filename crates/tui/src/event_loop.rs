@@ -1012,7 +1012,7 @@ impl<B: Backend> Loop<B> {
         }
         // The open's tail reads before the frame pages: the first frame
         // draws the preview it installs.
-        self.open_tail(rx);
+        let attached_history = self.open_tail(rx);
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load,
@@ -1072,10 +1072,11 @@ impl<B: Backend> Loop<B> {
         if draw_failed {
             return Some(1);
         }
-        // The attached-session history has landed in the drawn frame.
-        // A home frame, or one without a live stream, leaves the guard
-        // for the next draw; run_with discards it if none arrives.
-        if self.app.session().is_some() && self.hub.has_stream() {
+        // The attached-session history has landed in the drawn frame:
+        // the tail read completed and installed its preview before this
+        // draw. A frame before that install leaves the guard open;
+        // run_with discards it if no such frame arrives.
+        if attached_history {
             drop(self.attached_frame.take());
         }
         // After the first post-handover draw, the writer restarts its
@@ -1526,21 +1527,23 @@ impl<B: Backend> Loop<B> {
     /// Reads the open's tail when one is due: the own-segment history
     /// windows fill it, then the preview installs. No stream means the
     /// tail ended with nothing read; a lost read ends everything
-    /// through `disconnected`, with no install. The tail wait, each
-    /// answer fold and the install are timed once per process; the
-    /// first fetched page below keeps its own timer. Older windows and
-    /// ancestors read after the first frame draws, through the retained
-    /// count.
-    fn open_tail(&mut self, rx: &Receiver<Input>) {
+    /// through `disconnected`, with no install. Returns true when the
+    /// live-stream tail read reaches its install, so the draw can end the
+    /// attached-frame guard; a missing stream or lost read returns false.
+    /// The tail wait, each answer fold and the install are timed once per
+    /// process; the first fetched page below keeps its own timer. Older
+    /// windows and ancestors read after the first frame draws, through the
+    /// retained count.
+    fn open_tail(&mut self, rx: &Receiver<Input>) -> bool {
         let Some(session) = self.app.tail_due() else {
-            return;
+            return false;
         };
         // A new open never installs or counts the old run.
         self.app.clear_tail_read();
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
             self.app.install_tail();
-            return;
+            return false;
         }
         if self
             .hub
@@ -1556,7 +1559,7 @@ impl<B: Backend> Loop<B> {
             )
             .is_err()
         {
-            return;
+            return false;
         }
         // The completed read's install always runs: the open still holds
         // its tail read here (only a lost connection drops it, and that
@@ -1569,6 +1572,7 @@ impl<B: Backend> Loop<B> {
         let install = self.timing.tail_install();
         self.app.install_tail();
         drop(install);
+        true
     }
 
     /// Reads the retained count after the first frame draws: older
