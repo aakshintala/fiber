@@ -9,9 +9,9 @@ use crate::test_support::loopback;
 
 use super::{
     ATTACH_PASS, ATTACH_TAIL, FIXTURE_COUNT, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures,
-    PLANS, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, attach_stage_rows, await_pass_end, feed_step,
-    memory_rows, open_command, open_error_samples, parse_open_line, pass_entry, plan_turns,
-    replay_finished, size_note, stage_rows,
+    PLANS, PROBE_A, PROBE_B, SPAN_METRIC, Step, TURN_REPLY_BYTES, attach_stage_rows,
+    await_pass_end, feed_step, memory_rows, open_command, open_error_samples, parse_open_line,
+    pass_entry, plan_turns, replay_finished, size_note, span_samples, stage_rows,
 };
 
 #[test]
@@ -562,4 +562,139 @@ fn the_pass_end_entries_carry_the_fixture_and_log_size() {
         assert_eq!(entry.get("log_bytes"), Some(&json!(1_050_231)));
         assert_eq!(entry.get("ms"), Some(&json!(41.0)));
     }
+}
+
+/// A home directory holding `logs/tui-<pid>.log` with `text`, as the TUI
+/// under test leaves it.
+fn span_home(pid: u32, text: &str) -> fakes::TempDir {
+    let dir = fakes::TempDir::new("attach-spans");
+    let logs = dir.path().join("logs");
+    std::fs::create_dir_all(&logs).expect("creating logs");
+    std::fs::write(logs.join(format!("tui-{pid}.log")), text).expect("writing the tui log");
+    dir
+}
+
+/// One diagnostic line with `code` and `data`.
+fn span_line(code: &str, data: serde_json::Value) -> String {
+    json!({
+        "ts": 1_700_000_000_000_u64,
+        "level": "debug",
+        "process": "tui",
+        "code": code,
+        "message": "An operation ended.",
+        "data": data,
+    })
+    .to_string()
+}
+
+fn span_op(op: &str, ms: u64) -> String {
+    span_line("op_timing", json!({"op": op, "ms": ms}))
+}
+
+/// Each `op_timing` line in the sample's TUI log becomes one
+/// `attach_span_ms` row carrying the fixture, the sample, the operation
+/// and its milliseconds; other codes and blank lines are not spans. The
+/// terminal operation inventory and its per-process limits are in
+/// `docs/state.md:423-453`.
+#[test]
+fn span_samples_emit_one_row_per_op_timing_line() {
+    let text = [
+        span_op("tui.extensions", 3),
+        String::new(),
+        span_line("info", json!({"note": "ready"})),
+        span_op("tui.attached_frame", 7),
+        span_op("tui.tail_wait", 19),
+    ]
+    .join("\n");
+    let dir = span_home(4242, &text);
+    let mut rows = span_samples(dir.path(), 4242, "10 MiB", 10_485_760, 2).expect("spans read");
+    let mut want = vec![
+        (
+            SPAN_METRIC,
+            json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.extensions", "ms": 3}),
+        ),
+        (
+            SPAN_METRIC,
+            json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.attached_frame", "ms": 7}),
+        ),
+        (
+            SPAN_METRIC,
+            json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.tail_wait", "ms": 19}),
+        ),
+    ];
+    // `docs/state.md:423-453` promises counts and scopes, not log order,
+    // so the comparison sorts both sides: the exact rows and their count
+    // still match, in any order.
+    let key =
+        |(_, sample): &(&str, serde_json::Value)| serde_json::to_string(sample).unwrap_or_default();
+    rows.sort_by_key(|row| key(row));
+    want.sort_by_key(|row| key(row));
+    assert_eq!(rows, want);
+    assert_eq!(SPAN_METRIC, "attach_span_ms");
+}
+
+/// Each sample reads only its own TUI process's log: two samples in one
+/// home attribute their spans to their own sample number.
+#[test]
+fn span_samples_attribute_each_pid_log_to_its_own_sample() {
+    let dir = fakes::TempDir::new("attach-spans-two");
+    let logs = dir.path().join("logs");
+    std::fs::create_dir_all(&logs).expect("creating logs");
+    std::fs::write(logs.join("tui-100.log"), span_op("tui.tail_wait", 11)).expect("first log");
+    std::fs::write(logs.join("tui-200.log"), span_op("tui.tail_wait", 13)).expect("second log");
+    let first = span_samples(dir.path(), 100, "1 MiB", 1_048_576, 0).expect("first spans");
+    let second = span_samples(dir.path(), 200, "1 MiB", 1_048_576, 1).expect("second spans");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].1["sample"], json!(0));
+    assert_eq!(first[0].1["ms"], json!(11));
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].1["sample"], json!(1));
+    assert_eq!(second[0].1["ms"], json!(13));
+}
+
+/// A home without the sample's TUI log holds no spans: every non-debug
+/// home takes this path, leaving the timed rows unchanged.
+#[test]
+fn span_samples_are_empty_without_a_tui_log() {
+    let dir = fakes::TempDir::new("attach-spans-missing");
+    let rows = span_samples(dir.path(), 4242, "1 MiB", 1_048_576, 0).expect("no spans");
+    assert!(rows.is_empty());
+}
+
+/// A line that is not JSON fails the span result instead of disappearing
+/// into it.
+#[test]
+fn span_samples_fail_on_a_non_json_line() {
+    let dir = span_home(4242, "not json\n");
+    let err =
+        span_samples(dir.path(), 4242, "1 MiB", 1_048_576, 0).expect_err("malformed line fails");
+    assert!(err.contains("is not JSON"), "{err}");
+}
+
+/// An `op_timing` line with no string `data.op` or no whole `data.ms`
+/// fails the span result instead of counting as zero.
+#[test]
+fn span_samples_fail_on_an_op_timing_line_without_op_or_ms() {
+    for data in [
+        json!({"ms": 3}),
+        json!({"op": "tui.tail_wait"}),
+        json!({"op": "tui.tail_wait", "ms": "3"}),
+        json!({"op": 7, "ms": 3}),
+    ] {
+        let dir = span_home(4242, &span_line("op_timing", data));
+        let err = span_samples(dir.path(), 4242, "1 MiB", 1_048_576, 0)
+            .expect_err("malformed span fails");
+        assert!(err.contains("no string data.op or whole data.ms"), "{err}");
+    }
+}
+
+/// A log that cannot be read fails the span result: a directory at the
+/// log's path is not a missing file.
+#[test]
+fn span_samples_fail_when_the_log_cannot_be_read() {
+    let dir = fakes::TempDir::new("attach-spans-unreadable");
+    let logs = dir.path().join("logs");
+    std::fs::create_dir_all(logs.join("tui-4242.log")).expect("a directory at the log path");
+    let err = span_samples(dir.path(), 4242, "1 MiB", 1_048_576, 0).expect_err("unreadable fails");
+    assert!(err.contains("tui-4242.log"), "{err}");
 }
