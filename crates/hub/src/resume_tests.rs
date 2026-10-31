@@ -931,6 +931,33 @@ struct Client {
     read: BufReader<UnixStream>,
 }
 
+/// One blocking socket line on a worker thread, taken through one
+/// `Deadline` for the whole wait: calling code that blocks is a wait too
+/// (`docs/testing.md`, "Waits and timeouts"), so the read runs on a
+/// scoped thread and this receives its result with a deadline.
+/// `#[track_caller]` reports the test's line through `recv_or_fail`;
+/// a `panic!` inside a closure would report the closure instead. The
+/// socket keeps its read timeout, so a lost peer still releases the
+/// scoped thread and bounds the scope's join.
+#[track_caller]
+fn deadline_read_line(reader: &mut BufReader<UnixStream>, what: &str) -> String {
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut text = String::new();
+            let result = reader.read_line(&mut text);
+            tx.send((result, text)).unwrap_or(());
+        });
+        let (result, text) = Deadline::after(DEADLINE) // ruling: #3708
+            .recv_or_fail(&rx, what);
+        if let Err(error) = result {
+            panic!("never received {what}: {error}");
+        }
+        assert!(!text.is_empty(), "the hub closed before {what}");
+        text
+    })
+}
+
 impl Client {
     fn connect(hub: &Arc<Hub>) -> Self {
         let (a, b) = UnixStream::pair().unwrap();
@@ -1008,11 +1035,7 @@ impl Client {
 
     /// The next line. Panics past the deadline naming the wait.
     fn next(&mut self, what: &str) -> Value {
-        let mut text = String::new();
-        self.read
-            .read_line(&mut text)
-            .unwrap_or_else(|_| panic!("never received {what}"));
-        assert!(!text.is_empty(), "the hub closed before {what}");
+        let text = deadline_read_line(&mut self.read, what);
         serde_json::from_str(&text).unwrap()
     }
 
@@ -1573,13 +1596,11 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
     }
     Deadline::after(DEADLINE).recv_or_fail(&played, "the scripted replay");
     let mut reader = BufReader::new(client_read);
-    let mut text = String::new();
-    reader.read_line(&mut text).unwrap();
+    let mut text = deadline_read_line(&mut reader, "the replay acknowledgement");
     let first: Value = serde_json::from_str(&text).unwrap();
     if level == "full" && accepted {
         assert_reopened(&first, last_seq);
-        text.clear();
-        reader.read_line(&mut text).unwrap();
+        text = deadline_read_line(&mut reader, "the fold marker");
         assert_eq!(
             serde_json::from_str::<Value>(&text).unwrap()["kind"],
             "fold_marker"
@@ -1759,11 +1780,9 @@ fn a_first_exit_re_routes_and_the_resumed_session_answers() {
     );
     Deadline::after(DEADLINE).recv_or_fail(&played, "the scripted replay");
     let mut reader = BufReader::new(client_read);
-    let mut text = String::new();
-    reader.read_line(&mut text).unwrap();
+    let mut text = deadline_read_line(&mut reader, "the resumed session's reopening");
     assert_reopened(&serde_json::from_str(&text).unwrap(), Some(41));
-    text.clear();
-    reader.read_line(&mut text).unwrap();
+    text = deadline_read_line(&mut reader, "the fold marker");
     assert_eq!(
         serde_json::from_str::<Value>(&text).unwrap()["kind"],
         "fold_marker"
@@ -1771,14 +1790,12 @@ fn a_first_exit_re_routes_and_the_resumed_session_answers() {
     Deadline::after(DEADLINE).recv_or_fail(&answered, "the resumed answer");
     // The resumed session's replay reopens the stream again before the
     // re-routed command's answer.
-    text.clear();
-    reader.read_line(&mut text).unwrap();
+    text = deadline_read_line(&mut reader, "the stream reopening");
     assert_eq!(
         serde_json::from_str::<Value>(&text).unwrap()["kind"],
         "stream_reopened"
     );
-    text.clear();
-    reader.read_line(&mut text).unwrap();
+    text = deadline_read_line(&mut reader, "the re-routed command's acceptance");
     let accepted: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(accepted["kind"], "command_accepted");
     assert_eq!(accepted["payload"]["command_id"], "c_next");
@@ -3627,8 +3644,7 @@ fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queu
     );
     peer.set_read_timeout(Some(DEADLINE)).unwrap();
     let mut read = BufReader::new(peer);
-    let mut text = String::new();
-    read.read_line(&mut text).unwrap();
+    let text = deadline_read_line(&mut read, "the re-routed command's acceptance");
     let accepted: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
     assert_eq!(accepted["payload"]["command_id"], "c_1");
