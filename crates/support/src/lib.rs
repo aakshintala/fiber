@@ -68,3 +68,7 @@ pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+pub fn throwaway_3810_add(a: u32) -> u32 {
+    a + 1
+}
