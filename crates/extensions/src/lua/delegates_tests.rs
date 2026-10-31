@@ -76,6 +76,7 @@ fn completed(job_id: &JobId, status: Outcome) -> JobCompleted {
         output_tail: None,
         notice: None,
         changed_by: None,
+        protected_paths: None,
     }
 }
 

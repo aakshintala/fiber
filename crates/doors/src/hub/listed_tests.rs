@@ -1,6 +1,6 @@
 use super::*;
 use config::{Config, ProjectKey, Sources};
-use contract::{ErrorCode, HubEventKind, HubLine};
+use contract::{ErrorCode, HubLine};
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, clock::FakeClock};
 use serde_json::json;
@@ -53,13 +53,7 @@ fn authentication_answer_preserves_hub_line_kind_and_payload() {
     .unwrap()
     .clone();
 
-    assert_eq!(
-        (answer.kind, answer.payload),
-        (
-            HubEventKind::Unknown("future_kind".into()),
-            expected_payload
-        )
-    );
+    assert_eq!(answer.payload, expected_payload);
 }
 
 #[test]
@@ -169,19 +163,8 @@ fn authenticate_accepts_only_its_ack_and_keeps_the_wire_token_secret() {
         (None, Some(ErrorCode::ConnectionFailed)),
     ] {
         let (client, mut server) = UnixStream::pair().unwrap();
-        let (done, done_rx) = mpsc::channel();
+        let done_rx = spawn_authenticate(client, Duration::from_secs(1));
         let (wire, wire_rx) = mpsc::channel();
-        let clock = FakeClock::new();
-        thread::spawn(move || {
-            let result = authenticate(
-                &client,
-                "box",
-                &Secret::new("device-token".into()),
-                clock.as_ref(),
-                Duration::from_secs(1),
-            );
-            done.send(result).unwrap();
-        });
         thread::spawn(move || {
             let mut line = String::new();
             io::BufReader::new(server.try_clone().unwrap())

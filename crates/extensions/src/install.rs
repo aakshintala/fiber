@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use config::{Manifest, ProviderData};
 
-use crate::resolve::{at_least, version};
+use crate::resolve::{at_least, minimum};
 use crate::{API, Error};
 
 /// Where an installed extension came from.
@@ -97,8 +97,9 @@ impl Record {
             floor: match json.get("floor") {
                 None => None,
                 Some(serde_json::Value::String(floor)) => {
-                    // Only a full version counts; anything else is damage.
-                    version(floor).map_err(|_| bad("bad `floor`"))?;
+                    // Only a minimum the resolver can order counts;
+                    // anything else is damage.
+                    minimum(floor).map_err(|_| bad("bad `floor`"))?;
                     Some(floor.clone())
                 }
                 Some(_) => return Err(bad("bad `floor`")),

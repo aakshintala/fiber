@@ -586,6 +586,7 @@ impl Orphans {
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             })
             .collect()
     }
@@ -693,6 +694,12 @@ pub(crate) fn notice_text(completed: &JobCompleted) -> String {
     if let Some(tail) = &completed.output_tail {
         text.push_str("\nLast output:\n");
         text.push_str(tail.trim_end());
+    }
+    if let Some(paths) = &completed.protected_paths {
+        for line in paths.warning_lines() {
+            text.push('\n');
+            text.push_str(&line);
+        }
     }
     text
 }

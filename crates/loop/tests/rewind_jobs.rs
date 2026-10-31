@@ -325,6 +325,7 @@ impl FakeJobs {
 
                     notice: None,
                     changed_by: None,
+                    protected_paths: None,
                 },
                 claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate: None,
@@ -353,6 +354,7 @@ impl FakeJobs {
 
                     notice: None,
                     changed_by: None,
+                    protected_paths: None,
                 },
                 claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate: Some(delegate),
@@ -760,6 +762,7 @@ fn deliveries_during_the_stop_wait_are_refused_closing_or_dropped() {
 
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             },
             claim: Claim(Box::new(|| None)),
             delegate: None,

@@ -73,8 +73,8 @@ pub use layout::project_servers_dir;
 pub use layout::{
     crashes_dir, docs_dir, extension_data_dir, extensions_dir, global_config_file,
     images_cache_dir, logs_dir, machine_approvals_dir, mcp_cache_dir, pinned_dir,
-    project_approvals_dir, project_config_file, project_data_dir, project_worktrees_dir,
-    projects_dir, repository_config_file, run_dir,
+    project_approvals_dir, project_config_file, project_data_dir, project_protected_paths_dir,
+    project_worktrees_dir, projects_dir, repository_config_file, run_dir,
 };
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};

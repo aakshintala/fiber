@@ -490,6 +490,7 @@ fn state_own_command_failure_drops_earlier_changes_not_other_writes() {
             changes: None,
             control: None,
             changed_by: None,
+            protected_paths: None,
             provider_item: None,
             hosts_surfaced: Vec::new(),
             loaded: None,

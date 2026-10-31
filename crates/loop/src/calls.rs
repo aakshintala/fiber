@@ -1330,6 +1330,7 @@ impl Loop {
             spilled,
             hosts_surfaced,
             loaded,
+            protected_paths,
         } = output;
         // The call's output reached `finish`: its turn entry leaves the
         // map, so the map holds only calls whose output has not.
@@ -1448,6 +1449,7 @@ impl Loop {
                 changed_by: shaped.changed_by,
                 hosts_surfaced,
                 loaded,
+                protected_paths,
                 ..completed(String::new(), None)
             },
             shaped.state,

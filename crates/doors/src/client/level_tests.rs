@@ -205,7 +205,10 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
             response: None,
         })
         .unwrap();
-    outbox.swap(control_line(&id, LEVEL, 0), injector);
+    outbox.swap(
+        control_line(&id, crate::client::ControlKind::Level, 0),
+        injector,
+    );
     log.append(&notice(), None, None).unwrap();
     log.append(
         &Event::SessionStatus(contract::events::SessionStatus {
@@ -324,7 +327,7 @@ fn a_line_at_the_cutoff_is_skipped_never_written() {
         watcher: new,
         summary: true,
         cutoff,
-        prelude: vec![control_line(&id, "x.ack", 7)],
+        prelude: vec![ordinary_envelope(&id, "x.ack", 7)],
         response: None,
     })
     .unwrap();
@@ -482,7 +485,10 @@ fn a_lowering_waits_for_the_deferred_response_after_its_drain() {
             response: Some(resp_rx),
         })
         .unwrap();
-    outbox.swap(control_line(&id, LEVEL, 0), injector);
+    outbox.swap(
+        control_line(&id, crate::client::ControlKind::Level, 0),
+        injector,
+    );
     // The drain arrives, but no acceptance: the loop has not answered yet,
     // and nothing after the answer can precede it.
     let text = held.wait_for(
@@ -586,7 +592,10 @@ fn a_raising_writes_nothing_before_its_deferred_response() {
             response: Some(resp_rx),
         })
         .unwrap();
-    outbox.swap(control_line(&id, LEVEL, 0), injector);
+    outbox.swap(
+        control_line(&id, crate::client::ControlKind::Level, 0),
+        injector,
+    );
     // No line can precede the answer, not even the seeded history: the
     // writer is parked at the response wait, past every write it could
     // make before the loop's answer (the old-level line was skipped,
@@ -643,7 +652,7 @@ fn a_cancelled_response_ends_the_switch_as_an_error() {
         watcher: new,
         summary: true,
         cutoff,
-        prelude: vec![control_line(&id, "x.ack", 7)],
+        prelude: vec![ordinary_envelope(&id, "x.ack", 7)],
         response: Some(resp_rx),
     })
     .unwrap();
@@ -740,7 +749,11 @@ fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
         }),
     );
     injector.push_kept(answer);
-    injector.push_kept(control_line(&gate.session_id, crate::client::STOP, 0));
+    injector.push_kept(control_line(
+        &gate.session_id,
+        crate::client::ControlKind::Stop,
+        0,
+    ));
     assert!(
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer returns once STOP follows the answer"
@@ -788,9 +801,9 @@ fn a_level_change_after_the_log_ends_moves_the_writer_to_the_new_watcher() {
             response: None,
         })
         .unwrap();
-    old.push_kept(control_line(&id, LEVEL, 0));
+    old.push_kept(control_line(&id, crate::client::ControlKind::Level, 0));
     fresh_injector.push_kept(settled_acceptance(&id, &clock, "c_after"));
-    fresh_injector.push_kept(control_line(&id, crate::client::STOP, 0));
+    fresh_injector.push_kept(control_line(&id, crate::client::ControlKind::Stop, 0));
     assert!(
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer follows the switch and ends at STOP on the new queue"
@@ -801,4 +814,143 @@ fn a_level_change_after_the_log_ends_moves_the_writer_to_the_new_watcher() {
         .filter_map(|line| line.payload.get("command_id").and_then(|id| id.as_str()))
         .collect();
     assert_eq!(ids, ["c_up", "c_after"], "{lines:?}");
+}
+
+/// An ordinary envelope, not a control. The writer forwards it.
+fn ordinary_envelope(session: &SessionId, kind: &str, token: u64) -> contract::Envelope {
+    let mut payload = serde_json::Map::new();
+    payload.insert("token".to_owned(), serde_json::Value::from(token));
+    contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: session.clone(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload,
+    }
+}
+
+#[test]
+fn control_boundary_lines_carry_literal_names_and_tokens() {
+    use super::super::writer::ControlKind;
+
+    let session = SessionId("s_control".into());
+    // Token 0 is the edge the producers use; 1 sits just above it, and 7 is
+    // a nonzero token that must survive unchanged.
+    let cases = [
+        (ControlKind::Stop, "doors.stop", 0),
+        (ControlKind::Cut, "doors.cut", 1),
+        (ControlKind::Level, "doors.level", 7),
+    ];
+    for (kind, literal, token) in cases {
+        let line = control_line(&session, kind, token);
+        assert_eq!(line.kind, literal);
+        assert_eq!(line.session_id, session);
+        assert_eq!(line.ts, 0);
+        assert_eq!(line.schema_version, contract::SCHEMA_VERSION);
+        assert_eq!(line.turn_id, None);
+        assert_eq!(line.action_id, None);
+        assert_eq!(line.seq, None);
+        assert_eq!(
+            line.payload
+                .get("token")
+                .and_then(serde_json::Value::as_u64),
+            Some(token)
+        );
+        assert_eq!(line.payload.len(), 1);
+    }
+}
+
+#[test]
+fn control_boundary_recognizes_only_exact_names() {
+    use super::super::writer::ControlKind;
+
+    assert_eq!(
+        ControlKind::recognize("doors.stop"),
+        Some(ControlKind::Stop)
+    );
+    assert_eq!(ControlKind::recognize("doors.cut"), Some(ControlKind::Cut));
+    assert_eq!(
+        ControlKind::recognize("doors.level"),
+        Some(ControlKind::Level)
+    );
+
+    // At the name, just short of it, and one character past it. Case,
+    // whitespace, an empty name and a non-ASCII name are not controls.
+    let rejected = [
+        "x.ack",
+        "",
+        "\u{505c}\u{6b62}",
+        "doors.st\u{f6}p",
+        "doors.STOP",
+        "doors.CUT",
+        "doors.LEVEL",
+        "DOORS.stop",
+        "Doors.cut",
+        "doors.Level",
+        " doors.stop",
+        "doors.stop ",
+        "doors.cut\n",
+        "\tdoors.level",
+        "doors. cut",
+        "doors.stop\u{200b}",
+        "doors.sto",
+        "doors.cu",
+        "doors.leve",
+        "doors.",
+        "doors.stopx",
+        "doors.cutx",
+        "doors.levelx",
+        "xdoors.stop",
+        "doors.stopdoors.cut",
+    ];
+    for name in rejected {
+        assert_eq!(ControlKind::recognize(name), None, "{name:?}");
+    }
+}
+
+/// Stop is an internal wake-up. A full-level writer writes the ordinary
+/// envelopes queued ahead of it and does not write the stop line.
+#[test]
+fn control_boundary_full_level_writer_forwards_ordinary_envelopes() {
+    use super::super::writer::{ControlKind, Ended};
+
+    let (_temp, log, id, _clock) = open_log();
+    let watcher = log.watch_all();
+    let injector = watcher.injector();
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    let (_switch_tx, switches) = mpsc::channel();
+    thread::spawn({
+        let out = Arc::clone(&out);
+        move || {
+            let ended =
+                crate::client::write_loop(watcher, Box::new(SharedOut(out)), false, switches, None);
+            if let Ok(()) = done_tx.send(ended) {}
+        }
+    });
+    let ack = ordinary_envelope(&id, "x.ack", 7);
+    let near = ordinary_envelope(&id, "doors.stopx", 3);
+    injector.push_kept(ack.clone());
+    injector.push_kept(near.clone());
+    injector.push_kept(control_line(&id, ControlKind::Stop, 0));
+    let ended = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&done_rx)
+        .expect("stop ends the full-level writer");
+    assert!(matches!(ended, Ended::Done), "stop ends the writer cleanly");
+    let lines = envelopes(&String::from_utf8(lock(&out).clone()).unwrap());
+    assert!(
+        lines.contains(&ack),
+        "the ordinary x.ack reaches the client"
+    );
+    assert!(
+        lines.contains(&near),
+        "the ordinary doors.stopx near miss reaches the client"
+    );
+    assert!(
+        lines.iter().all(|line| line.kind != "doors.stop"),
+        "the internal stop line does not reach the client"
+    );
 }

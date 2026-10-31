@@ -969,7 +969,7 @@ fn tool_names_in(body: &Value) -> Vec<String> {
 
 #[test]
 fn reload_replaces_restarts_starts_and_drops_mcp_servers() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let hi = r#"{"content":[{"type":"text","text":"hi"}]}"#;
     let keep = mcp_dir(
         &setup,

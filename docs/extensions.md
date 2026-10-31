@@ -1803,7 +1803,9 @@ its floor go too.
 
 Two extensions that need different major versions, such as 1.x and 2.x, stop
 the install with `version_conflict`, naming both. So does a minimum that no
-tag meets.
+tag meets. A pre-release tag, such as `v0.0.1-nightly.20261030`, counts only
+when some minimum on that extension is itself a pre-release. It then counts
+like any other tag, and sorts below the stable release on its base.
 
 Fiber records the exact commit it installed and loads only that. Nothing is
 signed. The fetch runs over TLS or SSH, and a binary is checked against the
