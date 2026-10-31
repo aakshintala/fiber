@@ -90,9 +90,7 @@ fn steady_status_row(row: &str, workspace: &str) -> String {
                 panic!("the workspace segment in {row:?}");
             }
             let mut middle = middle.split_whitespace();
-            let mode = middle
-                .next()
-                .unwrap_or_else(|| panic!("a mode in {row:?}"));
+            let mode = middle.next().unwrap_or_else(|| panic!("a mode in {row:?}"));
             if middle.next_back() != Some(MODEL) {
                 panic!("the model segment in {row:?}");
             }
