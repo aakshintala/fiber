@@ -91,6 +91,24 @@ fn scroll_keeps_the_selection_in_view() {
     }
 }
 
+/// The line window sets the selection and the top independently: a
+/// selected line may sit above the first shown one, which `select`
+/// never produces since it keeps the top at or below the selection
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn line_window_sets_selection_and_top_independently() {
+    let mut list = List::gutter();
+    list.set_line_window(2, 3);
+    assert_eq!((list.selected(), list.top()), (2, 3));
+    assert!(list.is_gutter());
+    // `select` on the same selected line keeps the top below it.
+    let mut selected = List::gutter();
+    selected.select(2, 10, 4);
+    assert_eq!(selected.selected(), 2);
+    assert!(selected.top() <= selected.selected());
+    assert!(selected.is_gutter());
+}
+
 #[test]
 fn an_empty_list_ignores_every_key() {
     for key in [Key::Up, Key::Down, Key::PageUp, Key::PageDown] {

@@ -201,6 +201,16 @@ impl List {
         }
     }
 
+    /// Sets the selected display line and the first shown one
+    /// independently, with no clamping or scrolling: a view whose
+    /// selection and scroll move on different lines puts each where
+    /// its own rule says, so the selected line may sit above the
+    /// first shown one. The gutter mark stays as it was.
+    pub(crate) fn set_line_window(&mut self, selected_line: usize, top_line: usize) {
+        self.selected = selected_line;
+        self.top = top_line;
+    }
+
     /// The selected row's index.
     pub(crate) fn selected(&self) -> usize {
         self.selected
