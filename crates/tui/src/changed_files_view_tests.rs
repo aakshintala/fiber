@@ -90,6 +90,7 @@ fn app_with_files() -> App {
     let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
         panic!("opening the list sends the numstat query");
     };
+    // docs/tui.md:830 promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: serde_json::Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));

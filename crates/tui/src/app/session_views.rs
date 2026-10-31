@@ -789,7 +789,9 @@ impl App {
         if process.signal.is_some() || process.timed_out {
             return None;
         }
-        if output.is_empty() && process.exit_code != Some(0) {
+        // Only a clean run counts: any other exit leaves the rows on the
+        // card's figures with the view opening normally.
+        if process.exit_code != Some(0) {
             return None;
         }
         let body = changed_files_view::numstat_body(output, process.exit_code);
