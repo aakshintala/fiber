@@ -1658,11 +1658,21 @@ fn late_workers_emit_once_and_drop_late_replies() {
     assert_eq!(record.attempt, 1);
     assert_eq!(record.request_bytes, 0);
     assert_eq!(record.response_bytes, 11);
-    // The hook's late reply is discarded too: releasing its hold adds no
-    // record and disturbs nothing.
+    // The hook's caller timed out, but the already-sent request still ends
+    // and gets its own extension-purpose record when its held response lands.
     hook_server.release();
-    // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
-    assert_eq!(sink.records().len(), 1);
+    let hook_record = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&arrivals)
+        .expect("the late hook worker emitted its record");
+    assert_eq!(
+        hook_record.identity(),
+        Some(&Identity::Extension("ext".to_owned()))
+    );
+    assert_eq!(hook_record.purpose(), Purpose::Extension);
+    assert_eq!(hook_record.status, Some(200));
+    assert_eq!(hook_record.response_bytes, 2);
+    // docs/state.md, "Diagnostic logs": one line per completed HTTP request.
+    assert_eq!(sink.records().len(), 2);
     assert_eq!(hook_server.requests().len(), 1);
     assert_eq!(models_server.requests().len(), 1);
 }

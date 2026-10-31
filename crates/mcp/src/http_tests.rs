@@ -2847,7 +2847,7 @@ fn an_observed_start_writes_one_mcp_line_per_post() {
     let setup = Setup::new();
     let server = ProviderServer::start_responding(standard()).unwrap();
     let (remote, _) = setup.observed(&server, Duration::from_secs(5));
-    let lines = setup.lines();
+    let lines = setup.lines.await_count(3);
     assert_eq!(
         lines.len(),
         3,
