@@ -55,37 +55,36 @@ pub(super) fn edit_line(text: &mut String, caret: &mut usize, edit: &Edit) {
 }
 
 /// Moves the character cursor to the start of the previous word: back
-/// over gaps, then over one run of word characters.
+/// over one run each of gaps, then word characters.
 pub(super) fn word_left(text: &str, caret: &mut usize) {
     let chars: Vec<char> = text.chars().collect();
     let mut at = (*caret).min(chars.len());
-    while at > 0
-        && !chars
-            .get(at.saturating_sub(1))
-            .is_some_and(|ch| is_word_char(*ch))
-    {
-        at = at.saturating_sub(1);
-    }
-    while at > 0
-        && chars
-            .get(at.saturating_sub(1))
-            .is_some_and(|ch| is_word_char(*ch))
-    {
-        at = at.saturating_sub(1);
+    // Back over one run each of gaps, then word characters.
+    for want_word in [false, true] {
+        while at
+            .checked_sub(1)
+            .and_then(|prev| chars.get(prev))
+            .is_some_and(|ch| is_word_char(*ch) == want_word)
+        {
+            at = at.saturating_sub(1);
+        }
     }
     *caret = at;
 }
 
 /// Moves the character cursor to the end of the next word: forward over
-/// gaps, then over one run of word characters.
+/// one run each of gaps, then word characters.
 pub(super) fn word_right(text: &str, caret: &mut usize) {
     let chars: Vec<char> = text.chars().collect();
     let mut at = (*caret).min(chars.len());
-    while at < chars.len() && !chars.get(at).is_some_and(|ch| is_word_char(*ch)) {
-        at = at.saturating_add(1);
-    }
-    while at < chars.len() && chars.get(at).is_some_and(|ch| is_word_char(*ch)) {
-        at = at.saturating_add(1);
+    // Forward over one run each of gaps, then word characters.
+    for want_word in [false, true] {
+        while chars
+            .get(at)
+            .is_some_and(|ch| is_word_char(*ch) == want_word)
+        {
+            at = at.saturating_add(1);
+        }
     }
     *caret = at;
 }
