@@ -233,6 +233,21 @@ pub(crate) fn bar(
     runs
 }
 
+/// The automatic handoff point in force: known from the session's own
+/// `preamble_built`, known off when that build sets none, or unknown
+/// when the session logged no `preamble_built` of its own. A rewind, a
+/// fork or a workspace change continues another log, whose handoff point
+/// the client never learns (`docs/tui.md`, "Swapped views").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Handoff {
+    /// The handoff runs at this context size in tokens.
+    At(u64),
+    /// Automatic handoff is off.
+    Off,
+    /// No own `preamble_built` named one.
+    Unknown,
+}
+
 /// The current context size, model window and automatic handoff point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Sized {
@@ -240,8 +255,8 @@ pub(crate) struct Sized {
     pub(crate) total: u64,
     /// The model's context window in tokens.
     pub(crate) window: u64,
-    /// The automatic handoff point in tokens, when enabled.
-    pub(crate) trigger: Option<u64>,
+    /// The automatic handoff point in force.
+    pub(crate) trigger: Handoff,
 }
 
 /// The context rows and footer for the swapped view.
@@ -261,8 +276,8 @@ pub(crate) fn frame(
             u128::from(sized.total) * 100 / u128::from(sized.window)
         };
         let mut tail = format!(" · {percent}% of the {} window", compact(sized.window));
-        if let Some(trigger) = sized.trigger {
-            tail.push_str(&format!(" · automatic handoff at {}", compact(trigger)));
+        if let Handoff::At(point) = sized.trigger {
+            tail.push_str(&format!(" · automatic handoff at {}", compact(point)));
         }
         rows.push(indented(vec![
             (
@@ -279,16 +294,20 @@ pub(crate) fn frame(
             (Category::ToolResults, 0),
             (Category::Messages, sized.total),
         ]);
-        // The bar spans to the handoff point, not the window; with no
-        // handoff point it spans the window and draws no marker. A
+        // The bar spans to a known handoff point, not the window; with
+        // no handoff point it spans the window and draws no marker. A
         // window of 0 draws no bar.
-        let span = sized.trigger.unwrap_or(sized.window);
+        let trigger = match sized.trigger {
+            Handoff::At(point) => Some(point),
+            Handoff::Off | Handoff::Unknown => None,
+        };
+        let span = trigger.unwrap_or(sized.window);
         // The bar leaves the indent's two columns.
         let cells = usize::from(width).saturating_sub(2);
         let runs = if sized.window == 0 {
             Vec::new()
         } else {
-            bar(&fill, span, sized.trigger, cells)
+            bar(&fill, span, trigger, cells)
         };
         let mut bar_row = vec![("  ".to_owned(), None, Ink::Plain)];
         bar_row.extend(
@@ -296,7 +315,7 @@ pub(crate) fn frame(
                 .map(|(text, role)| (text.clone(), None, Ink::Role(*role))),
         );
         rows.push(bar_row);
-        if let Some(trigger) = sized.trigger {
+        if let Handoff::At(point) = sized.trigger {
             // The label ends under the marker, in attention; the pad
             // counts the indent's two columns.
             let mut end = 0usize;
@@ -309,7 +328,7 @@ pub(crate) fn frame(
             let (pad, label) = if runs.is_empty() {
                 (String::new(), String::new())
             } else {
-                let label = format!("handoff {}", compact(trigger));
+                let label = format!("handoff {}", compact(point));
                 (
                     " ".repeat(
                         end.saturating_add(2)
@@ -349,7 +368,10 @@ pub(crate) fn frame(
                 Ink::Muted,
             )));
         }
-        if sized.trigger.is_none() {
+        // Only a known-off handoff draws the off row: an unknown one —
+        // a continuation with no `preamble_built` of its own — draws
+        // neither a marker nor a row.
+        if sized.trigger == Handoff::Off {
             rows.push(indented(row("automatic handoff off", Ink::Muted)));
         }
         rows.push(indented(row("Largest tool results", Ink::Heading)));

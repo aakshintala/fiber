@@ -527,8 +527,13 @@ With the rail hidden and sessions waiting, the Session card ends with "! N
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
 shows the rail.
 
-The context bar is drawn against `preamble_built`'s `context_window` and
-`trigger_at`. Per-file counts come from `tool_call_completed`'s `changes`,
+The context bar is drawn against the window `session_status` reports and
+the handoff point the session's own `preamble_built` names. That window is
+the latest own build's `context_window`, or the inherited one when the
+session logged no `preamble_built` of its own. A session started by a
+rewind, a fork or a workspace change has no handoff point of its own, so
+its bar draws against the inherited window with no marker. Per-file counts
+come from `tool_call_completed`'s `changes`,
 never from `details`, which has no fixed shape a client may rely on
 (`docs/events.md`).
 

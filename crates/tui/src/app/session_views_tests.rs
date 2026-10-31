@@ -720,6 +720,35 @@ fn context_without_an_own_preamble_uses_the_reported_window() {
     );
 }
 
+/// An own `preamble_built` without a handoff point means automatic
+/// handoff is off, not unknown (see #3756): the breakdown keeps the
+/// existing off row.
+#[test]
+fn context_with_a_triggerless_preamble_keeps_the_off_row() {
+    let mut app = attached(100, 40);
+    app.on_line(context_status(50, 100));
+    app.on_line(session_line(
+        SESSION,
+        "preamble_built",
+        json!({
+            "reason": "start", "model": "model/m", "context_window": 100,
+            "system_prompt": "sys",
+            "tools": [{"name": "read", "registered_by": "builtin", "deferred": false,
+                "definition": {"a": 1}}],
+            "tool_choice": "auto", "cache_lifetime": "5m",
+        }),
+        Some("a_1"),
+    ));
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(
+        shown.contains("50 tokens · 50% of the 100 window"),
+        "{shown}"
+    );
+    assert!(shown.contains("automatic handoff off"), "{shown}");
+    assert!(!shown.contains("handoff at"), "{shown}");
+}
+
 #[test]
 fn going_home_clears_context_state_for_the_next_attachment() {
     let mut app = attached(100, 40);

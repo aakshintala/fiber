@@ -1,7 +1,7 @@
 //! Tests for the context breakdown's fold, estimates, bar and frame
 //! (`docs/tui.md`, "Swapped views").
 
-use super::{Category, ContextFold, LARGEST_SHOWN, Sized, bar, categories, frame};
+use super::{Category, ContextFold, Handoff, LARGEST_SHOWN, Sized, bar, categories, frame};
 use crate::swapped::{Ink, List, render};
 use crate::theme::Role;
 use contract::Envelope;
@@ -127,7 +127,7 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
     let sized = Sized {
         total: 268_000,
         window: 1_000_000,
-        trigger: Some(400_000),
+        trigger: Handoff::At(400_000),
     };
     let frame = frame(&fold, rate(), Some(sized), List::default(), 80);
     // The body is indented two columns: "268k tokens" bold, then the
@@ -402,7 +402,7 @@ fn largest_results_show_five_largest_and_keep_arrival_order_for_ties() {
         Some(Sized {
             total: 100,
             window: 100,
-            trigger: Some(80),
+            trigger: Handoff::At(80),
         }),
         80,
     );
@@ -463,7 +463,7 @@ fn result_names_come_from_the_request_and_unseen_requests_are_tools() {
         Some(Sized {
             total: 100,
             window: 100,
-            trigger: None,
+            trigger: Handoff::Unknown,
         }),
         80,
     );
@@ -517,7 +517,7 @@ fn without_a_rate_the_view_draws_one_fill_and_says_when_to_break_down() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Some(80),
+            trigger: Handoff::At(80),
         }),
         List::default(),
         12,
@@ -542,7 +542,7 @@ fn without_a_rate_the_view_draws_one_fill_and_says_when_to_break_down() {
             Some(Sized {
                 total: 20,
                 window: 100,
-                trigger: Some(80),
+                trigger: Handoff::At(80),
             }),
             80
         )
@@ -561,7 +561,7 @@ fn with_a_rate_the_view_shows_each_category_and_sizes_results_in_tokens() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Some(80),
+            trigger: Handoff::At(80),
         }),
         List::default(),
         80,
@@ -572,7 +572,7 @@ fn with_a_rate_the_view_shows_each_category_and_sizes_results_in_tokens() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Some(80),
+            trigger: Handoff::At(80),
         }),
         80,
     );
@@ -608,7 +608,7 @@ fn tool_results_draw_in_error() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: Some(80),
+            trigger: Handoff::At(80),
         }),
         List::default(),
         80,
@@ -635,7 +635,7 @@ fn a_missing_trigger_says_automatic_handoff_is_off() {
         Some(Sized {
             total: 20,
             window: 100,
-            trigger: None,
+            trigger: Handoff::Off,
         }),
         80,
     );
@@ -644,12 +644,43 @@ fn a_missing_trigger_says_automatic_handoff_is_off() {
 }
 
 #[test]
+fn an_unknown_handoff_draws_the_window_with_no_marker_and_no_off_row() {
+    // A continuation with no `preamble_built` of its own (see #3756):
+    // the total draws against the inherited window, with no handoff
+    // tail, no marker label and no off row.
+    let fold = ContextFold::default();
+    let sized = Some(Sized {
+        total: 50,
+        window: 200,
+        trigger: Handoff::Unknown,
+    });
+    let frame = frame(&fold, Rate::default(), sized, List::default(), 80);
+    let shown = text(&fold, Rate::default(), sized, 80);
+    assert!(
+        shown.contains("50 tokens · 25% of the 200 window"),
+        "{shown}"
+    );
+    // No tail, no marker label and no off row: each carries "handoff "
+    // with a trailing word, which the largest-results row never has.
+    assert!(!shown.contains("handoff "), "{shown}");
+    assert!(
+        !shown.contains("The context shows after the session's first request."),
+        "{shown}"
+    );
+    // The bar still draws against the window, and the total alone.
+    assert!(shown.contains('█'), "{shown}");
+    assert!(!shown.contains("system prompt"), "{shown}");
+    assert_eq!(frame.below, ["Breakdown after a request without images."]);
+    assert!(shown.contains("none since the last handoff"), "{shown}");
+}
+
+#[test]
 fn the_bar_row_stays_present_and_row_count_does_not_depend_on_width() {
     let fold = fold_with_sizes(4, 5, 6);
     let sized = Some(Sized {
         total: 20,
         window: 100,
-        trigger: Some(80),
+        trigger: Handoff::At(80),
     });
     let zero = frame(&fold, rate(), sized, List::default(), 0);
     let wide = frame(&fold, rate(), sized, List::default(), 80);
@@ -686,7 +717,7 @@ fn a_fork_notes_that_inherited_history_counts_under_messages() {
         Some(Sized {
             total: 100,
             window: 100,
-            trigger: Some(80),
+            trigger: Handoff::At(80),
         }),
         80,
     );
@@ -712,7 +743,7 @@ fn the_context_view_snapshot_is_rendered_through_the_shared_frame() {
         Some(Sized {
             total: 61_234,
             window: 200_000,
-            trigger: Some(140_000),
+            trigger: Handoff::At(140_000),
         }),
         List::default(),
         80,
