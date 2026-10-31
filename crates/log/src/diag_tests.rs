@@ -875,6 +875,11 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
         (TuiFirstRender, "tui.first_render"),
         (TuiAttachedFrame, "tui.attached_frame"),
         // `TuiFrame` at rest writes no line; the frame test above times it.
+        (TuiExtensions, "tui.extensions"),
+        (TuiAttachSummary, "tui.attach_summary"),
+        (TuiTailWait, "tui.tail_wait"),
+        (TuiPreviewFold, "tui.preview_fold"),
+        (TuiTailInstall, "tui.tail_install"),
         (LogAppend, "log.append"),
         (LogFsync, "log.fsync"),
         (ToolPermission, "tool.permission"),
