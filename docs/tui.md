@@ -1754,9 +1754,6 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
-- **A bound control character keeps the bytes after it.** When Ctrl+A and a
-  printable character arrive in the same input stream, Fiber emits the
-  line-start edit then reads the character as the next key, and nothing else.
 - **Esc closes whatever is on top,** except the workspace picker while no
   workspace is chosen ("Home"). On home, Esc on a focused row goes back to the session the person came from ("Home"). It returns focus to the input box from
   the conversation, and interrupts the turn only when nothing is open and the
