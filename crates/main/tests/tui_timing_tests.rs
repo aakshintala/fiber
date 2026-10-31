@@ -370,7 +370,7 @@ fn a_debug_resume_records_extension_and_attached_frame() {
     let mut parser = vt100::Parser::new(ROWS, COLS, 0);
     parser.process(&output[..first_end]);
     let first = parser.screen().contents();
-    // docs/tui.md:3055-3057: TUI extensions load before the first frame.
+    // docs/tui.md:3121-3123: TUI extensions load before the first frame.
     assert!(first.contains("EXTENSION-FIRST-FRAME"), "{first}");
     let grid = run.wait_screen("the attached history", |grid| grid.contents.contains(LAST));
     assert!(grid.contents.contains(LAST), "attached history is visible: {grid:?}");
