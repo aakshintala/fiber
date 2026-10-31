@@ -138,6 +138,19 @@ pub(crate) fn write_line(
     what: &str,
 ) -> io::Result<()> {
     let wait = deadline.start_wait();
+    write_line_through(stream, &wait, bytes, what)
+}
+
+/// Writes all of `bytes` through an already-started wait, without renewing
+/// its bound. At zero, it returns a `TimedOut` error naming `what` without
+/// writing.
+#[track_caller]
+pub(crate) fn write_line_through(
+    stream: &mut UnixStream,
+    wait: &Deadline,
+    bytes: &[u8],
+    what: &str,
+) -> io::Result<()> {
     let mut rest = bytes;
     while !rest.is_empty() {
         let left = wait.left();
@@ -234,6 +247,15 @@ impl Setup {
     /// Starts the test's deadline before any setup work.
     pub(crate) fn new() -> Self {
         Self::new_under(&std::env::temp_dir())
+    }
+
+    /// As [`Setup::new`], looking up the shared MCP fixture before the
+    /// deadline starts: the lookup warms the script past its first-exec
+    /// stall under its own bound, so the stall never eats the test's own
+    /// wait margin. Tests that never start the fixture keep [`Setup::new`].
+    pub(crate) fn new_with_mcp_fixture() -> Self {
+        fakes::mcp_fixture();
+        Self::new()
     }
 
     /// As [`Setup::new`], rooted under `parent` for a short socket path.
@@ -519,10 +541,7 @@ impl Run {
     }
 
     pub(crate) fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
+        kinds(&self.lines)
     }
 
     pub(crate) fn first(&self, kind: &str) -> &Value {
@@ -977,6 +996,20 @@ impl Socket {
         }
         let mut write = self.write.lock().unwrap();
         if let Err(error) = write_line(&mut write, self.deadline, &bytes, "sending a line") {
+            panic!("writing the socket: {error}");
+        }
+    }
+
+    /// Writes one socket line through an already-started wait without
+    /// renewing its bound.
+    #[track_caller]
+    pub(crate) fn send_through(&self, wait: &Deadline, line: &str) {
+        let mut bytes = line.as_bytes().to_vec();
+        if !line.ends_with('\n') {
+            bytes.push(b'\n');
+        }
+        let mut write = self.write.lock().unwrap();
+        if let Err(error) = write_line_through(&mut write, wait, &bytes, "sending a line") {
             panic!("writing the socket: {error}");
         }
     }
@@ -1692,11 +1725,6 @@ pub(crate) fn kinds(lines: &[Value]) -> Vec<&str> {
         .collect()
 }
 
-/// The ordered event kinds, also setting aside the hub's attention lines.
-pub(crate) fn kinds_without_attention(lines: &[Value]) -> Vec<&str> {
-    kinds(lines)
-}
-
 /// The relation a cited doc line promises between an exact kind pair. The
 /// relation is passed explicitly at each call site so its strength matches
 /// the wording of the cited line: "after" maps to [`Relation::After`],
@@ -2346,5 +2374,29 @@ fn stderr_drain_keeps_a_character_split_across_reads() {
         !snapshot.lock().unwrap().contains('\u{FFFD}'),
         "{}",
         snapshot.lock().unwrap()
+    );
+}
+
+#[test]
+fn run_kinds_sets_aside_independently_triggered_lines() {
+    // `Run::kinds` delegates to the free helper, so a `date_changed` line
+    // the contract writes on its own trigger never reaches an ordered
+    // expectation (`docs/testing.md`, "Event streams"; #3758).
+    let run = Run {
+        code: Some(0),
+        lines: vec![
+            json!({"kind": "preamble_built"}),
+            json!({"kind": "clients"}),
+            json!({"kind": "session_status"}),
+            json!({"kind": "turn_started"}),
+            json!({"kind": "attention"}),
+            json!({"kind": "date_changed"}),
+            json!({"kind": "turn_completed"}),
+        ],
+        stderr: String::new(),
+    };
+    assert_eq!(
+        run.kinds(),
+        ["preamble_built", "turn_started", "turn_completed"]
     );
 }

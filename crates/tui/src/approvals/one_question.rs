@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 
 use super::builder::Builder;
 use super::form::Spot;
-use super::text::{delete_before, insert_at, move_caret};
+use super::text::{delete_before, edit_line, insert_at};
 use super::{Panel, PanelKey, Title};
 use crate::format::width as measure;
 use crate::keys::{Edit, Key};
@@ -179,6 +179,8 @@ impl OneQuestion {
     }
 
     /// Applies an edit on the panel. Paste control characters become spaces.
+    /// On the words row every line edit runs the shared single-line editor;
+    /// every other row takes no text, so line edits do nothing there.
     pub(crate) fn on_edit(&mut self, edit: &Edit) {
         match edit {
             Edit::Paste(text) => {
@@ -188,12 +190,9 @@ impl OneQuestion {
                     }
                 }
             }
-            Edit::Left | Edit::Right => {
-                if self.at == Row::Words {
-                    move_caret(&self.words, &mut self.caret, *edit == Edit::Right);
-                }
-            }
-            Edit::ShiftEnter
+            Edit::Left
+            | Edit::Right
+            | Edit::ShiftEnter
             | Edit::CtrlJ
             | Edit::WordLeft
             | Edit::WordRight
@@ -201,7 +200,11 @@ impl OneQuestion {
             | Edit::DeleteToLineStart
             | Edit::LineStart
             | Edit::LineEnd
-            | Edit::Delete => {}
+            | Edit::Delete => {
+                if self.at == Row::Words {
+                    edit_line(&mut self.words, &mut self.caret, edit);
+                }
+            }
         }
     }
 

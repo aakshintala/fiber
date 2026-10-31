@@ -357,6 +357,7 @@ pub(crate) fn session_tools(
     timing: Option<contract::diag::Timing>,
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
+    protection: Option<Arc<tools::ProtectedPaths>>,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -383,6 +384,7 @@ pub(crate) fn session_tools(
         timing.clone(),
         shell_read_only,
         sandbox,
+        protection,
     )?;
     let (prepared, started) = pending.take_started()?;
     // The pending start settles repository approval and server startup

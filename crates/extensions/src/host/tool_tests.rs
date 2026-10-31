@@ -171,6 +171,7 @@ fn completed(text: &str) -> Box<ToolCallCompleted> {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -190,6 +191,7 @@ fn denied(reason: &str) -> Box<ToolCallCompleted> {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -214,6 +216,7 @@ fn failed(code: contract::ErrorCode, message: &str) -> Box<ToolCallCompleted> {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -301,9 +304,8 @@ fn a_denied_outcome_is_an_ordinary_return_with_reason_and_no_error() {
         ),
         &clock,
     );
-    // `details`, `artifact` and `changes` are set on the completion the
-    // loop wrote, and none reaches the script: exactly `status`, `content`
-    // and `reason`.
+    // `artifact` is forwarded when the completion carries it, while
+    // `details` and `changes` stay out; this denied outcome has four keys.
     let mut refused = denied("credentials");
     refused.details = Some(serde_json::json!({"diff": "x"}));
     refused.artifact = Some("artifacts/a.log".to_owned());
@@ -319,7 +321,7 @@ fn a_denied_outcome_is_an_ordinary_return_with_reason_and_no_error() {
     let (runner, _entered) = FakeRunner::scripted(vec![Ok(refused)]);
     assert_eq!(
         tool_call(&ext, "fetch", runner).unwrap(),
-        Some(Value::String("denied|credentials|nil|3|0".to_owned()))
+        Some(Value::String("denied|credentials|nil|4|0".to_owned()))
     );
 }
 
@@ -364,6 +366,7 @@ fn a_cancelled_outcome_is_an_ordinary_return() {
         changes: None,
         control: None,
         changed_by: None,
+        protected_paths: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
@@ -681,9 +684,9 @@ fn outcome_names_only_status_content_and_reason_or_error() {
         .map(String::as_str)
         .collect();
     keys.sort();
-    // Exactly `status` and `content`: a field added later never reaches the
-    // script unless `outcome` names it.
-    assert_eq!(keys, ["content", "status"]);
+    // Exactly `artifact`, `content` and `status`: a field added later never
+    // reaches the script unless `outcome` names it.
+    assert_eq!(keys, ["artifact", "content", "status"]);
     let mut refused = denied("standing_rule");
     refused.details = Some(serde_json::json!({"diff": "x"}));
     let outcome = super::outcome(&refused).unwrap();
@@ -1187,4 +1190,88 @@ fn a_tool_runs_while_another_tool_waits_on_its_inner_call() {
         .unwrap(),
         Some(Value::String("saw other says hi".to_owned()))
     );
+}
+
+#[test]
+fn outcome_carries_artifact_when_the_completion_has_one() {
+    let mut full = completed("hi");
+    full.artifact = Some("artifacts/a.log".to_owned());
+    let outcome = super::outcome(&full).unwrap();
+    let mut keys: Vec<&str> = outcome
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort();
+    assert_eq!(keys, ["artifact", "content", "status"]);
+    assert_eq!(outcome["artifact"], "artifacts/a.log");
+    // The script sees the same path: a cut inner call's ledger row can
+    // name the file holding its full output.
+    let clock = FakeClock::new();
+    let (_dir, ext) = extension(
+        &tool(
+            "fetch",
+            "function() local o = host.tool(\"read\", { path = \"x\" }) return tostring(o.artifact) end",
+        ),
+        &clock,
+    );
+    let mut done = completed("file text");
+    done.artifact = Some("artifacts/a.log".to_owned());
+    let (runner, _entered) = FakeRunner::scripted(vec![Ok(done)]);
+    assert_eq!(
+        tool_call(&ext, "fetch", runner).unwrap(),
+        Some(Value::String("artifacts/a.log".to_owned()))
+    );
+}
+
+#[test]
+fn outcome_omits_artifact_when_the_completion_has_none() {
+    let outcome = super::outcome(&completed("hi")).unwrap();
+    let mut keys: Vec<&str> = outcome
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort();
+    assert_eq!(keys, ["content", "status"]);
+    // The script sees no path: an uncut inner call's ledger row carries
+    // its name and status only.
+    let clock = FakeClock::new();
+    let (_dir, ext) = extension(
+        &tool(
+            "fetch",
+            "function() local o = host.tool(\"read\", { path = \"x\" }) return tostring(o.artifact) end",
+        ),
+        &clock,
+    );
+    let (runner, _entered) = FakeRunner::scripted(vec![Ok(completed("file text"))]);
+    assert_eq!(
+        tool_call(&ext, "fetch", runner).unwrap(),
+        Some(Value::String("nil".to_owned()))
+    );
+}
+
+#[test]
+fn outcome_never_carries_details_or_changes() {
+    let mut full = completed("hi");
+    full.details = Some(serde_json::json!({"diff": "x"}));
+    full.changes = Some(Vec::new());
+    full.process = Some(contract::shapes::Process {
+        exit_code: None,
+        signal: None,
+        timed_out: false,
+    });
+    full.control = Some(contract::events::Control::default());
+    full.changed_by = Some(vec!["fiber.test/tag".to_owned()]);
+    full.provider_item = Some(serde_json::json!({}));
+    let outcome = super::outcome(&full).unwrap();
+    let table = outcome.as_object().unwrap();
+    assert!(table.get("details").is_none(), "{table:?}");
+    assert!(table.get("changes").is_none(), "{table:?}");
+    assert!(table.get("process").is_none(), "{table:?}");
+    assert!(table.get("control").is_none(), "{table:?}");
+    assert!(table.get("changed_by").is_none(), "{table:?}");
+    assert!(table.get("provider_item").is_none(), "{table:?}");
 }

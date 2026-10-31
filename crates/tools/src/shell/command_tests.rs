@@ -22,6 +22,13 @@ use super::{MovePolicy, MoveReason, StopKind};
 use fakes::children::{Ready, ignores_sigterm};
 use support::group::alive;
 
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../../tests/support/sandbox_home.rs"]
+mod sandbox_home;
+
 #[test]
 fn bump_advances_the_sequence() {
     let mut inner = Inner::default();
@@ -351,9 +358,10 @@ fn run(dir: &std::path::Path, command: String) -> mpsc::Receiver<super::Finished
             None,
             &sandbox,
             &dir,
+            None,
         )
         .unwrap();
-        let super::Ran::Finished(finished) = ran else {
+        let super::Ran::Finished(finished, _) = ran else {
             panic!("a command that may not move moved");
         };
         let _sent = tx.send(finished);
@@ -1057,6 +1065,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
         },
         cap: OUTPUT_CAP,
         spill: None,
+        protection: None,
     }
 }
 
@@ -1139,6 +1148,7 @@ impl Job {
             None,
             &sandbox,
             &workspace,
+            None,
         )
         .unwrap();
         let super::Ran::Moved(mut moved) = ran else {
@@ -1159,7 +1169,7 @@ impl Job {
         let job_clock = Arc::clone(&clock);
         let (tx, done) = mpsc::channel();
         thread::spawn(move || {
-            let finished = moved.drive_job(job_clock.as_ref(), &cancel, stream, None);
+            let (finished, _) = moved.drive_job(job_clock.as_ref(), &cancel, stream, None);
             let _sent = tx.send(finished);
         });
         // Both lines: the fifo exists and fd 3 is open once the second arrives.
@@ -1369,11 +1379,12 @@ fn a_foreground_command_past_a_mebibyte_spills() {
                 None,
                 &sandbox,
                 &workspace,
+                None,
             )
             .unwrap()
         },
     );
-    let super::Ran::Finished(finished) = ran else {
+    let super::Ran::Finished(finished, _) = ran else {
         panic!("a quick command moved");
     };
     let super::Kept::Spilled(spill) = finished.output else {
@@ -1431,6 +1442,7 @@ fn a_command_moved_at_once_never_spills() {
                     None,
                     &sandbox,
                     &workspace,
+                    None,
                 )
                 .unwrap();
                 let super::Ran::Moved(moved) = ran else {
@@ -1451,7 +1463,11 @@ fn a_command_moved_at_once_never_spills() {
     let finished = fakes::within("a moved command resumes", Deadline::after(JOB_DEADLINE), {
         let clock = Arc::clone(&clock);
         let cancel = cancel.clone();
-        move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())
+        move || {
+            moved
+                .resume(clock.as_ref(), &cancel, &Recorder::default())
+                .0
+        }
     });
     assert!(matches!(finished.output, super::Kept::Whole(_)));
     assert!(std::fs::read_dir(&artifacts).unwrap().next().is_none());
@@ -1503,6 +1519,7 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
                     None,
                     &sandbox,
                     &workspace,
+                    None,
                 )
                 .unwrap();
                 let super::Ran::Moved(moved) = ran else {
@@ -1525,7 +1542,11 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
     let finished = fakes::within("a filed command resumes", Deadline::after(JOB_DEADLINE), {
         let clock = Arc::clone(&clock);
         let cancel = cancel.clone();
-        move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())
+        move || {
+            moved
+                .resume(clock.as_ref(), &cancel, &Recorder::default())
+                .0
+        }
     });
     assert!(
         matches!(finished.output, super::Kept::Whole(_)),
@@ -1579,6 +1600,7 @@ fn a_resumed_command_arms_the_spill() {
                     None,
                     &sandbox,
                     &workspace,
+                    None,
                 )
                 .unwrap();
                 let super::Ran::Moved(moved) = ran else {
@@ -1595,7 +1617,11 @@ fn a_resumed_command_arms_the_spill() {
     let finished = fakes::within("a moved command resumes", Deadline::after(JOB_DEADLINE), {
         let clock = Arc::clone(&clock);
         let cancel = cancel.clone();
-        move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())
+        move || {
+            moved
+                .resume(clock.as_ref(), &cancel, &Recorder::default())
+                .0
+        }
     });
     let super::Kept::Spilled(spill) = finished.output else {
         panic!("a resumed command past a mebibyte spills");
@@ -1643,6 +1669,7 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
             None,
             &sandbox,
             &work,
+            None,
             always_alive,
             &ps,
             super::super::sandbox::install,
@@ -1653,7 +1680,7 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
     let ran = Deadline::after(JOB_DEADLINE)
         .recv(&rx)
         .expect("the foreground call ended within the deadline");
-    let super::Ran::Finished(finished) = ran else {
+    let super::Ran::Finished(finished, _) = ran else {
         panic!("a shell with no members left finishes in the foreground");
     };
     assert_eq!(exit_code_of(finished.status), 0);
@@ -1865,6 +1892,7 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
                     None,
                     &sandbox,
                     &work,
+                    None,
                     always_alive,
                     &ps,
                     super::super::sandbox::install,
@@ -1895,7 +1923,7 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
         let ran = Deadline::after(JOB_DEADLINE)
             .recv(&rx)
             .expect("the foreground call ended within the deadline");
-        let super::Ran::Finished(finished) = ran else {
+        let super::Ran::Finished(finished, _) = ran else {
             panic!(
                 "a stop during the listing still finishes in the foreground (cancelled={cancelled})"
             );
@@ -1966,28 +1994,36 @@ fn cat_with_discard_redirect_or_true_reads() {
     );
 }
 
-fn sandbox_settings_for_test(
-    _workspace: &std::path::Path,
-    name: &str,
-) -> crate::shell::sandbox::Settings {
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let fiber_home = home.join(format!("fiber-sandbox-cmd-{name}-{}", std::process::id()));
-    crate::shell::sandbox::Settings {
+#[test]
+fn sandbox_home_is_owned_and_removed_on_drop() {
+    let (home, settings) = sandbox_settings_for_test();
+    drop(settings);
+    let root = home.root().to_path_buf();
+    let fiber_home = home.fiber_home().to_path_buf();
+    assert_eq!(fiber_home, root.join("fiber-home"));
+    assert!(fiber_home.starts_with(&root));
+    std::fs::create_dir_all(&fiber_home).expect("the test builds the home");
+    std::fs::write(fiber_home.join("marker"), "x").expect("the test marks the home");
+    drop(home);
+    assert!(!root.exists(), "dropping the home removes the tree");
+}
+
+fn sandbox_settings_for_test() -> (sandbox_home::SandboxHome, crate::shell::sandbox::Settings) {
+    let home = sandbox_home::SandboxHome::protected();
+    let settings = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: Vec::new(),
         deny_read: Vec::new(),
-        fiber_home,
-    }
+        fiber_home: home.fiber_home().to_path_buf(),
+    };
+    (home, settings)
 }
 
 #[test]
 fn sandbox_enabled_runs_a_confined_echo() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-echo");
     let work = dir.path().to_path_buf();
-    let sandbox = sandbox_settings_for_test(&work, "echo");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let ran = fakes::within(
         "a confined echo",
         Deadline::after(JOB_DEADLINE),
@@ -2006,11 +2042,12 @@ fn sandbox_enabled_runs_a_confined_echo() {
                 None,
                 &sandbox,
                 &work,
+                None,
             )
             .unwrap()
         },
     );
-    let super::Ran::Finished(finished) = ran else {
+    let super::Ran::Finished(finished, _) = ran else {
         panic!("a confined echo finishes");
     };
     assert_eq!(exit_code_of(finished.status), 0);
@@ -2024,14 +2061,8 @@ fn sandbox_enabled_runs_a_confined_echo() {
 fn sandbox_unavailable_fails_closed_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-unavailable");
     let work = dir.path().to_path_buf();
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let fiber_home = home.join(format!(
-        "fiber-sandbox-cmd-unavailable-{}",
-        std::process::id()
-    ));
+    let home = sandbox_home::SandboxHome::protected();
+    let fiber_home = home.fiber_home().to_path_buf();
     let sandbox = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: Vec::new(),
@@ -2054,6 +2085,7 @@ fn sandbox_unavailable_fails_closed_without_running() {
         None,
         &sandbox,
         &work,
+        None,
     );
     let Err(error) = result else {
         panic!("an unavailable sandbox fails the call");
@@ -2076,11 +2108,10 @@ fn sandbox_setup_failure_aborts_spawn_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-fail");
     let work = dir.path().to_path_buf();
     let marker = work.join("marker");
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let fiber_home = home.join(format!("fiber-sandbox-cmd-fail-{}", std::process::id()));
+    let home_root = fakes::TempDir::new("fiber-tools-shell-sandbox-protected");
+    let fiber_home = home_root.path().join("fiber-home");
+    assert!(fiber_home.starts_with(std::env::temp_dir()));
+    assert!(fiber_home.starts_with(home_root.path()));
     let sandbox = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
@@ -2102,6 +2133,7 @@ fn sandbox_setup_failure_aborts_spawn_without_running() {
         None,
         &sandbox,
         &work,
+        None,
     );
     let Err(error) = result else {
         panic!("a setup failure aborts spawn");
@@ -2155,7 +2187,7 @@ fn sandbox_install_failure_aborts_spawn_without_running() {
     let work = dir.path().to_path_buf();
     let ps = fakes::script(dir.path(), "ps", "exit 0");
     let marker = work.join("marker");
-    let sandbox = sandbox_settings_for_test(&work, "install-fail");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let command = format!("touch {} && echo hi", marker.display());
     let result = super::execute_inner(
         std::path::Path::new("/bin/sh"),
@@ -2171,6 +2203,7 @@ fn sandbox_install_failure_aborts_spawn_without_running() {
         None,
         &sandbox,
         &work,
+        None,
         always_alive,
         &ps,
         |_| Err(libc::EPERM),
@@ -2213,7 +2246,7 @@ fn confined_socket_probe() {
 fn sandbox_denies_sockets_with_abi2_rules_on_this_host() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-socket");
     let work = dir.path().to_path_buf();
-    let sandbox = sandbox_settings_for_test(&work, "socket");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let executable = std::env::current_exe().expect("the test executable");
     let quoted = executable.display().to_string().replace('\'', "'\\''");
     let command = format!(
@@ -2237,11 +2270,12 @@ fn sandbox_denies_sockets_with_abi2_rules_on_this_host() {
                 None,
                 &sandbox,
                 &work,
+                None,
             )
             .unwrap()
         },
     );
-    let super::Ran::Finished(finished) = ran else {
+    let super::Ran::Finished(finished, _) = ran else {
         panic!("a denied socket still finishes the call");
     };
     assert_eq!(
@@ -2260,5 +2294,458 @@ fn sandbox_denies_sockets_with_abi2_rules_on_this_host() {
     assert!(
         text.contains("unix=Err(PermissionDenied)"),
         "the sandbox denies the Unix connect: {text}"
+    );
+}
+
+// The protected-path transaction across confined execution: the guard is
+// taken before spawn, owned exactly once through adoption, and reported
+// with the call's end.
+
+use super::super::sandbox::protected::ProtectedPaths;
+
+/// The real home: the sandbox refuses a Fiber home inside a writable
+/// workspace or temp dir, so the home fixture lives here.
+fn real_home() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+}
+
+/// A confined sandbox with a fresh protection handle for `work`. The Fiber
+/// home lives in its own directory under the real home: the sandbox
+/// refuses a home inside a writable workspace or temp dir.
+fn protected_pair(
+    home: &std::path::Path,
+    work: &std::path::Path,
+    enabled: bool,
+) -> (
+    crate::shell::sandbox::Settings,
+    std::sync::Arc<ProtectedPaths>,
+) {
+    let fiber_home = home.to_path_buf();
+    let settings = crate::shell::sandbox::Settings {
+        enabled,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: fiber_home.clone(),
+    };
+    let (handle, startup) = ProtectedPaths::open(&fiber_home, work).expect("protection opens");
+    assert!(startup.is_none(), "a fresh home recovers nothing");
+    (settings, handle)
+}
+
+/// The baseline file of the one project under `home`.
+#[cfg(target_os = "linux")]
+fn baseline_of(home: &std::path::Path) -> std::path::PathBuf {
+    let mut found = Vec::new();
+    for project in std::fs::read_dir(home.join("projects")).expect("projects lists") {
+        let project = project.expect("project entry reads");
+        let candidate = project.path().join("protected-paths").join("baseline.json");
+        if candidate.is_file() {
+            found.push(candidate);
+        }
+    }
+    assert_eq!(found.len(), 1, "one project holds one baseline");
+    found.pop().expect("one baseline")
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_unchanged_command_reports_a_transaction_only_with_enabled_protection() {
+    for (enabled, installed, expected) in [
+        (
+            true,
+            true,
+            Some(contract::shapes::ProtectedPaths {
+                restored: Vec::new(),
+                failed: Vec::new(),
+            }),
+        ),
+        (false, true, None),
+        (true, false, None),
+    ] {
+        let dir = fakes::TempDir::new("fiber-command-empty-protection");
+        let home = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
+        let work = dir.path().to_path_buf();
+        let (sandbox, handle) = protected_pair(home.path(), &work, enabled);
+        let ran = fakes::within(
+            "the unchanged command finishes",
+            Deadline::after(Duration::from_secs(10)),
+            move || {
+                super::execute(
+                    std::path::Path::new("/bin/sh"),
+                    "printf unchanged",
+                    &work,
+                    Duration::from_secs(60),
+                    FakeClock::new().as_ref(),
+                    &CancelToken::new(),
+                    &Recorder::default(),
+                    MovePolicy::Stay,
+                    None,
+                    None,
+                    None,
+                    &sandbox,
+                    &work,
+                    installed.then_some(handle.as_ref()),
+                )
+                .expect("the command starts")
+            },
+        );
+        let super::Ran::Finished(finished, report) = ran else {
+            panic!("a Stay call finishes in the foreground");
+        };
+        assert_eq!(exit_code_of(finished.status), 0);
+        let super::Kept::Whole(bytes) = finished.output else {
+            panic!("short output stays whole");
+        };
+        assert_eq!(bytes, b"unchanged");
+        assert_eq!(report, expected, "enabled={enabled}, installed={installed}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_call_restores_its_protected_paths_and_reports() {
+    let dir = fakes::TempDir::new("fiber-protected-exec");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
+    let work = dir.path().to_path_buf();
+    let fiber = work.join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("note.txt"), b"original").expect("note written");
+    let (sandbox, handle) = protected_pair(home_dir.path(), &work, true);
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let ran = super::execute(
+        std::path::Path::new("/bin/sh"),
+        "echo changed > .fiber/note.txt",
+        &work,
+        Duration::from_secs(60),
+        clock.as_ref(),
+        &cancel,
+        &Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        &sandbox,
+        &work,
+        Some(&handle),
+    )
+    .expect("a confined spawn succeeds");
+    let super::Ran::Finished(finished, report) = ran else {
+        panic!("a Stay call finishes in the foreground");
+    };
+    assert_eq!(exit_code_of(finished.status), 0, "the call succeeds");
+    let report = report.expect("a confined call reports its end");
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert!(
+        report.failed.is_empty(),
+        "nothing fails, got {:?}",
+        report.failed
+    );
+    assert_eq!(
+        std::fs::read(fiber.join("note.txt")).expect("note reads"),
+        b"original",
+        "the damage is restored"
+    );
+    assert_eq!(report.warning_lines().len(), 1);
+}
+
+#[test]
+fn an_unconfined_call_takes_no_guard() {
+    let dir = fakes::TempDir::new("fiber-protected-unconfined");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
+    let work = dir.path().to_path_buf();
+    let (sandbox, handle) = protected_pair(home_dir.path(), &work, false);
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let ran = super::execute(
+        std::path::Path::new("/bin/sh"),
+        "echo hi",
+        &work,
+        Duration::from_secs(60),
+        clock.as_ref(),
+        &cancel,
+        &Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        &sandbox,
+        &work,
+        Some(&handle),
+    )
+    .expect("an unconfined spawn succeeds");
+    let super::Ran::Finished(_, report) = ran else {
+        panic!("a Stay call finishes in the foreground");
+    };
+    assert!(report.is_none(), "no transaction runs unconfined");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_baseline_fails_the_confined_call_closed() {
+    let dir = fakes::TempDir::new("fiber-protected-setup-fail");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
+    let work = dir.path().to_path_buf();
+    let fiber = work.join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    let fiber_home = home_dir.path().join("fiber-home");
+    let sandbox = crate::shell::sandbox::Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: fiber_home.clone(),
+    };
+    let (handle, _) = ProtectedPaths::open(&fiber_home, &work).expect("protection opens");
+    // A baseline is taken, abandoned, then corrupted: the next confined
+    // call must fail before spawn.
+    let begin = handle.begin(&work).expect("begin snapshots");
+    drop(begin.guard);
+    std::fs::write(baseline_of(&fiber_home), b"not json").expect("baseline corrupted");
+    let marker = work.join("marker");
+    let command = format!("touch {} && echo hi", marker.display());
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let result = super::execute(
+        std::path::Path::new("/bin/sh"),
+        &command,
+        &work,
+        Duration::from_secs(60),
+        clock.as_ref(),
+        &cancel,
+        &Recorder::default(),
+        MovePolicy::Stay,
+        None,
+        None,
+        None,
+        &sandbox,
+        &work,
+        Some(&handle),
+    );
+    let Err(error) = result else {
+        panic!("an unrecordable baseline stops the call");
+    };
+    error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<super::SandboxApply>())
+        .expect("a setup failure, not a spawn failure");
+    assert!(!marker.exists(), "no command runs unprotected");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_adopted_call_ends_its_guard_exactly_once() {
+    let dir = fakes::TempDir::new("fiber-protected-adopted");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
+    let work = dir.path().to_path_buf();
+    let fiber = work.join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("note.txt"), b"original").expect("note written");
+    let release = dir.path().join("release");
+    let (sandbox, handle) = protected_pair(home_dir.path(), &work, true);
+    std::process::Command::new("mkfifo")
+        .arg(&release)
+        .status()
+        .expect("the release FIFO is created");
+    // The command damages a protected path, then blocks reading the FIFO
+    // until the test releases it, so the move always wins the race with
+    // the end. `timeout` bounds the hold, so a failure before the release
+    // still ends the child (`docs/testing.md`, "Waits and timeouts").
+    let held = format!(
+        "echo changed > .fiber/note.txt\ntimeout 60 sh -c 'read line < '{}''\n",
+        release.display()
+    );
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let moved = fakes::within(
+        "a background command moves",
+        Deadline::after(Duration::from_secs(10)),
+        {
+            let clock = Arc::clone(&clock);
+            let cancel = cancel.clone();
+            let work = work.clone();
+            let held = held.clone();
+            let sandbox = sandbox.clone();
+            let handle = Arc::clone(&handle);
+            move || {
+                let ran = super::execute(
+                    std::path::Path::new("/bin/sh"),
+                    &held,
+                    &work,
+                    Duration::from_secs(60),
+                    clock.as_ref(),
+                    &cancel,
+                    &Recorder::default(),
+                    MovePolicy::Background,
+                    None,
+                    None,
+                    None,
+                    &sandbox,
+                    &work,
+                    Some(&handle),
+                )
+                .expect("a confined spawn succeeds");
+                let super::Ran::Moved(moved) = ran else {
+                    panic!("a background command moves");
+                };
+                moved
+            }
+        },
+    );
+    // Opened read-write, the FIFO never blocks on open; the write releases
+    // the command's blocked read. Held until the end, the writer keeps the
+    // release from being discarded before the child opens it.
+    let mut releaser = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&release)
+        .expect("the release FIFO opens");
+    {
+        use std::io::Write as _;
+        releaser.write_all(b"go\n").expect("release the command");
+        releaser.flush().expect("release flushes");
+    }
+    // The job's common finish consumes the guard: the adopted end restores
+    // and reports exactly once.
+    let deltas = Arc::new(fakes::jobs::JobDeltas::default());
+    let stream = super::super::output::JobStream::new(
+        contract::JobId("j_t".to_owned()),
+        Arc::clone(&deltas) as Arc<dyn contract::emit::Emit>,
+    );
+    let (finished, report) = fakes::within(
+        "the adopted command ends",
+        Deadline::after(Duration::from_secs(10)),
+        {
+            let clock = Arc::clone(&clock);
+            let cancel = cancel.clone();
+            move || moved.drive_job(clock.as_ref(), &cancel, stream, None)
+        },
+    );
+    assert_eq!(
+        exit_code_of(finished.status),
+        0,
+        "the adopted call succeeds"
+    );
+    let report = report.expect("the adopted end reports");
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(fiber.join("note.txt")).expect("note reads"),
+        b"original",
+        "the adopted end restores"
+    );
+    // The guard is consumed: a new call takes a fresh baseline.
+    let begin = handle.begin(&work).expect("the lock is released");
+    assert!(begin.guard.recovered.is_empty());
+    let empty = begin.guard.finish();
+    assert!(empty.is_empty(), "nothing further changed");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_job_open_preserves_the_guard_on_resume() {
+    let dir = fakes::TempDir::new("fiber-protected-resume");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
+    let work = dir.path().to_path_buf();
+    let fiber = work.join(".fiber");
+    std::fs::create_dir_all(&fiber).expect("fiber dir created");
+    std::fs::write(fiber.join("note.txt"), b"original").expect("note written");
+    let release = dir.path().join("release");
+    let (sandbox, handle) = protected_pair(home_dir.path(), &work, true);
+    std::process::Command::new("mkfifo")
+        .arg(&release)
+        .status()
+        .expect("the release FIFO is created");
+    // The command damages a protected path, then blocks reading the FIFO
+    // until the test releases it. `timeout` bounds the hold, so a failure
+    // before the release still ends the child (`docs/testing.md`, "Waits
+    // and timeouts").
+    let held = format!(
+        "echo changed > .fiber/note.txt\ntimeout 60 sh -c 'read line < '{}''\n",
+        release.display()
+    );
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let cancel = CancelToken::new();
+    let moved = fakes::within(
+        "a background command moves",
+        Deadline::after(Duration::from_secs(10)),
+        {
+            let clock = Arc::clone(&clock);
+            let cancel = cancel.clone();
+            let work = work.clone();
+            let held = held.clone();
+            let sandbox = sandbox.clone();
+            let handle = Arc::clone(&handle);
+            move || {
+                let ran = super::execute(
+                    std::path::Path::new("/bin/sh"),
+                    &held,
+                    &work,
+                    Duration::from_secs(60),
+                    clock.as_ref(),
+                    &cancel,
+                    &Recorder::default(),
+                    MovePolicy::Background,
+                    None,
+                    None,
+                    None,
+                    &sandbox,
+                    &work,
+                    Some(&handle),
+                )
+                .expect("a confined spawn succeeds");
+                let super::Ran::Moved(moved) = ran else {
+                    panic!("a background command moves");
+                };
+                moved
+            }
+        },
+    );
+    // Opened read-write, the FIFO never blocks on open; the write releases
+    // the command's blocked read and stays held until the end.
+    let mut releaser = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&release)
+        .expect("the release FIFO opens");
+    {
+        use std::io::Write as _;
+        releaser.write_all(b"go\n").expect("release the command");
+        releaser.flush().expect("release flushes");
+    }
+    // The job cannot open: the resumed foreground path still ends the guard.
+    let jobs: Arc<dyn contract::jobs::Jobs> = fakes::jobs::FakeJobs::failing();
+    let output = super::super::background::take(
+        *moved,
+        jobs,
+        Arc::clone(&clock),
+        &held,
+        super::super::Limit {
+            ms: 60_000,
+            monitor: false,
+        },
+        false,
+        &cancel,
+        &Recorder::default(),
+        None,
+        None,
+    );
+    let text = fakes::text_of(&output);
+    assert!(
+        text.contains("Protected path .fiber changed while a confined call ran;"),
+        "the receipt carries the notice: {text}"
+    );
+    let details = output.details.expect("the receipt carries details");
+    assert!(
+        details
+            .get("protected_paths")
+            .and_then(|paths| paths.get("restored"))
+            == Some(&serde_json::json!([".fiber"])),
+        "the receipt carries the report: {details}"
+    );
+    assert_eq!(
+        std::fs::read(fiber.join("note.txt")).expect("note reads"),
+        b"original",
+        "the resumed end restores"
     );
 }

@@ -1,7 +1,7 @@
 //! Tests for the approval queue: folding, the panel, keys and answers.
 
 use super::{Mark, Panel, PanelKey, Queue};
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::theme::Role;
 use ratatui::style::{Modifier, Style};
 use std::ops::Range;
@@ -501,6 +501,29 @@ fn digits_type_feedback_instead_of_choosing() {
         reply["args"],
         serde_json::json!({"request_id": "r_1", "decision": "deny", "feedback": "3"})
     );
+}
+
+#[test]
+fn delete_to_line_start_clears_the_feedback() {
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    for ch in "one two three".chars() {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    assert_eq!(row(&queue, 4), "▸ 2 Deny  one two three");
+    // Ghostty sends ⌘Backspace as `\x15`, the `delete_to_line_start` key.
+    queue.on_edit(&Edit::DeleteToLineStart);
+    assert_eq!(row(&queue, 4), "▸ 2 Deny  type to add feedback");
+}
+
+#[test]
+fn delete_word_deletes_the_previous_feedback_word() {
+    let mut queue = folded(&[standing_ask(S_A, "a_1", "r_1", "echo hi")]);
+    for ch in "one two".chars() {
+        press(&mut queue, Key::Char(ch), 1);
+    }
+    assert_eq!(row(&queue, 4), "▸ 2 Deny  one two");
+    queue.on_edit(&Edit::DeleteWord);
+    assert_eq!(row(&queue, 4), "▸ 2 Deny  one ");
 }
 
 #[test]

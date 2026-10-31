@@ -12,17 +12,21 @@ mod support;
 
 use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use support::*;
 
 use contract::emit::Emit;
+use contract::events::EventKind;
 use contract::events::{Clients, Empty, Event, FiberExited};
 use contract::shapes::{Tokens, Usage};
-use contract::{Envelope, SessionId};
+use contract::{Envelope, SCHEMA_VERSION, SessionId};
 use doors::{Watched, mint};
 use fakes::Deadline;
 use log::Log;
+use serde_json::Value;
 
 /// Appends one durable step to the session's log.
 fn step(log: &Log) {
@@ -291,4 +295,87 @@ fn watch_after_one_before_the_boundary_returns_at_the_old_fiber_exited() {
         "the old fiber_exited ends the watch: {at:?}"
     );
     opened.close();
+}
+
+/// A full envelope line of `kind` with `payload`, as a session writes it.
+fn enveloped(kind: &str, payload: Value) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "kind": kind,
+        "session_id": "s_stand",
+        "ts": 0,
+        "schema_version": SCHEMA_VERSION,
+        "payload": payload,
+    }))
+    .unwrap()
+}
+
+fn write_line(writer: &mut UnixStream, line: &str) {
+    writer.write_all(line.as_bytes()).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
+}
+
+#[test]
+fn a_kind_from_a_newer_build_neither_ends_the_watch_nor_loses_its_name() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let id = SessionId(mint("s_"));
+    let socket = run.join(&id.0);
+    // Its own listener, not a session: the subscribe is answered, then a
+    // line whose kind no released build knows arrives ahead of the real
+    // `fiber_exited`. Unknown is never the exit, so the watch holds past
+    // it and delivers it with its name intact.
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("watch connected");
+        stream
+            .set_read_timeout(Some(DEADLINE))
+            .expect("a read timeout is set");
+        let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
+        let mut writer = stream;
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("the subscribe arrives");
+        let sub: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(sub["command"], "subscribe");
+        write_line(
+            &mut writer,
+            &serde_json::to_string(&serde_json::json!({
+                "kind": "command_accepted",
+                "session_id": "s_stand",
+                "ts": 0,
+                "schema_version": SCHEMA_VERSION,
+                "payload": {"command_id": sub["id"]},
+            }))
+            .unwrap(),
+        );
+        write_line(
+            &mut writer,
+            &enveloped("kind_from_a_newer_build", serde_json::json!({})),
+        );
+        write_line(
+            &mut writer,
+            &enveloped("fiber_exited", serde_json::json!({})),
+        );
+    });
+
+    let mut seen = Vec::new();
+    let watched = doors::watch(&home, &id, &mut |line: &Envelope| {
+        seen.push(line.clone());
+    })
+    .expect("the watch held past the unknown kind to fiber_exited");
+    assert_eq!(watched, Watched::Exited);
+    assert_eq!(
+        seen.iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["kind_from_a_newer_build", "fiber_exited"]
+    );
+    assert_eq!(
+        EventKind::from_name("kind_from_a_newer_build"),
+        EventKind::Unknown("kind_from_a_newer_build".to_owned()),
+        "the unknown name parses to its own case, keeping its text"
+    );
+    server.join().expect("the listener served the watch");
 }

@@ -349,6 +349,7 @@ fn a_new_subscriber_reads_closing_after_the_close_is_accepted() {
                 output_tail: None,
                 notice: None,
                 changed_by: None,
+                protected_paths: None,
             },
             claim: Claim(Box::new(|| Some(Vec::new()))),
             delegate: None,

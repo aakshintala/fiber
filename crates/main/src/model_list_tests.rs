@@ -993,6 +993,255 @@ fn two_picker_reads_share_one_cancel() {
     );
 }
 
+/// Installed provider data without a credential becomes one logged-out
+/// row per provider, ordered by name. Function credentials show their
+/// declared sources and count as present when a declared path exists.
+#[test]
+fn installed_providers_without_credentials_are_logged_out_in_name_order() {
+    let setup = Setup::new("fiber-model-list-logged-out");
+    let unique: String = setup
+        .rig
+        .root
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    let env_name = format!("FIBER_TEST_3704_{unique}");
+    assert!(
+        std::env::var_os(&env_name).is_none(),
+        "{env_name} must be unset"
+    );
+    let credential_dir = setup.home().join("function-credentials");
+    let credential_file = credential_dir.join("profile.json");
+    install_extension(
+        &setup.home(),
+        "extensions/providers",
+        json!({
+            "name": "providers",
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API,
+        }),
+        &[
+            ("zeta", json!({"name": "zeta", "models": []})),
+            ("alpha", json!({"name": "alpha", "models": []})),
+            (
+                "function",
+                json!({
+                    "name": "function",
+                    "models": [],
+                    "credential_label": {
+                        "names": "profile",
+                        "default": "the environment or profile file",
+                        "credential_env": [env_name],
+                        "credential_paths": [{
+                            "path": credential_dir,
+                            "join": "profile.json",
+                        }],
+                    },
+                }),
+            ),
+        ],
+    );
+    let read_catalogue = || {
+        read(
+            &setup.home(),
+            &setup.workspace(),
+            tui::Refresh::Cached,
+            now(),
+            &|_| SessionExtensions::default(),
+            &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+    };
+
+    let catalogue = read_catalogue();
+    assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+    assert_eq!(
+        catalogue
+            .logged_out
+            .iter()
+            .map(|provider| (
+                provider.provider.as_str(),
+                provider.login,
+                provider.hint.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("alpha", true, ""),
+            (
+                "function",
+                false,
+                format!("{env_name}, {}", credential_file.display()).as_str(),
+            ),
+            ("zeta", true, ""),
+        ]
+    );
+    assert!(
+        catalogue
+            .logged_out
+            .iter()
+            .all(|provider| provider.provider != "scripted")
+    );
+
+    std::fs::create_dir_all(&credential_dir).unwrap();
+    std::fs::write(&credential_file, "profile").unwrap();
+    let catalogue = read_catalogue();
+    assert_eq!(
+        catalogue
+            .logged_out
+            .iter()
+            .map(|provider| provider.provider.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "zeta"]
+    );
+}
+
+/// A manifest-only provider is not a logged-out provider, even when its
+/// cached models synthesize an inventory entry. The load notices do not
+/// change just because the cache has that entry.
+#[test]
+fn a_manifest_declaration_without_provider_data_is_not_logged_out() {
+    let setup = Setup::new("fiber-model-list-no-provider-data");
+    install_extension(
+        &setup.home(),
+        "extensions/declared-only",
+        json!({
+            "name": "declared-only",
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API,
+            "providers": {"phantom": ["http://127.0.0.1:1/v1"]},
+        }),
+        &[],
+    );
+    let read_catalogue = || {
+        read(
+            &setup.home(),
+            &setup.workspace(),
+            tui::Refresh::Cached,
+            now(),
+            &|_| SessionExtensions::default(),
+            &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+    };
+
+    let without_cache = read_catalogue();
+    assert!(without_cache.logged_out.is_empty());
+    config::write_model_cache(
+        &setup.home(),
+        "phantom",
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 1000,
+        }]),
+    )
+    .unwrap();
+    let with_cache = read_catalogue();
+    assert!(
+        with_cache.lists.iter().any(|age| age.provider == "phantom"),
+        "the cache synthesized the declared provider: {:?}",
+        with_cache.lists
+    );
+    assert!(
+        with_cache.logged_out.is_empty(),
+        "cached-only entries are not provider data: {:?}",
+        with_cache.logged_out
+    );
+    assert_eq!(with_cache.notices, without_cache.notices);
+}
+
+/// Adding a stored credential switches an ordinary provider on without
+/// rewriting or deleting its cached model list.
+#[test]
+fn a_new_credential_removes_the_logged_out_row_without_changing_cache() {
+    let setup = Setup::new("fiber-model-list-login-after-cache");
+    install_extension(
+        &setup.home(),
+        "extensions/acme-ext",
+        json!({
+            "name": "acme-ext",
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API,
+        }),
+        &[(
+            "acme",
+            json!({
+                "name": "acme",
+                "models": [{
+                    "id": "m1",
+                    "protocol": "openai-responses",
+                    "base_url": "http://127.0.0.1:1/v1",
+                    "context_window": 1000,
+                }],
+            }),
+        )],
+    );
+    config::write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 1000,
+        }]),
+    )
+    .unwrap();
+    let cache = setup.home().join("cache/models/acme.json");
+    let cached_bytes = std::fs::read(&cache).unwrap();
+    let read_catalogue = || {
+        read(
+            &setup.home(),
+            &setup.workspace(),
+            tui::Refresh::Cached,
+            now(),
+            &|_| SessionExtensions::default(),
+            &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+    };
+
+    let before_login = read_catalogue();
+    assert!(before_login.models.is_empty());
+    assert_eq!(
+        before_login
+            .logged_out
+            .iter()
+            .map(|provider| provider.provider.as_str())
+            .collect::<Vec<_>>(),
+        ["acme"]
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    let after_login = read_catalogue();
+    assert!(after_login.logged_out.is_empty());
+    assert_eq!(
+        after_login
+            .models
+            .iter()
+            .map(|entry| entry.reference.as_str())
+            .collect::<Vec<_>>(),
+        ["acme/m1"]
+    );
+    assert_eq!(std::fs::read(cache).unwrap(), cached_bytes);
+}
+
 /// A placeholder with no value leaves one group and no notice: the
 /// models stay out of the list, and the group carries their names, the
 /// raw extension, and the file built from it.

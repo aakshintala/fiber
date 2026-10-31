@@ -58,6 +58,7 @@ fn completed(id: &str, status: Outcome, error: Option<Failure>) -> Event {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     })
 }
 

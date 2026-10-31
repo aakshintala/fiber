@@ -602,3 +602,39 @@ fn a_read_only_file_keeps_its_mode() {
         0o444
     );
 }
+
+#[test]
+fn a_write_inside_a_protected_path_advances_the_baseline() {
+    use crate::shell::sandbox::protected::ProtectedPaths;
+    let dir = TempDir::new("fiber-write-protected");
+    let fiber = dir.path().join(".fiber");
+    std::fs::create_dir_all(&fiber).unwrap();
+    std::fs::write(fiber.join("keep.txt"), b"original\n").unwrap();
+    let home = dir.path().join("fiber-home");
+    let (handle, _) = ProtectedPaths::open(&home, dir.path()).expect("protection opens");
+    // The baseline is taken before the approved write lands.
+    let begin = handle.begin(dir.path()).expect("begin snapshots");
+    let files =
+        Files::new(dir.path().to_path_buf()).with_protection(std::sync::Arc::clone(&handle));
+    files.read().run(
+        &fakes::tool_args(json!({"path": ".fiber/keep.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    let output = files.write().run(
+        &fakes::tool_args(json!({"path": ".fiber/keep.txt", "content": "approved\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
+    // A shell change after the approved write restores to the approved
+    // content, never to what was there before it.
+    std::fs::write(fiber.join("keep.txt"), b"shell\n").unwrap();
+    let report = begin.guard.finish();
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(fiber.join("keep.txt")).unwrap(),
+        b"approved\n",
+        "the end restores to the approved write"
+    );
+}

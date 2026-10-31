@@ -3412,6 +3412,10 @@ fn prompt_fixture(setup: &Setup) -> PathBuf {
 
 #[test]
 fn the_prompt_command_runs_a_servers_prompt() {
+    // Look up the shared MCP fixture before the deadline starts: the
+    // lookup warms the script past its first-exec stall under its own
+    // bound, so the stall never eats this test's wait margin.
+    fakes::mcp_fixture();
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
@@ -3493,6 +3497,10 @@ fn the_prompt_command_runs_a_servers_prompt() {
 
 #[test]
 fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
+    // Look up the shared MCP fixture before the deadline starts: the
+    // lookup warms the script past its first-exec stall under its own
+    // bound, so the stall never eats this test's wait margin.
+    fakes::mcp_fixture();
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
@@ -3553,6 +3561,10 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
 
 #[test]
 fn a_resumed_session_answers_commands_with_its_servers_prompts() {
+    // Look up the shared MCP fixture before the deadline starts: the
+    // lookup warms the script past its first-exec stall under its own
+    // bound, so the stall never eats this test's wait margin.
+    fakes::mcp_fixture();
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[function_call(
         "call_1",

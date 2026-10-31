@@ -3,26 +3,26 @@ source: crates/tui/src/app/overlay_tests.rs
 expression: text
 ---
  Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
-Enter                                                               e during a t
+Enter                                                                message dur
 Shift+Enter  Imported                                            ✕
-Esc                                                                  interrupt t
-Ctrl+C       Copied · 240                                           it
+Esc                                                                 on top; inte
+Ctrl+C       Copied · 240                                           then quit
 ⌥0           MCP▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 Ctrl+N       ser
-⌥1 ⌥2 ⌥3 ⌥4  ser  Quit                                       ✕       card N
-Delete, Bac  ser                                                    d, or a live
-↑            ser  1 session working                                 rom the proj
-←            ser                                                    t box into t
-Ctrl+R       ser  › Enter  leave them running
+⌥1 ⌥2 ⌥3 ⌥4  ser  Quit                                       ✕      of rail card
+Delete, Bac  ser                                                    d exited, or
+↑            ser  1 session working                                 rompt from t
+←            ser                                                    ty input box
+Ctrl+R       ser  › Enter  leave them running                       ts
 ⌥← ⌥→, Ctrl  ser    c      close all
-⌥Backspace   ser    Esc    stay
-Ctrl+U       ser                                                     of the line
-⌘← ⌘→        ser  click a choice · they keep running meanwhile
-Ctrl+G       ser                                                    ed token, in
+⌥Backspace,  ser    Esc    stay
+Ctrl+U       ser                                                    e start of t
+Ctrl+A Ctrl  ser  click a choice · they keep running meanwhile      e line
+Ctrl+G       ser                                                     a pasted to
 Ctrl+V       ser▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-Ctrl+O       server12
-Shift+Tab    server13                                               nto the conv
-↓ ↑, j k                                                            r previous i
-Enter        Imported items apply on the next /reload · Esc closes
-y
+Ctrl+O       server12                                               ledgers
+Shift+Tab    server13                                               t box into t
+↓ ↑, j k                                                             next or pre
+Enter        Imported items apply on the next /reload · Esc closes  m
+y                                                                   m
 ↑↓ move · E▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

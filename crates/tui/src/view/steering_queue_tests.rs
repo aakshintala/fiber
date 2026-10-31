@@ -611,7 +611,8 @@ fn the_hint_starts_at_the_drafts_end() {
                 .contains("Esc sto")
         })
         .expect("the hint row");
-    assert_eq!(buf[(15, y)].symbol(), "█");
+    // The caret keeps its covered `s`, drawn by the cursor.
+    assert_eq!(buf[(15, y)].symbol(), "s");
     // The cell exactly at the draft's end takes the hint; one past it
     // takes the next character.
     for (x, ch) in [(18, "e"), (19, "s")] {

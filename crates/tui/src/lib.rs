@@ -113,6 +113,7 @@ use crate::link::Line;
 
 pub use attention::Attention;
 
+pub use catalogue::LoggedOutProvider;
 pub use catalogue::{
     Catalogue, LeftOutGroup, LeftOutModel, ListAge, ModelEntry, Price, PriceTier, ReadModels,
     Refresh,

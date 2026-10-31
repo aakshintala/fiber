@@ -51,6 +51,43 @@ fn a_tool_call_completed_and_a_permission_resolved_omit_their_new_keys_when_empt
 }
 
 #[test]
+fn both_completions_carry_an_optional_protected_paths_report() {
+    let report =
+        json!({"restored":[".fiber"], "failed":[{"path":".git/config","message":"denied"}]});
+    for (kind, base) in [
+        (
+            "tool_call_completed",
+            json!({"status":"completed", "content":[]}),
+        ),
+        (
+            "job_completed",
+            json!({"job_id":"j_1", "status":"completed"}),
+        ),
+    ] {
+        // Absent stays absent.
+        let event = Event::from_envelope(&line(kind, base.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(event.payload().unwrap()).unwrap(),
+            base,
+            "{kind} omits the report when none changed"
+        );
+        // Present round-trips on the same key in both payloads.
+        let mut populated = base;
+        populated["protected_paths"] = report.clone();
+        let event = Event::from_envelope(&line(kind, populated.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(event.payload().unwrap()).unwrap(),
+            populated,
+            "{kind} keeps the report"
+        );
+    }
+}
+
+#[test]
 fn an_extensions_loaded_entry_omits_replaces_when_empty() {
     let empty = LoadedExtension {
         name: "e".into(),
@@ -203,6 +240,26 @@ fn every_kind_in_the_doc_is_known_with_its_class() {
     assert_eq!(code.len(), KINDS.len(), "a kind is declared twice");
     let doc_classes: BTreeMap<_, _> = doc.iter().map(|(k, (c, _))| (*k, *c)).collect();
     assert_eq!(code, doc_classes);
+}
+
+#[test]
+fn every_declared_name_maps_to_a_known_event_kind() {
+    for (name, _) in KINDS.iter().copied() {
+        let kind = EventKind::from_name(name);
+        assert_eq!(kind.name(), name, "{name}");
+        assert!(
+            !matches!(kind, EventKind::Unknown(_)),
+            "declared kind became Unknown: {name}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_event_kind_keeps_its_exact_name() {
+    let name = "future_kind_é";
+    let kind = EventKind::from_name(name);
+    assert_eq!(kind, EventKind::Unknown(name.to_owned()));
+    assert_eq!(kind.name(), name);
 }
 
 #[test]
@@ -596,6 +653,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "kept": [[0, 8192], [1040384, 1048576]],
             "changes": [{"path": "/a", "added": 1, "removed": 2}],
             "control": {"handoff": "note"}, "changed_by": ["e"],
+            "protected_paths": {"restored": [".fiber"], "failed": []},
             "hosts_surfaced": ["https://example.com/"]}),
         ),
         (
@@ -925,7 +983,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "job_completed",
             json!({"job_id": "j", "status": "cancelled", "error": error,
             "process": process, "output_tail": "tail",
-            "notice": "n", "changed_by": ["e"]}),
+            "notice": "n", "changed_by": ["e"],
+            "protected_paths": {"restored": [".fiber"], "failed": []}}),
         ),
         (
             "jobs_pending_notified",

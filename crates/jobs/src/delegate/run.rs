@@ -14,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
-use contract::events::FiberExited;
+use contract::events::{EventKind, FiberExited};
 use contract::jobs::Stop;
 use contract::shapes::Usage;
 use contract::{Envelope, JobId, PreSessionExit, SessionId};
@@ -25,6 +25,92 @@ use super::outcome::{Termination, outcome};
 use crate::registry::Unreported;
 use support::group::{GROUP_POLL, Listing};
 use support::{clock::Parker, lock};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JobEventKind {
+    SessionStarted,
+    FiberExited,
+    UsageRecorded,
+}
+
+fn classify_job_kind(kind: EventKind) -> Option<JobEventKind> {
+    use contract::events::EventKind as Kind;
+
+    match kind {
+        Kind::SessionStarted => Some(JobEventKind::SessionStarted),
+        Kind::FiberExited => Some(JobEventKind::FiberExited),
+        Kind::UsageRecorded => Some(JobEventKind::UsageRecorded),
+        Kind::FiberStarted
+        | Kind::Rewound
+        | Kind::Moved
+        | Kind::TurnStarted
+        | Kind::StepStarted
+        | Kind::TurnCompleted
+        | Kind::SteeringApplied
+        | Kind::SteeringQueue
+        | Kind::ShellCommand
+        | Kind::DirectoryAdded
+        | Kind::SessionNamed
+        | Kind::Clients
+        | Kind::SessionStatus
+        | Kind::ContextAdded
+        | Kind::AssistantMessageStarted
+        | Kind::AssistantMessageDelta
+        | Kind::AssistantMessageCompleted
+        | Kind::TextCompleted
+        | Kind::ToolCallArgumentsDelta
+        | Kind::ReasoningStarted
+        | Kind::ReasoningDelta
+        | Kind::ReasoningCompleted
+        | Kind::ToolCallRequested
+        | Kind::ToolCallStarted
+        | Kind::ToolCallDelta
+        | Kind::ToolCallCompleted
+        | Kind::PermissionRequested
+        | Kind::PermissionResolved
+        | Kind::InteractionRequested
+        | Kind::InteractionResolved
+        | Kind::RepositoryCodeOffered
+        | Kind::RepositoryCodeResolved
+        | Kind::QuotaNoticed
+        | Kind::QuotaRearmed
+        | Kind::RetryScheduled
+        | Kind::Notice
+        | Kind::PreambleBuilt
+        | Kind::ModelChanged
+        | Kind::OpeningMessage
+        | Kind::InstructionFile
+        | Kind::DateChanged
+        | Kind::SkillsChanged
+        | Kind::HandoffStarted
+        | Kind::HandoffCompleted
+        | Kind::SkillsResent
+        | Kind::ContextNudged
+        | Kind::ReviewerKept
+        | Kind::McpServerFailed
+        | Kind::McpServerReady
+        | Kind::Reloaded
+        | Kind::ExtensionsLoaded
+        | Kind::ExtensionStateSet
+        | Kind::ExtensionStateUnset
+        | Kind::ExtensionUi
+        | Kind::ExtensionMessage
+        | Kind::ExtensionLog
+        | Kind::ExtensionExec
+        | Kind::ExtensionHello
+        | Kind::ExtensionRequest
+        | Kind::JobStarted
+        | Kind::DelegateStarted
+        | Kind::JobDelta
+        | Kind::JobLine
+        | Kind::DelegateFinished
+        | Kind::JobCompleted
+        | Kind::JobsPendingNotified
+        | Kind::CommandAccepted
+        | Kind::CommandRejected
+        | Kind::Unknown(_) => None,
+    }
+}
 
 /// Builds the child's command from its launch. The runner sets the stdio,
 /// the process group and the lifeline around it.
@@ -741,7 +827,8 @@ impl Watcher {
         let result = (self.watch)(&self.session_id, after, &mut |envelope: &Envelope| {
             // Adoption takes the child's share before its log opens. A full
             // subscription replays this durable line even after late attach.
-            if envelope.kind == "session_started"
+            let kind = classify_job_kind(EventKind::from_name(&envelope.kind));
+            if kind == Some(JobEventKind::SessionStarted)
                 && envelope.session_id == self.session_id
                 && let Some(guard) = &self.worktree_guard
             {
@@ -752,7 +839,7 @@ impl Watcher {
                 if !note_seq(&mut fold.last_seq, envelope.seq.map(|seq| seq.0)) {
                     return;
                 }
-                if envelope.kind == "fiber_exited" {
+                if kind == Some(JobEventKind::FiberExited) {
                     fiber_exited_of(&envelope.payload)
                 } else {
                     None
@@ -766,7 +853,7 @@ impl Watcher {
             // never forwards the same `seq` twice, whichever runs first.
             // The send runs after the claim returns, still with no lock
             // held across it.
-            if envelope.kind == "usage_recorded"
+            if kind == Some(JobEventKind::UsageRecorded)
                 && let Some(forward) = &self.on_usage
                 && let Ok(line) = serde_json::from_value::<contract::events::UsageRecorded>(
                     serde_json::Value::Object(envelope.payload.clone()),
@@ -880,7 +967,9 @@ impl Watcher {
             let Ok(envelope) = serde_json::from_str::<contract::Envelope>(raw) else {
                 continue;
             };
-            if envelope.kind != "usage_recorded" {
+            if classify_job_kind(EventKind::from_name(&envelope.kind))
+                != Some(JobEventKind::UsageRecorded)
+            {
                 continue;
             }
             let Some(seq) = envelope.seq.map(|seq| seq.0) else {
@@ -1023,7 +1112,9 @@ fn fiber_exited_of_line(line: &str) -> Option<FiberExited> {
     let object = value.as_object()?;
     if object.contains_key("session_id") {
         let envelope: Envelope = serde_json::from_value(value).ok()?;
-        if envelope.kind != "fiber_exited" {
+        if classify_job_kind(EventKind::from_name(&envelope.kind))
+            != Some(JobEventKind::FiberExited)
+        {
             return None;
         }
         return fiber_exited_of(&envelope.payload);

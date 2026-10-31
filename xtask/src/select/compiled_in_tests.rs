@@ -83,6 +83,15 @@ fn picture_src(source: &str) -> RustFile {
     }
 }
 
+fn hub_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "hub".to_owned(),
+        path: "crates/hub/src/relay_tests.rs".to_owned(),
+        rel: "src/relay_tests.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
 fn extensions_src(source: &str) -> RustFile {
     RustFile {
         krate: "extensions".to_owned(),
@@ -125,6 +134,7 @@ fn listed_files() -> Vec<RustFile> {
         main_src(&listed_includes("main")),
         provider_src(&listed_includes("provider")),
         picture_src(&listed_includes("picture")),
+        hub_src(&listed_includes("hub")),
     ]
 }
 

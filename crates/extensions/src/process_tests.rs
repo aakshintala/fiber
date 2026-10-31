@@ -3153,7 +3153,7 @@ fn dispatch_provider(
     .unwrap();
     let line = super::process::envelope_line(
         shared,
-        "extension_request",
+        super::process::line::ProcessLineKind::ExtensionRequest,
         payload.as_object().cloned().unwrap_or_default(),
     );
     owner.extension.transport().send(line).unwrap();
@@ -3678,7 +3678,7 @@ fn refresh_without_a_scope_names_the_callback() {
     // Hand the script its request ids: fiber never parses this line.
     let line = super::process::envelope_line(
         owner.extension.shared(),
-        "extension_request",
+        super::process::line::ProcessLineKind::ExtensionRequest,
         serde_json::Map::from_iter([("rids".to_owned(), Value::Array(rids))]),
     );
     owner.extension.transport().send(line).unwrap();

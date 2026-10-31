@@ -10,7 +10,7 @@
 //! before `fiber_started` deletes its directory,
 //! so the hub can start it again from the refusal.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use contract::shapes::{Failure, Worktree};
@@ -38,30 +38,21 @@ pub(crate) fn session_continues(
     workspace: &Path,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
     supervised: bool,
 ) -> i32 {
     // One reads for the process, cancelled when this returns whatever the
     // result; there is no worktree isolation to outlive here.
     let reads = Arc::new(crate::switch::Reads::default());
     let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
+    let (home, current) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return ask_failed(e),
     };
     // The sessions dir comes from the entered directory, as every entry
     // does; the identity compare below uses the passed-in original
     // spelling, before `set_current_dir` normalized slashes and symlinks
     // away.
-    let current = match std::env::current_dir() {
-        Ok(current) => current,
-        Err(e) => {
-            return ask_failed(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
-    };
     let sessions = log::sessions_dir(&home, &worktree::project(&current));
     let recorded = match resolve(
         &new,
@@ -99,8 +90,7 @@ pub(crate) fn session_continues(
         Some(recorded),
         clock,
         signals,
-        fiber,
-        None,
+        process,
         None,
         None,
         None,

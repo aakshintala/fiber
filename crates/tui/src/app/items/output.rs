@@ -78,17 +78,20 @@ impl App {
         }
     }
 
-    /// The open job's output rows in a `width` by `height` body; empty
-    /// with no open job or no output yet.
+    /// The open job's output and protected warning rows in a `width` by
+    /// `height` body; empty with no open job or output to show.
     pub(crate) fn item_output_rows(&self, width: u16, height: u16) -> Vec<String> {
         let Some(open) = self.items.open.as_ref() else {
             return Vec::new();
         };
-        self.items
-            .jobs
-            .get(&open.job_id)
-            .and_then(|record| record.output.as_ref())
-            .map_or_else(Vec::new, |output| output.rows(width, height))
+        let Some(record) = self.items.jobs.get(&open.job_id) else {
+            return Vec::new();
+        };
+        let mut output = record.output.clone().unwrap_or_else(Output::plain);
+        for line in &record.protected {
+            output.feed(&format!("\n{line}\n"));
+        }
+        output.rows(width, height)
     }
 }
 

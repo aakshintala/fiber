@@ -72,6 +72,10 @@ pub(crate) struct Parts {
     /// The person's OS sandbox settings, read from the session's
     /// configuration and shared with the model shell (`docs/sandbox.md`).
     pub(crate) sandbox: crate::settings::SandboxHandle,
+    /// The session's protected paths, shared with the file tools and the
+    /// model shell: confined Linux calls take their guard from it, and a
+    /// stale baseline recovered at open reported in the startup notices.
+    pub(crate) protection: Arc<tools::ProtectedPaths>,
     /// Every configured `file` credential source, relative paths joined
     /// with the workspace the reader reads them from
     /// (`docs/permissions.md`, "Credentials").
@@ -128,9 +132,7 @@ pub(crate) fn parts_with_session<'a>(
     launch: SessionLaunch,
     fiber: PathBuf,
 ) -> Result<Parts, Failure> {
-    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-    let workspace = std::env::current_dir()
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+    let (home, workspace) = crate::startup::startup()?;
     parts_inner(
         home,
         workspace,
@@ -357,6 +359,35 @@ fn parts_inner(
         Arc::clone(&clock),
         process,
     )?;
+    // The protected paths' baseline: opening recovers a stale baseline when
+    // no confined call holds it, and reports what it restored. A baseline
+    // that cannot be recorded fails composition before any call runs.
+    let (protection, startup) =
+        tools::ProtectedPaths::open(&home, &workspace).map_err(|error| match error {
+            tools::ProtectedPathsOpenError::Project(message) => {
+                failed(ErrorCode::IoFailed, message)
+            }
+            tools::ProtectedPathsOpenError::HomeNotDirectory { path } => failed(
+                ErrorCode::IoFailed,
+                format!(
+                    "{} is not a directory, so protected-path state cannot be recorded",
+                    path.display()
+                ),
+            ),
+            tools::ProtectedPathsOpenError::Recovery(source) => failed(
+                ErrorCode::IoFailed,
+                format!("protected-path recovery failed: {source}"),
+            ),
+        })?;
+    if let Some(report) = startup {
+        startup_notices.extend(report.warning_lines().into_iter().map(|message| {
+            contract::events::Notice {
+                code: contract::ErrorCode::ProtectedPathsRestored,
+                message,
+                extension: None,
+            }
+        }));
+    }
     // A live session starts pending MCP before extension/provider waits,
     // so the two startups overlap; other callers compose with no pending
     // start, as before. Configuration refusals stay deferred until the
@@ -750,11 +781,11 @@ fn parts_inner(
         reviewer_observe,
         diag,
         prompt,
-        model: Model {
-            reference: model.reference(),
-            cost: model.model.cost.clone(),
-            subscription: model.model.subscription,
-        },
+        model: Model::from_resolved(
+            model.reference(),
+            model.model.cost.clone(),
+            model.model.subscription,
+        ),
         reviewer,
         limits,
         reviewer_notes,
@@ -768,6 +799,7 @@ fn parts_inner(
             &config,
         ))),
         sandbox,
+        protection,
         credential_files,
         locks,
         extensions,
@@ -873,11 +905,11 @@ pub(crate) fn choose_reviewer(
     Ok((
         r#loop::Reviewer {
             provider: chosen.provider,
-            model: Model {
-                reference: model.reference(),
-                cost: model.model.cost.clone(),
-                subscription: model.model.subscription,
-            },
+            model: Model::from_resolved(
+                model.reference(),
+                model.model.cost.clone(),
+                model.model.subscription,
+            ),
             cache_lifetime: settings::cache_lifetime(config, &model.reference()),
             context_window: chosen.context_window,
             thinking_levels: model.model.thinking_levels.clone(),

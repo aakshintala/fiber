@@ -8,12 +8,15 @@ use ratatui::style::{Modifier, Style};
 use std::path::PathBuf;
 
 use super::{
-    body, display_rows, focus_window_top, id_spans, keep_focus_visible_top, model_fit, page_step,
-    picker_wheel_window, window,
+    body, display_rows, focus_window_top, id_spans, items, keep_focus_visible_top, model_fit,
+    page_step, picker_wheel_window, rows_for, window,
 };
 use crate::app::{App, Effect};
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry, Price};
 use crate::keys::{Edit, Key, Mouse, MouseKind};
+use crate::model_picker::{
+    Fresh, InstallRow, LoggedOutRow, ModelRow, PickerView, Progress, Section,
+};
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
 use crate::theme::Role;
@@ -104,6 +107,7 @@ fn catalogue() -> Catalogue {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -677,6 +681,99 @@ fn page_steps_cover_the_window_less_one() {
     assert_eq!(page_step(&view, 48), 4);
     // A short screen fits one model: a page moves one.
     assert_eq!(page_step(&view, 10), 1);
+}
+
+#[test]
+fn failed_install_error_rows_take_space_in_the_focus_window() {
+    // A failed install keeps its error row below the provider (`docs/tui.md:740-742`).
+    let view = PickerView {
+        filter: String::new(),
+        count: String::new(),
+        toggle: None,
+        buttons_at: 1,
+        sections: Vec::new(),
+        no_match: false,
+        status: Vec::new(),
+        footer: Vec::new(),
+        refresh: true,
+        spinner: String::new(),
+        focused: Some(2),
+        top: 0,
+        logged_out: Vec::new(),
+        installs: vec![
+            InstallRow {
+                at: 2,
+                provider: "failed".to_owned(),
+                hits: Vec::new(),
+                progress: Some(Progress::Failed("no network".to_owned())),
+            },
+            InstallRow {
+                at: 3,
+                provider: "next".to_owned(),
+                hits: Vec::new(),
+                progress: None,
+            },
+        ],
+        outcomes: Vec::new(),
+    };
+
+    assert_eq!(window(&view, 2), (0, 1));
+}
+
+#[test]
+fn logged_out_separator_takes_space_after_a_model_section() {
+    // A blank separates logged-out rows from model sections (`docs/tui.md:706-709`).
+    let mut view = PickerView {
+        filter: String::new(),
+        count: String::new(),
+        toggle: None,
+        buttons_at: 1,
+        sections: vec![Section {
+            provider: "acme".to_owned(),
+            state: Fresh::Unknown,
+            models: vec![ModelRow {
+                at: 0,
+                id: "m1".to_owned(),
+                hits: vec![false; 2],
+                roles: Vec::new(),
+                current: false,
+                scoped: false,
+                price: None,
+                cost: None,
+                levels: Vec::new(),
+                saved: None,
+                chip: None,
+                mark: None,
+                session_only: false,
+            }],
+            left_out: Vec::new(),
+        }],
+        no_match: false,
+        status: Vec::new(),
+        footer: Vec::new(),
+        refresh: true,
+        spinner: String::new(),
+        focused: Some(0),
+        top: 0,
+        logged_out: vec![LoggedOutRow {
+            at: 1,
+            provider: "zed".to_owned(),
+            hits: vec![false; 3],
+            hint: None,
+        }],
+        installs: Vec::new(),
+        outcomes: Vec::new(),
+    };
+
+    let (start, end) = window(&view, 5);
+    assert_eq!((start, end), (0, 2));
+    assert_eq!(rows_for(&view, &items(&view), start, end), 5);
+
+    // When focus starts on the logged-out row, the off-window model adds no separator.
+    view.focused = Some(1);
+    let (start, end) = window(&view, 1);
+    assert_eq!((start, end), (1, 2));
+    assert_eq!(rows_for(&view, &items(&view), start, end), 1);
 }
 
 #[test]
@@ -1656,6 +1753,7 @@ fn a_first_party_file_row_names_its_config_file() {
                 name: None,
             }],
         }],
+        ..Default::default()
     };
     let mut app = attached(160, 48);
     app.on_models(Ok(catalogue));
