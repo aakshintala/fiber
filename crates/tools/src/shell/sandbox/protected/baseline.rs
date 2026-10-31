@@ -353,6 +353,7 @@ pub(crate) fn display(root: &Path, path: &Path) -> String {
 
 /// Makes a path absolute so reports can include registered worktrees outside
 /// the main checkout without losing their workspace-relative name.
+#[cfg(any(target_os = "linux", test))]
 fn absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
