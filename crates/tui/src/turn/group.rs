@@ -311,7 +311,21 @@ impl Group {
         let mut edit_missing = 0u64;
         let mut write_paths: Vec<&str> = Vec::new();
         let mut write_missing = 0u64;
+        // Every call with an inner pointing at it never counts as a
+        // kind of its own, at any depth: the summary reads what the
+        // inner calls did.
+        let mut outers: Vec<&str> = Vec::new();
         for call in self.calls() {
+            if let Some(outer) = call.outer_action_id.as_ref() {
+                if !outers.contains(&outer.0.as_str()) {
+                    outers.push(&outer.0);
+                }
+            }
+        }
+        for call in self.calls() {
+            if outers.contains(&call.action.as_str()) {
+                continue;
+            }
             match kind(&call.name, &call.arguments) {
                 Kind::Read => match call.arguments.get("path").and_then(Value::as_str) {
                     Some(path) => {

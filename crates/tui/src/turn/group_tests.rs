@@ -118,6 +118,60 @@ fn doc_group() -> Group {
     }
 }
 
+/// An inner call points at its outer call, so the summary can skip
+/// the outer.
+fn inner(mut call: Call, outer: &str) -> Call {
+    call.outer_action_id = Some(contract::ActionId(outer.to_owned()));
+    call
+}
+
+/// An outer with inner calls counts as no kind of its own: the
+/// summary reads what the inners did, and a failed inner edit keeps
+/// its kind and its totals.
+#[test]
+fn kinds_skips_outers_with_inners() {
+    let outer = Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "codemode".to_owned(),
+        arguments: json!({"source": "print('hi')"}),
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    let failed_edit = with_headline(
+        Call {
+            status: Some(CallStatus::Failed),
+            ..edit_call(5, "g.rs", 5, 2)
+        },
+        "nonzero_exit: exit 101",
+    );
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                outer,
+                inner(read_call(2, "f.rs"), "a_1"),
+                inner(edit_call(3, "e.rs", 3, 1), "a_1"),
+                inner(shell_call(4, "cargo test", Some(0), 7, "ok"), "a_1"),
+                inner(failed_edit, "a_1"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let (rows, _) = summary_row(&group, false, 60);
+    assert_eq!(rows.len(), 1);
+    // The whole line, so an outer counted as a kind of its own fails
+    // the test: no trailing "called 1 tool".
+    let text = rows[0].0.to_string();
+    let left = "● Read 1 file, edited 2 files +8 −3, ran 1 command";
+    let right = "0s ▸";
+    let filler = " ".repeat(60 - crate::format::width(left) - crate::format::width(right));
+    assert_eq!(text, format!("{left}{filler}{right}"));
+}
+
 fn summary_row(
     group: &Group,
     running: bool,
