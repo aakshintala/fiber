@@ -1,7 +1,7 @@
 //! Lua provider HTTP and hook chains at the binary level (`docs/state.md`,
 //! "Diagnostic logs"): the built `fiber` runs `ask` and `session` with a
 //! Lua provider as the session model. At debug each eligible Lua request
-//! writes one `provider_request` line without its URL, and each non-tool
+//! writes one `http_request` line without its URL, and each non-tool
 //! hook dispatch writes one `op_timing` line; otherwise both stay silent.
 //! A late model switch starts a fresh provider VM that keeps the sink.
 
@@ -275,13 +275,13 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
         .collect();
     let pid_requests: Vec<&Value> = pid_lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(pid_requests.len(), 2);
     for line in &pid_requests {
         assert_eq!(line["level"], "debug");
         assert_eq!(line["process"], "ask");
-        assert_eq!(line["message"], "A provider request ended.");
+        assert_eq!(line["message"], "An HTTP request ended.");
     }
     let mut pid_purposes: Vec<&str> = pid_requests
         .iter()
@@ -297,7 +297,7 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
     }
     let requests: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     // The native model call's record is always in the ask log. The quota
     // fetch runs off the request path and can outlive an ask, so its
@@ -314,12 +314,12 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
             .iter()
             .all(|line| line["data"]["purpose"] == "model_call"
                 || line["data"]["purpose"] == "quota"),
-        "only the model call and the quota fetch write ask-log provider_request lines: {requests:?}"
+        "only the model call and the quota fetch write ask-log http_request lines: {requests:?}"
     );
     let native = requests
         .iter()
         .find(|line| line["data"]["purpose"] == "model_call")
-        .expect("one model_call provider_request");
+        .expect("one model_call http_request");
     assert_eq!(native["data"]["purpose"], "model_call");
     assert_eq!(native["data"]["model"], "m1");
     // Each hook chain timed once per actual dispatch; unrelated installed
@@ -386,7 +386,7 @@ fn default_ask_runs_silent() {
     assert!(
         lines
             .iter()
-            .all(|line| line["code"] != "provider_request" && line["code"] != "op_timing"),
+            .all(|line| line["code"] != "http_request" && line["code"] != "op_timing"),
         "{lines:?}"
     );
 }
@@ -685,7 +685,7 @@ fn late_switch_starts_fresh_with_the_sink() {
     let late: Vec<&Value> = lines
         .iter()
         .filter(|line| {
-            line["code"] == "provider_request"
+            line["code"] == "http_request"
                 && line["data"]["provider"] == "late"
                 && line["data"]["purpose"] == "token_refresh"
         })
@@ -693,8 +693,88 @@ fn late_switch_starts_fresh_with_the_sink() {
     assert_eq!(late.len(), 1);
     assert_eq!(late[0]["data"]["purpose"], "token_refresh");
     assert_eq!(late[0]["data"]["attempt"], 1);
-    assert_eq!(late[0]["message"], "A provider request ended.");
+    assert_eq!(late[0]["message"], "An HTTP request ended.");
     let wire = serde_json::to_string(late[0]).unwrap();
     assert!(!wire.contains("late-tok"), "no credential: {wire}");
     assert!(!wire.contains(&url), "no URL: {wire}");
+}
+
+/// Installs `fiber.test/hook-http`, whose `turn_start` hook fetches one
+/// URL and discards it: the fetch is a non-provider `host.http` call.
+fn install_hook_http(setup: &Setup, server_url: &str) {
+    let source = setup.root.path().join("hooksrc");
+    fs::create_dir_all(&source).unwrap();
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fiber.test/hook-http", "version": "0.1.0", "fiber": "0.1.0", "api": 1}),
+    );
+    fs::write(
+        source.join("init.lua"),
+        format!(
+            "fiber.hook(\"turn_start\", {{ timeout = 60000, on_failure = \"blocking\",\n\
+               run = function(ctx)\n\
+               local r = host.http({{ url = \"{server_url}/lua-quota\" }})\n\
+               return nil end }})\n"
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// A hook's `host.http` call writes one `extension` line with the
+/// extension's name and no `host` or `path`: the rule is where the call
+/// is made, outside any provider function.
+#[test]
+fn debug_ask_records_a_hook_http_call_as_extension() {
+    let setup = Setup::new();
+    let server = start_routed();
+    let url = server.url();
+    install_test_provider(&setup, &url);
+    install_hook_http(&setup, &url);
+    configure(&setup, "test/m1", true);
+    let run = ask(&setup);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let kinds = run.kinds();
+    for kind in hook_kinds() {
+        assert!(kinds.contains(&kind), "{kind} in {kinds:?}");
+    }
+    assert!(
+        server.await_requests(5, setup.deadline),
+        "the hook fetch joins the provider fetches and the model call"
+    );
+    let id = run.session_id().to_owned();
+    let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
+    let hooks: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "http_request" && line["data"]["purpose"] == "extension")
+        .collect();
+    // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
+    assert_eq!(hooks.len(), 1, "one hook call writes one line: {lines:?}");
+    let line = hooks[0];
+    let data = &line["data"];
+    assert_eq!(data["extension"], "fiber.test/hook-http", "{data}");
+    assert_eq!(data["status"], 200, "{data}");
+    assert_eq!(data["attempt"], 1, "{data}");
+    assert!(data.get("provider").is_none(), "{data}");
+    assert!(data.get("model").is_none(), "{data}");
+    assert!(data.get("host").is_none(), "{data}");
+    assert!(data.get("path").is_none(), "{data}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["code"] == "http_request"
+                && line["data"]["purpose"] == "model_call")
+            .count(),
+        1,
+        "the native model call's line is intact"
+    );
 }

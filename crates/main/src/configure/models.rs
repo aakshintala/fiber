@@ -20,6 +20,14 @@ impl super::Seam {
         refresh: tui::Refresh,
         clock: Arc<dyn Clock>,
     ) -> Result<Value, Failure> {
+        // The catalogue's entry downloads observe on the hub writer at
+        // debug; the load is best-effort, so a configuration that will
+        // not read still lists rather than failing the door on
+        // diagnostics.
+        let writer = self
+            .load(workspace)
+            .ok()
+            .and_then(|config| self.hub_writer(&config, &clock));
         let catalogue = crate::model_list::catalogue(
             self.home.clone(),
             workspace.to_path_buf(),
@@ -27,6 +35,7 @@ impl super::Seam {
             Arc::clone(&self.locks) as Arc<dyn PathLock>,
             Arc::clone(&self.reads),
             refresh,
+            writer,
         )
         .map_err(|error| Failure {
             code: error.code(),

@@ -41,12 +41,14 @@ pub(super) fn blocking(
     }
     // The set holds approved copies through the filtered gate read. Gathering
     // may prepare copies, but no extension VM is loaded to ask for names.
+    // The hub writer observes at debug; `None` below.
     let set = repository_set(
         &seam.home,
         &project,
         workspace,
         &RepositoryScope::default(),
         &clock,
+        seam.hub_writer(&config, &clock),
     );
     let filtered = set.hooks_config(&config);
     match extensions::hooks_state(&filtered, &[]).map_err(from_extension)? {

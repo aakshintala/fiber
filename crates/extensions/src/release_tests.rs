@@ -6,11 +6,70 @@ use std::cell::Cell;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
 
-use super::{Release, expected_digest, install_release_with, swap_docs, url};
+use super::{
+    Observe, Release, expected_digest, fetch_nightly_tag_observed, fetch_verified_observed,
+    install_release_with, latest_stable_tag_observed, swap_docs, url,
+};
 use crate::Error;
+use contract::diag::{DebugLog, HttpRequest, Purpose};
+
+/// The silent observe on `clock`: no sink, so the download writes no line.
+fn silent(clock: &fakes::clock::FakeClock) -> Observe<'_> {
+    Observe { debug: None, clock }
+}
+
+/// Every `http_request` line the observed release calls write, in order.
+#[derive(Default)]
+struct Lines {
+    lines: Mutex<Vec<HttpRequest>>,
+}
+
+impl DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+impl Lines {
+    fn recorded(&self) -> Vec<HttpRequest> {
+        self.lines.lock().unwrap().clone()
+    }
+}
+
+/// The observed release calls on `clock`, with the sink their lines go to.
+fn observed(clock: &fakes::clock::FakeClock) -> (Arc<Lines>, Observe<'_>) {
+    let lines = Arc::new(Lines::default());
+    let observe = Observe {
+        debug: Some(Arc::clone(&lines) as Arc<dyn DebugLog>),
+        clock,
+    };
+    (lines, observe)
+}
+
+/// The `extension_release` shape every release line holds: no identity,
+/// one GET, nothing posted, and the headers before the end.
+fn assert_release_shape(line: &HttpRequest) {
+    assert_eq!(line.purpose(), Purpose::ExtensionRelease, "{line:?}");
+    assert_eq!(line.identity(), None, "no identity: {line:?}");
+    assert_eq!(line.model, None, "no model: {line:?}");
+    assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
+    assert_eq!(line.attempt, 1, "every download sends once: {line:?}");
+    assert_eq!(line.request_bytes, 0, "a download posts nothing: {line:?}");
+    if let Some(headers) = line.headers_ms {
+        assert!(
+            headers <= line.total_ms,
+            "headers land before the end: {line:?}"
+        );
+    }
+}
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -229,7 +288,14 @@ fn a_commit_that_cannot_be_put_back_is_finished_by_the_next_lock() {
     let home = held.path().join("home");
     let clock = fakes::clock::FakeClock::new();
     let rename = |from: &Path, to: &Path| fs::rename(from, to);
-    install_release_with(&home, &release(&serve("one"), "aaa"), &*clock, &rename).unwrap();
+    install_release_with(
+        &home,
+        &release(&serve("one"), "aaa"),
+        &*clock,
+        &rename,
+        &silent(clock.as_ref()),
+    )
+    .unwrap();
 
     // Moves: anthropic aside, anthropic in place, memory aside, memory in
     // place (fails), then every move back fails too.
@@ -242,8 +308,14 @@ fn a_commit_that_cannot_be_put_back_is_finished_by_the_next_lock() {
             fs::rename(from, to)
         }
     };
-    let err =
-        install_release_with(&home, &release(&serve("two"), "bbb"), &*clock, &failing).unwrap_err();
+    let err = install_release_with(
+        &home,
+        &release(&serve("two"), "bbb"),
+        &*clock,
+        &failing,
+        &silent(clock.as_ref()),
+    )
+    .unwrap_err();
     assert!(matches!(err, Error::Rollback { .. }), "{err:?}");
     assert!(home.join("extensions/.commit").exists());
     assert_eq!(fs::read_to_string(home.join("docs/v")).unwrap(), "one");
@@ -280,7 +352,14 @@ fn the_scratch_directory_is_removed_after_success_and_after_a_refusal() {
     let home = held.path().join("home");
     let clock = fakes::clock::FakeClock::new();
     let rename = |from: &Path, to: &Path| fs::rename(from, to);
-    install_release_with(&home, &release(&serve("one"), "aaa"), &*clock, &rename).unwrap();
+    install_release_with(
+        &home,
+        &release(&serve("one"), "aaa"),
+        &*clock,
+        &rename,
+        &silent(clock.as_ref()),
+    )
+    .unwrap();
     assert_eq!(scratch_left(), Vec::<String>::new());
 
     let bad = gzip(&archive(&[(header("acme/x", b'0', 0, 0o644, ""), b"")]));
@@ -302,7 +381,14 @@ fn the_scratch_directory_is_removed_after_success_and_after_a_refusal() {
         fakes::Response::status(404, "not found"),
     )
     .unwrap();
-    let err = install_release_with(&home, &release(&server, "aaa"), &*clock, &rename).unwrap_err();
+    let err = install_release_with(
+        &home,
+        &release(&server, "aaa"),
+        &*clock,
+        &rename,
+        &silent(clock.as_ref()),
+    )
+    .unwrap_err();
     assert!(matches!(err, Error::BadArchive { .. }), "{err:?}");
     assert_eq!(scratch_left(), Vec::<String>::new());
 }
@@ -369,7 +455,13 @@ fn fixture_release(server: &fakes::ProviderServer, commit: &str) -> Release {
 fn fetch_verified_returns_the_checked_bytes() {
     let server = update_fixture(b"marker", fixture_nightly_list());
     let release = fixture_release(&server, "abc1234");
-    let bytes = super::fetch_verified(&release, "fiber-test-triple.tar.gz").unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let bytes = fetch_verified_observed(
+        &release,
+        "fiber-test-triple.tar.gz",
+        &silent(clock.as_ref()),
+    )
+    .unwrap();
     let archived = gzip(&archive(&[(
         header("fiber", b'0', 6, 0o755, ""),
         b"marker".as_slice(),
@@ -398,7 +490,13 @@ fn fetch_verified_refuses_a_tampered_archive() {
     )
     .unwrap();
     let release = fixture_release(&server, "abc1234");
-    let err = super::fetch_verified(&release, "fiber-test-triple.tar.gz").unwrap_err();
+    let clock = fakes::clock::FakeClock::new();
+    let err = fetch_verified_observed(
+        &release,
+        "fiber-test-triple.tar.gz",
+        &silent(clock.as_ref()),
+    )
+    .unwrap_err();
     let Error::ArchiveChecksum { archive, .. } = &err else {
         panic!("a tampered archive fails its checksum: {err}");
     };
@@ -416,7 +514,13 @@ fn fetch_verified_names_a_missing_checksum_file() {
     )
     .unwrap();
     let release = fixture_release(&server, "abc1234");
-    let err = super::fetch_verified(&release, "fiber-test-triple.tar.gz").unwrap_err();
+    let clock = fakes::clock::FakeClock::new();
+    let err = fetch_verified_observed(
+        &release,
+        "fiber-test-triple.tar.gz",
+        &silent(clock.as_ref()),
+    )
+    .unwrap_err();
     let Error::Download { name, .. } = &err else {
         panic!("a missing checksum fails the download: {err}");
     };
@@ -615,5 +719,123 @@ fn latest_stable_tag_names_a_failed_redirect() {
     assert!(
         why.contains(&server.url()),
         "the failure names the URL: {why}"
+    );
+}
+
+/// An observed nightly tag writes its list's line: the server's host,
+/// the list's path without the query, status 200, and the served list
+/// count.
+#[test]
+fn an_observed_nightly_tag_writes_its_lists_line() {
+    let server = update_fixture(b"marker", fixture_nightly_list());
+    let clock = fakes::clock::FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    let tag = fetch_nightly_tag_observed(&server.url(), &observe).unwrap();
+    assert_eq!(tag, "v0.3.0-nightly.20240102");
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
+    assert_eq!(lines.len(), 1, "one line per list: {lines:?}");
+    let line = &lines[0];
+    assert_release_shape(line);
+    let host = server.url().trim_start_matches("http://").to_owned();
+    assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
+    // The query never reaches the line.
+    assert_eq!(line.path.as_deref(), Some("/releases"), "{line:?}");
+    assert_eq!(line.status, Some(200), "{line:?}");
+}
+
+/// An observed stable-tag lookup writes a line for both the redirect
+/// request and the final request.
+#[test]
+fn an_observed_stable_tag_writes_its_probes_line() {
+    let mut redirect = fakes::Response::status(302, "");
+    redirect
+        .headers
+        .push(("location".into(), "/releases/tag/v0.2.0".into()));
+    let server = fakes::ProviderServer::start_routed(
+        [
+            ("/releases/latest", redirect),
+            ("/releases/tag/v0.2.0", fakes::Response::status(200, "")),
+        ],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    let tag = latest_stable_tag_observed(&server.url(), &observe).unwrap();
+    assert_eq!(tag, "v0.2.0");
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, each redirect included.
+    assert_eq!(lines.len(), 2, "one line per request: {lines:?}");
+    for line in &lines {
+        assert_release_shape(line);
+        assert_eq!(line.response_bytes, 0, "the body is never read: {line:?}");
+    }
+    assert_eq!(lines[0].path.as_deref(), Some("/releases/latest"));
+    assert_eq!(lines[0].status, Some(302));
+    assert_eq!(lines[1].path.as_deref(), Some("/releases/tag/v0.2.0"));
+    assert_eq!(lines[1].status, Some(200));
+}
+
+/// An observed stable tag whose probe fails with a status keeps the
+/// status and the header timing: a response arrived, so the line is a
+/// status line with zero body bytes, as a download's is.
+#[test]
+fn an_observed_stable_tag_failure_keeps_the_status_and_header_timing() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(500, "boom")]).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    let err = latest_stable_tag_observed(&server.url(), &observe).unwrap_err();
+    assert!(
+        matches!(err, super::Error::Download { .. }),
+        "a failed probe names its URL: {err}"
+    );
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
+    assert_eq!(lines.len(), 1, "one line per probe: {lines:?}");
+    let line = &lines[0];
+    assert_release_shape(line);
+    assert_eq!(line.path.as_deref(), Some("/releases/latest"), "{line:?}");
+    assert_eq!(line.status, Some(500), "{line:?}");
+    assert_eq!(
+        line.headers_ms,
+        Some(0),
+        "the response head arrived: {line:?}"
+    );
+    assert_eq!(
+        line.response_bytes, 0,
+        "the error body is never read: {line:?}"
+    );
+}
+
+/// An observed nightly tag whose list fails writes only the lists
+/// line: the rejection never reads a target, and the failed status
+/// keeps zero body bytes.
+#[test]
+fn an_observed_nightly_tag_failure_writes_only_the_lists_line() {
+    let server = fakes::ProviderServer::start_routed(
+        [("/releases", fakes::Response::status(500, "boom"))],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    let err = super::fetch_nightly_tag_observed(&server.url(), &observe).unwrap_err();
+    assert!(
+        matches!(err, super::Error::Download { .. }),
+        "a failed list names its URL: {err}"
+    );
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
+    assert_eq!(lines.len(), 1, "the rejection reads no target: {lines:?}");
+    let line = &lines[0];
+    assert_release_shape(line);
+    let host = server.url().trim_start_matches("http://").to_owned();
+    assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
+    assert_eq!(line.path.as_deref(), Some("/releases"), "{line:?}");
+    assert_eq!(line.status, Some(500), "{line:?}");
+    assert_eq!(
+        line.response_bytes, 0,
+        "the error body is never read: {line:?}"
     );
 }

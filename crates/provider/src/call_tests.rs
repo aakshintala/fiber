@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use contract::diag::{DebugLog, ProviderRequest};
+use contract::diag::{DebugLog, HttpRequest, Identity};
 
 use super::*;
 use fakes::Deadline;
@@ -17,7 +17,7 @@ use fakes::Deadline;
 /// Captures the lines a record writes.
 struct Capture {
     debugging: bool,
-    lines: Mutex<Vec<ProviderRequest>>,
+    lines: Mutex<Vec<HttpRequest>>,
 }
 
 impl Capture {
@@ -28,7 +28,7 @@ impl Capture {
         })
     }
 
-    fn lines(&self) -> Vec<ProviderRequest> {
+    fn lines(&self) -> Vec<HttpRequest> {
         self.lines.lock().unwrap().clone()
     }
 }
@@ -38,7 +38,7 @@ impl DebugLog for Capture {
         self.debugging
     }
 
-    fn provider_request(&self, request: &ProviderRequest) {
+    fn http_request(&self, request: &HttpRequest) {
         self.lines.lock().unwrap().push(request.clone());
     }
 }
@@ -122,6 +122,25 @@ fn milestones_count_from_the_send_not_from_pre_send_work() {
     assert_eq!(line.request_bytes, 123);
     assert_eq!(line.response_bytes, 91);
     assert_eq!(line.status, Some(200));
+}
+
+/// A finished model call carries the provider and no other identity:
+/// the constructor fixes the wire identity, so no producer can leave a
+/// provider purpose without one.
+#[test]
+fn finish_carries_provider_and_no_extension() {
+    let log = Capture::new(true);
+    let clock = fakes::clock::FakeClock::new();
+    let mut finish = record(&log, &clock, clock.now());
+    finish.finish();
+    let lines = log.lines();
+    // docs/state.md, "Diagnostic logs": one line when the call ends; a retried call writes one line per attempt.
+    // docs/state.md, "Diagnostic logs": one line when the call ends; a retried call writes one line per attempt.
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines[0].identity(),
+        Some(&Identity::Provider("fake".to_owned()))
+    );
 }
 
 #[test]

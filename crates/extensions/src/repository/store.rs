@@ -76,6 +76,10 @@ pub struct Store {
     project: ProjectKey,
     clock: Arc<dyn Clock>,
     fetch: Option<Fetch>,
+    /// What a repository extension's binary download reports on: the
+    /// sink its `extension_release` line is written to. `None` stays
+    /// silent. Set with [`Store::with_diagnostics`].
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 }
 
 impl fmt::Debug for Store {
@@ -144,6 +148,7 @@ impl Store {
             project: project.clone(),
             clock,
             fetch: None,
+            debug: None,
         }
     }
 
@@ -154,6 +159,14 @@ impl Store {
     pub fn fetching(mut self, fetch: Fetch) -> Self {
         self.clock = fetch.clock();
         self.fetch = Some(fetch);
+        self
+    }
+
+    /// Reports a repository extension's binary download on `debug`: the
+    /// sink its `extension_release` line is written to. `None` stays
+    /// silent.
+    pub fn with_diagnostics(mut self, debug: Option<Arc<dyn contract::diag::DebugLog>>) -> Self {
+        self.debug = debug;
         self
     }
 
@@ -603,7 +616,11 @@ impl Store {
             let manifest = config::read_manifest(copy)?;
             let clock = Arc::clone(&self.clock);
             self.install_depends(item, copy, &manifest, &clock)?;
-            prepare(copy, &manifest, clock.as_ref())?;
+            let observe = crate::prepare::Observe {
+                debug: self.debug.clone(),
+                clock: clock.as_ref(),
+            };
+            prepare(copy, &manifest, clock.as_ref(), &observe)?;
             // The install step may have replaced dependency ancestors or
             // planted either marker: validate again and publish without
             // ever following a link.

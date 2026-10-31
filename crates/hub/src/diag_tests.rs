@@ -204,27 +204,30 @@ fn concurrent_writes_past_the_limit_lose_no_records() {
 }
 
 #[test]
-fn a_debug_hub_writes_peak_memory_as_a_hub_line() {
+fn a_debug_hub_writes_resources_as_a_hub_line() {
     let temp = Temp::new();
     let diag = temp.diag().with_level(log::diag::Level::Debug);
-    diag.peak_memory_then_info("hub_stopped", "The hub stopped: idle.");
+    diag.resources_then_info("hub_stopped", "The hub stopped: idle.");
     let text = temp.text();
     let mut lines = text.lines();
     let line: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
     assert_eq!(line["level"], "debug");
     assert_eq!(line["process"], "hub");
-    assert_eq!(line["code"], "peak_memory");
+    assert_eq!(line["code"], "resources");
     assert!(line["data"]["peak_kib"].as_u64().unwrap() > 0, "{line}");
+    assert!(line["data"]["current_kib"].as_u64().unwrap() > 0, "{line}");
+    assert!(line["data"]["disk_read_bytes"].is_u64(), "{line}");
+    assert!(line["data"]["disk_write_bytes"].is_u64(), "{line}");
     let line: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
     assert_eq!(line["code"], "hub_stopped");
     assert!(lines.next().is_none());
 }
 
 #[test]
-fn at_the_default_level_the_stop_comes_without_peak_memory() {
+fn at_the_default_level_the_stop_comes_without_resources() {
     let temp = Temp::new();
     temp.diag()
-        .peak_memory_then_info("hub_stopped", "The hub stopped: idle.");
+        .resources_then_info("hub_stopped", "The hub stopped: idle.");
     let line: serde_json::Value = serde_json::from_str(temp.text().trim_end()).unwrap();
     assert_eq!(line["code"], "hub_stopped");
 }
