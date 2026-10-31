@@ -11,8 +11,9 @@ use super::{Report, RestoreFailure};
 
 /// Compares every protected path against the baseline, restores any
 /// difference and reports it. A missing baseline records nothing, so a
-/// recovery with no baseline restores nothing. A failed entry is reported
-/// with its cause and never as restored.
+/// recovery with no baseline restores nothing. A baseline for another
+/// project identity is an error and remains untouched. A failed entry is
+/// reported with its cause and never as restored.
 pub(crate) fn compare_restore_report(dir: &StatePaths) -> Result<Report, std::io::Error> {
     let baseline = match read_baseline(&dir.baseline) {
         Ok(baseline) => baseline,
@@ -25,12 +26,13 @@ pub(crate) fn compare_restore_report(dir: &StatePaths) -> Result<Report, std::io
         Err(error) => return Err(error),
     };
     if !super::baseline::belongs_to_project(&baseline.entries, &dir.identity_marker) {
-        // A colliding project key can name this directory too. Its recorded
-        // absolute identity path makes that baseline absent for this project.
-        return Ok(Report {
-            restored: Vec::new(),
-            failed: Vec::new(),
-        });
+        // A colliding project key can name this directory too. Do not treat
+        // the other identity's baseline as empty: recovery would then delete
+        // the only copy of its pending restore.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the protected-path baseline belongs to another project identity",
+        ));
     }
     Ok(compare_restore_entries(&baseline.entries))
 }

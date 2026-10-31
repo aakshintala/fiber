@@ -1987,22 +1987,34 @@ fn colliding_project_slugs_do_not_share_protected_baselines() {
     std::fs::write(&hyphenated_file, b"damaged first project").expect("first path changed");
     drop(active.guard); // Simulate a call that ended before recovery ran.
 
-    let (second, startup) = ProtectedPaths::open(&home, &nested).expect("second project opens");
     assert!(
-        startup.is_none(),
-        "the colliding baseline is absent for this identity"
+        ProtectedPaths::open(&home, &nested).is_err(),
+        "a colliding identity cannot discard another project's stale baseline"
+    );
+    let (_first, startup) =
+        ProtectedPaths::open(&home, &hyphenated).expect("the baseline's identity can recover it");
+    assert_eq!(
+        startup
+            .expect("the first project's baseline is recovered")
+            .restored,
+        vec![".fiber".to_owned()]
     );
     assert_eq!(
         std::fs::read(&hyphenated_file).expect("first file reads"),
-        b"damaged first project",
-        "the second identity does not restore from the first baseline"
+        b"hyphenated original",
+        "the original identity can still restore its protected path"
+    );
+
+    let (second, startup) = ProtectedPaths::open(&home, &nested).expect("second project opens");
+    assert!(
+        startup.is_none(),
+        "the state directory is free after recovery"
     );
     assert_eq!(
         std::fs::read(&nested_file).expect("second file reads"),
         b"nested original",
         "the second identity's protected path is untouched"
     );
-
     let active = second
         .begin(&nested)
         .expect("second call snapshots its own project");
