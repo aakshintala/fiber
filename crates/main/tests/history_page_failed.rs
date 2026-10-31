@@ -40,9 +40,14 @@ const SCROLLS: usize = 500;
 const FRAME_END: &[u8] = b"\x1b[?2026l";
 
 /// What the fake hub serves: the jig's durable lines in `seq` order.
+/// `last_to` names the open's last window: the `to_seq` of the first
+/// window at or below 255, or none when the jig fits the tail request
+/// itself. `done` fires after that window's answer is written.
 struct Hub {
     lines: Vec<contract::Envelope>,
     max_seq: u64,
+    last_to: Option<u64>,
+    done: mpsc::Sender<()>,
 }
 
 /// The hub's `command_accepted` for `id`, in session shape when the
@@ -95,6 +100,7 @@ fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>) {
             "{name} from={from:?} to={to:?} level={:?}",
             args.get("level").and_then(Value::as_str),
         ));
+        let mut open_last = false;
         let result = match name.as_str() {
             "subscribe" if args.get("level").and_then(Value::as_str) == Some("full") => {
                 let answer = accept(&command, &id, json!({"last_seq": hub.max_seq}));
@@ -130,6 +136,9 @@ fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>) {
                 } else {
                     lines
                 };
+                // The open's last window: the tip-to-root walk ends at
+                // seq 0, so this is the last answer the open needs.
+                open_last = from.is_none() && to == hub.last_to;
                 json!({"lines": lines})
             }
             "commands" => json!({"commands": []}),
@@ -137,6 +146,11 @@ fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>) {
         };
         let answer = accept(&command, &id, result);
         std::io::Write::write_all(&mut writer, format!("{answer}\n").as_bytes()).unwrap();
+        if open_last {
+            // After the state it announces
+            // (docs/code-quality.md:251-254).
+            let _result = hub.done.send(());
+        }
     }
 }
 
@@ -265,7 +279,22 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     let max_seq = max_seq + 1;
     let (ours, theirs) = UnixStream::pair().unwrap();
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let hub = Hub { lines, max_seq };
+    // The open's last window: durable seqs run 0..=max_seq, and the
+    // tip-to-root walk steps back in at most 256-line windows, so the
+    // last one is the first with to_seq at or below 255; a log of 256
+    // durable lines or fewer ends with the tail request itself.
+    let last_to = if max_seq <= 255 {
+        None
+    } else {
+        Some((max_seq - 256) % 256)
+    };
+    let (open_done, open_done_rx) = mpsc::channel();
+    let hub = Hub {
+        lines,
+        max_seq,
+        last_to,
+        done: open_done,
+    };
     let served = Arc::clone(&seen);
     thread::spawn(move || serve(theirs, hub, served));
     let connect: tui::Connect = Box::new(move || {
@@ -307,27 +336,46 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         |grid| grid.contents.contains(LAST),
         || format!("hub saw: {:?}", seen.lock().unwrap()),
     );
-    // The open fetches the whole log; wait for it to settle (no new hub
-    // commands for a breath) before scrolling, so open traffic cannot
-    // satisfy the scroll's waits for it.
-    let settled = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    loop {
-        let before = seen.lock().unwrap().len();
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        if seen.lock().unwrap().len() == before && std::time::Instant::now() >= settled {
-            break;
-        }
-        assert!(
-            !driver.deadline.left().is_zero(),
-            "the open to settle: hub saw {:?}",
+    // The open fetches the whole log tip-to-root and the fake hub
+    // signals after writing the last window's answer, so the scroll
+    // below starts only once the open holds every line: one receive
+    // through the held deadline (docs/testing.md, "Waits and
+    // timeouts").
+    if setup.deadline.recv(&open_done_rx).is_err() {
+        panic!(
+            "waited until the deadline for the open to fetch the whole log: hub saw {:?}",
             seen.lock().unwrap(),
         );
     }
     seen.lock().unwrap().clear();
-    // To the top, through the page that cannot load: a frame draws for
-    // the scroll, with the failure's notice.
-    for _ in 0..SCROLLS {
-        driver.write(b"\x1b[5~");
+    // To the top, through the page that cannot load: five keys per
+    // drawn frame. A bulk write stalls against a full input buffer
+    // (write_within blocks on the deadline), so each batch waits for
+    // the frame it caused before the next goes out. Counter bounded,
+    // no clock: the grid says when the top is reached.
+    let mut batches = 0;
+    loop {
+        if !driver.shared.lock().unwrap().grid().contents.contains(LAST) {
+            break;
+        }
+        assert!(
+            batches < 200,
+            "the scroll to reach the top after {batches} batches of 5: hub saw {:?}",
+            seen.lock().unwrap(),
+        );
+        let from = driver.output().len();
+        for _ in 0..5 {
+            driver.write(b"\x1b[5~");
+        }
+        batches += 1;
+        driver.wait_bytes(
+            from,
+            FRAME_END,
+            &format!(
+                "a frame for scroll batch {batches}; hub saw {:?}",
+                seen.lock().unwrap()
+            ),
+        );
     }
     let seen_report = || {
         let seen = seen.lock().unwrap();
@@ -367,6 +415,10 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         FRAME_END,
         "a frame drew after the scroll past the page that cannot load",
     );
+    // One notice per code, shown once per terminal run
+    // (docs/tui.md:1322-1325): every scroll past the failed page fails
+    // it again with the same code and text, so exactly one grouped row
+    // shows.
     assert_eq!(
         occurrences(&grid, NOTICE),
         1,
