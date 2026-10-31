@@ -124,6 +124,12 @@ impl Setup {
         }
     }
 
+    /// Looks up the MCP fixture before `new` starts the test deadline.
+    fn new_with_mcp_fixture() -> Self {
+        fakes::mcp_fixture();
+        Self::new()
+    }
+
     fn home(&self) -> PathBuf {
         self.root.path().join("h")
     }
@@ -356,11 +362,7 @@ fn echo_tool() -> Value {
 
 #[test]
 fn an_approved_server_runs_from_its_pinned_copy() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
@@ -402,11 +404,7 @@ fn an_approved_server_runs_from_its_pinned_copy() {
 
 #[test]
 fn a_changed_pinned_file_needs_a_new_approval() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
@@ -440,11 +438,7 @@ fn a_changed_pinned_file_needs_a_new_approval() {
 
 #[test]
 fn a_changed_declaration_needs_a_new_approval() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
@@ -471,11 +465,7 @@ fn a_changed_declaration_needs_a_new_approval() {
 
 #[test]
 fn an_approval_in_one_repository_covers_another_on_this_machine() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
@@ -496,11 +486,7 @@ fn an_approval_in_one_repository_covers_another_on_this_machine() {
 
 #[test]
 fn a_pruned_copy_is_rebuilt() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
@@ -530,11 +516,7 @@ fn a_pruned_copy_is_rebuilt() {
 
 #[test]
 fn a_required_server_that_fails_to_start_exits_before_the_session() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start(Vec::<fakes::Response>::new()).unwrap();
     setup.provider(&server);
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
@@ -568,11 +550,7 @@ fn a_required_server_that_fails_to_start_exits_before_the_session() {
 
 #[test]
 fn a_reapproved_file_change_keeps_the_cached_tool_list() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
@@ -607,11 +585,7 @@ fn a_reapproved_file_change_keeps_the_cached_tool_list() {
 
 #[test]
 fn a_repositorys_hints_do_not_change_the_declared_effects() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([echo_tool()]),
         &[(
@@ -730,11 +704,7 @@ fn prompt(client: &fakes::Client) {
 
 #[test]
 fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
-    // Look up the shared MCP fixture before the deadline starts: the
-    // lookup warms the script past its first-exec stall under its own
-    // bound, so the stall never eats this test's wait margin.
-    fakes::mcp_fixture();
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     // The first ask's reply, then the hub turn's call and follow-up.
     let server = ProviderServer::start([
         hello(),

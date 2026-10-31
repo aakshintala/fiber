@@ -709,7 +709,8 @@ fn required_process_miss_fails_the_session_start() {
 /// Process startup and MCP startup overlap: the peer cannot ready
 /// before the MCP wrapper starts, and the MCP handshake cannot finish
 /// before the peer arrives. A serialized start fails this test, in
-/// either order, instead of merely running slower.
+/// either order, instead of merely running slower. This pins the parallel
+/// startup contract in `docs/extensions.md`, "Process extensions".
 #[test]
 fn process_and_mcp_start_in_parallel() {
     let setup = Setup::new_with_mcp_fixture();

@@ -832,6 +832,8 @@ fn two_quick_reconnects_spawn_the_server_once() {
     // The restart touched only the server it named: the other server
     // never left ready.
     assert_eq!(Driver::row(&rows, "up")["state"], "ready", "{rows:?}");
+    // `docs/mcp.md`, "Servers, their state and the per-server commands":
+    // a reconnect while `starting` or `ready` starts nothing.
     assert_eq!(
         fs::read_to_string(&spawns).unwrap().lines().count(),
         2,
