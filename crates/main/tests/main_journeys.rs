@@ -800,8 +800,8 @@ fn install_quota_provider(setup: &Setup, server_url: &str) {
 }
 
 /// A server answering every Lua purpose plus native model calls: the
-/// quota fetch reports 90% used, signalling when its quota response is
-/// ready so the journey's one focus-in runs after the fetch it started.
+/// quota fetch reports 90% used, signalling when the fetch's request
+/// arrives so the journey waits for the fetch the first turn started.
 fn start_quota_server() -> (ProviderServer, std::sync::mpsc::Receiver<()>) {
     let (quota_hit, quota_rx) = std::sync::mpsc::channel();
     let server = ProviderServer::start_responding(move |request| match request.path.as_str() {
@@ -846,30 +846,47 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             run.wait_screen("the first answered turn", |grid| {
                 grid.contents.contains("Hello.")
             });
-            // The fake signals when its quota response is ready, so the one
-            // focus-in below runs after the fetch the first turn started:
-            // the named screen wait then draws the fetched share, with no
-            // wall-clock read or sleep of its own. The focus-in sends a
-            // fetch-less query that starts no new fetch, so it starts no
-            // new `/lua-quota` request (`quota_fetch_session.rs`,
-            // `quota_notice_is_a_fiber_card_entry_in_pty`;
-            // `docs/testing.md`, "Waits and timeouts"); the grid wait below
-            // is the assertion, failing naming the wait when the share never
-            // draws. One 4-byte focus-in cannot fill the PTY input buffer by
-            // construction.
+            // The fake signals when the first turn's fetch reaches it, so
+            // the waits below run after the fetch started: the signal fires
+            // when the request arrives, before the response and before
+            // `finish_quota` stores it, so one fetch-less re-query straight
+            // after it could still miss (the fetch-less snapshot never
+            // re-asks when a flight lands after it).
             setup.deadline.recv_or_fail(
                 &quota_rx,
-                "the fake quota response for the fetch the first turn starts",
+                "the fake receiving the first turn's quota request",
             );
+            // The turn must end before typing: sent earlier, `/quota`
+            // would steer the first turn instead of opening the view.
+            run.turn_finished(from);
+            // The view's `fetch: true` query either joins that flight or
+            // starts its own, and answers only once a fetch ends
+            // (`switch/quota.rs`, `answer_fetch` over `force_start_quota`
+            // and `wait_quota`), so the drawn value proves `finish_quota`
+            // stored it; the answer folds into the panel card too
+            // (`tui/src/app/panel/quota.rs`, `panel_quota`). No
+            // wall-clock read or sleep of its own.
+            run.write(b"/quota\r");
+            run.wait_screen("the fetched quota value", |grid| {
+                grid.contents.contains("Quota") && grid.contents.contains("10%")
+            });
+            run.write(b"\x1b[27u");
+            run.wait_screen("the conversation after the quota view", |grid| {
+                grid.contents.contains("Hello.")
+            });
+            // The cache is fresh from the view's fetch, so the one
+            // focus-in below sends a fetch-less query that starts no new
+            // `/lua-quota` request (`docs/testing.md`, "Waits and
+            // timeouts"); the grid wait below is the assertion, failing
+            // naming the wait when the share never draws. One 4-byte
+            // focus-in cannot fill the PTY input buffer by construction.
             run.write(b"\x1b[I");
             run.wait_screen("the fetched quota share", |grid| {
                 grid.contents.contains("10%")
             });
-            // The reply draws while the first turn is still running, so
-            // the second prompt waits for its completed card: sent
-            // earlier, it would steer the first turn instead of starting
-            // the second.
-            run.turn_finished(from);
+            // The second prompt waits for the first turn's completed card:
+            // sent earlier, it would steer the first turn instead of
+            // starting the second.
             let from = run.output().len();
             run.write(b"second\r");
             let shown = run.wait_screen("the second turn's quota notice", |grid| {
