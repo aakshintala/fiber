@@ -3,7 +3,7 @@
 //! `docs/code-quality.md`, the crate list in `docs/dependencies.md`, and
 //! that process signals stay in the guarded helpers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{TokenStream, TokenTree};
 
@@ -39,6 +39,9 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
 /// both count. Only files under `crates/` count.
 pub(crate) const KINDS_LITERAL: &str = "assert_eq!(kinds(";
 pub(crate) const SUPPORT_KINDS_LITERAL: &str = "assert_eq!(support::kinds";
+
+/// Every crate may depend on `support`, which holds no domain knowledge.
+pub(crate) const SUPPORT_QUOTE: &str = "`support` depends on nothing in the workspace, and every crate may depend on it; the rules below leave it out because it holds no domain knowledge.";
 
 /// Occurrences of each ordered-assertion literal in `files` under `crates/`,
 /// as `(kinds, support)`.
@@ -96,6 +99,343 @@ pub(crate) const TUI: Isolation = Isolation {
     members: &["tui", "main"],
     why: "only the terminal links terminal UI code",
 };
+
+const CONTRACT_QUOTE: &str =
+    "`contract` depends on nothing and everything but `picture` depends on it.";
+const PICTURE_QUOTE: &str = "`picture` depends on nothing in the workspace.";
+const CONTRACT_ONLY_QUOTE: &str = "`log` and `config` depend only on `contract`.";
+const CORE_DEPENDENTS_QUOTE: &str = "`provider`, `tools`, `mcp`, `jobs` and `extensions` depend on `contract` and never on `loop`, on each other, or on `tui`.";
+const EXTENSIONS_CONFIG_QUOTE: &str =
+    "`extensions` also depends on `config`, for what an extension reads while it runs";
+const TOOLS_CONFIG_QUOTE: &str = "`tools` also depends on `config`, for where a project's protected-path state lives in Fiber home.";
+const EXTENSIONS_LOG_QUOTE: &str = "`extensions` also depends on `log`'s reading side, to replay the log to watchers at session end and to derive the project key.";
+const LOOP_QUOTE: &str = "`loop` depends on `contract`, `log` and the three seams, and never on `tui`, `doors` or `main`.";
+const SHARED_LOG_READ_QUOTE: &str =
+    "`tui`, `hub` and `doors` depend on `contract` and on `log`'s reading side";
+const DOORS_CONFIG_NET_QUOTE: &str =
+    "`doors` also depends on `config` and `net` for the hub client.";
+const TUI_LOG_QUOTE: &str = "`tui` also depends on `log` for the diagnostic writer.";
+const CLI_QUOTE: &str =
+    "`cli` depends on `contract`, `log`, `config`, `doors` and `extensions`, and never on `loop`.";
+const WORKTREE_QUOTE: &str = "`worktree` depends only on `contract`";
+const WORKTREE_USERS_QUOTE: &str = "`jobs`, `doors` and `cli` may depend on it.";
+const NET_QUOTE: &str = "`net` depends only on `contract` and ureq's TLS stack, the crates already in its tree through ureq included";
+const NET_USERS_QUOTE: &str =
+    "`provider`, `tools`, `mcp`, `extensions` and `doors` may depend on it";
+const ROUTING_QUOTE: &str = "`routing` depends on `contract`, `config`, `extensions` and `provider`, and is the only crate that depends on both `extensions` and `provider`; only `main` depends on it.";
+const MAIN_QUOTE: &str = "`main` depends on everything, and nothing depends on `main`.";
+const FAKES_QUOTE: &str = "It depends on `contract` and `support`.";
+const BENCH_QUOTE: &str =
+    "It takes the Fiber crates it measures through, plus `fakes`, as dev-dependencies only";
+
+/// A direct workspace dependency the architecture doc grants.
+pub(crate) struct Calls {
+    pub(crate) krate: &'static str,
+    pub(crate) depends_on: &'static [&'static str],
+    pub(crate) quote: &'static str,
+}
+
+/// The quoted rules that grant each first-party crate's normal dependencies.
+pub(crate) const CALLS: &[Calls] = &[
+    Calls {
+        krate: "support",
+        depends_on: &[],
+        quote: SUPPORT_QUOTE,
+    },
+    Calls {
+        krate: "contract",
+        depends_on: &[],
+        quote: CONTRACT_QUOTE,
+    },
+    Calls {
+        krate: "picture",
+        depends_on: &[],
+        quote: PICTURE_QUOTE,
+    },
+    Calls {
+        krate: "log",
+        depends_on: &["contract"],
+        quote: CONTRACT_ONLY_QUOTE,
+    },
+    Calls {
+        krate: "config",
+        depends_on: &["contract"],
+        quote: CONTRACT_ONLY_QUOTE,
+    },
+    Calls {
+        krate: "provider",
+        depends_on: &["contract"],
+        quote: CORE_DEPENDENTS_QUOTE,
+    },
+    Calls {
+        krate: "tools",
+        depends_on: &["contract"],
+        quote: CORE_DEPENDENTS_QUOTE,
+    },
+    Calls {
+        krate: "mcp",
+        depends_on: &["contract"],
+        quote: CORE_DEPENDENTS_QUOTE,
+    },
+    Calls {
+        krate: "jobs",
+        depends_on: &["contract"],
+        quote: CORE_DEPENDENTS_QUOTE,
+    },
+    Calls {
+        krate: "extensions",
+        depends_on: &["contract"],
+        quote: CORE_DEPENDENTS_QUOTE,
+    },
+    Calls {
+        krate: "extensions",
+        depends_on: &["config"],
+        quote: EXTENSIONS_CONFIG_QUOTE,
+    },
+    Calls {
+        krate: "tools",
+        depends_on: &["config"],
+        quote: TOOLS_CONFIG_QUOTE,
+    },
+    Calls {
+        krate: "extensions",
+        depends_on: &["log"],
+        quote: EXTENSIONS_LOG_QUOTE,
+    },
+    Calls {
+        krate: "loop",
+        depends_on: &["contract", "log"],
+        quote: LOOP_QUOTE,
+    },
+    Calls {
+        krate: "tui",
+        depends_on: &["contract", "log"],
+        quote: SHARED_LOG_READ_QUOTE,
+    },
+    Calls {
+        krate: "hub",
+        depends_on: &["contract", "log"],
+        quote: SHARED_LOG_READ_QUOTE,
+    },
+    Calls {
+        krate: "doors",
+        depends_on: &["contract", "log"],
+        quote: SHARED_LOG_READ_QUOTE,
+    },
+    Calls {
+        krate: "doors",
+        depends_on: &["config", "net"],
+        quote: DOORS_CONFIG_NET_QUOTE,
+    },
+    Calls {
+        krate: "tui",
+        depends_on: &["log"],
+        quote: TUI_LOG_QUOTE,
+    },
+    Calls {
+        krate: "cli",
+        depends_on: &["contract", "log", "config", "doors", "extensions"],
+        quote: CLI_QUOTE,
+    },
+    Calls {
+        krate: "worktree",
+        depends_on: &["contract"],
+        quote: WORKTREE_QUOTE,
+    },
+    Calls {
+        krate: "jobs",
+        depends_on: &["worktree"],
+        quote: WORKTREE_USERS_QUOTE,
+    },
+    Calls {
+        krate: "doors",
+        depends_on: &["worktree"],
+        quote: WORKTREE_USERS_QUOTE,
+    },
+    Calls {
+        krate: "cli",
+        depends_on: &["worktree"],
+        quote: WORKTREE_USERS_QUOTE,
+    },
+    Calls {
+        krate: "net",
+        depends_on: &["contract"],
+        quote: NET_QUOTE,
+    },
+    Calls {
+        krate: "provider",
+        depends_on: &["net"],
+        quote: NET_USERS_QUOTE,
+    },
+    Calls {
+        krate: "tools",
+        depends_on: &["net"],
+        quote: NET_USERS_QUOTE,
+    },
+    Calls {
+        krate: "mcp",
+        depends_on: &["net"],
+        quote: NET_USERS_QUOTE,
+    },
+    Calls {
+        krate: "extensions",
+        depends_on: &["net"],
+        quote: NET_USERS_QUOTE,
+    },
+    Calls {
+        krate: "doors",
+        depends_on: &["net"],
+        quote: NET_USERS_QUOTE,
+    },
+    Calls {
+        krate: "routing",
+        depends_on: &["contract", "config", "extensions", "provider"],
+        quote: ROUTING_QUOTE,
+    },
+    Calls {
+        krate: "main",
+        depends_on: &[
+            "cli",
+            "config",
+            "contract",
+            "doors",
+            "extensions",
+            "hub",
+            "jobs",
+            "log",
+            "loop",
+            "mcp",
+            "net",
+            "picture",
+            "provider",
+            "routing",
+            "tools",
+            "tui",
+            "worktree",
+        ],
+        quote: MAIN_QUOTE,
+    },
+    Calls {
+        krate: "fakes",
+        depends_on: &["contract"],
+        quote: FAKES_QUOTE,
+    },
+    Calls {
+        krate: "bench",
+        depends_on: &[],
+        quote: BENCH_QUOTE,
+    },
+];
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn section_body_start_line(markdown: &str, heading: &str) -> Option<usize> {
+    for (line_number, line) in markdown.lines().enumerate() {
+        if !line.starts_with('#') {
+            continue;
+        }
+        let hashes = line
+            .chars()
+            .take_while(|character| *character == '#')
+            .count();
+        let Some(rest) = line.get(hashes..) else {
+            continue;
+        };
+        if !rest.starts_with(' ') {
+            continue;
+        }
+        if rest.trim() != heading {
+            continue;
+        }
+        return Some(line_number + 2);
+    }
+    None
+}
+
+/// Each normal workspace edge not granted by a quoted call rule.
+pub(crate) fn crate_edges(
+    edges: &BTreeSet<(String, String)>,
+    calls: &[Calls],
+    architecture: &str,
+) -> Result<Vec<String>, String> {
+    const HEADING: &str = "The call rules";
+    let rules = section(architecture, HEADING)
+        .ok_or("docs/architecture.md has no \"The call rules\" section")?;
+    let body_start = section_body_start_line(architecture, HEADING)
+        .ok_or("docs/architecture.md has no \"The call rules\" section")?;
+    let mut folded_section = String::new();
+    let mut line_starts = Vec::new();
+    for (offset, line) in rules.iter().enumerate() {
+        let line = collapse_whitespace(line);
+        if line.is_empty() {
+            continue;
+        }
+        if !folded_section.is_empty() {
+            folded_section.push(' ');
+        }
+        line_starts.push((folded_section.len(), body_start + offset));
+        folded_section.push_str(&line);
+    }
+
+    let quotes: BTreeSet<&str> = calls
+        .iter()
+        .map(|call| call.quote)
+        .chain(std::iter::once(SUPPORT_QUOTE))
+        .collect();
+    let mut quote_lines = BTreeMap::new();
+    let mut failures = BTreeSet::new();
+    for quote in quotes {
+        let folded_quote = collapse_whitespace(quote);
+        if let Some(offset) = folded_section.find(&folded_quote) {
+            if let Some((_, line)) = line_starts.iter().rev().find(|(start, _)| *start <= offset) {
+                quote_lines.insert(quote, *line);
+            }
+        } else {
+            failures.insert(format!(
+                "table quote not in docs/architecture.md, \"{HEADING}\": \"{quote}\""
+            ));
+        }
+    }
+
+    for (from, to) in edges {
+        let source_rows: Vec<&Calls> = calls.iter().filter(|call| call.krate == from).collect();
+        let granted = (to == "support" && from != "support")
+            || source_rows
+                .iter()
+                .any(|call| call.depends_on.contains(&to.as_str()));
+        if granted {
+            continue;
+        }
+        if source_rows.is_empty() {
+            failures.insert(format!(
+                "{from} → {to}: docs/architecture.md, \"{HEADING}\", has no sentence for {from}"
+            ));
+            continue;
+        }
+
+        let mut seen_quotes = BTreeSet::new();
+        let row_quotes: Vec<&str> = source_rows
+            .iter()
+            .filter_map(|call| seen_quotes.insert(call.quote).then_some(call.quote))
+            .collect();
+        let location = row_quotes
+            .iter()
+            .find_map(|quote| quote_lines.get(quote))
+            .map(|line| format!("docs/architecture.md:{line}"))
+            .unwrap_or_else(|| "docs/architecture.md".to_owned());
+        let quotes = row_quotes
+            .iter()
+            .map(|quote| format!("\"{quote}\""))
+            .collect::<Vec<_>>()
+            .join(" ");
+        failures.insert(format!(
+            "{from} → {to}: {location}, \"{HEADING}\", does not grant it: {quotes}"
+        ));
+    }
+    Ok(failures.into_iter().collect())
+}
 
 /// Each failure where a workspace member's normal dependency tree names
 /// one of `rule`'s crates. `trees` pairs a member with the output of `cargo
