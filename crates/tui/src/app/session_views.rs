@@ -451,7 +451,7 @@ impl App {
                     Some(Sized {
                         total: context.tokens,
                         window: self.panel_state.window()?,
-                        trigger: self.panel_state.trigger_at(),
+                        trigger: self.panel_state.handoff(),
                     })
                 });
                 Some(context_view::frame(
