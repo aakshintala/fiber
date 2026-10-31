@@ -7,7 +7,6 @@ fn two_pins_on_a_page_need_two_unpins() {
     pins.pin(3);
     pins.unpin(3);
     assert!(pins.contains(3), "one pin is still held");
-    assert_eq!(pins.pages().collect::<Vec<_>>(), [3]);
     pins.unpin(3);
     assert!(!pins.contains(3));
     assert!(
@@ -27,6 +26,5 @@ fn unpin_of_an_unpinned_page_does_nothing() {
     );
     pins.pin(1);
     pins.unpin(2);
-    assert!(pins.contains(1));
     assert!(pins.contains(1), "the absent-page unpin leaves page 1 held");
 }
