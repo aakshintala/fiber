@@ -498,6 +498,132 @@ fn the_changed_files_hunk_row_is_dim() {
     assert_eq!(run.wait().status.code(), Some(0));
 }
 
+/// A Changed files card item's cell in the panel: the first cell at or
+/// after the panel columns holding `needle`.
+fn panel_item_at(grid: &Grid, needle: &str) -> Option<(u16, u16)> {
+    grid.rows.iter().enumerate().find_map(|(y, _)| {
+        let y = y as u16;
+        let x = col_at_or(grid, y, needle)?;
+        (x >= 100).then_some((x, y))
+    })
+}
+
+#[test]
+fn the_created_then_edited_file_row_reads_untracked_wholly_added() {
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    git(&workspace, &["init"]);
+    git(&workspace, &["config", "user.email", "test@fiber.dev"]);
+    git(&workspace, &["config", "user.name", "fiber test"]);
+    fs::write(workspace.join("initial.txt"), "base\n").unwrap();
+    git(&workspace, &["add", "initial.txt"]);
+    git(&workspace, &["commit", "-m", "base"]);
+    write_json(
+        &workspace.join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "write", "arguments": {"path": "new.txt", "content": "one\ntwo\nthree\n"}}]},
+            {"tool_calls": [{"name": "edit", "arguments": {"path": "new.txt", "edits": [
+                {"old_text": "two\n", "new_text": "TWO\n"},
+            ]}}]},
+            {"text": ["Done." ]},
+        ]}),
+    );
+    write_json(
+        &workspace.join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}, {"text": ["allow"]}]}),
+    );
+    config(&setup, json!({"reviewer": {"model": "scripted/r.json"}}));
+    let mut run = turned(&setup);
+    let grid = run.wait_screen("the changed files card", |grid| {
+        panel_item_at(grid, "new.txt").is_some()
+    });
+    // The card keeps Fiber's own edit sums: three added lines from the
+    // write and one changed line from the edit.
+    let (_, y) = panel_item_at(&grid, "new.txt").unwrap();
+    let x = col_at(&grid, y + 1, "+4");
+    // The totals row opens the Changed files list.
+    click(&mut run, x, y + 1);
+    let grid = run.wait_screen("the untracked file row", |grid| {
+        grid.rows[0].contains("Changed files")
+            && find_row(grid, "new.txt")
+                .is_some_and(|y| grid.rows[usize::from(y)].contains("untracked, wholly added"))
+    });
+    let y = row_with(&grid, "new.txt");
+    assert!(
+        is_dim(&grid, y, "untracked, wholly added"),
+        "{}",
+        grid.contents
+    );
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+#[test]
+fn the_repeatedly_edited_tracked_file_row_matches_numstat() {
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    git(&workspace, &["init"]);
+    git(&workspace, &["config", "user.email", "test@fiber.dev"]);
+    git(&workspace, &["config", "user.name", "fiber test"]);
+    fs::write(workspace.join("f.txt"), "a\nb\nc\nd\ne\n").unwrap();
+    git(&workspace, &["add", "f.txt"]);
+    git(&workspace, &["commit", "-m", "add f"]);
+    write_json(
+        &workspace.join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "edit", "arguments": {"path": "f.txt", "edits": [
+                {"old_text": "a\n", "new_text": "a1\n"},
+            ]}}]},
+            {"tool_calls": [{"name": "edit", "arguments": {"path": "f.txt", "edits": [
+                {"old_text": "a1\n", "new_text": "a2\n"},
+            ]}}]},
+            {"tool_calls": [{"name": "edit", "arguments": {"path": "f.txt", "edits": [
+                {"old_text": "b\n", "new_text": "b1\n"},
+            ]}}]},
+            {"text": ["Done." ]},
+        ]}),
+    );
+    write_json(
+        &workspace.join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}, {"text": ["allow"]}, {"text": ["allow"]}]}),
+    );
+    config(&setup, json!({"reviewer": {"model": "scripted/r.json"}}));
+    let mut run = turned(&setup);
+    let grid = run.wait_screen("the changed files card", |grid| {
+        panel_item_at(grid, "f.txt").is_some()
+    });
+    // The card keeps Fiber's own edit sums: each of the three edits
+    // adds and removes one line.
+    let (_, y) = panel_item_at(&grid, "f.txt").unwrap();
+    let x = col_at(&grid, y + 1, "+3");
+    // The totals row opens the Changed files list.
+    click(&mut run, x, y + 1);
+    // Git's own figures for the path, read after the turn's edits.
+    let out = std::process::Command::new("git")
+        .args(["diff", "--numstat", "HEAD", "--", "f.txt"])
+        .current_dir(&workspace)
+        .output()
+        .unwrap_or_else(|error| panic!("git numstat: {error}"));
+    assert!(out.status.success(), "git numstat: {out:?}");
+    let numstat =
+        String::from_utf8(out.stdout).unwrap_or_else(|error| panic!("numstat UTF-8: {error}"));
+    let mut fields = numstat.split_whitespace();
+    let (added, removed) = (fields.next().unwrap_or("?"), fields.next().unwrap_or("?"));
+    let wanted = format!("+{added} \u{2212}{removed}");
+    let grid = run.wait_screen("the tracked file row with git figures", |grid| {
+        grid.rows[0].contains("Changed files")
+            && find_row(grid, "f.txt").is_some_and(|y| grid.rows[usize::from(y)].contains(&wanted))
+    });
+    let y = row_with(&grid, "f.txt");
+    assert!(
+        grid.rows[usize::from(y)].contains(&wanted),
+        "{}",
+        grid.contents
+    );
+    run.write(b"\x03\x03\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
 /// A setup with same-name repo and personal `review` skills: the repo
 /// copy wins and shadows the personal one. The scripted provider only
 /// needs to keep the session alive, as for `/rules`.
