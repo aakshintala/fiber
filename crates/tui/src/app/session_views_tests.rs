@@ -2424,7 +2424,7 @@ fn a_numstat_answer_ended_by_a_signal_keeps_the_card_figures() {
     app.on_line(accepted_figures(
         &id,
         "5\t0\tsrc/file-0.rs\n",
-        1,
+        0,
         Some("SIGKILL"),
         false,
     ));
@@ -2440,7 +2440,7 @@ fn a_timed_out_numstat_answer_keeps_the_card_figures() {
     app.on_line(accepted_figures(
         &id,
         "5\t0\tsrc/file-0.rs\n",
-        1,
+        0,
         None,
         true,
     ));
