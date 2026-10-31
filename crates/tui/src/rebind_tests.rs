@@ -1290,3 +1290,69 @@ fn the_focused_wrapped_row_fills_the_draw_width_whole() {
         assert_eq!(text, format!("{mark}{key}{id}{rest}"), "line {line}");
     }
 }
+
+/// The settle scrolls until the selected action fits whole from the
+/// top: each action takes two display lines and the window shows
+/// three, so the second action already overflows a window on the
+/// first and the third moves the top onto its own first line. A
+/// flipped comparison stops at the wrong action: equality holds too
+/// early, and greater-than holds at once.
+#[test]
+fn settle_moves_the_window_until_the_selection_fits_whole() {
+    let grown = vec![2, 2, 2];
+    let mut screen = keys_screen();
+    screen.selected = 0;
+    screen.top = 0;
+    screen.settle(&grown, 3);
+    assert_eq!((screen.selected, screen.top), (0, 0));
+    let mut screen = keys_screen();
+    screen.selected = 1;
+    screen.top = 0;
+    screen.settle(&grown, 3);
+    assert_eq!((screen.selected, screen.top), (1, 2));
+    let mut screen = keys_screen();
+    screen.selected = 2;
+    screen.top = 0;
+    screen.settle(&grown, 3);
+    assert_eq!((screen.selected, screen.top), (2, 4));
+}
+
+/// A selection past the last action clamps to it: the stored index
+/// cannot name an action, so the scroll ends on a line the table
+/// holds. Either flipped operator keeps the past-the-end index.
+#[test]
+fn settle_clamps_a_past_the_end_selection_to_the_last_action() {
+    let keys = keys();
+    let grown = heights(&keys, WIDTH);
+    let shown = HEIGHT.saturating_sub(2);
+    let mut screen = keys_screen();
+    screen.selected = BINDINGS.len();
+    screen.top = 0;
+    screen.settle(&grown, shown);
+    assert_eq!(screen.selected, BINDINGS.len().saturating_sub(1));
+    // The window moves down to show the last action's first line.
+    assert_eq!(screen.top, 38);
+}
+
+/// A window of nothing shown keeps the clamped top: with no rows to
+/// reveal the selection the scroll stands. Treating the empty window
+/// as showing would move the top onto the selection's line.
+#[test]
+fn place_with_nothing_shown_keeps_the_clamped_top() {
+    let grown = vec![2, 2, 2];
+    let at = place(0, 0, &grown, 0);
+    assert_eq!((at.selected(), at.top()), (0, 0));
+    let at = place(2, 0, &grown, 0);
+    assert_eq!((at.selected(), at.top()), (4, 0));
+}
+
+/// The shares leave no spare column at the exact boundary: at width
+/// 52 the room past the gutter is 48, the id keeps 20, and the keys
+/// and description shares of the rest are exactly 8 and 20, so no
+/// column is left for the keys to take. Allowing the boundary would
+/// hand the keys a 29th column the room does not hold.
+#[test]
+fn columns_leave_no_spare_column_at_the_exact_share_boundary() {
+    let keys = keys();
+    assert_eq!(columns(&keys, 52), (8, 20, 20));
+}

@@ -646,3 +646,50 @@ fn keys_screen_wheel_through_an_open_notice_scrolls() {
         "the wrapper leaves the notice swallow to the router"
     );
 }
+
+/// The frame is there while the screen is open, with the keys
+/// content, and gone once it closes: no frame, no rows, and one row
+/// per display line with its join while open.
+#[test]
+fn keys_frame_is_some_with_the_keys_content_while_open() {
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    assert!(app.keys_frame(24).is_none());
+    app.open_keys();
+    let frame = app.keys_frame(24).expect("the screen is open");
+    assert_eq!(frame.title, "Keys");
+    assert_eq!(frame.command, "/keys");
+    assert!(!frame.rows.is_empty());
+    assert_eq!(frame.rows.len(), frame.joins.len());
+    assert!(app.keys_screen_open());
+}
+
+/// The draw width mirrors the area the frame draws in: the screen's
+/// on home, the attached conversation column's otherwise, so the
+/// frame wraps at the width it draws. A zero or one width would wrap
+/// every row into a line per character.
+#[test]
+fn keys_width_mirrors_the_area_the_frame_draws() {
+    let mut app = home(None);
+    app.open_keys();
+    assert_eq!(app.keys_width(), 80);
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    app.open_keys();
+    assert_eq!(app.keys_width(), usize::from(app.column_width()));
+}
+
+/// A click selects its row's action while browsing, and the cross
+/// closes the screen: the wrapper answers both with no effect of its
+/// own.
+#[test]
+fn keys_screen_click_selects_a_row_and_closes_on_the_cross() {
+    use crate::swapped::Spot;
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    app.open_keys();
+    let at = first_line(&app, 5);
+    assert_eq!(app.keys_screen_click(Spot::Row(at)), Effect::None);
+    assert!(app.keys_screen_open());
+    let frame = app.keys_frame(24).expect("the screen is open");
+    assert_eq!(frame.list.selected(), at);
+    assert_eq!(app.keys_screen_click(Spot::Close), Effect::None);
+    assert!(!app.keys_screen_open());
+}
