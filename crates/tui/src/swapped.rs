@@ -561,6 +561,21 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
     crate::view::marks::paint_selection(app, buf, crate::app::SurfaceId::Swapped, area);
 }
 
+/// Whether display line `at` belongs to the focused action's span: the
+/// selected first line and the wrap continuations after it, up to the
+/// next break. A wrapped action reads as one row barred on every line.
+fn focused_span(frame: &Frame, at: usize) -> bool {
+    let selected = frame.list.selected();
+    if at < selected {
+        return false;
+    }
+    if at == selected {
+        return true;
+    }
+    ((selected.saturating_add(1))..=at)
+        .all(|row| matches!(frame.joins.get(row), Some(Join::Wrap | Join::WrapSpace)))
+}
+
 /// Draws `frame` into `area`: the top row, then what fits top down,
 /// the footer on the last row.
 pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
@@ -591,6 +606,12 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
             rect: line,
         });
         let gutter = frame.list.is_gutter();
+        // The rebinding screen notes how its wrapped lines join: its
+        // focused action reads barred on every display line, with the
+        // gutter mark on the first only. Every other view keeps its
+        // shape: a plain list bars its selected row, a gutter list
+        // notes no bar.
+        let span = gutter && !frame.joins.is_empty();
         let mut x = area.x;
         if gutter {
             if at == frame.list.selected() {
@@ -616,7 +637,12 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
             }
             x = end;
         }
-        if !gutter && at == frame.list.selected() {
+        let barred = if span {
+            focused_span(frame, at)
+        } else {
+            !gutter && at == frame.list.selected()
+        };
+        if barred {
             buf.set_style(line, SELECTED);
         }
         y = y.saturating_add(1);

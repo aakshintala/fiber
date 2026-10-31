@@ -1,7 +1,7 @@
 //! Tests for the `/keys` screen: its fixed controls, capture, the swap
 //! prompts, reset, unbind and the failed save (`docs/tui.md`, "Bindings").
 
-use super::{KeysScreen, Outcome, columns, heights};
+use super::{KeysScreen, Outcome, columns, fits_from, heights, place};
 use crate::bindings::BINDINGS;
 use crate::configure::KeyEdit;
 use crate::keyset::Keyset;
@@ -88,29 +88,77 @@ fn moving_clamps_at_both_ends() {
         press(&mut screen, &keys, &["up"]),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), 0);
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 0));
     select(&mut screen, &keys, BINDINGS.len().saturating_sub(1));
     assert!(matches!(
         press(&mut screen, &keys, &["down"]),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), BINDINGS.len().saturating_sub(1));
+    assert_eq!(
+        selected(&screen, &keys),
+        first_line(&keys, BINDINGS.len().saturating_sub(1))
+    );
 }
 
+/// PageUp and PageDown move by the whole actions fitting from the top
+/// less one, at least one: thirteen fit in the open rows, so one page
+/// down lands twelve on.
 #[test]
-fn paging_moves_by_the_shown_rows_less_one() {
+fn paging_moves_by_the_fitting_actions_less_one() {
     let keys = keys();
+    let grown = heights(&keys, WIDTH);
+    let shown = HEIGHT.saturating_sub(2);
+    assert_eq!(fits_from(0, &grown, shown), 13);
     let mut screen = keys_screen();
     assert!(matches!(
         press(&mut screen, &keys, &["pagedown"]),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), 21);
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 12));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 0));
     assert!(matches!(
         press(&mut screen, &keys, &["pageup"]),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), 0);
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 0));
+    // A page up past the first action clamps at the top.
+    select(&mut screen, &keys, 2);
+    assert!(matches!(
+        press(&mut screen, &keys, &["pageup"]),
+        Outcome::Nothing
+    ));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 0));
+}
+
+/// How many whole actions fit from the top in the shown display lines:
+/// a row taller than the window fits none.
+#[test]
+fn fits_counts_the_whole_actions_fitting_from_the_top() {
+    assert_eq!(fits_from(0, &[2, 2, 2], 3), 1);
+    assert_eq!(fits_from(1, &[2, 2, 2], 3), 1);
+    assert_eq!(fits_from(2, &[2, 2, 2], 3), 1);
+    assert_eq!(fits_from(0, &[1, 1, 1], 3), 3);
+    assert_eq!(fits_from(0, &[5, 1], 3), 0);
+    assert_eq!(fits_from(0, &[1], 0), 0);
+}
+
+/// The frame's list for the selected action and the top one: two
+/// selects land the exact display-line pair, the selection in the
+/// window and the window top on the action's first line.
+#[test]
+fn place_lands_the_exact_selected_and_top_lines() {
+    let grown = vec![2, 2, 2];
+    let at = place(0, 0, &grown, 3);
+    assert!(at.is_gutter());
+    assert_eq!((at.selected(), at.top()), (0, 0));
+    let at = place(1, 1, &grown, 3);
+    assert_eq!((at.selected(), at.top()), (2, 2));
+    let at = place(2, 2, &grown, 3);
+    assert_eq!((at.selected(), at.top()), (4, 4));
+    // A taller-than-window action shows its top lines, held.
+    let tall = vec![1, 5, 1];
+    let at = place(1, 1, &tall, 3);
+    assert_eq!((at.selected(), at.top()), (1, 1));
 }
 
 #[test]
@@ -122,7 +170,7 @@ fn a_modified_arrow_does_not_move() {
         press(&mut screen, &keys, &["ctrl+up"]),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), 5);
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 5));
 }
 
 #[test]
@@ -546,7 +594,7 @@ fn a_row_click_selects_while_browsing_only() {
     let keys = keys();
     let mut screen = keys_screen();
     select(&mut screen, &keys, 5);
-    assert_eq!(selected(&screen, &keys), 5);
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 5));
     press(&mut screen, &keys, &["enter"]);
     let outcome = screen.click(Spot::Row(3), &keys, WIDTH, HEIGHT);
     assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
@@ -556,12 +604,12 @@ fn a_row_click_selects_while_browsing_only() {
     );
 }
 
-/// The wheel shifts the visible rows three a step while browsing,
-/// keeping a still-visible selection where it was and clearing the
-/// transient message as a stroke does.
+/// The wheel steps three actions a step while browsing, keeping a
+/// still-visible selection where it was and clearing the transient
+/// message as a stroke does.
 /// (`docs/tui.md:576`).
 #[test]
-fn wheel_shifts_three_rows_and_keeps_a_visible_selection_while_browsing() {
+fn wheel_steps_three_actions_and_keeps_a_visible_selection_while_browsing() {
     let keys = keys();
     let mut screen = keys_screen();
     screen.failed("boom".to_owned());
@@ -571,15 +619,153 @@ fn wheel_shifts_three_rows_and_keeps_a_visible_selection_while_browsing() {
         screen.wheel(false, &keys, WIDTH, HEIGHT),
         Outcome::Nothing
     ));
-    assert_eq!(top(&screen, &keys), 3);
-    assert_eq!(selected(&screen, &keys), 5);
+    assert_eq!(top(&screen, &keys), first_line(&keys, 3));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 5));
     assert!(below(&screen, &keys).is_empty());
     assert!(matches!(
         screen.wheel(true, &keys, WIDTH, HEIGHT),
         Outcome::Nothing
     ));
-    assert_eq!(top(&screen, &keys), 0);
-    assert_eq!(selected(&screen, &keys), 5);
+    assert_eq!(top(&screen, &keys), first_line(&keys, 0));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 5));
+}
+
+/// The wheel pulls a selection that leaves the window to the nearest
+/// shown action: down from the top the selection rides the new top,
+/// and back up it stays while shown.
+#[test]
+fn wheel_pulls_a_leaving_selection_to_the_nearest_shown_action() {
+    let keys = keys();
+    let mut screen = keys_screen();
+    assert!(matches!(
+        screen.wheel(false, &keys, WIDTH, HEIGHT),
+        Outcome::Nothing
+    ));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 3));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 3));
+    assert!(matches!(
+        screen.wheel(true, &keys, WIDTH, HEIGHT),
+        Outcome::Nothing
+    ));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 0));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 3));
+}
+
+/// A click on a continuation line selects its action, a click on the
+/// next action's first line selects that one, and a click past the
+/// last line selects the last action.
+#[test]
+fn a_click_on_a_continuation_line_selects_its_action() {
+    let keys = keys();
+    let grown = heights(&keys, WIDTH);
+    let mut screen = keys_screen();
+    // The delete_session action wraps into two display lines.
+    let start: usize = grown.iter().take(7).sum();
+    assert_eq!(grown[7], 2);
+    let outcome = screen.click(Spot::Row(start + 1), &keys, WIDTH, HEIGHT);
+    assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 7));
+    // The first line of the next action belongs to it, not to the
+    // wrapped lines above.
+    let outcome = screen.click(Spot::Row(start + 2), &keys, WIDTH, HEIGHT);
+    assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 8));
+    let total: usize = grown.iter().sum();
+    let outcome = screen.click(Spot::Row(total + 5), &keys, WIDTH, HEIGHT);
+    assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
+    assert_eq!(
+        selected(&screen, &keys),
+        first_line(&keys, BINDINGS.len().saturating_sub(1))
+    );
+}
+
+/// A click above the window pulls the scroll up, so the next page
+/// counts from the shown top.
+#[test]
+fn a_click_above_the_window_resets_the_scroll_for_the_next_page() {
+    let keys = keys();
+    let mut screen = keys_screen();
+    select(&mut screen, &keys, BINDINGS.len().saturating_sub(1));
+    let outcome = screen.click(Spot::Row(0), &keys, WIDTH, HEIGHT);
+    assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 0));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 0));
+    assert!(matches!(
+        press(&mut screen, &keys, &["pagedown"]),
+        Outcome::Nothing
+    ));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 12));
+}
+
+/// A wheel step clamps a selection sitting on the window's edge into
+/// the window: the last shown action keeps it.
+#[test]
+fn wheel_clamps_a_selection_sitting_on_the_window_edge() {
+    let keys = keys();
+    let mut screen = keys_screen();
+    select(&mut screen, &keys, 7);
+    assert!(matches!(
+        screen.wheel(false, &keys, WIDTH, 8),
+        Outcome::Nothing
+    ));
+    let frame = screen.frame(&keys, WIDTH, 8);
+    assert_eq!(frame.list.top(), first_line(&keys, 3));
+    assert_eq!(frame.list.selected(), first_line(&keys, 6));
+}
+
+/// The wheel clamps at the last action: wheeling down to the bottom
+/// holds there, and up steps three back with the selection staying.
+#[test]
+fn wheel_clamps_at_the_last_action() {
+    let keys = keys();
+    let mut screen = keys_screen();
+    for _ in 0..14 {
+        assert!(matches!(
+            screen.wheel(false, &keys, WIDTH, HEIGHT),
+            Outcome::Nothing
+        ));
+    }
+    assert_eq!(
+        top(&screen, &keys),
+        first_line(&keys, BINDINGS.len().saturating_sub(1))
+    );
+    assert_eq!(
+        selected(&screen, &keys),
+        first_line(&keys, BINDINGS.len().saturating_sub(1))
+    );
+    assert!(matches!(
+        screen.wheel(true, &keys, WIDTH, HEIGHT),
+        Outcome::Nothing
+    ));
+    assert_eq!(
+        top(&screen, &keys),
+        first_line(&keys, BINDINGS.len().saturating_sub(4))
+    );
+    assert_eq!(
+        selected(&screen, &keys),
+        first_line(&keys, BINDINGS.len().saturating_sub(1))
+    );
+}
+
+/// An action taller than the window shows its top lines with the
+/// selection held: the scroll starts on its first line.
+#[test]
+fn an_action_taller_than_the_window_shows_its_top_lines() {
+    let keys = keys();
+    let width: usize = 44;
+    let height: usize = 6;
+    let grown = heights(&keys, width);
+    assert!(
+        grown[6] > height.saturating_sub(2),
+        "rail_row_n overflows the window"
+    );
+    let mut screen = keys_screen();
+    let line: usize = grown.iter().take(6).sum();
+    let outcome = screen.click(Spot::Row(line), &keys, width, height);
+    assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
+    let frame = screen.frame(&keys, width, height);
+    assert_eq!(frame.list.selected(), line);
+    assert_eq!(frame.list.top(), line);
 }
 
 /// The wheel in a capture is swallowed, never a captured key: the
@@ -601,7 +787,7 @@ fn wheel_in_a_capture_waits_on() {
         screen.wheel(true, &keys, WIDTH, HEIGHT),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), 5);
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 5));
     assert_eq!(footer(&screen, &keys), prompt);
 }
 

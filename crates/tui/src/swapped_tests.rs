@@ -922,6 +922,40 @@ fn a_drag_over_a_wrapped_rebind_action_copies_it_whole() {
     );
 }
 
+/// A wrapped focused action reads barred on every display line, with
+/// the gutter mark on the first only; the next action reads plain
+/// (`docs/tui.md`, "Bindings").
+#[test]
+fn the_focused_wrapped_action_reads_barred_on_every_line() {
+    use crate::keyset::Keyset;
+    let keys = Keyset::default();
+    let screen = crate::rebind::KeysScreen::default();
+    let frame = screen.frame(&keys, 80, 24);
+    let grown = crate::rebind::heights(&keys, 80);
+    assert!(grown[0] > 1, "send wraps at 80 wide");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&frame, area, &mut buf, &mut Vec::new());
+    for line in 0..grown[0] {
+        let y = u16::try_from(1 + line).expect("a row");
+        for x in 0..80 {
+            assert!(
+                buf[(x, y)].modifier.contains(Modifier::REVERSED),
+                "bar at {x},{y}"
+            );
+        }
+    }
+    assert!(text(&buf, 1).starts_with("› "));
+    assert!(text(&buf, 2).starts_with("  "));
+    let rest = u16::try_from(1 + grown[0]).expect("a row");
+    for x in 0..80 {
+        assert!(
+            !buf[(x, rest)].modifier.contains(Modifier::REVERSED),
+            "no bar at {x},{rest}"
+        );
+    }
+}
+
 /// The lines below the rows and the field note breaks of their own:
 /// after a wrapped row they start new lines (`docs/tui.md`,
 /// "Selection and copy").
