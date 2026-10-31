@@ -354,7 +354,8 @@ mod tests {
     use support::clock::Sleep;
 
     use super::{
-        connect_attempt, hello_bound, is_hello_timeout, report, serve_installed, slices_shown,
+        MUST_SUCCEED_WITHIN, connect_attempt, hello_bound, is_hello_timeout, report,
+        serve_installed, slices_shown,
     };
     use crate::support::{Deadline, Setup};
 
@@ -438,7 +439,7 @@ mod tests {
                 done_tx.send(result).unwrap();
             })
             .unwrap();
-        let worker_id = Deadline::after(Duration::from_secs(5))
+        let worker_id = Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&id_rx)
             .expect("the connector reports its worker id");
         let poll = Duration::from_millis(10);
@@ -450,7 +451,7 @@ mod tests {
         }
         assert!(
             clock
-                .mark_parked(next_poll, Deadline::after(Duration::from_secs(5)))
+                .mark_parked(next_poll, Deadline::after(MUST_SUCCEED_WITHIN))
                 .is_some(),
             "the connector parks just before the race deadline"
         );
@@ -464,7 +465,7 @@ mod tests {
         clock.advance_when_parked(Some(next_poll), Some(worker_id), poll, &action_deadline);
         fakes::wait_until(
             "the connector to reach the hub listener",
-            Deadline::after(Duration::from_secs(5)),
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || match poll_listener.accept() {
                 Ok((stream, _)) => {
                     *poll_accepted.lock().unwrap() = Some(stream);
@@ -482,7 +483,7 @@ mod tests {
             Some(expected),
             Some(worker_id),
             Duration::from_secs(6),
-            Duration::from_secs(5),
+            MUST_SUCCEED_WITHIN,
         );
         let (matched, actual) = match observed {
             Ok(_) => (true, None),
@@ -500,7 +501,7 @@ mod tests {
                 Some(until),
                 Some(worker_id),
                 until.saturating_duration_since(clock.now()),
-                &Deadline::after(Duration::from_secs(5)),
+                &Deadline::after(MUST_SUCCEED_WITHIN),
             );
         }
         let mut server = accepted.lock().unwrap().take().unwrap();
@@ -513,7 +514,7 @@ mod tests {
             server.write_all(b"\n").unwrap();
         }
         drop(server);
-        let result = Deadline::after(Duration::from_secs(5))
+        let result = Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&done_rx, "the connector's hello result");
         worker.join().unwrap();
         assert!(matched, "hello parks at {expected:?}, found {actual:?}");
