@@ -500,6 +500,7 @@ fn status_input<'a>(app: &'a App, files: &'a [ChangedFile<'a>], flat: bool) -> S
                 .map(|status| Spend::Status(&status.spend))
                 .or_else(|| app.attached_spend().map(|cost| Spend::Attached { cost })),
             budget: panel.budget(),
+            cache_expires: None,
             speed: panel.speed(),
             turns: panel.turns(),
             tools_down: panel.down(),

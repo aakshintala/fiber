@@ -2321,6 +2321,7 @@ fn session_card<'a>(
         }),
         spend,
         budget,
+        cache_expires: None,
         speed: Some(64),
         turns: 12,
         tools_down,
@@ -2685,6 +2686,30 @@ fn session_value_emits_thinking_now() {
     assert_eq!(session_value(&card)["thinking_now"], json!(true));
     card.thinking_now = false;
     assert_eq!(session_value(&card)["thinking_now"], json!(false));
+}
+
+/// `session_value` carries the prompt cache expiry when set and omits
+/// the key when unset, so a replacement sees what the built-in draws
+/// (`docs/tui.md`, `card:session`).
+#[test]
+fn session_value_round_trips_cache_expires_and_omits_it_when_absent() {
+    let tools_down = std::collections::BTreeSet::new();
+    let mut card = session_card(
+        Some("/w"),
+        Some(tui::ext::BranchName::Named("main")),
+        Some("m"),
+        None,
+        None,
+        None,
+        &tools_down,
+    );
+    card.cache_expires = Some(1754000000000);
+    assert_eq!(
+        session_value(&card)["cache_expires"],
+        json!(1754000000000u64)
+    );
+    card.cache_expires = None;
+    assert!(session_value(&card).get("cache_expires").is_none());
 }
 
 #[test]
