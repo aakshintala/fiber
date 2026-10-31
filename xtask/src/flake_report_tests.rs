@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::{
-    Listed, Run, classify, decide_with, entry_is_file, event_requests, failing_file, runner_lists,
-    tested_line,
+    Listed, Run, classify, decide_with, entry_is_file, event_requests, failing_file, flake_titles,
+    runner_lists, tested_line,
 };
 
 const TITLE: &str = "Flaky tests: main::probe";
@@ -1144,4 +1144,49 @@ fn unreadable_entry_type_is_an_error() {
     );
     assert_eq!(entry_is_file(path, Ok(true)), Ok(true));
     assert_eq!(entry_is_file(path, Ok(false)), Ok(false));
+}
+
+#[test]
+fn flake_titles_dedupes_files_in_first_seen_order() {
+    // The Rust side is the sole titles parser: one deduped title per
+    // line, in first-seen order across the files and then the lines.
+    // Covers the three file-key examples, `main`, a binary id
+    // containing `::`, and a bare id.
+    let dir = std::env::temp_dir().join(format!("flake-titles-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch dir");
+    let first = dir.join("flaky-tests-a.txt");
+    let second = dir.join("flaky-tests-b.txt");
+    std::fs::write(
+        &first,
+        "extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\tsome detail\n\
+         main reviewer_setup::the_setup_saves\tsome detail\n\
+         main::hub_exit_window helper_tests::case\tsome detail\n\
+         extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\trepeat detail\n",
+    )
+    .expect("a first list");
+    std::fs::write(
+        &second,
+        "extensions host::tool_tests::a_denied_call_has_no_artifact\tsome detail\n\
+         extensions tests::x\tsome detail\n\
+         extensions\n\
+         fakes process_group_tests::reaps_children\tsome detail\n",
+    )
+    .expect("a second list");
+    let paths = vec![
+        first.to_string_lossy().into_owned(),
+        second.to_string_lossy().into_owned(),
+    ];
+    let out = flake_titles(&paths).expect("titles read");
+    assert_eq!(
+        out,
+        vec![
+            "Flaky tests: extensions::host::exec".to_owned(),
+            "Flaky tests: main::reviewer_setup".to_owned(),
+            "Flaky tests: main::hub_exit_window".to_owned(),
+            "Flaky tests: extensions::host::tool_tests".to_owned(),
+            "Flaky tests: extensions".to_owned(),
+            "Flaky tests: fakes::process_group_tests".to_owned(),
+        ]
+    );
+    assert!(std::fs::remove_dir_all(&dir).is_ok());
 }

@@ -498,7 +498,6 @@ impl Classified {
 /// binary is keyed by its module path without the test name or one trailing
 /// `tests` module, appended to the binary id; root-level tests use the binary
 /// id alone.
-/// Mirrors the Collate step in .github/workflows/ci.yml; scripts/test-flake-report checks the two agree.
 fn flake_title(binary: &str, test: &str) -> String {
     if binary == "main" {
         if let Some((first, _)) = test.split_once("::")
@@ -580,6 +579,38 @@ pub(crate) fn classify(lists: &[Listed], run: &Run) -> Vec<Classified> {
         }
     }
     out
+}
+
+/// The deduped issue titles for the flaky-list files named on the
+/// command line, in first-seen order across the files and then the
+/// lines. Each line is split exactly as `classify` splits it, and the
+/// title comes only from `flake_title`: the Rust side is the sole
+/// parser the workflow uses. A missing or unreadable file is an error
+/// naming the file.
+pub(crate) fn flake_titles(paths: &[String]) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for path in paths {
+        let bytes = std::fs::read(path).map_err(|e| format!("flake-titles: {path}: {e}"))?;
+        let text = String::from_utf8_lossy(&bytes);
+        for line in text.split('\n') {
+            if line.is_empty() {
+                continue;
+            }
+            let name = match line.split_once('\t') {
+                Some((name, _)) => name,
+                None => line,
+            };
+            let (binary, test) = match name.split_once(' ') {
+                Some((binary, test)) => (binary, test),
+                None => (name, ""),
+            };
+            let title = flake_title(binary, test);
+            if !out.iter().any(|seen| seen == &title) {
+                out.push(title);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The `flaky-tests-<runner>.txt` names among `names`, as
