@@ -115,41 +115,101 @@ struct FakeJobs {
     ids: Mutex<Vec<JobId>>,
     stops: Mutex<mpsc::Sender<JobId>>,
     inbox: Mutex<Option<mpsc::Sender<Delivery>>>,
+    /// The session's log: a held end watches it for the written end.
+    log: Arc<log::Log>,
+    /// Every job a stop was sent for: an end for one of these waits until
+    /// the loop writes it, forcing the interleaving where the loop parks
+    /// with the job still listed.
+    stopped: Mutex<Vec<JobId>>,
 }
 
 impl FakeJobs {
-    fn new(ids: &[&str]) -> (Arc<Self>, mpsc::Receiver<JobId>) {
+    fn new(ids: &[&str], log: &Arc<log::Log>) -> (Arc<Self>, mpsc::Receiver<JobId>) {
         let (tx, rx) = mpsc::channel();
         let jobs = Arc::new(Self {
             ids: Mutex::new(ids.iter().map(|id| JobId((*id).into())).collect()),
             stops: Mutex::new(tx),
             inbox: Mutex::new(None),
+            log: Arc::clone(log),
+            stopped: Mutex::new(Vec::new()),
         });
         (jobs, rx)
     }
 
     /// Ends `id` as `status`: the notice is sent through the installed
     /// inbox before `running` drops it, so a loop that reads an empty
-    /// `running` always finds the notice waiting.
+    /// `running` always finds the notice waiting. When the loop already
+    /// stopped the job, the drop waits until the loop writes the end, so
+    /// the loop parks with the job still listed: the flake's interleaving
+    /// on every run.
     fn end(&self, id: &str, status: Outcome, error: Option<Failure>) {
-        let inbox = self.inbox.lock().unwrap().clone().expect("deliver_to ran");
-        inbox
-            .send(Delivery::Job(JobNotice {
-                completed: JobCompleted {
-                    job_id: JobId(id.into()),
-                    status,
-                    error,
-                    process: None,
-                    output_tail: None,
-                    notice: None,
-                    changed_by: None,
-                    protected_paths: None,
-                },
-                claim: Claim(Box::new(|| Some(Vec::new()))),
-                delegate: None,
-            }))
-            .unwrap();
-        self.ids.lock().unwrap().retain(|listed| listed.0 != id);
+        // One lock spans the send and the drop below, so a loop that reads
+        // an empty `running` always finds the notice waiting and never
+        // parks with the job still listed: the buffered end wins. The lock
+        // covers only the send and the drop: the hold below waits with no
+        // lock held, so the loop's next `running` read never blocks on it.
+        {
+            let mut running = self.ids.lock().unwrap();
+            let inbox = self.inbox.lock().unwrap().clone().expect("deliver_to ran");
+            inbox
+                .send(Delivery::Job(JobNotice {
+                    completed: JobCompleted {
+                        job_id: JobId(id.into()),
+                        status,
+                        error,
+                        process: None,
+                        output_tail: None,
+                        notice: None,
+                        changed_by: None,
+                        protected_paths: None,
+                    },
+                    claim: Claim(Box::new(|| Some(Vec::new()))),
+                    delegate: None,
+                }))
+                .unwrap();
+            running.retain(|listed| listed.0 != id);
+        }
+        if self
+            .stopped
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|listed| listed.0 == id)
+        {
+            Self::wait_written(&self.log, id);
+        }
+    }
+
+    /// Waits until the log holds the `job_completed` line for `id`: the
+    /// loop's stop wait wrote the end this `end` sent. Watching starts
+    /// before the scan, so an end written between them is still seen on
+    /// the watch. One wall-clock deadline for the whole wait, so a missing
+    /// end fails naming it instead of hanging the test.
+    fn wait_written(log: &log::Log, id: &str) {
+        fn is_end(line: &contract::Envelope, id: &str) -> bool {
+            line.kind == "job_completed"
+                && line.payload.get("job_id").and_then(|value| value.as_str()) == Some(id)
+        }
+        let mut watcher = log.watch();
+        if log::read(log.dir())
+            .unwrap()
+            .iter()
+            .any(|line| is_end(line, id))
+        {
+            return;
+        }
+        let wait = Deadline::after(DEADLINE);
+        loop {
+            match watcher.recv_timeout(wait.left()) {
+                Some(Ok(Some(line))) if is_end(&line, id) => return,
+                Some(Ok(Some(_))) => {}
+                Some(Ok(None)) => panic!("the log ended before the end of {id} was written"),
+                Some(Err(error)) => {
+                    panic!("the log failed before the end of {id} was written: {error:?}")
+                }
+                None => panic!("the end of {id} was written in time"),
+            }
+        }
     }
 
     /// Drops the installed inbox sender, closing the inbox once every other
@@ -169,6 +229,13 @@ impl Jobs for FakeJobs {
     }
 
     fn stop(&self, job_id: &JobId) -> bool {
+        // Records the id a later `end` checks: an end for a stopped job
+        // waits until the loop writes it.
+        let mut stopped = self.stopped.lock().unwrap();
+        if !stopped.iter().any(|listed| listed == job_id) {
+            stopped.push(job_id.clone());
+        }
+        drop(stopped);
         let _sent = self.stops.lock().unwrap().send(job_id.clone());
         true
     }
@@ -411,7 +478,7 @@ fn a_move_with_admitted_job_news_is_busy() {
     // stopping a job or writing `moved`.
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
     let dir = session.dir.clone();
-    let (jobs, stops) = FakeJobs::new(&["j_1"]);
+    let (jobs, stops) = FakeJobs::new(&["j_1"], &session.log);
     let looped = session
         .looped
         .take()
@@ -455,7 +522,7 @@ fn a_second_transition_during_the_stop_is_busy_then_the_move_is_terminal() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
     let dir = session.dir.clone();
     target_dir(&session);
-    let (jobs, stops) = FakeJobs::new(&["j_1"]);
+    let (jobs, stops) = FakeJobs::new(&["j_1"], &session.log);
     let looped = session
         .looped
         .take()
@@ -527,7 +594,7 @@ fn job_ends_are_written_before_moved_in_order() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
     let dir = session.dir.clone();
     target_dir(&session);
-    let (jobs, stops) = FakeJobs::new(&["j_1", "j_2"]);
+    let (jobs, stops) = FakeJobs::new(&["j_1", "j_2"], &session.log);
     let looped = session
         .looped
         .take()
@@ -588,7 +655,7 @@ fn a_disconnected_inbox_fails_the_move_without_moved_or_fabrication() {
     let dir = session.dir.clone();
     target_dir(&session);
     let tx = take_inbox(&mut session);
-    let (jobs, stops) = FakeJobs::new(&["j_1"]);
+    let (jobs, stops) = FakeJobs::new(&["j_1"], &session.log);
     let looped = session
         .looped
         .take()
