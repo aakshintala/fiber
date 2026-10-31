@@ -1126,21 +1126,14 @@ fn enter_on_the_focused_notice_opens_it_after_its_row_moved() {
     let mut lp = live(notices(1));
     feed(&mut lp, vec![Input::Bytes(b"\x1b[Z".to_vec())]);
     // With no conversation item Shift+Tab focuses the last stop, the
-    // notice's own dismiss cross on the same row; walk to the notice
-    // itself, bounded by the frame's rows.
+    // box row's ctx segment below the notices; walk up past it and the
+    // notice's dismiss cross to the notice itself, bounded by the
+    // frame's rows.
     for _ in 0..12 {
         if matches!(lp.app.focused(), Some(TargetId::Notice(_))) {
             break;
         }
-        let up = matches!(lp.app.focused(), Some(TargetId::DismissNotice(_)));
-        feed(
-            &mut lp,
-            vec![Input::Bytes(if up {
-                b"\x1b[A".to_vec()
-            } else {
-                b"\x1b[B".to_vec()
-            })],
-        );
+        feed(&mut lp, vec![Input::Bytes(b"\x1b[A".to_vec())]);
     }
     assert!(
         matches!(lp.app.focused(), Some(TargetId::Notice(_))),
