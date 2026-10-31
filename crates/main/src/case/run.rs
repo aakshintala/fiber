@@ -4,16 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use contract::clock::Clock;
 use extensions::case::{Case, CaseRun, Input, SessionCase, Verdict, run_call};
 use serde_json::Value;
 
 /// Runs one case file and prints its child verdict.
-pub(crate) fn extension_case(
-    path: PathBuf,
-    process_clock: Arc<dyn Clock>,
-    fiber: Result<PathBuf, String>,
-) -> i32 {
+pub(crate) fn extension_case(path: PathBuf, process: &crate::startup::Process) -> i32 {
+    let process_clock = Arc::clone(&process.clock);
     let fallback_name = path
         .file_stem()
         .map(|name| name.to_string_lossy().into_owned())
@@ -74,7 +70,7 @@ pub(crate) fn extension_case(
         None,
         case_run.session_clock(),
         &signals,
-        fiber,
+        process,
         Some(Arc::clone(&case_run)),
         None,
         false,
