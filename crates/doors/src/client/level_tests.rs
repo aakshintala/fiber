@@ -937,7 +937,7 @@ fn control_boundary_full_level_writer_forwards_ordinary_envelopes() {
     injector.push_kept(ack.clone());
     injector.push_kept(near.clone());
     injector.push_kept(control_line(&id, ControlKind::Stop, 0));
-    let ended = Deadline::after(DEADLINE)
+    let ended = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("stop ends the full-level writer");
     assert!(matches!(ended, Ended::Done), "stop ends the writer cleanly");
