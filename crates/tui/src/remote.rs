@@ -16,7 +16,8 @@ mod router;
 
 use crate::ThemeSetting;
 use crate::catalogue::{
-    Catalogue, LeftOutGroup, LeftOutModel, ListAge, ModelEntry, Price, PriceTier, Refresh,
+    Catalogue, LeftOutGroup, LeftOutModel, ListAge, LoggedOutProvider, ModelEntry, Price,
+    PriceTier, Refresh,
 };
 use crate::configure::{
     BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
@@ -508,8 +509,25 @@ fn decode_left_out(value: &Value) -> Option<LeftOutGroup> {
     })
 }
 
+/// One provider whose data is present but whose credential is absent.
+fn decode_logged_out(value: &Value) -> Option<LoggedOutProvider> {
+    Some(LoggedOutProvider {
+        provider: read!(value, "provider")?,
+        login: read!(value, "login")?,
+        hint: read!(value, "hint")?,
+    })
+}
+
 fn decode_models(value: &Value) -> Option<Catalogue> {
-    Some(Catalogue {
+    let logged_out = match value.get("logged_out") {
+        None => Vec::new(),
+        Some(rows) => rows
+            .as_array()?
+            .iter()
+            .map(decode_logged_out)
+            .collect::<Option<Vec<_>>>()?,
+    };
+    let mut catalogue = Catalogue {
         installable: match value.get("installable") {
             None => Vec::new(),
             Some(names) => serde_json::from_value(names.clone()).ok()?,
@@ -535,7 +553,10 @@ fn decode_models(value: &Value) -> Option<Catalogue> {
             .iter()
             .map(decode_age)
             .collect::<Option<Vec<_>>>()?,
-    })
+        ..Default::default()
+    };
+    catalogue.logged_out = logged_out;
+    Some(catalogue)
 }
 /// Ownership follows the first key segment, never the file path.
 pub(crate) fn client_owned(key: &str) -> bool {

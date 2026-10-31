@@ -41,22 +41,35 @@ fn ctrl_a_and_ctrl_e_move_on_the_cursor_line() {
             && grid.rows.iter().any(|row| row.contains("jz"))
     });
     // `\x01` moves to the start of the cursor's line: typing lands
-    // before it, not at the draft's start. The block is the input
-    // cursor over the next character.
+    // before it, not at the draft's start. The cursor keeps the covered
+    // character, so the row reads "Xjz" with `j` in the slab colour on
+    // the text colour.
     run.write(b"\x01X");
     let grid = run.wait_screen("the line-start edit", |grid| {
-        grid.rows.iter().any(|row| row.contains("X█z"))
-            && !grid
-                .rows
-                .iter()
-                .map(|row| row.replace('█', ""))
-                .any(|row| row.contains("Xqx"))
+        grid.rows.iter().any(|row| row.contains("Xjz"))
+            && !grid.rows.iter().any(|row| row.contains("Xqx"))
     });
-    // The cursor block stands in for one character, so strip it before
-    // checking the typed text stayed on the cursor's line.
-    let bare: Vec<String> = grid.rows.iter().map(|row| row.replace('█', "")).collect();
+    // The covered `j` sits one cell past the `X`: its colours swap
+    // against its neighbour.
+    let (x, y) = grid
+        .rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, row)| {
+            row.find("Xjz").map(|byte| {
+                (
+                    u16::try_from(row[..byte].chars().count()).unwrap_or(0),
+                    u16::try_from(y).unwrap_or(0),
+                )
+            })
+        })
+        .expect("the edited line");
+    let (before, covered) = (grid.cell(x, y), grid.cell(x + 1, y));
+    assert_eq!(covered.symbol, "j");
+    assert_eq!(covered.fg, before.bg, "the cursor swaps its cell");
+    assert_eq!(covered.bg, before.fg, "the cursor swaps its cell");
     assert!(
-        !bare.iter().any(|row| row.contains("Xqx")),
+        !grid.rows.iter().any(|row| row.contains("Xqx")),
         "the start edit left the cursor's line: {}",
         grid.contents
     );
