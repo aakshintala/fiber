@@ -576,6 +576,7 @@ jobs:
         env:
           FILTER: ${{ steps.plan.outputs.filter }}
           COUNT: ${{ steps.plan.outputs.count }}
+          TESTS: ${{ steps.plan.outputs.tests }}
           PACKAGES: ${{ steps.plan.outputs.packages }}
         run: |
           package_args=()
@@ -585,7 +586,8 @@ jobs:
             fi
           done <<<"$PACKAGES"
           run_log=/dev/shm/stress-run.log
-          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=warn; } 2>&1 | tee "$run_log"; then
+          # Fail an empty filter or an iteration below the plan; identical names in several binaries can run extra tests.
+          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=fail; } 2>&1 | tee "$run_log"; then
             :
           else
             status=$?
@@ -594,6 +596,22 @@ jobs:
               echo "::error title=Runner out of disk::Stress run did not complete: the runner ran out of disk; no test result"
             fi
             exit "$status"
+          fi
+          iteration_count=0
+          while IFS= read -r summary; do
+            executed=$(sed -E 's/.*iteration [0-9]+\/[0-9]+: ([0-9]+) tests? run:.*/\1/' <<<"$summary")
+            if [ "$executed" -lt "$TESTS" ]; then
+              echo "::error title=Stress ran fewer tests than planned::iteration ran $executed tests; plan names $TESTS"
+              exit 1
+            fi
+            if [ "$executed" -gt "$TESTS" ]; then
+              echo "stress: executed $executed tests, planned $TESTS (a name matched in several binaries)"
+            fi
+            iteration_count=$((iteration_count + 1))
+          done < <(grep -E 'Stress test .* iteration [0-9]+/[0-9]+: [0-9]+ tests? run:' "$run_log")
+          if [ "$iteration_count" -ne "$COUNT" ]; then
+            echo "::error title=Stress iteration summaries missing::Expected $COUNT iteration summaries, found $iteration_count"
+            exit 1
           fi
       - name: Record the stress cost
         if: always()
