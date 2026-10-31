@@ -496,8 +496,12 @@ fn context_preamble() -> Line {
 }
 
 fn context_status(tokens: u64, window: u64) -> Line {
+    context_status_for(SESSION, tokens, window)
+}
+
+fn context_status_for(session: &str, tokens: u64, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "session_status",
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
@@ -749,24 +753,31 @@ fn context_with_a_triggerless_preamble_keeps_the_off_row() {
     assert!(!shown.contains("handoff at"), "{shown}");
 }
 
-/// Attaching another session drops the old session's cached status, so
-/// the panel holds no window or total until the new session's own
-/// `session_status` folds (see #3756): otherwise `window()` falls back
-/// to the old session's reported window and shows its total.
+/// Attaching another session preserves the old status payload but will
+/// not use its context window until the new session reports its own
+/// `session_status` (see #3756).
 #[test]
-fn attaching_another_session_clears_the_cached_status() {
+fn attaching_another_session_does_not_use_cached_status_for_context() {
     let mut app = attached(100, 40);
     app.on_line(context_preamble());
     app.on_line(context_status(50, 100));
     assert_eq!(app.panel_state().window(), Some(100));
     app.attach(SessionId(OTHER.to_owned()));
-    assert!(app.panel_state().status().is_none());
+    assert!(app.panel_state().status().is_some());
     assert_eq!(app.panel_state().window(), None);
     open_context(&mut app);
     let shown = screen(&app, 100, 40).0;
     assert!(
         shown.contains("The context shows after the session's first request."),
         "{shown}"
+    );
+
+    app.on_line(context_status_for(OTHER, 50, 200));
+    assert_eq!(app.panel_state().window(), Some(200));
+    let refreshed = screen(&app, 100, 40).0;
+    assert!(
+        refreshed.contains("50 tokens · 25% of the 200 window"),
+        "{refreshed}"
     );
 }
 

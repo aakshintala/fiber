@@ -115,6 +115,10 @@ pub(crate) struct PanelState {
     pub(crate) quota: quota::Query,
     widgets: Vec<Widget>,
     status: Option<SessionStatus>,
+    /// Whether `status` arrived after this attachment. Keep the cached
+    /// payload, but do not use its context window until the new session
+    /// reports its own status.
+    status_current: bool,
     model: Option<String>,
     thinking: Option<String>,
     thinking_state: ThinkingState,
@@ -168,6 +172,7 @@ impl PanelState {
             "session_status" => {
                 if let Some(status) = super::read!(envelope, SessionStatus) {
                     self.status = Some(status);
+                    self.status_current = true;
                 }
             }
             "session_started" => {
@@ -415,6 +420,9 @@ impl PanelState {
     /// "Swapped views").
     pub(crate) fn window(&self) -> Option<u64> {
         self.window.or_else(|| {
+            if !self.status_current {
+                return None;
+            }
             self.status
                 .as_ref()?
                 .context
@@ -549,13 +557,13 @@ impl PanelState {
         self.quota.attached();
         self.workspace = None;
         // The new attachment folds its own `preamble_built` and
-        // `session_status`: the old session's window, handoff point and
-        // status end here, so `/context` waits for the new session's
-        // fold instead of showing the old session's total and window
-        // (`docs/tui.md`, "Swapped views").
+        // `session_status`: the old window and handoff point end here.
+        // Keep the cached status for unrelated panel state, but wait for
+        // the new session's status before using its reported context
+        // window (`docs/tui.md`, "Swapped views").
         self.window = None;
         self.trigger_at = None;
-        self.status = None;
+        self.status_current = false;
         // A new attachment has no running call, so no streamed thinking.
         self.thinking_state = ThinkingState::Idle;
     }
