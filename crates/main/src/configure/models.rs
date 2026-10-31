@@ -49,8 +49,19 @@ impl super::Seam {
             "installable": catalogue.installable,
             "lists": catalogue.lists.iter().map(age).collect::<Vec<_>>(),
             "left_out": catalogue.left_out.iter().map(left_out).collect::<Vec<_>>(),
+            "logged_out": catalogue.logged_out.iter().map(logged_out).collect::<Vec<_>>(),
         }))
     }
+}
+
+/// One provider with data but no credential, with its login capability
+/// and declared source hints.
+fn logged_out(provider: &tui::LoggedOutProvider) -> Value {
+    json!({
+        "provider": provider.provider,
+        "login": provider.login,
+        "hint": provider.hint,
+    })
 }
 
 /// One model as the picker lists it: `name`, `default_level`,

@@ -104,7 +104,7 @@ it. A hook can never approve a call (`docs/extensions.md`, "Hooks").
    `credentials/` is refused. See [Credentials](#credentials).
 2. **A standing deny** matching this call: refused. No model call, no question.
 3. **A standing ask** matching this call: a human is asked.
-4. **A fast path** — see below: allowed, with no model call.
+4. **A fast path** — see below: allowed, with no model call. The confined fast path is checked before the others, and it is the only fast path a confined call ever meets: a confined call that does not declare `review_when_confined` is allowed here, and a guarded one goes on to step 5.
 5. **A session grant** matching this call: allowed.
 6. **A standing allow** matching this call: allowed.
 7. Otherwise **reviewed** by the reviewer.
@@ -128,7 +128,7 @@ no block budget.
 
 ### Fast paths
 
-Four classes of call never reach a reviewer or a person:
+Five classes of call never reach a reviewer or a person:
 
 - every call whose only effect is `reads`, or that declares no effect,
 - a `writes` call whose paths all sit inside the workspace or an added folder
@@ -144,14 +144,15 @@ Four classes of call never reach a reviewer or a person:
   search declares an empty host list and a web fetch declares its URL's host,
   so a search and a fetch to a known host take this path (`docs/tools.md`,
   "Web fetch and web search"). A call that declares no host list, or names a
-  host that is not known, is reviewed.
+  host that is not known, is reviewed, and
+- a shell call Fiber runs confined that does not declare `review_when_confined`.
 
 Memory layers keep their notes and pages as Markdown in extension data
 directories, so saving one costs no model call. The limit to Markdown keeps
 this path off files an extension may load as code or trust as settings, such
 as a Lua file or a JSON index; a write to one is reviewed.
 
-Everything else — shell execution, other network calls, and any other write
+Everything else — an unconfined or guarded shell call, other network calls, and any other write
 outside the workspace and the added folders — is reviewed. A write under a `.git/` or `.fiber/` directory is reviewed too: a hook or
 `.git/config` runs code on the next `git` command, which the reviewer judges
 as `git commit` without seeing the hook, and `.fiber/` holds the repository's

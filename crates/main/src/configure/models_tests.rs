@@ -237,6 +237,28 @@ fn references(catalogue: &Value) -> Vec<&str> {
 /// The hub's `models` lists the hub's own catalogue: the hub home's
 /// models, and none of the other home's.
 #[test]
+fn hub_models_encodes_logged_out_provider_rows() {
+    let hub = Rig::new("fiber-hub-models-logged-out");
+    install_extension(
+        &hub.home,
+        "extensions/acme-ext",
+        json!({
+            "name": "acme-ext",
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API,
+        }),
+        &[("acme", json!({"name": "acme", "models": []}))],
+    );
+    let seam = Seam::new(hub.home.clone());
+    let catalogue = result(&seam, "models", json!({"workspace": hub.workspace}));
+    assert_eq!(
+        catalogue["logged_out"],
+        json!([{"provider": "acme", "login": true, "hint": ""}])
+    );
+}
+
+#[test]
 fn hub_models_lists_the_hub_catalogue_and_none_of_the_clients() {
     let hub = Rig::new("fiber-hub-models-catalogue");
     let client = Rig::new("fiber-hub-models-client");

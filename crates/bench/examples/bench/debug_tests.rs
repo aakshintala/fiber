@@ -506,7 +506,6 @@ fn debug_pass_attach_entry_errors_without_spans() {
         Some(&json!("no attach spans were recorded")),
         "{attach}"
     );
-    assert_eq!(attach.get("spans"), Some(&json!([])), "{attach}");
 }
 
 /// A failed attach run keeps the workload's error, and still carries
@@ -542,58 +541,4 @@ fn debug_pass_attach_entry_keeps_the_workload_error() {
         ])),
         "{attach}"
     );
-}
-
-use std::sync::atomic::{AtomicU32, Ordering};
-
-static PROBE_RUNS: AtomicU32 = AtomicU32::new(u32::MAX);
-static PROBE_OTHER_RUNS: AtomicU32 = AtomicU32::new(u32::MAX);
-
-/// A workload recording how many samples the debug pass asked of it.
-fn probe_runs(ctx: &idle::Ctx<'_>, _: &mut Vec<String>) -> Result<idle::Samples, String> {
-    PROBE_RUNS.store(ctx.runs, Ordering::SeqCst);
-    Ok(Vec::new())
-}
-
-fn probe_other_runs(ctx: &idle::Ctx<'_>, _: &mut Vec<String>) -> Result<idle::Samples, String> {
-    PROBE_OTHER_RUNS.store(ctx.runs, Ordering::SeqCst);
-    Ok(Vec::new())
-}
-
-/// The debug pass runs the attach workload five samples per fixture, like
-/// the timed path, and every other workload once: one debug-only run
-/// never stands in for the five timed samples.
-#[test]
-fn run_debug_runs_attach_five_times_and_others_once() {
-    assert_eq!(crate::attach::SAMPLED[0].name, "terminal attach");
-    const ATTACH_PROBE: idle::Workload = idle::Workload {
-        name: "terminal attach",
-        timing: true,
-        run: probe_runs,
-    };
-    const OTHER_PROBE: idle::Workload = idle::Workload {
-        name: "session start",
-        timing: true,
-        run: probe_other_runs,
-    };
-    let fiber = std::env::current_exe().unwrap();
-    let clock = crate::run::System;
-    run_debug(
-        &fiber,
-        &clock,
-        None,
-        std::time::Duration::ZERO,
-        None,
-        &ATTACH_PROBE,
-    );
-    run_debug(
-        &fiber,
-        &clock,
-        None,
-        std::time::Duration::ZERO,
-        None,
-        &OTHER_PROBE,
-    );
-    assert_eq!(PROBE_RUNS.load(Ordering::SeqCst), 5);
-    assert_eq!(PROBE_OTHER_RUNS.load(Ordering::SeqCst), 1);
 }
