@@ -12,6 +12,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod extension_harness;
 mod support;
 
 use std::path::PathBuf;
@@ -293,6 +294,96 @@ fn a_long_script_keeps_its_start_and_its_finished_ledger_suffix() {
     assert!(
         text.ends_with("Script finished\n- read completed"),
         "the kept tail holds the status and ledger: {text:?}"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_failed_script_returns_its_failure_line_and_a_one_row_ledger() {
+    let source = "local small = host.tool(\"read\", { path = \"small.txt\" })\n\
+        print(\"saw:\" .. small.content[1].text)\n\
+        error(\"boom\")";
+    let setup = reviewed_setup(&calling(source), &allow());
+    std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    // The printed output survives the failure, then the failure line, then
+    // one ledger row for the inner call that finished before the error.
+    let completed = completed_holding(&run, "Script failed:");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed_text(completed);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "one printed line, the failure, one row: {text:?}"
+    );
+    assert_eq!(lines[0], "saw:hello");
+    assert!(
+        lines[1].starts_with("Script failed: "),
+        "the failure line: {:?}",
+        lines[1]
+    );
+    assert!(lines[1].contains("boom"), "the message: {:?}", lines[1]);
+    assert_eq!(lines[2], "- read completed");
+    assert!(!text.contains("Script finished"), "{text:?}");
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_denied_inner_call_returns_denied_inside_the_script() {
+    let source = "local o = host.tool(\"read\", { path = \"small.txt\" })\n\
+        print(\"status:\" .. o.status)\n\
+        print(\"reason:\" .. tostring(o.reason))";
+    let setup = reviewed_setup(&calling(source), &allow());
+    setup.lua(
+        "deny",
+        "fiber.hook(\"before_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) if call.tool == \"read\" then return { refuse = \"nope\" } end end })\n",
+    );
+    std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    // A refused inner call is an ordinary return: the script sees `denied`
+    // (`crates/loop/src/before_tool.rs` records a hook refusal under reason
+    // `hook`; the hook's text stays in the denial message), finishes, and
+    // the ledger rows it pathless.
+    let completed = completed_holding(&run, "status:denied");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "status:denied\nreason:hook\nScript finished\n- read denied"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_disabled_extension_leaves_its_tool_out_of_the_session() {
+    let setup = Setup::new();
+    // The full-name spelling: `docs/configuration.md`, "Keys", reads both
+    // spellings as the same key, and this one needs no short name.
+    script(&setup, "s.json", &json!({"steps": [{"text": "Hi."}]}));
+    install_codemode(&setup);
+    let mut extension = serde_json::Map::new();
+    extension.insert("enabled".to_owned(), json!(false));
+    let mut extensions = serde_json::Map::new();
+    extensions.insert(CODEMODE_NAME.to_owned(), Value::Object(extension));
+    let mut config = serde_json::Map::new();
+    config.insert("extensions".to_owned(), Value::Object(extensions));
+    write_json(&setup.home().join("config.json"), &Value::Object(config));
+    let run = ask(&setup, "hi");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The definitions sent at session start carry no `codemode` tool.
+    let tools = &run.of("preamble_built")[0]["payload"]["tools"];
+    assert!(
+        !tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "codemode"),
+        "{tools}"
     );
     assert_eq!(run.of("turn_completed").len(), 1);
 }
