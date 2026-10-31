@@ -296,9 +296,23 @@ pub enum Op {
     TuiTranscript,
     /// The terminal's first frame.
     TuiFirstRender,
+    /// The first draw holding attached-session history.
+    TuiAttachedFrame,
     /// A terminal frame past its 16 ms budget; one within budget writes
     /// no line.
     TuiFrame,
+    /// Loading TUI extensions before the terminal's first frame.
+    TuiExtensions,
+    /// The opening summary subscribe through its acceptance, which queues
+    /// the session's commands line.
+    TuiAttachSummary,
+    /// The open's pre-frame tail history read, to completion.
+    TuiTailWait,
+    /// Folding one tail answer into the preview candidate.
+    TuiPreviewFold,
+    /// Installing the open's pre-frame preview candidate, without
+    /// another fold.
+    TuiTailInstall,
     /// One session-log write attempt.
     LogAppend,
     /// One session-log sync, when the durability policy syncs.
@@ -359,7 +373,13 @@ impl Op {
             Self::TuiLogRead => "tui.log_read",
             Self::TuiTranscript => "tui.transcript",
             Self::TuiFirstRender => "tui.first_render",
+            Self::TuiAttachedFrame => "tui.attached_frame",
             Self::TuiFrame => "tui.frame",
+            Self::TuiExtensions => "tui.extensions",
+            Self::TuiAttachSummary => "tui.attach_summary",
+            Self::TuiTailWait => "tui.tail_wait",
+            Self::TuiPreviewFold => "tui.preview_fold",
+            Self::TuiTailInstall => "tui.tail_install",
             Self::LogAppend => "log.append",
             Self::LogFsync => "log.fsync",
             Self::ToolPermission => "tool.permission",

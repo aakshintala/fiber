@@ -464,18 +464,37 @@ What is recorded:
   worktree writes none. A failed creation or recreation, a recreation that
   finds the path present, and `fiber sessions prune` write none. Their
   `data` holds only `op` and `ms`.
-  Installed for the terminal are `tui.first_render`, `tui.log_read`,
-  `tui.transcript` and `tui.frame`. `tui.first_render` covers entry through
-  the first draw; a setup failure before the draw discards it and writes
-  none. `tui.log_read` covers the first attach's first fetched page, the
-  first `page_in` `hub.fetch` attempt, to completion whatever its outcome,
+  Installed for the terminal are `tui.extensions`, `tui.first_render`,
+  `tui.attached_frame`, `tui.log_read`, `tui.transcript`, `tui.frame`,
+  `tui.attach_summary`, `tui.tail_wait`, `tui.preview_fold` and
+  `tui.tail_install`.
+  `tui.extensions` covers extension loading before the first draw; when a
+  loader exists it writes once per process, and without one it writes none
+  (`docs/tui.md`, "How a TUI extension runs"). `tui.first_render` covers
+  entry through the first draw and writes at most once per process; a setup
+  failure before the draw discards it and writes none. `tui.attached_frame`
+  starts at the `tui.first_render` entry and ends at the first draw holding
+  attached-session history; it writes once per process. Without a stream, or
+  if the draw never happens, it writes none. `tui.log_read` covers the first
+  attach's first fetched
+  page, the first `page_in` `hub.fetch` attempt, to completion whatever its outcome,
   and `tui.transcript` covers the first successful `app.load` folding that
   page; each is written at most once per process, a failed fetch leaves the
   transcript latch unset, and an attach with no stream writes neither.
   `tui.frame` covers one frame over its 16 ms
   budget; a frame within budget writes none, so the log stays small while
   scrolling. Their `data` holds only `op` and `ms`. The terminal's file
-  stays pid-named across the attach.
+  stays pid-named across the attach. `tui.attach_summary` covers the
+  summary subscribe from before its send until acceptance queues the
+  session's commands line. `tui.tail_wait` covers the pre-frame
+  tail-history fetch from the initial `tail_next` through completion,
+  whatever its outcome. `tui.preview_fold` covers the first history
+  answer's fold from `app.tail_lines` entry through completion, not the
+  empty seed fold or installation. `tui.tail_install` covers the preview
+  installation from `app.install_tail` entry through completion after the
+  pre-frame tail-history fetch.
+  Each is written at most once per process on the first attach; an attach
+  with no stream writes none. Their `data` holds only `op` and `ms`.
   Request, model, hook and network timings may overlap as nested
   measurements, never additive phases.
 - **A session close that stopped waiting for a running command:** one `warn`

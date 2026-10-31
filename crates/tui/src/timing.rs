@@ -8,23 +8,30 @@ use std::sync::Arc;
 use contract::diag::Op;
 
 /// The loop's timing state: the diagnostic writer its scopes share, and
-/// the attach latches. `tui.log_read` and `tui.transcript` each write at
-/// most once per process: a reconnect, a delegate swap or a second attach
-/// never writes a second line.
+/// the attach latches. Each latched operation writes at most once per
+/// process: a reconnect, a delegate swap or a second attach never writes
+/// a second line.
 pub(crate) struct Timing {
     diag: Arc<log::diag::Diag>,
     log_read: bool,
     transcript: bool,
+    attach_summary: bool,
+    tail_wait: bool,
+    preview_fold: bool,
+    tail_install: bool,
 }
 
 impl Timing {
-    /// Shares `diag` with the loop's scopes; both attach latches start
-    /// unset.
+    /// Shares `diag` with the loop's scopes; all latches start unset.
     pub(crate) fn new(diag: Arc<log::diag::Diag>) -> Self {
         Self {
             diag,
             log_read: false,
             transcript: false,
+            attach_summary: false,
+            tail_wait: false,
+            preview_fold: false,
+            tail_install: false,
         }
     }
 
@@ -41,6 +48,13 @@ impl Timing {
     /// draw: a line there times work that happened.
     pub(crate) fn first_render(&self) -> Option<log::diag::Timer> {
         log::diag::timed(&self.diag, Op::TuiFirstRender, None, None)
+    }
+
+    /// Starts alongside the first render's guard. The caller holds it
+    /// until the first draw with attached-session history and discards it
+    /// if that draw never happens.
+    pub(crate) fn attached_frame(&self) -> Option<log::diag::Timer> {
+        log::diag::timed(&self.diag, Op::TuiAttachedFrame, None, None)
     }
 
     /// Starts the first attach's first fetched page guard, once per
@@ -69,6 +83,55 @@ impl Timing {
     /// line; the suppression lives in the timer's drop.
     pub(crate) fn frame(&self) -> Option<log::diag::Timer> {
         log::diag::timed(&self.diag, Op::TuiFrame, None, None)
+    }
+
+    /// Starts the extension load's guard. Loading runs once before the
+    /// first frame, so no latch: one line per process.
+    pub(crate) fn extensions(&self) -> Option<log::diag::Timer> {
+        log::diag::timed(&self.diag, Op::TuiExtensions, None, None)
+    }
+
+    /// Starts the opening summary subscribe's guard, once per process.
+    /// The loop drops it once the open leaves the summary stage, so one
+    /// line covers the send through the acceptance that queues the
+    /// session's commands line.
+    pub(crate) fn attach_summary(&mut self) -> Option<log::diag::Timer> {
+        if std::mem::replace(&mut self.attach_summary, true) {
+            return None;
+        }
+        log::diag::timed(&self.diag, Op::TuiAttachSummary, None, None)
+    }
+
+    /// Starts the open's pre-frame tail read guard, once per process.
+    /// The caller holds it across the whole tail phase to completion,
+    /// whatever its outcome; the post-frame count never takes it.
+    pub(crate) fn tail_wait(&mut self) -> Option<log::diag::Timer> {
+        if std::mem::replace(&mut self.tail_wait, true) {
+            return None;
+        }
+        log::diag::timed(&self.diag, Op::TuiTailWait, None, None)
+    }
+
+    /// Starts the first answer fold's guard, once per process. The
+    /// initial seed is empty, and later folds do not write a second line.
+    pub(crate) fn preview_fold(&mut self) -> Option<log::diag::Timer> {
+        if std::mem::replace(&mut self.preview_fold, true) {
+            return None;
+        }
+        log::diag::timed(&self.diag, Op::TuiPreviewFold, None, None)
+    }
+
+    /// Starts the open's pre-frame install guard, once per process.
+    /// The caller holds it across the preview install to completion,
+    /// whatever its outcome. The install puts the newest candidate on
+    /// screen without another fold (`docs/tui.md`, "History and
+    /// paging"); when no answer folded one, the install folds the
+    /// leftover candidate first, under this same guard.
+    pub(crate) fn tail_install(&mut self) -> Option<log::diag::Timer> {
+        if std::mem::replace(&mut self.tail_install, true) {
+            return None;
+        }
+        log::diag::timed(&self.diag, Op::TuiTailInstall, None, None)
     }
 }
 
