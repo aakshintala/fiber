@@ -320,8 +320,8 @@ fn at_default_no_debug_line_is_written() {
     }
 }
 
-/// The loaded input-box slot changes the first frame; the attached frame
-/// then shows history before the attached-frame record is checked.
+/// The loaded reply slot decorates seeded history on the first attached
+/// frame, before the attached-frame record is checked.
 #[test]
 fn a_debug_resume_records_extension_and_attached_frame() {
     let setup = Setup::new();
@@ -341,8 +341,8 @@ fn a_debug_resume_records_extension_and_attached_frame() {
     fs::write(
         extension.join("tui/init.lua"),
         concat!(
-            "fiber.slot('input_box',{timeout=100,render=function(input,width) ",
-            "return {{{text='EXTENSION-FIRST-FRAME'}}} end})",
+            "fiber.slot('reply',{timeout=100,render=function(input,width) ",
+            "return {{{text='ATTACHED-EXTENSION ' .. input.text}}} end})",
         ),
     )
     .unwrap();
@@ -365,14 +365,11 @@ fn a_debug_resume_records_extension_and_attached_frame() {
         &[("FIBER_TEST_FAKE_KEY", "sk-test")],
     );
     let pid = run.id();
-    let first_end = run.ready();
-    let output = run.output();
-    let mut parser = vt100::Parser::new(ROWS, COLS, 0);
-    parser.process(&output[..first_end]);
-    let first = parser.screen().contents();
-    // docs/tui.md:3121-3123: TUI extensions load before the first frame.
-    assert!(first.contains("EXTENSION-FIRST-FRAME"), "{first}");
-    let grid = run.wait_screen("the attached history", |grid| grid.contents.contains(LAST));
+    run.ready();
+    let grid = run.wait_screen("attached history through the loaded reply slot", |grid| {
+        grid.contents.contains("ATTACHED-EXTENSION") && grid.contents.contains(LAST)
+    });
+    assert!(grid.contents.contains("ATTACHED-EXTENSION"), "{grid:?}");
     assert!(
         grid.contents.contains(LAST),
         "attached history is visible: {grid:?}"

@@ -430,11 +430,13 @@ fn debug_pass_attach_entry_carries_per_sample_spans() {
     // leave elapsed values unasserted.
     let mut got: Vec<Value> = spans
         .iter()
-        .map(|span| json!({
-            "fixture": span["fixture"],
-            "sample": span["sample"],
-            "op": span["op"],
-        }))
+        .map(|span| {
+            json!({
+                "fixture": span["fixture"],
+                "sample": span["sample"],
+                "op": span["op"],
+            })
+        })
         .collect();
     let mut want = vec![
         json!({"fixture": "1 MiB", "sample": 0, "op": "tui.attached_frame"}),
@@ -445,7 +447,7 @@ fn debug_pass_attach_entry_carries_per_sample_spans() {
     want.sort_by_key(|span| key(span));
     assert_eq!(got, want, "{attach}");
     assert!(attach.get("error").is_none(), "{attach}");
-    // docs/state.md:431-434 promises one attached-frame line per process.
+    // docs/state.md:432-435 promises one attached-frame line per process.
     // The tallied operation name remains beside its spans.
     assert_eq!(
         attach
