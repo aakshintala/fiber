@@ -7,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::{lua_fixture, mcp_fixture, script};
-use crate::TempDir;
 use crate::deadline::Deadline;
+use crate::{MUST_SUCCEED_WITHIN, TempDir};
 use contract::clock::Clock;
 
 /// How long a script child may take. A wait that reaches it fails the test.
@@ -159,6 +159,51 @@ fn the_mcp_fixture_fails_its_start_on_a_fail_start_file() {
         !dir.path().join("requests.log").exists(),
         "nothing is read before the exit",
     );
+}
+
+/// The fixture server never holds its home: spawned the way production
+/// starts it, with its working directory under the home and its stderr on
+/// a log file under it, it leaves both at once, so the home drops cleanly
+/// while the server still runs.
+#[test]
+fn the_mcp_fixture_server_leaves_its_home_directory() {
+    let home = TempDir::new("fiber-fixture-leaves-home");
+    // The wrapper production spawns through redirects the server's
+    // stderr into its directory; mirror it, so the test pins the release
+    // of that descriptor too.
+    let stderr_log = home.path().join("stderr.log");
+    let stderr_file = std::fs::File::create(&stderr_log).unwrap();
+    let mut child = Command::new(mcp_fixture())
+        .arg(home.path())
+        .current_dir(home.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+        .unwrap();
+    // `pid.txt` lands only after the server leaves its starting directory
+    // and its inherited descriptors, so the drop below never races either
+    // move.
+    crate::wait_until(
+        "the fixture server to start",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        {
+            let started = home.path().join("pid.txt");
+            move || started.exists()
+        },
+    );
+    // The point of the moves: the home drops while the server still runs.
+    let path = home.path().to_path_buf();
+    drop(home);
+    assert!(
+        !path.exists(),
+        "the home survives with the server still running: {}",
+        path.display()
+    );
+    match child.kill() {
+        Ok(()) | Err(_) => {}
+    }
+    let _ = waited(child);
 }
 
 /// The accessor returns the checked-in script beside the crate, the same
