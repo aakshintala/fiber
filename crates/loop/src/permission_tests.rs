@@ -1497,3 +1497,245 @@ fn a_root_nested_below_metadata_grants_no_fast_path() {
         assert!(matches!(writes(&[&denied]), Verdict::Review), "{denied}");
     }
 }
+
+/// A confined call runs only inside the sandbox, so without the guard it
+/// needs no reviewer (`docs/permissions.md`, "The destructive-command
+/// guard").
+fn confined(effects: Effects) -> Effects {
+    Effects {
+        declared: DeclaredEffects {
+            confined: true,
+            ..effects.declared
+        },
+        ..effects
+    }
+}
+
+/// A call declaring `review_when_confined`: the shell's destructive-command
+/// guard sets it, and only it removes the confined fast path.
+fn guarded(effects: Effects) -> Effects {
+    Effects {
+        review_when_confined: true,
+        ..effects
+    }
+}
+
+fn judged(
+    tool: &str,
+    effects: &Effects,
+    rules: &Result<StandingRules, RulesError>,
+    grants: &[Grant],
+    workspace: &std::path::Path,
+    home: &std::path::Path,
+    credentials: &std::path::Path,
+) -> Verdict {
+    judge(
+        tool,
+        effects,
+        rules,
+        grants,
+        &crate::known_hosts::KnownHosts::default(),
+        workspace,
+        &[],
+        home,
+        credentials,
+        &[],
+    )
+}
+
+#[test]
+fn an_unguarded_confined_call_takes_the_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    let effects = confined(call(vec![Effect::Executes], None, Some("x")));
+    assert!(matches!(
+        judged(
+            "shell",
+            &effects,
+            &empty_rules(),
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Allow(None)
+    ));
+}
+
+#[test]
+fn a_guarded_confined_call_meets_grants_allows_and_the_reviewer() {
+    let (_root, workspace, home, credentials) = dirs();
+    let effects = guarded(confined(call(vec![Effect::Executes], None, Some("x"))));
+    // No grant and no rule: reviewed, as with the sandbox off.
+    assert!(matches!(
+        judged(
+            "shell",
+            &effects,
+            &empty_rules(),
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Review
+    ));
+    // A session grant still applies to the guarded call.
+    let grants = [Grant {
+        tool: "shell".into(),
+        prefix: "x".into(),
+    }];
+    assert!(matches!(
+        judged(
+            "shell",
+            &effects,
+            &empty_rules(),
+            &grants,
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Allow(Some(DecidedBy::SessionGrant))
+    ));
+    // A standing allow still applies to the guarded call.
+    let allows = rules(vec![rule(RuleDecision::Allow, "shell", "x")], Vec::new());
+    assert!(matches!(
+        judged(
+            "shell",
+            &effects,
+            &allows,
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Allow(Some(DecidedBy::StandingRule))
+    ));
+}
+
+#[test]
+fn a_guarded_confined_read_skips_the_read_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    // The guard over-matches by design (`echo rm -rf tmp` reads and is
+    // still guarded), so a guarded confined read must not take the read
+    // fast path.
+    let guarded_read = guarded(confined(call(
+        vec![Effect::Reads],
+        None,
+        Some("echo rm -rf tmp"),
+    )));
+    assert!(matches!(
+        judged(
+            "shell",
+            &guarded_read,
+            &empty_rules(),
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Review
+    ));
+    // An unguarded confined read keeps its fast path.
+    let plain_read = confined(call(vec![Effect::Reads], None, Some("echo hi")));
+    assert!(matches!(
+        judged(
+            "shell",
+            &plain_read,
+            &empty_rules(),
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Allow(None)
+    ));
+    // A guarded unconfined read keeps its ordinary fast path: the guard
+    // removes only the confined one.
+    let unconfined_guarded = guarded(call(vec![Effect::Reads], None, Some("echo rm -rf tmp")));
+    assert!(matches!(
+        judged(
+            "shell",
+            &unconfined_guarded,
+            &empty_rules(),
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Allow(None)
+    ));
+}
+
+#[test]
+fn denies_asks_and_always_reviewed_stay_first_for_confined_calls() {
+    let (_root, workspace, home, credentials) = dirs();
+    // The credential deny refuses a confined call touching its directory.
+    let secret = credentials.join("token");
+    std::fs::write(&secret, "s3cret").unwrap();
+    let spelled = secret.display().to_string();
+    let touching = confined(call(
+        vec![Effect::Executes],
+        Some(vec![spelled.as_str()]),
+        Some("x"),
+    ));
+    assert!(matches!(
+        judged(
+            "shell",
+            &touching,
+            &empty_rules(),
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Deny {
+            by: DecidedBy::CredentialDeny,
+            ..
+        }
+    ));
+    let effects = confined(call(vec![Effect::Executes], None, Some("x")));
+    // A standing deny refuses it.
+    let denied = rules(vec![rule(RuleDecision::Deny, "shell", "x")], Vec::new());
+    assert!(matches!(
+        judged(
+            "shell",
+            &effects,
+            &denied,
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Deny {
+            by: DecidedBy::StandingRule,
+            ..
+        }
+    ));
+    // A standing ask asks about it.
+    let asked = rules(vec![rule(RuleDecision::Ask, "shell", "x")], Vec::new());
+    assert!(matches!(
+        judged(
+            "shell",
+            &effects,
+            &asked,
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Ask(_)
+    ));
+    // `always_reviewed` still skips the confined fast path.
+    let reviewed_confined = reviewed(confined(call(vec![Effect::Executes], None, Some("x"))));
+    assert!(matches!(
+        judged(
+            "shell",
+            &reviewed_confined,
+            &empty_rules(),
+            &[],
+            &workspace,
+            &home,
+            &credentials
+        ),
+        Verdict::Review
+    ));
+}

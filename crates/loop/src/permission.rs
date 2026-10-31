@@ -79,7 +79,18 @@ pub(crate) fn judge(
     if effects.always_reviewed {
         return Verdict::Review;
     }
-    if fast_path(&effects.declared, workspace, added, home) || known_network(effects, known) {
+    // The confined fast path: a call Fiber runs only inside the sandbox
+    // needs no reviewer (`docs/permissions.md`, "The destructive-command
+    // guard"). A guarded call skips every fast path, not just this one:
+    // the guard over-matches by design, so a guarded `reads` must still
+    // meet grants, allows and the reviewer. Only an unconfined call reaches
+    // the existing fast paths, so the guard removes nothing there.
+    if effects.declared.confined {
+        if !effects.review_when_confined {
+            return Verdict::Allow(None);
+        }
+    } else if fast_path(&effects.declared, workspace, added, home) || known_network(effects, known)
+    {
         return Verdict::Allow(None);
     }
     if grants
