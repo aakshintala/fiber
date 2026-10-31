@@ -256,7 +256,7 @@ fn journey_config(setup: &Setup, servers: Value) {
 /// `provider_request` and `peak_memory` lines by their own paragraphs.
 #[test]
 fn a_debug_journey_times_the_session_core_matrix() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let sentinel = "sentinel-matrix-7q2x";
     let server = journey(sentinel.to_owned());
     setup.provider(&server);

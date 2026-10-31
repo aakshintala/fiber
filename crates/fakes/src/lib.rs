@@ -43,6 +43,7 @@ pub mod wire;
 mod within;
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub use blocking::BlockingProvider;
 pub use client::Client;
@@ -141,9 +142,23 @@ pub fn lua_fixture() -> PathBuf {
 /// The fake MCP stdio server's `server.sh`: it reads the directory named
 /// by its first argument, holding `tools.json` and one `call-<tool>.json`
 /// per tool.
+///
+/// Returning the path warms the script once per test process through the
+/// shared helper's start bound (`warm_up`), because the first exec of a
+/// freshly linked binary can stall for seconds on macOS. The warm runs the
+/// script with no arguments, which fast-fails with status 1 before reading
+/// anything, so it never blocks on input and warms the original path every
+/// caller executes.
 pub fn mcp_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mcp-fixture/server.sh")
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mcp-fixture/server.sh");
+    MCP_WARMED.get_or_init(|| warm_up(&path, &[], 1));
+    path
 }
+
+/// The checked-in script warmed past its first-exec stall in this test
+/// process: nextest runs a test binary in one process, so the first lookup
+/// warms and later lookups skip it.
+static MCP_WARMED: OnceLock<()> = OnceLock::new();
 
 #[cfg(test)]
 mod fixture_tests;

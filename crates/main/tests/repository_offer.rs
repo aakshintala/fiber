@@ -259,7 +259,7 @@ fn close(client: &Client, id: &str) {
 
 #[test]
 fn a_full_client_reads_a_listed_file_and_nothing_else() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let script = setup.workspace().join("tools/db.sh");
@@ -338,7 +338,7 @@ fn a_full_client_reads_a_listed_file_and_nothing_else() {
 
 #[test]
 fn a_full_client_answers_the_offer_and_the_turn_runs() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({}));
@@ -437,7 +437,7 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
 
 #[test]
 fn an_extensions_replacement_of_an_mcp_tool_survives_the_offer() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([
         stream(&[function_call("call_echo", "mcp__db__echo", &json!({}))]),
         hello(),
@@ -562,7 +562,7 @@ fn an_extensions_replacement_of_an_mcp_tool_survives_the_offer() {
 
 #[test]
 fn fiber_ask_skips_an_unapproved_server_with_a_notice() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({}));
@@ -605,7 +605,7 @@ fn fiber_ask_skips_an_unapproved_server_with_a_notice() {
 
 #[test]
 fn fiber_ask_fails_on_a_required_server_nobody_approved() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({"required": true}));
@@ -678,7 +678,7 @@ fn fiber_ask_fails_on_a_required_repository_extension_nobody_approved() {
 
 #[test]
 fn fiber_ask_after_fiber_approve_loads_without_a_notice() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({"required": true}));
@@ -750,7 +750,7 @@ fn stdout_kinds(lines: &[Value]) -> Vec<&str> {
 
 #[test]
 fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({}));
@@ -858,7 +858,7 @@ fn end_through_hub(
 
 #[test]
 fn a_client_that_starts_with_content_through_the_hub_is_offered_the_code() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({}));
@@ -894,7 +894,7 @@ fn a_client_that_starts_with_content_through_the_hub_is_offered_the_code() {
 
 #[test]
 fn a_start_with_content_that_never_subscribes_runs_unattended() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     declare_db(&setup, &json!({}));
