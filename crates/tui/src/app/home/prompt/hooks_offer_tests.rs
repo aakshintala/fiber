@@ -458,7 +458,10 @@ fn clear_staged_decline_stays_attached_and_sends_no_close() {
         app.session().map(|session| session.0.as_str()),
         Some(session)
     );
-    assert!(app.clear_pending.is_none(), "the clear settles");
+    assert!(
+        app.clear_pending_command_id().is_none(),
+        "the clear settles"
+    );
 }
 
 #[test]
@@ -654,7 +657,12 @@ fn accepting_resends_the_retained_start_unchanged() {
         "the retry is retained"
     );
     assert!(app.outbox.start_line(&old).is_none());
-    assert!(matches!(app.phase, Phase::Pending { .. }));
+    assert_eq!(
+        app.phase,
+        Phase::Pending {
+            command_id: new.clone(),
+        }
+    );
     // The new start's answer opens the session, as any start's does:
     // attach, commands, then the pending draft as its first prompt.
     let out = app.on_line(accepted(&new, "s_aaaaaaaaaaaaaaaa"));
@@ -694,11 +702,9 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
     app.on_line(status(old_session));
     app.clear();
     let staged = app
-        .clear_pending
-        .as_ref()
+        .clear_pending_command_id()
         .expect("the clear staged a start")
-        .command_id
-        .clone();
+        .to_owned();
     let staged_line = app
         .outbox
         .start_line(&staged)
@@ -735,11 +741,18 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
         .expect("the retry has an id")
         .to_owned();
     assert_eq!(
-        app.clear_pending
-            .as_ref()
-            .map(|pending| pending.command_id.as_str()),
+        app.clear_pending_command_id(),
         Some(new.as_str()),
         "the clear follows the retry"
+    );
+    assert!(
+        matches!(app.phase, Phase::Attached { .. }),
+        "a clear retry keeps the old phase attached instead of marking the retry pending"
+    );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(old_session),
+        "the staged clear stays attached until the retry answers"
     );
     let out = app.on_line(accepted(&new, "s_bbbbbbbbbbbbbbbb"));
     // The accepted retry closes the old session: the close goes out
@@ -1081,7 +1094,10 @@ fn clear_staged_install_failure_settles_the_clear() {
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
     let old = refuse_start(&mut app, "");
-    assert!(app.clear_pending.is_some(), "the clear staged a start");
+    assert!(
+        app.clear_pending_command_id().is_some(),
+        "the clear staged a start"
+    );
     let ticket = match app.take_hooks_job().expect("the query waits") {
         crate::install_worker::HooksJob::Query(query) => query.ticket,
         crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
@@ -1115,7 +1131,10 @@ fn clear_staged_install_failure_settles_the_clear() {
         app.session().map(|session| session.0.as_str()),
         Some(session)
     );
-    assert!(app.clear_pending.is_none(), "the clear settles");
+    assert!(
+        app.clear_pending_command_id().is_none(),
+        "the clear settles"
+    );
     assert!(!app.outbox.pending.contains_key(&old));
 }
 
@@ -1127,7 +1146,10 @@ fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
     let old = refuse_start(&mut app, "");
-    assert!(app.clear_pending.is_some(), "the clear staged a start");
+    assert!(
+        app.clear_pending_command_id().is_some(),
+        "the clear staged a start"
+    );
     assert!(app.take_hooks_job().is_some(), "the query runs");
     app.disconnected();
     assert!(!app.hooks_offer_open(), "the offer closes");
@@ -1142,7 +1164,10 @@ fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
             "Connection lost.".to_owned()
         )]
     );
-    assert!(app.clear_pending.is_none(), "the clear settles");
+    assert!(
+        app.clear_pending_command_id().is_none(),
+        "the clear settles"
+    );
     assert!(!app.outbox.pending.contains_key(&old));
     assert_eq!(
         app.session().map(|session| session.0.as_str()),
