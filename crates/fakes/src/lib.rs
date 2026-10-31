@@ -143,11 +143,12 @@ pub fn lua_fixture() -> PathBuf {
 /// by its first argument, holding `tools.json` and one `call-<tool>.json`
 /// per tool.
 ///
-/// The server leaves its starting directory for `/` before it writes
-/// `pid.txt`, reaching everything through its first argument by absolute
-/// path instead: a server that outlives the test never holds the
-/// spawner's directory through its working directory, whatever directory
-/// spawns it. Every caller gets that behaviour with no change of its own.
+/// The server leaves its starting directory for `/` and its stderr for
+/// `/dev/null` before it writes `pid.txt`, reaching everything through
+/// its first argument by absolute path instead: a server that outlives
+/// the test never holds the spawner's directory through its working
+/// directory or an inherited descriptor, whatever directory spawns it.
+/// Every caller gets that behaviour with no change of its own.
 ///
 /// Returning the path warms the script once per test process through the
 /// shared helper's start bound (`warm_up`), because the first exec of a

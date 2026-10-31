@@ -181,24 +181,53 @@ fn live_dirs(pid: u32) -> Vec<std::path::PathBuf> {
     support::peer::dirs_of(support::peer::Pid(pid))
 }
 
-/// The fixture server never holds its home through its working directory:
-/// spawned the way production starts it, with its working directory under
-/// the home, it leaves for a neutral directory at once, so the home drops
-/// cleanly while the server still runs.
+/// The files `pid` holds open under `home`: the Linux-only open-file
+/// match of the holder scan, so a server the scan would name through a
+/// descriptor fails the assert below first and fast.
+#[cfg(target_os = "linux")]
+fn open_under_home(pid: u32, home: &Path) -> Vec<std::path::PathBuf> {
+    let fds = Path::new("/proc").join(pid.to_string()).join("fd");
+    std::fs::read_dir(&fds)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+        .filter(|target| support::peer::within_dir(home, target))
+        .collect()
+}
+
+/// No open-file match exists on macOS: the holder scan matches the
+/// working directory and the executable image only, so there is nothing
+/// further to assert there.
+#[cfg(target_os = "macos")]
+fn open_under_home(_pid: u32, _home: &Path) -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+/// The fixture server never holds its home: spawned the way production
+/// starts it, with its working directory under the home and its stderr on
+/// a log file under it, it leaves both at once, so the home drops cleanly
+/// while the server still runs.
 #[test]
 fn the_mcp_fixture_server_leaves_its_home_directory() {
     let home = TempDir::new("fiber-fixture-leaves-home");
+    // The wrapper production spawns through redirects the server's
+    // stderr into its directory; mirror it, so the test pins the release
+    // of that descriptor too.
+    let stderr_log = home.path().join("stderr.log");
+    let stderr_file = std::fs::File::create(&stderr_log).unwrap();
     let mut child = Command::new(mcp_fixture())
         .arg(home.path())
         .current_dir(home.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(stderr_file))
         .spawn()
         .unwrap();
     let pid = child.id();
-    // `pid.txt` lands only after the server leaves its starting directory,
-    // so the read below never races the move.
+    // `pid.txt` lands only after the server leaves its starting directory
+    // and its inherited descriptors, so the reads below never race either
+    // move.
     crate::wait_until("the fixture server to start", Deadline::after(DEADLINE), {
         let started = home.path().join("pid.txt");
         move || started.exists()
@@ -219,7 +248,17 @@ fn the_mcp_fixture_server_leaves_its_home_directory() {
             .collect::<Vec<_>>()
             .join(", "),
     );
-    // The point of the move: the home drops while the server still runs.
+    assert!(
+        open_under_home(pid, &canonical).is_empty(),
+        "server pid {pid} still holds {} through an open file: {}",
+        home.path().display(),
+        open_under_home(pid, &canonical)
+            .iter()
+            .map(|file| file.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    // The point of the moves: the home drops while the server still runs.
     let path = home.path().to_path_buf();
     drop(home);
     assert!(
