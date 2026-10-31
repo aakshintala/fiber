@@ -118,6 +118,44 @@ fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
     (setup, release, guard)
 }
 
+/// Dropping the helper without any release write reaps the parked holder:
+/// the parent-death cleanup path, which is the leak this helper closes.
+/// The pre-drop guard pins the test against vacuity: `try_matching_exits`
+/// passes when nothing matches, so without a live match on the holder's
+/// own pid the reap below would prove nothing.
+#[test]
+fn hold_drop_releases_and_reaps_the_holder() {
+    let setup = Setup::new();
+    // Pid-scoped like the job command, so parallel tests cannot
+    // cross-match; the absolute path keeps the helper on its hold-path
+    // derivation.
+    let command = format!(
+        "head -n 1 {} #{}",
+        setup.workspace().join("hold").display(),
+        std::process::id()
+    );
+    let hold = support::hold::Hold::park(&setup, &command);
+    let mut holder = Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = holder.id();
+    assert!(fakes::pid_alive(pid), "the holder lives before the drop");
+    let pattern = setup.workspace().join("hold").to_str().unwrap().to_owned();
+    let listed = pattern.clone();
+    fakes::wait_until("the holder to park", setup.deadline, move || {
+        fakes::matching(&listed)
+            .map(|pids| pids.contains(&pid))
+            .unwrap_or(false)
+    });
+    drop(hold);
+    fakes::try_matching_exits(pattern.as_str(), setup.deadline)
+        .unwrap_or_else(|error| panic!("the dropped helper reaps its holder: {error}"));
+    let _ = holder.wait();
+}
+
 /// Only the tty job is held: the parent starts one scripted `shell`
 /// (with `tty: true`) running `head -n 1 hold` in the workspace, then
 /// answers. No delegate spawns, so releasing the hold finishes the job
