@@ -360,6 +360,15 @@ impl App {
             .and_then(|home| home.subs.answered(id, accepted))
     }
 
+    /// Whether the open's first-stage summary subscribe is in flight:
+    /// the attach summary span runs while this holds, through the
+    /// acceptance that queues the session's commands line.
+    pub(crate) fn summary_in_flight(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| matches!(home.subs.opening, Some(Opening::Summary { .. })))
+    }
+
     /// Whether `id` is the open's subscribe in flight: the first
     /// stage's or the raise's. Only its rejection fails the open, and
     /// only the raise's acceptance ends the gate.

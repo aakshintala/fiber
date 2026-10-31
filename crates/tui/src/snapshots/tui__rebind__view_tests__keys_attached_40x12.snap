@@ -1,16 +1,15 @@
 ---
 source: crates/tui/src/rebind_view_tests.rs
-assertion_line: 97
 expression: "screen(&app, 40, 12)"
 ---
   Keys  /keys                Esc returns
- Enter                       send Send a
- Shift+Enter, Ctrl+J         line_break
- Esc                         close_or_in
- Ctrl+C                      clear_then_
-⋮⌥0                          go_home Go
-⋮Ctrl+N                      new_session
-⋮⌥1 ⌥2 ⌥3 ⌥4 ⌥5 ⌥6 ⌥7 ⌥8 ⌥9  rail_row_n
+ Enter                              send
+ Shift+Enter, Ctrl+J                line
+ Esc                                clos
+ Ctrl+C                             clea
+⋮⌥0                                 go_h
+⋮Ctrl+N                             new_
+⋮⌥1 ⌥2 ⌥3 ⌥4 ⌥5 ⌥6 ⌥7 ⌥8 ⌥9         rail
  ↑↓ move · Enter rebind · r reset · Dele
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›

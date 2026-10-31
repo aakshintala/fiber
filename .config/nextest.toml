@@ -35,14 +35,10 @@ path = "junit.xml"
 filter = 'package(main) & test(=builtin::tool_budget_tests::the_built_in_definitions_fit_their_budget)'
 success-output = "immediate"
 
-# docs/testing.md, "Waits and timeouts": allow twice the test's deadline plus run time.
-[[profile.default.overrides]]
-filter = 'package(main) & test(=images_past_the_placeholder_range_keep_a_unique_viewer_target)'
-slow-timeout = { period = "30s", terminate-after = 12 }
-
 # docs/testing.md, "Journeys": the journey binary's kill bound is twice the
 # longest single deadline plus run time; it carries only slow-timeout, so a
-# hang fails once under the default profile.
+# hang fails once under the default profile. Longest deadline 120 s, moved
+# journey ~6 s local run: 2×120 + 7 rounds to 9 periods (270 s).
 [[profile.default.overrides]]
 filter = 'package(main) & binary(=main_journeys)'
-slow-timeout = { period = "30s", terminate-after = 6 }
+slow-timeout = { period = "30s", terminate-after = 9 }

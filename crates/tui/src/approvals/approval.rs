@@ -467,7 +467,9 @@ impl Approval {
     }
 
     /// An editing key: a paste is typed into the feedback, a control
-    /// character as a space; every other edit does nothing.
+    /// character as a space; every line edit runs the shared single-line
+    /// editor. The feedback is append-only with the caret at its end, so
+    /// deletes act at the end and moves stay at the end.
     pub(super) fn on_edit(&mut self, edit: &Edit) {
         match edit {
             Edit::Paste(text) => {
@@ -485,7 +487,10 @@ impl Approval {
             | Edit::DeleteToLineStart
             | Edit::LineStart
             | Edit::LineEnd
-            | Edit::Delete => {}
+            | Edit::Delete => {
+                let mut end = self.feedback.chars().count();
+                super::text::edit_line(&mut self.feedback, &mut end, edit);
+            }
         }
     }
 
