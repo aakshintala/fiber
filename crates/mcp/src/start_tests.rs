@@ -593,15 +593,8 @@ fn servers_stop_at_once() {
             }
         })
         .collect();
-    // Warm the checked-in fixture past its first-exec stall before the
-    // start keeps its own deadline: a `fail-start` directory makes the
-    // fixture exit 1 before reading anything, so the warm-up never
-    // blocks on input.
-    let fixture = fakes::mcp_fixture();
-    let warm_dir = fakes::TempDir::new("fiber-mcp-warm");
-    std::fs::write(warm_dir.path().join("fail-start"), "").expect("warm-up dir");
-    let warm_arg = warm_dir.path().display().to_string();
-    fakes::warm_up(&fixture, &[warm_arg.as_str()], 1);
+    // The spec map above already looked up the checked-in fixture, which
+    // warms it once before the start keeps its own deadline.
     let clock = setups[0].clock();
     let workspace = setups[0].workspace();
     let artifacts = setups[0].artifacts();
