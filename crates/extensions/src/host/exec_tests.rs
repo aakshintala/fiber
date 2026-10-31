@@ -122,9 +122,9 @@ fn step_to_deadline(clock: &FakeClock, deadline: Instant) {
 /// Names the park a supervisor observation holds: the grace bound, the
 /// drain bound, or another instant, with the group-empty and EOF state the
 /// supervisor saw. A failed fake-clock wait reports this instead of only
-/// the park mismatch, so the failure shows what the run had seen. This
-/// reports observed state, not a deterministic repro: no pause point
-/// reaches the reader/supervisor order behind the flake.
+/// the park mismatch, so the failure shows what the run had seen. The
+/// escaped-holder FIFO gates pin the process and EOF state, so the drain
+/// bound is the only reachable park there; the stream remains diagnostic.
 fn describe_park_event(
     event: &super::ExecTestEvent,
     kill_at: Instant,
@@ -1789,8 +1789,10 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
     fakes::fifo(&release_path);
     fakes::fifo(&leader_gate_path);
     // fd 3 keeps the run's input pipe open while the escaped child waits on
-    // the test-owned FIFO. The leader gate keeps its group alive until the
-    // child has escaped and opened that FIFO.
+    // the test-owned FIFO. The leader gate keeps its group alive through the
+    // fake deadline so the deadline stop signals it. The child blocks on the
+    // release FIFO on a separate descriptor while it holds the duplicated
+    // stdin and both output pipes open.
     let escaped_child = r#"
         POSIX::setsid() or die $!;
         $SIG{HUP} = "IGNORE";
@@ -1798,11 +1800,11 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
         open my $ready, ">>", $ARGV[0] or die $!;
         print $ready "$$\n";
         close $ready;
-        open STDIN, "<", $ARGV[1] or die $!;
+        open my $rel, "<", $ARGV[1] or die $!;
         open my $opened, ">>", $ARGV[0] or die $!;
         print $opened "$$\n";
         close $opened;
-        my $line = <STDIN>;
+        my $line = <$rel>;
         die "no release" unless defined $line;
         open my $ack, ">>", $ARGV[0] or die $!;
         print $ack "$$\n";
@@ -1820,7 +1822,7 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
         .write(true)
         .open(&release_path)
         .expect("open the escaped holder's release fifo");
-    let mut leader_gate = OpenOptions::new()
+    let leader_gate = OpenOptions::new()
         .read(true)
         .write(true)
         .open(&leader_gate_path)
@@ -1845,10 +1847,12 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
         "the original leader waits at its gate until the child escapes"
     );
 
-    leader_gate
-        .write_all(b"exit\n")
-        .expect("release the original leader");
-    drop(leader_gate);
+    step_to_deadline(&clock, deadline);
+    let kill_at = clock.now() + GRACE;
+    let drain_until = clock.now() + DRAIN;
+    // The deadline stop signals the original group while the escaped child
+    // still holds the pipes; the group then empties with EOF false, so the
+    // supervisor reaches only the drain bound.
     let pgid_for_wait = pgid;
     fakes::wait_until(
         "the original process group to empty",
@@ -1857,12 +1861,9 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
     );
     assert!(
         !group::alive(pgid),
-        "the leader gate empties the original group"
+        "the stop signal empties the original group"
     );
-
-    step_to_deadline(&clock, deadline);
-    let kill_at = clock.now() + GRACE;
-    let drain_until = clock.now() + DRAIN;
+    drop(leader_gate);
     assert!(
         clock.await_parked(drain_until, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the escaped holder pins the supervisor at the drain bound"
