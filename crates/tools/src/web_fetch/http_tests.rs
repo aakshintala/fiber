@@ -244,6 +244,7 @@ fn a_stopped_hop_sends_no_request() {
         uri: &uri,
         pinned: Some(&[SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9)]),
         proxy: None,
+        observe: None,
     };
     let result = hop.get(&request, |_, _| Ok(()));
     assert!(result.is_err());
@@ -394,6 +395,7 @@ fn head_of(address: SocketAddr, uri: &str) -> super::Head {
             uri: &uri,
             pinned: Some(&[address]),
             proxy: None,
+            observe: None,
         };
         let hop = Arc::new(Hop::default());
         hop.get(&request, |head, _| Ok(head)).unwrap()

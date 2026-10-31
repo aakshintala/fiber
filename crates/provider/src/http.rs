@@ -670,55 +670,10 @@ pub(crate) fn sanitized_target(url: &str, secrets: &Secrets) -> (Option<String>,
     let (authority, path) = rest.find('/').map_or((rest, "/"), |at| rest.split_at(at));
     let host = authority.rsplit('@').next().unwrap_or(authority);
     let host = (!host.is_empty()).then(|| secrets.redact(host));
-    let path = String::from_utf8(percent_decode(path.as_bytes()))
+    let path = String::from_utf8(support::percent_decode(path.as_bytes()))
         .ok()
         .map(|decoded| secrets.redact(&decoded));
     (host, path)
-}
-
-/// Percent-decodes `raw`: each `%` followed by two hex digits, in either
-/// case, becomes its byte; anything else stays literal. The bytes are
-/// consumed through the iterator, with no index arithmetic: a `%` peeks at
-/// the next two bytes without taking them, so a cut-short or non-hex
-/// follower is re-scanned as a fresh byte, ready to start another escape.
-fn percent_decode(raw: &[u8]) -> Vec<u8> {
-    let mut decoded = Vec::with_capacity(raw.len());
-    let mut bytes = raw.iter().copied().peekable();
-    while let Some(byte) = bytes.next() {
-        if byte != b'%' {
-            decoded.push(byte);
-            continue;
-        }
-        let mut look = bytes.clone();
-        match (look.next(), look.next()) {
-            (Some(high), Some(low)) => match (hex_val(high), hex_val(low)) {
-                (Some(high), Some(low)) => {
-                    decoded.push((high << 4) + low);
-                    bytes.next();
-                    bytes.next();
-                }
-                // Not hex: the `%` stays literal.
-                (None, _) | (_, None) => {
-                    decoded.push(byte);
-                }
-            },
-            // Cut short: the `%` stays literal.
-            _ => {
-                decoded.push(byte);
-            }
-        }
-    }
-    decoded
-}
-
-/// A hex digit's value, in either case.
-fn hex_val(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 /// The seconds from the failed reply's `Date` header to a usage-limit

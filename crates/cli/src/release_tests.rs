@@ -168,3 +168,82 @@ fn release_install_exits_2_for_another_version() {
     );
     assert_eq!(code, 2);
 }
+
+/// A debug install logs one `extension_release` line per download to the
+/// pid-named CLI log: the two archives and their checksum files, each
+/// with the server's host and path, status 200, and the served count.
+#[test]
+fn a_debug_install_logs_one_extension_release_line_per_download() {
+    let held = fakes::TempDir::new("fiber-release-cli");
+    let home = held.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        home.join("config.json"),
+        serde_json::json!({"diagnostics": {"level": "debug"}}).to_string(),
+    )
+    .unwrap();
+    let server = serve(None);
+    let (result, _) = step(&home, &server, "0.0.0", Some("abc1234"));
+    result.unwrap();
+    let name = format!("cli-{}.log", std::process::id());
+    let text = fs::read_to_string(home.join("logs").join(&name)).unwrap();
+    let host = server.url().trim_start_matches("http://").to_owned();
+    let requests: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|line: &serde_json::Value| line["code"] == "http_request")
+        .filter(|line: &serde_json::Value| {
+            line["data"].get("host").and_then(|host| host.as_str()) == Some(host.as_str())
+        })
+        .collect();
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    assert_eq!(
+        requests.len(),
+        4,
+        "two archives and their checksums: {requests:?}"
+    );
+    let mut paths: Vec<&str> = requests
+        .iter()
+        .map(|line| line["data"]["path"].as_str().unwrap())
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            "/download/v0.0.0/fiber-docs.tar.gz",
+            "/download/v0.0.0/fiber-docs.tar.gz.sha256",
+            "/download/v0.0.0/fiber-extensions.tar.gz",
+            "/download/v0.0.0/fiber-extensions.tar.gz.sha256",
+        ]
+    );
+    for request in &requests {
+        assert_eq!(request["process"], "cli");
+        assert!(
+            request.get("session_id").is_none(),
+            "no session on a one-shot command: {request}"
+        );
+        let data = &request["data"];
+        assert_eq!(data["purpose"], "extension_release", "{data}");
+        assert_eq!(data["status"], 200, "{data}");
+        assert_eq!(data["attempt"], 1, "{data}");
+        assert_eq!(data["request_bytes"], 0, "{data}");
+        assert!(data.get("provider").is_none(), "{data}");
+        assert!(data.get("extension").is_none(), "{data}");
+        assert!(data.get("model").is_none(), "{data}");
+    }
+}
+
+/// An info install writes no CLI log: the release downloads stay silent.
+#[test]
+fn an_info_install_writes_no_cli_log() {
+    let held = fakes::TempDir::new("fiber-release-cli");
+    let home = held.path().join("home");
+    let server = serve(None);
+    let (result, _) = step(&home, &server, "0.0.0", Some("abc1234"));
+    result.unwrap();
+    assert!(
+        !home.join("logs").exists(),
+        "no log without debug: {:?}",
+        home.join("logs")
+    );
+}

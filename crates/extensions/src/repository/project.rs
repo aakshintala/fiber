@@ -88,6 +88,7 @@ impl RepositorySet {
         workspace: &Path,
         skipped: &BTreeSet<(String, String)>,
         fetch: Fetch,
+        debug: Option<Arc<dyn contract::diag::DebugLog>>,
     ) -> Self {
         let clock = fetch.clock();
         let mut set = Self::default();
@@ -114,7 +115,9 @@ impl RepositorySet {
         if declared.is_empty() && !has_hooks {
             return set;
         }
-        let store = Store::new(home, project, Arc::clone(&clock)).fetching(fetch);
+        let store = Store::new(home, project, Arc::clone(&clock))
+            .fetching(fetch)
+            .with_diagnostics(debug);
         // One index for every hash below, saved once: an unchanged declared
         // file is compared by size and modification time, never read
         // (`docs/performance.md`).
@@ -220,6 +223,7 @@ impl RepositorySet {
         project: &ProjectKey,
         workspace: &Path,
         clock: Arc<dyn Clock>,
+        debug: Option<Arc<dyn contract::diag::DebugLog>>,
     ) -> Self {
         let mut set = Self::default();
         // A declaration that fails to read gives no entry and no notice,
@@ -236,7 +240,7 @@ impl RepositorySet {
         if declared.is_empty() {
             return set;
         }
-        let store = Store::new(home, project, clock);
+        let store = Store::new(home, project, clock).with_diagnostics(debug);
         // The index is read but never saved: an unchanged declared file
         // is still compared by size and modification time, never read,
         // while the load writes nothing.

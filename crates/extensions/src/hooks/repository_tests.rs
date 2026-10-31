@@ -89,6 +89,7 @@ impl Setup {
             &self.workspace(),
             skipped,
             Fetch::new(crate::Origin::github(), "0.0.0", FakeClock::new()),
+            None,
         )
     }
 
@@ -106,6 +107,7 @@ impl Setup {
             None,
             StateSeed::new(),
             set,
+            None,
         );
         let filtered = session.hooks_config(config);
         assert_eq!(
@@ -329,6 +331,7 @@ fn skip_retains_old_and_approval_switches_to_new() {
         FakeClock::new(),
         Arc::new(fakes::FakeLock::new()),
         setup.set(&skipped),
+        None,
     );
     let kept = reloaded
         .hooks_config(&config)
@@ -352,6 +355,7 @@ fn skip_retains_old_and_approval_switches_to_new() {
         FakeClock::new(),
         Arc::new(fakes::FakeLock::new()),
         setup.set(&empty_skipped()),
+        None,
     );
     let now = switched
         .hooks_config(&config)
@@ -418,6 +422,7 @@ fn deleted_hooks_drop_the_old_snapshot() {
         FakeClock::new(),
         Arc::new(fakes::FakeLock::new()),
         setup.set(&empty_skipped()),
+        None,
     );
     assert!(reloaded.hook_snapshots.is_empty());
 }
@@ -539,6 +544,7 @@ fn failed_gather_retains_running_snapshot_and_hold() {
         FakeClock::new(),
         Arc::new(fakes::FakeLock::new()),
         failed,
+        None,
     );
     let kept = reloaded
         .hooks_config(&config)
@@ -621,6 +627,7 @@ fn approved_replacement_copy_failure_retains_running_snapshot_and_hold() {
         FakeClock::new(),
         Arc::new(fakes::FakeLock::new()),
         failed,
+        None,
     );
     // The required gate still reports the copy failure ...
     let (name, _) = reloaded

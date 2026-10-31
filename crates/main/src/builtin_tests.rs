@@ -1256,6 +1256,7 @@ fn builtin_tools_carry_the_protection_handle_to_files_and_shell() {
         skills(),
         None,
         Default::default(),
+        Default::default(),
         std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
             enabled: true,
             allow_write: Vec::new(),
@@ -1344,6 +1345,7 @@ fn the_model_shell_marks_confined_when_on_and_available() {
         None,
         &delegates(),
         skills(),
+        None,
         None,
         Default::default(),
         sandbox,

@@ -700,6 +700,7 @@ fn live(setup: &Setup, server: &fakes::ProviderServer, name: &str) -> crate::sta
             &cache,
             &clock,
             "0.0.0",
+            None,
         )
     })
 }
@@ -1146,6 +1147,7 @@ fn read_asking_answers_an_elicitation_and_reads() {
             &cache,
             &clock,
             "0.0.0",
+            None,
         )
     });
     let tool = live_tool(&started, setup.artifacts().as_path());

@@ -307,7 +307,7 @@ fn login_provider_resolves_a_repository_only_browser_provider_to_its_copy() {
         .unwrap();
     // No personal install: only the pinned copy holds the extension, so a
     // home-layout resolution fails while the copy resolves.
-    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone(), None);
     let (providers, notices) = Providers::load_all_repository(&home, &set).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(
@@ -505,7 +505,7 @@ fn a_login_provider_serves_a_copy_local_dependency() {
             .join(config::dir_name("example.com/acme/strings"))
             .exists()
     );
-    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone(), None);
     let (providers, notices) = Providers::load_all_repository(&home, &set).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(
@@ -536,7 +536,7 @@ fn extension_source_dir_prefers_the_pinned_copy_then_the_install() {
     let project = config::ProjectKey::new("pin").unwrap();
     install(&home, "acme-ext", "acme");
     // The personal install resolves while no repository copy is pinned.
-    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone(), None);
     let (providers, _) = Providers::load_all_repository(&home, &set).unwrap();
     assert_eq!(
         providers.extension_source_dir("acme-ext"),
@@ -557,7 +557,7 @@ fn extension_source_dir_prefers_the_pinned_copy_then_the_install() {
         .approve(&item, &digest)
         .unwrap();
     let copy = crate::Store::new(&home, &project, clock.clone()).copy_dir(&digest);
-    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone(), None);
     let (providers, _) = Providers::load_all_repository(&home, &set).unwrap();
     assert_eq!(providers.extension_source_dir("acme-ext"), Some(copy));
     assert_eq!(providers.extension_source_dir("nobody"), None);

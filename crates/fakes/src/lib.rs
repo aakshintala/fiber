@@ -54,7 +54,7 @@ pub use emit::{EventLog, Recorder};
 pub use fifo::fifo;
 pub use finished::finished;
 pub use gated_http::GatedHttp;
-pub use jig_start::{START_BOUND, warm_up};
+pub use jig_start::{START_BOUND, WarmedJig, warm_up};
 pub use jobs::StubJobs;
 pub use locks::{FakeLock, NoLock};
 pub use rules::{NoRules, RecordingRules};

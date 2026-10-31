@@ -65,6 +65,25 @@ impl Seam {
         }
     }
 
+    /// The hub-process writer for `config`'s diagnostics level: `Some`
+    /// at debug, `None` below, so release and catalogue downloads stay
+    /// silent. Building it never fails the operation; a writer is only
+    /// diagnostics.
+    fn hub_writer(
+        &self,
+        config: &Config,
+        clock: &Arc<dyn contract::clock::Clock>,
+    ) -> Option<Arc<dyn contract::diag::DebugLog>> {
+        config::diagnostics_debug(config).then(|| {
+            Arc::new(log::diag::Diag::new(
+                &self.home,
+                log::diag::Process::Hub,
+                log::diag::Level::Debug,
+                Arc::clone(clock),
+            )) as Arc<dyn contract::diag::DebugLog>
+        })
+    }
+
     /// The workspace's project key, resolved once per path and cached
     /// for the seam's life. A failed resolve is retried: only keys are
     /// cached, never failures. The key goes stale when the workspace's

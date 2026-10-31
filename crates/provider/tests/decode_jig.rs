@@ -10,7 +10,7 @@
 )]
 
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -26,12 +26,13 @@ const JIG_DEADLINE: Duration = Duration::from_secs(20);
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/decode`), so the test starts no cargo and
-/// waits on no build lock.
-fn example_path() -> PathBuf {
+/// waits on no build lock. Warming before returning means every exec site
+/// holds only a warmed path.
+fn example_path() -> fakes::WarmedJig {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.join("examples").join("decode")
+    fakes::WarmedJig::warm(path.join("examples").join("decode"), &[], 2)
 }
 
 /// A recorded stream the provider tests replay: the response bytes of one
@@ -40,8 +41,8 @@ static RECORDING: &[u8] = include_bytes!("recordings/opencode-go-tool-call.sse")
 
 #[track_caller]
 fn decode(file: &Path) -> Output {
-    fakes::warm_up(&example_path(), &[], 2);
-    let child = Command::new(example_path())
+    let warmed = example_path();
+    let child = Command::new(warmed.path())
         .arg(file)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
