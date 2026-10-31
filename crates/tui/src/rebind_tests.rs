@@ -658,6 +658,55 @@ fn wheel_pulls_a_leaving_selection_to_the_nearest_shown_action() {
     assert_eq!(selected(&screen, &keys), first_line(&keys, 1));
 }
 
+/// Wheeling up never moves more than three display lines backward, even
+/// when the three-line target falls inside a taller wrapped action: from
+/// the third action the target line sits inside the first, so the snap
+/// stops on the second instead of jumping to the first's start. Wheeling
+/// down still steps exactly three display lines to the next action start.
+/// (`docs/tui.md`, "Swapped views").
+#[test]
+fn wheel_up_into_a_wrapped_action_moves_at_most_three_display_lines() {
+    let keys = keys();
+    let grown = heights(&keys, WIDTH);
+    assert_eq!(&grown[..5], &[2, 2, 2, 1, 1], "wrapped actions sit in view");
+    let mut screen = keys_screen();
+    assert!(matches!(
+        screen.wheel(false, &keys, WIDTH, HEIGHT),
+        Outcome::Nothing
+    ));
+    assert!(matches!(
+        screen.wheel(false, &keys, WIDTH, HEIGHT),
+        Outcome::Nothing
+    ));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 2));
+    assert!(matches!(
+        screen.wheel(false, &keys, WIDTH, HEIGHT),
+        Outcome::Nothing
+    ));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 4));
+    assert_eq!(
+        top(&screen, &keys) - first_line(&keys, 2),
+        3,
+        "down still steps exactly three display lines"
+    );
+    assert!(matches!(
+        screen.wheel(true, &keys, WIDTH, HEIGHT),
+        Outcome::Nothing
+    ));
+    assert_eq!(top(&screen, &keys), first_line(&keys, 2));
+    let before = first_line(&keys, 2);
+    assert!(matches!(
+        screen.wheel(true, &keys, WIDTH, HEIGHT),
+        Outcome::Nothing
+    ));
+    let after = top(&screen, &keys);
+    assert!(
+        before - after <= 3,
+        "one upward step moves at most three display lines: {before} to {after}"
+    );
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 4));
+}
+
 /// A click on a continuation line selects its action, a click on the
 /// next action's first line selects that one, and a click past the
 /// last line selects the last action (`docs/tui.md`, "Bindings").
@@ -725,10 +774,11 @@ fn wheel_clamps_a_selection_sitting_on_the_window_edge() {
 }
 
 /// The wheel clamps at the last action: wheeling down to the bottom
-/// holds there, and up steps three display lines back with the
-/// selection staying. Each step moves three display lines, so reaching
-/// the tail takes more steps than the old three-actions step, and the
-/// step back lands inside the third-to-last action.
+/// holds there, and up steps back with the selection staying. Each
+/// step moves three display lines, so reaching the tail takes more
+/// steps than the old three-actions step; the three-line target back
+/// falls inside the third-to-last action, so the snap clamps to the
+/// second-to-last one instead of jumping four display lines back.
 #[test]
 fn wheel_clamps_at_the_last_action() {
     let keys = keys();
@@ -762,7 +812,7 @@ fn wheel_clamps_at_the_last_action() {
     ));
     assert_eq!(
         top(&screen, &keys),
-        first_line(&keys, BINDINGS.len().saturating_sub(3))
+        first_line(&keys, BINDINGS.len().saturating_sub(2))
     );
     assert_eq!(
         selected(&screen, &keys),
