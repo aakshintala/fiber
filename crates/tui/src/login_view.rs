@@ -1732,18 +1732,18 @@ fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<(overlay::Row, Jo
         .collect()
 }
 
-/// The dots row: the last dots that fit, with the block cursor
-/// after them when `cursor` is set. Dots only, never an ellipsis.
+/// The dots row: the last dots that fit, with the cursor's block after
+/// them when `cursor` is set. Dots only, never an ellipsis.
 fn dots_row(dots: &str, inner: usize, cursor: bool) -> overlay::Row {
-    let dim = Style::new().add_modifier(Modifier::DIM);
     let count = dots.chars().count();
     if cursor {
         let room = inner.saturating_sub(1);
         let shown: String = dots.chars().skip(count.saturating_sub(room)).collect();
+        let (_, style) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
         overlay::Row {
             spans: vec![
                 Span::styled(shown, Style::new()),
-                Span::styled("█".to_owned(), dim),
+                Span::styled("█".to_owned(), style),
             ],
             right: Vec::new(),
             targets: Vec::new(),
@@ -1770,19 +1770,59 @@ fn host_edit_row(typed: &Draft, inner: usize) -> overlay::Row {
         return blank_row();
     }
     let text = typed.expand();
-    let chars: Vec<char> = text.chars().collect();
-    let caret = typed.position().min(chars.len());
-    let mut shown = String::new();
-    for (at, ch) in chars.iter().enumerate() {
-        if at == caret {
-            shown.push('█');
+    let caret = typed.position().min(text.chars().count());
+    // The caret's cell draws the covered character in the slab's colour
+    // on the text colour, or a block in the text colour past the end
+    // (`docs/tui.md`, "The input box"). `tail` keeps the row's right
+    // end, so a cut caret maps back by how many characters fell off the
+    // left; a caret cut away leaves the plain row, as the block fell off
+    // with it before.
+    if caret >= text.chars().count() {
+        let (_, style) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
+        return overlay::Row {
+            spans: vec![
+                Span::raw(tail(&text, inner.saturating_sub(1))),
+                Span::styled("█".to_owned(), style),
+            ],
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        };
+    }
+    let shown = tail(&text, inner);
+    let kept: Vec<char> = shown.strip_prefix('…').unwrap_or(&shown).chars().collect();
+    let Some(at) = caret.checked_sub(text.chars().count().saturating_sub(kept.len())) else {
+        return text_row(shown, Style::new());
+    };
+    let mut before = String::new();
+    let mut covered = String::new();
+    let mut after = String::new();
+    for (index, ch) in kept.iter().enumerate() {
+        if index < at {
+            before.push(*ch);
+        } else if index == at {
+            covered.push(*ch);
+        } else {
+            after.push(*ch);
         }
-        shown.push(*ch);
     }
-    if caret >= chars.len() {
-        shown.push('█');
+    let (symbol, style) =
+        crate::view::cursor::cursor_cell(Some(&covered), Role::Surface, Role::Text);
+    let first = if shown.starts_with('…') {
+        format!("…{before}")
+    } else {
+        before
+    };
+    overlay::Row {
+        spans: vec![
+            Span::raw(first),
+            Span::styled(symbol, style),
+            Span::raw(after),
+        ],
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
     }
-    text_row(tail(&shown, inner), Style::new())
 }
 
 fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
@@ -1797,11 +1837,12 @@ fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
     let caret = label.position().min(chars.len());
     if caret >= chars.len() {
         let shown = tail(&text, room.saturating_sub(1));
+        let (_, cursor) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
         return overlay::Row {
             spans: vec![
                 Span::styled(prefix.to_owned(), dim),
                 Span::styled(shown, dim),
-                Span::styled("█".to_owned(), dim),
+                Span::styled("█".to_owned(), cursor),
             ],
             right: Vec::new(),
             targets: Vec::new(),
@@ -1846,14 +1887,13 @@ fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
         .skip(caret.saturating_add(1))
         .take(end.saturating_sub(caret.saturating_add(1)))
         .collect();
+    let (symbol, cursor) =
+        crate::view::cursor::cursor_cell(Some(&at_ch.to_string()), Role::Surface, Role::Text);
     overlay::Row {
         spans: vec![
             Span::styled(prefix.to_owned(), dim),
             Span::styled(before, dim),
-            Span::styled(
-                at_ch.to_string(),
-                Style::new().add_modifier(Modifier::DIM | Modifier::REVERSED),
-            ),
+            Span::styled(symbol, cursor),
             Span::styled(after, dim),
         ],
         right: Vec::new(),
