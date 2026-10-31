@@ -1090,7 +1090,9 @@ fn a_guarded_confined_call_meets_the_reviewer_not_the_fast_path() {
     assert!(resolved < positions("tool_call_started", &guarded_id));
     assert_eq!(lines[resolved]["payload"]["decided_by"], "reviewer");
     assert_eq!(lines[resolved]["payload"]["decision"], "allow");
-    // The plain call takes the fast path: no decision line of its own.
+    // The plain call takes the fast path: no decision line of its own
+    // (`docs/permissions.md`, "What the log records": a `permission_resolved`
+    // carries what decided it, and nothing else is written down).
     assert!(
         lines
             .iter()
