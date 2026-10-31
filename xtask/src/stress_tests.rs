@@ -206,6 +206,37 @@ fn a_retry_list_head_matches_despite_detail_text() {
 }
 
 #[test]
+fn stress_plan_emits_one_test_line_per_distinct_test() {
+    let touched = [
+        TestRef {
+            package: "main".to_owned(),
+            binary: None,
+            name: "hub_start::tests::offers".to_owned(),
+            unit: false,
+        },
+        TestRef {
+            package: "main".to_owned(),
+            binary: None,
+            name: "hub_start::tests::offers".to_owned(),
+            unit: true,
+        },
+        TestRef {
+            package: "main".to_owned(),
+            binary: None,
+            name: "hub_start::tests::starts".to_owned(),
+            unit: false,
+        },
+    ];
+    assert_eq!(
+        plan_test_lines(&touched),
+        vec![
+            "test\tmain hub_start::tests::offers",
+            "test\tmain hub_start::tests::starts",
+        ]
+    );
+}
+
+#[test]
 fn a_summary_with_no_tests_names_the_empty_selection() {
     assert_eq!(
         plan_summary(30, &[]),

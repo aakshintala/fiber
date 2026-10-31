@@ -7,7 +7,7 @@
 //! `touches` says it changes the function. Anything unreadable is an error
 //! naming the path, never an empty selection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{Delimiter, Group, LineColumn, TokenStream, TokenTree};
 
@@ -30,24 +30,20 @@ pub(crate) struct TestRef {
     pub(crate) unit: bool,
 }
 
-/// Where one test file's tests run: the package, the nextest binary id if
-/// the file is an integration or example test, the prefix its tests'
-/// names start with, and whether its tests compile into the package's
-/// unit tests rather than an integration binary.
+/// Where one test file's tests run: its package, optional nextest binary,
+/// name prefixes and whether its tests compile into package unit tests.
 struct FileScope {
     package: String,
     binary: Option<String>,
-    prefix: String,
+    prefixes: Vec<String>,
     unit: bool,
 }
 
-/// The package, binary and name prefix of the tests in the file at `path`:
-/// `None` for any other path. A file directly in `tests/` and files under
-/// `src/` or `examples/` take the `bug-filter` scope; a module under
-/// `tests/<dir>/` takes the file layout, since several binaries may include
-/// it under different names and no binary is known. When `tests/<dir>.rs`
-/// is among `sources` the directory is that binary's module and the prefix
-/// runs below it, else the prefix runs below the directory itself.
+/// The package, binary and name prefixes for tests in `path`, or `None`
+/// when it is not a test file. Files under `tests/<dir>/` use each
+/// same-package declaring module name; without a usable declaration they
+/// keep the file-layout prefix. A declaration cycle also falls back to the
+/// layout prefix. `src/` and `examples/` keep their `bug-filter` scope.
 fn file_scope(
     path: &str,
     members: &Members,
@@ -67,7 +63,7 @@ fn file_scope(
         return Some(FileScope {
             package,
             binary,
-            prefix,
+            prefixes: vec![prefix],
             unit,
         });
     }
@@ -80,6 +76,35 @@ fn file_scope(
     if !is_test_file(rel) {
         return None;
     }
+    let parts: Vec<&str> = rel.split('/').collect();
+    let ["tests", _, rest @ ..] = parts.as_slice() else {
+        return None;
+    };
+    if rest.is_empty() {
+        return None;
+    }
+
+    let prefixes = declared_prefixes(path, members, by_target, sources, &mut Vec::new());
+    if !prefixes.is_empty() {
+        return Some(FileScope {
+            package: name.to_owned(),
+            binary: None,
+            prefixes,
+            unit: false,
+        });
+    }
+    layout_scope(path, name, members, sources)
+}
+
+/// The existing file-layout scope for a shared `tests/<dir>/` file.
+fn layout_scope(
+    path: &str,
+    package: &str,
+    members: &Members,
+    sources: &[RustFile],
+) -> Option<FileScope> {
+    let member = members.get(package)?;
+    let rel = path.get(member.dir.len() + 1..)?;
     let parts: Vec<&str> = rel.split('/').collect();
     let ["tests", dir, rest @ ..] = parts.as_slice() else {
         return None;
@@ -99,19 +124,85 @@ fn file_scope(
     let root = format!("{}/tests/{dir}.rs", member.dir);
     if sources.iter().any(|f| f.path == root) {
         Some(FileScope {
-            package: name.to_owned(),
-            binary: Some(format!("{name}::{dir}")),
-            prefix: short,
+            package: package.to_owned(),
+            binary: Some(format!("{package}::{dir}")),
+            prefixes: vec![short],
             unit: false,
         })
     } else {
         Some(FileScope {
-            package: name.to_owned(),
+            package: package.to_owned(),
             binary: None,
-            prefix: format!("{dir}::{short}"),
+            prefixes: vec![format!("{dir}::{short}")],
             unit: false,
         })
     }
+}
+
+/// Every usable module prefix for a shared test file. Any cycle invalidates
+/// the full result, so callers use the file-layout scope instead.
+fn declared_prefixes(
+    path: &str,
+    members: &Members,
+    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
+    sources: &[RustFile],
+    stack: &mut Vec<String>,
+) -> Vec<String> {
+    fn walk(
+        path: &str,
+        members: &Members,
+        by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
+        sources: &[RustFile],
+        stack: &mut Vec<String>,
+    ) -> Result<Vec<String>, ()> {
+        if stack.iter().any(|seen| seen == path) {
+            return Err(());
+        }
+        stack.push(path.to_owned());
+        let result = (|| {
+            let Some(package) = owner(path, members) else {
+                return Ok(Vec::new());
+            };
+            let Some(member) = members.get(package) else {
+                return Ok(Vec::new());
+            };
+            let Some(declarers) = by_target.get(path) else {
+                return Ok(Vec::new());
+            };
+            let mut prefixes = BTreeSet::new();
+            for (declarer, ident) in declarers {
+                if owner(declarer, members) != Some(package) {
+                    continue;
+                }
+                let Some(declarer_rel) = declarer.get(member.dir.len() + 1..) else {
+                    continue;
+                };
+                let parts: Vec<&str> = declarer_rel.split('/').collect();
+                let parent_prefixes = match parts.as_slice() {
+                    ["tests", _binary] => vec![String::new()],
+                    ["tests", _, rest @ ..] if !rest.is_empty() => {
+                        let declared = walk(declarer, members, by_target, sources, stack)?;
+                        if declared.is_empty() {
+                            layout_scope(declarer, package, members, sources)
+                                .map(|scope| scope.prefixes)
+                                .unwrap_or_default()
+                        } else {
+                            declared
+                        }
+                    }
+                    _ => continue,
+                };
+                for parent in parent_prefixes {
+                    prefixes.insert(format!("{parent}{}::", strip_raw(ident)));
+                }
+            }
+            Ok(prefixes.into_iter().collect())
+        })();
+        stack.pop();
+        result
+    }
+
+    walk(path, members, by_target, sources, stack).unwrap_or_default()
 }
 
 /// A test function in one file: its name with inline modules, and its
@@ -363,19 +454,26 @@ fn resolve(
         return Err(format!("{path}: no source in the working tree"));
     };
     let fns = test_fns(&source.source).map_err(|()| format!("{path}: cannot parse"))?;
-    Ok(Some(
-        fns.into_iter()
-            .map(|f| {
-                let test = TestRef {
-                    package: scope.package.clone(),
-                    binary: scope.binary.clone(),
-                    name: format!("{}{}", scope.prefix, f.name),
-                    unit: scope.unit,
-                };
-                (f, test)
-            })
-            .collect(),
-    ))
+    let mut tests = Vec::new();
+    for f in fns {
+        for prefix in &scope.prefixes {
+            let test = TestRef {
+                package: scope.package.clone(),
+                binary: scope.binary.clone(),
+                name: format!("{prefix}{}", f.name),
+                unit: scope.unit,
+            };
+            tests.push((
+                TestFn {
+                    name: f.name.clone(),
+                    start: f.start,
+                    end: f.end,
+                },
+                test,
+            ));
+        }
+    }
+    Ok(Some(tests))
 }
 
 /// What the open file's hunks have resolved to: no test file, or its
@@ -507,11 +605,12 @@ fn select(hunk: &Hunk, tests: &[(TestFn, TestRef)], out: &mut Vec<TestRef>) {
 /// The nextest filter selecting exactly the touched tests, in diff order:
 /// a binary term for integration and example tests, a package term for
 /// unit tests, and a `kind(test)` package term for shared `tests/`
-/// support modules. Which package term a test without a binary takes is
-/// kept from where it compiles, never read from its module path: a unit
-/// test in a `#[path]`-declared file (as `app::commands::aliases::<name>`)
-/// holds no `tests::` segment, yet still runs in the package's unit
-/// tests, where a `kind(test)` term would match nothing.
+/// support modules. Their name prefixes follow same-package declarations,
+/// with the file layout as a fallback. Which package term a test without a
+/// binary takes is kept from where it compiles, never read from its module
+/// path: a unit test in a `#[path]`-declared file (as
+/// `app::commands::aliases::<name>`) holds no `tests::` segment, yet still
+/// runs in package unit tests, where a `kind(test)` term would match nothing.
 pub(crate) fn filter(tests: &[TestRef]) -> String {
     tests
         .iter()

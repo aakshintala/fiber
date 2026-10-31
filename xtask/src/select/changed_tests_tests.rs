@@ -746,6 +746,18 @@ fn a_declared_support_module_dedups_across_binaries() {
         "crates/main/tests/support/hub_start.rs",
         "@@ -3,1 +3,1 @@\n-    fn offers() {}\n+    fn offers() {}\n",
     );
+    let members = members();
+    let by_target = index_path_decls(&sources);
+    let scope = file_scope(
+        "crates/main/tests/support/hub_start.rs",
+        &members,
+        &by_target,
+        &sources,
+    );
+    assert_eq!(
+        scope.map(|scope| scope.prefixes),
+        Some(vec!["hub_start::".to_owned()])
+    );
     assert_eq!(
         selected(&diff, &sources),
         vec![refer("main", None, false, "hub_start::tests::offers")]

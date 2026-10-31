@@ -80,6 +80,20 @@ pub(crate) fn touched_retries(list: &str, touched: &[TestRef]) -> Vec<String> {
     failures
 }
 
+/// One sorted `test` line per distinct planned test.
+fn plan_test_lines(touched: &[TestRef]) -> Vec<String> {
+    let mut lines: Vec<String> = touched
+        .iter()
+        .map(|test| {
+            let id = test.binary.as_deref().unwrap_or(&test.package);
+            format!("test\t{id} {}", test.name)
+        })
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines
+}
+
 /// The `--summary` block `stress-plan` appends, over the printed `test`
 /// lines: one singular or plural heading, then those lines fenced.
 fn plan_summary(count: u32, lines: &[String]) -> String {
@@ -143,11 +157,7 @@ pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     for package in &packages {
         println!("package\t{package}");
     }
-    let mut lines = Vec::new();
-    for test in &touched {
-        let id = test.binary.as_deref().unwrap_or(&test.package);
-        lines.push(format!("test\t{id} {}", test.name));
-    }
+    let lines = plan_test_lines(&touched);
     for line in &lines {
         println!("{line}");
     }
