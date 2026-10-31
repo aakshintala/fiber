@@ -193,6 +193,23 @@ fn clear_sends_a_start_with_the_old_session_s_wire() {
     );
 }
 
+#[test]
+fn clear_without_session_posts_notice_and_clears_draft() {
+    let mut app = connected();
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    assert_eq!(app.notice(), Some("No session on screen."));
+    assert_eq!(app.draft(), "");
+    assert!(app.clear_pending_command_id().is_none());
+}
+
+#[test]
+fn clear_without_status_sends_nothing_and_keeps_draft() {
+    let mut app = attached();
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    assert_eq!(app.draft(), "/clear");
+    assert!(app.clear_pending_command_id().is_none());
+}
+
 /// A build or switch that names no credential overrides an earlier start
 /// label (`docs/tui.md:1941–1945`, "Clearing").
 #[test]
@@ -452,9 +469,9 @@ fn clear_refusal_only_settles_the_matching_start() {
         .unwrap_or_else(|| panic!("start id"));
 
     assert!(!app.clear_rejected("c_unrelated", "busy", "Unrelated."));
-    assert!(app.clear_pending());
+    assert!(app.clear_pending_command_id().is_some());
     assert!(app.clear_rejected(id, "busy", "Busy."));
-    assert!(!app.clear_pending());
+    assert!(app.clear_pending_command_id().is_none());
     assert_eq!(app.notice(), Some("Busy."));
 }
 
@@ -565,12 +582,12 @@ fn clear_close_answer_settles_only_its_matching_command_id() {
         "command_accepted",
         json!({"command_id": "c_unrelated", "result": {}}),
     ));
-    assert_eq!(app.clear.close.as_deref(), Some(close_id));
+    assert_eq!(app.clear_close_id(), Some(close_id));
     app.on_line(hub_line(
         "command_accepted",
         json!({"command_id": close_id, "result": {}}),
     ));
-    assert_eq!(app.clear.close, None);
+    assert_eq!(app.clear_close_id(), None);
 }
 
 #[test]
@@ -623,6 +640,41 @@ fn clear_with_a_question_wait_names_the_question() {
         app.clear_question(),
         Some(("fix the parser".to_owned(), "question".to_owned(), false))
     );
+}
+
+#[test]
+fn clear_confirmation_without_wait_row_closes_prompt_without_sending_start() {
+    let mut app = homed();
+    app.on_line(waiting_status(SESSION, "approval"));
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    assert!(app.clear_open());
+    app.home
+        .as_mut()
+        .expect("home")
+        .sessions
+        .remove(&contract::SessionId(SESSION.to_owned()));
+
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.clear_open());
+    assert!(app.clear_pending_command_id().is_none());
+}
+
+#[test]
+fn clear_confirmation_without_status_closes_prompt_without_sending_start() {
+    let mut app = homed();
+    app.on_line(waiting_status(SESSION, "approval"));
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    assert!(app.clear_open());
+    let id = contract::SessionId(SESSION.to_owned());
+    let sessions = &mut app.home.as_mut().expect("home").sessions;
+    let mut row = sessions.row(&id).expect("the waiting row").clone();
+    sessions.remove(&id);
+    row.status = None;
+    sessions.status(row);
+
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.clear_open());
+    assert!(app.clear_pending_command_id().is_none());
 }
 
 /// Enter clears a wait only after the clear start answers

@@ -546,7 +546,9 @@ impl App {
             if !matches!(self.on_key(crate::keys::Key::Enter, now), Effect::Send(_)) {
                 return None;
             }
-        } else if !self.clear_pending() && !matches!(self.clear(), Effect::Send(_)) {
+        } else if self.clear_pending_command_id().is_none()
+            && !matches!(self.clear(), Effect::Send(_))
+        {
             return None;
         }
         let id = self

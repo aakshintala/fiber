@@ -11,24 +11,24 @@ use crate::input::Draft;
 /// start's id, the credential its args named, and whether its close goes
 /// with `now`.
 #[derive(Debug, Clone)]
-pub(super) struct ClearPending {
+struct ClearPending {
     /// The session to close after the start is accepted.
-    pub(super) old: SessionId,
+    old: SessionId,
     /// The id of the pending start.
-    pub(super) command_id: String,
+    command_id: String,
     /// The credential state the start carries.
-    pub(super) credential: Option<Option<String>>,
+    credential: Option<Option<String>>,
     /// Whether the close drops a wait.
-    pub(super) now: bool,
+    now: bool,
 }
 
 /// The `/clear` start and close correlations.
 #[derive(Debug, Default)]
 pub(super) struct Clear {
     /// The start awaiting its answer.
-    pub(super) pending: Option<ClearPending>,
+    pending: Option<ClearPending>,
     /// The close awaiting its answer.
-    pub(super) close: Option<String>,
+    close: Option<String>,
 }
 
 impl App {
@@ -130,9 +130,18 @@ impl App {
         effect
     }
 
-    /// Whether `/clear` has a start waiting for its answer.
-    pub(super) fn clear_pending(&self) -> bool {
-        self.clear.pending.is_some()
+    /// The id of `/clear`'s start waiting for its answer.
+    pub(super) fn clear_pending_command_id(&self) -> Option<&str> {
+        self.clear
+            .pending
+            .as_ref()
+            .map(|pending| pending.command_id.as_str())
+    }
+
+    /// The id of `/clear`'s close waiting for its answer.
+    #[cfg(test)]
+    pub(super) fn clear_close_id(&self) -> Option<&str> {
+        self.clear.close.as_deref()
     }
 
     /// Accepts the matching clear start and sends its follow-up commands.
