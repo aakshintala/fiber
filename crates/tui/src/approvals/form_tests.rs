@@ -707,6 +707,37 @@ fn every_other_edit_does_nothing() {
 }
 
 #[test]
+fn delete_to_line_start_clears_the_words_row() {
+    let mut form = three_options();
+    type_text(&mut form, "one two three");
+    assert_eq!(cursor_line(&form), "▸ 4 ✎ one two three");
+    // Ghostty sends ⌘Backspace as `\x15`, the `delete_to_line_start` key.
+    form.on_edit(&Edit::DeleteToLineStart);
+    assert_eq!(
+        answer(&form)["answers"],
+        json!([{"skipped": true}])
+    );
+    assert!(
+        cursor_line(&form).starts_with("▸ 4 ✎ Type an answer"),
+        "{}",
+        cursor_line(&form)
+    );
+}
+
+#[test]
+fn delete_word_deletes_the_previous_word_on_the_words_row() {
+    let mut form = three_options();
+    type_text(&mut form, "one two");
+    assert_eq!(cursor_line(&form), "▸ 4 ✎ one two");
+    form.on_edit(&Edit::DeleteWord);
+    assert_eq!(cursor_line(&form), "▸ 4 ✎ one ");
+    assert_eq!(
+        answer(&form)["answers"],
+        json!([{"labels": [], "text": "one "}])
+    );
+}
+
+#[test]
 fn control_characters_in_model_text_draw_as_spaces() {
     let form = form(json!([
         {"header": "Pi\nck", "question": "Which\rone?", "options": [
