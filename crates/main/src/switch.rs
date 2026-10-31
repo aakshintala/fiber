@@ -800,11 +800,11 @@ pub(crate) fn prepare(
     });
     Ok(r#loop::Prepared {
         provider,
-        model: r#loop::Model {
-            reference: reference.clone(),
-            cost: resolved.model.cost.clone(),
-            subscription: resolved.model.subscription,
-        },
+        model: r#loop::Model::from_resolved(
+            reference.clone(),
+            resolved.model.cost.clone(),
+            resolved.model.subscription,
+        ),
         thinking,
         // The suffix first, then what was asked for now, then the
         // session's choice.

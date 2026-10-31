@@ -6,7 +6,7 @@
 //! instead (`docs/invocation.md`, "Processes").
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use contract::ErrorCode;
@@ -118,37 +118,17 @@ pub(crate) struct Resuming {
     pub(crate) credential: Option<String>,
 }
 
-impl Resuming {
-    /// What `fiber ask --resume` resumes: the session and the credential
-    /// label to switch it to.
-    pub(crate) fn new(selector: String, credential: Option<String>) -> Self {
-        Self {
-            selector,
-            credential,
-        }
-    }
-}
-
 pub(crate) fn ask_resume(
     resuming: Resuming,
     overrides: Vec<String>,
     prompt: String,
-    clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
-    };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return ask_failed(failed(
-                contract::ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
+    let clock = Arc::clone(&process.clock);
+    let (home, workspace) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return ask_failed(e),
     };
     let project = worktree::project(&workspace);
     let sessions = log::sessions_dir(&home, &project);
@@ -208,7 +188,7 @@ pub(crate) fn ask_resume(
         false,
         clock,
         signals,
-        fiber,
+        process,
     )
 }
 
@@ -257,20 +237,11 @@ pub(crate) fn session_resume(
     prompt: Option<String>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
-    };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return ask_failed(failed(
-                contract::ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
+    let (home, workspace) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return ask_failed(e),
     };
     let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
     log::crash::attach(&id);
@@ -282,7 +253,7 @@ pub(crate) fn session_resume(
     let one_turn = prompt.is_some();
     resume_session(
         log, &sessions, &dir, id, overrides, credential, prompt, one_turn, true, clock, signals,
-        fiber,
+        process,
     )
 }
 
@@ -308,7 +279,7 @@ fn resume_session(
     enter_present: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
 ) -> i32 {
     // One reads for the process, cancelled when this returns whatever the
     // result: the guard drops after `end`, so a signal during the end is
@@ -385,7 +356,7 @@ fn resume_session(
         one_turn,
         clock,
         signals,
-        fiber,
+        process,
         Arc::clone(&reads),
         opened,
     );
@@ -410,75 +381,27 @@ fn resume_session(
 /// failure.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
+    reason = "one resumed assembly needs its log, fold, prompt, mode, clock, signals and executable"
 )]
-fn resumed_session(
-    log: Arc<Log>,
-    sessions: &Path,
-    dir: &log::SessionDir,
-    id: SessionId,
-    overrides: Vec<String>,
-    credential: Option<String>,
+pub(crate) fn assemble_resumed(
+    mut parts: crate::Parts,
+    resume: crate::session_command::ResumeStart,
     prompt: Option<String>,
     one_turn: bool,
-    clock: Arc<dyn contract::clock::Clock>,
-    signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    fiber_path: std::path::PathBuf,
     reads: Arc<crate::switch::Reads>,
-    opened: Option<doors::WorktreeOpener>,
+    signals: &Arc<doors::Signals>,
+    process: &crate::startup::Process,
 ) -> Result<i32, Failure> {
-    let folded = match r#loop::resumed(dir.path()) {
-        Ok(folded) => folded,
-        Err(e) => return Err(failed(e.code(), e)),
-    };
-    // The per-run layer first (`--model`, then `-c model=`), then the
-    // recorded model, then configuration's default. A
-    // model that no longer resolves fails here, before any session line is
-    // written. Configuration and the project key still come from the launch
-    // directory; the workspace is the first `session_started`'s, wherever
-    // the resume runs. The recorded thinking level is read before `folded`
-    // moves into `Loop::resume`.
-    let recorded_thinking = folded
-        .thinking
-        .as_deref()
-        .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
-    crate::shutdown::arm(signals, &reads);
-    let fiber_path = fiber
-        .clone()
-        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
-    // The diagnostic process: a one-turn resume is an ask; a resumed
-    // session keeps its session identity.
-    let process = if one_turn {
-        log::diag::Process::Ask
-    } else {
-        log::diag::Process::Session
-    };
-    let seed = chain_seed(
-        sessions,
-        &log::history(dir.path()).map_err(|error| failed(error.code(), error))?,
-    )
-    .map_err(|error| failed(error.code(), error))?;
-    let mut parts = crate::parts_with_session(
-        overrides,
-        folded.model.as_deref(),
-        crate::credential::Labels::new(credential.as_deref(), folded.credential.as_deref()),
-        recorded_thinking,
-        Arc::clone(&clock),
-        None,
-        Arc::clone(&reads),
-        process,
-        seed,
-        crate::session_extensions::RepositoryScope {
-            workspace: Some(std::path::PathBuf::from(&folded.workspace)),
-            skipped: folded.skipped(),
-        },
-        crate::parts::SessionLaunch {
-            id: id.clone(),
-            reason: contract::events::ExtensionReason::Resume,
-            event_cursor: log.count(),
-        },
-        fiber_path.clone(),
-    )?;
+    let id = resume.id();
+    let sessions_buf = resume.sessions()?.to_path_buf();
+    let crate::session_command::ResumeStart {
+        dir,
+        log,
+        folded,
+        opened,
+    } = resume;
+    let clock = Arc::clone(&process.clock);
     // The session directory's log: the opening message's
     // environment names it.
     parts.prompt.session_log = dir.events().display().to_string();
@@ -548,12 +471,6 @@ fn resumed_session(
         jobs.install_timing(Arc::clone(timing));
     }
     // A resumed session declares `delegate_spawn` too, parented to itself.
-    let Some(sessions) = dir.path().parent() else {
-        return Err(failed(
-            ErrorCode::IoFailed,
-            "the session directory has no parent",
-        ));
-    };
     let crate::switch::quota::QuotaReaders {
         door: quota,
         model: model_quota,
@@ -564,7 +481,7 @@ fn resumed_session(
         home.clone(),
         id.clone(),
         Path::new(&folded.workspace).to_path_buf(),
-        sessions.to_path_buf(),
+        sessions_buf,
         Arc::clone(&jobs),
         Arc::clone(&clock),
         resolve,
@@ -857,6 +774,91 @@ fn resumed_session(
     servers.stop();
     close(session, log, &home, dir.path(), &workspace, &*clock);
     Ok(code)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
+)]
+fn resumed_session(
+    log: Arc<Log>,
+    sessions: &Path,
+    dir: &log::SessionDir,
+    id: SessionId,
+    overrides: Vec<String>,
+    credential: Option<String>,
+    prompt: Option<String>,
+    one_turn: bool,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &Arc<doors::Signals>,
+    process: &crate::startup::Process,
+    reads: Arc<crate::switch::Reads>,
+    opened: Option<doors::WorktreeOpener>,
+) -> Result<i32, Failure> {
+    let folded = match r#loop::resumed(dir.path()) {
+        Ok(folded) => folded,
+        Err(e) => return Err(failed(e.code(), e)),
+    };
+    // The per-run layer first (`--model`, then `-c model=`), then the
+    // recorded model, then configuration's default. A
+    // model that no longer resolves fails here, before any session line is
+    // written. Configuration and the project key still come from the launch
+    // directory; the workspace is the first `session_started`'s, wherever
+    // the resume runs. The recorded thinking level is read before `folded`
+    // moves into `Loop::resume`.
+    let recorded_thinking = folded
+        .thinking
+        .as_deref()
+        .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
+    crate::shutdown::arm(signals, &reads);
+    let fiber_path = process.exe.clone()?;
+    // The diagnostic process: a one-turn resume is an ask; a resumed
+    // session keeps its session identity.
+    let diag_process = if one_turn {
+        log::diag::Process::Ask
+    } else {
+        log::diag::Process::Session
+    };
+    let seed = chain_seed(
+        sessions,
+        &log::history(dir.path()).map_err(|error| failed(error.code(), error))?,
+    )
+    .map_err(|error| failed(error.code(), error))?;
+    let parts = crate::parts_with_session(
+        overrides,
+        folded.model.as_deref(),
+        crate::credential::Labels::new(credential.as_deref(), folded.credential.as_deref()),
+        recorded_thinking,
+        Arc::clone(&clock),
+        None,
+        Arc::clone(&reads),
+        diag_process,
+        seed,
+        crate::session_extensions::RepositoryScope {
+            workspace: Some(std::path::PathBuf::from(&folded.workspace)),
+            skipped: folded.skipped(),
+        },
+        crate::parts::SessionLaunch {
+            id: id.clone(),
+            reason: contract::events::ExtensionReason::Resume,
+            event_cursor: log.count(),
+        },
+        fiber_path.clone(),
+    )?;
+    let resume = crate::session_command::ResumeStart::new(
+        log::SessionDir::new(sessions, &id),
+        Arc::clone(&log),
+        folded,
+        opened,
+    )?;
+    let inputs = crate::session_command::SessionInputs::resumed(
+        prompt,
+        one_turn,
+        fiber_path.clone(),
+        Arc::clone(&reads),
+        resume,
+    );
+    crate::session_command::assemble_session(parts, inputs, signals, process)
 }
 
 /// The first line's `session_started` worktree, when it records one. Any
