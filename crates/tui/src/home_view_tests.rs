@@ -159,6 +159,7 @@ fn choose_session_model(app: &mut App) {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     assert_eq!(
         app.on_press(crate::stroke::Stroke::parse("ctrl+s").unwrap(), now),
@@ -201,6 +202,24 @@ fn the_cursor_marks_the_last_fitting_row_and_sheds_below_it() {
             assert!(at.is_empty(), "height {height}: {at:?}");
         }
     }
+}
+
+#[test]
+fn a_cursor_on_the_areas_bottom_edge_draws_nothing() {
+    // Six draft rows in a six-row home: the box clamps to the area's
+    // top, so the caret's row lands exactly on the area's bottom edge.
+    // The cursor draws nothing there, without panicking (`docs/tui.md`,
+    // "The input box").
+    let mut app = home(80, 6);
+    type_draft(&mut app, "a\nb\nc\nd\ne\nf");
+    let area = Rect::new(0, 0, 80, 6);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    let blocks: Vec<(u16, u16)> = (0..6)
+        .flat_map(|y| (0..80).map(move |x| (x, y)))
+        .filter(|(x, y)| buf[(*x, *y)].symbol() == "█")
+        .collect();
+    assert!(blocks.is_empty(), "{blocks:?}");
 }
 
 #[test]
@@ -3223,10 +3242,20 @@ fn the_typed_picker_row_styles() {
         Some(crate::theme::Role::Info.color()),
         "{shown}"
     );
-    // Its cursor is dim.
+    // Its cursor is a block in the text colour on the slab, with no dim.
     let cursor = col(typed, "█");
+    assert_eq!(
+        buf[(cursor, typed)].style().fg,
+        Some(crate::theme::Role::Text.color()),
+        "{shown}"
+    );
+    assert_eq!(
+        buf[(cursor, typed)].bg,
+        crate::theme::Role::Surface.color(),
+        "{shown}"
+    );
     assert!(
-        buf[(cursor, typed)]
+        !buf[(cursor, typed)]
             .style()
             .add_modifier
             .contains(Modifier::DIM),
