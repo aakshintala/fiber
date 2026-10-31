@@ -657,7 +657,12 @@ fn accepting_resends_the_retained_start_unchanged() {
         "the retry is retained"
     );
     assert!(app.outbox.start_line(&old).is_none());
-    assert!(matches!(app.phase, Phase::Pending { .. }));
+    assert_eq!(
+        app.phase,
+        Phase::Pending {
+            command_id: new.clone(),
+        }
+    );
     // The new start's answer opens the session, as any start's does:
     // attach, commands, then the pending draft as its first prompt.
     let out = app.on_line(accepted(&new, "s_aaaaaaaaaaaaaaaa"));
@@ -739,6 +744,10 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
         app.clear_pending_command_id(),
         Some(new.as_str()),
         "the clear follows the retry"
+    );
+    assert!(
+        matches!(app.phase, Phase::Attached { .. }),
+        "a clear retry keeps the old phase attached instead of marking the retry pending"
     );
     assert_eq!(
         app.session().map(|session| session.0.as_str()),
