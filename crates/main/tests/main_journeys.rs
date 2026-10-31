@@ -867,12 +867,17 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             // (`tui/src/app/panel/quota.rs`, `panel_quota`). The view
             // draws the cached rows under `/quota · fetching` until that
             // answer lands (`tui/src/quota_view.rs`, `frame`), so the
-            // wait also requires the fetching mark gone: `10%` alone
-            // could match the cached draw while the fetch is still in
-            // flight. No wall-clock read or sleep of its own.
+            // wait also requires the fetching mark gone. `Quota` plus
+            // `10%` alone could match the panel card, which the default
+            // cards include (`crates/config/src/keys.rs`,
+            // `tui.panel.cards`), before the view opens: the wait names
+            // the view's own top row (`/quota` and `Esc returns`,
+            // `swapped.rs`, `draw_top_row`), so only the open view's
+            // fetched value passes. No wall-clock read or sleep of its own.
             run.write(b"/quota\r");
             run.wait_screen("the fetched quota value", |grid| {
-                grid.contents.contains("Quota")
+                grid.contents.contains("/quota")
+                    && grid.contents.contains("Esc returns")
                     && grid.contents.contains("10%")
                     && !grid.contents.contains("fetching")
             });
