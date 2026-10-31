@@ -64,12 +64,18 @@ impl App {
     /// fit. Zero with no layout to draw them in
     /// (`docs/tui.md`, "The input box", "The narrow layout").
     pub(super) fn narrow_rows(&self, base: usize) -> usize {
-        let Some(layout) = self.chrome.layout() else {
-            return 0;
-        };
         // The rule and the status row sit inside the input box's slab,
-        // under its draft, whenever the box itself draws.
-        let chrome = usize::from(self.panel().is_none() && self.home_screen().is_none()) * 2;
+        // under its draft, whenever the box itself draws. The box draws
+        // without a layout too; only the floor line replaces it, and the
+        // approval panel takes its place.
+        let chrome = usize::from(
+            self.panel().is_none()
+                && self.home_screen().is_none()
+                && self.chrome().floor_line().is_none(),
+        ) * 2;
+        let Some(layout) = self.chrome.layout() else {
+            return chrome;
+        };
         if !layout.narrow {
             // Wide with the panel hidden draws the status line inside
             // the box; with the panel shown its count is zero.
