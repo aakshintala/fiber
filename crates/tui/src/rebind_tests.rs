@@ -101,20 +101,20 @@ fn moving_clamps_at_both_ends() {
 }
 
 /// PageUp and PageDown move by the whole actions fitting from the top
-/// less one, at least one: thirteen fit in the open rows, so one page
-/// down lands twelve on.
+/// less one, at least one: twelve fit in the open rows, so one page
+/// down lands eleven on.
 #[test]
 fn paging_moves_by_the_fitting_actions_less_one() {
     let keys = keys();
     let grown = heights(&keys, WIDTH);
     let shown = HEIGHT.saturating_sub(2);
-    assert_eq!(fits_from(0, &grown, shown), 13);
+    assert_eq!(fits_from(0, &grown, shown), 12);
     let mut screen = keys_screen();
     assert!(matches!(
         press(&mut screen, &keys, &["pagedown"]),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), first_line(&keys, 12));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 11));
     assert_eq!(top(&screen, &keys), first_line(&keys, 0));
     assert!(matches!(
         press(&mut screen, &keys, &["pageup"]),
@@ -659,15 +659,15 @@ fn a_click_on_a_continuation_line_selects_its_action() {
     let keys = keys();
     let grown = heights(&keys, WIDTH);
     let mut screen = keys_screen();
-    // The delete_session action wraps into two display lines.
+    // The delete_session action wraps into three display lines.
     let start: usize = grown.iter().take(7).sum();
-    assert_eq!(grown[7], 2);
+    assert_eq!(grown[7], 3);
     let outcome = screen.click(Spot::Row(start + 1), &keys, WIDTH, HEIGHT);
     assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
     assert_eq!(selected(&screen, &keys), first_line(&keys, 7));
     // The first line of the next action belongs to it, not to the
     // wrapped lines above.
-    let outcome = screen.click(Spot::Row(start + 2), &keys, WIDTH, HEIGHT);
+    let outcome = screen.click(Spot::Row(start + grown[7]), &keys, WIDTH, HEIGHT);
     assert!(matches!(outcome, Outcome::Nothing), "{outcome:?}");
     assert_eq!(selected(&screen, &keys), first_line(&keys, 8));
     let total: usize = grown.iter().sum();
@@ -694,7 +694,7 @@ fn a_click_above_the_window_resets_the_scroll_for_the_next_page() {
         press(&mut screen, &keys, &["pagedown"]),
         Outcome::Nothing
     ));
-    assert_eq!(selected(&screen, &keys), first_line(&keys, 12));
+    assert_eq!(selected(&screen, &keys), first_line(&keys, 11));
 }
 
 /// A wheel step clamps a selection sitting on the window's edge into
@@ -818,12 +818,12 @@ fn wheel_in_a_clash_keeps_the_prompt() {
 }
 
 /// The columns share the draw width past the gutter and the two
-/// separators: at 80 the keys take 13, the id 20 and the description
-/// 43 (`docs/tui.md`, "Bindings").
+/// separators: at 80 the keys take 16, the id 20 and the description
+/// 40 (`docs/tui.md`, "Bindings").
 #[test]
 fn columns_share_the_draw_width_past_the_gutter_and_separators() {
     let keys = keys();
-    assert_eq!(columns(&keys, 80), (13, 20, 43));
+    assert_eq!(columns(&keys, 80), (16, 20, 40));
     // Where the share runs, the three columns with their two
     // single-space separators and the two gutter columns fill the draw
     // width exactly, so no key is cut and no column overlaps.
@@ -853,14 +853,14 @@ fn columns_share_the_draw_width_past_the_gutter_and_separators() {
 }
 
 /// A wrapped action takes as many lines as its tallest column: the
-/// delete_session row wraps its keys after the comma into exactly two
-/// display lines, while a single-line action stays one.
+/// delete_session row wraps its keys after the comma into exactly
+/// three display lines, while a single-line action stays one.
 #[test]
 fn delete_session_wraps_after_the_comma_at_80() {
     let keys = keys();
     let grown = heights(&keys, WIDTH);
     assert_eq!(grown.len(), BINDINGS.len());
-    assert_eq!(grown[7], 2, "delete_session takes two display lines");
+    assert_eq!(grown[7], 3, "delete_session takes three display lines");
     assert_eq!(grown[3], 1, "clear_then_quit takes one display line");
     let screen = keys_screen();
     let frame = screen.frame(&keys, WIDTH, HEIGHT);
@@ -878,8 +878,8 @@ fn delete_session_wraps_after_the_comma_at_80() {
         frame.rows[start + 1][0].0
     );
     assert_eq!(
-        &frame.joins[start..start + 2],
-        &[Join::Break, Join::WrapSpace]
+        &frame.joins[start..start + 3],
+        &[Join::Break, Join::WrapSpace, Join::WrapSpace]
     );
     let single: usize = grown.iter().take(3).sum();
     assert_eq!(&frame.joins[single..single + 1], &[Join::Break]);
@@ -887,24 +887,23 @@ fn delete_session_wraps_after_the_comma_at_80() {
 
 /// An overlong word breaks inside where it reaches the column's edge,
 /// noting a wrap with no space, at a narrow width: the delete_word
-/// keys break inside `⌥Backspace` while its id and description stand
-/// whole on the first line.
+/// keys break inside `⌥Backspace` on the first boundary.
 #[test]
 fn an_overlong_word_breaks_inside_at_a_narrow_width() {
     let keys = keys();
     let (label, id, description) = columns(&keys, 44);
-    assert_eq!((label, id, description), (5, 20, 15));
+    assert_eq!((label, id, description), (6, 20, 14));
     let delete_word = BINDINGS
         .iter()
         .position(|binding| binding.id == "delete_word")
         .expect("delete_word");
     assert_eq!(delete_word, 12);
     let grown = heights(&keys, 44);
-    assert_eq!(grown[delete_word], 2, "the keys wrap, nothing else does");
+    assert_eq!(grown[delete_word], 6);
     let screen = keys_screen();
     let frame = screen.frame(&keys, 44, HEIGHT);
     let start: usize = grown.iter().take(delete_word).sum();
-    assert_eq!(frame.rows[start][0].0.trim_end(), "⌥Back");
+    assert_eq!(frame.rows[start][0].0.trim_end(), "⌥Backs");
     assert_eq!(&frame.joins[start..start + 2], &[Join::Break, Join::Wrap]);
 }
 
@@ -917,7 +916,7 @@ fn the_focused_wrapped_row_fills_the_draw_width_whole() {
     use ratatui::layout::Rect;
     let keys = keys();
     let (label, id, description) = columns(&keys, WIDTH);
-    assert_eq!((label, id, description), (13, 20, 43));
+    assert_eq!((label, id, description), (16, 20, 40));
     let screen = keys_screen();
     let frame = screen.frame(&keys, WIDTH, HEIGHT);
     let grown = heights(&keys, WIDTH);
@@ -935,11 +934,11 @@ fn the_focused_wrapped_row_fills_the_draw_width_whole() {
     // The id cell keeps its single-space separators around the padded
     // id, as the frame draws the cells with no gap between them.
     let id_line = format!(" send{} ", " ".repeat(id - 4));
-    // The first description line is exactly 43 columns wide, filling
-    // its column with no pad.
+    // The first description line is 36 columns wide, padded to its
+    // column.
     let description_line = format!(
-        "Send a prompt, or a steering message during{}",
-        " ".repeat(description - 43)
+        "Send a prompt, or a steering message{}",
+        " ".repeat(description - 36)
     );
     for line in 0..grown[send] {
         let y = u16::try_from(1 + line).expect("a row");
@@ -958,7 +957,7 @@ fn the_focused_wrapped_row_fills_the_draw_width_whole() {
         let rest = if line == 0 {
             description_line.clone()
         } else {
-            format!("a turn{}", " ".repeat(description - 6))
+            format!("during a turn{}", " ".repeat(description - 13))
         };
         assert_eq!(text, format!("{mark}{key}{id}{rest}"), "line {line}");
     }

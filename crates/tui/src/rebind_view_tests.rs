@@ -159,25 +159,25 @@ fn keys_failed_save_80x24() {
 }
 
 /// Attached wide, the screen wraps at the conversation column, not
-/// the screen: at 160 by 40 the column is 102 wide, so the move_word
-/// keys wrap inside the column's 18-wide keys instead of standing
-/// whole as at 160 wide.
+/// the screen: at 160 by 40 the column is 102 wide, so the
+/// delete_word keys wrap inside the column's 22-wide keys instead of
+/// standing whole as at 160 wide.
 #[test]
 fn keys_attached_160x40_wraps_at_the_column_width() {
     let mut app = attached_sized(160, 40);
     assert_eq!(app.column_width(), 102);
     // The columns at the column width differ from the screen width's:
     // natural widths stand at 160, the share runs at 102.
-    assert_eq!(super::columns(app.keys(), 102), (18, 20, 60));
-    assert_eq!(super::columns(app.keys(), 160), (27, 20, 91));
+    assert_eq!(super::columns(app.keys(), 102), (22, 20, 56));
+    assert_eq!(super::columns(app.keys(), 160), (34, 20, 91));
     slash_keys(&mut app);
     let rows: Vec<String> = screen(&app, 160, 40).lines().map(str::to_owned).collect();
     let at = rows
         .iter()
-        .position(|row| row.contains("Ctrl+←") && !row.contains("Ctrl+→,"))
-        .expect("a row wrapping the move_word keys");
+        .position(|row| row.contains("⌥Backspace,") && !row.contains("Ctrl+W"))
+        .expect("a row wrapping the delete_word keys");
     assert!(
-        rows[at.saturating_add(1)].contains("Ctrl+→,"),
+        rows[at.saturating_add(1)].contains("Ctrl+W"),
         "the continuation shows the wrapped keys: {:?}",
         rows
     );

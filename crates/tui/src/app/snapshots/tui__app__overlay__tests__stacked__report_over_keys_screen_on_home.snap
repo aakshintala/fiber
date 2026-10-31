@@ -4,23 +4,23 @@ assertion_line: 4234
 expression: text
 ---
  Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
-› Enter                                                             ssage during
+› Enter                                                              message
              Imported                                            ✕
   Shift+Ent
   Ctrl+J     Copied · 240
-  Esc        MCP servers                                             the turn
+  Esc        MCP servers                                            upt the turn
              server0
   Ctrl+C     server1
   ⌥0         server2
   Ctrl+N     server3
-  ⌥1 ⌥2 ⌥3   server4                                                ard N
-  ⌥5 ⌥6 ⌥7   server5
-  ⌥9         server6
-  Delete,    server7                                                a live one
-  Backspace  server8                                                ion list
-  ↑          server9                                                he project
-             server10
-  ←          server11                                               box into the
+  ⌥1 ⌥2 ⌥3   server4                                                l card N
+  ⌥6 ⌥7 ⌥8   server5
+  Delete,    server6                                                or a live
+  Backspace  server7                                                he session
+             server8
+  ↑          server9                                                m the
+             server10                                               reen
+  ←          server11                                               ut box into
              server12
   Ctrl+R     server13
   ⌥← ⌥→, Ct

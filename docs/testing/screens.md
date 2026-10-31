@@ -24,7 +24,9 @@ session's second form declined; and an interrupted turn followed by a turn
 whose failed model call Fiber retries. The journey in
 `crates/main/tests/inline_images.rs` scrolls and clicks an inline PNG, opens
 the viewer, and asserts one transmit and place before a session-change delete,
-with no later image writes.
+with no later image writes. The 255-read journey past the placeholder range,
+whose past-range caption click opens its viewer with no placeholder grid above
+it, runs in `crates/main/tests/main_journeys.rs` after merge.
 
 The journeys in `journeys.rs` snapshot the settled grid with `insta` at named
 moments, as its text rows and cursor state. The cursor line holds the

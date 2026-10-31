@@ -4,24 +4,24 @@ assertion_line: 158
 expression: "screen(&app, 80, 24)"
 ---
   Keys  /keys                                                        Esc returns
-   Enter         send                 Send a prompt, or a steering message
-                                      during a turn
-   Shift+Enter,  line_break           Insert a line break
+   Enter           send                 Send a prompt, or a steering message
+                                        during a turn
+   Shift+Enter,    line_break           Insert a line break
    Ctrl+J
-   Esc           close_or_interrupt   Close what is on top; interrupt the turn
-                                      when nothing is open
-   Ctrl+C        clear_then_quit      Clear the draft, then quit
-   ⌥0            go_home              Go home
- › Ctrl+N        new_session          Start a new session
-   ⌥1 ⌥2 ⌥3 ⌥4   rail_row_n           Switch to the session of rail card N
-⋮  ⌥5 ⌥6 ⌥7 ⌥8
-⋮  ⌥9
-⋮  Delete,       delete_session       Delete the selected exited, or a live one
-   Backspace                          with Delete session in the session list
-   ↑             recall_prompt        Recall an earlier prompt from the project
-                                      of the session on screen
-   ←             focus_rail           Move focus from an empty input box into
-                                      the rail
+   Esc             close_or_interrupt   Close what is on top; interrupt the turn
+                                        when nothing is open
+   Ctrl+C          clear_then_quit      Clear the draft, then quit
+   ⌥0              go_home              Go home
+ › Ctrl+N          new_session          Start a new session
+   ⌥1 ⌥2 ⌥3 ⌥4 ⌥5  rail_row_n           Switch to the session of rail card N
+⋮  ⌥6 ⌥7 ⌥8 ⌥9
+⋮  Delete,         delete_session       Delete the selected exited, or a live
+⋮  Backspace                            one with Delete session in the session
+                                        list
+   ↑               recall_prompt        Recall an earlier prompt from the
+                                        project of the session on screen
+   ←               focus_rail           Move focus from an empty input box into
+                                        the rail
  Not saved: disk full
  ↑↓ move · Enter rebind · r reset · Delete unbind · Esc close
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

@@ -38,6 +38,7 @@ mod session_command;
 mod session_extensions;
 mod settings;
 mod shutdown;
+mod startup;
 mod startup_log;
 mod switch;
 mod theme_setting;
@@ -124,10 +125,15 @@ fn run() -> i32 {
     // `dhat-heap.json` lands in the working directory at orderly exit.
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::builder().build();
-    let fiber = std::env::current_exe().map_err(|error| format!("the running binary: {error}"));
+    let exe = std::env::current_exe()
+        .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")));
     // Help and version print before anything reads the home, configuration,
     // credentials, or stdin.
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
+    let process = startup::Process {
+        clock: Arc::clone(&clock),
+        exe,
+    };
     // First: every process writes one crash report and aborts on a panic
     // (`docs/code-quality.md`, "What a panic leaves").
     log::crash::install(
@@ -156,7 +162,7 @@ fn run() -> i32 {
         }
         // `fiber` with no arguments opens the terminal: this tty as a
         // client of one hub, its own or a listed one.
-        cli::Invocation::Run(None, top) => open::home(fiber, top.hub, top.model, top.overrides),
+        cli::Invocation::Run(None, top) => open::home(&process, top.hub, top.model, top.overrides),
         cli::Invocation::Run(
             Some(cli::Commands::Resume {
                 id,
@@ -164,9 +170,9 @@ fn run() -> i32 {
                 hub,
             }),
             _,
-        ) => open::resume(id, credential, hub, fiber),
+        ) => open::resume(id, credential, hub, &process),
         cli::Invocation::Run(Some(cli::Commands::Continue { hub }), _) => {
-            open::continue_latest(fiber, hub)
+            open::continue_latest(&process, hub)
         }
         cli::Invocation::Usage {
             ask: true,
@@ -183,40 +189,35 @@ fn run() -> i32 {
             match cli::ask_parts(&args.prompt) {
                 Ok((prompt, dash)) => ask(
                     per_run(args.model, args.overrides),
-                    args.resume
-                        .map(|id| resume::Resuming::new(id, args.credential)),
+                    args.resume.map(|id| resume::Resuming {
+                        selector: id,
+                        credential: args.credential,
+                    }),
                     args.worktree,
                     prompt,
                     dash,
-                    clock,
-                    fiber,
+                    &process,
                 ),
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
         cli::Invocation::Run(Some(cli::Commands::ExtensionCase { case }), _) => {
-            case::run::extension_case(case, clock, fiber)
+            case::run::extension_case(case, &process)
         }
         cli::Invocation::Run(Some(cli::Commands::Session(args)), _) => {
-            session_command::run(args, clock, fiber)
+            session_command::run(args, &process)
         }
         cli::Invocation::Run(Some(cli::Commands::Hub(command)), _) => {
-            hub_command::run(command, fiber, clock.as_ref())
+            hub_command::run(command, &process)
         }
         cli::Invocation::Run(Some(cli::Commands::Sessions(args)), _) => match args.command {
-            None => sessions_list(
-                args.all,
-                args.json,
-                args.hub.as_deref(),
-                clock.as_ref(),
-                fiber,
-            ),
+            None => sessions_list(args.all, args.json, args.hub.as_deref(), &process),
             Some(cli::SessionsCommands::Delete {
                 hub,
                 cascade,
                 yes,
                 id,
-            }) => sessions_delete(&id, cascade, yes, hub.as_deref(), clock.as_ref(), fiber),
+            }) => sessions_delete(&id, cascade, yes, hub.as_deref(), &process),
             Some(cli::SessionsCommands::Export { id, path }) => ::cli::export(&id, path.as_deref()),
             Some(cli::SessionsCommands::Search { all, json, text }) => {
                 ::cli::sessions_search(&text, all, json)
@@ -235,12 +236,11 @@ fn run() -> i32 {
                 yes,
                 force,
                 hub.as_deref(),
-                clock.as_ref(),
-                fiber,
+                &process,
             ),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args)), _) => {
-            models_entry(args, clock, fiber, read_signals::CancelOnSignal::new)
+            models_entry(args, &process, read_signals::CancelOnSignal::new)
         }
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers }), _) => {
             refresh_entry(&providers, clock, read_signals::CancelOnSignal::new)
@@ -278,9 +278,11 @@ fn run() -> i32 {
                 ::cli::extension_reinstall(&name, env!("CARGO_PKG_VERSION"), clock.as_ref())
             }
             cli::ExtensionCommands::List => ::cli::extension_list(clock.as_ref()),
-            cli::ExtensionCommands::Test { path } => {
-                ::cli::extension_test(path.as_deref(), fiber, Arc::clone(&clock))
-            }
+            cli::ExtensionCommands::Test { path } => ::cli::extension_test(
+                path.as_deref(),
+                process.exe.clone().map_err(|failure| failure.message),
+                Arc::clone(&clock),
+            ),
         },
         cli::Invocation::Run(Some(cli::Commands::Mcp(command)), _) => {
             mcp_command(command, Arc::clone(&clock))
@@ -344,10 +346,10 @@ fn run() -> i32 {
                 Err(error) => return fail(error),
             };
             if target.is_listed() {
-                let mut connect = || connect_hub(&home, &target, &fiber, clock.as_ref());
+                let mut connect = || connect_hub(&home, &target, &process.exe, clock.as_ref());
                 ::cli::stop_remote(&mut connect, clock.as_ref())
             } else {
-                let mut start = || start_hub(fiber.clone());
+                let mut start = hub_connect(&process.exe);
                 ::cli::stop_local(&home, &mut start, clock.as_ref())
             }
         }
@@ -542,12 +544,9 @@ fn mcp_declaration(args: &cli::McpAddArgs) -> Result<::cli::McpDeclaration, Stri
     }
 }
 
-#[allow(
-    clippy::print_stderr,
-    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
-)]
 fn fail(e: Failure) -> i32 {
-    eprintln!("fiber: {}", e.message);
+    // A closed stderr leaves nobody to tell.
+    writeln!(io::stderr(), "fiber: {}", e.message).unwrap_or(());
     doors::exit_code(&e)
 }
 
@@ -558,12 +557,9 @@ type Register = read_signals::Register;
 /// commands left on a normal return and on a foreground signal. The guard
 /// is built before the runner, so a refused registration returns before
 /// any credential command starts.
-fn models_entry(
-    args: cli::ModelsArgs,
-    clock: Arc<dyn contract::clock::Clock>,
-    fiber: Result<PathBuf, String>,
-    register: Register,
-) -> i32 {
+fn models_entry(args: cli::ModelsArgs, process: &startup::Process, register: Register) -> i32 {
+    let clock = Arc::clone(&process.clock);
+    let fiber = process.exe.clone().map_err(|failure| failure.message);
     let reads = Arc::new(crate::switch::Reads::default());
     let guards = match read_signals::guarded(&reads, &clock, &read_signals::FOREGROUND, register) {
         Ok(guards) => guards,
@@ -689,9 +685,9 @@ fn ask(
     worktree: bool,
     arg: Option<String>,
     dash: bool,
-    clock: Arc<dyn contract::clock::Clock>,
-    fiber: Result<PathBuf, String>,
+    process: &startup::Process,
 ) -> i32 {
+    let clock = Arc::clone(&process.clock);
     // First: a signal while the prompt is read exits at once
     // (`docs/invocation.md`, "Shutdown").
     let signals = match crate::shutdown::install(Arc::clone(&clock)) {
@@ -705,8 +701,22 @@ fn ask(
         Err(e) => return ask_failed(Failure::from(e)),
     };
     match resume {
-        Some(resuming) => resume::ask_resume(resuming, overrides, prompt, clock, &signals, fiber),
-        None => ask_new(overrides, prompt, worktree, clock, &signals, fiber),
+        Some(resuming) => resume::ask_resume(resuming, overrides, prompt, &signals, process),
+        None => session_command::new_session(
+            SessionId(doors::mint("s_")),
+            overrides,
+            Some(prompt),
+            true,
+            worktree,
+            None,
+            clock,
+            &signals,
+            process,
+            None,
+            None,
+            false,
+            Vec::new(),
+        ),
     }
 }
 
@@ -778,32 +788,6 @@ fn feedback(
         }
         Err(error) => fail(error.into()),
     }
-}
-
-/// `fiber ask` on a new session.
-fn ask_new(
-    overrides: Vec<String>,
-    prompt: String,
-    worktree: bool,
-    clock: Arc<dyn contract::clock::Clock>,
-    signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
-) -> i32 {
-    session_command::new_session(
-        SessionId(doors::mint("s_")),
-        overrides,
-        Some(prompt),
-        true,
-        worktree,
-        None,
-        clock,
-        signals,
-        fiber,
-        None,
-        None,
-        false,
-        Vec::new(),
-    )
 }
 
 /// What an `ask` loop judges with: the workspace the session keeps, the
@@ -1074,16 +1058,6 @@ fn run_turn(
     }
 }
 
-/// Stops the servers, then fails before any session line.
-/// Stops the servers and prints a startup failure. Only
-/// `retry_policy_tests` still fails this way; new sessions report through
-/// `session_command::report`, after asking about a recorded signal.
-#[cfg(test)]
-fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
-    servers.servers.stop();
-    ask_failed(e)
-}
-
 /// The terminal's shared reads with its guards: a plain cancel for a
 /// normal quit with a watcher that cancels and settles on SIGTERM and
 /// SIGHUP. Built before the model-list reader, so a signal cancels a
@@ -1117,7 +1091,7 @@ fn terminal_guards(
     reason = "prints client configuration notices (docs/code-quality.md, \"Lints\")"
 )]
 fn terminal(
-    fiber: Result<PathBuf, String>,
+    process: &startup::Process,
     target: doors::hub::Target,
     open_at: tui::OpenAt,
     model: Option<String>,
@@ -1127,18 +1101,9 @@ fn terminal(
         return code;
     }
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return fail(failed(e.code(), e)),
-    };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return fail(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
+    let (home, workspace) = match startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return fail(e),
     };
     // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
     let project = match ::cli::project_of(&home, &workspace) {
@@ -1244,9 +1209,10 @@ fn terminal(
     // The converter runs this executable again: its path, when the run
     // knows one, rides the launch so JPEG and WebP convert before Kitty
     // transmission (`docs/tui.md`, "Images").
-    launch.fiber = fiber.as_ref().ok().cloned();
+    launch.fiber = process.exe.as_ref().ok().cloned();
+    let exe = process.exe.clone();
     let connect: tui::Connect = Box::new(move || {
-        connect_hub(&home, &target, &fiber, hub_clock.as_ref()).map_err(io::Error::other)
+        connect_hub(&home, &target, &exe, hub_clock.as_ref()).map_err(io::Error::other)
     });
     launch.models = Some(models);
     launch.configure = Some(seam);
@@ -1308,8 +1274,10 @@ fn terminal(
 /// to its reaper thread at once: the hub keeps running while the thread
 /// owns its wait. A reaper thread that never starts leaves the child
 /// running unreaped, and its failure is recorded in the diagnostic log.
-fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
-    let exe = exe.map_err(io::Error::other)?;
+fn start_hub(exe: &Result<PathBuf, Failure>) -> io::Result<()> {
+    let exe = exe
+        .as_ref()
+        .map_err(|failure| io::Error::other(failure.message.clone()))?;
     let child = std::process::Command::new(exe)
         .arg("hub")
         .arg("serve")
@@ -1327,39 +1295,35 @@ fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
     Ok(())
 }
 
-/// Connects to the hub under `home`, starting it with `fiber` when none runs.
+fn hub_connect(exe: &Result<PathBuf, Failure>) -> impl FnMut() -> io::Result<()> + '_ {
+    move || start_hub(exe)
+}
+
+/// Connects to the hub under `home`, starting it with `exe` when none runs.
 fn connect_hub(
     home: &Path,
     target: &doors::hub::Target,
-    fiber: &Result<PathBuf, String>,
+    exe: &Result<PathBuf, Failure>,
     clock: &dyn contract::clock::Clock,
 ) -> Result<doors::hub::Hub, doors::Error> {
-    let mut start = || start_hub(fiber.clone());
+    let mut start = hub_connect(exe);
     doors::hub::connect_target(home, target, &mut start, clock)
 }
 
 fn hub_target(named: Option<&str>) -> Result<(PathBuf, doors::hub::Target), Failure> {
-    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-    let workspace = std::env::current_dir()
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+    let (home, workspace) = startup::startup()?;
     let target =
         doors::hub::load_target(&home, &workspace, named).map_err(|e| failed(e.code(), e))?;
     Ok((home, target))
 }
 
 /// `fiber sessions`: the hub it reaches is started when none runs.
-fn sessions_list(
-    all: bool,
-    json: bool,
-    named: Option<&str>,
-    clock: &dyn contract::clock::Clock,
-    fiber: Result<PathBuf, String>,
-) -> i32 {
+fn sessions_list(all: bool, json: bool, named: Option<&str>, process: &startup::Process) -> i32 {
     let (home, target) = match hub_target(named) {
         Ok(target) => target,
         Err(error) => return fail(error),
     };
-    let mut connect = || connect_hub(&home, &target, &fiber, clock);
+    let mut connect = || connect_hub(&home, &target, &process.exe, process.clock.as_ref());
     ::cli::sessions_list(all || target.is_listed(), json, &mut connect)
 }
 
@@ -1369,8 +1333,7 @@ fn sessions_delete(
     cascade: bool,
     yes: bool,
     named: Option<&str>,
-    clock: &dyn contract::clock::Clock,
-    fiber: Result<PathBuf, String>,
+    process: &startup::Process,
 ) -> i32 {
     let (home, target) = match hub_target(named) {
         Ok(target) => target,
@@ -1380,14 +1343,14 @@ fn sessions_delete(
         doors::hub::Target::Local => None,
         doors::hub::Target::Listed { name, .. } => Some(name.as_str()),
     };
-    let mut connect = || connect_hub(&home, &target, &fiber, clock);
+    let mut connect = || connect_hub(&home, &target, &process.exe, process.clock.as_ref());
     ::cli::delete(id, cascade, yes, hub, &mut connect)
 }
 
 /// `fiber sessions prune`: the hub it reaches is started when none runs.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one hand-off of prune's flags: what to prune, the hub, the clock and the binary"
+    reason = "one hand-off of prune's flags and process inputs"
 )]
 fn sessions_prune(
     older_than: Option<String>,
@@ -1396,8 +1359,7 @@ fn sessions_prune(
     yes: bool,
     force: bool,
     named: Option<&str>,
-    clock: &dyn contract::clock::Clock,
-    fiber: Result<PathBuf, String>,
+    process: &startup::Process,
 ) -> i32 {
     let (home, target) = match hub_target(named) {
         Ok(target) => target,
@@ -1407,7 +1369,7 @@ fn sessions_prune(
         doors::hub::Target::Local => None,
         doors::hub::Target::Listed { name, .. } => Some(name.as_str()),
     };
-    let mut connect = || connect_hub(&home, &target, &fiber, clock);
+    let mut connect = || connect_hub(&home, &target, &process.exe, process.clock.as_ref());
     ::cli::prune(
         &::cli::PruneArgs {
             older_than,
@@ -1417,7 +1379,7 @@ fn sessions_prune(
             force,
         },
         hub,
-        clock,
+        process.clock.as_ref(),
         &mut connect,
     )
 }

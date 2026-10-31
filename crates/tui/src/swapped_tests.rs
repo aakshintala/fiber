@@ -877,9 +877,13 @@ fn rebind_continuations_note_wrap_joins_while_first_lines_break() {
     let screen = crate::rebind::KeysScreen::default();
     let frame = screen.frame(&keys, 80, 24);
     let grown = crate::rebind::heights(&keys, 80);
-    // The delete_session action wraps its keys after the comma.
+    // The delete_session action wraps its keys after the comma and its
+    // description across three display lines.
     let at: usize = (0..7).map(|action| grown[action]).sum();
-    assert_eq!(&frame.joins[at..at + 2], &[Join::Break, Join::WrapSpace]);
+    assert_eq!(
+        &frame.joins[at..at + 3],
+        &[Join::Break, Join::WrapSpace, Join::WrapSpace]
+    );
     // A single-line action notes one break.
     let single: usize = (0..3).map(|action| grown[action]).sum();
     assert_eq!(&frame.joins[single..single + 1], &[Join::Break]);
