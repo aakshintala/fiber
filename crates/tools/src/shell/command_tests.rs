@@ -2065,14 +2065,12 @@ fn sandbox_enabled_runs_a_confined_echo() {
 fn sandbox_unavailable_fails_closed_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-unavailable");
     let work = dir.path().to_path_buf();
-    let home = std::env::var_os("HOME").map_or_else(
+    let parent = std::env::var_os("HOME").map_or_else(
         || std::path::PathBuf::from("/tmp"),
         std::path::PathBuf::from,
     );
-    let fiber_home = home.join(format!(
-        "fiber-sandbox-cmd-unavailable-{}",
-        std::process::id()
-    ));
+    let home = sandbox_home::SandboxHome::new(&parent, "fiber-tools-shell-sandbox-protected");
+    let fiber_home = home.fiber_home().to_path_buf();
     let sandbox = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: Vec::new(),
@@ -2118,11 +2116,10 @@ fn sandbox_setup_failure_aborts_spawn_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-fail");
     let work = dir.path().to_path_buf();
     let marker = work.join("marker");
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let fiber_home = home.join(format!("fiber-sandbox-cmd-fail-{}", std::process::id()));
+    let home_root = fakes::TempDir::new("fiber-tools-shell-sandbox-protected");
+    let fiber_home = home_root.path().join("fiber-home");
+    assert!(fiber_home.starts_with(std::env::temp_dir()));
+    assert!(fiber_home.starts_with(home_root.path()));
     let sandbox = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],

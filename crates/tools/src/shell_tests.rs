@@ -1281,15 +1281,15 @@ fn effects_does_not_declare_confined_when_sandbox_setup_is_unavailable() {
     // An unresolvable write grant leaves the call on the reviewed path.
     let dir = fakes::TempDir::new("fiber-shell-effects-unappliable");
     let workspace = dir.path().to_path_buf();
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
+    let home_root = fakes::TempDir::new("fiber-tools-shell-sandbox-protected");
+    let fiber_home = home_root.path().join("fiber-home");
+    assert!(fiber_home.starts_with(std::env::temp_dir()));
+    assert!(fiber_home.starts_with(home_root.path()));
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: vec![dir.path().join("missing-write")],
         deny_read: Vec::new(),
-        fiber_home: home.join(format!("fiber-shell-effects-fail-{}", std::process::id())),
+        fiber_home,
     }));
     let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
     let declared = effects(&shell, "echo hi");
@@ -1401,11 +1401,10 @@ fn a_failed_confined_setup_never_runs_unconfined() {
     let dir = fakes::TempDir::new("fiber-shell-run-confined-fail");
     let workspace = dir.path().to_path_buf();
     let marker = workspace.join("marker");
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let fiber_home = home.join(format!("fiber-shell-sandbox-fail-{}", std::process::id()));
+    let home_root = fakes::TempDir::new("fiber-tools-shell-sandbox-protected");
+    let fiber_home = home_root.path().join("fiber-home");
+    assert!(fiber_home.starts_with(std::env::temp_dir()));
+    assert!(fiber_home.starts_with(home_root.path()));
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],

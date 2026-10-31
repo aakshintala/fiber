@@ -3436,18 +3436,15 @@ fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
 fn an_unavailable_sandbox_does_not_declare_the_shell_confined() {
     let dir = fakes::TempDir::new("fiber-tools-shell-sandbox-fail");
     let workspace = dir.path().to_path_buf();
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
+    let home_root = fakes::TempDir::new("fiber-tools-shell-sandbox-protected");
+    let fiber_home = home_root.path().join("fiber-home");
+    assert!(fiber_home.starts_with(std::env::temp_dir()));
+    assert!(fiber_home.starts_with(home_root.path()));
     let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
         enabled: true,
         allow_write: vec![workspace.join("missing-write")],
         deny_read: Vec::new(),
-        fiber_home: home.join(format!(
-            "fiber-tools-shell-sandbox-fail-{}",
-            std::process::id()
-        )),
+        fiber_home,
     }));
     let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
     let effects = shell
