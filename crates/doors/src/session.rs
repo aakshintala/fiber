@@ -118,6 +118,12 @@ pub(crate) struct Gate {
     /// unknown, as `commands` is empty until set.
     servers_refresh: OnceLock<ServersRefresh>,
     mcp_login: OnceLock<McpLogin>,
+    /// Validated reconnect attempts, inserted before start work and removed
+    /// after final collection, including on rejection or unwind.
+    reconnect_flights: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    /// Set before delivering a rewind or workspace move; never cleared in
+    /// this session, so later reconnects keep the normal admission path.
+    transition_delivered: AtomicBool,
     /// The already-read check the `import` driver command consults, wired
     /// by the session process before the session runs.
     pub(crate) personal_source_check: OnceLock<Arc<dyn contract::skills::PersonalSourceCheck>>,
@@ -458,6 +464,12 @@ impl Session {
     pub fn mcp_servers(&self, refresh: ServersRefresh) {
         let stored = self.gate.servers_refresh.set(refresh);
         debug_assert!(stored.is_ok(), "mcp_servers is wired once");
+    }
+
+    /// The server names whose reconnect start is executing. A start
+    /// inserts only after validation and removes itself before returning.
+    pub fn reconnect_flights(&self) -> Arc<Mutex<std::collections::BTreeSet<String>>> {
+        Arc::clone(&self.gate.reconnect_flights)
     }
 
     /// Wires one server's login runner for the `mcp_login` command before
@@ -976,6 +988,25 @@ impl Gate {
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
+        if matches!(
+            &delivery,
+            Delivery::Rewind(..) | Delivery::ChangeWorkspace(..)
+        ) {
+            self.transition_delivered.store(true, Ordering::SeqCst);
+        }
+        if let Delivery::McpReconnect(args, _) = &delivery {
+            let joined = self.admission.admit(|| {
+                !self.transition_delivered.load(Ordering::SeqCst)
+                    && lock(&self.reconnect_flights).contains(&args.server)
+            });
+            if joined == Some(true) {
+                let Delivery::McpReconnect(_, ack) = delivery else {
+                    unreachable!("the joined delivery is a reconnect");
+                };
+                (ack.0)(Ok(None));
+                return;
+            }
+        }
         // The ack's answer runs host code `doors` does not own, so no
         // `doors` lock is held across it: under the guard only the slot
         // read and the one send run, and the undelivered delivery drops
@@ -1071,6 +1102,8 @@ fn open_in(
         quota: OnceLock::new(),
         credentials: OnceLock::new(),
         servers_refresh: OnceLock::new(),
+        reconnect_flights: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+        transition_delivered: AtomicBool::new(false),
         mcp_login: OnceLock::new(),
         personal_source_check: OnceLock::new(),
         accepted: Accepted::new(),
@@ -1263,3 +1296,7 @@ fn drain(watcher: &mut Watcher, out: &mut dyn Write) {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "session_reconnect_tests.rs"]
+mod reconnect_tests;
