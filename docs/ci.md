@@ -537,7 +537,7 @@ regenerates it and fails when the committed copy differs.
 
 ## Manually dispatched workflows
 
-Three workflows never run on a push or a pull request. Someone starts them with
+Four workflows never run on a push or a pull request. Someone starts them with
 `gh workflow run <file> --ref <branch>`, and GitHub allows that only once the
 workflow file is on `main`.
 
@@ -554,6 +554,10 @@ workflow file is on `main`.
   process and for the fiber processes alone, the fiber processes' self time per
   function (`fiber-symbols.txt`), and the harness's JSON. Its timings run under perf,
   so they are not budget evidence.
+- `build-timings.yml` builds the whole workspace with `--timings` on Linux
+  x86_64 and macOS arm64 from a warm dependency cache, times an incremental
+  rebuild after touching one file each in `crates/tui` and `crates/support`,
+  and uploads both timing reports as artifacts (#3789, step 1).
 
 ## Job time limits
 
