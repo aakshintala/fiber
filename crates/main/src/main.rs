@@ -1350,7 +1350,7 @@ fn sessions_delete(
 /// `fiber sessions prune`: the hub it reaches is started when none runs.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one hand-off of prune's flags: what to prune, the hub, the clock and the binary"
+    reason = "one hand-off of prune's flags and process inputs"
 )]
 fn sessions_prune(
     older_than: Option<String>,
@@ -1379,7 +1379,7 @@ fn sessions_prune(
             force,
         },
         hub,
-        clock,
+        process.clock.as_ref(),
         &mut connect,
     )
 }

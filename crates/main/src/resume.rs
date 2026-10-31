@@ -6,7 +6,7 @@
 //! instead (`docs/invocation.md`, "Processes").
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use contract::ErrorCode;

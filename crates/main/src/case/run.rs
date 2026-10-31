@@ -4,7 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use contract::clock::Clock;
 use extensions::case::{Case, CaseRun, Input, SessionCase, Verdict, run_call};
 use serde_json::Value;
 

@@ -10,7 +10,7 @@
 //! before `fiber_started` deletes its directory,
 //! so the hub can start it again from the refusal.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use contract::shapes::{Failure, Worktree};
