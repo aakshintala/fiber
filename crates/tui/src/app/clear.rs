@@ -138,6 +138,12 @@ impl App {
             .map(|pending| pending.command_id.as_str())
     }
 
+    /// The clear close id, for asserting its answer correlation.
+    #[cfg(test)]
+    pub(super) fn clear_close_id(&self) -> Option<&str> {
+        self.clear.close.as_deref()
+    }
+
     /// Accepts the matching clear start and sends its follow-up commands.
     /// Another start's answer leaves the clear pending untouched.
     pub(super) fn clear_start_accepted(
