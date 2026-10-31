@@ -452,7 +452,7 @@ fn the_view_carries_logged_out_rows_with_focus_hits_and_hint() {
     let first = view.logged_out.first().unwrap();
     assert_eq!(first.provider, "vertex");
     assert_eq!(first.at, row);
-    assert!(first.hits.is_empty());
+    assert_eq!(first.hits, vec![false; "vertex".chars().count()]);
     assert_eq!(first.hint.as_deref(), Some("TOKEN or ~/.config/token"));
     assert_eq!(view.focused, Some(row));
     assert!(!view.no_match);
@@ -603,7 +603,9 @@ fn pruning_keeps_logged_out_focus_until_both_provider_lists_drop_it() {
 fn pruning_keeps_a_catalogued_install_focus_hidden_by_the_query() {
     let mut picker = picker(Mode::Choose, &["acme/m1"], &["openai"]);
     picker.go(Stop::Install("openai".to_owned()));
-    picker.push_query('a');
+    picker.push_query('m');
+    // Query input clears focus; restore a catalogued focus to isolate pruning.
+    picker.installs.focus = Some("openai".to_owned());
 
     picker.prune_focus();
 
