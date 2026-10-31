@@ -35,14 +35,16 @@ struct Jig {
     reaped: bool,
 }
 /// The built `connect` example beside the test binary: the jig the tests drive.
-fn example_executable() -> std::path::PathBuf {
-    std::env::current_exe()
+/// Warming before returning means every exec site holds only a warmed path.
+fn example_executable() -> fakes::WarmedJig {
+    let path = std::env::current_exe()
         .unwrap()
         .parent()
         .unwrap()
         .parent()
         .unwrap()
-        .join("examples/connect")
+        .join("examples/connect");
+    fakes::WarmedJig::warm(path, &["--bogus"], 2)
 }
 impl Jig {
     fn spawn(home: &Path, args: &[&str]) -> Self {
@@ -55,9 +57,8 @@ impl Jig {
         Self::spawn_inner(home, args, true)
     }
     fn spawn_inner(home: &Path, args: &[&str], capture_stderr: bool) -> Self {
-        let executable = example_executable();
-        fakes::warm_up(&executable, &["--bogus"], 2);
-        let mut child = Command::new(executable)
+        let warmed = example_executable();
+        let mut child = Command::new(warmed.path())
             .args(args)
             .env_clear()
             .envs(fakes::check_run())

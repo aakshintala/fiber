@@ -10,9 +10,9 @@
 
 use std::time::Duration;
 
+use crate::ProcessFixture;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
-use crate::{ProcessFixture, warm_up};
 
 /// One deadline for the whole exchange: every wait takes what remains of
 /// it, so a stall fails naming its own wait instead of hanging the test.
@@ -105,7 +105,7 @@ fn a_protocol_peer_acknowledges_each_hold_before_release() {
 
 #[test]
 fn the_fixture_usage_error_names_its_modes() {
-    warm_up(&super::example_path(), &["bogus-mode"], 2);
+    let _warmed = super::example_path();
 }
 
 /// A `wait_for` started after the guard is partly consumed still drains
