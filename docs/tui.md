@@ -3204,8 +3204,11 @@ do not carry over to Linux; the call counts do.
 One slot has focus at a time: the input box, an open view, or the overlay on
 top. An extension's view or overlay takes focus when it opens.
 
-- **Keys** reach the focused slot first, as names such as `ctrl+o`, `alt+up`
-  or `shift+enter`, and typed text as text. A paste is one event. The handler
+- **Keys** reach the focused slot's `on_key` first, as names such as
+  `ctrl+o`, `alt+up` or `shift+enter`, and typed text as text. Typed text is
+  what bare typing names below. A paste is one event holding the whole pasted
+  text before the built-in box collapses it, so a replaced box sees the raw
+  text (`docs/extensions.md`, "Commands and screens"). The handler
   returns whether it handled the key. A key it did not handle goes to the key
   map as if no extension were there.
 - **Whole-screen bindings act before the built-in key map.** An eligible
@@ -3220,12 +3223,17 @@ top. An extension's view or overlay takes focus when it opens.
   settle before the fallthrough, and action events keep their built-in
   settle behavior. Only Ctrl+C reaches the bindings from the `/keys`
   screen, so no screen code skips dispatch: Ctrl+C itself is unregistrable.
-- **Esc** closes whatever is on top, unless the focused slot handles it
-  itself.
+- **Esc** closes whatever is on top, or interrupts the turn, unless the
+  focused slot handles it itself.
 - **The second Ctrl+C always quits** ("Quit"), whatever the focused
   slot does, so a slot that swallows every key cannot trap the person. The
-  first Ctrl+C is the slot's.
-- **A click** on a span with a `click` id goes to that slot's click handler.
+  first Ctrl+C is the slot's, even with the box empty; unhandled, it clears
+  the draft or arms the quit prompt as built in. The terminal counts the
+  presses itself: a Ctrl+C within about a second of an earlier one quits,
+  whether or not the slot handled the earlier one. The second Ctrl+C is the
+  only key the terminal keeps from the focused slot.
+- **A click** on a span with a `click` id goes to that slot's click handler,
+  with the id and the session on screen.
   The wheel, a drag and any click it does not handle go to the terminal, so
   scrolling and selection keep working.
 
@@ -3234,7 +3242,15 @@ once keyboard detection finishes ("Keys", "Rules"). An extension that binds
 one also binds a key that works without the protocol, as the built-ins do.
 Every click target an extension draws is a focus stop in navigate mode
 ("Moving through the conversation"), so its widgets need no focus order of
-their own.
+their own. The terminal finds them in the cached spans, whose `click` ids are
+part of the renderer's output, so the cache key needs nothing more and finding
+them calls no Lua. Enter on a focused stop makes the same click call.
+
+A key or click handler runs only when input arrives, so it adds nothing while
+nothing happens ("Performance"). Its declared timeout bounds it. The frame
+budgets in `docs/performance.md` are measured without a TUI extension, and a
+handler's time is the extension author's cost, as its timers are
+("Animation").
 
 ### Animation
 

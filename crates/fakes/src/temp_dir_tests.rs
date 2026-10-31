@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -9,10 +9,11 @@ use std::thread;
 use std::time::Duration;
 
 use super::TempDir;
+use crate::MUST_SUCCEED_WITHIN;
+use crate::children::Ready;
+use crate::clock::FakeClock;
 use crate::deadline::Deadline;
-
-/// How long the killed-run test waits for the child to print, and to exit.
-const DEADLINE: Duration = Duration::from_secs(10);
+use contract::clock::Clock;
 
 /// The child test [`a_killed_run_leaves_a_directory_a_later_one_does_not_reuse`]
 /// re-executes. Unset, the test does nothing.
@@ -233,9 +234,9 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    let (status, stderr) = Deadline::after(DEADLINE)
+    let (status, stderr) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the killed child to exit"))
+        .unwrap_or_else(|_| panic!("waited {MUST_SUCCEED_WITHIN:?} for the killed child to exit"))
         .unwrap();
     assert!(
         status.signal() == Some(9),
@@ -280,9 +281,11 @@ fn a_closed_stdin_lets_the_child_exit_and_clean_up() {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    let (status, stderr) = Deadline::after(DEADLINE)
+    let (status, stderr) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to exit after stdin closed"))
+        .unwrap_or_else(|_| {
+            panic!("waited {MUST_SUCCEED_WITHIN:?} for the child to exit after stdin closed")
+        })
         .unwrap();
     assert!(
         status.code() == Some(0),
@@ -352,9 +355,11 @@ fn printed_dir(child: &mut ChildGuard) -> PathBuf {
             }
         }
     });
-    let printed = Deadline::after(DEADLINE)
+    let printed = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to print its directory"));
+        .unwrap_or_else(|_| {
+            panic!("waited {MUST_SUCCEED_WITHIN:?} for the child to print its directory")
+        });
     let Some(printed) = printed else {
         panic!("the child exited before printing its directory");
     };
@@ -378,6 +383,321 @@ impl Drop for ChildGuard {
             }
         }
     }
+}
+
+/// Spawns a shell that signals readiness on `ready`, then holds `dir` as
+/// its working directory under `sleep`: the holder the drop must wait for.
+/// The paths travel as arguments, never interpolated, so no quoting can
+/// break them.
+fn spawn_cwd_holder(dir: &TempDir, ready: &Ready) -> ChildGuard {
+    ChildGuard(Some(
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("echo $$ > \"$2\"; exec sleep 300")
+            .arg("sh")
+            .arg(dir.path())
+            .arg(ready.path())
+            .current_dir(dir.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    ))
+}
+
+/// Spawns a shell with the same shape as [`spawn_cwd_holder`], except it
+/// execs `sleep 2`: the holder is alive for the drop's first scan and
+/// exits on its own well inside the bound, so the drop removes the
+/// directory without any explicit reap.
+fn spawn_short_holder(dir: &TempDir, ready: &Ready) -> ChildGuard {
+    ChildGuard(Some(
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("echo $$ > \"$2\"; exec sleep 2")
+            .arg("sh")
+            .arg(dir.path())
+            .arg(ready.path())
+            .current_dir(dir.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    ))
+}
+
+/// Spawns a shell that holds `dir` through an open file after changing
+/// directory away from it, then signals readiness and sleeps: the
+/// file-descriptor holder the working-directory scan misses. Linux only:
+/// macOS has no open-file scan.
+#[cfg(target_os = "linux")]
+fn spawn_fd_holder(dir: &TempDir, ready: &Ready) -> ChildGuard {
+    ChildGuard(Some(
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exec 3> \"$1/hold\"; cd /; echo $$ > \"$2\"; exec sleep 300")
+            .arg("sh")
+            .arg(dir.path())
+            .arg(ready.path())
+            .current_dir(dir.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    ))
+}
+
+/// Kills the holder and reaps it under the must-succeed bound, so the test
+/// itself leaks nothing even when an assert below fails.
+fn reap_holder(mut holder: ChildGuard) {
+    let Some(mut child) = holder.0.take() else {
+        return;
+    };
+    match child.kill() {
+        Ok(()) | Err(_) => {}
+    }
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || match done.send(child.wait()) {
+        Ok(()) | Err(_) => {}
+    });
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&finished, "the holder to exit after SIGKILL")
+        .unwrap();
+}
+
+/// Removes the directory the failed drop left behind, so the test itself
+/// leaks nothing even when an assert below fails.
+fn remove_left(path: &Path) {
+    if path.exists() {
+        fs::remove_dir_all(path).unwrap();
+    }
+}
+
+impl ChildGuard {
+    fn pid(&self) -> u32 {
+        self.0.as_ref().unwrap().id()
+    }
+}
+
+#[test]
+fn a_live_holder_fails_the_drop_naming_the_directory_and_the_holder() {
+    let dir = TempDir::new("holder");
+    let ready = Ready::new(dir.path());
+    let holder = spawn_cwd_holder(&dir, &ready);
+    let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
+    let pid = holder.pid();
+    assert_eq!(reported, [pid]);
+    let path = dir.path().to_path_buf();
+    let clock = FakeClock::new();
+    let t0 = clock.now();
+    // Past `t0` plus the bound, so the first probe is already expired and
+    // the expiry returns at once with no wall wait (`docs/testing.md`,
+    // "Values that change every run").
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(MUST_SUCCEED_WITHIN + Duration::from_secs(1));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::wait_for_holders(dir.path(), &*clock, t0, MUST_SUCCEED_WITHIN)
+    }));
+    reap_holder(holder);
+    remove_left(&path);
+    let holders = match caught {
+        Ok(holders) => holders,
+        Err(payload) => panic!("the holder wait panicked: {}", panic_message(payload)),
+    };
+    assert!(
+        holders.contains(&pid),
+        "the expired wait missed the live holder {pid}: {holders:?}"
+    );
+    let message = super::holders_message(&path, dir.owner.as_deref(), &holders);
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the failure names no directory: {message}"
+    );
+    assert!(
+        message.contains(&format!("pid {pid}")),
+        "the failure names no holder: {message}"
+    );
+    assert!(message.contains("for test "), "{message}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_open_file_holder_fails_the_drop_naming_the_directory_and_the_holder() {
+    let dir = TempDir::new("holder-fd");
+    let ready = Ready::new(dir.path());
+    let holder = spawn_fd_holder(&dir, &ready);
+    let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
+    let pid = holder.pid();
+    assert_eq!(reported, [pid]);
+    let path = dir.path().to_path_buf();
+    let clock = FakeClock::new();
+    let t0 = clock.now();
+    // Past `t0` plus the bound, so the first probe is already expired and
+    // the expiry returns at once with no wall wait (`docs/testing.md`,
+    // "Values that change every run").
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(MUST_SUCCEED_WITHIN + Duration::from_secs(1));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::wait_for_holders(dir.path(), &*clock, t0, MUST_SUCCEED_WITHIN)
+    }));
+    reap_holder(holder);
+    remove_left(&path);
+    let holders = match caught {
+        Ok(holders) => holders,
+        Err(payload) => panic!("the holder wait panicked: {}", panic_message(payload)),
+    };
+    assert!(
+        holders.contains(&pid),
+        "the expired wait missed the live open-file holder {pid}: {holders:?}"
+    );
+    let message = super::holders_message(&path, dir.owner.as_deref(), &holders);
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the failure names no directory: {message}"
+    );
+    assert!(
+        message.contains(&format!("pid {pid}")),
+        "the failure names no holder: {message}"
+    );
+    assert!(message.contains("for test "), "{message}");
+}
+
+#[test]
+fn an_exiting_holder_lets_the_drop_remove_the_directory() {
+    let dir = TempDir::new("holder-gone");
+    let ready = Ready::new(dir.path());
+    let holder = spawn_short_holder(&dir, &ready);
+    let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
+    assert_eq!(reported, [holder.pid()]);
+    let path = dir.path().to_path_buf();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        drop(dir);
+        match done.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(
+        &finished,
+        "the drop to remove the directory after its holder exited",
+    );
+    assert!(!path.exists(), "the drop left {}", path.display());
+}
+
+#[test]
+fn a_drop_while_unwinding_removes_without_panicking_again() {
+    let dir = TempDir::new("holder-unwind");
+    let ready = Ready::new(dir.path());
+    let holder = spawn_cwd_holder(&dir, &ready);
+    ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
+    let path = dir.path().to_path_buf();
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> () {
+        let _live = dir;
+        panic!("the test body failed first");
+    }));
+    reap_holder(holder);
+    remove_left(&path);
+    let Err(payload) = caught else {
+        panic!("the body panic did not propagate");
+    };
+    let message = panic_message(payload);
+    assert!(
+        message.contains("the test body failed first"),
+        "the drop replaced the body panic: {message}"
+    );
+}
+
+#[test]
+fn an_expired_bound_returns_the_live_holders_without_waiting() {
+    let dir = TempDir::new("holder-expired");
+    let ready = Ready::new(dir.path());
+    let holder = spawn_cwd_holder(&dir, &ready);
+    let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
+    let pid = holder.pid();
+    assert_eq!(reported, [pid]);
+    let clock = FakeClock::new();
+    let t0 = clock.now();
+    // Past `t0` plus the bound, so the first probe is already expired and
+    // the timeout branch fires at once with no wall wait (`docs/testing.md`,
+    // "Values that change every run").
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(MUST_SUCCEED_WITHIN + Duration::from_secs(1));
+    let holders = super::wait_for_holders(dir.path(), &*clock, t0, MUST_SUCCEED_WITHIN);
+    reap_holder(holder);
+    let path = dir.path().to_path_buf();
+    remove_left(&path);
+    assert!(
+        holders.contains(&pid),
+        "the expired wait missed the live holder {pid}: {holders:?}"
+    );
+    let message = super::holders_message(dir.path(), dir.owner.as_deref(), &holders);
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the expiry names no directory: {message}"
+    );
+    assert!(
+        message.contains(&format!("pid {pid}")),
+        "the expiry names no holder: {message}"
+    );
+    match dir.owner.as_deref() {
+        Some(name) => assert!(
+            message.contains(name),
+            "the expiry names no creating test: {message}"
+        ),
+        None => assert!(message.contains("an unnamed test"), "{message}"),
+    }
+    assert!(!path.exists(), "the test left {}", path.display());
+}
+
+#[test]
+fn the_test_process_itself_is_never_a_holder() {
+    let dir = TempDir::new("self-hold");
+    let _held = fs::File::create(dir.path().join("held")).unwrap();
+    let holders = super::holder_pids(dir.path());
+    assert!(
+        !holders.contains(&std::process::id()),
+        "the scan listed the test process itself: {holders:?}"
+    );
+    let path = dir.path().to_path_buf();
+    drop(dir);
+    assert!(!path.exists(), "the drop left {}", path.display());
+}
+
+#[test]
+fn scanned_pid_refuses_small_ids_and_the_test_itself() {
+    assert!(super::scanned_pid(2, 99));
+    assert!(super::scanned_pid(3, 99));
+    assert!(!super::scanned_pid(1, 99));
+    assert!(!super::scanned_pid(0, 99));
+    assert!(!super::scanned_pid(99, 99));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn parse_pid_reads_only_all_digit_names() {
+    use std::ffi::OsStr;
+    assert_eq!(super::parse_pid(OsStr::new("1234")), Some(1234));
+    assert_eq!(super::parse_pid(OsStr::new("1")), Some(1));
+    assert_eq!(super::parse_pid(OsStr::new("4294967295")), Some(u32::MAX));
+    assert_eq!(super::parse_pid(OsStr::new("4294967296")), None);
+    assert_eq!(super::parse_pid(OsStr::new("self")), None);
+    assert_eq!(super::parse_pid(OsStr::new("")), None);
+    assert_eq!(super::parse_pid(OsStr::new("12x")), None);
+    assert_eq!(super::parse_pid(OsStr::new(" 12")), None);
 }
 
 fn send_line(tx: &mpsc::Sender<Option<String>>, line: Option<String>) {
