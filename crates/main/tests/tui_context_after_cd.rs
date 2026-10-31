@@ -181,8 +181,8 @@ fn context_after_cd_shows_the_total_against_the_inherited_window() {
         grid.contents
     );
     assert!(
-        !grid.contents.contains("system prompt"),
-        "the sizes without an own preamble show the total alone; screen:\n{}",
+        !grid.contents.contains("handoff 70k"),
+        "the parent's handoff marker is gone; screen:\n{}",
         grid.contents
     );
     run.write(b"\x03\x03\r");
