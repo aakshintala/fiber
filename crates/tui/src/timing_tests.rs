@@ -862,7 +862,9 @@ fn summary_poll_starts_nothing_once_the_latch_is_set() {
     );
 }
 
-/// The open's pre-frame tail read is timed end to end: one
+/// The attached-frame guard survives the session draw while the summary
+/// is still in flight, then ends after the tail read installs and draws
+/// its preview. The open's pre-frame tail read is timed end to end: one
 /// `tui.tail_wait` line spans the whole fetch, one `tui.preview_fold`
 /// line covers the answer fold (the empty seed fold writes none), and
 /// one `tui.tail_install` line covers installation, which installs the
@@ -870,11 +872,11 @@ fn summary_poll_starts_nothing_once_the_latch_is_set() {
 /// paging"). A `Phase::Count` read takes no attach guard, so swapping
 /// the arms leaves none here (`docs/state.md`, "Diagnostic logs").
 #[test]
-fn open_tail_times_the_wait_answer_fold_and_install() {
+fn attached_frame_waits_for_the_tail_install_and_draw() {
     let (home, mut lp, id) = subscribing_lp("tui-timing-open-tail");
-    accept_summary(&mut lp, &id);
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     lp.hub.store(ours);
+    lp.attached_frame = lp.timing.attached_frame();
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("timing-open-tail-hub".to_owned())
@@ -908,24 +910,41 @@ fn open_tail_times_the_wait_answer_fold_and_install() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // `open_tail` blocks in `recv`: it runs on a thread of its own and
-    // the loop arrives through one deadline, so a wait that never ends
-    // fails here instead of hanging the suite (`docs/testing.md`,
+    assert_eq!(lp.frame_inner(&rx), None);
+    assert!(
+        lp.attached_frame.is_some(),
+        "the draw before summary acceptance leaves the guard open"
+    );
+    accept_summary(&mut lp, &id);
+    // The frame's tail read blocks in `recv`: it runs on a thread of its
+    // own and the loop arrives through one deadline, so a wait that never
+    // ends fails here instead of hanging the suite (`docs/testing.md`,
     // "Waits and timeouts").
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("timing-open-tail".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            lp.open_tail(&rx);
+            assert_eq!(lp.frame_inner(&rx), None);
             done.send(lp).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let lp = Deadline::after(Duration::from_secs(10))
         .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the tail read: {err}"));
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the tail read and draw: {err}"));
+    assert!(
+        lp.attached_frame.is_none(),
+        "the successful tail install ends the guard after its draw"
+    );
     drop(lp);
     let lines = op_lines(home.path());
+    let attached: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.attached_frame")
+        .cloned()
+        .collect();
+    // docs/state.md:432-435 promises one line at the first attached-history draw.
+    assert_terminal_wire(&attached, "tui.attached_frame");
     let waits: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.tail_wait")
@@ -955,6 +974,64 @@ fn open_tail_times_the_wait_answer_fold_and_install() {
     );
     // docs/state.md:450-454 promises one install line per process.
     assert_terminal_wires(&installs, "tui.tail_install");
+}
+
+/// A due opening with no hub stream installs no attached-frame timing:
+/// there is no fetched history to draw.
+#[test]
+fn attached_frame_stays_open_when_tail_is_due_without_a_stream() {
+    let (home, mut lp, id) = subscribing_lp("tui-timing-attached-no-stream");
+    lp.attached_frame = lp.timing.attached_frame();
+    accept_summary(&mut lp, &id);
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(lp.frame_inner(&rx), None);
+    assert!(
+        lp.attached_frame.is_some(),
+        "a due open without a stream does not end the guard"
+    );
+    crate::timing::discard(lp.attached_frame.take());
+    // docs/state.md:432-435 promises no line when an attach has no stream.
+    assert!(
+        !log_file(home.path()).exists(),
+        "no stream means no attached-frame line"
+    );
+}
+
+/// A lost tail wait has no fetched history to draw, even though it began
+/// with a live stream.
+#[test]
+fn attached_frame_stays_open_when_tail_fetch_is_lost() {
+    let (home, mut lp, id) = subscribing_lp("tui-timing-attached-lost-tail");
+    let (ours, _peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub.store(ours);
+    lp.attached_frame = lp.timing.attached_frame();
+    accept_summary(&mut lp, &id);
+    let (tx, rx) = mpsc::channel();
+    tx.send(crate::Input::Disconnected)
+        .unwrap_or_else(|err| panic!("send disconnect: {err}"));
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-attached-lost-tail".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            let result = lp.frame_inner(&rx);
+            done.send((lp, result)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (lp, result) = Deadline::after(Duration::from_secs(10))
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the lost tail frame: {err}"));
+    assert_eq!(result, None);
+    assert!(
+        lp.attached_frame.is_some(),
+        "a lost tail read does not end the guard"
+    );
+    crate::timing::discard(lp.attached_frame);
+    // docs/state.md:432-435 promises no line when no history draw occurs.
+    assert!(
+        !log_file(home.path()).exists(),
+        "a lost tail read means no attached-frame line"
+    );
 }
 
 /// A refused connect still draws its first frame, and only it.
