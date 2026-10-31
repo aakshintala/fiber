@@ -263,15 +263,32 @@ fn session_segments(app: &App) -> Vec<Segment> {
                 .saturating_mul(100)
                 .checked_div(inside)
                 .unwrap_or(0);
-            // Dim `cache` with its share, opening the usage view.
+            // Dim `cache` with its share, then the time until it
+            // resets, opening the usage view (`docs/tui.md`, "The
+            // narrow layout").
             let mut spans = vec![
                 Span::styled("cache", style(Role::Muted)),
                 Span::raw(" ".to_owned()),
             ];
             let at: usize = spans.iter().map(|span| format::width(&span.content)).sum();
             let share = format!("{hits}%",);
-            let wide = format::width(&share);
             spans.push(Span::raw(share));
+            if let Some(expiry) = status.cache_expires {
+                let now = app.motion().wall_ms().unwrap_or(0);
+                spans.push(Span::raw(" ".to_owned()));
+                if now >= expiry {
+                    spans.push(Span::styled("expired".to_owned(), style(Role::Attention)));
+                } else {
+                    spans.push(Span::raw(crate::view::panel::cache_countdown(
+                        expiry.saturating_sub(now),
+                    )));
+                }
+            }
+            let wide: usize = spans
+                .iter()
+                .map(|span| format::width(&span.content))
+                .sum::<usize>()
+                .saturating_sub(at);
             out.push(Segment {
                 spans,
                 spots: vec![(at, wide, Spot::Usage)],
