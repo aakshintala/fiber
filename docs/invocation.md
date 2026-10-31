@@ -1152,7 +1152,6 @@ terminal states end it: `Answered` sends exactly one line, and `Dropped` sends n
 | Read or Queued | the session's relay is live and starts the write | Writing | nothing yet |
 | Read, Queued or Writing | the session answers `closing` after the exited window: the hub confirms delivery | Written | nothing yet; the existing `Written -> Rerouted` claim below then hands the command once to the resumed session, suppressing the old answer |
 | Written | the session answers `closing` after the exited window | Rerouted | nothing yet; delivered once to the resumed session |
-| Written | the session answers `closing` after it already rerouted once | Answered | the `closing` rejection |
 | Written | the session answers `indeterminate` | Answered | the `indeterminate` rejection; never replayed |
 | Written, in the exit window | the session shuts its connection | Answered | exactly one answer before shutdown: its own, or `indeterminate` when the close grace cut it |
 | Written | the session exits cleanly without answering | Rerouted | nothing yet; delivered once to the resumed session, in read order; already rerouted once, then one `command_rejected closing` |
