@@ -570,6 +570,16 @@ fn a_member_whose_tree_names_a_tui_crate_is_reported_and_tui_and_main_are_exempt
     );
 }
 
+#[test]
+fn crate_edge_table_has_no_self_or_test_only_targets() {
+    for row in CALLS {
+        assert!(!row.depends_on.contains(&row.krate), "{}", row.krate);
+        assert!(!row.depends_on.contains(&"support"), "{}", row.krate);
+        assert!(!row.depends_on.contains(&"fakes"), "{}", row.krate);
+        assert!(!row.depends_on.contains(&"xtask"), "{}", row.krate);
+    }
+}
+
 /// A `--prefix depth` tree where `tools` and `main` enable
 /// `preserve_order`: the crates in the `default` and `std` subtrees, and
 /// the deeper crate under `tools`, enabled nothing.

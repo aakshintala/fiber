@@ -86,7 +86,9 @@ it; the rules below leave it out because it holds no domain knowledge.
 `extensions` depend on `contract` and never on `loop`, on each other, or on
 `tui`. `extensions` also depends on `config`, for what an extension reads
 while it runs; `tools` also depends on `config`, for where a project's
-protected-path state lives in Fiber home. `loop`
+protected-path state lives in Fiber home. `extensions` also depends on
+`log`'s reading side, to replay the log to watchers at session end and to
+derive the project key. `loop`
 depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
 or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
 side, the functions `log` exports for reading (taking the lock, deleting a
