@@ -47,6 +47,7 @@ fn extension_usage_carries_its_line() {
         extension: Some("tag".to_owned()),
         origin_session_id: None,
         reviewer: None,
+        warming: None,
     };
     let delivery = crate::inbox::Delivery::ExtensionUsage(line.clone());
     match delivery {

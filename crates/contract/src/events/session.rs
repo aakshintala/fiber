@@ -433,6 +433,10 @@ pub struct SessionStatus {
     /// After the first request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextFill>,
+    /// After the first model request: when the session's prompt cache
+    /// expires, as `ts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_expires: Option<u64>,
     /// The session's spend so far, delegates included.
     pub spend: Usage,
     /// Delegates running.
