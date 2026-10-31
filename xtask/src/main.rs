@@ -41,7 +41,7 @@
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `crate-edges`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
 //! - `flake-report-events`: reads one JSON object on stdin carrying the
 //!   flake titles and the complete open and closed exact-title issue
 //!   lookups with their completeness, and prints the unique closed issue
@@ -376,6 +376,18 @@ fn run(args: &[String]) -> Result<bool, String> {
             &rules::TUI,
             "no crate but tui and main links ratatui or crossterm",
         ),
+        "crate-edges" => {
+            let failures = rules::crate_edges(
+                &normal_edges()?,
+                rules::CALLS,
+                &read("docs/architecture.md")?,
+            )?;
+            report(
+                "crate-edges",
+                &failures,
+                "every first-party dependency is one the call rules grant",
+            )
+        }
         "preserve-order" => {
             // What ships in a Fiber binary, over every target and feature:
             // Cargo unifies features across every crate linked into one
@@ -818,6 +830,38 @@ fn cargo_dependencies() -> Result<BTreeSet<(String, String)>, String> {
         .filter(|(_, dep)| !names.contains(dep))
         .map(|(krate, dep)| (krate.to_owned(), dep.to_owned()))
         .collect())
+}
+
+fn normal_edges() -> Result<BTreeSet<(String, String)>, String> {
+    let (root, packages) = packages()?;
+    let dir_of = |package: &Value| {
+        relative(
+            Path::new(text(package, "manifest_path"))
+                .parent()
+                .unwrap_or(Path::new("")),
+            &root,
+        )
+    };
+    let by_dir: BTreeMap<String, &str> = packages
+        .iter()
+        .map(|package| (dir_of(package), text(package, "name")))
+        .collect();
+    let mut edges = BTreeSet::new();
+    for package in &packages {
+        for dependency in array(package, "dependencies") {
+            if dependency.get("kind").is_some_and(|kind| !kind.is_null()) {
+                continue;
+            }
+            let Some(path) = dependency.get("path").and_then(Value::as_str) else {
+                continue;
+            };
+            let dir = relative(Path::new(path), &root);
+            if let Some(member) = by_dir.get(&dir) {
+                edges.insert((text(package, "name").to_owned(), (*member).to_owned()));
+            }
+        }
+    }
+    Ok(edges)
 }
 
 /// Every Rust file in a member, tracked or not, skipping ignored ones.
