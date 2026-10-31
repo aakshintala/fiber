@@ -24,6 +24,7 @@ fn completion() -> Box<ToolCallCompleted> {
         }],
         hosts_surfaced: Vec::new(),
         loaded: None,
+        protected_paths: None,
     })
 }
 

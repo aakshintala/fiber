@@ -121,6 +121,12 @@ pub(crate) struct CallResult {
     pub(crate) headline: String,
     /// The result's text parts joined with "\n".
     pub(crate) content: String,
+    /// The protected-path warning lines, one per changed path, folded
+    /// from the completion's report. The ledger row shows only the
+    /// result's first line, so the warning draws as its own row beneath
+    /// the call; the opened view shows the result text, which carries
+    /// the same notice unless a hook rewrote it.
+    pub(crate) protected: Vec<String>,
 }
 
 /// When a call started and how long it took: one field, so no call can
@@ -171,6 +177,14 @@ impl Call {
             .as_deref()
             .map(|result| result.content.as_str())
             .unwrap_or("")
+    }
+
+    /// The protected-path warning lines, else none.
+    pub(crate) fn protected(&self) -> &[String] {
+        self.result
+            .as_deref()
+            .map(|result| result.protected.as_slice())
+            .unwrap_or_default()
     }
 }
 
@@ -627,6 +641,10 @@ impl Group {
                         );
                         out.push((Line::from(row), Some(Target::Call(call.id))));
                     }
+                }
+                for warning in call.protected() {
+                    let row = fit(crate::format::warning_line(warning), max);
+                    out.push((Line::from(row), Some(Target::Call(call.id))));
                 }
                 crate::turn::images::call_rows(&call.images, width, layout, out);
                 if out.open_scope(Target::Call(call.id), call.open) {

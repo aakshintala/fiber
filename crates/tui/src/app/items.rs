@@ -65,6 +65,10 @@ pub(super) struct JobRecord {
     /// The job's live output since the terminal attached; dropped at
     /// `job_completed` unless the job's view is open.
     output: Option<Output>,
+    /// The adopted call's protected-path warning lines, one per changed
+    /// path, folded from the `job_completed` report. A resume replays the
+    /// completion, so the fold keeps them durably.
+    protected: Vec<String>,
     /// Whether the job runs under a pseudo-terminal: set once at
     /// `job_started`, kept after `job_completed` clears the output, so a
     /// finished tty job still selects the screen slab.
@@ -184,6 +188,7 @@ impl Items {
                 outcome: None,
                 output: None,
                 tty: false,
+                protected: Vec::new(),
             }
         })
     }
@@ -669,6 +674,11 @@ impl App {
                     };
                     let record = self.items.record(&done.job_id);
                     record.outcome = Some((word.to_owned(), envelope.ts));
+                    record.protected = done
+                        .protected_paths
+                        .as_ref()
+                        .map(|report| report.warning_lines())
+                        .unwrap_or_default();
                     // A completed delegate drops its wish: a lowering
                     // would answer `session_not_found`.
                     if let Some(delegate) = record.delegate.clone() {

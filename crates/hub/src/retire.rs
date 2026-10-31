@@ -36,7 +36,7 @@
 //! for answers only a live relay gives, so the order cannot deadlock and
 //! one thread per relay stays.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -45,7 +45,7 @@ use contract::{CommandId, ErrorCode, SessionId};
 use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock};
-use crate::relay::{Ack, Kept, KeptState, Relay, Relays, relay_slot};
+use crate::relay::{Ack, CommandState, Kept, Relay, Relays, relay_slot};
 
 /// Why a relay no longer takes writes: it saw the exited window, or a
 /// write to it failed.
@@ -96,37 +96,58 @@ pub(crate) struct AckOrder {
 }
 
 /// What [`AckOrder`] tracks: the unanswered commands per session in read
-/// order, and, per command a retiring relay re-routed, the session and
-/// epoch that handed it over. A re-routed command stays recorded until
-/// its answer is forwarded or refused, or it is dropped without one.
+/// order, per command a retiring relay re-routed the session and epoch
+/// that handed it over, and every recorded command's delivery state. A
+/// re-routed command stays recorded until its answer is forwarded or
+/// refused, or it is dropped without one.
 #[derive(Default)]
 struct Inner {
-    pending: HashMap<String, VecDeque<String>>,
+    pending: HashMap<String, VecDeque<CommandId>>,
     rerouted: HashMap<String, (String, u64)>,
-    /// The ids handed to a resumed session once: a command is re-routed at
-    /// most once. Separate from `rerouted`, which `drop_ids` clears when
-    /// the handover's answer is forwarded.
-    handed: HashSet<String>,
+    /// Each recorded command's delivery state
+    /// (`docs/invocation.md`, "What the hub speaks"): the canonical
+    /// owner of the one transition per move, including the one-time move
+    /// into `Rerouted`. Separate from `rerouted`, which only withholds a
+    /// retiring relay's later acknowledgements.
+    states: HashMap<CommandId, CommandState>,
+}
+
+/// Why [`AckOrder::transition`] refused a move: either no command with the
+/// id was recorded, or the recorded state never moves that way. The
+/// caller keeps the client-visible behavior: a refused re-route answers
+/// `closing`, and a refused answer or drop changes nothing on the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IllegalTransition {
+    /// No command with the id was recorded: one the session answers when
+    /// it ends, which is never queued, or one answered before any write.
+    Unknown(CommandId),
+    /// The recorded state never moves that way.
+    Forbidden {
+        /// The command the move was requested for.
+        id: CommandId,
+        /// The state the command was in.
+        from: CommandState,
+        /// The state the move requested.
+        to: CommandState,
+    },
 }
 
 impl AckOrder {
     /// Enqueues `id` on `session`'s queue in read order, once: a recovered
     /// command routed again is already queued, so it is left where it was
-    /// read.
-    pub(crate) fn enqueue(&self, session: &str, id: &str) {
+    /// read. A newly recorded command starts in `Read`: it reached no
+    /// session socket.
+    pub(crate) fn enqueue(&self, session: &str, id: &CommandId) {
         let mut inner = lock(&self.inner);
-        if inner
-            .pending
-            .values()
-            .any(|queued| queued.contains(&id.to_owned()))
-        {
+        if inner.pending.values().any(|queued| queued.contains(id)) {
             return;
         }
         inner
             .pending
             .entry(session.to_owned())
             .or_default()
-            .push_back(id.to_owned());
+            .push_back(id.clone());
+        inner.states.entry(id.clone()).or_insert(CommandState::Read);
     }
 
     /// The session whose queue holds `id`, if any: a command the session
@@ -135,7 +156,7 @@ impl AckOrder {
         lock(&self.inner)
             .pending
             .iter()
-            .find(|(_, queued)| queued.contains(&id.to_owned()))
+            .find(|(_, queued)| queued.iter().any(|queued| queued.0 == *id))
             .map(|(session, _)| session.clone())
     }
 
@@ -149,16 +170,42 @@ impl AckOrder {
             .insert(id.to_owned(), (session.to_owned(), epoch));
     }
 
-    /// Takes `id` for its one re-route: true the first time, false after,
-    /// until the id is answered, refused or dropped.
-    pub(crate) fn hand_once(&self, id: &str) -> bool {
-        lock(&self.inner).handed.insert(id.to_owned())
+    /// Moves `id` to `to` when the recorded state allows it, returning
+    /// the state it moved from: the one transition API every relay,
+    /// attach and retirement path requests. Only the move into `Rerouted`
+    /// claims the command's one permitted re-route, and only from
+    /// `Written`: a command that never reached a session is passed on,
+    /// never re-routed, and a second claim is refused. A refused move
+    /// changes nothing: the caller answers `closing` for a refused
+    /// re-route and keeps the wire shape for anything else.
+    pub(crate) fn transition(
+        &self,
+        id: &CommandId,
+        to: CommandState,
+    ) -> Result<CommandState, IllegalTransition> {
+        let mut inner = lock(&self.inner);
+        let from = inner
+            .states
+            .get(id)
+            .copied()
+            .ok_or_else(|| IllegalTransition::Unknown(id.clone()))?;
+        if !allowed(from, to) {
+            return Err(IllegalTransition::Forbidden {
+                id: id.clone(),
+                from,
+                to,
+            });
+        }
+        inner.states.insert(id.clone(), to);
+        Ok(from)
     }
 
-    /// Frees `id` for a later re-route: its answer reached the client, it
-    /// was refused, or it was dropped.
-    pub(crate) fn forget_handed(&self, id: &str) {
-        lock(&self.inner).handed.remove(id);
+    /// The recorded delivery state of `id`, if any. Tests only: production
+    /// moves through [`AckOrder::transition`] and never branches on a
+    /// recorded state.
+    #[cfg(test)]
+    pub(crate) fn state(&self, id: &CommandId) -> Option<CommandState> {
+        lock(&self.inner).states.get(id).copied()
     }
 
     /// Whether `line` is a command the session answers when it ends, such
@@ -194,13 +241,17 @@ impl AckOrder {
 
     /// Drops `id` from its session's queue and unrecords it as re-routed,
     /// waking every waiter: the acknowledgement was forwarded or refused.
+    /// The caller moves the state to `Answered` first; a refused move
+    /// changes nothing here.
     pub(crate) fn done(&self, session: &str, id: &str) {
         self.drop_ids(&[(session.to_owned(), id.to_owned())]);
     }
 
     /// Drops every `(session, id)` without an acknowledgement, unrecording
-    /// it as re-routed, and wakes every waiter: an unanswered command at
-    /// a relay thread's end holds back nothing behind it.
+    /// it as re-routed and forgetting its delivery state, and wakes every
+    /// waiter: an unanswered command at a relay thread's end holds back
+    /// nothing behind it. A disconnect, rewind or move drops it with no
+    /// answer and no state move; an already answered command stays answered.
     pub(crate) fn drop_ids(&self, ids: &[(String, String)]) {
         if ids.is_empty() {
             return;
@@ -208,14 +259,85 @@ impl AckOrder {
         let mut inner = lock(&self.inner);
         for (session, id) in ids {
             if let Some(queued) = inner.pending.get_mut(session) {
-                queued.retain(|queued| *queued != *id);
+                queued.retain(|queued| queued.0 != *id);
             }
             inner.rerouted.remove(id);
-            inner.handed.remove(id);
+            inner.states.remove(&CommandId(id.clone()));
         }
         inner.pending.retain(|_, queued| !queued.is_empty());
         self.changed.notify_all();
     }
+}
+
+/// Whether `CommandState::transition` allows the move from `from` to `to`
+/// (`docs/invocation.md`, "What the hub speaks"): a new command starts in
+/// `Read`; a live write first moves it to `Writing`, owned by the kept
+/// attempt until the write or an acknowledgement wins it. A won write
+/// moves it to `Queued` when the session could have read nothing, `Written`
+/// when the whole line landed, or `Partial` when the session may have read
+/// a byte. A won acknowledgement moves it to `Answered` and is forwarded,
+/// and the late write result changes nothing. A write that changes nothing
+/// reports its outcome anyway: `Queued` stays queued, `Written` stays
+/// written, and a rerouted command keeps its `Rerouted` claim through later
+/// writes, so a command queued behind a re-route is passed on, never
+/// delivered twice. Only `Written` claims the one permitted re-route into
+/// `Rerouted`, and only once: a second claim is refused and answered
+/// `closing`. `Writing` never moves directly to `Rerouted`: a post-exit
+/// `closing` confirms `Written` first. `Partial` is terminal except for its
+/// own `indeterminate` answer: the command is never delivered again. Every
+/// answered command ends in `Answered`; a disconnect, rewind or move drops
+/// a command in `Queued`, `Written`, `Partial` or `Rerouted` through
+/// `drop_ids`, without an answer and without a further move.
+fn allowed(from: CommandState, to: CommandState) -> bool {
+    use CommandState::{Answered, Dropped, Partial, Queued, Read, Rerouted, Writing, Written};
+    match from {
+        Read => match to {
+            Queued | Writing | Written | Partial | Answered => true,
+            Read | Rerouted | Dropped => false,
+        },
+        Queued => match to {
+            Queued | Writing | Written | Partial | Answered | Dropped => true,
+            Read | Rerouted => false,
+        },
+        Writing => match to {
+            Written | Queued | Partial | Answered => true,
+            Read | Writing | Rerouted | Dropped => false,
+        },
+        Written => match to {
+            Written | Rerouted | Answered | Dropped => true,
+            Read | Queued | Writing | Partial => false,
+        },
+        Partial => match to {
+            Answered | Dropped => true,
+            Read | Queued | Writing | Written | Partial | Rerouted => false,
+        },
+        Rerouted => match to {
+            Answered | Dropped => true,
+            Read | Queued | Writing | Written | Partial | Rerouted => false,
+        },
+        Answered => match to {
+            Read | Queued | Writing | Written | Partial | Rerouted | Answered | Dropped => false,
+        },
+        Dropped => match to {
+            Read | Queued | Writing | Written | Partial | Rerouted | Answered | Dropped => false,
+        },
+    }
+}
+
+/// Reports `to` for `id`, keeping the current state when the move is
+/// refused: the write, attach and replay paths report each outcome, and a
+/// refused report only means the command already moved past it — a
+/// rerouted claim kept through a later write, or a command the session
+/// answers when it ends and never recorded. Reporters never branch on the
+/// outcome, so a refusal changes nothing on the wire; the decision points
+/// (`relay`'s and `drain`'s re-route claims) use [`AckOrder::transition`]
+/// directly.
+pub(crate) fn report(order: &AckOrder, id: &CommandId, to: CommandState) {
+    #[allow(
+        clippy::let_underscore_must_use,
+        reason = "a refused report keeps the current state by design: reporters never branch on it"
+    )]
+    let _ = order.transition(id, to);
 }
 
 /// Refuses `id` for `session` at once, then leaves the queue: re-routes
@@ -234,7 +356,9 @@ pub(crate) fn refuse(
 ) {
     let order = lock(relays).order.clone();
     crate::connection::reject(writer, hub, Some(id), code, message);
-    order.forget_handed(&id.0);
+    // The rejection is the command's one answer. The line is already
+    // written, and an unrecorded command was never queued.
+    report(&order, id, CommandState::Answered);
     if let Some(queued) = order.session_for(&id.0) {
         order.done(&queued, &id.0);
     } else {
@@ -254,7 +378,7 @@ pub(crate) fn enqueue_new(
     if AckOrder::is_shell_ended(stripped) {
         return;
     }
-    order.enqueue(session, &id.0);
+    order.enqueue(session, id);
 }
 
 /// Answers a relayed command `session_not_found` in command order: the
@@ -319,10 +443,14 @@ pub(crate) fn forward(
     let written = out.write_all(buf).and_then(|()| out.flush());
     drop(out);
     if let Some((session, id)) = &ordered {
+        // The forwarded acknowledgement is the command's one answer: the
+        // line is already written.
+        report(order, &CommandId(id.clone()), CommandState::Answered);
         order.done(session, id);
     } else if let Some(ack) = ack {
-        // A command the session answers when it ends is never queued.
-        order.forget_handed(&ack.id);
+        // A command the session answers when it ends is never queued and
+        // never recorded.
+        report(order, &CommandId(ack.id.clone()), CommandState::Answered);
     }
     written
 }
@@ -430,15 +558,15 @@ pub(crate) fn drain(
         let mut kept = lock(kept);
         let sent: Sent = kept
             .iter()
-            .filter(|(_, _, state)| *state == KeptState::Sent)
+            .filter(|(_, _, state)| *state == CommandState::Written)
             .map(|(id, line, _)| (id.clone(), line.clone()))
             .collect();
         let partial = kept
             .iter()
-            .filter(|(_, _, state)| *state == KeptState::Partial)
+            .filter(|(_, _, state)| *state == CommandState::Partial)
             .map(|(id, _, _)| (session.to_owned(), id.clone()))
             .collect();
-        kept.retain(|(_, _, state)| *state == KeptState::Queued);
+        kept.retain(|(_, _, state)| *state == CommandState::Queued);
         (present, sent, partial)
     };
     if !sent.is_empty() {
@@ -474,7 +602,7 @@ pub(crate) fn drain(
         if present && !client_gone {
             // The refusal stays queued until its answer is written, so a
             // later command's acknowledgement on another relay cannot be
-            // forwarded first (`docs/invocation.md:1113-1118`,
+            // forwarded first (`docs/invocation.md:1107-1112`,
             // "Commands keep their order"): `refuse` writes the answer
             // before `order.done` clears it.
             for (session, id) in &partial {
@@ -562,7 +690,11 @@ fn reroute_once(
         return;
     }
     for (id, line) in sent {
-        if !order.hand_once(&id) {
+        // Only the move into `Rerouted` claims the command's one permitted
+        // re-route: a second clean exit without an answer refuses the
+        // command `closing`, as the session would.
+        let claimed = CommandId(id.clone());
+        if order.transition(&claimed, CommandState::Rerouted).is_err() {
             refuse(
                 writer,
                 hub,
@@ -574,7 +706,7 @@ fn reroute_once(
             );
         } else if hand_over(order, relays, session, epoch, &id, &line) {
             crate::relay::route(
-                &CommandId(id),
+                &claimed,
                 session,
                 line,
                 hub,
@@ -585,7 +717,9 @@ fn reroute_once(
                 None,
             );
         } else {
-            order.forget_handed(&id);
+            // The entry is gone: the client disconnected, so the claimed
+            // command is dropped with the connection instead of answered.
+            order.drop_ids(&[(session.to_owned(), id)]);
         }
     }
 }
@@ -667,7 +801,7 @@ pub(crate) fn recover(
     // the session, so it is never routed again.
     let queued: Vec<(String, Map<String, Value>)> = lock(&entry.kept)
         .iter()
-        .filter(|(_, _, state)| *state == KeptState::Queued)
+        .filter(|(_, _, state)| *state == CommandState::Queued)
         .map(|(queued, line, _)| (queued.clone(), line.clone()))
         .collect();
     drop(entry);
@@ -715,7 +849,7 @@ fn pump(
             // on.
             let leading = kept
                 .first()
-                .is_some_and(|(_, _, state)| *state == KeptState::Queued);
+                .is_some_and(|(_, _, state)| *state == CommandState::Queued);
             if !leading {
                 if finish && kept.is_empty() {
                     held.finish(session, epoch);
@@ -761,7 +895,7 @@ fn clear(session: &str, kept: &Kept, hub: &Arc<Hub>, relays: &Arc<Mutex<Relays>>
         let mut kept = lock(kept);
         let dropped = kept
             .iter()
-            .filter(|(_, _, state)| *state == KeptState::Queued)
+            .filter(|(_, _, state)| *state == CommandState::Queued)
             .count();
         kept.clear();
         dropped

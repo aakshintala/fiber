@@ -216,6 +216,7 @@ fn cancelled() -> Box<ToolCallCompleted> {
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
+        protected_paths: None,
     })
 }
 
