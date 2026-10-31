@@ -32,6 +32,10 @@ const VERSION: &str = "0.0.1";
 /// The nightly the fixture list names, above `0.0.0` too.
 const NIGHTLY: &str = "0.0.1-nightly.20240101";
 
+/// The newer nightly the pair fixture serves above [`NIGHTLY`]: a
+/// nightly-floored install moves onto it.
+const NIGHTLY_NEXT: &str = "0.0.1-nightly.20240102";
+
 /// The bytes the fixture binary archives hold: the staged `fiber` binary.
 const MARKER: &[u8] = b"binary-from-the-fixture-release";
 
@@ -45,6 +49,14 @@ struct Github {
 impl Github {
     #[track_caller]
     fn new(setup: &Setup) -> Self {
+        Self::with_tags(setup, &[VERSION, NIGHTLY])
+    }
+
+    /// The same fixture with exactly `tags`: a nightly-only repository
+    /// holds no stable tag, so only a nightly minimum can resolve what it
+    /// serves.
+    #[track_caller]
+    fn with_tags(setup: &Setup, tags: &[&str]) -> Self {
         let base = setup.root.path().join("gh");
         let repo = base.join("aakshintala/fiber");
         fs::create_dir_all(repo.join("providers/anthropic")).unwrap();
@@ -65,13 +77,95 @@ impl Github {
         fakes::git::git(&repo, &["init", "--quiet"]);
         fakes::git::git(&repo, &["add", "."]);
         fakes::git::git(&repo, &["commit", "--quiet", "-m", "fiber"]);
-        for version in [VERSION, NIGHTLY] {
+        for version in tags {
             fakes::git::git(&repo, &["tag", &format!("v{version}")]);
         }
         Self {
             key: format!("url.file://{}/.insteadOf", base.display()),
         }
     }
+}
+
+/// A second local repository outside the release extensions archive, for
+/// one extension the archive never covers: a stable tag and a nightly tag
+/// on the same base, with the extension manifest committed at each.
+struct Sidecar {
+    commit: String,
+}
+
+impl Sidecar {
+    const NAME: &str = "github.com/aakshintala/fiber-side/widgets";
+    const VERSION: &str = "0.2.0";
+    const NIGHTLY: &str = "0.2.0-nightly.20240102";
+
+    #[track_caller]
+    fn new(setup: &Setup) -> Self {
+        let base = setup.root.path().join("gh");
+        let repo = base.join("aakshintala/fiber-side");
+        fs::create_dir_all(repo.join("widgets")).unwrap();
+        let manifest = |version: &str| {
+            json!({
+                "name": Self::NAME,
+                "version": version,
+                "fiber": "0.0.0",
+                "api": 1,
+            })
+            .to_string()
+        };
+        fs::write(repo.join("widgets/extension.json"), manifest(Self::VERSION)).unwrap();
+        fakes::git::git(&repo, &["init", "--quiet"]);
+        fakes::git::git(&repo, &["add", "."]);
+        fakes::git::git(&repo, &["commit", "--quiet", "-m", "fiber-side"]);
+        fakes::git::git(&repo, &["tag", &format!("v{}", Self::VERSION)]);
+        fs::write(repo.join("widgets/extension.json"), manifest(Self::NIGHTLY)).unwrap();
+        fakes::git::git(&repo, &["add", "."]);
+        fakes::git::git(&repo, &["commit", "--quiet", "-m", "nightly"]);
+        fakes::git::git(&repo, &["tag", &format!("v{}", Self::NIGHTLY)]);
+        let commit = fakes::git::git(
+            &repo,
+            &["rev-list", "-n", "1", &format!("v{}", Self::VERSION)],
+        );
+        Self { commit }
+    }
+}
+
+/// The home as an install writes it: the manifest plus the install record
+/// carrying the version, the request flag, the floor and the given commit
+/// as the source.
+#[track_caller]
+fn install_git_record(
+    setup: &Setup,
+    dir: &str,
+    name: &str,
+    version: &str,
+    floor: &str,
+    commit: &str,
+) {
+    let dir = setup.home().join(dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({
+            "name": name,
+            "version": version,
+            "fiber": "0.0.0",
+            "api": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join(".fiber.json"),
+        json!({
+            "name": name,
+            "version": version,
+            "requested": true,
+            "floor": floor,
+            "source": { "commit": commit },
+        })
+        .to_string(),
+    )
+    .unwrap();
 }
 
 impl Setup {
@@ -146,10 +240,10 @@ fn binary_archive() -> String {
     )
 }
 
-/// The fixture releases: docs, extensions and binary archives for
-/// [`VERSION`] and [`NIGHTLY`], the `/releases/latest` redirect at the
-/// stable tag, and the nightly list naming [`NIGHTLY`].
-fn serve() -> fakes::ProviderServer {
+/// The fixture releases for `versions`: docs, extensions and binary
+/// archives per version, the `/releases/latest` redirect at `latest`, and
+/// the nightly list naming `nightlies` as pre-releases.
+fn serve_versions(versions: &[&str], latest: &str, nightlies: &[&str]) -> fakes::ProviderServer {
     let manifest = |version: &str| {
         json!({
             "name": "github.com/aakshintala/fiber/providers/anthropic",
@@ -161,7 +255,7 @@ fn serve() -> fakes::ProviderServer {
     };
     let file = |name: &str, body: &[u8]| header(name, b'0', body.len() as u64, 0o644, "");
     let mut routes: Vec<(String, fakes::Response)> = Vec::new();
-    for version in [VERSION, NIGHTLY] {
+    for version in versions {
         let binary = gzip(&archive(&[(file("fiber", MARKER), MARKER)]));
         let docs = gzip(&archive(&[(file("README.md", b"docs"), b"docs")]));
         let anthropic = manifest(version);
@@ -189,26 +283,28 @@ fn serve() -> fakes::ProviderServer {
             }
         }
     }
-    let mut latest = fakes::Response::status(302, "");
-    latest
+    let mut latest_response = fakes::Response::status(302, "");
+    latest_response
         .headers
-        .push(("location".to_owned(), format!("/releases/tag/v{VERSION}")));
+        .push(("location".to_owned(), format!("/releases/tag/v{latest}")));
     // Every run follows the redirect and lands on the tag: one route per
     // run, as a real server answers every request.
     for _ in 0..2 {
-        routes.push(("/releases/latest".to_owned(), latest.clone()));
+        routes.push(("/releases/latest".to_owned(), latest_response.clone()));
         routes.push((
-            format!("/releases/tag/v{VERSION}"),
+            format!("/releases/tag/v{latest}"),
             fakes::Response::status(200, ""),
         ));
     }
+    let list: Vec<serde_json::Value> = nightlies
+        .iter()
+        .map(|version| {
+            json!({ "tag_name": format!("v{version}"), "prerelease": true, "draft": false })
+        })
+        .collect();
     routes.push((
         "/releases".to_owned(),
-        fakes::Response::status(
-            200,
-            json!([{ "tag_name": format!("v{NIGHTLY}"), "prerelease": true, "draft": false }])
-                .to_string(),
-        ),
+        fakes::Response::status(200, serde_json::Value::Array(list).to_string()),
     ));
     fakes::ProviderServer::start_routed(
         routes
@@ -217,6 +313,25 @@ fn serve() -> fakes::ProviderServer {
         fakes::Response::status(404, "not found"),
     )
     .unwrap()
+}
+
+/// The fixture releases: docs, extensions and binary archives for
+/// [`VERSION`] and [`NIGHTLY`], the `/releases/latest` redirect at the
+/// stable tag, and the nightly list naming [`NIGHTLY`].
+fn serve() -> fakes::ProviderServer {
+    serve_versions(&[VERSION, NIGHTLY], VERSION, &[NIGHTLY])
+}
+
+/// The fixture releases for the nightly pair: docs, extensions and binary
+/// archives for [`NIGHTLY`] and [`NIGHTLY_NEXT`], with the nightly list
+/// naming both as pre-releases, so the nightly channel moves to
+/// [`NIGHTLY_NEXT`].
+fn serve_nightly_pair() -> fakes::ProviderServer {
+    serve_versions(
+        &[NIGHTLY, NIGHTLY_NEXT],
+        NIGHTLY_NEXT,
+        &[NIGHTLY, NIGHTLY_NEXT],
+    )
 }
 
 /// Waits for the restarted hub to list `session` as live: the fresh
@@ -368,6 +483,89 @@ fn nightly_update_with_an_installed_extension_replaces_the_running_copy() {
     let manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
     assert_eq!(manifest["name"], NAME, "{manifest}");
+}
+
+/// Home as a nightly install at [`NIGHTLY`] with the nightly floor writes
+/// it: `fiber update --channel nightly` moves the first-party extension to
+/// [`NIGHTLY_NEXT`], the newest nightly the pair fixture serves.
+#[test]
+fn nightly_update_moves_a_nightly_floored_extension_to_the_newest_nightly() {
+    const NAME: &str = "github.com/aakshintala/fiber/providers/anthropic";
+    let setup = Setup::new();
+    let server = serve_nightly_pair();
+    let github = Github::with_tags(&setup, &[NIGHTLY, NIGHTLY_NEXT]);
+    // The version from the record, the nightly floor, and the release
+    // tag's commit as the source.
+    let repo = setup.root.path().join("gh/aakshintala/fiber");
+    let commit = fakes::git::git(&repo, &["rev-list", "-n", "1", &format!("v{NIGHTLY}")]);
+    install_git_record(
+        &setup,
+        "extensions/anthropic",
+        NAME,
+        NIGHTLY,
+        NIGHTLY,
+        &commit,
+    );
+    let copy = copy_binary(&setup);
+    let run = setup.run_update(
+        &copy,
+        &server,
+        &github,
+        &["update", "--channel", "nightly"],
+        None,
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(fs::read(&copy).unwrap(), MARKER);
+    assert!(setup.home().join("docs").is_dir(), "{}", run.stderr);
+    assert!(run.stderr.contains("fiber: updated docs"), "{}", run.stderr);
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(setup.home().join("extensions/anthropic/.fiber.json")).unwrap(),
+    )
+    .unwrap();
+    // docs/extensions.md:1797, 1805-1807.
+    assert_eq!(record["version"], NIGHTLY_NEXT, "{record}\n{}", run.stderr);
+    // The archive adoption keeps the installed floor: the move lands on
+    // the new nightly, and the old nightly stays the minimum.
+    // docs/extensions.md:1798-1799.
+    assert_eq!(record["floor"], NIGHTLY, "{record}\n{}", run.stderr);
+    assert_eq!(record["requested"], true, "{record}\n{}", run.stderr);
+}
+
+/// Home with a stable-floored extension outside the release archive:
+/// `fiber update --channel nightly` keeps it at its stable version even
+/// though its repository also serves a nightly tag.
+#[test]
+fn nightly_update_keeps_a_stable_floored_extension_outside_the_archive() {
+    let setup = Setup::new();
+    let server = serve_nightly_pair();
+    let github = Github::with_tags(&setup, &[NIGHTLY, NIGHTLY_NEXT]);
+    let sidecar = Sidecar::new(&setup);
+    install_git_record(
+        &setup,
+        "extensions/widgets",
+        Sidecar::NAME,
+        Sidecar::VERSION,
+        Sidecar::VERSION,
+        &sidecar.commit,
+    );
+    let copy = copy_binary(&setup);
+    let run = setup.run_update(
+        &copy,
+        &server,
+        &github,
+        &["update", "--channel", "nightly"],
+        None,
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(fs::read(&copy).unwrap(), MARKER);
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(setup.home().join("extensions/widgets/.fiber.json")).unwrap(),
+    )
+    .unwrap();
+    // docs/extensions.md:1805-1807.
+    assert_eq!(record["version"], Sidecar::VERSION, "{record}");
+    // docs/extensions.md:1798-1799.
+    assert_eq!(record["floor"], Sidecar::VERSION, "{record}");
 }
 
 #[test]
