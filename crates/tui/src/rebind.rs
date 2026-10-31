@@ -141,16 +141,18 @@ enum Mode {
     },
 }
 
-/// The rebinding screen: the selected action and the first shown one,
-/// what it waits for, and the message line below the rows. Selection
-/// and scroll move by action, never by display line: each action wraps
-/// inside its own columns and takes as many lines as its tallest
-/// column (`docs/tui.md`, "Bindings").
+/// The rebinding screen: the selected action and the first shown
+/// display line, what it waits for, and the message line below the
+/// rows. Selection moves by action, never by display line: each
+/// action wraps inside its own columns and takes as many lines as
+/// its tallest column (`docs/tui.md`, "Bindings"). The mouse wheel
+/// is the exception: it moves the scroll by display line, three
+/// lines a step, and may rest it inside a wrapped action.
 #[derive(Debug, Default)]
 pub(crate) struct KeysScreen {
     /// The selected action's index in the table.
     selected: usize,
-    /// The first shown action's index in the table.
+    /// The first shown display line in the table.
     top: usize,
     mode: Mode,
     message: Option<String>,
@@ -288,15 +290,24 @@ impl KeysScreen {
             return;
         }
         let grown = heights(keys, width);
+        let total_lines: usize = grown.iter().sum();
+        // Pages count from the action holding the stored display line:
+        // a wheel may rest the top inside a wrapped action, and only
+        // an action index enters the fitting count.
+        let top_action = action_at(self.top.min(total_lines.saturating_sub(1)), &grown);
         match key {
             Key::Up => self.selected = self.selected.saturating_sub(1),
             Key::Down => self.selected = self.selected.saturating_add(1).min(total - 1),
             Key::PageUp => {
-                let page = fits_from(self.top, &grown, shown).saturating_sub(1).max(1);
+                let page = fits_from(top_action, &grown, shown)
+                    .saturating_sub(1)
+                    .max(1);
                 self.selected = self.selected.saturating_sub(page);
             }
             Key::PageDown => {
-                let page = fits_from(self.top, &grown, shown).saturating_sub(1).max(1);
+                let page = fits_from(top_action, &grown, shown)
+                    .saturating_sub(1)
+                    .max(1);
                 self.selected = self.selected.saturating_add(page).min(total - 1);
             }
             Key::Char(_)
@@ -325,24 +336,29 @@ impl KeysScreen {
         self.settle(&grown, shown);
     }
 
-    /// Keeps the selected action whole on screen: the scroll is the
-    /// first action shown, moved down until the selection sits in the
-    /// window fitting whole from it. An action taller than the window
-    /// shows its top lines, with the selection held.
+    /// Keeps the selected action whole on screen: the scroll
+    /// reanchors through the action holding the stored display line,
+    /// then moves down until the selection sits in the window fitting
+    /// whole from it, and the stored top becomes that action's first
+    /// display line. An action taller than the window shows its top
+    /// lines, with the selection held.
     fn settle(&mut self, grown: &[usize], shown: usize) {
         let total = BINDINGS.len();
         if total == 0 {
             return;
         }
         self.selected = self.selected.min(total - 1);
-        self.top = self.top.min(self.selected);
+        let total_lines: usize = grown.iter().sum();
+        let mut top = action_at(self.top.min(total_lines.saturating_sub(1)), grown);
+        top = top.min(self.selected);
         loop {
-            let fits = fits_from(self.top, grown, shown).max(1);
-            if self.selected < self.top.saturating_add(fits) {
+            let fits = fits_from(top, grown, shown).max(1);
+            if self.selected < top.saturating_add(fits) {
                 break;
             }
-            self.top = self.top.saturating_add(1);
+            top = top.saturating_add(1);
         }
+        self.top = grown.iter().take(top).sum();
     }
 
     /// Applies captured keys through [`Keyset::set`]: a clash prompts for
@@ -384,12 +400,14 @@ impl KeysScreen {
     /// Shifts the window three display lines for a wheel step while
     /// browsing, clearing the transient message as a stroke does; in
     /// Capture or Clash the wheel is swallowed, never a captured key.
-    /// The scroll stays action-indexed: the stepped line snaps to the
-    /// action holding it, clamping an upward snap that would land above
-    /// the stepped line to the next action, so neither direction moves
-    /// more than three display lines. The selection stays while it
-    /// shows, else moves to the nearest shown action. `width` is the
-    /// draw width in columns, `height` the view's rows.
+    /// The scroll is a display-line offset over the legal window
+    /// range, so a step into a wrapped action rests inside it instead
+    /// of snapping to its start, moving one to three lines off an
+    /// end and holding at one. The selection stays while any of its
+    /// lines shows, else moves to the action at the nearer window
+    /// edge. A zero-height view changes nothing, not even the
+    /// message. `width` is the draw width in columns, `height` the
+    /// view's rows.
     pub(crate) fn wheel(
         &mut self,
         up: bool,
@@ -400,42 +418,32 @@ impl KeysScreen {
         if !matches!(self.mode, Mode::Browse) {
             return Outcome::Nothing;
         }
-        self.message = None;
         let shown = rows_height(&self.frame(keys, width, height), height);
+        if shown == 0 {
+            return Outcome::Nothing;
+        }
+        self.message = None;
         let grown = heights(keys, width);
         let total = BINDINGS.len();
         if total == 0 {
             return Outcome::Nothing;
         }
-        let top_line: usize = grown.iter().take(self.top).sum();
         let total_lines: usize = grown.iter().sum();
-        let stepped = if up {
-            top_line.saturating_sub(3)
+        let end = total_lines.saturating_sub(shown);
+        let next = if up {
+            self.top.min(end).saturating_sub(3)
         } else {
-            top_line
-                .saturating_add(3)
-                .min(total_lines.saturating_sub(1))
+            self.top.min(end).saturating_add(3).min(end)
         };
-        let snapped = action_at(stepped, &grown);
-        let snapped_line: usize = grown.iter().take(snapped).sum();
-        self.top = if up && snapped_line < stepped {
-            snapped.saturating_add(1).min(total.saturating_sub(1))
+        self.top = next;
+        let selected = self.selected.min(total - 1);
+        let start: usize = grown.iter().take(selected).sum();
+        if start.saturating_add(grown[selected]) <= next {
+            self.selected = action_at(next, &grown);
+        } else if start >= next.saturating_add(shown) {
+            self.selected = action_at(next.saturating_add(shown).saturating_sub(1), &grown);
         } else {
-            snapped
-        };
-        if self.selected < self.top {
-            self.selected = self.top;
-        } else {
-            let fits = fits_from(self.top, &grown, shown);
-            if fits == 0 {
-                self.selected = self.top;
-            } else if self.selected >= self.top.saturating_add(fits) {
-                self.selected = self
-                    .top
-                    .saturating_add(fits)
-                    .saturating_sub(1)
-                    .min(total - 1);
-            }
+            self.selected = selected;
         }
         Outcome::Nothing
     }
@@ -477,8 +485,9 @@ impl KeysScreen {
     /// columns, one display line per wrapped row, with how each line
     /// joins the one before, the message or the clash line below them,
     /// and the footer naming the mode's keys. `width` is the draw width
-    /// in columns; selection and scroll stay action-indexed while the
-    /// frame carries their display lines.
+    /// in columns; the selection stays action-indexed while the scroll
+    /// is a display-line offset, and the frame carries both as display
+    /// lines.
     pub(crate) fn frame(&self, keys: &Keyset, width: usize, height: usize) -> Frame {
         let (label, id, description) = columns(keys, width);
         let grown = heights(keys, width);
@@ -626,23 +635,31 @@ fn action_at(line: usize, grown: &[usize]) -> usize {
     grown.len().saturating_sub(1)
 }
 
-/// The frame's list for the selected action and the top one: two
-/// selects land the exact display-line pair, the first the selection in
-/// the drawn window, the second the window top on the action's first
-/// line, so the selected action reads whole and the window starts on an
-/// action start.
-fn place(selected: usize, top: usize, grown: &[usize], shown: usize) -> List {
+/// The frame's list for the selected action and the display-line
+/// top: the stored top clamps to the current window range first, then
+/// the window reveals the selected action's first line when the whole
+/// action falls outside it, moving the smallest distance that shows
+/// that line. The selected action's first line and the top land
+/// independently, so a wheel step can rest the window inside a
+/// wrapped action while the selection stays on its first line.
+fn place(selected: usize, top_line: usize, grown: &[usize], shown: usize) -> List {
     let total: usize = grown.iter().sum();
-    let first = |at: usize| grown.iter().take(at).sum();
-    let selected_line: usize = first(selected);
-    let top_line: usize = first(top);
+    let end = total.saturating_sub(shown);
+    let mut top = top_line.min(end);
+    let at = selected.min(grown.len().saturating_sub(1));
+    let selected_line: usize = grown.iter().take(at).sum();
+    if shown > 0 {
+        let last = selected_line
+            .saturating_add(grown.get(at).copied().unwrap_or(0))
+            .saturating_sub(1);
+        if last < top {
+            top = selected_line;
+        } else if selected_line >= top.saturating_add(shown) {
+            top = selected_line.saturating_add(1).saturating_sub(shown);
+        }
+    }
     let mut list = List::gutter();
-    list.select(selected_line, total, shown);
-    list.select(
-        selected_line,
-        total,
-        selected_line.saturating_sub(top_line).saturating_add(1),
-    );
+    list.set_line_window(selected_line, top);
     list
 }
 
