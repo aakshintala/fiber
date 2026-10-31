@@ -54,7 +54,7 @@ pub(crate) struct CaseInputs {
     host: Arc<extensions::HostScript>,
 }
 
-enum WorkspaceStart {
+pub(crate) enum WorkspaceStart {
     Direct,
     CreatedWorktree {
         worktree: Worktree,
@@ -66,7 +66,7 @@ enum WorkspaceStart {
 }
 
 impl WorkspaceStart {
-    fn new(
+    pub(crate) fn new(
         worktree: Option<Worktree>,
         opened: Option<doors::WorktreeOpener>,
     ) -> Result<Self, Failure> {
@@ -102,7 +102,7 @@ impl WorkspaceStart {
     clippy::large_enum_variant,
     reason = "resume carries its log, fold and directory for assembly"
 )]
-enum Start {
+pub(crate) enum Start {
     New {
         id: SessionId,
         workspace: WorkspaceStart,
@@ -172,39 +172,11 @@ impl ResumeStart {
 }
 
 pub(crate) struct SessionInputs {
-    prompt: Option<String>,
-    one_turn: bool,
-    start: Start,
-    fiber_path: PathBuf,
-    reads: Arc<crate::switch::Reads>,
-}
-
-impl SessionInputs {
-    fn fresh(
-        prompt: Option<String>,
-        one_turn: bool,
-        start: Start,
-        fiber_path: PathBuf,
-        reads: Arc<crate::switch::Reads>,
-    ) -> Self {
-        Self {
-            prompt,
-            one_turn,
-            start,
-            fiber_path,
-            reads,
-        }
-    }
-
-    pub(crate) fn resumed(
-        prompt: Option<String>,
-        one_turn: bool,
-        fiber_path: PathBuf,
-        reads: Arc<crate::switch::Reads>,
-        resume: ResumeStart,
-    ) -> Self {
-        Self::fresh(prompt, one_turn, Start::Resume(resume), fiber_path, reads)
-    }
+    pub(crate) prompt: Option<String>,
+    pub(crate) one_turn: bool,
+    pub(crate) start: Start,
+    pub(crate) fiber_path: PathBuf,
+    pub(crate) reads: Arc<crate::switch::Reads>,
 }
 
 /// Whether the session may answer an approval: the base run's
@@ -667,15 +639,24 @@ pub(crate) fn run_new(
             inherited,
         },
     };
-    let inputs = SessionInputs::fresh(prompt, one_turn, start, fiber_path.clone(), reads);
+    let inputs = SessionInputs {
+        prompt,
+        one_turn,
+        start,
+        fiber_path: fiber_path.clone(),
+        reads,
+    };
     assemble_session(parts, inputs, signals, process)
 }
 
-fn assemble_new(
+/// One function assembles every session after its [`Parts`] are built:
+/// the single exhaustive [`Start`] dispatch runs the new, delegate and
+/// rewound paths (which share one body) or the resumed path.
+pub(crate) fn assemble_session(
     mut parts: Parts,
     inputs: SessionInputs,
     signals: &Arc<doors::Signals>,
-    clock: Arc<dyn contract::clock::Clock>,
+    process: &crate::startup::Process,
 ) -> Result<i32, Failure> {
     let SessionInputs {
         prompt,
@@ -684,568 +665,942 @@ fn assemble_new(
         fiber_path,
         reads,
     } = inputs;
-    let (id, worktree, opened, supervised, case_inputs, parent, rewound, inherited) = match start {
-        Start::New {
-            id,
-            workspace,
-            supervised,
-            case_inputs,
-            inherited,
-        } => {
-            let worktree = workspace.worktree().cloned();
-            let opened = workspace.opened().cloned();
-            (
-                id,
-                worktree,
+    match start {
+        Start::Resume(resume) => {
+            let id = resume.id();
+            let sessions_buf = resume.sessions()?.to_path_buf();
+            let ResumeStart {
+                dir,
+                log,
+                folded,
                 opened,
-                supervised,
-                case_inputs,
-                None,
-                None,
-                inherited,
-            )
-        }
-        Start::Delegate {
-            id,
-            parent,
-            workspace,
-            inherited,
-        } => {
-            let worktree = workspace.worktree().cloned();
-            let opened = workspace.opened().cloned();
-            (
-                id,
-                worktree,
-                opened,
-                false,
-                None,
-                Some(parent),
-                None,
-                inherited,
-            )
-        }
-        Start::Rewound {
-            id,
-            continuation,
-            workspace,
-            inherited,
-        } => {
-            let worktree = workspace.worktree().cloned();
-            let opened = workspace.opened().cloned();
-            (
-                id,
-                worktree,
-                opened,
-                false,
-                None,
-                None,
-                Some(continuation),
-                inherited,
-            )
-        }
-        Start::Resume(_) => {
-            return Err(failed(
-                ErrorCode::IoFailed,
-                "a resumed start cannot assemble as new",
-            ));
-        }
-    };
-    log::crash::attach(&id);
-    let dir = log::SessionDir::new(&parts.sessions, &id);
-    // The session directory's log: the opening message's environment
-    // names it.
-    parts.prompt.session_log = dir.events().display().to_string();
-    let Parts {
-        sources,
-        provider,
-        observe,
-        reviewer_observe,
-        diag,
-        model,
-        prompt: prompt_inputs,
-        reviewer,
-        limits,
-        reviewer_notes,
-        budget,
-        retry,
-        handoff,
-        idle,
-        warm,
-        caps,
-        shell_read_only,
-        sandbox,
-        protection,
-        home,
-        project,
-        workspace,
-        sessions,
-        repository,
-        credential_files,
-        extensions,
-        locks,
-        mut mcp,
-        pending_mcp,
-        switching,
-        switchable,
-        resolve,
-        web_search,
-    } = parts;
-    let (job_emit, jobs) = late_emit::registry(&dir, &clock);
-    shutdown::arm(signals, &reads);
-    // Every session declares `delegate_spawn`: a delegate is its own
-    // session, so the child re-executes this binary.
-    let crate::switch::quota::QuotaReaders {
-        door: quota,
-        model: model_quota,
-        notice,
-    } = switching.quota_readers();
-    let delegates = crate::delegates::Delegates::new(
-        fiber_path.clone(),
-        home.clone(),
-        id.clone(),
-        workspace.clone(),
-        sessions.clone(),
-        jobs.clone(),
-        Arc::clone(&clock),
-        resolve,
-    )
-    .with_quota(model_quota);
-    // Before the log exists: a failure here, such as not finding the running
-    // binary, leaves no session line; every server starts with the session too.
-    // The `skill` tool answers from the loop's set: the reader shares it,
-    // so a skill added after the opening stays unknown until the listing
-    // has it (`docs/system-prompt.md`, "Added and removed skills").
-    let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), &workspace);
-    let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
-    let web_search =
-        crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
-    // The connection timing rides the session's MCP starts at debug; at
-    // info no callable is built, so starting costs the one level check.
-    let timing = if diag.debugging() {
-        Some(diag.timings())
-    } else {
-        None
-    };
-    // The create line's writer opens here, before the session file
-    // attaches: its `ts` is the writer's open time, its `ms` the stamped
-    // creation. At `info` there is no timing, so nothing opens.
-    if let (Some(timing), Some(opened)) = (&timing, &opened) {
-        opened(timing);
-    }
-    // The registry is built above, before any tool runs: installing the
-    // session's timing times a background start as `jobs.start`.
-    if let Some(timing) = &timing {
-        jobs.install_timing(Arc::clone(timing));
-    }
-    let pending_mcp = match pending_mcp {
-        Some(pending) => pending,
-        None => {
-            let _ = extensions.finish_processes(&support::cancel::Token::new());
-            return Err(failed(ErrorCode::IoFailed, "MCP startup was not prepared"));
-        }
-    };
-    let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
-        fiber_path.clone(),
-        &home,
-        &workspace,
-        &dir.artifacts(),
-        &clock,
-        &jobs,
-        &locks,
-        &project,
-        pending_mcp,
-        web_search,
-        &delegates,
-        skills,
-        extensions.tools(),
-        timing.clone(),
-        shell_read_only.clone(),
-        sandbox.clone(),
-        Some(protection),
-    ) {
-        Ok(tools) => tools,
-        Err(failure) => {
-            let _ = extensions.finish_processes(&support::cancel::Token::new());
-            return Err(failure);
-        }
-    };
-    let delegates = Arc::new(delegates);
-    let forget = Arc::clone(&session_servers.forget);
-    let hosted_stands = crate::switch::hosted_stands(&tools);
-    let permissions = ask_permissions(
-        &home,
-        &project,
-        workspace.to_string_lossy().into_owned(),
-        credential_files,
-        &clock,
-    );
-    let offer = Arc::new(extensions::SessionOffer::new(
-        &home,
-        &project,
-        &workspace,
-        crate::session_extensions::fetch(&clock),
-    ));
-    let log = match Log::create(&sessions, id.clone(), Arc::clone(&clock)) {
-        Ok(log) => Arc::new(log),
-        Err(e) => {
-            session_servers.servers.stop();
-            return Err(failed(e.code(), e));
-        }
-    };
-    // `Log::create` writes no event line: installing before any append
-    // times every write the process makes.
-    if timing.is_some() {
-        log.install_timing(Arc::clone(&diag));
-    }
-    // The durable log exists: the diagnostic writer takes the session's
-    // file and id, so request, extension and memory lines share them.
-    diag.attach(&id);
-    job_emit.set(Arc::new(log::WeakEmit::new(&log)) as _);
-    let event_output: Box<dyn io::Write + Send> = if case_inputs.is_some() {
-        Box::new(io::sink())
-    } else {
-        Box::new(io::stdout())
-    };
-    let session = match Session::open_with_timing(
-        &home,
-        dir.path(),
-        &log,
-        Arc::clone(&clock),
-        infos,
-        event_output,
-        timing,
-    ) {
-        Ok(session) => session,
-        Err(e) => {
-            session_servers.servers.stop();
-            return Err(Failure::from(e));
-        }
-    };
-    session.shell(driver);
-    session.notes_workspace(workspace.clone());
-    session.jobs(jobs.clone());
-    session.repository_code(Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>);
-    session.images(Arc::clone(&session_servers.images));
-    session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
-    session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
-    extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
-    extensions.drive_to(session.driver());
-    let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
-    let host_model = Arc::new(crate::model_host::ModelHost::new(
-        switching.reacher(Arc::new(crate::connect)),
-        budget,
-        &retry,
-        dir.path().to_path_buf(),
-        id.clone(),
-    ));
-    extensions.model_to(host_model.clone());
-    extensions.delegate_to(Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>);
-    // A session case with nobody attached denies where it would ask a
-    // person, as a headless run does: only the person fallback is removed,
-    // so `attended: false` with a reviewer still allows through it.
-    let case_attended = case_inputs
-        .as_ref()
-        .is_none_or(|inputs| inputs.case_run.attended());
-    let answerable = effective_answerable(!one_turn && case_attended, supervised);
-    extensions.answerable(answerable);
-    extensions.browse_with(
-        Arc::new(extensions::SystemBrowser::default()),
-        session.attended(),
-    );
-    session.skills(r#loop::skills(&prompt_inputs, &workspace));
-    // The session's MCP prompt rows, tagged with each server's name:
-    // the `commands` answer lists them beside skills, and `/name` runs
-    // them through the fetch below (`docs/mcp.md`, "Prompts and
-    // resources"). Shadowed prompts join the startup notices.
-    let prompt_rows = session_servers.prompts.commands();
-    let listed = r#loop::commands(
-        &prompt_inputs,
-        &workspace,
-        &prompt_rows,
-        &extensions.commands(),
-    );
-    mcp.notices.extend(listed.notices);
-    // The turn-start check measures the runnable set against these rows,
-    // so a skill added before the opening lists still refreshes them.
-    skill_set.sync_commands(&listed.runnable);
-    session.commands(listed.rows);
-    session.quota(quota);
-    let door = crate::switch::Door {
-        declare: session.declarer(),
-        hosted_stands,
-        backend: extensions.search_backend(),
-    };
-    let current = Arc::new(crate::session_extensions::Current::new(extensions));
-    let (commands_refresh, commands_sync) = command_update_wiring(&current, &session, &skill_set);
-    let readers =
-        switching.credential_readers(switching.clone().closure(door), model.reference.clone());
-    session.credentials(readers.labels, readers.admitted);
-    let switcher = readers.prepare;
-    let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
-        sources,
-        prompt_inputs.clone(),
-        current.clone(),
-        switching.clone(),
-        &tools,
-        &session,
-        host_model,
-        Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>,
-        session_servers,
-        answerable,
-        log.clone(),
-        diag.clone(),
-        shell_read_only,
-        sandbox,
-        std::sync::Arc::new(std::sync::Mutex::new(repository)),
-        commands_sync,
-    );
-    // Every notice the startup already wrote, including the ones
-    // `mcp_servers_started` writes after this read: the late preparer
-    // drops the ones it would repeat and keeps the new ones.
-    let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
-    let providers = reload.mcp_providers(&server_failures);
-    let (reloader, late) = reload.preparers(written);
-    session.mcp_servers(providers.refresh);
-    session.mcp_login(providers.login);
-    session.personal_source_check(crate::prompt_files::personal_source_check(
-        prompt_inputs.home.clone(),
-        prompt_inputs.agents_home.clone(),
-        Arc::clone(&prompt_inputs.clock),
-    ));
-    let cancel = Arc::new(r#loop::TurnCancel::default());
-    // A signal while armed: nothing was written to the session log, so nothing more is.
-    let reads = switching.reads();
-    if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
-        servers.stop();
-        close(session, log, &home, dir.path(), &workspace, &*clock);
-        return Ok(code);
-    }
-    let inbox_wake = session.inbox_wake();
-    let rewrites = session.rewrites();
-    let admission = session.admission();
-    let steering = session.steering();
-    // The fetch runs a prompt row through its server, starting a lazy
-    // one as a first tool call does (`docs/mcp.md`, "Prompts and
-    // resources"). No logic lives here beyond that call.
-    let fetch_prompts = prompts.clone();
-    let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
-        fetch_prompts.get(server, prompt, text, cancel)
-    });
-    let case_driver = case_inputs.as_ref().and_then(|inputs| {
-        let case = &inputs.case_run;
-        let mut watcher = log.watch_all();
-        let events = Box::new(move |wait| {
-            watcher
-                .recv_timeout(wait)
-                .map(|result| result.map_err(|error| error.to_string()))
-        });
-        let case_cancel: Arc<dyn Fn() + Send + Sync> = {
-            let cancel = Arc::clone(&cancel);
-            Arc::new(move || {
-                cancel.cancel();
-            })
-        };
-        match case.start(session.driver(), events, case_cancel) {
-            Ok(driver) => Some(driver),
-            Err(error) => {
-                case.record_failure(error.to_string());
-                None
-            }
-        }
-    });
-    let run_one_turn = one_turn || (case_inputs.is_some() && case_driver.is_none());
-    let code = run_turn(
-        &session,
-        &log,
-        dir.path(),
-        prompt,
-        run_one_turn,
-        cancel,
-        &diag,
-        &current,
-        |inbox, cancel, slot| {
-            // The commit writes the session's first lines together, so a
-            // signal recorded before them writes nothing: `Loop::start`
-            // writes `session_started`, which `fiber_started` follows
-            // (`docs/events.md`); a rewind's start writes the
-            // `session_started` that continues the old log instead, and a
-            // delegate opens through `Loop::delegate`, naming its parent.
-            let committed = signals.commit(|| {
-                let started = match (rewound, parent) {
-                    (Some(start), _) => {
-                        let is_fork = matches!(&start.how, r#loop::Continuation::Fork { .. });
-                        let session = r#loop::Session {
-                            log: Arc::clone(&log),
-                            provider,
-                            model,
-                            prompt: prompt_inputs,
-                            inbox,
-                            tools: r#loop::capped(tools, &caps),
-                            permissions,
-                        };
-                        if is_fork {
-                            Loop::fork_with_added(session, start, worktree, inherited)
-                        } else {
-                            Loop::rewound_with_worktree(session, start, worktree)
-                        }
-                    }
-                    // A fresh spawn records its inherited roots here,
-                    // after `session_started` and before the opening. A
-                    // fork's roots are seeded in its point-continuation arm.
-                    (None, Some(parent)) => Loop::delegate_with_added(
-                        r#loop::Session {
-                            log: Arc::clone(&log),
-                            provider,
-                            model,
-                            prompt: prompt_inputs,
-                            inbox,
-                            tools: r#loop::capped(tools, &caps),
-                            permissions,
-                        },
-                        parent,
-                        worktree,
-                        inherited,
-                    ),
-                    (None, None) if supervised => Loop::supervised(
-                        r#loop::Session {
-                            log: Arc::clone(&log),
-                            provider,
-                            model,
-                            prompt: prompt_inputs,
-                            inbox,
-                            tools: r#loop::capped(tools, &caps),
-                            permissions,
-                        },
-                        worktree,
-                    ),
-                    (None, None) => Loop::start(
-                        r#loop::Session {
-                            log: Arc::clone(&log),
-                            provider,
-                            model,
-                            prompt: prompt_inputs,
-                            inbox,
-                            tools: r#loop::capped(tools, &caps),
-                            permissions,
-                        },
-                        worktree,
-                    ),
-                };
-                started.and_then(|looped| {
-                    r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
-                    session_extensions::written(&log, &current.get())?;
-                    // The providers load reports the same shadow the
-                    // session's load reported: `written` wrote that half.
-                    let notices = crate::session_extensions::unwritten(mcp.notices, &current.get());
-                    r#loop::mcp_servers_started(&log, server_failures, notices)?;
-                    Ok(looped)
-                })
-            });
-            let started = match committed {
-                Err(code) => return Ok(Some(code)),
-                Ok(started) => started,
-            };
-            finish(
-                started.map(|looped| {
-                    let looped =
-                        session_extensions::hooked(looped.jobs(jobs).quota(notice), &current);
-                    let looped = session_extensions::released(looped, Arc::clone(&current));
-                    looped
-                        .diagnostics(Arc::clone(&diag))
-                        .observed(observe)
-                        .reviewer_observed(reviewer_observe)
-                        .reviewer_notes(reviewer_notes)
-                        .handoff(handoff)
-                        .on_handoff(forget)
-                        .switcher(switcher, switchable)
-                        .reloader(reloader)
-                        .reconnector(providers.reconnect)
-                        .late_extensions(late)
-                        .repository_code(offer)
-                        .approved_code(load)
-                        .skill_set(skill_set)
-                        .commands_refresh(commands_refresh)
-                        .server_prompts(r#loop::ServerPrompts {
-                            rows: prompt_rows,
-                            fetch,
-                        })
-                        .inbox_wake(inbox_wake)
-                        .on_rewrite(rewrites)
-                        .admission(admission)
-                        .steering(steering)
-                        .tool_search(crate::builtin::tool_search_factory())
-                        .tool_rows(crate::builtin::tool_rows(
-                            session.declarer(),
-                            session.state_setter(),
-                        ))
-                }),
-                budget,
-                idle,
-                warm,
-                // One-turn `fiber ask` and unattended session cases run with no client that may answer (`docs/permissions.md`, "Headless").
-                !run_one_turn && case_attended,
-                supervised,
+            } = resume;
+            let clock = Arc::clone(&process.clock);
+            // The session directory's log: the opening message's
+            // environment names it.
+            parts.prompt.session_log = dir.events().display().to_string();
+            let Parts {
+                sources,
+                provider,
+                observe,
+                reviewer_observe,
+                diag,
+                model,
+                prompt: prompt_inputs,
                 reviewer,
                 limits,
+                reviewer_notes,
+                budget,
                 retry,
-                cancel,
-                slot,
+                handoff,
+                idle,
+                warm,
+                caps,
+                home,
+                project,
+                credential_files,
+                extensions,
+                locks,
+                mut mcp,
+                pending_mcp,
+                switching,
+                switchable,
+                resolve,
+                web_search,
+                shell_read_only,
+                sandbox,
+                protection,
+                repository,
+                ..
+            } = parts;
+            // The log is already open: install the writer before any append the
+            // resumed process makes. The level is checked once; its answer gates
+            // both the install and the connection timing below.
+            let timing = if diag.debugging() {
+                log.install_timing(Arc::clone(&diag));
+                Some(diag.timings())
+            } else {
+                None
+            };
+            // The recreated worktree's create line opens here, before the
+            // session file attaches: a kept present worktree has no opener, so
+            // it writes none.
+            if let (Some(timing), Some(opened)) = (&timing, &opened) {
+                opened(timing);
+            }
+            // The recorded workspace, not the launch directory. A failure here,
+            // such as not finding the running binary, returns before `fiber_started`,
+            // so the log stays as it was. Every configured stdio server starts too.
+            // Jobs live and die with the process: a resumed session's registry
+            // starts empty (`docs/tools.md`, "Background jobs").
+            let jobs = jobs::Registry::new(
+                dir.artifacts(),
+                Arc::clone(&clock),
+                Arc::new(log::WeakEmit::new(&log)) as _,
+            );
+            // The registry starts empty on a resumed session too: installing the
+            // session's timing times a background start as `jobs.start`.
+            if let Some(timing) = &timing {
+                jobs.install_timing(Arc::clone(timing));
+            }
+            // A resumed session declares `delegate_spawn` too, parented to itself.
+            let crate::switch::quota::QuotaReaders {
+                door: quota,
+                model: model_quota,
+                notice,
+            } = switching.quota_readers();
+            let delegates = crate::delegates::Delegates::new(
+                fiber_path.clone(),
+                home.clone(),
+                id.clone(),
+                Path::new(&folded.workspace).to_path_buf(),
+                sessions_buf,
+                Arc::clone(&jobs),
+                Arc::clone(&clock),
+                resolve,
             )
-            .map(|()| None)
-        },
-    );
-    if let Some(case_driver) = case_driver {
-        match case_driver.join() {
-            Ok(()) => {}
-            Err(_) => {
-                if let Some(inputs) = &case_inputs {
-                    inputs
-                        .case_run
-                        .record_failure("the case driver panicked".to_owned());
+            .with_quota(model_quota);
+            crate::shutdown::arm(signals, &reads);
+            let skill_set =
+                r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
+            let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
+            let web_search = crate::builtin::web_search(
+                web_search.as_deref(),
+                extensions.search_backend().as_ref(),
+            )?;
+            let pending_mcp = match pending_mcp {
+                Some(pending) => pending,
+                None => {
+                    let _ = extensions.finish_processes(&support::cancel::Token::new());
+                    return Err(failed(ErrorCode::IoFailed, "MCP startup was not prepared"));
+                }
+            };
+            let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
+                fiber_path.clone(),
+                &home,
+                Path::new(&folded.workspace),
+                &dir.artifacts(),
+                &clock,
+                &jobs,
+                &locks,
+                &project,
+                pending_mcp,
+                web_search,
+                &delegates,
+                skills,
+                extensions.tools(),
+                timing.clone(),
+                shell_read_only.clone(),
+                sandbox.clone(),
+                Some(protection),
+            ) {
+                Ok(tools) => tools,
+                Err(failure) => {
+                    let _ = extensions.finish_processes(&support::cancel::Token::new());
+                    return Err(failure);
+                }
+            };
+            let delegates = std::sync::Arc::new(delegates);
+            let forget = Arc::clone(&session_servers.forget);
+            let hosted_stands = crate::switch::hosted_stands(&tools);
+            let workspace = std::path::PathBuf::from(&folded.workspace);
+            let offer = Arc::new(extensions::SessionOffer::new(
+                &home,
+                &project,
+                &workspace,
+                crate::session_extensions::fetch(&clock),
+            ));
+            let permissions = crate::ask_permissions(
+                &home,
+                &project,
+                folded.workspace.clone(),
+                credential_files,
+                &clock,
+            );
+            // The durable log is held: the diagnostic writer takes the session's
+            // file and id, so the door's socket timer and every later line share
+            // them, while MCP and permission lines keep the pre-attach file.
+            diag.attach(&id);
+            let session = match Session::resume_with_timing(
+                &home,
+                dir.path(),
+                &log,
+                Arc::clone(&clock),
+                infos,
+                Box::new(io::stdout()),
+                timing,
+            ) {
+                Ok(session) => session,
+                Err(e) => {
+                    session_servers.servers.stop();
+                    return Err(Failure::from(e));
+                }
+            };
+            session.shell(driver);
+            session.notes_workspace(workspace.clone());
+            session.jobs(jobs.clone());
+            session.repository_code(
+                Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>
+            );
+            session.images(Arc::clone(&session_servers.images));
+            session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
+            session
+                .extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
+            extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
+            extensions.drive_to(session.driver());
+            let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
+            let host_model = Arc::new(crate::model_host::ModelHost::new(
+                switching.reacher(Arc::new(crate::connect)),
+                budget,
+                &retry,
+                dir.path().to_path_buf(),
+                id.clone(),
+            ));
+            extensions.model_to(host_model.clone());
+            extensions
+                .delegate_to(Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>);
+            // A resume restores the flag from the log's first line: a supervised
+            // resume stays unanswerable even when a person drives it
+            // (`docs/permissions.md`, "Supervised sessions").
+            let supervised = folded.supervised;
+            let answerable = effective_answerable(!one_turn, supervised);
+            extensions.answerable(answerable);
+            extensions.browse_with(
+                Arc::new(extensions::SystemBrowser::default()),
+                session.attended(),
+            );
+            session.skills(r#loop::skills(&prompt_inputs, Path::new(&folded.workspace)));
+            // The session's MCP prompt rows, as a new session lists them: the
+            // `commands` answer lists them beside skills, and `/name` runs them
+            // through the fetch below (`docs/mcp.md`, "Prompts and resources").
+            // Shadowed prompts join the startup notices.
+            let prompt_rows = session_servers.prompts.commands();
+            let listed = r#loop::commands(
+                &prompt_inputs,
+                Path::new(&folded.workspace),
+                &prompt_rows,
+                &extensions.commands(),
+            );
+            mcp.notices.extend(listed.notices);
+            // The turn-start check measures the runnable set against these rows,
+            // so a template added while the session was away still refreshes them.
+            skill_set.sync_commands(&listed.runnable);
+            session.commands(listed.rows);
+            session.quota(quota);
+            let door = crate::switch::Door {
+                declare: session.declarer(),
+                hosted_stands,
+                backend: extensions.search_backend(),
+            };
+            let current = Arc::new(crate::session_extensions::Current::new(extensions));
+            let (commands_refresh, commands_sync) =
+                command_update_wiring(&current, &session, &skill_set);
+            let readers = switching
+                .credential_readers(switching.clone().closure(door), model.reference.clone());
+            session.credentials(readers.labels, readers.admitted);
+            let switcher = readers.prepare;
+            let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
+                sources,
+                prompt_inputs.clone(),
+                current.clone(),
+                switching.clone(),
+                &tools,
+                &session,
+                host_model,
+                Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>,
+                session_servers,
+                answerable,
+                log.clone(),
+                diag.clone(),
+                shell_read_only,
+                sandbox,
+                std::sync::Arc::new(std::sync::Mutex::new(repository)),
+                commands_sync,
+            );
+            // Every notice the startup already wrote, including the ones
+            // `mcp_servers_started` writes after this read: the late preparer
+            // drops the ones it would repeat and keeps the new ones.
+            let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
+            let providers = reload.mcp_providers(&server_failures);
+            let (reloader, late) = reload.preparers(written);
+            session.mcp_servers(providers.refresh);
+            session.mcp_login(providers.login);
+            session.personal_source_check(crate::prompt_files::personal_source_check(
+                prompt_inputs.home.clone(),
+                prompt_inputs.agents_home.clone(),
+                Arc::clone(&prompt_inputs.clock),
+            ));
+            let cancel = Arc::new(r#loop::TurnCancel::default());
+            // A signal while armed: the log stays as it was. The commit below
+            // decides the window between `start` and the first write: a recorded
+            // signal writes nothing and exits with its code.
+            let reads = switching.reads();
+            if let Some(code) =
+                crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads)
+            {
+                servers.stop();
+                close(session, log, &home, dir.path(), &workspace, &*clock);
+                return Ok(code);
+            }
+            match signals.commit(|| {
+                r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
+                    .and_then(|()| crate::session_extensions::written(&log, &current.get()))
+                    .and_then(|()| {
+                        // The providers load reports the same shadow the
+                        // session's load reported: `written` wrote that half.
+                        let notices =
+                            crate::session_extensions::unwritten(mcp.notices, &current.get());
+                        r#loop::mcp_servers_started(&log, server_failures, notices)
+                    })
+            }) {
+                Err(code) => {
+                    servers.stop();
+                    close(session, log, &home, dir.path(), &workspace, &*clock);
+                    return Ok(code);
+                }
+                Ok(Err(e)) => {
+                    servers.stop();
+                    close(session, log, &home, dir.path(), &workspace, &*clock);
+                    return Err(failed(e.code(), e));
+                }
+                Ok(Ok(())) => {}
+            }
+            // The session file and id are already attached above, before the
+            // door opened: request, extension and memory lines share them.
+            let inbox_wake = session.inbox_wake();
+            let rewrites = session.rewrites();
+            let admission = session.admission();
+            let steering = session.steering();
+            // The fetch runs a prompt row through its server, starting a lazy
+            // one as a first tool call does (`docs/mcp.md`, "Prompts and
+            // resources"). No logic lives here beyond that call.
+            let fetch_prompts = prompts.clone();
+            let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
+                fetch_prompts.get(server, prompt, text, cancel)
+            });
+            let code = run_turn(
+                &session,
+                &log,
+                dir.path(),
+                prompt,
+                one_turn,
+                cancel,
+                &diag,
+                &current,
+                |inbox, cancel, slot| {
+                    // A resume that fails leaves no loop to take the summary from:
+                    // the earlier process's open requests still reach the exit.
+                    *slot = Some(folded.exit_seed());
+                    crate::finish(
+                        Loop::resume(
+                            r#loop::Session {
+                                log: Arc::clone(&log),
+                                provider,
+                                model,
+                                prompt: prompt_inputs,
+                                inbox,
+                                tools: r#loop::capped(tools, &caps),
+                                permissions,
+                            },
+                            folded,
+                        )
+                        .map(|looped| {
+                            let looped = crate::session_extensions::hooked(
+                                looped.jobs(jobs).quota(notice),
+                                &current,
+                            );
+                            let looped =
+                                crate::session_extensions::released(looped, Arc::clone(&current));
+                            looped
+                                .diagnostics(Arc::clone(&diag))
+                                .observed(observe)
+                                .reviewer_observed(reviewer_observe)
+                                .reviewer_notes(reviewer_notes)
+                                .handoff(handoff)
+                                .on_handoff(forget)
+                                .switcher(switcher, switchable)
+                                .reloader(reloader)
+                                .reconnector(providers.reconnect)
+                                .late_extensions(late)
+                                .repository_code(offer)
+                                .approved_code(load)
+                                .skill_set(skill_set)
+                                .commands_refresh(commands_refresh)
+                                .server_prompts(r#loop::ServerPrompts {
+                                    rows: prompt_rows,
+                                    fetch,
+                                })
+                                .inbox_wake(inbox_wake)
+                                .on_rewrite(rewrites)
+                                .admission(admission)
+                                .steering(steering)
+                                .tool_search(crate::builtin::tool_search_factory())
+                                .tool_rows(crate::builtin::tool_rows(
+                                    session.declarer(),
+                                    session.state_setter(),
+                                ))
+                        }),
+                        budget,
+                        idle,
+                        warm,
+                        // `fiber ask --resume` runs one turn with no client.
+                        !one_turn,
+                        supervised,
+                        reviewer,
+                        limits,
+                        retry,
+                        cancel,
+                        slot,
+                    )
+                    .map(|()| None)
+                },
+            );
+            servers.stop();
+            close(session, log, &home, dir.path(), &workspace, &*clock);
+            Ok(code)
+        }
+        fresh @ Start::New { .. }
+        | fresh @ Start::Delegate { .. }
+        | fresh @ Start::Rewound { .. } => {
+            let (id, worktree, opened, supervised, case_inputs, parent, rewound, inherited) =
+                match fresh {
+                    Start::New {
+                        id,
+                        workspace,
+                        supervised,
+                        case_inputs,
+                        inherited,
+                    } => {
+                        let worktree = workspace.worktree().cloned();
+                        let opened = workspace.opened().cloned();
+                        (
+                            id,
+                            worktree,
+                            opened,
+                            supervised,
+                            case_inputs,
+                            None,
+                            None,
+                            inherited,
+                        )
+                    }
+                    Start::Delegate {
+                        id,
+                        parent,
+                        workspace,
+                        inherited,
+                    } => {
+                        let worktree = workspace.worktree().cloned();
+                        let opened = workspace.opened().cloned();
+                        (
+                            id,
+                            worktree,
+                            opened,
+                            false,
+                            None,
+                            Some(parent),
+                            None,
+                            inherited,
+                        )
+                    }
+                    Start::Rewound {
+                        id,
+                        continuation,
+                        workspace,
+                        inherited,
+                    } => {
+                        let worktree = workspace.worktree().cloned();
+                        let opened = workspace.opened().cloned();
+                        (
+                            id,
+                            worktree,
+                            opened,
+                            false,
+                            None,
+                            None,
+                            Some(continuation),
+                            inherited,
+                        )
+                    }
+                    Start::Resume(_) => unreachable!("a resumed start cannot assemble as new"),
+                };
+            let clock = case_inputs
+                .as_ref()
+                .map_or(Arc::clone(&process.clock), |inputs| {
+                    inputs.case_run.session_clock()
+                });
+            log::crash::attach(&id);
+            let dir = log::SessionDir::new(&parts.sessions, &id);
+            // The session directory's log: the opening message's environment
+            // names it.
+            parts.prompt.session_log = dir.events().display().to_string();
+            let Parts {
+                sources,
+                provider,
+                observe,
+                reviewer_observe,
+                diag,
+                model,
+                prompt: prompt_inputs,
+                reviewer,
+                limits,
+                reviewer_notes,
+                budget,
+                retry,
+                handoff,
+                idle,
+                warm,
+                caps,
+                shell_read_only,
+                sandbox,
+                protection,
+                home,
+                project,
+                workspace,
+                sessions,
+                repository,
+                credential_files,
+                extensions,
+                locks,
+                mut mcp,
+                pending_mcp,
+                switching,
+                switchable,
+                resolve,
+                web_search,
+            } = parts;
+            let (job_emit, jobs) = late_emit::registry(&dir, &clock);
+            shutdown::arm(signals, &reads);
+            // Every session declares `delegate_spawn`: a delegate is its own
+            // session, so the child re-executes this binary.
+            let crate::switch::quota::QuotaReaders {
+                door: quota,
+                model: model_quota,
+                notice,
+            } = switching.quota_readers();
+            let delegates = crate::delegates::Delegates::new(
+                fiber_path.clone(),
+                home.clone(),
+                id.clone(),
+                workspace.clone(),
+                sessions.clone(),
+                jobs.clone(),
+                Arc::clone(&clock),
+                resolve,
+            )
+            .with_quota(model_quota);
+            // Before the log exists: a failure here, such as not finding the running
+            // binary, leaves no session line; every server starts with the session too.
+            // The `skill` tool answers from the loop's set: the reader shares it,
+            // so a skill added after the opening stays unknown until the listing
+            // has it (`docs/system-prompt.md`, "Added and removed skills").
+            let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), &workspace);
+            let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
+            let web_search = crate::builtin::web_search(
+                web_search.as_deref(),
+                extensions.search_backend().as_ref(),
+            )?;
+            // The connection timing rides the session's MCP starts at debug; at
+            // info no callable is built, so starting costs the one level check.
+            let timing = if diag.debugging() {
+                Some(diag.timings())
+            } else {
+                None
+            };
+            // The create line's writer opens here, before the session file
+            // attaches: its `ts` is the writer's open time, its `ms` the stamped
+            // creation. At `info` there is no timing, so nothing opens.
+            if let (Some(timing), Some(opened)) = (&timing, &opened) {
+                opened(timing);
+            }
+            // The registry is built above, before any tool runs: installing the
+            // session's timing times a background start as `jobs.start`.
+            if let Some(timing) = &timing {
+                jobs.install_timing(Arc::clone(timing));
+            }
+            let pending_mcp = match pending_mcp {
+                Some(pending) => pending,
+                None => {
+                    let _ = extensions.finish_processes(&support::cancel::Token::new());
+                    return Err(failed(ErrorCode::IoFailed, "MCP startup was not prepared"));
+                }
+            };
+            let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
+                fiber_path.clone(),
+                &home,
+                &workspace,
+                &dir.artifacts(),
+                &clock,
+                &jobs,
+                &locks,
+                &project,
+                pending_mcp,
+                web_search,
+                &delegates,
+                skills,
+                extensions.tools(),
+                timing.clone(),
+                shell_read_only.clone(),
+                sandbox.clone(),
+                Some(protection),
+            ) {
+                Ok(tools) => tools,
+                Err(failure) => {
+                    let _ = extensions.finish_processes(&support::cancel::Token::new());
+                    return Err(failure);
+                }
+            };
+            let delegates = Arc::new(delegates);
+            let forget = Arc::clone(&session_servers.forget);
+            let hosted_stands = crate::switch::hosted_stands(&tools);
+            let permissions = ask_permissions(
+                &home,
+                &project,
+                workspace.to_string_lossy().into_owned(),
+                credential_files,
+                &clock,
+            );
+            let offer = Arc::new(extensions::SessionOffer::new(
+                &home,
+                &project,
+                &workspace,
+                crate::session_extensions::fetch(&clock),
+            ));
+            let log = match Log::create(&sessions, id.clone(), Arc::clone(&clock)) {
+                Ok(log) => Arc::new(log),
+                Err(e) => {
+                    session_servers.servers.stop();
+                    return Err(failed(e.code(), e));
+                }
+            };
+            // `Log::create` writes no event line: installing before any append
+            // times every write the process makes.
+            if timing.is_some() {
+                log.install_timing(Arc::clone(&diag));
+            }
+            // The durable log exists: the diagnostic writer takes the session's
+            // file and id, so request, extension and memory lines share them.
+            diag.attach(&id);
+            job_emit.set(Arc::new(log::WeakEmit::new(&log)) as _);
+            let event_output: Box<dyn io::Write + Send> = if case_inputs.is_some() {
+                Box::new(io::sink())
+            } else {
+                Box::new(io::stdout())
+            };
+            let session = match Session::open_with_timing(
+                &home,
+                dir.path(),
+                &log,
+                Arc::clone(&clock),
+                infos,
+                event_output,
+                timing,
+            ) {
+                Ok(session) => session,
+                Err(e) => {
+                    session_servers.servers.stop();
+                    return Err(Failure::from(e));
+                }
+            };
+            session.shell(driver);
+            session.notes_workspace(workspace.clone());
+            session.jobs(jobs.clone());
+            session.repository_code(
+                Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>
+            );
+            session.images(Arc::clone(&session_servers.images));
+            session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
+            session
+                .extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
+            extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
+            extensions.drive_to(session.driver());
+            let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
+            let host_model = Arc::new(crate::model_host::ModelHost::new(
+                switching.reacher(Arc::new(crate::connect)),
+                budget,
+                &retry,
+                dir.path().to_path_buf(),
+                id.clone(),
+            ));
+            extensions.model_to(host_model.clone());
+            extensions
+                .delegate_to(Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>);
+            // A session case with nobody attached denies where it would ask a
+            // person, as a headless run does: only the person fallback is removed,
+            // so `attended: false` with a reviewer still allows through it.
+            let case_attended = case_inputs
+                .as_ref()
+                .is_none_or(|inputs| inputs.case_run.attended());
+            let answerable = effective_answerable(!one_turn && case_attended, supervised);
+            extensions.answerable(answerable);
+            extensions.browse_with(
+                Arc::new(extensions::SystemBrowser::default()),
+                session.attended(),
+            );
+            session.skills(r#loop::skills(&prompt_inputs, &workspace));
+            // The session's MCP prompt rows, tagged with each server's name:
+            // the `commands` answer lists them beside skills, and `/name` runs
+            // them through the fetch below (`docs/mcp.md`, "Prompts and
+            // resources"). Shadowed prompts join the startup notices.
+            let prompt_rows = session_servers.prompts.commands();
+            let listed = r#loop::commands(
+                &prompt_inputs,
+                &workspace,
+                &prompt_rows,
+                &extensions.commands(),
+            );
+            mcp.notices.extend(listed.notices);
+            // The turn-start check measures the runnable set against these rows,
+            // so a skill added before the opening lists still refreshes them.
+            skill_set.sync_commands(&listed.runnable);
+            session.commands(listed.rows);
+            session.quota(quota);
+            let door = crate::switch::Door {
+                declare: session.declarer(),
+                hosted_stands,
+                backend: extensions.search_backend(),
+            };
+            let current = Arc::new(crate::session_extensions::Current::new(extensions));
+            let (commands_refresh, commands_sync) =
+                command_update_wiring(&current, &session, &skill_set);
+            let readers = switching
+                .credential_readers(switching.clone().closure(door), model.reference.clone());
+            session.credentials(readers.labels, readers.admitted);
+            let switcher = readers.prepare;
+            let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
+                sources,
+                prompt_inputs.clone(),
+                current.clone(),
+                switching.clone(),
+                &tools,
+                &session,
+                host_model,
+                Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>,
+                session_servers,
+                answerable,
+                log.clone(),
+                diag.clone(),
+                shell_read_only,
+                sandbox,
+                std::sync::Arc::new(std::sync::Mutex::new(repository)),
+                commands_sync,
+            );
+            // Every notice the startup already wrote, including the ones
+            // `mcp_servers_started` writes after this read: the late preparer
+            // drops the ones it would repeat and keeps the new ones.
+            let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
+            let providers = reload.mcp_providers(&server_failures);
+            let (reloader, late) = reload.preparers(written);
+            session.mcp_servers(providers.refresh);
+            session.mcp_login(providers.login);
+            session.personal_source_check(crate::prompt_files::personal_source_check(
+                prompt_inputs.home.clone(),
+                prompt_inputs.agents_home.clone(),
+                Arc::clone(&prompt_inputs.clock),
+            ));
+            let cancel = Arc::new(r#loop::TurnCancel::default());
+            // A signal while armed: nothing was written to the session log, so nothing more is.
+            let reads = switching.reads();
+            if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
+                servers.stop();
+                close(session, log, &home, dir.path(), &workspace, &*clock);
+                return Ok(code);
+            }
+            let inbox_wake = session.inbox_wake();
+            let rewrites = session.rewrites();
+            let admission = session.admission();
+            let steering = session.steering();
+            // The fetch runs a prompt row through its server, starting a lazy
+            // one as a first tool call does (`docs/mcp.md`, "Prompts and
+            // resources"). No logic lives here beyond that call.
+            let fetch_prompts = prompts.clone();
+            let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
+                fetch_prompts.get(server, prompt, text, cancel)
+            });
+            let case_driver = case_inputs.as_ref().and_then(|inputs| {
+                let case = &inputs.case_run;
+                let mut watcher = log.watch_all();
+                let events = Box::new(move |wait| {
+                    watcher
+                        .recv_timeout(wait)
+                        .map(|result| result.map_err(|error| error.to_string()))
+                });
+                let case_cancel: Arc<dyn Fn() + Send + Sync> = {
+                    let cancel = Arc::clone(&cancel);
+                    Arc::new(move || {
+                        cancel.cancel();
+                    })
+                };
+                match case.start(session.driver(), events, case_cancel) {
+                    Ok(driver) => Some(driver),
+                    Err(error) => {
+                        case.record_failure(error.to_string());
+                        None
+                    }
+                }
+            });
+            let run_one_turn = one_turn || (case_inputs.is_some() && case_driver.is_none());
+            let code = run_turn(
+                &session,
+                &log,
+                dir.path(),
+                prompt,
+                run_one_turn,
+                cancel,
+                &diag,
+                &current,
+                |inbox, cancel, slot| {
+                    // The commit writes the session's first lines together, so a
+                    // signal recorded before them writes nothing: `Loop::start`
+                    // writes `session_started`, which `fiber_started` follows
+                    // (`docs/events.md`); a rewind's start writes the
+                    // `session_started` that continues the old log instead, and a
+                    // delegate opens through `Loop::delegate`, naming its parent.
+                    let committed = signals.commit(|| {
+                        let started = match (rewound, parent) {
+                            (Some(start), _) => {
+                                let is_fork =
+                                    matches!(&start.how, r#loop::Continuation::Fork { .. });
+                                let session = r#loop::Session {
+                                    log: Arc::clone(&log),
+                                    provider,
+                                    model,
+                                    prompt: prompt_inputs,
+                                    inbox,
+                                    tools: r#loop::capped(tools, &caps),
+                                    permissions,
+                                };
+                                if is_fork {
+                                    Loop::fork_with_added(session, start, worktree, inherited)
+                                } else {
+                                    Loop::rewound_with_worktree(session, start, worktree)
+                                }
+                            }
+                            // A fresh spawn records its inherited roots here,
+                            // after `session_started` and before the opening. A
+                            // fork's roots are seeded in its point-continuation arm.
+                            (None, Some(parent)) => Loop::delegate_with_added(
+                                r#loop::Session {
+                                    log: Arc::clone(&log),
+                                    provider,
+                                    model,
+                                    prompt: prompt_inputs,
+                                    inbox,
+                                    tools: r#loop::capped(tools, &caps),
+                                    permissions,
+                                },
+                                parent,
+                                worktree,
+                                inherited,
+                            ),
+                            (None, None) if supervised => Loop::supervised(
+                                r#loop::Session {
+                                    log: Arc::clone(&log),
+                                    provider,
+                                    model,
+                                    prompt: prompt_inputs,
+                                    inbox,
+                                    tools: r#loop::capped(tools, &caps),
+                                    permissions,
+                                },
+                                worktree,
+                            ),
+                            (None, None) => Loop::start(
+                                r#loop::Session {
+                                    log: Arc::clone(&log),
+                                    provider,
+                                    model,
+                                    prompt: prompt_inputs,
+                                    inbox,
+                                    tools: r#loop::capped(tools, &caps),
+                                    permissions,
+                                },
+                                worktree,
+                            ),
+                        };
+                        started.and_then(|looped| {
+                            r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
+                            session_extensions::written(&log, &current.get())?;
+                            // The providers load reports the same shadow the
+                            // session's load reported: `written` wrote that half.
+                            let notices =
+                                crate::session_extensions::unwritten(mcp.notices, &current.get());
+                            r#loop::mcp_servers_started(&log, server_failures, notices)?;
+                            Ok(looped)
+                        })
+                    });
+                    let started = match committed {
+                        Err(code) => return Ok(Some(code)),
+                        Ok(started) => started,
+                    };
+                    finish(
+                        started.map(|looped| {
+                            let looped = session_extensions::hooked(
+                                looped.jobs(jobs).quota(notice),
+                                &current,
+                            );
+                            let looped = session_extensions::released(looped, Arc::clone(&current));
+                            looped
+                                .diagnostics(Arc::clone(&diag))
+                                .observed(observe)
+                                .reviewer_observed(reviewer_observe)
+                                .reviewer_notes(reviewer_notes)
+                                .handoff(handoff)
+                                .on_handoff(forget)
+                                .switcher(switcher, switchable)
+                                .reloader(reloader)
+                                .reconnector(providers.reconnect)
+                                .late_extensions(late)
+                                .repository_code(offer)
+                                .approved_code(load)
+                                .skill_set(skill_set)
+                                .commands_refresh(commands_refresh)
+                                .server_prompts(r#loop::ServerPrompts {
+                                    rows: prompt_rows,
+                                    fetch,
+                                })
+                                .inbox_wake(inbox_wake)
+                                .on_rewrite(rewrites)
+                                .admission(admission)
+                                .steering(steering)
+                                .tool_search(crate::builtin::tool_search_factory())
+                                .tool_rows(crate::builtin::tool_rows(
+                                    session.declarer(),
+                                    session.state_setter(),
+                                ))
+                        }),
+                        budget,
+                        idle,
+                        warm,
+                        // One-turn `fiber ask` and unattended session cases run with no client that may answer (`docs/permissions.md`, "Headless").
+                        !run_one_turn && case_attended,
+                        supervised,
+                        reviewer,
+                        limits,
+                        retry,
+                        cancel,
+                        slot,
+                    )
+                    .map(|()| None)
+                },
+            );
+            if let Some(case_driver) = case_driver {
+                match case_driver.join() {
+                    Ok(()) => {}
+                    Err(_) => {
+                        if let Some(inputs) = &case_inputs {
+                            inputs
+                                .case_run
+                                .record_failure("the case driver panicked".to_owned());
+                        }
+                    }
                 }
             }
+            servers.stop();
+            close(session, log, &home, dir.path(), &workspace, &*clock);
+            Ok(code)
         }
     }
-    servers.stop();
-    close(session, log, &home, dir.path(), &workspace, &*clock);
-    Ok(code)
-}
-
-pub(crate) fn assemble_session(
-    parts: Parts,
-    inputs: SessionInputs,
-    signals: &Arc<doors::Signals>,
-    process: &crate::startup::Process,
-) -> Result<i32, Failure> {
-    let is_resume = matches!(inputs.start, Start::Resume(_));
-    if is_resume {
-        let SessionInputs {
-            prompt,
-            one_turn,
-            start,
-            fiber_path,
-            reads,
-        } = inputs;
-        let resume = match start {
-            Start::Resume(resume) => resume,
-            Start::New { .. } | Start::Delegate { .. } | Start::Rewound { .. } => {
-                unreachable!("a fresh start cannot assemble as resumed")
-            }
-        };
-        return crate::resume::assemble_resumed(
-            parts, resume, prompt, one_turn, fiber_path, reads, signals, process,
-        );
-    }
-    let clock = match &inputs.start {
-        Start::New { case_inputs, .. } => case_inputs
-            .as_ref()
-            .map_or(Arc::clone(&process.clock), |inputs| {
-                inputs.case_run.session_clock()
-            }),
-        Start::Delegate { .. } | Start::Rewound { .. } => Arc::clone(&process.clock),
-        Start::Resume(_) => unreachable!(),
-    };
-    assemble_new(parts, inputs, signals, clock)
 }
 
 /// As [`run_new`], opening the worktree's create line once the diagnostic
