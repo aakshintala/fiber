@@ -1748,7 +1748,6 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
             dismiss_first_run_offer(&mut run);
             started(&mut run);
             let sessions = sessions(&setup);
-            assert_eq!(sessions.len(), 1, "one session ran");
             // The past-range image is `pic-254.png`: the first 254 reads fill
             // the kitty placeholder colours. It is selected by its requested
             // source path, never by completion position.

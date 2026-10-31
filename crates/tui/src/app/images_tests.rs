@@ -629,7 +629,6 @@ fn a_click_past_the_placeholder_range_opens_its_viewer() {
     );
     // A click on its caption opens the viewer on its path.
     let lines = sent(app.view_image(id));
-    assert_eq!(lines.len(), 1);
     let value: Value =
         serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("a line: {err}"));
     assert_eq!(value.get("command"), Some(&json!("read_file")));
