@@ -178,18 +178,19 @@ fn delegates_shed_before_status_rows() {
 }
 
 #[test]
-fn no_rows_outside_the_narrow_layout() {
-    // Wide, with the panel drawn.
+fn only_the_box_chrome_counts_outside_the_narrow_layout() {
+    // Wide, with the panel drawn: only the input box's rule and status
+    // row count below the conversation.
     let wide = attached(200, 40);
     assert!(!wide.chrome().layout().is_some_and(|layout| layout.narrow));
     assert_eq!(wide.narrow_fit(), None);
-    assert_eq!(wide.narrow_rows(wide.below_rows()), 0);
+    assert_eq!(wide.narrow_rows(wide.below_rows()), 2);
     // Narrow, with the panel hidden by the person.
     let mut hidden = attached(100, 30);
     hidden.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
     assert!(!hidden.chrome().layout().is_some_and(|layout| layout.narrow));
     assert_eq!(hidden.narrow_fit(), None);
-    assert_eq!(hidden.narrow_rows(hidden.below_rows()), 0);
+    assert_eq!(hidden.narrow_rows(hidden.below_rows()), 2);
 }
 
 #[test]

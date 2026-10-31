@@ -4,8 +4,12 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 
+use super::panel::{PERMISSION_MODE, bar_spans, short_tokens};
+use super::status_rows::{Joined, Segment, StatusRow, cut_row, push_segment};
 use crate::app::App;
+use crate::app::panel::Spot;
 use crate::format;
 use crate::mouse::{Target, TargetId};
 use crate::surface;
@@ -56,6 +60,15 @@ pub(super) fn draw(
         *bottom = y;
         bottom_edge = true;
     }
+    // The rule and the status row draw when the draft, the top edge and
+    // both fit: cut short, the box keeps the draft with its edges, and
+    // the chrome sheds first.
+    let chrome = usize::from(bottom.saturating_sub(area.y)) >= rows.len() + usize::from(fits) + 2;
+    let below_box = *bottom;
+    if chrome {
+        put_status_row(app, area, bottom, buf, targets);
+        put_rule(area, bottom, buf);
+    }
     let below = *bottom;
     let text = text_area(area);
     for (at, row) in rows.iter().enumerate().rev() {
@@ -63,7 +76,12 @@ pub(super) fn draw(
         // (`docs/tui.md`, "The input box").
         put_row(buf, area, text, bottom, row, top == 0 && at == 0, focused);
     }
-    let slab = Rect::new(area.x, *bottom, area.width, below.saturating_sub(*bottom));
+    let slab = Rect::new(
+        area.x,
+        *bottom,
+        area.width,
+        below_box.saturating_sub(*bottom),
+    );
     let mut top_edge = false;
     if fits && let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) {
         *bottom = y;
@@ -147,6 +165,276 @@ fn text_area(area: Rect) -> Rect {
             area.height,
         )
     }
+}
+
+/// The last `cells` cells of `text`, never splitting a wide glyph, so
+/// a working directory cut from the left keeps whole cells.
+fn tail_cells(text: &str, cells: usize) -> String {
+    let mut taken = 0;
+    let mut out = Vec::new();
+    for ch in text.chars().rev() {
+        let wide = format::width(&ch.to_string());
+        if taken + wide > cells {
+            break;
+        }
+        taken += wide;
+        out.push(ch);
+    }
+    out.into_iter().rev().collect()
+}
+
+/// The row's left side in `room` columns: the working directory, then
+/// the permission mode in `attention`, joined by a dim `  │  `. Too
+/// wide, the working directory is cut from the left to keep its tail
+/// first, then the side is cut at its right end
+/// (`docs/tui.md`, "The input box").
+fn status_left(workspace: &str, room: usize) -> StatusRow {
+    let mut full = Joined {
+        spans: Vec::new(),
+        spots: Vec::new(),
+    };
+    if !workspace.is_empty() {
+        push_segment(
+            &mut full,
+            Segment::plain(vec![Span::raw(workspace.to_owned())]),
+        );
+    }
+    push_segment(
+        &mut full,
+        Segment::plain(vec![Span::styled(PERMISSION_MODE, style(Role::Attention))]),
+    );
+    let wide: usize = full
+        .spans
+        .iter()
+        .map(|span| format::width(&span.content))
+        .sum();
+    if wide <= room {
+        return cut_row(full, wide.saturating_add(1));
+    }
+    // Cut the working directory from the left first, keeping its tail
+    // behind an ellipsis; the shed cells leave exactly `room`.
+    let shed = wide - room;
+    let ws_w: usize = format::width(workspace);
+    if !workspace.is_empty() && shed < ws_w {
+        let tail = tail_cells(workspace, ws_w - shed - 1);
+        let mut cut = Joined {
+            spans: Vec::new(),
+            spots: Vec::new(),
+        };
+        push_segment(
+            &mut cut,
+            Segment::plain(vec![Span::raw(format!("…{tail}"))]),
+        );
+        push_segment(
+            &mut cut,
+            Segment::plain(vec![Span::styled(PERMISSION_MODE, style(Role::Attention))]),
+        );
+        return cut_row(cut, room.saturating_add(1));
+    }
+    // Past the working directory the side is cut at its right end.
+    let mut rest = Joined {
+        spans: Vec::new(),
+        spots: Vec::new(),
+    };
+    push_segment(
+        &mut rest,
+        Segment::plain(vec![Span::styled(PERMISSION_MODE, style(Role::Attention))]),
+    );
+    cut_row(rest, room.saturating_add(1))
+}
+
+/// The row's ctx segment over the whole segment: `ctx` dim, the 8-cell
+/// bar, the size and the share of the window dim, opening the context
+/// breakdown (`docs/tui.md`, "The input box"). Unknown figures show an
+/// empty bar with dim dashes, so the row keeps both sides from the
+/// first frame.
+fn ctx_segment(app: &App) -> Segment {
+    let panel = app.panel_state();
+    let window = panel.window().filter(|window| *window > 0);
+    let known = window.and_then(|window| {
+        panel
+            .status()
+            .and_then(|status| status.context.as_ref())
+            .map(|context| (window, context))
+    });
+    let mut spans = vec![
+        Span::styled("ctx", style(Role::Muted)),
+        Span::raw(" ".to_owned()),
+    ];
+    match known {
+        Some((window, context)) => {
+            spans.extend(bar_spans(
+                context.tokens,
+                panel.trigger_at().unwrap_or(window),
+                None,
+                8,
+            ));
+            spans.push(Span::raw(" ".to_owned()));
+            spans.push(Span::styled(
+                short_tokens(context.tokens),
+                style(Role::Muted),
+            ));
+            spans.push(Span::styled(" · ", style(Role::Muted)));
+            let share = context
+                .tokens
+                .saturating_mul(100)
+                .checked_div(window)
+                .unwrap_or(0);
+            spans.push(Span::styled(format!("{share}%"), style(Role::Muted)));
+        }
+        None => {
+            spans.extend(bar_spans(0, 1, None, 8));
+            spans.push(Span::raw(" ".to_owned()));
+            spans.push(Span::styled("—", style(Role::Muted)));
+            spans.push(Span::styled(" · ", style(Role::Muted)));
+            spans.push(Span::styled("—", style(Role::Muted)));
+        }
+    }
+    Segment::spotted(spans, Spot::Context)
+}
+
+/// The row's right side: the model in `accent` with the thinking level
+/// in `attention`, then the ctx segment, joined by a dim `  │  `. The
+/// model slot stays blank until a preamble names one
+/// (`docs/tui.md`, "The input box").
+fn status_right(app: &App) -> Joined {
+    let panel = app.panel_state();
+    let mut joined = Joined {
+        spans: Vec::new(),
+        spots: Vec::new(),
+    };
+    let model = panel
+        .model()
+        .or_else(|| panel.status().map(|status| status.model.as_str()));
+    let mut spans = Vec::new();
+    if let Some(model) = model {
+        spans.push(Span::styled(model.to_owned(), style(Role::Accent)));
+    }
+    if let Some(thinking) = panel.thinking() {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" ".to_owned()));
+        }
+        spans.push(Span::styled(thinking.to_owned(), style(Role::Attention)));
+    }
+    if !spans.is_empty() {
+        push_segment(&mut joined, Segment::spotted(spans, Spot::Model));
+    }
+    push_segment(&mut joined, ctx_segment(app));
+    joined
+}
+
+/// Draws the input box's status row on the row above `bottom`: the
+/// working directory and the permission mode on the left; the model,
+/// the thinking level and the ctx segment right-aligned, ending one
+/// column short of the slab's edge, with at least two columns between
+/// the sides. Too wide, the working directory is cut from the left
+/// first, then the left side is cut at its right end; the right side
+/// is cut only when the slab is narrower than it, at the slab's right
+/// edge (`docs/tui.md`, "The input box"). Moves `bottom` above it.
+fn put_status_row(
+    app: &App,
+    area: Rect,
+    bottom: &mut u16,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) {
+    let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
+        return;
+    };
+    let start = area.x.saturating_add(1);
+    let end = area.right().saturating_sub(1);
+    let avail = usize::from(end.saturating_sub(start));
+    if avail == 0 {
+        return;
+    }
+    let workspace = app
+        .panel_state()
+        .status()
+        .map(|status| status.workspace.as_str())
+        .unwrap_or("");
+    let right = status_right(app);
+    let rw: usize = right
+        .spans
+        .iter()
+        .map(|span| format::width(&span.content))
+        .sum();
+    // The right side is cut only when the slab is narrower than it;
+    // the left side then drops.
+    let (left, right, lw) = if rw > avail {
+        (
+            cut_row(
+                Joined {
+                    spans: Vec::new(),
+                    spots: Vec::new(),
+                },
+                1,
+            ),
+            cut_row(right, avail.saturating_add(1)),
+            0,
+        )
+    } else {
+        // The two sides keep at least two columns between them; past
+        // that the left side drops.
+        let room = avail.saturating_sub(rw).saturating_sub(2);
+        let left = if room == 0 && rw > 0 {
+            cut_row(
+                Joined {
+                    spans: Vec::new(),
+                    spots: Vec::new(),
+                },
+                1,
+            )
+        } else {
+            status_left(workspace, room)
+        };
+        let lw: usize = left.line.width();
+        (left, cut_row(right, rw.saturating_add(1)), lw)
+    };
+    let right_w = rw.min(avail);
+    let right_x = end.saturating_sub(u16::try_from(right_w).unwrap_or(u16::MAX));
+    buf.set_line(start, y, &left.line, u16::try_from(lw).unwrap_or(u16::MAX));
+    buf.set_line(
+        right_x,
+        y,
+        &right.line,
+        u16::try_from(right_w).unwrap_or(u16::MAX),
+    );
+    *bottom = y;
+    for (at, wide, spot) in left.spots {
+        targets.push(Target {
+            id: TargetId::Panel(spot),
+            rect: Rect::new(start.saturating_add(at), y, wide, 1),
+        });
+    }
+    for (at, wide, spot) in right.spots {
+        targets.push(Target {
+            id: TargetId::Panel(spot),
+            rect: Rect::new(right_x.saturating_add(at), y, wide, 1),
+        });
+    }
+}
+
+/// Draws the rule above the status row: `─` in `rule` from the stripe's
+/// next column to one column short of the slab's right edge
+/// (`docs/tui.md`, "The input box"). Moves `bottom` above it.
+fn put_rule(area: Rect, bottom: &mut u16, buf: &mut Buffer) {
+    let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
+        return;
+    };
+    let start = area.x.saturating_add(1);
+    let end = area.right().saturating_sub(1);
+    let avail = usize::from(end.saturating_sub(start));
+    if avail == 0 {
+        return;
+    }
+    buf.set_stringn(
+        start,
+        y,
+        &"─".repeat(usize::from(avail)),
+        usize::from(avail),
+        style(Role::Rule),
+    );
+    *bottom = y;
 }
 
 /// Puts one draft row on the row above `bottom` at the text columns,
@@ -299,8 +587,9 @@ fn draw_hint(
     }
 }
 /// The cursor's rows above the column's bottom and its column: the shown
-/// rows below the cursor's with the bottom edge below them, so the cursor
-/// sits in the same column as without edges, past the stripe and gap
+/// rows below the cursor's with the rule, the status row, the kept
+/// status lines and the bottom edge below them, so the cursor sits in
+/// the same column as without edges, past the stripe and gap
 /// (`docs/tui.md`, "Look"). Without colour the text sits one column in,
 /// past the box's left side.
 pub(super) fn cursor_row(app: &App, width: u16, room: usize) -> (u16, u16) {
@@ -311,8 +600,16 @@ pub(super) fn cursor_row(app: &App, width: u16, room: usize) -> (u16, u16) {
     } else {
         width.saturating_sub(surface::inset(width))
     };
+    // The rule and the status row sit under the draft; the kept status
+    // lines sit under them.
+    let chrome = 2usize.saturating_add(super::status_rows::kept(app));
     (
-        to_u16(rows.len().saturating_sub(row).saturating_add(edges)),
+        to_u16(
+            rows.len()
+                .saturating_sub(row)
+                .saturating_add(edges)
+                .saturating_add(chrome),
+        ),
         col.saturating_add(indent),
     )
 }

@@ -171,8 +171,8 @@ fn attached_at_160_the_column_is_the_screen_less_the_rail_and_panel() {
     assert_eq!(app.column_width(), 102);
     assert_eq!(app.chrome().regions().panel, layout.panel);
     assert_eq!(app.regions.panel, layout.panel);
-    // The input box's row with its edges.
-    assert_eq!(app.conversation_height(), 37);
+    // The input box's row with its edges, rule and status row.
+    assert_eq!(app.conversation_height(), 35);
 }
 
 #[test]

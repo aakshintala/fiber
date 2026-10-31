@@ -36,15 +36,16 @@ pub(crate) fn status(app: &App, width: u16) -> Vec<StatusRow> {
 }
 
 /// One card's segments: its spans with the spots on them at
-/// segment-relative offsets.
-struct Segment {
-    spans: Vec<Span<'static>>,
-    spots: Vec<(usize, usize, Spot)>,
+/// segment-relative offsets. Shared with the input box's status row,
+/// which joins and cuts its sides the same way.
+pub(super) struct Segment {
+    pub(super) spans: Vec<Span<'static>>,
+    pub(super) spots: Vec<(usize, usize, Spot)>,
 }
 
 impl Segment {
     /// A segment of `spans` with no spot.
-    fn plain(spans: Vec<Span<'static>>) -> Self {
+    pub(super) fn plain(spans: Vec<Span<'static>>) -> Self {
         Segment {
             spans,
             spots: Vec::new(),
@@ -52,7 +53,7 @@ impl Segment {
     }
 
     /// A segment of `spans` opening `spot` across the whole segment.
-    fn spotted(spans: Vec<Span<'static>>, spot: Spot) -> Self {
+    pub(super) fn spotted(spans: Vec<Span<'static>>, spot: Spot) -> Self {
         let wide: usize = spans.iter().map(|span| format::width(&span.content)).sum();
         Segment {
             spans,
@@ -62,15 +63,16 @@ impl Segment {
 }
 
 /// Segments joined by a dim `  │  `: each segment's spans with the spots
-/// on them, at their column offsets.
-struct Joined {
-    spans: Vec<Span<'static>>,
-    spots: Vec<(u16, u16, Spot)>,
+/// on them, at their column offsets. Shared with the input box's
+/// status row, which joins its sides the same way.
+pub(super) struct Joined {
+    pub(super) spans: Vec<Span<'static>>,
+    pub(super) spots: Vec<(u16, u16, Spot)>,
 }
 
 /// Appends `segment`'s spans, joined by a dim `  │  `, recording its
 /// spots shifted past the joiner.
-fn push_segment(joined: &mut Joined, segment: Segment) {
+pub(super) fn push_segment(joined: &mut Joined, segment: Segment) {
     if !joined.spans.is_empty() {
         joined
             .spans
@@ -94,7 +96,9 @@ fn push_segment(joined: &mut Joined, segment: Segment) {
 /// A status row cut to `width - 1`: its line over the joined spans, each
 /// keeping its style and ending in `…` past the width, and its targets
 /// clamped to the visible columns. A row that fits keeps every cell.
-fn cut_row(joined: Joined, width: usize) -> StatusRow {
+/// Shared with the input box's status row, which cuts each side the
+/// same way.
+pub(super) fn cut_row(joined: Joined, width: usize) -> StatusRow {
     let text = width.saturating_sub(1);
     let wide: usize = joined
         .spans

@@ -56,20 +56,29 @@ impl App {
         Some(fit(height, self.below_rows() + widgets, delegates, status))
     }
 
-    /// The rows the narrow layout adds below the conversation, given
-    /// `base`: the widget rows, the delegates rows and the status rows
-    /// that fit. Zero outside the narrow layout.
+    /// The rows below the conversation past `base`: the input box's own
+    /// rows past its draft and edges (the rule and the status row,
+    /// whenever the box itself draws), then the narrow layout's rows
+    /// where they draw — the widget rows, the delegates rows and the
+    /// status rows that fit. Zero with no layout to draw them in
+    /// (`docs/tui.md`, "The input box", "The narrow layout").
     pub(super) fn narrow_rows(&self, base: usize) -> usize {
-        let Some(layout) = self.chrome.layout().filter(|layout| layout.narrow) else {
+        let Some(layout) = self.chrome.layout() else {
             return 0;
         };
+        // The rule and the status row sit inside the input box's slab,
+        // under its draft, whenever the box itself draws.
+        let chrome = usize::from(self.panel().is_none() && self.home_screen().is_none()) * 2;
+        if !layout.narrow {
+            return chrome;
+        }
         let height = usize::from(self.screen.height());
         let width = layout.column.width;
         let widgets = crate::view::status_rows::widget(self, width).len();
         let delegates = crate::view::status_rows::delegates(self, width).len();
         let status = crate::view::status_rows::status(self, width).len();
         let kept = fit(height, base + widgets, delegates, status);
-        widgets + kept.delegates + kept.status
+        chrome + widgets + kept.delegates + kept.status
     }
 
     /// Expands or collapses the narrow layout's widget row. The rows move,

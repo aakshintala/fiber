@@ -11,8 +11,6 @@ expression: "screen(&app, 100, 40)"
 
   All  Sessions  The input box  The conversation  Steering  Requests, models and help
   Type to search shortcuts› █
-    The conversation           Show or hide the panel                  ⌥P · /panel
-    The conversation           Show or hide the rail                   ⌥R · /rail; drag its edge
     The conversation           Search (where forwarded)                Ctrl+F; Cmd+F
     The conversation           Open the search results (with search    Ctrl+F · click the match
                                open)                                   count
@@ -34,11 +32,13 @@ expression: "screen(&app, 100, 40)"
     Requests, models and help  Refresh every model list in the model   Ctrl+R · click "⟳ refresh
                                picker                                  all"
   › Requests, models and help  Open the key map                        F1 · /? or /help
-  ↑ 23 more
+  ↑ 25 more
 
   ↑↓ move · ←→ tabs · Esc closes
 
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────────────────────────────────────────────────────────────────
+▌auto                                                                            ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
