@@ -1927,6 +1927,95 @@ fn a_stale_baseline_is_recovered_before_a_new_snapshot() {
 }
 
 #[test]
+fn colliding_project_slugs_do_not_share_protected_baselines() {
+    let root = fakes::TempDir::new("fiber-protected-colliding-project-slugs");
+    let hyphenated = root.path().join("a-b");
+    let nested = root.path().join("a/b");
+    let hyphenated_fiber = hyphenated.join(".fiber");
+    let nested_fiber = nested.join(".fiber");
+    std::fs::create_dir_all(&hyphenated_fiber).expect("hyphenated project");
+    std::fs::create_dir_all(&nested_fiber).expect("nested project");
+    let hyphenated_file = hyphenated_fiber.join("keep.txt");
+    let nested_file = nested_fiber.join("keep.txt");
+    std::fs::write(&hyphenated_file, b"hyphenated original").expect("first protected file");
+    std::fs::write(&nested_file, b"nested original").expect("second protected file");
+
+    let home = protected_home(&root);
+    let first_identity = baseline::identity(&hyphenated)
+        .expect("first identity")
+        .path;
+    let second_identity = baseline::identity(&nested).expect("second identity").path;
+    let first_slug = first_identity.to_string_lossy().replace('/', "-");
+    let second_slug = second_identity.to_string_lossy().replace('/', "-");
+    assert_eq!(
+        first_slug, second_slug,
+        "the identities share the project slug"
+    );
+    let first_paths = baseline::state_paths(&home, &hyphenated).expect("first state paths");
+    let second_paths = baseline::state_paths(&home, &nested).expect("second state paths");
+    assert_eq!(
+        first_paths.dir,
+        home.join("projects")
+            .join(first_slug)
+            .join("protected-paths"),
+        "protected state uses the project key, without a second key scheme"
+    );
+    assert_eq!(
+        first_paths.dir, second_paths.dir,
+        "the slug collision is real"
+    );
+    assert_ne!(
+        first_paths.identity_marker, second_paths.identity_marker,
+        "the baseline's absolute protected path records the identity"
+    );
+
+    let first = open_handle(&home, &hyphenated);
+    let second = open_handle(&home, &nested);
+    let active = first.begin(&hyphenated).expect("first call begins");
+    assert!(
+        second.begin(&nested).is_err(),
+        "a different identity cannot join a live baseline"
+    );
+    assert!(
+        ProtectedPaths::open(&home, &nested).is_err(),
+        "a different identity cannot open another project's live baseline"
+    );
+    assert!(
+        second.note_approved_write(&nested, &nested_file).is_err(),
+        "an approved write cannot update another project's baseline"
+    );
+    std::fs::write(&hyphenated_file, b"damaged first project").expect("first path changed");
+    drop(active.guard); // Simulate a call that ended before recovery ran.
+
+    let (second, startup) = ProtectedPaths::open(&home, &nested).expect("second project opens");
+    assert!(
+        startup.is_none(),
+        "the colliding baseline is absent for this identity"
+    );
+    assert_eq!(
+        std::fs::read(&hyphenated_file).expect("first file reads"),
+        b"damaged first project",
+        "the second identity does not restore from the first baseline"
+    );
+    assert_eq!(
+        std::fs::read(&nested_file).expect("second file reads"),
+        b"nested original",
+        "the second identity's protected path is untouched"
+    );
+
+    let active = second
+        .begin(&nested)
+        .expect("second call snapshots its own project");
+    std::fs::write(&nested_file, b"damaged second project").expect("second path changed");
+    assert_eq!(active.guard.finish().restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(&nested_file).expect("second file reads after restore"),
+        b"nested original",
+        "the second identity restores only its own baseline"
+    );
+}
+
+#[test]
 fn a_workspace_no_project_key_can_name_fails_before_spawn() {
     let dir = fakes::TempDir::new("fiber-protected-bad-key");
     let home = protected_home(&dir);

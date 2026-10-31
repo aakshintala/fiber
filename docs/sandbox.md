@@ -68,7 +68,8 @@ so Fiber records them before the call and restores them after it.
 
 Each confined call starts by checking the project's baseline. The baseline
 is one JSON file per project under Fiber home, recording the protected
-paths and their contents. When no confined call is running, the call
+paths and their contents. The baseline and its two locks live at `projects/<key>/protected-paths/`,
+under the project's own key. When no confined call is running, the call
 compares the live paths against the baseline, restores each difference,
 folds the result into its own report, and takes a fresh snapshot. When
 other calls are running, the call reuses their baseline unchanged. An approved

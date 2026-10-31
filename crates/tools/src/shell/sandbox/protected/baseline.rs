@@ -20,7 +20,6 @@ pub(crate) struct Identity {
     /// The identity path.
     pub(crate) path: PathBuf,
     /// Whether `git rev-parse` found a repository.
-    #[cfg(any(target_os = "linux", test))]
     pub(crate) in_repository: bool,
 }
 
@@ -44,7 +43,6 @@ pub(crate) fn identity(workspace: &Path) -> Result<Identity, String> {
             let path = PathBuf::from(raw);
             Ok(Identity {
                 path: path.canonicalize().unwrap_or(path),
-                #[cfg(any(target_os = "linux", test))]
                 in_repository: true,
             })
         }
@@ -66,7 +64,6 @@ fn fallback_or_fail(workspace: &Path, cause: &str) -> Result<Identity, String> {
         path: workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf()),
-        #[cfg(any(target_os = "linux", test))]
         in_repository: false,
     })
 }
@@ -93,35 +90,6 @@ fn describe(status: &std::process::ExitStatus, stderr: &[u8]) -> String {
     }
 }
 
-/// The readable key of the identity path: every `/` becomes `-`
-/// (`docs/state.md`, "Projects").
-pub(crate) fn slug(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "-")
-}
-
-/// A stable 64-bit FNV-1a hash of the identity path's bytes. The standard
-/// hasher's keys are not stable across builds, so the key uses this
-/// instead; the suffix keeps distinct project identities distinct even
-/// when their readable slugs collide (for example `/a-b` and `/a/b`).
-pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
-    const OFFSET: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-    let mut hash = OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
-}
-
-/// The state key for an identity path: the readable slug plus the hash of
-/// the full identity, so colliding slugs never share a baseline or a lock
-/// (`docs/sandbox.md`, "Protected paths").
-pub(crate) fn state_key(identity_path: &Path) -> String {
-    let bytes = identity_path.as_os_str().as_encoded_bytes();
-    format!("{}-{:016x}", slug(identity_path), fnv1a(bytes))
-}
-
 /// The project's state files under
 /// `FIBER_HOME/projects/<key>/protected-paths/`: one JSON baseline, one
 /// short baseline lock, and one active lock.
@@ -135,21 +103,29 @@ pub(crate) struct StatePaths {
     pub(crate) baseline_lock: PathBuf,
     /// One shared hold per active call.
     pub(crate) active_lock: PathBuf,
+    /// A protected path that records the project's exact identity.
+    pub(crate) identity_marker: PathBuf,
 }
 
 /// The state files for `workspace`'s project, under the config layout's
 /// projects root (`docs/state.md`, "Projects"). The key names one file in
 /// `projects/`; anything else fails closed before spawn.
 pub(crate) fn state_paths(home: &Path, workspace: &Path) -> Result<StatePaths, String> {
-    let key = state_key(&identity(workspace)?.path);
-    let key = config::ProjectKey::new(key).map_err(|source| source.to_string())?;
-    let dir = config::projects_dir(home)
-        .join(key.as_str())
-        .join("protected-paths");
+    let identity = identity(workspace)?;
+    // Match `log::project_key` without adding a dependency from tools to log.
+    let key = config::ProjectKey::new(identity.path.to_string_lossy().replace('/', "-"))
+        .map_err(|source| source.to_string())?;
+    let identity_marker = if identity.in_repository {
+        identity.path.join("config")
+    } else {
+        workspace.join(".fiber")
+    };
+    let dir = config::project_protected_paths_dir(home, &key);
     Ok(StatePaths {
         baseline: dir.join("baseline.json"),
         baseline_lock: dir.join("baseline.lock"),
         active_lock: dir.join("active.lock"),
+        identity_marker,
         dir,
     })
 }
@@ -440,6 +416,26 @@ pub(crate) fn unix_mode(_meta: &std::fs::Metadata) -> u32 {
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn create_dir(dir: &Path) -> Result<(), io::Error> {
     std::fs::create_dir_all(dir)
+}
+
+/// Whether `entries` record the path that identifies this project. Compare
+/// the parent canonically but leave the final component lexical, so aliases
+/// of one project agree without following a protected symlink.
+pub(crate) fn belongs_to_project(entries: &[Entry], marker: &Path) -> bool {
+    fn normalized(path: &Path) -> PathBuf {
+        match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) => parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf())
+                .join(name),
+            _ => path.to_path_buf(),
+        }
+    }
+
+    let marker = normalized(marker);
+    entries
+        .iter()
+        .any(|entry| normalized(Path::new(&entry.path)) == marker)
 }
 
 /// Opens a lock file, creating it. The lock lives on the descriptor, so

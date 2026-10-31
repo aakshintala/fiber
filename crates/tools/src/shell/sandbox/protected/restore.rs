@@ -24,6 +24,14 @@ pub(crate) fn compare_restore_report(dir: &StatePaths) -> Result<Report, std::io
         }
         Err(error) => return Err(error),
     };
+    if !super::baseline::belongs_to_project(&baseline.entries, &dir.identity_marker) {
+        // A colliding project key can name this directory too. Its recorded
+        // absolute identity path makes that baseline absent for this project.
+        return Ok(Report {
+            restored: Vec::new(),
+            failed: Vec::new(),
+        });
+    }
     Ok(compare_restore_entries(&baseline.entries))
 }
 

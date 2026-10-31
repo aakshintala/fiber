@@ -119,8 +119,12 @@ fn pending_lock(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn pending_entries(pending: &PendingBaselines, dir: &Path) -> Option<Vec<baseline::Entry>> {
-    pending_lock(pending).get(dir).cloned()
+fn pending_entries(
+    pending: &PendingBaselines,
+    dir: &baseline::StatePaths,
+) -> Option<Vec<baseline::Entry>> {
+    let entries = pending_lock(pending).get(&dir.dir).cloned()?;
+    baseline::belongs_to_project(&entries, &dir.identity_marker).then_some(entries)
 }
 
 fn set_pending(pending: &PendingBaselines, dir: &Path, entries: Vec<baseline::Entry>) {
@@ -182,7 +186,7 @@ impl ProtectedPaths {
                 // session, then snapshot fresh. The recovered report joins
                 // the call's own report below. Discovery or capture that
                 // is incomplete fails before spawn.
-                let recovered = match pending_entries(&self.pending, &dir.dir) {
+                let recovered = match pending_entries(&self.pending, &dir) {
                     Some(entries) => {
                         let report = restore::compare_restore_entries(&entries);
                         baseline::write_baseline(&dir.baseline, &entries).map_err(setup)?;
@@ -212,12 +216,21 @@ impl ProtectedPaths {
                 // is compatible with the ending calls' own shared holds, and
                 // the holders of a brief exclusive take never wait, so this
                 // cannot deadlock.
-                if let Some(entries) = pending_entries(&self.pending, &dir.dir) {
+                if let Some(entries) = pending_entries(&self.pending, &dir) {
                     baseline::write_baseline(&dir.baseline, &entries).map_err(setup)?;
                     clear_pending(&self.pending, &dir.dir);
                 } else {
                     match baseline::read_baseline(&dir.baseline) {
-                        Ok(_) => {}
+                        Ok(baseline)
+                            if baseline::belongs_to_project(
+                                &baseline.entries,
+                                &dir.identity_marker,
+                            ) => {}
+                        Ok(_) => {
+                            return Err(SetupError {
+                                message: "the protected-path baseline belongs to another project identity".to_owned(),
+                            });
+                        }
                         Err(error) if error.kind() == io::ErrorKind::NotFound => {
                             return Err(SetupError {
                                 message: format!(
@@ -265,10 +278,20 @@ impl ProtectedPaths {
         let baseline_file =
             baseline::open_lock(&dir.baseline_lock).map_err(|source| source.to_string())?;
         baseline_file.lock().map_err(|source| source.to_string())?;
-        let mut entries = match pending_entries(&self.pending, &dir.dir) {
+        let mut entries = match pending_entries(&self.pending, &dir) {
             Some(entries) => entries,
             None => match baseline::read_baseline(&dir.baseline) {
-                Ok(baseline) => baseline.entries,
+                Ok(baseline)
+                    if baseline::belongs_to_project(&baseline.entries, &dir.identity_marker) =>
+                {
+                    baseline.entries
+                }
+                Ok(_) => {
+                    return Err(
+                        "the protected-path baseline belongs to another project identity"
+                            .to_owned(),
+                    );
+                }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
                 Err(error) => return Err(error.to_string()),
             },
@@ -328,7 +351,7 @@ impl Guard {
                 if file.lock().is_err() {
                     finish_failure("the baseline lock could not be taken")
                 } else {
-                    let report = match pending_entries(&pending, &dir.dir) {
+                    let report = match pending_entries(&pending, &dir) {
                         Some(entries) => {
                             let mut report = restore::compare_restore_entries(&entries);
                             match baseline::write_baseline(&dir.baseline, &entries) {
@@ -406,7 +429,17 @@ fn recover(dir: &baseline::StatePaths) -> Result<Option<Report>, io::Error> {
             Ok((!report.is_empty()).then_some(report))
         }
         Err(TryLockError::WouldBlock) => {
-            // Calls are live: the baseline stays fixed for them.
+            // Calls are live: the baseline stays fixed for them. A colliding
+            // project key must not join another identity's active baseline.
+            if dir.baseline.exists() {
+                let baseline = baseline::read_baseline(&dir.baseline)?;
+                if !baseline::belongs_to_project(&baseline.entries, &dir.identity_marker) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "the protected-path baseline belongs to another project identity",
+                    ));
+                }
+            }
             drop(baseline_file);
             drop(active_file);
             Ok(None)
