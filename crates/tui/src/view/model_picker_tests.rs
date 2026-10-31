@@ -723,7 +723,7 @@ fn failed_install_error_rows_take_space_in_the_focus_window() {
 #[test]
 fn logged_out_separator_takes_space_after_a_model_section() {
     // A blank separates logged-out rows from model sections (`docs/tui.md:706-709`).
-    let view = PickerView {
+    let mut view = PickerView {
         filter: String::new(),
         count: String::new(),
         toggle: None,
@@ -768,6 +768,12 @@ fn logged_out_separator_takes_space_after_a_model_section() {
     let (start, end) = window(&view, 5);
     assert_eq!((start, end), (0, 2));
     assert_eq!(rows_for(&view, &items(&view), start, end), 5);
+
+    // When focus starts on the logged-out row, the off-window model adds no separator.
+    view.focused = Some(1);
+    let (start, end) = window(&view, 1);
+    assert_eq!((start, end), (1, 2));
+    assert_eq!(rows_for(&view, &items(&view), start, end), 1);
 }
 
 #[test]
