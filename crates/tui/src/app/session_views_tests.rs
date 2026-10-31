@@ -536,15 +536,19 @@ fn context_usage(input_media: Option<bool>) -> Line {
 }
 
 fn context_tool(name: &str, result: &str) -> [Line; 2] {
+    context_tool_for(SESSION, name, result)
+}
+
+fn context_tool_for(session: &str, name: &str, result: &str) -> [Line; 2] {
     [
         session_line(
-            SESSION,
+            session,
             "tool_call_requested",
             json!({"name": name, "arguments": {}}),
             Some("a_1"),
         ),
         session_line(
-            SESSION,
+            session,
             "tool_call_completed",
             json!({"status": "completed", "content": [{"type": "text", "text": result}]}),
             Some("a_1"),
@@ -759,6 +763,9 @@ fn rewound_context_does_not_reuse_parent_preamble_sizes() {
         }),
         None,
     ));
+    for line in context_tool_for(OTHER, "read", "child result") {
+        app.on_line(line);
+    }
     app.on_line(context_status_for(OTHER, 12, 200));
     open_context(&mut app);
     let shown = screen(&app, 100, 40).0;
@@ -769,6 +776,10 @@ fn rewound_context_does_not_reuse_parent_preamble_sizes() {
     assert!(!shown.contains("system prompt"), "{shown}");
     assert!(!shown.contains("tool definitions"), "{shown}");
     assert!(!shown.contains("parent result"), "{shown}");
+    assert!(shown.contains("read"), "{shown}");
+    assert!(shown.contains("12 bytes"), "{shown}");
+    assert!(!shown.contains("~12 tokens"), "{shown}");
+    assert!(!shown.contains("■ tool results"), "{shown}");
 }
 
 /// An own `preamble_built` without a handoff point means automatic

@@ -836,7 +836,9 @@ install still running.
   `session_status`, and uses that status's reported window when there is
   no own preamble; it does not reuse the previous session's context. A
   `session_started` also clears preamble-derived category estimates, so a
-  fork cannot reuse its parent's. It is drawn indented two columns: "268k tokens" bold,
+  fork cannot reuse its parent's. Largest results stay in bytes until this
+  session has its own first-request rate; the view never reuses a prior
+  session's rate. It is drawn indented two columns: "268k tokens" bold,
   then " · 26% of the 1M window · automatic handoff at 400k" dim; the bar,
   one █ run per category in its colour, ▁ in `rule` for the room left, and │
   in `attention` at the handoff

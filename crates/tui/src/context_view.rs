@@ -285,6 +285,8 @@ pub(crate) fn frame(
     list: List,
     width: u16,
 ) -> Frame {
+    // A continuation without its own preamble has no rate for its results.
+    let rate = if fold.preamble { rate } else { Rate::default() };
     let mut rows = Vec::new();
     let mut below = Vec::new();
     if let Some(sized) = sized {
