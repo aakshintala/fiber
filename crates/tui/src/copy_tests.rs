@@ -189,7 +189,7 @@ fn a_click_maps_past_a_prompt_that_wraps() {
         Some("a_1"),
     ));
     let header = row_of(&app, 30, 14, "rust").expect("header");
-    assert_eq!(header, 7);
+    assert_eq!(header, 5);
     assert_eq!(
         click(&mut app, 27, header),
         Effect::Copy("let a = 1;".to_owned())

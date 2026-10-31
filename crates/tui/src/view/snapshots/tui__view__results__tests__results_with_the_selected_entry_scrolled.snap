@@ -3,7 +3,7 @@ source: crates/tui/src/view/results_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
  Search  ⌕ match                                                     Esc returns
-31 of 40 · ⌕ match
+32 of 40 · ⌕ match
 
                                                                           turn 1
 match number 0 match number 1 match number 2

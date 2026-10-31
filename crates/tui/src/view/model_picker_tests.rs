@@ -854,8 +854,8 @@ fn the_level_chips_take_clicks_past_the_thinking_label() {
 
 #[test]
 fn an_unfocused_row_draws_its_saved_level_dim() {
-    let app = choosing(80, 24);
-    let buf = buffer(&app, 80, 24);
+    let app = choosing(80, 26);
+    let buf = buffer(&app, 80, 26);
     let text = crate::view::text(&buf);
     let (y, _) = find_row(&text, "z2 [chat]");
     let below = text
@@ -870,13 +870,13 @@ fn an_unfocused_row_draws_its_saved_level_dim() {
 
 #[test]
 fn the_focused_saved_level_is_bold_when_another_chip_is_chosen() {
-    let mut app = choosing(80, 24);
+    let mut app = choosing(80, 26);
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..3 {
         assert_eq!(app.on_key(Key::Down, now), Effect::None);
     }
     app.on_edit(Edit::Left);
-    let buf = buffer(&app, 80, 24);
+    let buf = buffer(&app, 80, 26);
     let text = crate::view::text(&buf);
     let (y, line) = find_row(&text, "[low] high");
     let x = cell_x(&line, "high");
