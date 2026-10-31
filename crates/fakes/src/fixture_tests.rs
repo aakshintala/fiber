@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::{lua_fixture, mcp_fixture, script};
-use crate::TempDir;
+use crate::{MUST_SUCCEED_WITHIN, TempDir};
 use crate::deadline::Deadline;
 use contract::clock::Clock;
 
@@ -228,7 +228,7 @@ fn the_mcp_fixture_server_leaves_its_home_directory() {
     // `pid.txt` lands only after the server leaves its starting directory
     // and its inherited descriptors, so the reads below never race either
     // move.
-    crate::wait_until("the fixture server to start", Deadline::after(DEADLINE), {
+    crate::wait_until("the fixture server to start", Deadline::after(MUST_SUCCEED_WITHIN), {
         let started = home.path().join("pid.txt");
         move || started.exists()
     });
