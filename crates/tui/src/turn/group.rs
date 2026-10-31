@@ -62,6 +62,10 @@ pub(crate) struct Call {
     pub(crate) action: String,
     pub(crate) name: String,
     pub(crate) arguments: Value,
+    /// The outer call this call ran inside, from `ran_by`'s
+    /// `outer_action_id`; `None` on the model's own calls and on
+    /// `command_id`-anchored inners, which never nest.
+    pub(crate) outer_action_id: Option<contract::ActionId>,
     /// How it ended; `None` while it runs.
     pub(crate) status: Option<CallStatus>,
     pub(crate) changes: Vec<FileChange>,

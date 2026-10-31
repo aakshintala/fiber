@@ -1845,6 +1845,54 @@ fn answered_ask_call(id: usize) -> Call {
     call
 }
 
+/// `call_requested` stores `ran_by`'s outer call on the pushed call,
+/// so the ledger nests it under that call; a command anchor or no
+/// `ran_by` stores none.
+#[test]
+fn outer_action_id_stored_from_ran_by() {
+    use contract::events::{Anchor, RanBy, ToolCallRequested};
+
+    use super::super::{Fold, Turn};
+    fn requested_with(ran_by: Option<RanBy>) -> Call {
+        let mut fold = Fold::default();
+        let mut turn = Turn::new(Vec::new(), 0);
+        turn.call_requested(
+            "a_9",
+            ToolCallRequested {
+                name: "read".to_owned(),
+                arguments: json!({"path": "a.rs"}),
+                provider_id: None,
+                repair: None,
+                ran_by,
+                provider_item: None,
+            },
+            0,
+            &mut fold,
+        );
+        turn.groups()
+            .flat_map(|group| group.sections.iter())
+            .flat_map(|section| section.calls.iter())
+            .find(|call| call.action == "a_9")
+            .cloned()
+            .expect("the requested call stays in its turn")
+    }
+    let outer = requested_with(Some(RanBy {
+        extension: "ext".to_owned(),
+        anchor: Anchor::OuterCall(contract::ActionId("a_1".to_owned())),
+    }));
+    assert_eq!(
+        outer.outer_action_id,
+        Some(contract::ActionId("a_1".to_owned()))
+    );
+    let command = requested_with(Some(RanBy {
+        extension: "ext".to_owned(),
+        anchor: Anchor::Command(contract::CommandId("c_1".to_owned())),
+    }));
+    assert_eq!(command.outer_action_id, None);
+    let absent = requested_with(None);
+    assert_eq!(absent.outer_action_id, None);
+}
+
 /// A renderer that fills nothing draws exactly the built-in rows, at
 /// widths from a wide terminal down to five columns, and is never
 /// called.
