@@ -24,6 +24,11 @@ fn now() -> Instant {
 
 /// An app on home at `width` by `height`.
 fn home(width: u16, height: u16) -> App {
+    home_with_model(width, height, None)
+}
+
+/// An app on home with `model` in its launch chips.
+fn home_with_model(width: u16, height: u16, model: Option<&str>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -31,6 +36,7 @@ fn home(width: u16, height: u16) -> App {
             project: "-w".to_owned(),
             git: false,
         },
+        model: model.map(str::to_owned),
         ..Default::default()
     });
     app.set_size(width, height);
@@ -115,6 +121,15 @@ fn catalogue() -> Catalogue {
         lists: Vec::new(),
         left_out: Vec::new(),
         ..Default::default()
+    }
+}
+
+/// One switched-off provider in the catalogue.
+fn logged_out(provider: &str, login: bool, hint: &str) -> crate::catalogue::LoggedOutProvider {
+    crate::catalogue::LoggedOutProvider {
+        provider: provider.to_owned(),
+        login,
+        hint: hint.to_owned(),
     }
 }
 
@@ -298,6 +313,155 @@ fn mark_x(line: &str, needle: &str) -> u16 {
         .find(needle)
         .unwrap_or_else(|| panic!("no {needle:?} in {line:?}"));
     u16::try_from(crate::format::width(&line[..byte])).unwrap_or(u16::MAX)
+}
+
+#[test]
+fn fresh_home_shows_logged_out_rows_instead_of_model_rows() {
+    use ratatui::style::Modifier;
+
+    let mut app = home(80, 24);
+    open(&mut app);
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(Catalogue {
+        logged_out: vec![
+            logged_out("bedrock", false, "AWS_TOKEN"),
+            logged_out("openai", true, ""),
+        ],
+        ..Default::default()
+    }));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    insta::assert_snapshot!("model_picker_logged_out_fresh_home", text);
+    assert!(
+        text.contains("› bedrock · set AWS_TOKEN to log in"),
+        "{text}"
+    );
+    assert!(text.contains("openai · not logged in"), "{text}");
+    assert!(!text.contains("m1"), "{text}");
+    assert!(!text.contains("No models match"), "{text}");
+    assert_eq!(
+        app.model_picker_view().expect("open").status,
+        vec!["No models. Install a provider: fiber extension install <name>.".to_owned()],
+    );
+    assert_eq!(text.matches("· not logged in").count(), 1, "{text}");
+
+    let (y, line) = find_mark_row(&text, "bedrock");
+    assert!(line.contains("› bedrock"), "{line}");
+    let name_x = mark_x(&line, "bedrock");
+    assert_eq!(buf[(name_x, y)].bg, crate::theme::Role::Accent.color());
+    let hint_x = mark_x(&line, "set AWS_TOKEN to log in");
+    assert!(buf[(hint_x, y)].modifier.contains(Modifier::DIM));
+    let (y, line) = find_mark_row(&text, "openai");
+    let name_x = mark_x(&line, "openai");
+    assert_eq!(buf[(name_x, y)].fg, crate::theme::Role::Accent.color());
+    let suffix_x = mark_x(&line, "not logged in");
+    assert!(buf[(suffix_x, y)].modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn logged_out_rows_follow_models_and_filter_by_provider_name() {
+    let mut app = home(80, 24);
+    let mut data = catalogue();
+    data.logged_out = vec![
+        logged_out("bedrock", false, "AWS_TOKEN"),
+        logged_out("zed", true, ""),
+    ];
+    app.on_models(Ok(data));
+    open(&mut app);
+    let text = screen(&app, 80, 24);
+    let model_at = text.find("m1").expect("model row");
+    let provider_at = text.find("bedrock").expect("logged-out row");
+    assert!(model_at < provider_at, "{text}");
+    assert!(text.contains("zed · not logged in"), "{text}");
+    assert!(!text.contains("absent"), "{text}");
+
+    type_filter(&mut app, "zed");
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.logged_out.len(), 1);
+    assert_eq!(view.logged_out[0].hits, [0, 1, 2]);
+    assert!(!view.no_match);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let filtered = crate::view::text(&buf);
+    let (y, line) = find_mark_row(&filtered, "zed · not logged in");
+    let x = mark_x(&line, "zed");
+    assert!(
+        buf[(x, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+    assert!(
+        buf[(x, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::UNDERLINED)
+    );
+    assert!(filtered.contains("zed · not logged in"), "{filtered}");
+    assert!(!filtered.contains("bedrock"), "{filtered}");
+    assert!(!filtered.contains("m1"), "{filtered}");
+
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    type_filter(&mut app, "absent");
+    let view = app.model_picker_view().expect("open");
+    assert!(view.no_match);
+    assert!(screen(&app, 80, 24).contains("No models match"));
+}
+
+#[test]
+fn logged_out_hints_replace_control_characters_with_spaces() {
+    let mut app = home(80, 24);
+    open(&mut app);
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(Catalogue {
+        logged_out: vec![logged_out("bedrock", false, "AWS_TOKEN\nPWN\u{1b}[31m")],
+        ..Default::default()
+    }));
+
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(
+        view.logged_out[0].hint.as_deref(),
+        Some("AWS_TOKEN PWN [31m")
+    );
+}
+
+#[test]
+fn logged_out_rows_are_absent_from_thinking_and_scope_screens() {
+    use crate::model_picker::Mode;
+
+    let mut data = catalogue();
+    data.logged_out = vec![logged_out("zed", true, "")];
+
+    let mut thinking = home_with_model(80, 24, Some("acme/m1"));
+    thinking.on_models(Ok(data.clone()));
+    assert_eq!(thinking.open_model_picker(Mode::Thinking), Effect::None);
+    assert!(!screen(&thinking, 80, 24).contains("zed"));
+
+    let mut scope = home(80, 24);
+    scope.on_models(Ok(data));
+    assert_eq!(scope.scoped_models_command(), Effect::None);
+    assert!(!screen(&scope, 80, 24).contains("zed"));
+}
+
+#[test]
+fn logged_out_rows_keep_focus_visible_in_a_short_viewport() {
+    let mut app = home(80, 10);
+    app.on_models(Ok(Catalogue {
+        logged_out: (0..12)
+            .map(|at| logged_out(&format!("p{at:02}"), true, ""))
+            .collect(),
+        ..Default::default()
+    }));
+    open(&mut app);
+    for _ in 0..11 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+
+    let text = screen(&app, 80, 10);
+    assert!(text.contains("› p10 · not logged in"), "{text}");
 }
 
 #[test]

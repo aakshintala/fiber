@@ -1162,7 +1162,7 @@ impl ModelPicker {
                             .enumerate()
                             .filter_map(|(index, hit)| hit.then_some(index))
                             .collect(),
-                        hint: (!row.login).then(|| row.hint.clone()),
+                        hint: (!row.login).then(|| controls_to_space(&row.hint)),
                     });
                 }
             } else if let RowAt::Install(provider) = row {
