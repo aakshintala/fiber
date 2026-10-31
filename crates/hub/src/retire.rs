@@ -122,14 +122,7 @@ pub(crate) enum IllegalTransition {
     /// it ends, which is never queued, or one answered before any write.
     Unknown(CommandId),
     /// The recorded state never moves that way.
-    Forbidden {
-        /// The command the move was requested for.
-        id: CommandId,
-        /// The state the command was in.
-        from: CommandState,
-        /// The state the move requested.
-        to: CommandState,
-    },
+    Forbidden,
 }
 
 impl AckOrder {
@@ -170,8 +163,8 @@ impl AckOrder {
             .insert(id.to_owned(), (session.to_owned(), epoch));
     }
 
-    /// Moves `id` to `to` when the recorded state allows it, returning
-    /// the state it moved from: the one transition API every relay,
+    /// Moves `id` to `to` when the recorded state allows it: the one
+    /// transition API every relay,
     /// attach and retirement path requests. Only the move into `Rerouted`
     /// claims the command's one permitted re-route, and only from
     /// `Written`: a command that never reached a session is passed on,
@@ -182,7 +175,7 @@ impl AckOrder {
         &self,
         id: &CommandId,
         to: CommandState,
-    ) -> Result<CommandState, IllegalTransition> {
+    ) -> Result<(), IllegalTransition> {
         let mut inner = lock(&self.inner);
         let from = inner
             .states
@@ -190,14 +183,10 @@ impl AckOrder {
             .copied()
             .ok_or_else(|| IllegalTransition::Unknown(id.clone()))?;
         if !allowed(from, to) {
-            return Err(IllegalTransition::Forbidden {
-                id: id.clone(),
-                from,
-                to,
-            });
+            return Err(IllegalTransition::Forbidden);
         }
         inner.states.insert(id.clone(), to);
-        Ok(from)
+        Ok(())
     }
 
     /// The recorded delivery state of `id`, if any. Tests only: production
