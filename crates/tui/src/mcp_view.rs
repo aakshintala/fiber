@@ -2,7 +2,7 @@
 //! state and the per-server commands"): one row per configured server with
 //! its layer, state and tool count. Enter reconnects a failed server and
 //! logs in one that needs it; a repository's unapproved server only says
-//! to run `fiber approve`, and Enter on a ready or connecting row does
+//! to run `fiber approve`, and Enter on a ready or not-started row does
 //! nothing.
 
 use std::collections::HashMap;
@@ -142,7 +142,7 @@ impl Mcp {
 
     /// Enter on the selected server: reconnect a failed one, log in one
     /// that needs it, the approve advice on an unapproved one, and
-    /// nothing on a ready or connecting row.
+    /// nothing on a ready or not-started row.
     fn enter(&mut self) -> Act {
         let Some(row) = self.servers.get(self.list.selected()) else {
             // The last note: Enter does nothing on it.
@@ -155,7 +155,7 @@ impl Mcp {
         match row.state {
             McpServerState::Failed => Act::McpReconnect(row.name.clone()),
             McpServerState::NeedsLogin => Act::McpLogin(row.name.clone()),
-            McpServerState::Connecting | McpServerState::Ready => Act::Stay,
+            McpServerState::NotStarted | McpServerState::Ready => Act::Stay,
         }
     }
 
@@ -268,7 +268,7 @@ impl Mcp {
         // view's width: the frame has no width to cut by.
         let mut login_url = None;
         let (state, ink) = match row.state {
-            McpServerState::Connecting => ("connecting".to_owned(), Ink::Muted),
+            McpServerState::NotStarted => ("not started".to_owned(), Ink::Muted),
             McpServerState::Ready => {
                 let count = row.tools.unwrap_or(0);
                 let tools = if count == 1 {
