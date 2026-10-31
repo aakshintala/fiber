@@ -580,6 +580,188 @@ fn crate_edge_table_has_no_self_or_test_only_targets() {
     }
 }
 
+fn calls_architecture(rules: &str) -> String {
+    format!("# Architecture\n\n## The call rules\n{SUPPORT_QUOTE}\n{rules}")
+}
+
+fn call_row(
+    krate: &'static str,
+    depends_on: &'static [&'static str],
+    quote: &'static str,
+) -> Calls {
+    Calls {
+        krate,
+        depends_on,
+        quote,
+    }
+}
+
+fn edge_set(edges: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+    edges
+        .iter()
+        .map(|(from, to)| ((*from).to_owned(), (*to).to_owned()))
+        .collect()
+}
+
+const ALPHA_QUOTE: &str = "`alpha` depends on `beta`.";
+
+#[test]
+fn crate_edges_allows_a_granted_edge_and_rejects_an_unlisted_target() {
+    let calls = [call_row("alpha", &["beta"], ALPHA_QUOTE)];
+    let architecture = calls_architecture("\nRule: `alpha` depends on `beta`.\n");
+    assert_eq!(
+        crate_edges(
+            &edge_set(&[("alpha", "beta"), ("alpha", "gamma")]),
+            &calls,
+            &architecture,
+        ),
+        Ok(vec!["alpha → gamma: docs/architecture.md:6, \"The call rules\", does not grant it: \"`alpha` depends on `beta`.\"".to_owned()])
+    );
+}
+
+#[test]
+fn crate_edges_allows_support_for_other_sources_but_not_from_support() {
+    const CONTRACT_QUOTE: &str = "`contract` has no workspace dependencies.";
+    let calls = [
+        call_row("support", &[], SUPPORT_QUOTE),
+        call_row("contract", &[], CONTRACT_QUOTE),
+    ];
+    let architecture = calls_architecture(&format!("{CONTRACT_QUOTE}\n"));
+    assert_eq!(
+        crate_edges(
+            &edge_set(&[
+                ("alpha", "support"),
+                ("support", "contract"),
+                ("support", "support"),
+            ]),
+            &calls,
+            &architecture,
+        ),
+        Ok(vec![
+            format!(
+                "support → contract: docs/architecture.md:4, \"The call rules\", does not grant it: \"{SUPPORT_QUOTE}\""
+            ),
+            format!(
+                "support → support: docs/architecture.md:4, \"The call rules\", does not grant it: \"{SUPPORT_QUOTE}\""
+            ),
+        ])
+    );
+}
+
+#[test]
+fn crate_edges_rejects_fakes_even_when_other_targets_are_granted() {
+    const CLI_QUOTE: &str = "`cli` depends on `contract` and `log`.";
+    const ALL_QUOTE: &str = "`all` depends on `contract`, `log`, `config`, `doors`, `extensions`, `net` and `worktree`.";
+    let calls = [
+        call_row("cli", &["contract", "log"], CLI_QUOTE),
+        call_row(
+            "all",
+            &[
+                "contract",
+                "log",
+                "config",
+                "doors",
+                "extensions",
+                "net",
+                "worktree",
+            ],
+            ALL_QUOTE,
+        ),
+    ];
+    let architecture = calls_architecture(&format!("{CLI_QUOTE}\n{ALL_QUOTE}\n"));
+    assert_eq!(
+        crate_edges(
+            &edge_set(&[("all", "fakes"), ("cli", "fakes")]),
+            &calls,
+            &architecture,
+        ),
+        Ok(vec![
+            format!(
+                "all → fakes: docs/architecture.md:6, \"The call rules\", does not grant it: \"{ALL_QUOTE}\""
+            ),
+            format!(
+                "cli → fakes: docs/architecture.md:5, \"The call rules\", does not grant it: \"{CLI_QUOTE}\""
+            ),
+        ])
+    );
+}
+
+#[test]
+fn crate_edges_rejects_an_unlisted_source_but_accepts_it_when_added() {
+    const XTASK_QUOTE: &str = "`xtask` depends on `contract`.";
+    let architecture = calls_architecture(&format!("{XTASK_QUOTE}\n"));
+    let edge = edge_set(&[("xtask", "contract")]);
+    assert_eq!(
+        crate_edges(&edge, &[], &architecture),
+        Ok(vec![
+            "xtask → contract: docs/architecture.md, \"The call rules\", has no sentence for xtask"
+                .to_owned()
+        ])
+    );
+    assert_eq!(
+        crate_edges(
+            &edge,
+            &[call_row("xtask", &["contract"], XTASK_QUOTE)],
+            &architecture,
+        ),
+        Ok(Vec::new())
+    );
+}
+
+#[test]
+fn crate_edges_requires_quotes_inside_the_section_and_collapses_whitespace() {
+    let calls = [call_row("alpha", &["beta"], ALPHA_QUOTE)];
+    let outside_only = format!(
+        "# Architecture\n\n## The call rules\n{SUPPORT_QUOTE}\nNo alpha rule.\n\n## Other\n{ALPHA_QUOTE}\n"
+    );
+    assert_eq!(
+        crate_edges(&BTreeSet::new(), &calls, &outside_only),
+        Ok(vec![format!(
+            "table quote not in docs/architecture.md, \"The call rules\": \"{ALPHA_QUOTE}\""
+        )])
+    );
+    let wrapped = calls_architecture("`alpha`  depends\n    on `beta`.\n");
+    assert_eq!(
+        crate_edges(&edge_set(&[("alpha", "gamma")]), &calls, &wrapped),
+        Ok(vec!["alpha → gamma: docs/architecture.md:5, \"The call rules\", does not grant it: \"`alpha` depends on `beta`.\"".to_owned()])
+    );
+}
+
+#[test]
+fn crate_edges_requires_the_call_rules_section() {
+    assert_eq!(
+        crate_edges(&BTreeSet::new(), &[], "# Architecture\n"),
+        Err("docs/architecture.md has no \"The call rules\" section".to_owned())
+    );
+}
+
+#[test]
+fn crate_edges_sorts_failures_and_deduplicates_shared_quotes() {
+    const QUOTE: &str = "`alpha` may depend on listed crates.";
+    const SECOND_QUOTE: &str = "`alpha` also has a second rule.";
+    let calls = [
+        call_row("alpha", &["beta"], QUOTE),
+        call_row("alpha", &["gamma"], QUOTE),
+        call_row("alpha", &["delta"], SECOND_QUOTE),
+    ];
+    let architecture = calls_architecture(&format!("{QUOTE}\n{SECOND_QUOTE}\n"));
+    assert_eq!(
+        crate_edges(
+            &edge_set(&[("alpha", "worse"), ("alpha", "bad")]),
+            &calls,
+            &architecture,
+        ),
+        Ok(vec![
+            format!(
+                "alpha → bad: docs/architecture.md:5, \"The call rules\", does not grant it: \"{QUOTE}\" \"{SECOND_QUOTE}\""
+            ),
+            format!(
+                "alpha → worse: docs/architecture.md:5, \"The call rules\", does not grant it: \"{QUOTE}\" \"{SECOND_QUOTE}\""
+            ),
+        ])
+    );
+}
+
 /// A `--prefix depth` tree where `tools` and `main` enable
 /// `preserve_order`: the crates in the `default` and `std` subtrees, and
 /// the deeper crate under `tools`, enabled nothing.

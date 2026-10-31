@@ -3,7 +3,7 @@
 //! `docs/code-quality.md`, the crate list in `docs/dependencies.md`, and
 //! that process signals stay in the guarded helpers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{TokenStream, TokenTree};
 
@@ -326,6 +326,108 @@ pub(crate) const CALLS: &[Calls] = &[
         quote: BENCH_QUOTE,
     },
 ];
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn section_body_start_line(markdown: &str, heading: &str) -> Option<usize> {
+    markdown
+        .lines()
+        .enumerate()
+        .find_map(|(line_number, line)| {
+            let hashes = line
+                .chars()
+                .take_while(|character| *character == '#')
+                .count();
+            let rest = line.get(hashes..)?;
+            (hashes > 0 && rest.starts_with(' ') && rest.trim() == heading)
+                .then_some(line_number + 2)
+        })
+}
+
+/// Each normal workspace edge not granted by a quoted call rule.
+pub(crate) fn crate_edges(
+    edges: &BTreeSet<(String, String)>,
+    calls: &[Calls],
+    architecture: &str,
+) -> Result<Vec<String>, String> {
+    const HEADING: &str = "The call rules";
+    let rules = section(architecture, HEADING)
+        .ok_or("docs/architecture.md has no \"The call rules\" section")?;
+    let body_start = section_body_start_line(architecture, HEADING)
+        .ok_or("docs/architecture.md has no \"The call rules\" section")?;
+    let mut folded_section = String::new();
+    let mut line_starts = Vec::new();
+    for (offset, line) in rules.iter().enumerate() {
+        let line = collapse_whitespace(line);
+        if line.is_empty() {
+            continue;
+        }
+        if !folded_section.is_empty() {
+            folded_section.push(' ');
+        }
+        line_starts.push((folded_section.len(), body_start + offset));
+        folded_section.push_str(&line);
+    }
+
+    let quotes: BTreeSet<&str> = calls
+        .iter()
+        .map(|call| call.quote)
+        .chain(std::iter::once(SUPPORT_QUOTE))
+        .collect();
+    let mut quote_lines = BTreeMap::new();
+    let mut failures = BTreeSet::new();
+    for quote in quotes {
+        let folded_quote = collapse_whitespace(quote);
+        if let Some(offset) = folded_section.find(&folded_quote) {
+            if let Some((_, line)) = line_starts.iter().rev().find(|(start, _)| *start <= offset) {
+                quote_lines.insert(quote, *line);
+            }
+        } else {
+            failures.insert(format!(
+                "table quote not in docs/architecture.md, \"{HEADING}\": \"{quote}\""
+            ));
+        }
+    }
+
+    for (from, to) in edges {
+        let source_rows: Vec<&Calls> = calls.iter().filter(|call| call.krate == from).collect();
+        let granted = (to == "support" && from != "support")
+            || source_rows
+                .iter()
+                .any(|call| call.depends_on.contains(&to.as_str()));
+        if granted {
+            continue;
+        }
+        if source_rows.is_empty() {
+            failures.insert(format!(
+                "{from} → {to}: docs/architecture.md, \"{HEADING}\", has no sentence for {from}"
+            ));
+            continue;
+        }
+
+        let mut seen_quotes = BTreeSet::new();
+        let row_quotes: Vec<&str> = source_rows
+            .iter()
+            .filter_map(|call| seen_quotes.insert(call.quote).then_some(call.quote))
+            .collect();
+        let location = row_quotes
+            .iter()
+            .find_map(|quote| quote_lines.get(quote))
+            .map(|line| format!("docs/architecture.md:{line}"))
+            .unwrap_or_else(|| "docs/architecture.md".to_owned());
+        let quotes = row_quotes
+            .iter()
+            .map(|quote| format!("\"{quote}\""))
+            .collect::<Vec<_>>()
+            .join(" ");
+        failures.insert(format!(
+            "{from} → {to}: {location}, \"{HEADING}\", does not grant it: {quotes}"
+        ));
+    }
+    Ok(failures.into_iter().collect())
+}
 
 /// Each failure where a workspace member's normal dependency tree names
 /// one of `rule`'s crates. `trees` pairs a member with the output of `cargo
