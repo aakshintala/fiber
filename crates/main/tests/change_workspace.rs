@@ -765,7 +765,12 @@ fn two_successive_target_requests_keep_a_stable_prefix() {
 
 /// Exit evidence precedes lock release: only an empty Hub `held` answer
 /// permits the real delete (docs/invocation.md, "Deleting a session").
-fn wait_for_leaf_unheld(hubbed: &mut Hubbed, leaf: &str, on_held: impl FnOnce()) {
+fn wait_for_leaf_unheld(
+    hubbed: &mut Hubbed,
+    leaf: &str,
+    mut on_probe: impl FnMut(usize),
+    on_held: impl FnOnce(),
+) {
     let client = hubbed.client_mut();
     let wait = client.start_wait();
     // Sends and reads use the same wait; no probe renews it.
@@ -789,6 +794,7 @@ fn wait_for_leaf_unheld(hubbed: &mut Hubbed, leaf: &str, on_held: impl FnOnce())
                 json!({"session": leaf, "dry_run": true}),
             ),
         );
+        on_probe(probe);
         let mut lines = Vec::new();
         let answer = loop {
             let line = client
@@ -824,7 +830,7 @@ fn the_leaf_wait_requires_an_empty_answer_after_observing_held() {
     use std::os::unix::net::UnixStream;
 
     let setup = Setup::new();
-    let (mine, mut peer) = UnixStream::pair().unwrap();
+    let (mine, peer) = UnixStream::pair().unwrap();
     let mut hubbed = Hubbed {
         hub: Arc::new(Mutex::new(None)),
         client: Some(Socket::from(setup.deadline, mine)),
@@ -832,40 +838,73 @@ fn the_leaf_wait_requires_an_empty_answer_after_observing_held() {
         home: setup.home(),
         cleanup_failure: None,
     };
-    // A foreign command's empty answer cannot release the wait. The
-    // callback is one-shot even when the Hub observes held twice.
-    for (id, held) in [
-        ("foreign", json!([])),
-        ("c_leaf_unheld_s_leaf_0", json!(["s_leaf"])),
-        ("c_leaf_unheld_s_leaf_1", json!(["s_leaf", "s_other"])),
-        ("c_leaf_unheld_s_leaf_2", json!([])),
-    ] {
-        writeln!(
-            peer,
-            "{}",
-            json!({"kind": "command_accepted", "payload": {
-                "command_id": id, "result": {"held": held}
-            }})
-        )
-        .unwrap();
-    }
-    let mut observations = 0;
-    wait_for_leaf_unheld(&mut hubbed, "s_leaf", || observations += 1);
-    assert_eq!(observations, 1, "held must be observed before returning");
+    // A foreign command's empty answer cannot release the wait. Answer each
+    // request only after the peer has read it; the held callback is one-shot.
+    hubbed.client().send(&command(
+        "c_foreign",
+        None,
+        "delete",
+        json!({"session": "s_foreign", "dry_run": true}),
+    ));
     let mut requests = BufReader::new(peer);
-    let wait = setup.deadline.start_wait();
-    for probe in 0..3 {
-        let request = read_line(&mut requests, wait, "the dry-run probe")
+    let mut observations = 0;
+    wait_for_leaf_unheld(
+        &mut hubbed,
+        "s_leaf",
+        |probe| {
+            if probe == 0 {
+                let request = read_line(
+                    &mut requests,
+                    setup.deadline.start_wait(),
+                    "the foreign dry-run request",
+                )
+                .unwrap()
+                .unwrap();
+                let request: Value = serde_json::from_str(&request).unwrap();
+                assert_eq!(request["id"], "c_foreign");
+                assert_eq!(request["command"], "delete");
+                writeln!(
+                    requests.get_mut(),
+                    "{}",
+                    json!({"kind": "command_accepted", "payload": {
+                        "command_id": "c_foreign", "result": {"held": []}
+                    }})
+                )
+                .unwrap();
+            }
+            let request = read_line(
+                &mut requests,
+                setup.deadline.start_wait(),
+                "the dry-run probe",
+            )
             .unwrap()
             .unwrap();
-        let request: Value = serde_json::from_str(&request).unwrap();
-        assert_eq!(request["id"], format!("c_leaf_unheld_s_leaf_{probe}"));
-        assert_eq!(request["command"], "delete");
-        assert_eq!(
-            request["args"],
-            json!({"session": "s_leaf", "dry_run": true})
-        );
-    }
+            let request: Value = serde_json::from_str(&request).unwrap();
+            let id = format!("c_leaf_unheld_s_leaf_{probe}");
+            assert_eq!(request["id"], id);
+            assert_eq!(request["command"], "delete");
+            assert_eq!(
+                request["args"],
+                json!({"session": "s_leaf", "dry_run": true})
+            );
+            let held = match probe {
+                0 => json!(["s_leaf"]),
+                1 => json!(["s_leaf", "s_other"]),
+                2 => json!([]),
+                _ => panic!("unexpected probe {probe}"),
+            };
+            writeln!(
+                requests.get_mut(),
+                "{}",
+                json!({"kind": "command_accepted", "payload": {
+                    "command_id": id, "result": {"held": held}
+                }})
+            )
+            .unwrap();
+        },
+        || observations += 1,
+    );
+    assert_eq!(observations, 1, "held must be observed before returning");
 }
 
 #[test]
@@ -885,9 +924,12 @@ fn the_leaf_wait_expiry_names_the_session_and_last_held_answer() {
         cleanup_failure: None,
     };
     let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        wait_for_leaf_unheld(&mut hubbed, "s_busy", || {
-            panic!("no held answer was received")
-        });
+        wait_for_leaf_unheld(
+            &mut hubbed,
+            "s_busy",
+            |_| {},
+            || panic!("no held answer was received"),
+        );
     }))
     .expect_err("a spent deadline cannot permit deletion");
     let message = payload_message(&expired);
@@ -1109,7 +1151,7 @@ fn a_rewind_to_a_pre_move_point_reads_across_projects() {
     // Resume works on the rewind child, and the leaf deletes clean.
     hubbed.prompt("c_three", &next, "three");
     hubbed.close("c_close_next", &next);
-    wait_for_leaf_unheld(&mut hubbed, &next, || {});
+    wait_for_leaf_unheld(&mut hubbed, &next, |_| {}, || {});
     let log = session_log_path(&setup, &next);
     let output = delete(&setup, &layout.repo_b, &next);
     assert!(output.status.success(), "delete the leaf: {output:?}");
@@ -1185,7 +1227,12 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
         panic!("the test could not take the leaf {next}'s session lock");
     };
     let mut leaf_held_by_test = Some(leaf_guard);
-    wait_for_leaf_unheld(&mut hubbed, &next, || drop(leaf_held_by_test.take()));
+    wait_for_leaf_unheld(
+        &mut hubbed,
+        &next,
+        |_| {},
+        || drop(leaf_held_by_test.take()),
+    );
     assert!(
         leaf_held_by_test.is_none(),
         "the wait observed the held leaf"
@@ -1440,7 +1487,7 @@ fn the_old_worktree_survives_the_move_and_a_later_prune_removes_it() {
     // worktree under the unchanged shared-lock and dirty rules, while the
     // plain target workspace and the young old log stay.
     hubbed.close("c_close", &child);
-    wait_for_leaf_unheld(&mut hubbed, &child, || {});
+    wait_for_leaf_unheld(&mut hubbed, &child, |_| {}, || {});
     let output = delete(&setup, &layout.repo_b, &child);
     assert!(output.status.success(), "delete the leaf: {output:?}");
     // Prune scopes to its working directory's project: the old worktree
