@@ -1122,9 +1122,13 @@ mkdir -p "$collate_key/flaky"
   printf 'main root_level_test\td3\nmain\td4\nmain ::empty_segment\td8\n'
   printf 'main::hub_exit_window helper_tests::case\td5\n'
   printf 'fakes process_group_tests::reaps_children\td6\nfakes\td7\n'
+  printf 'extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\td9\n'
+  printf 'extensions host::tool_tests::a_denied_call_has_no_artifact\td10\n'
+  printf 'extensions tests::x\td11\nextensions x\td12\nextensions\td13\n'
+  printf 'extensions tests::tests::x\td14\nextensions a::tests::inner::x\td15\n'
 } >"$collate_key/flaky/flaky-tests-linux.txt"
 run_collate "$collate_key"
-expect_titles_sorted "$collate_key" "$(printf 'Flaky tests: main::reviewer_setup\nFlaky tests: main::reload_tests\nFlaky tests: main\nFlaky tests: main::hub_exit_window\nFlaky tests: fakes')"
+expect_titles_sorted "$collate_key" "$(printf 'Flaky tests: main::reviewer_setup\nFlaky tests: main::reload_tests\nFlaky tests: main\nFlaky tests: main::hub_exit_window\nFlaky tests: fakes::process_group_tests\nFlaky tests: fakes\nFlaky tests: extensions::host::exec\nFlaky tests: extensions::host::tool_tests\nFlaky tests: extensions\nFlaky tests: extensions::tests\nFlaky tests: extensions::a::tests::inner')"
 expect_flakes "$collate_key" 'has_flakes=true'
 "$real_cargo" run --quiet --manifest-path "$toplevel/xtask/Cargo.toml" -- flake-classify --flaky-dir "$collate_key/flaky" --event push --tested-commit "$sha" >"$collate_key/classes.jsonl" || fail "collate-key: flake-classify failed"
 "$real_jq" -r .title "$collate_key/classes.jsonl" | LC_ALL=C sort >"$collate_key/rust.txt"

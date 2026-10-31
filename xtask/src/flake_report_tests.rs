@@ -852,7 +852,64 @@ fn an_empty_first_segment_falls_back_to_main() {
 }
 
 #[test]
-fn a_unit_test_with_a_tests_module_keeps_its_binary_title() {
+fn a_unit_test_file_uses_its_nested_module_path() {
+    let text = "extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    let record = titled(&out, "extensions::host::exec");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: extensions::host::exec")
+    );
+}
+
+#[test]
+fn a_tests_named_module_stays_in_the_file_path() {
+    let text = "extensions host::tool_tests::a_denied_call_has_no_artifact\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    let record = titled(&out, "extensions::host::tool_tests");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: extensions::host::tool_tests")
+    );
+}
+
+#[test]
+fn crate_root_unit_tests_keep_the_binary_key() {
+    for line in [
+        "extensions tests::x\tsome detail",
+        "extensions x\tsome detail",
+        "extensions\tsome detail",
+    ] {
+        let out = classified(&[("linux", line)], &push_run());
+        let record = titled(&out, "extensions");
+        assert_eq!(field(record, "title"), Some("Flaky tests: extensions"));
+    }
+}
+
+#[test]
+fn a_repeated_tests_module_is_reduced_once() {
+    let text = "extensions tests::tests::x\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    let record = titled(&out, "extensions::tests");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: extensions::tests")
+    );
+}
+
+#[test]
+fn a_non_trailing_tests_module_stays_in_the_file_path() {
+    let text = "extensions a::tests::inner::x\tsome detail\n";
+    let out = classified(&[("linux", text)], &push_run());
+    let record = titled(&out, "extensions::a::tests::inner");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: extensions::a::tests::inner")
+    );
+}
+
+#[test]
+fn a_unit_test_with_a_tests_module_uses_its_file_key() {
     // Unit-test ids are not parsed specially: a `*_tests` segment in the
     // test name never renames the title.
     let text = "fakes process_group_tests::reaps_children\tsome detail\n";
@@ -862,8 +919,11 @@ fn a_unit_test_with_a_tests_module_keeps_its_binary_title() {
     // docs/testing/running.md, "Flaky tests": "unit-test ids such as
     // `fakes` are not parsed specially".
     assert_eq!(out.len(), 1);
-    let record = titled(&out, "fakes");
-    assert_eq!(field(record, "title"), Some("Flaky tests: fakes"));
+    let record = titled(&out, "fakes::process_group_tests");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: fakes::process_group_tests")
+    );
     assert_eq!(
         field(record, "name"),
         Some("fakes process_group_tests::reaps_children")
