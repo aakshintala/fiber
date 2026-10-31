@@ -303,9 +303,9 @@ column has no header row: its first row is conversation. The conversation keeps
 one blank column on each side, so the turn cards start one column in from the
 rail's edge and end one column before the panel's; with the rail hidden its
 one-column grip sits at the screen's left edge and the cards start at the third
-column. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. It replaces
-a footer and status line, and the input box spans only the conversation
-column.
+column. The panel is shown while the screen is wide enough, unless the person hides it with ⌥P. While
+it shows, the input box leaves out its status line ("The narrow layout"),
+and the input box spans only the conversation column.
 
 The rail and the panel each take a share of the screen's width, kept between
 a floor and a ceiling: the rail 15%, from 22 to 48 columns, and the panel 21%,
@@ -416,9 +416,9 @@ rows; scrolling clamps at the top and bottom of the content.
 
 The default cards, in order:
 
-- **Session:** the working directory; the git branch; model and thinking level; a context bar that
+- **Session status:** the working directory; the git branch; model and thinking level; a context bar that
   fills toward the automatic handoff point, with a marker there; tokens, cache
-  hit rate, cost billed and cost on subscription, delegates included, against
+  hit rate, the time until the prompt cache resets, cost billed and cost on subscription, delegates included, against
   `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
   MCP server that is down. Every number has a plain label that says what it
   measures, such as "tokens in / out", "cache hits" or "output speed, last
@@ -449,7 +449,8 @@ row is pushed to the card's right padding, and a row too long for the card is
 cut with "…". The cards draw:
 
 ```
-  ~/work/fiber                     auto
+  Session status                   auto
+  ~/work/fiber
   git main
   anthropic/claude-opus      high ∴
   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│          268k
@@ -457,6 +458,7 @@ cut with "…". The cards draw:
   then a summary, fresh context
   tokens in / out     412k / 18.2k
   cache hits                   91%
+  cache resets in              42m
   cost                       $4.12
   cost on subscription       $0.00
   speed, last reply   64 tokens/s
@@ -481,8 +483,9 @@ cut with "…". The cards draw:
   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆
 ```
 
-- **Session.** The title is the working directory in bold, with the
-  permission mode right-aligned in `attention`. Then "git" dim and the branch
+- **Session status.** The title is "Session status" in bold, with the
+  permission mode right-aligned in `attention`. Then the working directory;
+  "git" dim and the branch
   in `secondary`; the model in `accent`, with the thinking level
   right-aligned in `attention` and a dim "∴" after it while the model thinks.
   The context bar is 17 cells of ▆, filled in `info` toward the handoff point
@@ -492,7 +495,12 @@ cut with "…". The cards draw:
   handoff is, dim. Clicking the bar or the lines under it opens the context
   breakdown. Each figure after that is a row: its plain label dim, and the
   figure right-aligned in the text colour; a down MCP server is "✗ <server>
-  down" right-aligned in `error`.
+  down" right-aligned in `error`. "cache resets in" is the time left before
+  the prompt cache expires, counted from the end of the last model request,
+  a warming refresh included, at the session's cache lifetime
+  (`docs/prompt-cache.md`, "Cache lifetime"). It shows "—" before the first
+  request and "expired" in `attention` once the lifetime has passed. It
+  counts in minutes, and in seconds under the last minute.
 - **Changed files.** The title's figure is the count of files, dim. Each row
   is a path, cut from the left to keep its file name ("…/tests/x.rs"), with
   "+N" in `added` and "−N" in `removed` right-aligned. The last row is
@@ -523,7 +531,7 @@ cut with "…". The cards draw:
   (`docs/tools.md`, "Fetching"). At most one query is in flight; a turn
   end during it is not held. A rejection stops queries until reattach.
 
-With the rail hidden and sessions waiting, the Session card ends with "! N
+With the rail hidden and sessions waiting, the Session status card ends with "! N
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
 shows the rail.
 
@@ -651,7 +659,7 @@ button refreshes every list (`docs/model-routing.md`, "Model discovery").
 
 Under the view's top row the picker is an overlay ("Look", "Overlays").
 Its first row is the filter: "Type to search" dim until something is
-typed, then "›" dim and the query bold, with a dim block cursor either
+typed, then "›" dim and the query bold, with the cursor ("The input box") either
 way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
 under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
 while every model shows, and "⟳ refresh all" dim at the right end. Each
@@ -818,8 +826,13 @@ install still running.
   "diff against HEAD". An untracked file shows as wholly added. Each file is
   a row: the chosen file's path bold, then " · " dim, "+N" in `added` and
   "−N" in `removed`; an untracked file's path, then "· untracked, wholly
-  added" dim. Under the chosen file, its hunks in the diff format an opened
-  edit uses ("Tool groups and the ledger").
+  added" dim. A row's figures are git's for that path, so they match its
+  hunks: one `git diff --numstat HEAD` limited to the listed paths, run when
+  the view opens, and, for a path git does not track, its line count as
+  added. Until that answers, the rows show the Changed files card's figures,
+  which sum Fiber's own edits (`docs/tools.md`, "write" and "edit"). Under
+  the chosen file, its hunks in the diff format an opened edit uses ("Tool
+  groups and the ledger").
 - **The release notes,** `/release-notes`: the running binary's
   changelog section for its own version (`docs/releasing.md`, "The
   changelog"), embedded in the binary at build time, so the view asks
@@ -977,21 +990,23 @@ under the conversation take its place. From the top:
    half the screen; otherwise they collapse into the status line
 3. the steering queue
 4. an extension widget row, collapsed to one line, which a click expands
-5. the input box
-6. the status line, two rows under the input box
+5. the input box, with its status line
 
-Each card contributes its segments to the status line in the configured order,
+The status line is two rows at the bottom of the input box, under its
+status row ("The input box"). It shows whenever the panel does not: in the
+narrow layout, and on a wide screen with the panel hidden by ⌥P, `/panel` or
+the rail. Each card contributes its segments to the status line in the configured order,
 and each row is cut at the terminal's right edge. The
 second row opens with "N delegates running" and "N jobs running", so they are
 never cut; each opens a list of delegate or job cards in the conversation
 area. Clicking any other segment opens its card's view, the Quota segment the quota view.
 
-The status line sits on the `panel` tint, one column in, with segments joined
-by a dim "  │  ". Each card's segments are short forms of its rows: the working
-directory, "git" dim and the branch in `secondary`; the model in `accent` and
-the thinking level in `attention`; the permission mode in `attention`; "ctx"
-dim, an 8-cell context bar and the size ("ctx ▆▆▆▆▆▆▆▆ 268k"), which opens the
-context breakdown; the cost and "cache" dim with its share; "tools N" dim and
+The status line sits on the slab, starting in the status row's column, with
+segments joined by a dim "  │  ". Each card's segments are short forms of its rows. The
+working directory, model, thinking level, permission mode and context are
+in the input box's status row ("The input box"), so the status line leaves
+them out. Its segments are "git" dim and the branch in `secondary`; the cost
+and "cache" dim with its share, then the time until it resets; "tools N" dim and
 any down server in `error`; "±" dim, "N files" and the `added` and `removed`
 totals; "◆" in `secondary` before the delegates; "⚙" in `attention` before
 the jobs; and "Q" dim before the quota, with a limit nearly spent in `error`.
@@ -1006,7 +1021,7 @@ waiting" in `attention`.
 
 The rail sheds before the panel. When the screen is too narrow for the rail's
 floor, the conversation's minimum and the panel, the rail hides, and "N
-waiting" joins the Session card, or the status line in the narrow layout; a
+waiting" joins the Session status card, or the status line while the panel is not shown; a
 click on it shows the rail. A hidden rail leaves its grip at the screen's left
 edge, and dragging the grip out shows the rail again, as does ⌥R. Shown while the
 width has no room for it, the rail hides the panel, as ⌥P does; ⌥P brings the
@@ -1014,7 +1029,7 @@ panel back and the rail sheds again. A rail hidden
 for width returns when the screen grows; one the person hid, by ⌥R, `/rail` or by
 dragging it below its floor, saves `tui.rail.shown` as off and stays hidden,
 across launches, until shown. Below the narrow layout, which
-has already dropped the panel, the screen sheds the status rows, then the
+has already dropped the panel, the screen sheds the status line, then the
 working line's detail. Below a floor of about 40 by 10
 cells it shows one centred line, "Fiber needs 40×10 · now 32×8". The session
 keeps running, nothing is lost, and the screen redraws on resize.
@@ -1258,7 +1273,7 @@ unchanged" in `attention`.
 ```
  A second card continues the turn, and its ▣ line
 closes it. A failed or cancelled handoff says the context is unchanged. The
-Session card's context bar drops to the new size.
+Session status card's context bar drops to the new size.
 
 The nudge is one dim line where it happened: "◔ Context at 268k, two thirds of
 the way to the 400k handoff. The model was told a handoff keeps the work
@@ -1280,7 +1295,7 @@ The terminal shows Fiber's message as it is and never rewrites it
 - `mcp_server_failed` is a ⚠ line in the conversation with its
   `error.message`: "⚠ " in `attention`, the message dim, wrapped under
   itself. A server that comes back writes `mcp_server_ready`, which
-  clears the Session card's mark in every client.
+  clears the Session status card's mark in every client.
 
 ### Notices
 
@@ -1668,7 +1683,7 @@ wraps onto.
 The search bar floats over the conversation's top-right corner, as an
 editor's find box does, and the input box keeps its draft. It is 40 columns
 wide, a `surface` slab with ▄ and ▀ edges: " ⌕ " in `attention`, the query
-bold, a dim █, and right-aligned "3 of 41", or "no matches" or "type to
+bold, the cursor ("The input box"), and right-aligned "3 of 41", or "no matches" or "type to
 search" dim. Every match is marked on the `match` tint, the current one on
 `match_current`. A match inside a collapsed section expands it when it
 becomes the current match.
@@ -1723,6 +1738,14 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   reply arrives. crossterm parses both replies but hands them only to a call
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
+- **Input is read in the order it arrives.** Each key, paste or mouse report
+  becomes one event, in the order its bytes came: a bound control character
+  then a letter is the binding's action, then the letter, and nothing else.
+  A byte that starts no key is dropped and reading goes on from the next
+  byte. A control character with no binding is dropped whole, a two-byte C1
+  control included. An escape sequence cut by a byte that cannot continue it
+  drops its `ESC [`, and reading goes on from that byte. Invalid UTF-8 drops
+  one byte and keeps the rest.
 - **Every action has a key.** Every action also has a mouse target or a slash
   command, except editing the draft in the input box and search, choosing
   in the model picker or the credential picker for this session only, and
@@ -1808,8 +1831,34 @@ keyboard's reach.
 
 The input box is a `surface` slab with ▄ and ▀ edges across the
 conversation's width: a ▌ stripe in `accent`, a space, "› " in `info`, the
-draft, and the cursor, a dim █. While search is open, typing goes to the
+draft, and the cursor. While search is open, typing goes to the
 search box and the draft shows without a cursor.
+
+The cursor, here and wherever Fiber draws one, is the cell under it drawn
+reversed: its character in the slab's colour on the text colour. Past the
+last character it is a block in the text colour. The character under it
+stays readable in light and dark mode.
+
+Under the draft and inside the slab, the box ends with a rule and its
+status row, in every layout, and the status line after them while the panel
+is not shown ("The narrow layout"). The rule is ─ in `rule` from the
+stripe's next column to one column short of the slab's right edge. The
+status row has two sides. On the left: the working directory, then the
+permission mode in `attention`. Right-aligned, ending one column short of
+the slab's edge: the model in `accent` and the thinking level in
+`attention`, then "ctx" dim, an 8-cell context bar, the size and the share
+of the window dim ("ctx ▆▆▆▆▆▆▆▆ 268k · 26%"). Segments on each side are
+joined by a dim "  │  ", as in the status line ("The narrow layout"), and
+the two sides keep at least two columns between them. The row says nothing
+about handoff: the handoff point is in the Session status card and the
+context breakdown. When the row is too wide, the working directory is cut
+from the left to keep its last part ("…/fiber"), then the left side is cut
+at its right end; the right side is cut only when the slab is narrower than
+it, at the slab's right edge. Clicking the model or the thinking level
+opens the model picker, as Ctrl+L does; clicking the ctx segment opens the
+context breakdown; clicking the working directory or the permission mode
+opens the Session status card's view. An extension redraws the row
+through the `input_status` slot ("Extension seams").
 
 - Enter sends. Shift+Enter inserts a line break, with Ctrl+J for terminals
   without the kitty keyboard protocol. Pasted text keeps its line breaks. The box grows to about a third of
@@ -1896,8 +1945,8 @@ binding by area, with its other paths." and the counts ("38 actions, 26 with
 other paths"). After a blank row comes a row of tabs, "All" and then each
 area, two columns apart: the chosen tab bold, drawn dark on white, the rest
 dim; ← and → move between them. Under the tabs, the search line reads "Type
-to search shortcuts" dim, then "› " dim and the typed query bold with a dim
-█. Typing narrows the rows to bindings whose action, key or other paths
+to search shortcuts" dim, then "› " dim and the typed query bold with the
+cursor ("The input box"). Typing narrows the rows to bindings whose action, key or other paths
 contain the query, ignoring case, across every area when the tab is All.
 
 Each binding is one row over three columns that start at the same cell on
@@ -2154,7 +2203,7 @@ widening it. Esc goes back to the provider list.
   "Waiting for the browser…" dim. Footer: "y copy URL · Esc back"; `y` copies
   the whole URL.
 - **Key entry.** "Label (--as): default." and "Key for google:", the key
-  masked as dots with a block cursor. Tab moves between the key and the
+  masked as dots with the cursor ("The input box"). Tab moves between the key and the
   label. Footer: "Tab key or label · Enter submit · Esc back".
 - **Done.** "✓ Logged in to anthropic." in `success`. Footer: "Esc back".
 - **Failed.** "Login to anthropic failed: token expired.", the reason in
@@ -2443,7 +2492,7 @@ The roles, in order, with each built-in theme's values:
 | `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` | `#d0d7de` |
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
 | `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
-| `panel` | the rail's and the panel's regions, the narrow layout's status line | `#0c0c11` | `#f6f8fa` |
+| `panel` | the rail's and the panel's regions | `#0c0c11` | `#f6f8fa` |
 | `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
 | `surface_raised` | the card on screen, a hovered card | `#3a3a4a` | `#d0d7de` |
 | `card_retrying` | a rail card in RETRYING | `#262014` | `#ebe5d9` |
@@ -2738,7 +2787,7 @@ itself is a separate client of the hub, not a TUI extension.
 
 | Slot | What it draws |
 |---|---|
-| `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, the status rows, and any region an extension adds |
+| `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, and any region an extension adds |
 | `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
 | `prompt` | Only a person's prompt bubble: a non-driver message never calls it |
@@ -2756,7 +2805,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `working_line` | The working line |
 | `steering_queue` | The queued steering messages |
 | `input_box` | The input box |
-| `status_rows` | The narrow layout's status rows |
+| `status_rows` | The input box's status line |
 | `view:<name>` | A swapped view, built in or one an extension adds |
 | `overlay:<name>` | An overlay an extension adds, drawn over the conversation |
 | `approval` | The approval panel, draw-only |
@@ -2913,7 +2962,24 @@ three.
 
 Nothing draws and no renderer runs on an empty queue.
 
-**`status_rows`** draws the narrow layout's status rows.
+**`input_status`** draws the input box's status row, under its rule. A
+replaced input box is drawn whole by the extension, so `input_status` draws
+only when the input box itself is built in. A replacement draws one line, and
+further lines are dropped. A replacement keeps one target, the Session
+status view, over the row's full width. A replacement that returns no lines
+leaves the row blank; the rule stays.
+
+| Field | What it holds |
+|---|---|
+| `workspace` | The workspace's path |
+| `mode` | The permission mode |
+| `model` | The model |
+| `thinking` | The thinking level |
+| `context` | `tokens` and `window` |
+
+**`status_rows`** draws the input box's status line, while the panel is not
+shown. Like `input_status`, it draws only when the input box itself is built
+in.
 
 | Field | What it holds |
 |---|---|
@@ -2932,7 +2998,7 @@ narrow row and a running delegate's narrow row draw through the same slot
 with the same input. Its narrow form caps what the built-in shows, as the
 five-file cut does, and the replacement inherits the cap.
 
-`card:session` draws the session card:
+`card:session` draws the Session status card:
 
 | Field | What it holds |
 |---|---|
