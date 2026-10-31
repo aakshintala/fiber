@@ -304,6 +304,18 @@ fn parse_numstat_reads_counts_and_marks_binary() {
 }
 
 #[test]
+fn parse_numstat_drops_a_row_with_a_dash_in_only_one_column() {
+    use super::{NumstatFigure, parse_numstat};
+    let parsed = parse_numstat("-\t5\tsrc/half-a.rs\n5\t-\tsrc/half-b.rs\n7\t1\tsrc/full.rs\n");
+    assert!(!parsed.contains_key("src/half-a.rs"));
+    assert!(!parsed.contains_key("src/half-b.rs"));
+    assert_eq!(
+        parsed.get("src/full.rs"),
+        Some(&NumstatFigure::Counted(7, 1))
+    );
+}
+
+#[test]
 fn resolve_figures_prefers_git_counts_untracked_lines_then_card() {
     let card = changes(&[
         ("src/a.rs", 4, 2),

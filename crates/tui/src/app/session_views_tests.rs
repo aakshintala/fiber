@@ -2337,3 +2337,145 @@ fn a_rejected_numstat_query_keeps_the_card_figures() {
     let shown = screen(&app, 120, 35).0;
     assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
 }
+
+fn files_attached_in(root: &std::path::Path, width: u16, height: u16) -> App {
+    let mut app = App::new(root.to_path_buf());
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: root.to_path_buf(),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        panel_cards: vec!["changed_files".to_owned()],
+        ..Default::default()
+    });
+    app.attach(SessionId(SESSION.to_owned()));
+    app.set_size(width, height);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app
+}
+
+fn open_figures(app: &mut App, width: u16, height: u16) -> String {
+    let (_, targets) = screen(app, width, height);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == TargetId::Panel(PanelSpot::ChangedFiles) })
+    );
+    let effect = app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
+    let Effect::Send(lines) = effect else {
+        panic!("opening the list sends the numstat query, got {effect:?}");
+    };
+    assert_eq!(lines.len(), 1, "one numstat command");
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    request["id"].as_str().unwrap_or_default().to_owned()
+}
+
+fn accepted_figures(
+    id: &str,
+    text: &str,
+    exit_code: i32,
+    signal: Option<&str>,
+    timed_out: bool,
+) -> Line {
+    session_line(
+        SESSION,
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {"output": text, "process": {"exit_code": exit_code, "signal": signal, "timed_out": timed_out}},
+        }),
+        Some("a_1"),
+    )
+}
+
+#[test]
+fn a_numstat_answer_ended_by_a_signal_keeps_the_card_figures() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &id,
+        "5\t0\tsrc/file-0.rs\n",
+        1,
+        Some("SIGKILL"),
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+}
+
+#[test]
+fn a_timed_out_numstat_answer_keeps_the_card_figures() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &id,
+        "5\t0\tsrc/file-0.rs\n",
+        1,
+        None,
+        true,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+}
+
+#[test]
+fn an_empty_numstat_answer_with_exit_zero_counts_untracked_lines() {
+    let dir = fakes::TempDir::new("tui-numstat-empty-success");
+    std::fs::create_dir_all(dir.path().join("src"))
+        .unwrap_or_else(|error| panic!("workspace src: {error}"));
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\nb\nc\nd\n")
+        .unwrap_or_else(|error| panic!("workspace file: {error}"));
+    let mut app = files_attached_in(dir.path(), 120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(&id, "Exit code 0.\n", 0, None, false));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("untracked, wholly added"), "{shown}");
+    assert!(shown.contains("1 file changed  +4 −0"), "{shown}");
+}
+
+#[test]
+fn an_empty_numstat_answer_with_a_failure_exit_keeps_the_card_figures() {
+    let dir = fakes::TempDir::new("tui-numstat-empty-failure");
+    std::fs::create_dir_all(dir.path().join("src"))
+        .unwrap_or_else(|error| panic!("workspace src: {error}"));
+    std::fs::write(dir.path().join("src/file-0.rs"), "a\nb\nc\nd\n")
+        .unwrap_or_else(|error| panic!("workspace file: {error}"));
+    let mut app = files_attached_in(dir.path(), 120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(&id, "", 128, None, false));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+}
+
+#[test]
+fn a_refused_numstat_query_drops_its_late_answer() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(rejected_diff(SESSION, &id, "hub refused"));
+    app.on_line(accepted_diff(&id, "5\t0\tsrc/file-0.rs\n"));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+}
+
+#[test]
+fn a_refusal_for_another_command_keeps_the_numstat_query_pending() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(rejected_diff(SESSION, "c_other", "wrong command"));
+    app.on_line(accepted_diff(&id, "5\t0\tsrc/file-0.rs\n"));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+}
