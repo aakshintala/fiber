@@ -595,10 +595,11 @@ fn the_bar_draws_its_prefix_query_block_and_count() {
             "query {x}"
         );
     }
-    // The block dim.
+    // The block in the text colour, with no dim.
     assert_eq!(cell(first + 5).symbol(), "█");
+    assert_eq!(cell(first + 5).fg, Role::Text.color());
     assert!(
-        cell(first + 5)
+        !cell(first + 5)
             .modifier
             .contains(ratatui::style::Modifier::DIM)
     );
@@ -774,8 +775,9 @@ fn the_cursor_sits_on_the_drawn_block() {
                 let cursor = super::bar_cursor(&bar, area).expect("the cursor");
                 let at = (cursor.x, cursor.y);
                 assert_eq!(buf[at].symbol(), "█", "{width}x{height} {query:?}");
+                assert_eq!(buf[at].fg, Role::Text.color(), "{width}x{height} {query:?}");
                 assert!(
-                    buf[at].modifier.contains(ratatui::style::Modifier::DIM),
+                    !buf[at].modifier.contains(ratatui::style::Modifier::DIM),
                     "{width}x{height} {query:?}"
                 );
             }

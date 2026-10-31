@@ -110,7 +110,49 @@ pub(crate) fn read(
             Vec::new()
         }
     };
-    Ok(tui::Catalogue {
+    let logged_out = providers
+        .names()
+        .filter_map(|name| {
+            if name == "scripted" {
+                return None;
+            }
+            let data = providers.get(name)?;
+            let source = providers.provider_source_dir(name)?;
+            if !source
+                .join("providers")
+                .join(format!("{name}.json"))
+                .is_file()
+                || config
+                    .credentials()
+                    .has_credential(data, &|var| std::env::var(var).ok())
+            {
+                return None;
+            }
+            let (login, hint) = match &data.credential_from {
+                config::CredentialFrom::Stored { .. } => (true, String::new()),
+                config::CredentialFrom::Function(sources) => {
+                    let hints = sources
+                        .credential_env
+                        .iter()
+                        .cloned()
+                        .chain(sources.credential_paths.iter().map(|credential| {
+                            credential.join.as_deref().map_or_else(
+                                || credential.path.clone(),
+                                |join| Path::new(&credential.path).join(join).display().to_string(),
+                            )
+                        }))
+                        .collect::<Vec<_>>();
+                    (false, hints.join(", "))
+                }
+            };
+            Some(tui::LoggedOutProvider {
+                provider: name.to_owned(),
+                login,
+                hint,
+            })
+        })
+        .collect();
+    let mut catalogue = tui::Catalogue {
         installable,
         models: entries(&providers, &config),
         // The ages read after the refresh above ran, so a refreshed
@@ -118,7 +160,10 @@ pub(crate) fn read(
         lists: ages(home, &providers, &config, now),
         notices,
         left_out: groups.iter().map(left_out).collect(),
-    })
+        ..Default::default()
+    };
+    catalogue.logged_out = logged_out;
+    Ok(catalogue)
 }
 
 /// One provider-and-setting group with no placeholder value, as the
