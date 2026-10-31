@@ -620,8 +620,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   Fiber did not send is `failed` with code `signal` and `process.signal`.
   A timeout is as above; a cancellation is `cancelled`.
 - The output the model reads ends with a closing line that says how the
-  command ended. If the command's own output does not end in a newline, a
-  newline goes first, and the closing line ends with one:
+  command ended. If the command's own output is non-empty and does not end
+  in a newline, a newline goes first. An empty output gets the closing line
+  alone. The closing line ends with a newline:
   - `Exit code N.` for an exit, 0 included;
   - `Killed by SIGNAME.` for a signal;
   - `Timed out after N ms and stopped.` for a timeout;
