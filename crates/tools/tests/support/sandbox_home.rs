@@ -21,6 +21,14 @@ impl SandboxHome {
         Self { root, fiber_home }
     }
 
+    /// A home under `$HOME` (or `/tmp` when unset) with the shared
+    /// `fiber-tools-shell-sandbox-protected` prefix, so one glob sweeps
+    /// every leftover.
+    pub(crate) fn protected() -> Self {
+        let parent = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+        Self::new(&parent, "fiber-tools-shell-sandbox-protected")
+    }
+
     /// The owned root the home derives from.
     pub(crate) fn root(&self) -> &Path {
         self.root.path()

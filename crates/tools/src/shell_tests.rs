@@ -1246,11 +1246,7 @@ fn sandbox_handle_for_test() -> (
     sandbox_home::SandboxHome,
     std::sync::Arc<std::sync::Mutex<crate::shell::sandbox::Settings>>,
 ) {
-    let parent = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let home = sandbox_home::SandboxHome::new(&parent, "fiber-tools-shell-sandbox-protected");
+    let home = sandbox_home::SandboxHome::protected();
     let handle = std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: Vec::new(),

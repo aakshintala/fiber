@@ -3298,11 +3298,7 @@ fn a_shell_guards_git_reads_by_repository() {
 }
 
 fn sandbox_settings_for_integration() -> (sandbox_home::SandboxHome, tools::SandboxSettings) {
-    let parent = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let home = sandbox_home::SandboxHome::new(&parent, "fiber-tools-shell-sandbox-protected");
+    let home = sandbox_home::SandboxHome::protected();
     let settings = tools::SandboxSettings {
         enabled: true,
         allow_write: Vec::new(),

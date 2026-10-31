@@ -2009,11 +2009,7 @@ fn sandbox_home_is_owned_and_removed_on_drop() {
 }
 
 fn sandbox_settings_for_test() -> (sandbox_home::SandboxHome, crate::shell::sandbox::Settings) {
-    let parent = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let home = sandbox_home::SandboxHome::new(&parent, "fiber-tools-shell-sandbox-protected");
+    let home = sandbox_home::SandboxHome::protected();
     let settings = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: Vec::new(),
@@ -2065,11 +2061,7 @@ fn sandbox_enabled_runs_a_confined_echo() {
 fn sandbox_unavailable_fails_closed_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-unavailable");
     let work = dir.path().to_path_buf();
-    let parent = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let home = sandbox_home::SandboxHome::new(&parent, "fiber-tools-shell-sandbox-protected");
+    let home = sandbox_home::SandboxHome::protected();
     let fiber_home = home.fiber_home().to_path_buf();
     let sandbox = crate::shell::sandbox::Settings {
         enabled: true,
