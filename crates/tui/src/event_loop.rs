@@ -343,9 +343,10 @@ pub(crate) fn run_with(
     // asks arm it, and the loop re-arms it after every frame. Without
     // the tick nothing moving on screen moves: fail instead of running
     // still.
-    if let Err(error) = terminal
-        .tick
-        .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)
+    if let Err(error) =
+        terminal
+            .tick
+            .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)
     {
         crate::timing::discard(terminal.attached_frame.take());
         return Err(error.into());

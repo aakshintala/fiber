@@ -3165,7 +3165,10 @@ fn attached_frame_stops_at_the_first_draw_holding_history() {
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.frame_inner(&rx), None);
-    assert!(lp.attached_frame.is_none(), "the drawn history stops the guard");
+    assert!(
+        lp.attached_frame.is_none(),
+        "the drawn history stops the guard"
+    );
     let path = home
         .path()
         .join("logs")
@@ -3199,7 +3202,10 @@ fn attached_frame_waits_for_an_attached_session() {
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.frame_inner(&rx), None);
-    assert!(lp.attached_frame.is_some(), "a home draw does not stop the guard");
+    assert!(
+        lp.attached_frame.is_some(),
+        "a home draw does not stop the guard"
+    );
     crate::timing::discard(lp.attached_frame.take());
     let path = home
         .path()
@@ -3229,7 +3235,10 @@ fn attached_frame_is_discarded_without_a_stream() {
     lp.attached_frame = lp.timing.attached_frame();
     let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.frame_inner(&rx), None);
-    assert!(lp.attached_frame.is_some(), "a missing stream leaves the guard open");
+    assert!(
+        lp.attached_frame.is_some(),
+        "a missing stream leaves the guard open"
+    );
     crate::timing::discard(lp.attached_frame.take());
     let path = home
         .path()

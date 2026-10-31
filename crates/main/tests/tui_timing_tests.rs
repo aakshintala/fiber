@@ -337,7 +337,7 @@ fn a_debug_resume_records_extension_and_attached_frame() {
         }),
     );
     fs::create_dir_all(extension.join("tui")).unwrap();
-    fs::write(&extension.join("init.lua"), "").unwrap();
+    fs::write(extension.join("init.lua"), "").unwrap();
     fs::write(
         extension.join("tui/init.lua"),
         concat!(
@@ -373,7 +373,10 @@ fn a_debug_resume_records_extension_and_attached_frame() {
     // docs/tui.md:3121-3123: TUI extensions load before the first frame.
     assert!(first.contains("EXTENSION-FIRST-FRAME"), "{first}");
     let grid = run.wait_screen("the attached history", |grid| grid.contents.contains(LAST));
-    assert!(grid.contents.contains(LAST), "attached history is visible: {grid:?}");
+    assert!(
+        grid.contents.contains(LAST),
+        "attached history is visible: {grid:?}"
+    );
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored primary screen", |grid| {
         !grid.alternate_screen && !grid.hide_cursor
