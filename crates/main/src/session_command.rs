@@ -66,7 +66,7 @@ pub(crate) enum WorkspaceStart {
 }
 
 impl WorkspaceStart {
-    pub(crate) fn new(
+    fn new(
         worktree: Option<Worktree>,
         opened: Option<doors::WorktreeOpener>,
     ) -> Result<Self, Failure> {
