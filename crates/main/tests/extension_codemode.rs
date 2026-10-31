@@ -197,7 +197,9 @@ fn assert_large_eq(actual: &str, expected: &str) {
 #[test]
 fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
     let big = "B".repeat(20 * 1024);
-    let source = "local small = host.tool(\"read\", { path = \"small.txt\" })\n\
+    let source = "local small = _G.host.tool(\"read\", { path = \"small.txt\" })\n\
+        local nested = load('local o = host.tool(\"read\", { path = \"nested.txt\" }); print(\"nested:\" .. o.content[1].text)')\n\
+        nested()\n\
         local big = host.tool(\"shell\", { command = \"cat big.bin\" })\n\
         print(\"small:\" .. small.content[1].text)\n\
         print(\"big:\" .. big.content[1].text:sub(1, 4))\n\
@@ -205,6 +207,7 @@ fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
         return \"ignored\"";
     let setup = reviewed_setup(&calling(source), &allow());
     std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+    std::fs::write(setup.workspace().join("nested.txt"), "world").unwrap();
     std::fs::write(setup.workspace().join("big.bin"), &big).unwrap();
     let run = ask(&setup, "run it");
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -222,14 +225,16 @@ fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
     let mut lines: Vec<&str> = text.lines().collect();
     assert_eq!(
         lines.len(),
-        6,
-        "four printed and status lines plus two ledger rows: {text:?}"
+        8,
+        "four printed and status lines plus three ledger rows: {text:?}"
     );
     let shell_row = lines.pop().unwrap();
+    let nested_read_row = lines.pop().unwrap();
     let read_row = lines.pop().unwrap();
     assert_eq!(
         lines,
         [
+            "nested:world",
             "small:hello",
             "big:BBBB",
             "multi\t1\ttrue",
@@ -237,6 +242,7 @@ fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
         ]
     );
     assert_eq!(read_row, "- read completed");
+    assert_eq!(nested_read_row, "- read completed");
     let path = shell_row
         .strip_prefix("- shell completed ")
         .unwrap_or_else(|| panic!("the cut row names its artifact: {shell_row:?}"));
@@ -385,5 +391,32 @@ fn a_disabled_extension_leaves_its_tool_out_of_the_session() {
             .any(|tool| tool["name"] == "codemode"),
         "{tools}"
     );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn an_uncut_inner_call_keeps_an_after_tool_artifact_in_the_ledger() {
+    let source = r#"local o = host.tool("read", { path = "small.txt" })
+print(o.content[1].text)"#;
+    let setup = reviewed_setup(&calling(source), &allow());
+    setup.lua(
+        "artifact",
+        r#"fiber.hook("after_tool", { timeout = 30000, on_failure = "blocking",
+           run = function(call) if call.tool == "read" then return { artifact = "full hook output" } end end })"#,
+    );
+    std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    let text = completed_text(completed);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "printed line, status and ledger: {text:?}");
+    assert_eq!(lines[0], "hello");
+    assert_eq!(lines[1], "Script finished");
+    let path = lines[2]
+        .strip_prefix("- read completed ")
+        .unwrap_or_else(|| panic!("the hook artifact path is in the row: {text:?}"));
+    let stored = std::fs::read(run.session_dir(&setup).join(path)).unwrap();
+    assert_eq!(stored, b"full hook output");
     assert_eq!(run.of("turn_completed").len(), 1);
 }
