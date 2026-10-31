@@ -66,20 +66,19 @@ impl NativeHostServices {
             if !debug.debugging() {
                 return None;
             }
-            let (identity, purpose) =
-                match crate::host::admission::http_attribution(callback.ran_by()) {
-                    crate::host::admission::HttpAttribution::Provider { provider, purpose } => {
-                        (contract::diag::Identity::Provider(provider), purpose)
+            let attribution = match crate::host::admission::http_attribution(callback.ran_by()) {
+                crate::host::admission::HttpAttribution::Provider { provider, purpose } => {
+                    crate::host::HttpAttribution::Provider { provider, purpose }
+                }
+                crate::host::admission::HttpAttribution::Extension => {
+                    crate::host::HttpAttribution::Extension {
+                        extension: callback.extension.clone(),
                     }
-                    crate::host::admission::HttpAttribution::Extension => (
-                        contract::diag::Identity::Extension(callback.extension.clone()),
-                        contract::diag::Purpose::Extension,
-                    ),
-                    crate::host::admission::HttpAttribution::Silent => return None,
-                };
+                }
+                crate::host::admission::HttpAttribution::Silent => return None,
+            };
             Some(crate::host::HttpObservation {
-                identity,
-                purpose,
+                attribution,
                 debug: Arc::clone(debug),
                 clock: Arc::clone(&self.clock),
             })

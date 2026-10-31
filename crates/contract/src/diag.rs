@@ -79,16 +79,44 @@ pub enum Purpose {
     ExtensionRelease,
 }
 
+/// A provider-only purpose. A provider identity cannot be paired with
+/// `web_fetch`, `mcp`, `extension` or `extension_release`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderPurpose {
+    /// A model call: a turn's, the reviewer's or a cache-warming refresh.
+    ModelCall,
+    /// A provider's model-list refresh.
+    ModelList,
+    /// A quota read.
+    Quota,
+    /// An OAuth token refresh.
+    TokenRefresh,
+    /// A provider's `cost()` lookup.
+    Cost,
+}
+
+impl From<ProviderPurpose> for Purpose {
+    fn from(purpose: ProviderPurpose) -> Self {
+        match purpose {
+            ProviderPurpose::ModelCall => Self::ModelCall,
+            ProviderPurpose::ModelList => Self::ModelList,
+            ProviderPurpose::Quota => Self::Quota,
+            ProviderPurpose::TokenRefresh => Self::TokenRefresh,
+            ProviderPurpose::Cost => Self::Cost,
+        }
+    }
+}
+
 impl Purpose {
     /// The eligible purpose of a provider `function` name (`models`,
     /// `quota`, `credential` or `cost`): `sign` and anything else records
     /// nothing, as the Lua and process adapters' silence shows.
-    pub fn for_provider_function(function: &str) -> Option<Purpose> {
+    pub fn for_provider_function(function: &str) -> Option<ProviderPurpose> {
         match function {
-            "models" => Some(Purpose::ModelList),
-            "quota" => Some(Purpose::Quota),
-            "credential" => Some(Purpose::TokenRefresh),
-            "cost" => Some(Purpose::Cost),
+            "models" => Some(ProviderPurpose::ModelList),
+            "quota" => Some(ProviderPurpose::Quota),
+            "credential" => Some(ProviderPurpose::TokenRefresh),
+            "cost" => Some(ProviderPurpose::Cost),
             _ => None,
         }
     }
@@ -103,12 +131,12 @@ pub struct HttpRequest {
     /// Whose request it was, absent on purposes that carry no identity.
     /// Flattened, so the wire keeps the `provider` or `extension` key.
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<Identity>,
+    identity: Option<Identity>,
     /// The model, on a model call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Why the request was made.
-    pub purpose: Purpose,
+    /// Why the request was made. Set only by the matching constructor.
+    purpose: Purpose,
     /// The URL's authority, without userinfo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
@@ -155,12 +183,22 @@ pub struct HttpRequest {
 /// path of a release URL, which holds a tag and an asset name and no
 /// secret.
 impl HttpRequest {
+    /// The identity fixed by this request's constructor.
+    pub fn identity(&self) -> Option<&Identity> {
+        self.identity.as_ref()
+    }
+
+    /// The purpose fixed by this request's constructor.
+    pub fn purpose(&self) -> Purpose {
+        self.purpose
+    }
+
     /// One request on a provider's purposes: `model_call`, `model_list`,
     /// `quota`, `token_refresh` or `cost`.
-    pub fn for_provider(provider: impl Into<String>, purpose: Purpose) -> Self {
+    pub fn for_provider(provider: impl Into<String>, purpose: ProviderPurpose) -> Self {
         Self {
             identity: Some(Identity::Provider(provider.into())),
-            purpose,
+            purpose: purpose.into(),
             ..Self::for_web_fetch()
         }
     }

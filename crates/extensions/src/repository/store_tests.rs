@@ -888,23 +888,27 @@ fn a_store_prepare_with_a_sink_writes_the_binary_line() {
         "the refused binary fails the approval: {err:?}"
     );
     let lines = lines.lines.lock().unwrap().clone();
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
     assert_eq!(lines.len(), 1, "one line per binary: {lines:?}");
     let line = &lines[0];
     assert_eq!(
-        line.purpose,
+        line.purpose(),
         contract::diag::Purpose::ExtensionRelease,
         "{line:?}"
     );
     assert_eq!(
-        line.path.as_deref(),
-        Some("/bin"),
-        "the binary's path: {line:?}"
+        line.host.as_deref(),
+        Some(closed.trim_start_matches("http://")),
+        "the manifest host stays: {line:?}"
+    );
+    assert_eq!(
+        line.path, None,
+        "manifest binary paths stay private: {line:?}"
     );
     assert_eq!(line.status, None, "no response arrived: {line:?}");
     assert_eq!(line.attempt, 1, "{line:?}");
     assert_eq!(line.request_bytes, 0, "{line:?}");
     assert_eq!(line.response_bytes, 0, "{line:?}");
-    assert_eq!(line.identity, None, "no identity: {line:?}");
+    assert_eq!(line.identity(), None, "no identity: {line:?}");
     assert_eq!(line.model, None, "no model: {line:?}");
 }

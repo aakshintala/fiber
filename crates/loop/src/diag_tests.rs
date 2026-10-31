@@ -63,7 +63,7 @@ fn debug_diag(
         log::diag::Level::Debug,
         clock as std::sync::Arc<dyn contract::clock::Clock>,
     )
-    .with_peak(read);
+    .with_resources(read);
     diag.attach(&SessionId("s-1".into()));
     std::sync::Arc::new(diag)
 }

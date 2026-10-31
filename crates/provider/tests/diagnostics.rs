@@ -237,9 +237,12 @@ fn each_protocol_writes_one_complete_record() {
         let lines = log.lines();
         assert_eq!(lines.len(), 1, "one call writes one line on {protocol}");
         let line = &lines[0];
-        assert_eq!(line.identity, Some(Identity::Provider(protocol.to_owned())));
+        assert_eq!(
+            line.identity(),
+            Some(&Identity::Provider(protocol.to_owned()))
+        );
         assert_eq!(line.model.as_deref(), Some("m"));
-        assert_eq!(line.purpose, contract::diag::Purpose::ModelCall);
+        assert_eq!(line.purpose(), contract::diag::Purpose::ModelCall);
         let host = server.url().split_once("://").unwrap().1.to_owned();
         assert_eq!(line.host.as_deref(), Some(host.as_str()), "on {protocol}");
         assert_eq!(line.path.as_deref(), Some(expected_path(protocol)));

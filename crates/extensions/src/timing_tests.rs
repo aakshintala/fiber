@@ -21,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime};
 use config::{Config, ProjectKey, Sources};
 use contract::clock::Clock;
 use contract::diag::HttpRequest as ObservedRequest;
-use contract::diag::{DebugLog, Identity, Purpose, Timing};
+use contract::diag::{DebugLog, Identity, ProviderPurpose, Purpose, Timing};
 use fakes::clock::FakeClock;
 
 use super::SessionExtensions;
@@ -451,13 +451,15 @@ fn get(url: &str, timeout: Option<Duration>) -> HttpRequest {
 
 fn observed(
     provider: &str,
-    purpose: Purpose,
+    purpose: ProviderPurpose,
     debug: Arc<dyn DebugLog>,
     clock: Arc<dyn Clock>,
 ) -> HttpObservation {
     HttpObservation {
-        identity: Identity::Provider(provider.to_owned()),
-        purpose,
+        attribution: crate::host::HttpAttribution::Provider {
+            provider: provider.to_owned(),
+            purpose,
+        },
         debug,
         clock,
     }
@@ -507,7 +509,7 @@ fn observed_and_plain_agree_on_every_outcome() {
         let plain = perform(&request);
         let seen = perform_observed(
             &request,
-            observed("p", Purpose::ModelList, sink.clone(), clock),
+            observed("p", ProviderPurpose::ModelList, sink.clone(), clock),
         );
         // A status other than 2xx is a reply, not an error: the exact
         // outcome matches on both paths.
@@ -519,8 +521,8 @@ fn observed_and_plain_agree_on_every_outcome() {
         // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
         assert_eq!(records.len(), 1);
         let record = &records[0];
-        assert_eq!(record.identity, Some(Identity::Provider("p".to_owned())));
-        assert_eq!(record.purpose, Purpose::ModelList);
+        assert_eq!(record.identity(), Some(&Identity::Provider("p".to_owned())));
+        assert_eq!(record.purpose(), Purpose::ModelList);
         assert_eq!(record.status, Some(status));
         assert_eq!(record.attempt, 1);
         assert_eq!(record.request_bytes, request_bytes);
@@ -534,8 +536,11 @@ fn observed_and_plain_agree_on_every_outcome() {
     let clock = FakeClock::new();
     let (sink, _) = Watching::new();
     let plain = perform(&refused).unwrap_err();
-    let seen =
-        perform_observed(&refused, observed("p", Purpose::Quota, sink.clone(), clock)).unwrap_err();
+    let seen = perform_observed(
+        &refused,
+        observed("p", ProviderPurpose::Quota, sink.clone(), clock),
+    )
+    .unwrap_err();
     assert_eq!(plain, seen);
     assert_eq!(plain.0, ErrorCode::ConnectionFailed);
     let records = sink.records();
@@ -583,8 +588,11 @@ fn pre_send_failures_emit_nothing() {
         let clock = FakeClock::new();
         let (sink, _) = Watching::new();
         let plain = perform(&request).unwrap_err();
-        let seen = perform_observed(&request, observed("p", Purpose::Cost, sink.clone(), clock))
-            .unwrap_err();
+        let seen = perform_observed(
+            &request,
+            observed("p", ProviderPurpose::Cost, sink.clone(), clock),
+        )
+        .unwrap_err();
         // The error's code and message match, not only its failure.
         assert_eq!(plain, seen);
         assert_eq!(plain.0, ErrorCode::ConnectionFailed);
@@ -611,7 +619,7 @@ fn milestones_come_from_the_send() {
             &get(&format!("{url}/x"), None),
             observed(
                 "p",
-                Purpose::TokenRefresh,
+                ProviderPurpose::TokenRefresh,
                 sink.clone(),
                 Script::at(&stamps),
             ),
@@ -635,7 +643,12 @@ fn partial_read_keeps_status_headers_and_count() {
     let (sink, _) = Watching::new();
     let seen = perform_observed(
         &get(&again.url(), Some(Duration::from_millis(300))),
-        observed("p", Purpose::ModelList, sink.clone(), FakeClock::new()),
+        observed(
+            "p",
+            ProviderPurpose::ModelList,
+            sink.clone(),
+            FakeClock::new(),
+        ),
     )
     .unwrap_err();
     // The same classified error on both paths: the passed backstop is a
@@ -694,7 +707,7 @@ fn cap_boundaries_hold_on_both_paths() {
                 move || {
                     perform_observed(
                         &request,
-                        observed("p", Purpose::Quota, held.clone(), FakeClock::new()),
+                        observed("p", ProviderPurpose::Quota, held.clone(), FakeClock::new()),
                     )
                 }
             },
@@ -774,7 +787,7 @@ fn purpose_mapping_covers_every_target() {
                 function: "models",
                 credential: None,
             },
-            Some(Purpose::ModelList),
+            Some(ProviderPurpose::ModelList),
         ),
         (
             Target::Provider {
@@ -782,7 +795,7 @@ fn purpose_mapping_covers_every_target() {
                 function: "quota",
                 credential: None,
             },
-            Some(Purpose::Quota),
+            Some(ProviderPurpose::Quota),
         ),
         (
             Target::Provider {
@@ -790,7 +803,7 @@ fn purpose_mapping_covers_every_target() {
                 function: "credential",
                 credential: None,
             },
-            Some(Purpose::TokenRefresh),
+            Some(ProviderPurpose::TokenRefresh),
         ),
         (
             Target::Provider {
@@ -798,7 +811,7 @@ fn purpose_mapping_covers_every_target() {
                 function: "credential",
                 credential: Some(CredentialFor::Stored(pair.clone())),
             },
-            Some(Purpose::TokenRefresh),
+            Some(ProviderPurpose::TokenRefresh),
         ),
         (
             Target::Provider {
@@ -806,7 +819,7 @@ fn purpose_mapping_covers_every_target() {
                 function: "credential",
                 credential: Some(CredentialFor::Login(Arc::clone(&slot))),
             },
-            Some(Purpose::TokenRefresh),
+            Some(ProviderPurpose::TokenRefresh),
         ),
         (
             Target::Provider {
@@ -814,7 +827,7 @@ fn purpose_mapping_covers_every_target() {
                 function: "cost",
                 credential: None,
             },
-            Some(Purpose::Cost),
+            Some(ProviderPurpose::Cost),
         ),
         (
             Target::Provider {
@@ -868,8 +881,13 @@ fn purpose_mapping_covers_every_target() {
     let hub = crate::lua::Hub::new(FakeClock::new());
     hub.set_diagnostics(sink.clone());
     let context = http_observation(&hub, &target, "mem").expect("an eligible target observes");
-    assert_eq!(context.identity, Identity::Provider("p".to_owned()));
-    assert_eq!(context.purpose, Purpose::ModelList);
+    assert_eq!(
+        context.attribution,
+        crate::host::HttpAttribution::Provider {
+            provider: "p".to_owned(),
+            purpose: ProviderPurpose::ModelList,
+        }
+    );
     assert!(sink.records().is_empty());
     // Every non-provider target observes as the extension, with no
     // provider and no host, path or model on the line.
@@ -893,8 +911,12 @@ fn purpose_mapping_covers_every_target() {
     ] {
         let context =
             http_observation(&hub, &target, "mem").expect("outside a provider function observes");
-        assert_eq!(context.identity, Identity::Extension("mem".to_owned()));
-        assert_eq!(context.purpose, Purpose::Extension);
+        assert_eq!(
+            context.attribution,
+            crate::host::HttpAttribution::Extension {
+                extension: "mem".to_owned(),
+            }
+        );
     }
     // A provider function without a purpose stays silent, whatever HTTP
     // it sends.
@@ -1253,18 +1275,18 @@ fn worker_emits_only_after_the_guard_releases() {
     );
     let provider_record = records
         .iter()
-        .find(|record| record.identity == Some(Identity::Provider("rz".to_owned())))
+        .find(|record| record.identity() == Some(&Identity::Provider("rz".to_owned())))
         .expect("the models call records its provider line");
-    assert_eq!(provider_record.purpose, Purpose::ModelList);
+    assert_eq!(provider_record.purpose(), Purpose::ModelList);
     assert_eq!(provider_record.status, Some(200));
     assert_eq!(provider_record.attempt, 1);
     assert_eq!(provider_record.headers_ms, Some(0));
     assert_eq!(provider_record.total_ms, 0);
     let hook_record = records
         .iter()
-        .find(|record| record.identity == Some(Identity::Extension("ext".to_owned())))
+        .find(|record| record.identity() == Some(&Identity::Extension("ext".to_owned())))
         .expect("the released hook records its extension line");
-    assert_eq!(hook_record.purpose, Purpose::Extension);
+    assert_eq!(hook_record.purpose(), Purpose::Extension);
     assert_eq!(hook_record.status, Some(200));
 }
 
@@ -1480,8 +1502,11 @@ fn expired_before_admission_starts_nothing() {
     // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1, "only the released hook's request records");
     let record = &records[0];
-    assert_eq!(record.identity, Some(Identity::Extension("ext".to_owned())));
-    assert_eq!(record.purpose, Purpose::Extension);
+    assert_eq!(
+        record.identity(),
+        Some(&Identity::Extension("ext".to_owned()))
+    );
+    assert_eq!(record.purpose(), Purpose::Extension);
 }
 
 #[test]
@@ -1627,8 +1652,8 @@ fn late_workers_emit_once_and_drop_late_replies() {
     let record = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrivals)
         .expect("the late worker emitted its record");
-    assert_eq!(record.identity, Some(Identity::Provider("p".to_owned())));
-    assert_eq!(record.purpose, Purpose::ModelList);
+    assert_eq!(record.identity(), Some(&Identity::Provider("p".to_owned())));
+    assert_eq!(record.purpose(), Purpose::ModelList);
     assert_eq!(record.status, Some(200));
     assert_eq!(record.attempt, 1);
     assert_eq!(record.request_bytes, 0);

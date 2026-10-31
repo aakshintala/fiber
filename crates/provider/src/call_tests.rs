@@ -138,8 +138,8 @@ fn finish_carries_provider_and_no_extension() {
     // docs/state.md, "Diagnostic logs": one line when the call ends; a retried call writes one line per attempt.
     assert_eq!(lines.len(), 1);
     assert_eq!(
-        lines[0].identity,
-        Some(Identity::Provider("fake".to_owned()))
+        lines[0].identity(),
+        Some(&Identity::Provider("fake".to_owned()))
     );
 }
 

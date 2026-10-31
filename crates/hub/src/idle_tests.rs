@@ -184,7 +184,7 @@ fn serve_with_hub_at(
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    serve_with_hub_at_peak_and_starter(
+    serve_with_hub_at_resources_and_starter(
         temp,
         idle,
         clock,
@@ -202,7 +202,7 @@ fn serve_with_hub_at_and_starter(
     level: Level,
     starter: FakeStarter,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    serve_with_hub_at_peak_and_starter(
+    serve_with_hub_at_resources_and_starter(
         temp,
         idle,
         clock,
@@ -212,17 +212,17 @@ fn serve_with_hub_at_and_starter(
     )
 }
 
-/// [`serve_with_hub_at`] reading the peak memory with `peak`. Tests use
-/// it to check the stop pair with a deterministic `resources` value.
-fn serve_with_hub_at_peak_and_starter(
+/// [`serve_with_hub_at`] reading `resources`. Tests use it to check the
+/// stop pair with a deterministic sample.
+fn serve_with_hub_at_resources_and_starter(
     temp: &Temp,
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
-    peak: fn() -> Option<log::diag::ResourcesSample>,
+    resources: fn() -> Option<log::diag::ResourcesSample>,
     starter: FakeStarter,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    // Keeps its own hub: the diag carries the test's level and peak reader.
+    // Keeps its own hub: the diag carries the test's level and resource reader.
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
         &temp.dir,
@@ -231,7 +231,7 @@ fn serve_with_hub_at_peak_and_starter(
         Arc::clone(&timed),
         crate::diag::open(&temp.dir, timed)
             .with_level(level)
-            .with_peak(peak),
+            .with_resources(resources),
     ));
     hub.diag
         .line(Severity::Info, None, "hub_started", "The hub started.");
@@ -1127,7 +1127,7 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
 fn a_signal_stop_keeps_resources_next_to_hub_stopped_during_disconnects() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let (hub, got, done) = serve_with_hub_at_peak_and_starter(
+    let (hub, got, done) = serve_with_hub_at_resources_and_starter(
         &temp,
         IDLE,
         Arc::clone(&clock),

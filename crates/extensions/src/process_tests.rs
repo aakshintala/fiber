@@ -3936,12 +3936,12 @@ fn process_http_records_the_calling_extension() {
     assert_eq!(records.len(), 1);
     let record = &records[0];
     assert_eq!(
-        record.identity,
-        Some(contract::diag::Identity::Extension(
+        record.identity(),
+        Some(&contract::diag::Identity::Extension(
             "fiber.test/proc".to_owned()
         ))
     );
-    assert_eq!(record.purpose, contract::diag::Purpose::Extension);
+    assert_eq!(record.purpose(), contract::diag::Purpose::Extension);
     assert_eq!(record.status, Some(200));
     assert_eq!(record.attempt, 1);
     // The exact key set proves no `provider`, `host`, `path`, `model`
@@ -4026,10 +4026,10 @@ fn process_http_in_a_provider_callback_keeps_the_provider_purpose() {
     assert_eq!(records.len(), 1);
     let record = &records[0];
     assert_eq!(
-        record.identity,
-        Some(contract::diag::Identity::Provider("acme".to_owned()))
+        record.identity(),
+        Some(&contract::diag::Identity::Provider("acme".to_owned()))
     );
-    assert_eq!(record.purpose, contract::diag::Purpose::ModelList);
+    assert_eq!(record.purpose(), contract::diag::Purpose::ModelList);
     assert_eq!(record.status, Some(200));
     // The exact key set proves no `extension`, `host`, `path`, `model`
     // or `first_token_ms` key, present or null.

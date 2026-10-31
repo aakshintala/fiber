@@ -251,7 +251,8 @@ and `info` lines below. At `"debug"` it also writes `debug` lines; `error`,
 `warn` and `info` lines keep their shape and carry no `data`. A process reads
 the level when it starts, so a changed value reaches new processes only. A
 debug line holds no credential, token, header value, prompt, model text, tool
-argument or configuration value.
+argument or configuration value. A websocket connection to a hub is not a
+request and writes no `http_request` line.
 
 What is recorded:
 
@@ -323,14 +324,16 @@ What is recorded:
   a provider, model, host, path, URL, server name, credential, header
   value or token, as for every line in `logs/`.
 - **At `debug`, an extension release check:** one `http_request` line per
-  tag lookup, checksum and binary download, with `purpose`
-  `extension_release`. `data` holds `host` (the authority without
+  actual HTTP request, including each redirect hop, for tag lookups,
+  checksums and binary downloads, with `purpose` `extension_release`.
+  `data` holds `host` (the authority without
   userinfo) and `path` (no query string or fragment, percent-decoded), a
   release path holding a tag and an asset name and no secret, plus
   `status` when a response came, `attempt` (always 1), `request_bytes` 0,
   `response_bytes` as read, and `headers_ms` and `total_ms`, whole
-  milliseconds from the send. Post-send failure and body-read rules are
-  the Lua provider's.
+  milliseconds from the send. A manifest-declared binary URL omits
+  `path` and keeps `host`, because its path may identify a private asset.
+  Post-send failure and body-read rules are the Lua provider's.
 - **At `debug`, the hub's memory and disk I/O:** a `resources` line just
   before each `hub_stopped`. `data` holds `peak_kib` and `current_kib`,
   peak and current memory, and `disk_read_bytes` and `disk_write_bytes`,

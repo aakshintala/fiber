@@ -204,8 +204,8 @@ fn code(output: &Output) -> Option<ErrorCode> {
 /// identity, model, host or path, no request body, and the first attempt.
 #[track_caller]
 fn assert_fixed(line: &HttpRequest) {
-    assert_eq!(line.purpose, Purpose::WebFetch);
-    assert_eq!(line.identity, None);
+    assert_eq!(line.purpose(), Purpose::WebFetch);
+    assert_eq!(line.identity(), None);
     assert_eq!(line.model, None);
     assert_eq!(line.host, None);
     assert_eq!(line.path, None);
@@ -813,6 +813,7 @@ fn a_location_header_name_is_matched_without_regard_to_case() {
 
 #[test]
 fn ten_redirects_are_followed_and_the_eleventh_fails() {
+    // docs/tools.md, "Web fetch and web search": ten hops are followed; the eleventh fails.
     let ten: Vec<_> = (1..=10).map(|n| redirect(302, &format!("/{n}"))).collect();
     let server = serve(ten.into_iter().chain([ok("text/plain", "end")]));
     let output = Rig::new().fetch(&format!("{}/0", server.url()));
@@ -880,6 +881,7 @@ fn a_redirect_chain_writes_one_line_per_hop() {
 
 #[test]
 fn a_redirect_limit_keeps_every_hop_then_fails_silent() {
+    // docs/tools.md, "Web fetch and web search": an eleventh redirect is not followed.
     let eleven: Vec<_> = (1..=11).map(|n| redirect(302, &format!("/{n}"))).collect();
     let server = serve(eleven.into_iter().chain([ok("text/plain", "never")]));
     let rig = Rig::new();
@@ -902,6 +904,7 @@ fn a_redirect_limit_keeps_every_hop_then_fails_silent() {
 
 #[test]
 fn a_redirect_to_a_blocked_address_keeps_the_first_line_only() {
+    // docs/tools.md, "Web fetch and web search": each hop refuses link-local addresses.
     let server = serve([
         redirect(302, "http://169.254.169.254/"),
         ok("text/plain", "never"),
@@ -918,6 +921,7 @@ fn a_redirect_to_a_blocked_address_keeps_the_first_line_only() {
 
 #[test]
 fn a_redirect_to_an_invalid_target_keeps_the_first_line_only() {
+    // docs/tools.md, "Web fetch and web search": a redirect to an unparseable URL fails.
     let server = serve([redirect(302, "ftp://example.com/x")]);
     let rig = Rig::new();
     let output = rig.fetch(&server.url());
@@ -1008,6 +1012,7 @@ fn a_name_the_resolver_maps_is_fetched_at_the_address_it_gave() {
 
 #[test]
 fn a_redirect_to_the_metadata_address_is_blocked_before_any_request() {
+    // docs/tools.md, "Web fetch and web search": every redirect hop is checked before connecting.
     for target in [
         "http://169.254.169.254/latest/meta-data/",
         "http://169.254.0.1/",
@@ -1094,6 +1099,7 @@ fn one_blocked_address_among_several_blocks_the_name() {
 
 #[test]
 fn a_redirect_to_a_name_that_resolves_to_a_blocked_address_is_blocked() {
+    // docs/tools.md, "Web fetch and web search": every resolved redirect address is checked.
     let server = serve([
         redirect(302, "http://evil.test:9/"),
         ok("text/plain", "never"),

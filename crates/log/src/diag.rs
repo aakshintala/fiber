@@ -162,7 +162,7 @@ pub struct Diag {
     level: Level,
     clock: Arc<dyn Clock>,
     rotate_at: Option<u64>,
-    peak: fn() -> Option<ResourcesSample>,
+    resources: fn() -> Option<ResourcesSample>,
     /// A hook run between [`Diag::resources_then_info`]'s two appends,
     /// told whether the state lock is still held. Test-only: the `state`
     /// mutex and the interval between the pair's appends are private to
@@ -194,7 +194,7 @@ impl Diag {
             level,
             clock,
             rotate_at: None,
-            peak: resources_sample,
+            resources: resources_sample,
             #[cfg(test)]
             between: None,
             state: Arc::new(Mutex::new(State {
@@ -219,10 +219,10 @@ impl Diag {
         self
     }
 
-    /// Reads the resources with `read` instead of [`resources_sample`]..
+    /// Reads the resources with `read` instead of [`resources_sample`].
     #[must_use]
-    pub fn with_peak(mut self, read: fn() -> Option<ResourcesSample>) -> Self {
-        self.peak = read;
+    pub fn with_resources(mut self, read: fn() -> Option<ResourcesSample>) -> Self {
+        self.resources = read;
         self
     }
 
@@ -263,7 +263,7 @@ impl Diag {
             level: self.level,
             clock: Arc::clone(&self.clock),
             rotate_at: None,
-            peak: self.peak,
+            resources: self.resources,
             #[cfg(test)]
             between: None,
             state: Arc::new(Mutex::new(State {
@@ -306,7 +306,7 @@ impl Diag {
         if !self.debugging() {
             return;
         }
-        if let Some(sample) = (self.peak)() {
+        if let Some(sample) = (self.resources)() {
             let _files = lock(&FILES);
             let state = lock(&self.state);
             self.resources_line(&state, sample);
@@ -320,7 +320,7 @@ impl Diag {
         let _files = lock(&FILES);
         let state = lock(&self.state);
         if self.debugging()
-            && let Some(sample) = (self.peak)()
+            && let Some(sample) = (self.resources)()
         {
             self.resources_line(&state, sample);
         }

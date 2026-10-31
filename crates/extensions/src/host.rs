@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use config::Config;
 use contract::clock::Clock;
-use contract::diag::{DebugLog, Identity, Purpose};
+use contract::diag::{DebugLog, HttpRequest as DiagnosticRequest, ProviderPurpose};
 use contract::files::PathLock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
@@ -621,15 +621,31 @@ pub(crate) fn perform_observed(
     execute(request, Some(&observation))
 }
 
-/// What one observed Lua HTTP request records: exactly one identity —
-/// the provider's registered name on a provider purpose, the extension's
-/// registered name otherwise — why the request was made, and where the
-/// line goes with what clock stamps it. Owned and immutable: snapshotted
-/// before admission and carried to the worker, never read from shared or
-/// mutable state. No URL, credential, body, header or model is held.
+/// The request identity and its purpose, paired so a provider purpose
+/// cannot be assigned to an extension identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HttpAttribution {
+    /// A provider function's request.
+    Provider {
+        /// The provider's registered name.
+        provider: String,
+        /// The provider function's purpose.
+        purpose: ProviderPurpose,
+    },
+    /// A request outside a provider function.
+    Extension {
+        /// The extension's registered name.
+        extension: String,
+    },
+}
+
+/// What one observed Lua HTTP request records: its paired identity and
+/// purpose, and where the line goes with what clock stamps it. Owned and
+/// immutable: snapshotted before admission and carried to the worker, never
+/// read from shared or mutable state. No URL, credential, body, header or
+/// model is held.
 pub(crate) struct HttpObservation {
-    pub(crate) identity: Identity,
-    pub(crate) purpose: Purpose,
+    pub(crate) attribution: HttpAttribution,
     pub(crate) debug: Arc<dyn DebugLog>,
     pub(crate) clock: Arc<dyn Clock>,
 }
@@ -761,12 +777,12 @@ fn write_request(
     // purpose with the provider's name, or any other target with the
     // extension's name. The enum makes the match total: no silent
     // preference, no unwritten line.
-    let mut line = match &observation.identity {
-        Identity::Extension(extension) => {
-            contract::diag::HttpRequest::for_extension(extension.clone())
+    let mut line = match &observation.attribution {
+        HttpAttribution::Extension { extension } => {
+            DiagnosticRequest::for_extension(extension.clone())
         }
-        Identity::Provider(provider) => {
-            contract::diag::HttpRequest::for_provider(provider.clone(), observation.purpose)
+        HttpAttribution::Provider { provider, purpose } => {
+            DiagnosticRequest::for_provider(provider.clone(), *purpose)
         }
     };
     line.status = status;

@@ -13,6 +13,7 @@ use std::time::Duration;
 use config::Manifest;
 use contract::clock::Clock;
 use contract::diag::{DebugLog, HttpRequest};
+use ureq::http::Uri;
 use ureq::unversioned::resolver::DefaultResolver;
 
 /// What a release, checksum or binary download reports on: the sink
@@ -33,10 +34,10 @@ impl Observe<'_> {
     }
 
     /// Writes the download's `extension_release` line: sanitized `host`
-    /// and query/fragment-free decoded `path`, `status` only when a
-    /// response arrived, `attempt: 1`, the posted (always zero) and
-    /// consumed byte counts, and the stamps ordered. A send that never
-    /// left (`start` `None`) writes nothing.
+    /// and, unless `include_path` is false for a manifest-declared binary,
+    /// query/fragment-free decoded `path`; `status` only when a response
+    /// arrived; `attempt: 1`; the posted and consumed byte counts; and
+    /// ordered stamps. A send that never left (`start` `None`) writes none.
     pub(crate) fn line(
         &self,
         url: &str,
@@ -44,6 +45,7 @@ impl Observe<'_> {
         headers: Option<std::time::Instant>,
         status: Option<u16>,
         consumed: u64,
+        include_path: bool,
     ) {
         let Some(debug) = self.debug.as_ref() else {
             return;
@@ -59,7 +61,8 @@ impl Observe<'_> {
             u64::try_from(instant.saturating_duration_since(start).as_millis()).unwrap_or(u64::MAX)
         };
         let (host, path) = sanitized_url(url);
-        let mut line = HttpRequest::for_extension_release(host, path);
+        let mut line =
+            HttpRequest::for_extension_release(host, if include_path { path } else { None });
         line.status = status;
         line.attempt = 1;
         line.request_bytes = 0;
@@ -124,7 +127,7 @@ pub(crate) fn prepare_binary(
             name: manifest.name.clone(),
             why: format!("`{}` names no file", manifest.name),
         })?;
-        let bytes = download_observed(&manifest.name, &binary.url, observe)?;
+        let bytes = download_manifest_observed(&manifest.name, &binary.url, observe)?;
         let got = support::sha256_hex(&bytes);
         if !got.eq_ignore_ascii_case(binary.sha256.trim()) {
             return Err(Error::BinaryChecksum {
@@ -255,11 +258,23 @@ fn binary_name(name: &str) -> Option<&str> {
 }
 
 /// Downloads `url` with the production limits and the proxy the environment
-/// names, as ureq's default config does. Nothing cancels a download, so its
-/// `Keep` holds no socket and is never stopped. The download writes one
-/// `extension_release` line on `observe`: `status` only when a response
-/// arrived, the consumed body byte count however the read ends, and no
-/// line when the send never left.
+/// names. A manifest-declared binary's path is omitted from every line.
+pub(crate) fn download_manifest_observed(
+    name: &str,
+    url: &str,
+    observe: &Observe<'_>,
+) -> Result<Vec<u8>, Error> {
+    download_with_path(
+        name,
+        url,
+        ureq::Proxy::try_from_env(),
+        net::LIMITS,
+        observe,
+        false,
+    )
+}
+
+/// Downloads a non-manifest release URL, retaining its sanitized path.
 pub(crate) fn download_observed(
     name: &str,
     url: &str,
@@ -270,9 +285,8 @@ pub(crate) fn download_observed(
 
 /// Downloads `url` over the shared connector, so a download that connects
 /// to no address within the connect bound, or waits out the idle bound for
-/// a byte, fails instead of hanging the install. Redirects are followed and
-/// a non-2xx status is an error, as ureq's defaults have it; any failure is
-/// the install's own `Download` error, not a connection error.
+/// a byte, fails instead of hanging the install. Every redirect response
+/// writes its own line; a non-2xx status is an error.
 fn download_with(
     name: &str,
     url: &str,
@@ -280,48 +294,220 @@ fn download_with(
     limits: net::Limits,
     observe: &Observe<'_>,
 ) -> Result<Vec<u8>, Error> {
-    let fail = |why: String| Error::Download {
-        name: name.into(),
-        why: format!("{url}: {why}"),
-    };
-    let agent = net::agent(
-        net::config().proxy(proxy).build(),
-        Arc::new(()),
-        DefaultResolver::default(),
-        limits,
-    );
-    // The send stamp: `None` when silent, so no clock is read at info.
-    let start = observe.stamp();
-    let mut response = match agent.get(url).call() {
-        Ok(response) => response,
-        Err(error) => {
-            // Post-send with a status keeps it; post-send without a
-            // response carries no status or headers and zero bytes. A
-            // send refusal never left, so it writes nothing.
-            if let ureq::Error::StatusCode(status) = &error {
-                observe.line(url, start, observe.stamp(), Some(*status), 0);
-            } else {
-                observe.line(url, start, None, None, 0);
-            }
-            return Err(fail(error.to_string()));
-        }
-    };
-    let status = response.status().as_u16();
-    let headers = observe.stamp();
-    let mut reader = response.body_mut().with_config().limit(MAX_BINARY).reader();
+    download_with_path(name, url, proxy, limits, observe, true)
+}
+
+fn download_with_path(
+    name: &str,
+    url: &str,
+    proxy: Option<ureq::Proxy>,
+    limits: net::Limits,
+    observe: &Observe<'_>,
+    include_path: bool,
+) -> Result<Vec<u8>, Error> {
+    let agent = agent(proxy, limits);
+    let mut observed = get_observed(name, url, &agent, observe, include_path)?;
+    let status = observed.response.status().as_u16();
+    let mut reader = observed
+        .response
+        .body_mut()
+        .with_config()
+        .limit(MAX_BINARY)
+        .reader();
     // Counted through `io::copy`: a read that fails keeps the bytes
     // consumed before it, and the line keeps them with the status.
     let mut bytes = Vec::new();
     match std::io::copy(&mut reader, &mut bytes) {
         Ok(consumed) => {
-            observe.line(url, start, headers, Some(status), consumed);
+            observe.line(
+                &observed.url.to_string(),
+                observed.start,
+                observed.headers,
+                Some(status),
+                consumed,
+                include_path,
+            );
             Ok(bytes)
         }
         Err(error) => {
-            observe.line(url, start, headers, Some(status), bytes.len() as u64);
-            Err(fail(error.to_string()))
+            observe.line(
+                &observed.url.to_string(),
+                observed.start,
+                observed.headers,
+                Some(status),
+                bytes.len() as u64,
+                include_path,
+            );
+            Err(Error::Download {
+                name: name.into(),
+                why: format!("{url}: {error}"),
+            })
         }
     }
+}
+
+/// Builds the HTTP client with redirects and status errors exposed to the
+/// caller, so it can log each response before following or refusing it.
+pub(crate) fn agent(proxy: Option<ureq::Proxy>, limits: net::Limits) -> ureq::Agent {
+    net::agent(
+        net::config()
+            .proxy(proxy)
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .build(),
+        Arc::new(()),
+        DefaultResolver::default(),
+        limits,
+    )
+}
+
+/// A successful GET's final response and the stamps for its request.
+pub(crate) struct ObservedResponse {
+    pub(crate) response: ureq::http::Response<ureq::Body>,
+    pub(crate) url: Uri,
+    pub(crate) start: Option<std::time::Instant>,
+    pub(crate) headers: Option<std::time::Instant>,
+}
+
+/// Sends one GET at a time, recording each redirect response and each
+/// response-less failure. The final 2xx response is returned for its caller
+/// to read and record.
+pub(crate) fn get_observed(
+    name: &str,
+    url: &str,
+    agent: &ureq::Agent,
+    observe: &Observe<'_>,
+    include_path: bool,
+) -> Result<ObservedResponse, Error> {
+    const MAX_REDIRECTS: usize = 10;
+    let fail = |why: String| Error::Download {
+        name: name.into(),
+        why: format!("{url}: {why}"),
+    };
+    let mut current = without_fragment(url)
+        .parse::<Uri>()
+        .map_err(|error| fail(error.to_string()))?;
+    if !http_uri(&current) {
+        return Err(fail(ureq::Error::BadUri(url.to_owned()).to_string()));
+    }
+    let mut redirects = 0;
+    loop {
+        let request_url = current.to_string();
+        let start = observe.stamp();
+        let response = match agent.get(&request_url).call() {
+            Ok(response) => response,
+            Err(error) => {
+                observe.line(&request_url, start, None, None, 0, include_path);
+                return Err(fail(error.to_string()));
+            }
+        };
+        let headers = observe.stamp();
+        let status = response.status().as_u16();
+        if response.status().is_redirection()
+            && let Some(location) = response.headers().get("location")
+        {
+            observe.line(&request_url, start, headers, Some(status), 0, include_path);
+            if redirects == MAX_REDIRECTS {
+                return Err(fail(ureq::Error::TooManyRedirects.to_string()));
+            }
+            let location = location.to_str().map_err(|error| fail(error.to_string()))?;
+            current = redirect_uri(&current, location).map_err(fail)?;
+            if !http_uri(&current) {
+                return Err(fail(ureq::Error::BadUri(current.to_string()).to_string()));
+            }
+            redirects += 1;
+            continue;
+        }
+        if !(200..300).contains(&status) {
+            observe.line(&request_url, start, headers, Some(status), 0, include_path);
+            return Err(fail(ureq::Error::StatusCode(status).to_string()));
+        }
+        return Ok(ObservedResponse {
+            response,
+            url: current,
+            start,
+            headers,
+        });
+    }
+}
+
+fn without_fragment(url: &str) -> &str {
+    url.split_once('#').map_or(url, |(before, _)| before)
+}
+
+fn http_uri(uri: &Uri) -> bool {
+    matches!(uri.scheme_str(), Some("http" | "https"))
+        && uri
+            .authority()
+            .is_some_and(|authority| !authority.as_str().is_empty())
+}
+
+/// Joins a redirect like ureq: absolute and network-path references keep
+/// their own authority, while relative paths replace the base's last segment.
+fn redirect_uri(base: &Uri, location: &str) -> Result<Uri, String> {
+    let location = without_fragment(location);
+    if let Ok(absolute) = location.parse::<Uri>()
+        && absolute.scheme().is_some()
+    {
+        return Ok(absolute);
+    }
+    let scheme = base.scheme_str().ok_or_else(|| location.to_owned())?;
+    if location.starts_with("//") {
+        return format!("{scheme}:{location}")
+            .parse()
+            .map_err(|error: ureq::http::uri::InvalidUri| error.to_string());
+    }
+    let mut parts = base.clone().into_parts();
+    let base_path = if base.path().is_empty() {
+        "/"
+    } else {
+        base.path()
+    };
+    let path_and_query = if location.is_empty() {
+        format!(
+            "{base_path}{}",
+            base.query()
+                .map_or_else(String::new, |query| format!("?{query}"))
+        )
+    } else if location.starts_with('?') {
+        format!("{base_path}{location}")
+    } else if location.starts_with('/') {
+        location.to_owned()
+    } else {
+        join_relative(base_path, location)
+    };
+    parts.path_and_query = Some(
+        path_and_query
+            .parse()
+            .map_err(|error: ureq::http::uri::InvalidUri| error.to_string())?,
+    );
+    Uri::from_parts(parts).map_err(|error| error.to_string())
+}
+
+fn join_relative(base_path: &str, location: &str) -> String {
+    let mut segments: Vec<_> = base_path.split('/').collect();
+    if segments.len() > 1 {
+        segments.pop();
+    }
+    for segment in location.split('/') {
+        match segment {
+            "." => {}
+            ".." if segments.len() > 1 => {
+                segments.pop();
+            }
+            ".." => {}
+            _ => segments.push(segment),
+        }
+    }
+    if (location == "."
+        || location == ".."
+        || location.ends_with("/.")
+        || location.ends_with("/.."))
+        && !segments.last().is_some_and(|segment| segment.is_empty())
+    {
+        segments.push("");
+    }
+    segments.join("/")
 }
 
 #[cfg(test)]

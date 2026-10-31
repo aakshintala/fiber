@@ -42,7 +42,7 @@ use extensions::{RepositorySet, StateSeed};
 /// The provider a provider-purpose record names: provider purposes always
 /// carry one, so anything else is the test's failure.
 fn provider_of(record: &HttpRequest) -> String {
-    match record.identity.clone() {
+    match record.identity().cloned() {
         Some(Identity::Provider(provider)) => provider,
         other => panic!("provider purposes carry a provider: {other:?}"),
     }
@@ -1035,7 +1035,7 @@ fn provider_purposes_record_once_per_attempt() {
         .map(|record| {
             (
                 provider_of(record),
-                serde_json::to_value(record.purpose)
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -1094,10 +1094,10 @@ fn two_calls_in_one_callback_emit_two_attempt_ones() {
     // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 2);
     for record in &records {
-        assert_eq!(record.identity, Some(Identity::Provider("p".to_owned())));
+        assert_eq!(record.identity(), Some(&Identity::Provider("p".to_owned())));
         assert_eq!(record.attempt, 1);
         assert_eq!(
-            serde_json::to_value(record.purpose).unwrap(),
+            serde_json::to_value(record.purpose()).unwrap(),
             serde_json::Value::String("model_list".to_owned())
         );
     }
@@ -1272,8 +1272,8 @@ fn sign_command_and_entry_load_record_as_the_extension() {
         .iter()
         .map(|record| {
             (
-                record.identity.clone(),
-                serde_json::to_value(record.purpose)
+                record.identity().cloned(),
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -1344,10 +1344,10 @@ fn hook_http_records_as_the_extension_with_a_sink_installed() {
     );
     let record = &records[0];
     assert_eq!(
-        record.identity,
-        Some(Identity::Extension("fiber.test/one".to_owned()))
+        record.identity(),
+        Some(&Identity::Extension("fiber.test/one".to_owned()))
     );
-    assert_eq!(record.purpose, Purpose::Extension);
+    assert_eq!(record.purpose(), Purpose::Extension);
     assert_eq!(record.status, Some(200));
     assert_eq!(record.attempt, 1);
 }
@@ -1407,10 +1407,10 @@ fn session_load_entry_http_records_with_the_load_sink() {
     assert_eq!(records.len(), 1, "the entry's request records");
     let record = &records[0];
     assert_eq!(
-        record.identity,
-        Some(Identity::Extension("fiber.test/entry".to_owned()))
+        record.identity(),
+        Some(&Identity::Extension("fiber.test/entry".to_owned()))
     );
-    assert_eq!(record.purpose, Purpose::Extension);
+    assert_eq!(record.purpose(), Purpose::Extension);
     assert_eq!(record.status, Some(200));
     assert_eq!(record.attempt, 1);
     // A test-only load installs no sink, so the same entry stays silent.
@@ -1464,10 +1464,10 @@ fn load_with_diagnostics_forwards_its_sink_to_entry() {
     // docs/state.md, "Diagnostic logs": any other host.http call records one line with purpose extension.
     assert_eq!(records.len(), 1, "the entry's request records");
     assert_eq!(
-        records[0].identity,
-        Some(Identity::Extension("fiber.test/entry".to_owned()))
+        records[0].identity(),
+        Some(&Identity::Extension("fiber.test/entry".to_owned()))
     );
-    assert_eq!(records[0].purpose, Purpose::Extension);
+    assert_eq!(records[0].purpose(), Purpose::Extension);
     // `None` stays silent: the same entry sends but records nothing.
     let _session = load_with(None);
     assert_eq!(server.requests().len(), 2, "the entry sent its HTTP again");
@@ -1631,8 +1631,8 @@ fn extension_lines_carry_the_extension_and_no_provider_or_host() {
         ]
     );
     assert_eq!(
-        records[0].identity,
-        Some(Identity::Extension("ext".to_owned()))
+        records[0].identity(),
+        Some(&Identity::Extension("ext".to_owned()))
     );
 }
 
@@ -1715,11 +1715,11 @@ fn background_refresh_is_observed() {
     // docs/state.md, "Diagnostic logs": one line when the request ends, with the provider's purpose.
     assert_eq!(records.len(), 1);
     assert_eq!(
-        records[0].identity,
-        Some(Identity::Provider("p".to_owned()))
+        records[0].identity(),
+        Some(&Identity::Provider("p".to_owned()))
     );
     assert_eq!(
-        serde_json::to_value(records[0].purpose).unwrap(),
+        serde_json::to_value(records[0].purpose()).unwrap(),
         serde_json::Value::String("model_list".to_owned())
     );
 }
@@ -1843,8 +1843,8 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         .iter()
         .map(|record| {
             (
-                record.identity.clone(),
-                serde_json::to_value(record.purpose)
+                record.identity().cloned(),
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -1885,7 +1885,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         .map(|record| {
             (
                 provider_of(record),
-                serde_json::to_value(record.purpose)
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -1981,8 +1981,8 @@ fn late_vm_entry_records_through_the_retained_sink() {
         .iter()
         .map(|record| {
             (
-                record.identity.clone(),
-                serde_json::to_value(record.purpose)
+                record.identity().cloned(),
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -2129,7 +2129,7 @@ fn session_discovery_and_refresh_carry_the_sink() {
         .records()
         .iter()
         .map(|record| {
-            serde_json::to_value(record.purpose)
+            serde_json::to_value(record.purpose())
                 .unwrap()
                 .as_str()
                 .unwrap()
@@ -2362,7 +2362,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         .map(|record| {
             (
                 provider_of(record),
-                serde_json::to_value(record.purpose)
+                serde_json::to_value(record.purpose())
                     .unwrap()
                     .as_str()
                     .unwrap()

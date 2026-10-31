@@ -19,6 +19,7 @@ use std::time::Instant;
 use contract::clock::{Clock, Wake};
 use contract::diag::{DebugLog, HttpRequest};
 use contract::tool::Cancel;
+use support::counted::Counted;
 use ureq::config::Config;
 use ureq::http::Uri;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
@@ -306,34 +307,14 @@ impl Hop {
         };
         let status = head.status;
         let mut reader = response.into_body().into_reader();
-        let mut body = Counted {
-            inner: &mut reader,
-            bytes: 0,
-        };
+        let mut body = Counted::new(&mut reader);
         let result = read(head, &mut body);
         if let (Some(observe), Some(start), Some(headers)) =
             (request.observe.as_ref(), start, headers)
         {
-            observe_request(observe, start, Some(headers), Some(status), body.bytes);
+            observe_request(observe, start, Some(headers), Some(status), body.consumed());
         }
         result.map_err(|error| error.to_string())
-    }
-}
-
-/// Counts the body bytes pulled through it, however the read ends, so a
-/// failed or stopped read still reports what arrived before it.
-struct Counted<'a> {
-    inner: &'a mut dyn Read,
-    bytes: u64,
-}
-
-impl Read for Counted<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = self.inner.read(buf)?;
-        self.bytes = self
-            .bytes
-            .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
-        Ok(read)
     }
 }
 

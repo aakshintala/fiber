@@ -23,6 +23,7 @@ use contract::clock::Clock;
 use contract::diag::{DebugLog, HttpRequest};
 use contract::tool::Cancel;
 use serde_json::Value;
+use support::counted::Counted;
 use ureq::unversioned::resolver::DefaultResolver;
 
 use crate::pipes::MAX_LINE;
@@ -876,10 +877,7 @@ fn stream_answer(
     shared: &Arc<Shared>,
     writer: &Weak<mpsc::SyncSender<Vec<u8>>>,
 ) -> u64 {
-    let mut counted = Counted {
-        inner: response.into_body().into_reader(),
-        bytes: 0,
-    };
+    let mut counted = Counted::new(response.into_body().into_reader());
     {
         let mut reader = BufReader::new(&mut counted);
         loop {
@@ -895,24 +893,7 @@ fn stream_answer(
             }
         }
     }
-    counted.bytes
-}
-
-/// Counts the body bytes pulled through it, however the read ends, so a
-/// failed or stopped read still reports what arrived before it.
-struct Counted<R> {
-    inner: R,
-    bytes: u64,
-}
-
-impl<R: Read> Read for Counted<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = self.inner.read(buf)?;
-        self.bytes = self
-            .bytes
-            .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
-        Ok(read)
-    }
+    counted.consumed()
 }
 
 /// The legacy probe: an `initialize` answered `4xx` carries no session
@@ -956,10 +937,7 @@ fn probe_legacy(id: u64, post_status: u16, link: &Arc<Link>, shared: &Arc<Shared
                 && media_type(&response) == "text/event-stream" =>
         {
             let status = response.status().as_u16();
-            let mut counted = Counted {
-                inner: response.into_body().into_reader(),
-                bytes: 0,
-            };
+            let mut counted = Counted::new(response.into_body().into_reader());
             let legacy = {
                 let mut reader = BufReader::new(&mut counted);
                 match crate::sse::next(&mut reader) {
@@ -972,7 +950,7 @@ fn probe_legacy(id: u64, post_status: u16, link: &Arc<Link>, shared: &Arc<Shared
                     | crate::sse::Next::TooLong => false,
                 }
             };
-            link.observe(start, headers, Some(status), 0, counted.bytes);
+            link.observe(start, headers, Some(status), 0, counted.consumed());
             legacy
         }
         Ok(response) => {

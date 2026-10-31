@@ -314,25 +314,24 @@ pub(crate) fn get(
     Ok((status, authenticate, body))
 }
 
-/// A JSON `POST`'s status and its body capped at 1 MiB plus one byte.
-/// When observed, the read writes one `mcp` line shaped as [`get`]'s,
-/// with the posted byte length.
-fn post_json(url: &str, body: &str, observe: &Observe) -> Result<(u16, Vec<u8>), ureq::Error> {
+/// Sends a login `POST`, reads at most 1 MiB plus one byte, and records
+/// the sent and consumed body lengths on the request's `mcp` line.
+fn post(
+    url: &str,
+    content_type: &str,
+    body: &str,
+    observe: &Observe,
+) -> Result<(u16, Vec<u8>), ureq::Error> {
+    let request_bytes = u64::try_from(body.len()).unwrap_or(u64::MAX);
     let start = observe.stamp();
     let response = match agent()
         .post(url)
-        .header("content-type", "application/json")
+        .header("content-type", content_type)
         .send(body)
     {
         Ok(response) => response,
         Err(error) => {
-            observe.line(
-                start,
-                None,
-                None,
-                u64::try_from(body.len()).unwrap_or(u64::MAX),
-                0,
-            );
+            observe.line(start, None, None, request_bytes, 0);
             return Err(error);
         }
     };
@@ -349,58 +348,30 @@ fn post_json(url: &str, body: &str, observe: &Observe) -> Result<(u16, Vec<u8>),
         start,
         headers,
         Some(status),
-        u64::try_from(body.len()).unwrap_or(u64::MAX),
+        request_bytes,
         u64::try_from(bytes.len()).unwrap_or(u64::MAX),
     );
     read.map_err(|_| ureq::Error::Timeout(ureq::Timeout::Global))?;
     Ok((status, bytes))
 }
 
-/// A form `POST`'s status and its body capped at 1 MiB plus one byte.
-/// When observed, the read writes one `mcp` line shaped as [`get`]'s,
-/// with the encoded form's byte length as the posted count.
+/// A JSON `POST`'s status and body, using the common login request pipeline.
+fn post_json(url: &str, body: &str, observe: &Observe) -> Result<(u16, Vec<u8>), ureq::Error> {
+    post(url, "application/json", body, observe)
+}
+
+/// A form `POST`'s status and body; the encoded body length is counted.
 fn post_form(
     url: &str,
     form: &[(&str, &str)],
     observe: &Observe,
 ) -> Result<(u16, Vec<u8>), ureq::Error> {
-    let body = form_body(form);
-    let start = observe.stamp();
-    let response = match agent()
-        .post(url)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .send(body.as_str())
-    {
-        Ok(response) => response,
-        Err(error) => {
-            observe.line(
-                start,
-                None,
-                None,
-                u64::try_from(body.len()).unwrap_or(u64::MAX),
-                0,
-            );
-            return Err(error);
-        }
-    };
-    let headers = observe.stamp();
-    let mut response = response;
-    let status = response.status().as_u16();
-    let mut bytes = Vec::new();
-    let read = response
-        .body_mut()
-        .as_reader()
-        .take(MAX_BODY as u64 + 1)
-        .read_to_end(&mut bytes);
-    observe.line(
-        start,
-        headers,
-        Some(status),
-        u64::try_from(body.len()).unwrap_or(u64::MAX),
-        u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-    );
-    read.map_err(|_| ureq::Error::Timeout(ureq::Timeout::Global))?;
-    Ok((status, bytes))
+    post(
+        url,
+        "application/x-www-form-urlencoded",
+        &form_body(form),
+        observe,
+    )
 }
 
 /// The origin of a canonical URL: its scheme and authority, the fallback

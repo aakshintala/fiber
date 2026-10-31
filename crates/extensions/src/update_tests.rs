@@ -1222,20 +1222,20 @@ fn an_observed_stage_writes_one_extension_release_line_per_archive() {
         "/download/v0.2.0/fiber-docs.tar.gz",
         "/download/v0.2.0/fiber-docs.tar.gz.sha256",
     ];
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
     assert_eq!(
         lines.len(),
         paths.len(),
         "one line per archive and checksum: {lines:?}"
     );
     for (line, path) in lines.iter().zip(paths) {
-        assert_eq!(line.purpose, Purpose::ExtensionRelease, "{line:?}");
+        assert_eq!(line.purpose(), Purpose::ExtensionRelease, "{line:?}");
         assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
         assert_eq!(line.path.as_deref(), Some(path), "{line:?}");
         assert_eq!(line.status, Some(200), "{line:?}");
         assert_eq!(line.attempt, 1, "{line:?}");
         assert_eq!(line.request_bytes, 0, "{line:?}");
-        assert_eq!(line.identity, None, "no identity: {line:?}");
+        assert_eq!(line.identity(), None, "no identity: {line:?}");
         assert_eq!(line.model, None, "no model: {line:?}");
         if let Some(headers) = line.headers_ms {
             assert!(

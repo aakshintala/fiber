@@ -653,7 +653,7 @@ fn an_observed_install_writes_one_extension_release_line_per_download() {
         "one line per archive and checksum: {lines:?}"
     );
     for (line, (path, bytes)) in lines.iter().zip(bodies) {
-        assert_eq!(line.purpose, Purpose::ExtensionRelease, "{line:?}");
+        assert_eq!(line.purpose(), Purpose::ExtensionRelease, "{line:?}");
         assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
         assert_eq!(line.path.as_deref(), Some(path), "{line:?}");
         assert_eq!(line.status, Some(200), "{line:?}");
@@ -664,7 +664,7 @@ fn an_observed_install_writes_one_extension_release_line_per_download() {
             u64::try_from(bytes).unwrap(),
             "the line counts what the server served: {line:?}"
         );
-        assert_eq!(line.identity, None, "no identity: {line:?}");
+        assert_eq!(line.identity(), None, "no identity: {line:?}");
         assert_eq!(line.model, None, "no model: {line:?}");
         assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
         if let Some(headers) = line.headers_ms {

@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use contract::clock::Wake;
-use contract::diag::{Op, Purpose};
+use contract::diag::{Op, ProviderPurpose};
 
 use super::*;
 use fakes::Deadline;
@@ -83,23 +83,15 @@ fn session() -> SessionId {
 }
 
 fn request() -> HttpRequest {
-    HttpRequest {
-        identity: Some(contract::diag::Identity::Provider("fake".into())),
-        model: Some("m".into()),
-        purpose: Purpose::ModelCall,
-        host: Some("127.0.0.1:50731".into()),
-        path: None,
-        status: Some(200),
-        attempt: 1,
-        request_bytes: 2214,
-        response_bytes: 913,
-        headers_ms: Some(41),
-        first_token_ms: None,
-        total_ms: 180,
-        prefix_hashes: None,
-        cache_read: None,
-        cache_write: None,
-    }
+    let mut request = HttpRequest::for_provider("fake", ProviderPurpose::ModelCall);
+    request.model = Some("m".into());
+    request.host = Some("127.0.0.1:50731".into());
+    request.status = Some(200);
+    request.request_bytes = 2214;
+    request.response_bytes = 913;
+    request.headers_ms = Some(41);
+    request.total_ms = 180;
+    request
 }
 
 #[test]
@@ -164,7 +156,7 @@ fn at_info_debug_lines_write_nothing_and_create_nothing() {
     ] {
         let diag = home
             .diag(process, Level::Info)
-            .with_peak(|| Some(sample(7)));
+            .with_resources(|| Some(sample(7)));
         assert!(!diag.debugging());
         diag.http_request(&request());
         diag.resources();
@@ -201,7 +193,7 @@ fn at_debug_resources_writes_the_reader_s_values_as_given() {
         let diag = home
             .diag(Process::Hub, Level::Info)
             .with_level(Level::Debug)
-            .with_peak(peak);
+            .with_resources(peak);
         diag.resources();
         assert_eq!(
             home.text("hub.log"),
@@ -219,7 +211,9 @@ fn at_debug_resources_writes_the_reader_s_values_as_given() {
 #[test]
 fn a_failed_resources_read_writes_nothing() {
     let home = Home::new("ld-peak-none");
-    let diag = home.diag(Process::Session, Level::Debug).with_peak(|| None);
+    let diag = home
+        .diag(Process::Session, Level::Debug)
+        .with_resources(|| None);
     diag.resources();
     assert!(!home.path().join("logs").exists());
 }
@@ -314,7 +308,7 @@ fn a_failed_write_is_silent() {
     fs::write(home.path().join("logs"), b"not a directory").unwrap();
     let diag = home
         .diag(Process::Session, Level::Debug)
-        .with_peak(|| Some(sample(1)));
+        .with_resources(|| Some(sample(1)));
     diag.line(Severity::Info, None, "extension_log", "x: y");
     diag.http_request(&request());
     diag.resources();
@@ -447,7 +441,7 @@ fn a_second_writer_waits_for_the_pair() {
     });
     let pair = home
         .diag(Process::Hub, Level::Debug)
-        .with_peak(|| Some(sample(7)))
+        .with_resources(|| Some(sample(7)))
         .with_between(between);
     let worker = thread::Builder::new()
         .name("log-test-pair".to_owned())
@@ -524,7 +518,7 @@ fn resources_then_info_writes_its_pair_with_nothing_between() {
         move |held| calls.lock().unwrap().push(held)
     });
     home.diag(Process::Hub, Level::Debug)
-        .with_peak(|| Some(sample(7)))
+        .with_resources(|| Some(sample(7)))
         .with_between(between)
         .resources_then_info("hub_stopped", "The hub stopped: signal.");
     assert_eq!(*calls.lock().unwrap(), [true]);

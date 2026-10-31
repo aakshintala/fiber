@@ -68,10 +68,10 @@ fn identity_serializes_to_its_own_wire_key() {
 #[test]
 fn for_provider_function_maps_names_to_purposes() {
     for (function, purpose) in [
-        ("models", Purpose::ModelList),
-        ("quota", Purpose::Quota),
-        ("credential", Purpose::TokenRefresh),
-        ("cost", Purpose::Cost),
+        ("models", ProviderPurpose::ModelList),
+        ("quota", ProviderPurpose::Quota),
+        ("credential", ProviderPurpose::TokenRefresh),
+        ("cost", ProviderPurpose::Cost),
     ] {
         assert_eq!(
             Purpose::for_provider_function(function),
@@ -224,11 +224,11 @@ fn a_prefix_hash_without_optional_segments_leaves_them_out() {
 #[test]
 fn provider_purposes_keep_provider_and_gain_no_extension() {
     for purpose in [
-        Purpose::ModelCall,
-        Purpose::ModelList,
-        Purpose::Quota,
-        Purpose::TokenRefresh,
-        Purpose::Cost,
+        ProviderPurpose::ModelCall,
+        ProviderPurpose::ModelList,
+        ProviderPurpose::Quota,
+        ProviderPurpose::TokenRefresh,
+        ProviderPurpose::Cost,
     ] {
         let request = HttpRequest::for_provider("fake", purpose);
         let line = serde_json::to_string(&request).unwrap();
@@ -238,8 +238,8 @@ fn provider_purposes_keep_provider_and_gain_no_extension() {
         );
         assert!(!line.contains("extension"), "{purpose:?}: {line}");
         assert_eq!(
-            request.identity,
-            Some(Identity::Provider("fake".into())),
+            request.identity(),
+            Some(&Identity::Provider("fake".into())),
             "{purpose:?}"
         );
     }
@@ -260,13 +260,13 @@ fn web_fetch_and_mcp_carry_no_identity_model_host_or_path() {
             assert!(
                 !line.contains(absent),
                 "{absent} is absent on {:?}: {line}",
-                request.purpose
+                request.purpose()
             );
         }
         assert!(!line.contains("null"), "{line}");
     }
-    assert_eq!(HttpRequest::for_web_fetch().purpose, Purpose::WebFetch);
-    assert_eq!(HttpRequest::for_mcp().purpose, Purpose::Mcp);
+    assert_eq!(HttpRequest::for_web_fetch().purpose(), Purpose::WebFetch);
+    assert_eq!(HttpRequest::for_mcp().purpose(), Purpose::Mcp);
 }
 
 #[test]
@@ -306,31 +306,17 @@ fn extension_release_carries_host_and_path_but_no_identity_or_model() {
 }
 
 #[test]
-fn a_model_call_built_by_for_web_fetch_fails_the_provider_key_check() {
-    // The constructors fix the wire identity: a model call needs a
-    // provider, which `for_web_fetch` never sets. Re-purposing its
-    // skeleton leaves the line without one.
-    let mut request = HttpRequest::for_web_fetch();
-    request.purpose = Purpose::ModelCall;
-    let line = serde_json::to_string(&request).unwrap();
-    assert!(
-        !line.contains("\"provider\""),
-        "a model_call without provider is not on the wire: {line}"
-    );
-}
-
-#[test]
 fn constructors_start_attempt_at_one_with_zero_bytes() {
     for request in [
-        HttpRequest::for_provider("fake", Purpose::Quota),
+        HttpRequest::for_provider("fake", ProviderPurpose::Quota),
         HttpRequest::for_web_fetch(),
         HttpRequest::for_mcp(),
         HttpRequest::for_extension("mem"),
         HttpRequest::for_extension_release(None, None),
     ] {
-        assert_eq!(request.attempt, 1, "{:?}", request.purpose);
-        assert_eq!(request.request_bytes, 0, "{:?}", request.purpose);
-        assert_eq!(request.response_bytes, 0, "{:?}", request.purpose);
-        assert_eq!(request.total_ms, 0, "{:?}", request.purpose);
+        assert_eq!(request.attempt, 1, "{:?}", request.purpose());
+        assert_eq!(request.request_bytes, 0, "{:?}", request.purpose());
+        assert_eq!(request.response_bytes, 0, "{:?}", request.purpose());
+        assert_eq!(request.total_ms, 0, "{:?}", request.purpose());
     }
 }

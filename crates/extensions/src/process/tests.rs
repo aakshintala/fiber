@@ -417,7 +417,7 @@ fn admission_row(ran_by: Option<&str>) -> (Option<admission::ToolAnchor>, bool, 
 #[test]
 fn http_attribution_keeps_provider_callbacks_with_their_purpose() {
     use admission::HttpAttribution::{Extension, Provider, Silent};
-    use contract::diag::Purpose::{Cost, ModelList, Quota, TokenRefresh};
+    use contract::diag::ProviderPurpose::{Cost, ModelList, Quota, TokenRefresh};
     // Each eligible provider function keeps its name and purpose.
     assert_eq!(
         admission::http_attribution(Some("provider acme.models")),

@@ -127,7 +127,8 @@ pub fn install_docs_if_missing_observed(
 /// The newest stable release tag: the tag `releases/latest` redirects
 /// to. A fetch failure is [`Error::Download`] naming the URL. The
 /// redirect target is read, never the body. The observed entry carries
-/// the probe's line; [`latest_stable_tag`] stays silent.
+/// one line per actual request, including each redirect; [`latest_stable_tag`]
+/// stays silent.
 pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
     latest_stable_tag_observed(
         web_base,
@@ -138,49 +139,20 @@ pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
     )
 }
 
-/// As [`latest_stable_tag`], writing the probe's line on `observe`.
+/// As [`latest_stable_tag`], writing one line per actual request on `observe`.
 pub fn latest_stable_tag_observed(web_base: &str, observe: &Observe<'_>) -> Result<String, Error> {
-    use ureq::ResponseExt as _;
     let url = format!("{}/releases/latest", web_base.trim_end_matches('/'));
-    let fail = |why: String| Error::Download {
-        name: "stable".into(),
-        why: format!("{url}: {why}"),
-    };
-    let agent = net::agent(
-        net::config().proxy(ureq::Proxy::try_from_env()).build(),
-        std::sync::Arc::new(()),
-        ureq::unversioned::resolver::DefaultResolver::default(),
-        net::LIMITS,
-    );
-    // The send stamp: `None` when silent, so no clock is read at info.
-    let start = observe.stamp();
-    let response = match agent.get(&url).call() {
-        Ok(response) => response,
-        Err(error) => {
-            // A status-bearing failure keeps the status and the header
-            // timing, as a download's does; a failure before a response
-            // carries neither.
-            if let ureq::Error::StatusCode(status) = &error {
-                observe.line(&url, start, observe.stamp(), Some(*status), 0);
-            } else {
-                observe.line(&url, start, None, None, 0);
-            }
-            return Err(fail(error.to_string()));
-        }
-    };
+    let agent = crate::prepare::agent(ureq::Proxy::try_from_env(), net::LIMITS);
+    let observed = crate::prepare::get_observed("stable", &url, &agent, observe, true)?;
     observe.line(
-        &url,
-        start,
-        observe.stamp(),
-        Some(response.status().as_u16()),
+        &observed.url.to_string(),
+        observed.start,
+        observed.headers,
+        Some(observed.response.status().as_u16()),
         0,
+        true,
     );
-    let tag = response
-        .get_uri()
-        .path()
-        .rsplit('/')
-        .next()
-        .unwrap_or_default();
+    let tag = observed.url.path().rsplit('/').next().unwrap_or_default();
     Ok(tag.to_owned())
 }
 

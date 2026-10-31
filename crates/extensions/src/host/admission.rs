@@ -260,7 +260,10 @@ pub(crate) fn exec_logged(ran_by: Option<&str>) -> bool {
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) enum HttpAttribution {
     /// Inside an eligible provider function: the provider and purpose.
-    Provider { provider: String, purpose: Purpose },
+    Provider {
+        provider: String,
+        purpose: contract::diag::ProviderPurpose,
+    },
     /// Inside a provider function with no eligible purpose: silent.
     Silent,
     /// Anywhere else: the extension's own request.

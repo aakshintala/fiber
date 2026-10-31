@@ -279,9 +279,11 @@ pub(super) fn admit<'a>(
                             drop(worker.lock());
                             #[cfg(test)]
                             if let Some(observation) = http.as_ref() {
-                                let provider = match &observation.identity {
-                                    contract::diag::Identity::Provider(name) => Some(name.as_str()),
-                                    contract::diag::Identity::Extension(_) => None,
+                                let provider = match &observation.attribution {
+                                    host::HttpAttribution::Provider { provider, .. } => {
+                                        Some(provider.as_str())
+                                    }
+                                    host::HttpAttribution::Extension { .. } => None,
                                 };
                                 await_observed_release(provider);
                             }

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use contract::JobId;
 use contract::clock::Clock;
-use contract::diag::{DebugLog, Identity, Purpose};
+use contract::diag::{DebugLog, ProviderPurpose, Purpose};
 use serde_json::{Value, json};
 
 use crate::oauth::{Browser, LoginSlot, SystemBrowser};
@@ -1108,7 +1108,7 @@ pub(crate) enum Target {
 /// send. The function-name mapping is the contract's, shared with the
 /// process adapter; this only reads the target. A pure mapping of the
 /// value, as the seam holds no behaviour.
-pub(crate) fn provider_purpose(target: &Target) -> Option<(&str, Purpose)> {
+pub(crate) fn provider_purpose(target: &Target) -> Option<(&str, ProviderPurpose)> {
     let Target::Provider { name, function, .. } = target else {
         return None;
     };
@@ -1131,25 +1131,26 @@ pub(crate) fn http_observation(
     target: &Target,
     extension: &str,
 ) -> Option<host::HttpObservation> {
-    let (identity, purpose) = match provider_purpose(target) {
-        Some((provider, purpose)) => (Identity::Provider(provider.to_owned()), purpose),
+    let attribution = match provider_purpose(target) {
+        Some((provider, purpose)) => host::HttpAttribution::Provider {
+            provider: provider.to_owned(),
+            purpose,
+        },
         // Outside a provider function there is no provider purpose: the
         // request is the extension's own. The named provider functions
         // live in the contract's mapping, so the test is "outside a
         // provider function" and the list cannot go stale.
         None if matches!(target, Target::Provider { .. }) => return None,
-        None => (
-            Identity::Extension(extension.to_owned()),
-            Purpose::Extension,
-        ),
+        None => host::HttpAttribution::Extension {
+            extension: extension.to_owned(),
+        },
     };
     let debug = hub.diagnostics()?;
     if !debug.debugging() {
         return None;
     }
     Some(host::HttpObservation {
-        identity,
-        purpose,
+        attribution,
         debug,
         clock: hub.clock_handle(),
     })

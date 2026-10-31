@@ -64,8 +64,8 @@ fn observed(clock: &FakeClock) -> (Arc<Lines>, Observe<'_>) {
 /// provider, extension or model identity, no token timing, one GET,
 /// nothing posted, and the headers before the end.
 fn assert_release_shape(line: &HttpRequest) {
-    assert_eq!(line.purpose, Purpose::ExtensionRelease, "{line:?}");
-    assert_eq!(line.identity, None, "no identity: {line:?}");
+    assert_eq!(line.purpose(), Purpose::ExtensionRelease, "{line:?}");
+    assert_eq!(line.identity(), None, "no identity: {line:?}");
     assert_eq!(line.model, None, "no model: {line:?}");
     assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
     assert_eq!(line.attempt, 1, "every download sends once: {line:?}");
@@ -600,28 +600,90 @@ fn prepare_binary_downloads_the_binary_but_runs_no_install_step() {
     );
 }
 
-/// An observed download writes one `extension_release` line: the
-/// server's host, the download's path, status 200, and the served body
-/// count.
 #[test]
-fn an_observed_download_writes_one_extension_release_line() {
-    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-    let url = format!("{}/tool?x=1#frag", server.url());
+fn manifest_binary_observation_keeps_host_but_omits_path() {
+    let body = b"binary";
+    let digest = super::hex(ring::digest::digest(&ring::digest::SHA256, body).as_ref());
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, body.to_vec())]).unwrap();
+    let url = format!("{}/private/package-token/asset", server.url());
+    let manifest: config::Manifest = serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "v1.0.0",
+        "fiber": "0.1.0",
+        "api": 1,
+        "binaries": { platform(): { "url": url, "sha256": digest } },
+    }))
+    .unwrap();
+    let dir = fakes::TempDir::new("fiber-manifest-binary-observation");
+    let clock = FakeClock::new();
+    let (lines, observe) = observed(&clock);
+    super::prepare_binary(dir.path(), &manifest, &observe).unwrap();
+    let lines = lines.recorded();
+    // docs/state.md, "Diagnostic logs": one line for this actual binary request, with its manifest path omitted.
+    assert_eq!(lines.len(), 1, "one request: {lines:?}");
+    let line = &lines[0];
+    assert_release_shape(line);
+    let host = server.url().trim_start_matches("http://").to_owned();
+    assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
+    assert_eq!(line.path, None, "manifest paths stay private: {line:?}");
+    assert_eq!(line.status, Some(200), "{line:?}");
+    assert_eq!(line.response_bytes, body.len() as u64, "{line:?}");
+    assert!(
+        !serde_json::to_string(line)
+            .unwrap()
+            .contains("package-token"),
+        "the manifest path is absent from the serialized line: {line:?}"
+    );
+}
+
+/// An observed download writes one `extension_release` line per actual
+/// request, including the redirect hop, and strips queries from each path.
+#[test]
+fn an_observed_download_writes_one_extension_release_line_per_hop() {
+    let mut redirect = fakes::Response::status(302, "");
+    redirect
+        .headers
+        .push(("location".into(), "/tool?x=1".into()));
+    let server =
+        fakes::ProviderServer::start([redirect, fakes::Response::status(200, "{}")]).unwrap();
+    let url = format!("{}/start?x=1#frag", server.url());
     let clock = FakeClock::new();
     let (lines, observe) = observed(&clock);
     let bytes = download_observed("probe", &url, &observe).unwrap();
     assert_eq!(bytes, b"{}");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
-    assert_eq!(lines.len(), 1, "one line per download: {lines:?}");
-    let line = &lines[0];
-    assert_release_shape(line);
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, each redirect included.
+    assert_eq!(lines.len(), 2, "one line per request: {lines:?}");
     let host = server.url().trim_start_matches("http://").to_owned();
-    assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
-    // The query and fragment never reach the line.
-    assert_eq!(line.path.as_deref(), Some("/tool"), "{line:?}");
-    assert_eq!(line.status, Some(200), "{line:?}");
-    assert_eq!(line.response_bytes, 2, "{line:?}");
+    for line in &lines {
+        assert_release_shape(line);
+        assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
+    }
+    // The fragment never reaches the server, and neither query reaches a line.
+    assert_eq!(lines[0].path.as_deref(), Some("/start"), "{:?}", lines[0]);
+    assert_eq!(lines[0].status, Some(302), "{:?}", lines[0]);
+    assert_eq!(lines[0].response_bytes, 0, "{:?}", lines[0]);
+    assert_eq!(lines[1].path.as_deref(), Some("/tool"), "{:?}", lines[1]);
+    assert_eq!(lines[1].status, Some(200), "{:?}", lines[1]);
+    assert_eq!(lines[1].response_bytes, 2, "{:?}", lines[1]);
+}
+
+#[test]
+fn redirect_resolution_handles_empty_query_only_and_relative_references() {
+    let base = "https://example.test/a/b?old=1".parse().unwrap();
+    for (location, expected) in [
+        ("", "https://example.test/a/b?old=1"),
+        ("#fragment", "https://example.test/a/b?old=1"),
+        ("?new=2", "https://example.test/a/b?new=2"),
+        (".", "https://example.test/a/"),
+        ("../c", "https://example.test/c"),
+        ("../../../c", "https://example.test/c"),
+        ("//cdn.example.test/a", "https://cdn.example.test/a"),
+    ] {
+        let actual = super::redirect_uri(&base, location).unwrap();
+        assert_eq!(actual.to_string(), expected, "{location}");
+    }
 }
 
 /// A refused download writes a statusless line: no response arrived,

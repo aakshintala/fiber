@@ -613,6 +613,7 @@ fn diagnostic_file(home: &Path, name: &str) -> Vec<Value> {
 
 #[test]
 fn one_shot_mcp_login_logs_with_cli_process_and_no_session() {
+    // docs/state.md, "Diagnostic logs": one line per POST and per GET the MCP login sends.
     let setup = Setup::new();
     let empty = setup.root.path().join("empty");
     fs::create_dir_all(&empty).unwrap();

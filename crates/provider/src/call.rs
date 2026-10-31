@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use contract::diag::{DebugLog, HttpRequest, PrefixHashes, Purpose, Timing};
+use contract::diag::{DebugLog, HttpRequest, PrefixHashes, ProviderPurpose, Timing};
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Reply};
 use contract::shapes::Tokens;
@@ -218,7 +218,8 @@ impl ObservationFinish {
         self.done = true;
         let total = self.clock.now();
         let (host, path) = http::sanitized_target(&self.url, &self.redact);
-        let mut request = HttpRequest::for_provider(self.provider.clone(), Purpose::ModelCall);
+        let mut request =
+            HttpRequest::for_provider(self.provider.clone(), ProviderPurpose::ModelCall);
         request.model = self.model.clone();
         request.host = host;
         request.path = path;

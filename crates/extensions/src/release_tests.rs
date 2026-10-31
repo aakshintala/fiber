@@ -57,8 +57,8 @@ fn observed(clock: &fakes::clock::FakeClock) -> (Arc<Lines>, Observe<'_>) {
 /// The `extension_release` shape every release line holds: no identity,
 /// one GET, nothing posted, and the headers before the end.
 fn assert_release_shape(line: &HttpRequest) {
-    assert_eq!(line.purpose, Purpose::ExtensionRelease, "{line:?}");
-    assert_eq!(line.identity, None, "no identity: {line:?}");
+    assert_eq!(line.purpose(), Purpose::ExtensionRelease, "{line:?}");
+    assert_eq!(line.identity(), None, "no identity: {line:?}");
     assert_eq!(line.model, None, "no model: {line:?}");
     assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
     assert_eq!(line.attempt, 1, "every download sends once: {line:?}");
@@ -733,7 +733,7 @@ fn an_observed_nightly_tag_writes_its_lists_line() {
     let tag = fetch_nightly_tag_observed(&server.url(), &observe).unwrap();
     assert_eq!(tag, "v0.3.0-nightly.20240102");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
     assert_eq!(lines.len(), 1, "one line per list: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -744,8 +744,8 @@ fn an_observed_nightly_tag_writes_its_lists_line() {
     assert_eq!(line.status, Some(200), "{line:?}");
 }
 
-/// An observed stable tag writes its probe's line: the probe path,
-/// status 200, and the tag the redirect names.
+/// An observed stable-tag lookup writes a line for both the redirect
+/// request and the final request.
 #[test]
 fn an_observed_stable_tag_writes_its_probes_line() {
     let mut redirect = fakes::Response::status(302, "");
@@ -765,16 +765,16 @@ fn an_observed_stable_tag_writes_its_probes_line() {
     let tag = latest_stable_tag_observed(&server.url(), &observe).unwrap();
     assert_eq!(tag, "v0.2.0");
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
-    assert_eq!(lines.len(), 1, "one line per probe: {lines:?}");
-    let line = &lines[0];
-    assert_release_shape(line);
-    assert_eq!(line.path.as_deref(), Some("/releases/latest"), "{line:?}");
-    assert_eq!(line.status, Some(200), "{line:?}");
-    assert_eq!(
-        line.response_bytes, 0,
-        "the redirect target is read, never the body: {line:?}"
-    );
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, each redirect included.
+    assert_eq!(lines.len(), 2, "one line per request: {lines:?}");
+    for line in &lines {
+        assert_release_shape(line);
+        assert_eq!(line.response_bytes, 0, "the body is never read: {line:?}");
+    }
+    assert_eq!(lines[0].path.as_deref(), Some("/releases/latest"));
+    assert_eq!(lines[0].status, Some(302));
+    assert_eq!(lines[1].path.as_deref(), Some("/releases/tag/v0.2.0"));
+    assert_eq!(lines[1].status, Some(200));
 }
 
 /// An observed stable tag whose probe fails with a status keeps the
@@ -791,7 +791,7 @@ fn an_observed_stable_tag_failure_keeps_the_status_and_header_timing() {
         "a failed probe names its URL: {err}"
     );
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
     assert_eq!(lines.len(), 1, "one line per probe: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
@@ -826,7 +826,7 @@ fn an_observed_nightly_tag_failure_writes_only_the_lists_line() {
         "a failed list names its URL: {err}"
     );
     let lines = lines.recorded();
-    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    // docs/state.md, "Diagnostic logs": one line per actual release HTTP request, including redirect hops.
     assert_eq!(lines.len(), 1, "the rejection reads no target: {lines:?}");
     let line = &lines[0];
     assert_release_shape(line);
