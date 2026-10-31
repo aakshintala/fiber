@@ -873,6 +873,7 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
         (TuiLogRead, "tui.log_read"),
         (TuiTranscript, "tui.transcript"),
         (TuiFirstRender, "tui.first_render"),
+        (TuiAttachedFrame, "tui.attached_frame"),
         // `TuiFrame` at rest writes no line; the frame test above times it.
         (LogAppend, "log.append"),
         (LogFsync, "log.fsync"),

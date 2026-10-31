@@ -142,6 +142,8 @@ pub enum Op {
     TuiTranscript,
     /// The terminal's first frame.
     TuiFirstRender,
+    /// The first draw holding attached-session history.
+    TuiAttachedFrame,
     /// A terminal frame past its 16 ms budget; one within budget writes
     /// no line.
     TuiFrame,
@@ -217,6 +219,7 @@ impl Op {
             Self::TuiLogRead => "tui.log_read",
             Self::TuiTranscript => "tui.transcript",
             Self::TuiFirstRender => "tui.first_render",
+            Self::TuiAttachedFrame => "tui.attached_frame",
             Self::TuiFrame => "tui.frame",
             Self::TuiExtensions => "tui.extensions",
             Self::TuiAttachSummary => "tui.attach_summary",

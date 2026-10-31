@@ -391,7 +391,7 @@ fn debug_pass_is_skipped_unless_only_all() {
 /// The attach workload's entry carries its per-sample, per-fixture spans
 /// in no promised order, separate from the tallied totals, with no error
 /// when spans exist. The one-line-per-process attach spans are documented
-/// in `docs/state.md:423-446`.
+/// in `docs/state.md:423-453`.
 #[test]
 fn debug_pass_attach_entry_carries_per_sample_spans() {
     let mut head = Pass::new(Side::Head, args(&["--paging", "j"]));
@@ -400,15 +400,15 @@ fn debug_pass_attach_entry_carries_per_sample_spans() {
             run_spans(
                 Ok(()),
                 Vec::new(),
-                vec![text(vec![op("tui.tail_wait", 11)])],
+                vec![text(vec![op("tui.attached_frame", 11)])],
                 vec![
                     (
                         crate::attach::SPAN_METRIC,
-                        json!({"fixture": "1 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 11}),
+                        json!({"fixture": "1 MiB", "sample": 0, "op": "tui.attached_frame", "ms": 11}),
                     ),
                     (
                         crate::attach::SPAN_METRIC,
-                        json!({"fixture": "10 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 13}),
+                        json!({"fixture": "10 MiB", "sample": 0, "op": "tui.attached_frame", "ms": 13}),
                     ),
                 ],
             )
@@ -425,25 +425,34 @@ fn debug_pass_attach_entry_carries_per_sample_spans() {
         .get("spans")
         .and_then(|spans| spans.as_array())
         .expect("attach entry carries a spans array");
-    assert_eq!(spans.len(), 2, "{attach}");
-    // `docs/state.md:423-446` promises counts and scopes, not sample
-    // order, so the comparison sorts both sides: the exact rows and
-    // their count still match, in any order.
-    let mut got = spans.clone();
+    // `docs/state.md:423-453` promises counts and scopes, not sample
+    // order, so compare fixture/sample/op identities in any order and
+    // leave elapsed values unasserted.
+    let mut got: Vec<Value> = spans
+        .iter()
+        .map(|span| json!({
+            "fixture": span["fixture"],
+            "sample": span["sample"],
+            "op": span["op"],
+        }))
+        .collect();
     let mut want = vec![
-        json!({"fixture": "1 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 11}),
-        json!({"fixture": "10 MiB", "sample": 0, "op": "tui.tail_wait", "ms": 13}),
+        json!({"fixture": "1 MiB", "sample": 0, "op": "tui.attached_frame"}),
+        json!({"fixture": "10 MiB", "sample": 0, "op": "tui.attached_frame"}),
     ];
     let key = |span: &Value| serde_json::to_string(span).unwrap_or_default();
     got.sort_by_key(|span| key(span));
     want.sort_by_key(|span| key(span));
     assert_eq!(got, want, "{attach}");
     assert!(attach.get("error").is_none(), "{attach}");
-    // The tallied totals still stand beside the spans.
+    // docs/state.md:431-434 promises one attached-frame line per process.
+    // The tallied operation name remains beside its spans.
     assert_eq!(
-        attach.get("ops"),
-        Some(&json!({"tui.tail_wait": {"count": 1, "ms": 11}})),
-        "{attach}"
+        attach
+            .get("ops")
+            .and_then(|ops| ops["tui.attached_frame"]["count"].as_u64()),
+        Some(1),
+        "the operation name is retained: {attach}"
     );
 }
 

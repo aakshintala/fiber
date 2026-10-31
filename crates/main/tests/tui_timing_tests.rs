@@ -283,8 +283,11 @@ fn a_debug_resume_records_first_render_log_read_and_transcript_once_each() {
     // No `tui.frame` assertion: a loaded machine can push a real frame
     // past 16 ms, so absence would flake; suppression is pinned in the
     // `log` crate and over-budget wiring in the `tui` crate.
+    // docs/state.md:429-431 promises one first-render line.
     assert_terminal_wire(&ops(&setup, pid, "tui.first_render"), "tui.first_render");
+    // docs/state.md:434-439 promises one first-page read line.
     assert_terminal_wire(&ops(&setup, pid, "tui.log_read"), "tui.log_read");
+    // docs/state.md:437-439 promises one transcript line after a successful load.
     assert_terminal_wire(&ops(&setup, pid, "tui.transcript"), "tui.transcript");
     for line in op_lines(&setup, pid) {
         if line["process"] != "tui" {
@@ -315,4 +318,73 @@ fn at_default_no_debug_line_is_written() {
         let line: Value = serde_json::from_str(line).unwrap();
         assert_ne!(line["level"], "debug", "the default stays silent: {line}");
     }
+}
+
+/// The loaded input-box slot changes the first frame; the attached frame
+/// then shows history before the attached-frame record is checked.
+#[test]
+fn a_debug_resume_records_extension_and_attached_frame() {
+    let setup = Setup::new();
+    seed(&setup, json!({"diagnostics": {"level": "debug"}}));
+    let extension = setup.root.path().join("attached-frame-extension");
+    write_json(
+        &extension.join("extension.json"),
+        &json!({
+            "name": "attached-frame",
+            "version": "v3.0.0",
+            "fiber": "0.0.0",
+            "api": 1
+        }),
+    );
+    fs::create_dir_all(extension.join("tui")).unwrap();
+    fs::write(&extension.join("init.lua"), "").unwrap();
+    fs::write(
+        extension.join("tui/init.lua"),
+        concat!(
+            "fiber.slot('input_box',{timeout=100,render=function(input,width) ",
+            "return {{{text='EXTENSION-FIRST-FRAME'}}} end})",
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(extension),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+
+    let mut run = Run::spawn(
+        &setup,
+        COLS,
+        ROWS,
+        &["resume", ID],
+        &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+    );
+    let pid = run.id();
+    let first_end = run.ready();
+    let output = run.output();
+    let mut parser = vt100::Parser::new(ROWS, COLS, 0);
+    parser.process(&output[..first_end]);
+    let first = parser.screen().contents();
+    // docs/tui.md:3055-3057: TUI extensions load before the first frame.
+    assert!(first.contains("EXTENSION-FIRST-FRAME"), "{first}");
+    let grid = run.wait_screen("the attached history", |grid| grid.contents.contains(LAST));
+    assert!(grid.contents.contains(LAST), "attached history is visible: {grid:?}");
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    // docs/state.md:427-428 promises one line when the TUI loader exists.
+    assert_terminal_wire(&ops(&setup, pid, "tui.extensions"), "tui.extensions");
+    // docs/state.md:431-434 promises one line at the first attached-history draw.
+    assert_terminal_wire(
+        &ops(&setup, pid, "tui.attached_frame"),
+        "tui.attached_frame",
+    );
 }

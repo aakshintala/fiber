@@ -421,13 +421,18 @@ What is recorded:
   finds the path present, and `fiber sessions prune` write none. Their
   `data` holds only `op` and `ms`.
   Installed for the terminal are `tui.extensions`, `tui.first_render`,
-  `tui.log_read`, `tui.transcript`, `tui.frame`, `tui.attach_summary`,
-  `tui.tail_wait`, `tui.preview_fold` and `tui.tail_install`.
+  `tui.attached_frame`, `tui.log_read`, `tui.transcript`, `tui.frame`,
+  `tui.attach_summary`, `tui.tail_wait`, `tui.preview_fold` and
+  `tui.tail_install`.
   `tui.extensions` covers extension loading before the first draw; when a
   loader exists it writes once per process, and without one it writes none
   (`docs/tui.md`, "How a TUI extension runs"). `tui.first_render` covers
   entry through the first draw; a setup failure before the draw discards it
-  and writes none. `tui.log_read` covers the first attach's first fetched
+  and writes none. `tui.attached_frame` starts at the `tui.first_render`
+  entry and ends at the first draw holding attached-session history. It
+  writes once per process. An attach with no stream, or one that ends
+  before that draw, writes none. `tui.log_read` covers the first
+  attach's first fetched
   page, the first `page_in` `hub.fetch` attempt, to completion whatever its outcome,
   and `tui.transcript` covers the first successful `app.load` folding that
   page; each is written at most once per process, a failed fetch leaves the

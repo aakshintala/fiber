@@ -50,6 +50,13 @@ impl Timing {
         log::diag::timed(&self.diag, Op::TuiFirstRender, None, None)
     }
 
+    /// Starts alongside the first render's guard. The caller holds it
+    /// until the first draw with attached-session history and discards it
+    /// if that draw never happens.
+    pub(crate) fn attached_frame(&self) -> Option<log::diag::Timer> {
+        log::diag::timed(&self.diag, Op::TuiAttachedFrame, None, None)
+    }
+
     /// Starts the first attach's first fetched page guard, once per
     /// process. The caller holds it across the first actual `page_in`
     /// `hub.fetch` attempt to completion, whatever its outcome: an

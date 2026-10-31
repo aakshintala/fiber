@@ -113,6 +113,7 @@ pub(crate) fn run_with(
     // so a line there never times setup work as a frame that never drew.
     let timing = crate::timing::Timing::new(diag);
     let first_render = timing.first_render();
+    let attached_frame = timing.attached_frame();
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
@@ -123,6 +124,7 @@ pub(crate) fn run_with(
     // any frame.
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     };
     catch_interrupts();
@@ -132,14 +134,17 @@ pub(crate) fn run_with(
     let hover = launch.hover;
     let Ok((width, height)) = term::setup(&tty, hover) else {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     };
     let Ok(out) = tty.try_clone() else {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     };
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     };
     // `App::new` maps an empty launch directory to no workspace, so a
@@ -267,6 +272,7 @@ pub(crate) fn run_with(
     }
     if screen.draw(&mut app, None).is_err() {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     }
     // The frame drew: its line stands, whatever the loop meets after.
@@ -291,7 +297,13 @@ pub(crate) fn run_with(
     model_reader.ask(catalogue::Refresh::Cached, &tx);
     // Without the reader no key reaches the loop: fail instead of
     // running deaf. The guard's drop restores the terminal.
-    let reader = spawn_reader(&tty, tx.clone())?;
+    let reader = match spawn_reader(&tty, tx.clone()) {
+        Ok(reader) => reader,
+        Err(error) => {
+            crate::timing::discard(attached_frame);
+            return Err(error.into());
+        }
+    };
     let mut terminal = Loop {
         app,
         parser: Parser::default(),
@@ -307,6 +319,7 @@ pub(crate) fn run_with(
         on_attach,
         clock,
         timing,
+        attached_frame,
         summary_span: None,
         files_out: tx.clone(),
         search: None,
@@ -330,15 +343,20 @@ pub(crate) fn run_with(
     // asks arm it, and the loop re-arms it after every frame. Without
     // the tick nothing moving on screen moves: fail instead of running
     // still.
-    terminal
+    if let Err(error) = terminal
         .tick
-        .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)?;
+        .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)
+    {
+        crate::timing::discard(terminal.attached_frame.take());
+        return Err(error.into());
+    }
     terminal.tick.arm(terminal.app.take_wake());
     spawn_signal(term_signals, tx.clone());
     if let Some(signals) = signals {
         spawn_resize(signals, tx);
     }
     let code = terminal.run(&rx);
+    crate::timing::discard(terminal.attached_frame.take());
     terminal.tick.stop();
     // The writer goes before the hub hangs up and the guard drops: Stop
     // sends its mandatory abort delete at the next chunk boundary, then
@@ -448,6 +466,9 @@ struct Loop<B: Backend> {
     clock: Arc<dyn Clock>,
     /// The diagnostic writer the timed scopes share.
     timing: crate::timing::Timing,
+    /// The first draw with attached-session history, carried from
+    /// `run_with`; discarded if the loop ends before that draw.
+    attached_frame: Option<log::diag::Timer>,
     /// The opening summary subscribe's guard, while the open holds that
     /// stage: dropped once the open leaves it, writing one line.
     summary_span: Option<log::diag::Timer>,
@@ -1049,6 +1070,12 @@ impl<B: Backend> Loop<B> {
         };
         if draw_failed {
             return Some(1);
+        }
+        // The attached-session history has landed in the drawn frame.
+        // A home frame, or one without a live stream, leaves the guard
+        // for the next draw; run_with discards it if none arrives.
+        if self.app.session().is_some() && self.hub.has_stream() {
+            drop(self.attached_frame.take());
         }
         // After the first post-handover draw, the writer restarts its
         // retained images whole; the re-fetched requests drain below.

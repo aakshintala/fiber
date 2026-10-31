@@ -595,13 +595,14 @@ fn span_op(op: &str, ms: u64) -> String {
 /// `attach_span_ms` row carrying the fixture, the sample, the operation
 /// and its milliseconds; other codes and blank lines are not spans. The
 /// terminal operation inventory and its per-process limits are in
-/// `docs/state.md:423-446`.
+/// `docs/state.md:423-453`.
 #[test]
 fn span_samples_emit_one_row_per_op_timing_line() {
     let text = [
         span_op("tui.extensions", 3),
         String::new(),
         span_line("info", json!({"note": "ready"})),
+        span_op("tui.attached_frame", 7),
         span_op("tui.tail_wait", 19),
     ]
     .join("\n");
@@ -614,10 +615,14 @@ fn span_samples_emit_one_row_per_op_timing_line() {
         ),
         (
             SPAN_METRIC,
+            json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.attached_frame", "ms": 7}),
+        ),
+        (
+            SPAN_METRIC,
             json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2, "op": "tui.tail_wait", "ms": 19}),
         ),
     ];
-    // `docs/state.md:423-446` promises counts and scopes, not log order,
+    // `docs/state.md:423-453` promises counts and scopes, not log order,
     // so the comparison sorts both sides: the exact rows and their count
     // still match, in any order.
     let key =
