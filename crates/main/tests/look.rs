@@ -1783,3 +1783,128 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     assert!(!closed.contains('$'), "{closed:?}");
     quit(run);
 }
+
+/// The dark theme's surface tint in truecolour (`crates/tui/src/theme.rs`):
+/// the input box's slab, whose colour the covered cursor cell takes.
+const CURSOR_SURFACE: Colour = Colour::Rgb(0x1a, 0x1a, 0x22);
+
+/// The light theme's surface tint and text colour in truecolour.
+const LIGHT_CURSOR_SURFACE: Colour = Colour::Rgb(0xea, 0xee, 0xf2);
+const LIGHT_CURSOR_TEXT: Colour = Colour::Rgb(0x1f, 0x23, 0x28);
+
+#[test]
+fn the_input_cursor_reverses_the_covered_character() {
+    reversed_cursor_look(
+        serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}, "tui": {"rail": {"shown": false}, "panel": {"cards": []}}}),
+        CURSOR_SURFACE,
+        Colour::Default,
+    );
+}
+
+#[test]
+fn the_light_input_cursor_reverses_the_covered_character() {
+    reversed_cursor_look(
+        serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}, "tui": {"theme": "light", "rail": {"shown": false}, "panel": {"cards": []}}}),
+        LIGHT_CURSOR_SURFACE,
+        LIGHT_CURSOR_TEXT,
+    );
+}
+
+/// The row and column where `needle` starts on `screen`, scanning cell by
+/// cell so a restyled cursor still matches its text.
+fn needle_start(screen: &Grid, needle: &str) -> Option<(u16, u16)> {
+    let want: Vec<String> = needle.chars().map(|cell| cell.to_string()).collect();
+    (0..48u16).find_map(|y| {
+        (0..160u16)
+            .filter(|x| {
+                want.iter().enumerate().all(|(dx, cell)| {
+                    u16::try_from(dx).is_ok_and(|dx| {
+                        x.checked_add(dx).is_some_and(|xx| {
+                            xx < 160 && screen.cell(xx, y).symbol == *cell
+                        })
+                    })
+                })
+            })
+            .map(|x| (x, y))
+            .next()
+    })
+}
+
+/// One cursor journey at 160x48 in truecolour: "abc" typed, the past-end
+/// block in the text colour on the slab, then two steps left, and the
+/// covered "b" in the slab colour on the text colour while its neighbours
+/// keep theirs (`docs/tui.md`, "The input box").
+fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour) {
+    let setup = Setup::new();
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &serde_json::json!({"steps": [{"text": ["Complete."]}]}),
+    );
+    support::write_json(&setup.home().join("config.json"), &config);
+    // The one wait bound is the setup's named deadline, which the run
+    // carries into every `wait_screen` below.
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready(); // The input reader runs before any typing goes out.
+    run.write(b"abc");
+    let past = run.wait_screen("the past-end cursor", |screen| {
+        needle_start(screen, "abc").is_some_and(|(x, y)| {
+            x.checked_add(3).is_some_and(|at| {
+                at < 160 && {
+                    let cell = screen.cell(at, y);
+                    cell.symbol == "█"
+                        && cell.fg == text
+                        && cell.bg == surface
+                        && !cell.dim
+                        && !cell.inverse
+                }
+            })
+        })
+    });
+    // settled: "the past-end cursor" checked each of these properties with
+    // no input since.
+    let (x, y) = needle_start(&past, "abc").expect("the typed draft");
+    let at = x + 3;
+    assert_eq!(past.cell(at, y).symbol, "█");
+    assert_eq!(past.cell(at, y).fg, text, "the block takes the text colour");
+    assert_eq!(
+        past.cell(at, y).bg,
+        surface,
+        "the block keeps the slab behind it"
+    );
+    assert!(!past.cell(at, y).dim, "no dim marks the cursor");
+    assert!(!past.cell(at, y).inverse, "no reverse marks the cursor");
+    // Two steps left puts the caret on "b": the typed cells stay put.
+    run.write(b"\x1b[D\x1b[D");
+    let covered = run.wait_screen("the cursor on b", |screen| {
+        needle_start(screen, "abc").is_some_and(|(x, y)| {
+            let (a, b, c) = (screen.cell(x, y), screen.cell(x + 1, y), screen.cell(x + 2, y));
+            a.symbol == "a"
+                && a.bg == surface
+                && b.symbol == "b"
+                && b.fg == surface
+                && b.bg == text
+                && !b.dim
+                && !b.inverse
+                && c.symbol == "c"
+        })
+    });
+    // settled: "the cursor on b" checked each of these properties with no
+    // input since.
+    let (x, y) = needle_start(&covered, "abc").expect("the typed draft");
+    let (a, b, c) = (
+        covered.cell(x, y),
+        covered.cell(x + 1, y),
+        covered.cell(x + 2, y),
+    );
+    assert_eq!(
+        (a.symbol.as_str(), b.symbol.as_str(), c.symbol.as_str()),
+        ("a", "b", "c")
+    );
+    assert_eq!(b.fg, surface, "the covered cell takes the slab colour");
+    assert_eq!(b.bg, text, "the covered cell takes the text colour");
+    assert_eq!(b.fg, a.bg, "the cursor swaps against its neighbours");
+    assert_eq!(a.bg, surface, "the neighbours keep the slab");
+    assert!(!b.dim, "no dim marks the cursor");
+    assert!(!b.inverse, "no reverse marks the cursor");
+    quit(run);
+}
