@@ -20,11 +20,15 @@ use crate::deadline::Deadline;
 use serde_json::Value;
 
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
-fn example_path() -> PathBuf {
+fn example_path() -> crate::WarmedJig {
     let mut path = std::env::current_exe().expect("the test binary knows its path");
     path.pop();
     path.pop();
-    path.join("examples").join("process-extension")
+    crate::WarmedJig::warm(
+        path.join("examples").join("process-extension"),
+        &["bogus-mode"],
+        2,
+    )
 }
 
 /// One run of the fixture: the example's captured stdout lines, its stdin,
@@ -49,13 +53,12 @@ impl ProcessFixture {
     /// argv value for protocol modes; `echo` and `hold` ignore it.
     #[track_caller]
     pub fn command(mode: &str, configuration: Option<&Value>) -> (PathBuf, Vec<String>) {
-        let example = example_path();
-        crate::warm_up(&example, &["bogus-mode"], 2);
+        let warmed = example_path();
         let mut fixture_args = vec![mode.to_owned()];
         if let Some(configuration) = configuration {
             fixture_args.push(configuration.to_string());
         }
-        (example, fixture_args)
+        (warmed.path().to_path_buf(), fixture_args)
     }
 
     /// Starts the example in `mode` (`echo` or `hold`). Warms the binary
