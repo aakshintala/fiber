@@ -842,6 +842,94 @@ fn two_quick_reconnects_spawn_the_server_once() {
     driver.finish();
 }
 
+#[test]
+fn two_quick_reconnects_join_a_start_that_fails() {
+    let setup = support::Setup::new_with_mcp_fixture();
+    let dir = fixture_dir(&setup, "fx");
+    let spawns = setup.root.path().join("spawns");
+    let sync = setup.root.path().join("sync");
+    let release = setup.root.path().join("release");
+    fakes::fifo(&sync);
+    fakes::fifo(&release);
+    let wrapper = setup.root.path().join("flaky.sh");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/bash\nprintf 'spawn\\n' >> \"{}\"\nif [ \"$(wc -l < \"{}\")\" -eq 1 ]; then exit 1; fi\nprintf 'started\\n' > \"{}\"\nread -r release < \"{}\"\nexit 1\n",
+            spawns.display(), spawns.display(), sync.display(), release.display(),
+        ),
+    )
+    .unwrap();
+    let _model = configure(
+        &setup,
+        &json!({
+            "flaky": {
+                "command": "/bin/bash",
+                "args": [wrapper.display().to_string()],
+                "env": {"PATH": std::env::var_os("PATH").unwrap().to_str().unwrap()},
+            },
+            "up": {
+                "command": "/bin/bash",
+                "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+            },
+        }),
+    );
+    let driver = Driver::start(
+        setup,
+        &doors::mint("s_"),
+        &std::env::var_os("PATH").unwrap(),
+    );
+    let rows = driver.servers("c_before");
+    assert_eq!(Driver::row(&rows, "flaky")["state"], "failed", "{rows:?}");
+
+    driver
+        .client
+        .send(r#"{"id":"c_one","command":"mcp_reconnect","args":{"server":"flaky"}}"#);
+    fakes::within(
+        "the reconnect's start rendezvous",
+        driver.setup.deadline.start_wait(),
+        move || {
+            let mut line = String::new();
+            BufReader::new(fs::File::open(sync).unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            assert_eq!(line, "started\n");
+        },
+    );
+    driver
+        .client
+        .send(r#"{"id":"c_two","command":"mcp_reconnect","args":{"server":"flaky"}}"#);
+    // The second answer precedes release: it joins the executing start
+    // (`docs/mcp.md`, "Servers, their state and the per-server commands").
+    let second = support::recv_answer(
+        &driver.client,
+        "c_two",
+        "the joined reconnect acknowledgement",
+    );
+    assert_eq!(second["kind"], "command_accepted", "{second:?}");
+    assert!(second["payload"].get("result").is_none(), "{second:?}");
+    let mut writer = fakes::within(
+        "the reconnect's release reader",
+        driver.setup.deadline.start_wait(),
+        move || fs::OpenOptions::new().write(true).open(release).unwrap(),
+    );
+    writer.write_all(b"release\n").unwrap();
+    let first = support::recv_answer(
+        &driver.client,
+        "c_one",
+        "the first reconnect acknowledgement",
+    );
+    assert_eq!(first["kind"], "command_accepted", "{first:?}");
+    let rows = driver.servers("c_after");
+    assert_eq!(Driver::row(&rows, "flaky")["state"], "failed", "{rows:?}");
+    assert_eq!(Driver::row(&rows, "up")["state"], "ready", "{rows:?}");
+    // A reconnect during a start starts nothing, even when it fails
+    // (`docs/mcp.md`, "Servers, their state and the per-server commands").
+    assert_eq!(fs::read_to_string(&spawns).unwrap().lines().count(), 2);
+    drop(writer);
+    driver.finish();
+}
+
 /// The session runtime directories under the test home that a stalled
 /// startup may have reached: `run` holds session sockets, `cache/mcp`
 /// holds cached server lists, `logs` holds diagnostic logs. Names only:
