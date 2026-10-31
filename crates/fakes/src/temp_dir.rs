@@ -12,9 +12,12 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use contract::clock::Clock;
 
 use crate::MUST_SUCCEED_WITHIN;
+use crate::clock::SystemClock;
 use crate::deadline::Deadline;
 use crate::process_group::{pids_exit, stop_closed};
 
@@ -100,7 +103,8 @@ impl Drop for TempDir {
             remove(&self.path);
             return;
         }
-        let holders = wait_for_holders(&self.path, Deadline::after(MUST_SUCCEED_WITHIN));
+        let clock = SystemClock;
+        let holders = wait_for_holders(&self.path, &clock, clock.now(), MUST_SUCCEED_WITHIN);
         if !holders.is_empty() {
             fail_on_holders(&self.path, self.owner.as_deref(), &holders);
         }
@@ -223,22 +227,22 @@ fn restore_modes(path: &Path) {
     }
 }
 
-/// The pids still holding `path` once `deadline` runs out: scans, waits the
-/// listed pids out under what remains of the deadline, and rescans until
-/// nothing holds it or the deadline expires. A spent deadline returns the
-/// first scan at once, so a post-bound fake clock never waits: per
-/// [`Deadline::left`], a wait handed zero takes only an already-arrived
-/// result, then runs its own timeout branch.
-fn wait_for_holders(path: &Path, deadline: Deadline) -> Vec<u32> {
+/// The pids still holding `path` once `bound` past `start` runs out on
+/// `clock`: scans, waits the listed pids out under what remains of the
+/// bound, and rescans until nothing holds it or the bound expires. An
+/// expired bound returns the first scan at once, so a post-bound fake clock
+/// never waits.
+fn wait_for_holders(path: &Path, clock: &dyn Clock, start: Instant, bound: Duration) -> Vec<u32> {
     loop {
         let holders = holder_pids(path);
         if holders.is_empty() {
             return holders;
         }
-        if deadline.left().is_zero() {
+        let elapsed = clock.now().saturating_duration_since(start);
+        if elapsed >= bound {
             return holders;
         }
-        match pids_exit(&holders, deadline) {
+        match pids_exit(&holders, Deadline::after(bound.saturating_sub(elapsed))) {
             true | false => {}
         }
         pause();

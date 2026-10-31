@@ -9,12 +9,11 @@ use std::thread;
 use std::time::Duration;
 
 use super::TempDir;
+use crate::MUST_SUCCEED_WITHIN;
 use crate::children::Ready;
 use crate::clock::FakeClock;
 use crate::deadline::{Deadline, WAITS};
-
-/// How long the killed-run test waits for the child to print, and to exit.
-const DEADLINE: Duration = Duration::from_secs(10);
+use contract::clock::Clock;
 
 /// The child test [`a_killed_run_leaves_a_directory_a_later_one_does_not_reuse`]
 /// re-executes. Unset, the test does nothing.
@@ -235,9 +234,9 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    let (status, stderr) = Deadline::after(DEADLINE)
+    let (status, stderr) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the killed child to exit"))
+        .unwrap_or_else(|_| panic!("waited {MUST_SUCCEED_WITHIN:?} for the killed child to exit"))
         .unwrap();
     assert!(
         status.signal() == Some(9),
@@ -282,9 +281,11 @@ fn a_closed_stdin_lets_the_child_exit_and_clean_up() {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    let (status, stderr) = Deadline::after(DEADLINE)
+    let (status, stderr) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to exit after stdin closed"))
+        .unwrap_or_else(|_| {
+            panic!("waited {MUST_SUCCEED_WITHIN:?} for the child to exit after stdin closed")
+        })
         .unwrap();
     assert!(
         status.code() == Some(0),
@@ -354,9 +355,11 @@ fn printed_dir(child: &mut ChildGuard) -> PathBuf {
             }
         }
     });
-    let printed = Deadline::after(DEADLINE)
+    let printed = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to print its directory"));
+        .unwrap_or_else(|_| {
+            panic!("waited {MUST_SUCCEED_WITHIN:?} for the child to print its directory")
+        });
     let Some(printed) = printed else {
         panic!("the child exited before printing its directory");
     };
@@ -440,7 +443,7 @@ fn reap_holder(mut holder: ChildGuard) {
     thread::spawn(move || match done.send(child.wait()) {
         Ok(()) | Err(_) => {}
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&finished, "the holder to exit after SIGKILL")
         .unwrap();
 }
@@ -470,7 +473,7 @@ fn a_live_holder_fails_the_drop_naming_the_directory_and_the_holder() {
     let dir = TempDir::new("holder");
     let ready = Ready::new(dir.path());
     let holder = spawn_cwd_holder(&dir, &ready);
-    let reported = ready.wait(Deadline::after(DEADLINE));
+    let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
     let pid = holder.pid();
     assert_eq!(reported, [pid]);
     let path = dir.path().to_path_buf();
@@ -498,7 +501,7 @@ fn an_open_file_holder_fails_the_drop_naming_the_directory_and_the_holder() {
     let dir = TempDir::new("holder-fd");
     let ready = Ready::new(dir.path());
     let holder = spawn_fd_holder(&dir, &ready);
-    let reported = ready.wait(Deadline::after(DEADLINE));
+    let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
     let pid = holder.pid();
     assert_eq!(reported, [pid]);
     let path = dir.path().to_path_buf();
@@ -524,7 +527,7 @@ fn an_exiting_holder_lets_the_drop_remove_the_directory() {
     let dir = TempDir::new("holder-gone");
     let ready = Ready::new(dir.path());
     let holder = spawn_cwd_holder(&dir, &ready);
-    let reported = ready.wait(Deadline::after(DEADLINE));
+    let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
     assert_eq!(reported, [holder.pid()]);
     let path = dir.path().to_path_buf();
     let (done, finished) = mpsc::channel();
@@ -535,7 +538,7 @@ fn an_exiting_holder_lets_the_drop_remove_the_directory() {
         }
     });
     reap_holder(holder);
-    Deadline::after(DEADLINE).recv_or_fail(
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(
         &finished,
         "the drop to remove the directory after its holder exited",
     );
@@ -547,7 +550,7 @@ fn a_drop_while_unwinding_removes_without_panicking_again() {
     let dir = TempDir::new("holder-unwind");
     let ready = Ready::new(dir.path());
     let holder = spawn_cwd_holder(&dir, &ready);
-    ready.wait(Deadline::after(DEADLINE));
+    ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
     let path = dir.path().to_path_buf();
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> () {
         let _live = dir;
@@ -570,26 +573,28 @@ fn an_expired_bound_returns_the_live_holders_without_waiting() {
     let dir = TempDir::new("holder-expired");
     let ready = Ready::new(dir.path());
     let holder = spawn_cwd_holder(&dir, &ready);
-    let reported = ready.wait(Deadline::after(DEADLINE));
+    let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
     let pid = holder.pid();
     assert_eq!(reported, [pid]);
-    let clock: &'static std::sync::Arc<FakeClock> = Box::leak(Box::new(FakeClock::new()));
-    let wait = Deadline::on(&**clock);
-    // Past the deadline's guard, so `left` is zero and the timeout branch
-    // fires at once with no wall wait (`docs/testing.md`, "Values that
-    // change every run").
+    let clock = FakeClock::new();
+    let t0 = clock.now();
+    // Past `t0` plus the bound, so the first probe is already expired and
+    // the timeout branch fires at once with no wall wait (`docs/testing.md`,
+    // "Values that change every run").
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(WAITS + Duration::from_secs(1));
-    let holders = super::wait_for_holders(dir.path(), wait);
+    clock.advance(MUST_SUCCEED_WITHIN + Duration::from_secs(1));
+    let holders = super::wait_for_holders(dir.path(), &*clock, t0, MUST_SUCCEED_WITHIN);
+    reap_holder(holder);
+    let path = dir.path().to_path_buf();
+    remove_left(&path);
     assert!(
         holders.contains(&pid),
         "the expired wait missed the live holder {pid}: {holders:?}"
     );
     let message = holders_message_for(&dir, &holders);
-    let path = dir.path().to_path_buf();
     assert!(
         message.contains(&path.display().to_string()),
         "the expiry names no directory: {message}"
@@ -605,8 +610,6 @@ fn an_expired_bound_returns_the_live_holders_without_waiting() {
         ),
         None => assert!(message.contains("an unnamed test"), "{message}"),
     }
-    reap_holder(holder);
-    remove_left(&path);
     assert!(!path.exists(), "the test left {}", path.display());
 }
 
