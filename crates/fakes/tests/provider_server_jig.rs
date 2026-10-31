@@ -13,7 +13,6 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -37,12 +36,13 @@ const _: () = assert!(START_BOUND.as_secs() > DEADLINE.as_secs());
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/provider-server`), so the test starts no
-/// cargo and waits on no build lock.
-fn example_path() -> PathBuf {
+/// cargo and waits on no build lock. Warming before returning means every
+/// exec site holds only a warmed path.
+fn example_path() -> fakes::WarmedJig {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.join("examples").join("provider-server")
+    fakes::WarmedJig::warm(path.join("examples").join("provider-server"), &[], 2)
 }
 
 /// Reads the jig's stdout: first its `listening on` line, then one request
@@ -112,8 +112,8 @@ fn it_serves_one_fixture_and_prints_the_request_it_received() {
     let dir = fakes::TempDir::new("provider-server-jig");
     let fixture = dir.path().join("reply.sse");
     std::fs::write(&fixture, "data: hi\n\n").unwrap();
-    fakes::warm_up(&example_path(), &[], 2);
-    let mut command = Command::new(example_path());
+    let warmed = example_path();
+    let mut command = Command::new(warmed.path());
     command.arg(&fixture);
     serve_one_fixture(command);
 }

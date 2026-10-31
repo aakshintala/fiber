@@ -7,7 +7,7 @@
 //! the warm-up either absorbs the stall or fails naming the start.
 
 use std::os::unix::process::CommandExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -18,10 +18,36 @@ use std::time::Duration;
 /// with its reap still reports before the harness kills the test.
 pub const START_BOUND: Duration = Duration::from_secs(50);
 
+/// A jig binary's path past its first-exec stall: the only constructor
+/// warms through [`warm_up`] before returning, so no value exists that
+/// skipped the warm and every exec site builds from [`WarmedJig::path`].
+pub struct WarmedJig {
+    path: PathBuf,
+}
+
+impl WarmedJig {
+    /// Warms `path` by running it with `args` and asserting its exit is
+    /// `exit`, then holds the warmed path. A jig example binary starts
+    /// through this; [`warm_up`] is for an already-built `CARGO_BIN_EXE_*`
+    /// product binary.
+    #[track_caller]
+    pub fn warm(path: PathBuf, args: &[&str], exit: i32) -> Self {
+        warm_up(&path, args, exit);
+        Self { path }
+    }
+
+    /// The warmed path to exec.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Runs `binary args` once under [`START_BOUND`] on every call and asserts
 /// its exit is `exit`: no state, so a failed warm-up affects no later call.
 /// The child leads its own process group and a watchdog guards it, as the
-/// sibling jig wrappers do (`docs/testing/running.md`).
+/// sibling jig wrappers do (`docs/testing/running.md`). For an already-built
+/// `CARGO_BIN_EXE_*` product binary; a jig example binary starts through
+/// [`WarmedJig::warm`].
 ///
 /// # Panics
 ///

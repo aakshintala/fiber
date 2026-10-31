@@ -46,6 +46,9 @@ struct Jig {
     dir: fakes::TempDir,
     /// `<CARGO_TARGET_TMPDIR>/<dir's name>`, holding the `paging` link.
     bin: PathBuf,
+    /// This test's own path to the built jig, warmed past its first-exec
+    /// stall before any exchange runs.
+    exe: fakes::WarmedJig,
 }
 
 impl Drop for Jig {
@@ -68,19 +71,19 @@ impl Jig {
         let name = dir.path().file_name().unwrap();
         let bin = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
         std::fs::create_dir_all(&bin).unwrap();
-        let exe = bin.join("paging");
-        if let Err(err) = std::fs::hard_link(example_path(), &exe) {
-            panic!("hard-linking `paging` to {}: {err}", exe.display());
+        let link = bin.join("paging");
+        if let Err(err) = std::fs::hard_link(example_path(), &link) {
+            panic!("hard-linking `paging` to {}: {err}", link.display());
         }
         // The hard link shares the example's inode, so one warm-up covers both
         // the built example and the link; it stalls here, not in the exchange.
-        fakes::warm_up(&exe, &["--bogus"], 2);
-        Self { dir, bin }
+        let exe = fakes::WarmedJig::warm(link, &["--bogus"], 2);
+        Self { dir, bin, exe }
     }
 
     /// This test's own path to the built jig.
-    fn exe(&self) -> PathBuf {
-        self.bin.join("paging")
+    fn exe(&self) -> &Path {
+        self.exe.path()
     }
 
     /// The directory holding this test's events file.
@@ -172,7 +175,7 @@ fn open_prints_one_json_line_with_the_four_keys() {
     let file = jig.dir().join("events.jsonl");
     std::fs::write(&file, events()).unwrap();
     let arg = file.display().to_string();
-    let out = run(&jig.exe(), &["open", arg.as_str(), "60", "12", "end"]);
+    let out = run(jig.exe(), &["open", arg.as_str(), "60", "12", "end"]);
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");
     assert!(stderr.is_empty(), "a report writes no stderr: {stderr}");
@@ -193,7 +196,7 @@ fn open_spells_the_single_frame_as_its_number_too() {
     std::fs::write(&file, events()).unwrap();
     let arg = file.display().to_string();
     let out = run(
-        &jig.exe(),
+        jig.exe(),
         &["open", arg.as_str(), "60", "12", "18446744073709551615"],
     );
     let stderr = String::from_utf8(out.stderr).unwrap();
@@ -211,20 +214,20 @@ fn open_needs_a_file_a_size_and_a_frame_count() {
     std::fs::write(&file, events()).unwrap();
     let arg = file.display().to_string();
     // A missing word is a usage error, not a defaulted open run.
-    let out = run(&jig.exe(), &["open", arg.as_str(), "60", "12"]);
+    let out = run(jig.exe(), &["open", arg.as_str(), "60", "12"]);
     assert_usage(&out);
     // A word that is neither a number nor `end` is a usage error.
-    let out = run(&jig.exe(), &["open", arg.as_str(), "60", "12", "every"]);
+    let out = run(jig.exe(), &["open", arg.as_str(), "60", "12", "every"]);
     assert_usage(&out);
     // So is a size that is not a number.
-    let out = run(&jig.exe(), &["open", arg.as_str(), "60", "x", "64"]);
+    let out = run(jig.exe(), &["open", arg.as_str(), "60", "x", "64"]);
     assert_usage(&out);
 }
 
 #[test]
 fn a_word_that_is_neither_a_number_nor_open_is_a_usage_error() {
     let jig = Jig::new();
-    let out = run(&jig.exe(), &["wide"]);
+    let out = run(jig.exe(), &["wide"]);
     assert_usage(&out);
 }
 
@@ -234,7 +237,7 @@ fn a_line_the_log_cannot_hold_is_an_error_not_a_report() {
     let file = jig.dir().join("events.jsonl");
     std::fs::write(&file, "not json\n").unwrap();
     let arg = file.display().to_string();
-    let out = run(&jig.exe(), &["open", arg.as_str(), "60", "12", "end"]);
+    let out = run(jig.exe(), &["open", arg.as_str(), "60", "12", "end"]);
     assert_eq!(out.status.code(), Some(1), "a bad line exits 1");
     assert_ne!(out.status.code(), Some(0));
     let stderr = String::from_utf8(out.stderr).unwrap();
@@ -247,7 +250,7 @@ fn open_on_a_missing_file_fails_with_stderr() {
     let jig = Jig::new();
     let missing = jig.dir().join("missing.jsonl");
     let arg = missing.display().to_string();
-    let out = run(&jig.exe(), &["open", arg.as_str(), "60", "12", "end"]);
+    let out = run(jig.exe(), &["open", arg.as_str(), "60", "12", "end"]);
     assert_eq!(out.status.code(), Some(1), "a missing file exits 1");
     assert_ne!(out.status.code(), Some(0));
     let stderr = String::from_utf8(out.stderr).unwrap();
@@ -260,7 +263,7 @@ fn open_on_a_missing_file_fails_with_stderr() {
 fn positional_args_generate_the_session_at_the_given_size() {
     // Explicit words run the positional mode at that scale and size.
     let jig = Jig::new();
-    let out = run(&jig.exe(), &["0", "60", "12"]);
+    let out = run(jig.exe(), &["0", "60", "12"]);
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");
     let stdout = String::from_utf8(out.stdout).unwrap();
