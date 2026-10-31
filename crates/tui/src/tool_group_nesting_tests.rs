@@ -167,7 +167,7 @@ fn tool_group_nesting_summary() {
     nested_turn(&mut app);
     let shown = screen(&mut app);
     // The summary reads what the inner calls did; the script's own
-    // call never counts as a kind of its own.
+    // call never counts as a kind of its own (`docs/tui.md:1136-1141`).
     assert!(
         shown.contains("Read 1 file, edited 1 file +3 −1, ran 1 command"),
         "{shown}"
@@ -183,7 +183,7 @@ fn tool_group_nesting_open_ledger() {
     app.open(call_target(&app, "a_1"));
     let shown = screen(&mut app);
     // One row for the outer, then its script source and one indented
-    // row per inner call.
+    // row per inner call (`docs/tui.md:1130-1132`, `docs/tui.md:1142-1144`).
     assert!(shown.contains("✓ other"), "{shown}");
     assert!(shown.contains("print('hi')"), "{shown}");
     assert!(shown.contains("print('bye')"), "{shown}");
@@ -203,7 +203,8 @@ fn tool_group_nesting_open_edit() {
     app.open(call_target(&app, "a_1"));
     app.open(call_target(&app, "a_3"));
     let shown = screen(&mut app);
-    // The edit row opens to its diff, as any call does.
+    // The edit row opens to its diff, as any call does
+    // (`docs/tui.md:1145-1146`).
     assert!(shown.contains("print('old')"), "{shown}");
     assert!(shown.contains("print('new')"), "{shown}");
 }
@@ -260,7 +261,8 @@ fn tool_group_nesting_orphan_top_level() {
     app.open(group_target(&app));
     let shown = screen(&mut app);
     // The closed outer is one row with its inners hidden; the orphan
-    // draws top-level, without the inner indent.
+    // draws top-level, without the inner indent (`docs/tui.md:1130-1135`;
+    // orphan rule `docs/tui.md:1134-1135`).
     assert!(shown.contains("✓ other"), "{shown}");
     assert!(!shown.contains("in.rs"), "{shown}");
     let orphan = shown

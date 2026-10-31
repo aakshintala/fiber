@@ -127,7 +127,7 @@ fn inner(mut call: Call, outer: &str) -> Call {
 
 /// An outer with inner calls counts as no kind of its own: the
 /// summary reads what the inners did, and a failed inner edit keeps
-/// its kind and its totals.
+/// its kind and its totals (`docs/tui.md:1136-1141`).
 #[test]
 fn kinds_skips_outers_with_inners() {
     let outer = Call {
@@ -162,6 +162,8 @@ fn kinds_skips_outers_with_inners() {
         ..Group::default()
     };
     let (rows, _) = summary_row(&group, false, 60);
+    // Count per `docs/tui.md:1136-1141`: the summary counts inner calls by
+    // kind; an outer with inners never counts as a kind of its own.
     assert_eq!(rows.len(), 1);
     // The whole line, so an outer counted as a kind of its own fails
     // the test: no trailing "called 1 tool".
@@ -191,7 +193,8 @@ fn outer_call(id: usize, action: &str, source: &str) -> Call {
 
 /// An opened outer draws its arguments first, then one row per inner
 /// per level, each two columns further in with the same glyph, kind,
-/// target and result it would draw on its own.
+/// target and result it would draw on its own (`docs/tui.md:1130-1132`,
+/// `docs/tui.md:1142-1144`).
 #[test]
 fn nested_ledger_rows_draw_inners_indented() {
     let group = Group {
@@ -218,6 +221,9 @@ fn nested_ledger_rows_draw_inners_indented() {
         ..Group::default()
     };
     let rows = ledger_rows(&group, 76);
+    // Count and order per `docs/tui.md:1130-1132` (one row per inner, two
+    // columns further in per level) and `docs/tui.md:1142-1144` (arguments
+    // first, then the inner rows).
     assert_eq!(rows.len(), 6);
     let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
     assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
@@ -241,7 +247,7 @@ fn nested_ledger_rows_draw_inners_indented() {
 
 /// An inner whose outer names no call of the section draws top-level,
 /// in push order, as a command-anchored inner does; an inner arriving
-/// before its outer still nests under it.
+/// before its outer still nests under it (`docs/tui.md:1130-1135`).
 #[test]
 fn nested_ledger_rows_keep_orphans_and_command_inners_on_top() {
     let group = Group {
@@ -290,6 +296,9 @@ fn nested_ledger_rows_keep_orphans_and_command_inners_on_top() {
         ..Group::default()
     };
     let rows = ledger_rows(&group, 76);
+    // Count and order per `docs/tui.md:1130-1135`: inners nest under their
+    // outer; an inner whose outer names no call of the turn draws
+    // top-level, in push order.
     assert_eq!(rows.len(), 9);
     let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
     assert!(text[0].starts_with("    1 ✓ read"), "{}", text[0]);
@@ -306,7 +315,9 @@ fn nested_ledger_rows_keep_orphans_and_command_inners_on_top() {
     assert!(text[8].contains("late.rs"), "{}", text[8]);
 }
 
-/// Failed, denied, cancelled and running inners keep their glyphs.
+/// Failed, denied, cancelled and running inners keep their glyphs
+/// (`docs/tui.md:1131-1132`: each inner keeps the glyph it would draw
+/// on its own).
 #[test]
 fn nested_ledger_rows_keep_inner_status_glyphs() {
     let group = Group {
@@ -328,6 +339,8 @@ fn nested_ledger_rows_keep_inner_status_glyphs() {
         ..Group::default()
     };
     let rows = ledger_rows(&group, 76);
+    // Count and order per `docs/tui.md:1131-1132`: each inner keeps the
+    // glyph, kind, target and result it would draw on its own.
     assert_eq!(rows.len(), 6);
     let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
     assert!(text[2].starts_with("        ✗ shell"), "{}", text[2]);
@@ -341,7 +354,8 @@ fn nested_ledger_rows_keep_inner_status_glyphs() {
 }
 
 /// A chain nests at every level: C under B under A, B counting as an
-/// inner, and the summary counting C by kind alone.
+/// inner, and the summary counting C by kind alone
+/// (`docs/tui.md:1132-1134`, `docs/tui.md:1136-1138`).
 #[test]
 fn nested_two_level_chain_groups_and_counts() {
     let group = Group {
@@ -370,6 +384,8 @@ fn nested_two_level_chain_groups_and_counts() {
         ..Group::default()
     };
     let rows = ledger_rows(&group, 76);
+    // Count and order per `docs/tui.md:1132-1134`: calls nest at any depth,
+    // one row per inner per level.
     assert_eq!(rows.len(), 8);
     let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
     assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
@@ -386,6 +402,8 @@ fn nested_two_level_chain_groups_and_counts() {
     assert!(text[6].contains("deep.rs"), "{}", text[6]);
     assert!(text[6].ends_with("5 lines"), "{}", text[6]);
     assert_eq!(text[7], "        deep text");
+    // Count per `docs/tui.md:1136-1138`: the summary counts inner calls by
+    // kind at every depth; the middle of the chain counts as an inner.
     let (summary, _) = summary_row(&group, false, 60);
     let line = summary[0].0.to_string();
     let left = "● Read 1 file";
@@ -397,7 +415,9 @@ fn nested_two_level_chain_groups_and_counts() {
 
 /// Contradictory anchors draw every call once: each names the other
 /// as its outer, so neither is a root, and the second pass draws them
-/// top-level instead of nesting forever.
+/// top-level instead of nesting forever. The fallback keeps the
+/// `docs/tui.md:1130-1135` shape (one row per call, in push order); the
+/// cycle guard itself is implementation detail the doc does not promise.
 #[test]
 fn nested_ledger_rows_draw_anchor_cycles_once() {
     let group = Group {
@@ -421,6 +441,8 @@ fn nested_ledger_rows_draw_anchor_cycles_once() {
     group.ledger(76, &crate::image::Layout::default(), &mut out);
     let (rows, _) = out.into_parts();
     let rows: Vec<ratatui::text::Line<'_>> = rows.into_iter().map(|(line, _)| line).collect();
+    // Count and order per `docs/tui.md:1130-1135`: one row per call drawn
+    // top-level in push order when no root holds.
     assert_eq!(rows.len(), 4);
     let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
     assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
@@ -430,7 +452,7 @@ fn nested_ledger_rows_draw_anchor_cycles_once() {
 }
 
 /// An opened outer draws at most twenty argument lines; the inner
-/// rows always follow.
+/// rows always follow (`docs/tui.md:1142-1144`).
 #[test]
 fn nested_ledger_rows_cap_the_arguments_block() {
     let script = |n: u64| {
@@ -461,11 +483,15 @@ fn nested_ledger_rows_cap_the_arguments_block() {
         ..Group::default()
     };
     let rows = ledger_rows(&group_with(20), 76);
+    // Count and order per `docs/tui.md:1142-1144`: at most 20 argument
+    // lines, then one indented row per inner call.
     assert_eq!(rows.len(), 22);
     let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
     assert_eq!(text[20], "        L20");
     assert!(text[21].starts_with("        ✓ read"), "{}", text[21]);
     let rows = ledger_rows(&group_with(21), 76);
+    // Same `docs/tui.md:1142-1144` cap: the twenty-first line is cut and
+    // the inner row still follows.
     assert_eq!(rows.len(), 22);
     let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
     assert_eq!(text[20], "        L20");
