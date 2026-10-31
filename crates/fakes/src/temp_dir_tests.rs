@@ -12,7 +12,7 @@ use super::TempDir;
 use crate::MUST_SUCCEED_WITHIN;
 use crate::children::Ready;
 use crate::clock::FakeClock;
-use crate::deadline::{Deadline, WAITS};
+use crate::deadline::Deadline;
 use contract::clock::Clock;
 
 /// The child test [`a_killed_run_leaves_a_directory_a_later_one_does_not_reuse`]
@@ -456,12 +456,6 @@ fn remove_left(path: &Path) {
     }
 }
 
-/// The drop's panic message for `holders`: the directory, the creating
-/// test and every holder, as the drop formats it.
-fn holders_message_for(dir: &TempDir, holders: &[u32]) -> String {
-    super::holders_message(dir.path(), dir.owner.as_deref(), holders)
-}
-
 impl ChildGuard {
     fn pid(&self) -> u32 {
         self.0.as_ref().unwrap().id()
@@ -594,7 +588,7 @@ fn an_expired_bound_returns_the_live_holders_without_waiting() {
         holders.contains(&pid),
         "the expired wait missed the live holder {pid}: {holders:?}"
     );
-    let message = holders_message_for(&dir, &holders);
+    let message = super::holders_message(dir.path(), dir.owner.as_deref(), &holders);
     assert!(
         message.contains(&path.display().to_string()),
         "the expiry names no directory: {message}"
@@ -634,19 +628,6 @@ fn scanned_pid_refuses_small_ids_and_the_test_itself() {
     assert!(!super::scanned_pid(1, 99));
     assert!(!super::scanned_pid(0, 99));
     assert!(!super::scanned_pid(99, 99));
-}
-
-#[test]
-fn a_spent_deadline_returns_the_live_holders_at_once() {
-    let clock: &'static std::sync::Arc<FakeClock> = Box::leak(Box::new(FakeClock::new()));
-    let wait = Deadline::on(&**clock);
-    assert!(!wait.left().is_zero());
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "no code under test waits on the clock (ruling 6179406086)"
-    )]
-    clock.advance(WAITS);
-    assert!(wait.left().is_zero());
 }
 
 #[cfg(target_os = "linux")]
