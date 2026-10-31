@@ -80,6 +80,7 @@ fn catalogue() -> Catalogue {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }
 }
 

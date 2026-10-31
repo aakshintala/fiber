@@ -770,6 +770,7 @@ fn tools_footer(usage: Option<u64>, entry: Option<crate::catalogue::ModelEntry>)
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     let id = open_tools(&mut app);
     app.on_line(session_line(

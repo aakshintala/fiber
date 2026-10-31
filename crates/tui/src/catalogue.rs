@@ -104,6 +104,22 @@ pub struct Catalogue {
     /// counts in the picker instead of noticing at launch
     /// (`docs/model-routing.md`, "A per-account host").
     pub left_out: Vec<LeftOutGroup>,
+    /// Installed providers with data but no credential, in provider name
+    /// order. Only login-capable providers have `login` true; other rows
+    /// carry their declared environment-variable and path hints.
+    pub logged_out: Vec<LoggedOutProvider>,
+}
+
+/// One installed provider with data but no credential, shown by the
+/// choosing model picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggedOutProvider {
+    /// The installed provider's name.
+    pub provider: String,
+    /// Whether `fiber login` supports this provider.
+    pub login: bool,
+    /// Its declared environment-variable names and paths, empty when `login`.
+    pub hint: String,
 }
 
 /// One model left out for a placeholder with no value: its id and its

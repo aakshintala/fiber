@@ -1,7 +1,7 @@
-//! The picker's not-installed rows, the error under a failed one, and the
-//! lines a landed install leaves under the list (`docs/tui.md`, "Swapped
-//! views"). Every text here came from an install and is cut to
-//! [`TEXT_MAX`] columns, so no row outgrows the picker.
+//! The picker's logged-out and not-installed rows, the error under a
+//! failed install, and the lines a landed install leaves under the list
+//! (`docs/tui.md`, "Swapped views"). Install output is cut to [`TEXT_MAX`]
+//! columns, so no install row outgrows the picker.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
@@ -9,7 +9,7 @@ use ratatui::text::Span;
 use super::overlay::Row;
 use super::{gutter, id_spans};
 use crate::format::width as cells;
-use crate::model_picker::{InstallRow, Outcome, Progress, credential_text};
+use crate::model_picker::{InstallRow, LoggedOutRow, Outcome, Progress, credential_text};
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
 use crate::text::{cut, to_u16};
@@ -24,6 +24,33 @@ const INDENT: &str = "    ";
 
 fn dim() -> Style {
     Style::new().add_modifier(Modifier::DIM)
+}
+
+/// One logged-out row: the gutter, the provider's name in `accent` with
+/// each query hit bold and underlined, then its credential hint or
+/// " · not logged in" dim. The name takes clicks as Enter does; the row
+/// takes clicks anywhere, focusing it. The focused row sits on the bar.
+pub(super) fn logged_out_row(row: &LoggedOutRow, focused: bool) -> Row {
+    let suffix = match &row.hint {
+        Some(hint) => format!(" · set {hint} to log in"),
+        None => " · not logged in".to_owned(),
+    };
+    let mut spans = vec![gutter(focused)];
+    spans.extend(id_spans(&row.provider, &row.hits));
+    spans.push(Span::styled(suffix, dim()));
+    Row {
+        spans,
+        right: Vec::new(),
+        targets: vec![
+            (0, u16::MAX, TargetId::View(Spot::Row(row.at))),
+            (
+                2,
+                to_u16(2 + cells(&row.provider)),
+                TargetId::View(Spot::Cell(row.at, 0)),
+            ),
+        ],
+        barred: focused,
+    }
 }
 
 /// One not-installed row: the gutter, the provider's name in `accent`
