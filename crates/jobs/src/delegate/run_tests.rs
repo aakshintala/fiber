@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use crate::delegate::group::listed;
 use contract::Envelope;
 use contract::clock::Clock as _;
-use contract::events::{FiberExited, FinalMessage, Outcome};
+use contract::events::{EventKind, FiberExited, FinalMessage, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::Jobs as _;
 use contract::shapes::{Failure, Usage};
@@ -35,8 +35,8 @@ use fakes::{
 };
 
 use super::{
-    Fold, Fresh, Launch, Launched, POLL, Runner, Shared, Start, Stat, Watch, Watched, Watcher,
-    cap_due, kill_due, mint_session_id, note_seq, over_len, park_due,
+    Fold, Fresh, JobEventKind, Launch, Launched, POLL, Runner, Shared, Start, Stat, Watch, Watched,
+    Watcher, cap_due, classify_job_kind, kill_due, mint_session_id, note_seq, over_len, park_due,
 };
 use crate::delegate::outcome::Termination;
 use crate::registry::Registry;
@@ -194,7 +194,9 @@ impl Script {
         let mut deliver_lines = |lines: &[Envelope]| {
             for line in lines.iter().filter(|line| deliver(line)) {
                 self.emit(line, on_line);
-                if line.kind == "fiber_exited" {
+                if classify_job_kind(EventKind::from_name(&line.kind))
+                    == Some(JobEventKind::FiberExited)
+                {
                     break;
                 }
             }
@@ -1026,6 +1028,86 @@ fn worktree_parent_releases_at_child_acknowledgement_or_failed_start_cleanup() {
 }
 
 #[test]
+fn an_unknown_kind_with_a_valid_usage_payload_is_not_adopted_forwarded_or_folded_as_exit() {
+    let mut unknown_usage = usage_envelope(1, "g_future", Some(0.1));
+    unknown_usage.kind = "future_kind_é".into();
+    let mut unknown_exit = fiber_exited_line(2, "Not an exit kind.");
+    unknown_exit.kind = "future_kind_é".into();
+    let unknown_lines = [unknown_usage, unknown_exit];
+    let dir = TempDir::new("fiber-unknown-job-kind");
+    let output_path = dir.path().join("events.jsonl");
+    let text = unknown_lines
+        .iter()
+        .map(|line| serde_json::to_string(line).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&output_path, format!("{text}\n")).unwrap();
+
+    let released = Arc::new(AtomicBool::new(false));
+    let guard_release = Arc::clone(&released);
+    let guard = super::WorktreeGuard::new(move || {
+        guard_release.store(true, Ordering::SeqCst);
+    });
+    let released_during_watch = Arc::clone(&released);
+    let adopted = Arc::new(AtomicBool::new(false));
+    let adopted_in_watch = Arc::clone(&adopted);
+    let watch: Watch = Arc::new(move |_, _, on_line| {
+        for line in &unknown_lines {
+            on_line(line);
+        }
+        adopted_in_watch.store(
+            released_during_watch.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+        Ok(Watched::Closed)
+    });
+
+    let forwarded = Arc::new(Mutex::new(Vec::new()));
+    let forwarded_from_watch = Arc::clone(&forwarded);
+    let on_usage: super::UsageForward = Arc::new(move |_, line| {
+        forwarded_from_watch
+            .lock()
+            .unwrap()
+            .push(line.generation_id.0.clone());
+    });
+    let clock = FakeClock::new();
+    let fold = Arc::new(Mutex::new(Fold::default()));
+    Watcher {
+        watch,
+        session_id: SessionId("s_child".into()),
+        after: None,
+        fold: Arc::clone(&fold),
+        shared: Shared::new(Arc::clone(&clock) as Arc<dyn contract::clock::Clock>, BOUND),
+        cap: 1 << 20,
+        clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        last_check: Arc::new(Mutex::new(None)),
+        stat: Arc::new(|| 0),
+        output_path,
+        wake: Arc::new(Parker::new()),
+        on_usage: Some(on_usage),
+        worktree_guard: Some(guard),
+    }
+    .run();
+
+    assert!(
+        !adopted.load(Ordering::SeqCst),
+        "unknown kind does not adopt the worktree"
+    );
+    assert!(
+        forwarded.lock().unwrap().is_empty(),
+        "unknown kind is not forwarded as usage"
+    );
+    let fold = fold.lock().unwrap();
+    assert_eq!(
+        fold.last_seq,
+        Some(2),
+        "the watch folded both unknown lines"
+    );
+    assert!(fold.socket.is_none(), "unknown kind is not an exit result");
+    assert_eq!(fold.result, Some(super::WatchResult::Retry));
+}
+
+#[test]
 fn a_second_guard_release_waits_until_the_first_has_closed_the_share() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
@@ -1341,6 +1423,16 @@ fn a_startup_line_of_another_kind_is_no_verdict() {
         r#"{"kind":"fiber_started","schema_version":1,"payload":{"error":{"code":"invalid_arguments","message":"Bad model."},"exit_code":1}}"#,
         1,
         "fiber-delegate-startup-wrong-kind",
+    );
+    assert_no_verdict(&notice, 1);
+}
+
+#[test]
+fn an_unknown_startup_kind_is_no_verdict() {
+    let notice = stdout_report(
+        r#"{"kind":"future_startup_kind","schema_version":1,"payload":{"error":{"code":"invalid_arguments","message":"Bad model."},"exit_code":1}}"#,
+        1,
+        "fiber-delegate-startup-unknown-kind",
     );
     assert_no_verdict(&notice, 1);
 }
