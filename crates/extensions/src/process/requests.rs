@@ -28,7 +28,7 @@ use crate::Error;
 use crate::runtime::FunctionRef;
 use serde_json::Value;
 
-use super::{Shared, envelope_line, hang_guard, lifecycle, transport};
+use super::{Shared, envelope_line, hang_guard, lifecycle, line::ProcessLineKind, transport};
 
 use super::super::host::admission::CallbackContext;
 
@@ -639,7 +639,7 @@ pub(crate) fn run_request(
     })?;
     let line = envelope_line(
         shared,
-        "extension_request",
+        ProcessLineKind::ExtensionRequest,
         payload.as_object().cloned().unwrap_or_default(),
     );
     match support::lock(&shared.transport).send(line) {

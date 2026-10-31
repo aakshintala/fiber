@@ -31,7 +31,7 @@ use crate::oauth::{self, held};
 
 use super::requests::{Answer, Outcome, RequestKind, Table};
 use super::transport::SendError;
-use super::{Shared, answer_off, answer_on, envelope_line, hang_guard};
+use super::{Shared, answer_off, answer_on, envelope_line, hang_guard, line::ProcessLineKind};
 
 /// The stored pair's file under Fiber home. The home alone names no
 /// pair: the dispatcher carries the session's pair on the callback, and
@@ -271,7 +271,7 @@ fn run_refresh(
     };
     let line = envelope_line(
         shared,
-        "extension_request",
+        ProcessLineKind::ExtensionRequest,
         payload.as_object().cloned().unwrap_or_default(),
     );
     match lock(&shared.transport).send(line) {
