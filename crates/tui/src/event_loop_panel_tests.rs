@@ -125,12 +125,14 @@ fn the_wheel_over_the_panel_scrolls_it_in_the_loop() {
         .unwrap_or_else(|| panic!("a panel"));
     feed(&mut lp, vec![wheel(panel.x + 5, panel.y + 10)]);
     assert_eq!(lp.app.panel_state().scroll(), 3);
-    // Five more wheels past the Session card's thirteen rows and the
-    // blank row: the widget's third line sits first.
-    for _ in 0..5 {
+    // Six more wheels past the Session card's fifteen rows and the
+    // blank row: the widget's third line sits first (the two new card
+    // rows moved the title from 16 to 18, so 21 skips it with the two
+    // lines above).
+    for _ in 0..6 {
         feed(&mut lp, vec![wheel(panel.x + 5, panel.y + 10)]);
     }
-    assert_eq!(lp.app.panel_state().scroll(), 18);
+    assert_eq!(lp.app.panel_state().scroll(), 21);
     assert!(shown(&lp).contains("line 02"), "{}", shown(&lp));
     assert!(!shown(&lp).contains("line 00"), "{}", shown(&lp));
     assert!(!shown(&lp).contains("plan · tasks"), "{}", shown(&lp));
