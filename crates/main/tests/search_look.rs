@@ -186,7 +186,8 @@ fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
     if !content.ends_with("1 of 5 ") {
         return None;
     }
-    // " ⌕ " in `attention`, the query bold, the █ and the count dim.
+    // " ⌕ " in `attention`, the query bold, the █ in the text colour
+    // with no dim, and the count dim.
     let at = first.checked_add(
         u16::try_from(
             content
@@ -203,7 +204,10 @@ fn slab_cells(grid: &Grid) -> Option<(u16, u16, u16)> {
         return None;
     }
     let block = query.checked_add(4)?;
-    if grid.cell(block, y).symbol != "█" || !grid.cell(block, y).dim {
+    if grid.cell(block, y).symbol != "█"
+        || grid.cell(block, y).fg != Colour::Default
+        || grid.cell(block, y).dim
+    {
         return None;
     }
     let count_at = last.checked_sub(6)?;
@@ -353,14 +357,16 @@ fn the_search_bar_matches_the_doc() {
     for x in first..=last {
         assert_eq!(grid.cell(x, y).bg, SURFACE, "({x}, {y})");
     }
-    // " ⌕ " in `attention`, the query bold, the █ and the count dim.
+    // " ⌕ " in `attention`, the query bold, the █ in the text colour
+    // with no dim, and the count dim.
     let query = first + 3;
     assert_eq!(grid.cell(query - 1, y).fg, ATTENTION);
     for x in query..query + 4 {
         assert!(grid.cell(x, y).bold, "query ({x}, {y})");
     }
     assert_eq!(grid.cell(query + 4, y).symbol, "█");
-    assert!(grid.cell(query + 4, y).dim);
+    assert_eq!(grid.cell(query + 4, y).fg, Colour::Default);
+    assert!(!grid.cell(query + 4, y).dim);
     let count = col_at(&grid, y, "1 of 5");
     for dx in 0..6 {
         assert!(grid.cell(count + dx, y).dim, "count {dx}");
