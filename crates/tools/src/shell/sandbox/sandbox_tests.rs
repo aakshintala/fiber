@@ -1636,6 +1636,26 @@ fn baseline_file(home: &std::path::Path) -> std::path::PathBuf {
     found.pop().expect("one baseline")
 }
 
+/// The canonical spelling of a baseline entry path, with lexical fallback.
+/// A missing `.fiber` cannot canonicalize itself, so its workspace root is
+/// canonicalized and the file name re-joined: the same construction the
+/// expected `.fiber` paths below use. Both sides of every assertion below
+/// go through this form, so a `/private/...` discovery record and a
+/// `/var/...` lexical spelling compare equal on macOS.
+fn canonical_entry(path: &str) -> std::path::PathBuf {
+    let candidate = Path::new(path);
+    if let Ok(resolved) = std::fs::canonicalize(candidate) {
+        return resolved;
+    }
+    if let Some(parent) = candidate.parent()
+        && let Ok(root) = std::fs::canonicalize(parent)
+        && let Some(name) = candidate.file_name()
+    {
+        return root.join(name);
+    }
+    candidate.to_path_buf()
+}
+
 /// A linked worktree on a detached head at `name` under the repository.
 fn linked(repo: &std::path::Path, name: &str) -> std::path::PathBuf {
     let path = repo.join(name);
@@ -1685,19 +1705,21 @@ fn baseline_covers_shared_state_once_and_each_worktree_pointer_and_fiber() {
         "the shared hooks are recorded, got {paths:?}"
     );
     assert!(
-        !paths.iter().any(|path| Path::new(path) == main_git),
+        !paths.iter().any(|path| canonical_entry(path) == main_git),
         "the main checkout's own directory is never snapshotted, got {paths:?}"
     );
     assert!(
-        paths.iter().any(|path| Path::new(path) == other_git),
+        paths.iter().any(|path| canonical_entry(path) == other_git),
         "the linked worktree's pointer is recorded, got {paths:?}"
     );
     assert!(
-        paths.iter().any(|path| Path::new(path) == main_fiber),
+        paths.iter().any(|path| canonical_entry(path) == main_fiber),
         "the main checkout's fiber dir is recorded, got {paths:?}"
     );
     assert!(
-        paths.iter().any(|path| Path::new(path) == other_fiber),
+        paths
+            .iter()
+            .any(|path| canonical_entry(path) == other_fiber),
         "the linked worktree's fiber dir is recorded, got {paths:?}"
     );
     let shared: Vec<&&str> = paths
@@ -3324,7 +3346,7 @@ mod protected_mutant_regressions {
         assert!(
             entries
                 .iter()
-                .any(|entry| Path::new(&entry.path) == pointer),
+                .any(|entry| super::canonical_entry(&entry.path) == pointer),
             "a non-shared directory pointer is protected"
         );
     }

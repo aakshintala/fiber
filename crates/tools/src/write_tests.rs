@@ -638,3 +638,43 @@ fn a_write_inside_a_protected_path_advances_the_baseline() {
         "the end restores to the approved write"
     );
 }
+
+#[test]
+fn a_write_through_a_symlinked_workspace_alias_advances_the_baseline() {
+    use crate::shell::sandbox::protected::ProtectedPaths;
+    let dir = TempDir::new("fiber-write-protected-alias");
+    let workspace = dir.path().join("workspace");
+    let fiber = workspace.join(".fiber");
+    std::fs::create_dir_all(&fiber).unwrap();
+    std::fs::write(fiber.join("keep.txt"), b"original\n").unwrap();
+    let alias = dir.path().join("workspace-alias");
+    symlink(&workspace, &alias).unwrap();
+    let home = dir.path().join("fiber-home");
+    let (handle, _) = ProtectedPaths::open(&home, &alias).expect("protection opens");
+    // The baseline records the alias spelling; the file tool resolves
+    // through the symlink to the real workspace, so the approved path
+    // reaches the baseline only when both spellings match canonically.
+    let begin = handle.begin(&alias).expect("begin snapshots");
+    let files = Files::new(alias).with_protection(std::sync::Arc::clone(&handle));
+    files.read().run(
+        &fakes::tool_args(json!({"path": ".fiber/keep.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    let output = files.write().run(
+        &fakes::tool_args(json!({"path": ".fiber/keep.txt", "content": "approved\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
+    // A shell change after the approved write restores to the approved
+    // content, never to what was there before it.
+    std::fs::write(fiber.join("keep.txt"), b"shell\n").unwrap();
+    let report = begin.guard.finish();
+    assert_eq!(report.restored, vec![".fiber".to_owned()]);
+    assert_eq!(
+        std::fs::read(fiber.join("keep.txt")).unwrap(),
+        b"approved\n",
+        "the alias and real workspace spellings name one protected entry"
+    );
+}

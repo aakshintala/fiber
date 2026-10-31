@@ -725,6 +725,21 @@ fn a_confined_call_restores_the_protected_path_it_changed() {
         fs::read(linked.join(".fiber/note.txt")).unwrap(),
         b"linked original\n"
     );
+    // The protected-path state lives under the log project key for this
+    // workspace's project: `main` already depends on both `log` and
+    // `tools`, so the binary test pins the key without a new crate edge.
+    let key = log::project_key(&worktree::project(&workspace));
+    let baseline = setup
+        .home()
+        .join("projects")
+        .join(&key)
+        .join("protected-paths")
+        .join("baseline.json");
+    assert!(
+        baseline.is_file(),
+        "the protected baseline lives under the project key {key}: {}",
+        baseline.display()
+    );
     // `docs/sandbox.md:102-106` promises the warning wording and its
     // headless stderr destination for each changed path.
     assert!(
