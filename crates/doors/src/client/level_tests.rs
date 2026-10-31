@@ -802,3 +802,136 @@ fn a_level_change_after_the_log_ends_moves_the_writer_to_the_new_watcher() {
         .collect();
     assert_eq!(ids, ["c_up", "c_after"], "{lines:?}");
 }
+
+/// An ordinary envelope, not a control. The writer forwards it.
+fn ordinary_envelope(session: &SessionId, kind: &str, token: u64) -> contract::Envelope {
+    let mut payload = serde_json::Map::new();
+    payload.insert("token".to_owned(), serde_json::Value::from(token));
+    contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: session.clone(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload,
+    }
+}
+
+#[test]
+fn control_boundary_lines_carry_literal_names_and_tokens() {
+    use super::super::writer::ControlKind;
+
+    let session = SessionId("s_control".into());
+    // Token 0 is the edge the producers use; 1 sits just above it, and 7 is
+    // a nonzero token that must survive unchanged.
+    let cases = [
+        (ControlKind::Stop, "doors.stop", 0),
+        (ControlKind::Cut, "doors.cut", 1),
+        (ControlKind::Level, "doors.level", 7),
+    ];
+    for (kind, literal, token) in cases {
+        assert_eq!(kind.name(), literal);
+        let line = control_line(&session, kind.name(), token);
+        assert_eq!(line.kind, literal);
+        assert_eq!(line.session_id, session);
+        assert_eq!(line.ts, 0);
+        assert_eq!(line.schema_version, contract::SCHEMA_VERSION);
+        assert_eq!(line.turn_id, None);
+        assert_eq!(line.action_id, None);
+        assert_eq!(line.seq, None);
+        assert_eq!(
+            line.payload
+                .get("token")
+                .and_then(serde_json::Value::as_u64),
+            Some(token)
+        );
+        assert_eq!(line.payload.len(), 1);
+    }
+}
+
+#[test]
+fn control_boundary_recognizes_only_exact_names() {
+    use super::super::writer::ControlKind;
+
+    assert_eq!(
+        ControlKind::recognize("doors.stop"),
+        Some(ControlKind::Stop)
+    );
+    assert_eq!(ControlKind::recognize("doors.cut"), Some(ControlKind::Cut));
+    assert_eq!(
+        ControlKind::recognize("doors.level"),
+        Some(ControlKind::Level)
+    );
+
+    // At the name, just short of it, and one character past it. Case,
+    // whitespace, an empty name and a non-ASCII name are not controls.
+    let rejected = [
+        "x.ack",
+        "",
+        "\u{505c}\u{6b62}",
+        "doors.st\u{f6}p",
+        "doors.STOP",
+        "doors.CUT",
+        "doors.LEVEL",
+        "DOORS.stop",
+        "Doors.cut",
+        "doors.Level",
+        " doors.stop",
+        "doors.stop ",
+        "doors.cut\n",
+        "\tdoors.level",
+        "doors. cut",
+        "doors.stop\u{200b}",
+        "doors.sto",
+        "doors.cu",
+        "doors.leve",
+        "doors.",
+        "doors.stopx",
+        "doors.cutx",
+        "doors.levelx",
+        "xdoors.stop",
+        "doors.stopdoors.cut",
+    ];
+    for name in rejected {
+        assert_eq!(ControlKind::recognize(name), None, "{name:?}");
+    }
+}
+
+/// Stop is an internal wake-up. A full-level writer writes the ordinary
+/// envelopes queued ahead of it and does not write the stop line.
+#[test]
+fn control_boundary_full_level_writer_forwards_ordinary_envelopes() {
+    use super::super::writer::{ControlKind, Ended};
+
+    let (_temp, log, id, _clock) = open_log();
+    let watcher = log.watch_all();
+    let injector = watcher.injector();
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    let (_switch_tx, switches) = mpsc::channel();
+    thread::spawn({
+        let out = Arc::clone(&out);
+        move || {
+            let ended =
+                crate::client::write_loop(watcher, Box::new(SharedOut(out)), false, switches, None);
+            if let Ok(()) = done_tx.send(ended) {}
+        }
+    });
+    let ack = ordinary_envelope(&id, "x.ack", 7);
+    let near = ordinary_envelope(&id, "doors.stopx", 3);
+    injector.push_kept(ack.clone());
+    injector.push_kept(near.clone());
+    injector.push_kept(control_line(&id, ControlKind::Stop.name(), 0));
+    let ended = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("stop ends the full-level writer");
+    assert!(matches!(ended, Ended::Done), "stop ends the writer cleanly");
+    let lines = envelopes(&String::from_utf8(lock(&out).clone()).unwrap());
+    assert_eq!(
+        lines,
+        vec![ack, near],
+        "ordinary envelopes reach the client and stop does not"
+    );
+}

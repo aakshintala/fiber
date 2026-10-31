@@ -380,6 +380,40 @@ pub(crate) fn write_line(stream: &mut dyn Write, line: &Envelope) -> std::io::Re
     support::framing::write_line(stream, &bytes)
 }
 
+/// A wake-up queued to a session writer. The writer consumes it and never
+/// writes it to a client. The envelope still carries the name in `kind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ControlKind {
+    /// `doors.stop`. Before the log ends this ends the writer, unless the
+    /// session is stopping: then the writer records it and continues.
+    Stop,
+    /// `doors.cut`. Flushes what the close grace decided; the writer carries on.
+    Cut,
+    /// `doors.level`. Switches the writer onto the next subscription level.
+    Level,
+}
+
+impl ControlKind {
+    /// The exact `kind` string this control carries.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Stop => "doors.stop",
+            Self::Cut => "doors.cut",
+            Self::Level => "doors.level",
+        }
+    }
+
+    /// The control whose name is exactly `name`, or `None` for every other string.
+    pub(crate) fn recognize(name: &str) -> Option<Self> {
+        match name {
+            "doors.stop" => Some(Self::Stop),
+            "doors.cut" => Some(Self::Cut),
+            "doors.level" => Some(Self::Level),
+            _ => None,
+        }
+    }
+}
+
 /// A control line for `session`, such as the one that stops its writer.
 pub(crate) fn control_line(session: &SessionId, kind: &str, token: u64) -> Envelope {
     let mut payload = Map::new();
