@@ -768,8 +768,7 @@ fn two_successive_target_requests_keep_a_stable_prefix() {
 fn wait_for_leaf_unheld(hubbed: &mut Hubbed, leaf: &str, on_held: impl FnOnce()) {
     let client = hubbed.client_mut();
     let wait = client.start_wait();
-    // Sends and reads share the expiry fixed here; no probe renews it.
-    client.set_deadline(Deadline::after(wait.left()));
+    // Sends and reads use the same wait; no probe renews it.
     let mut on_held = Some(on_held);
     let mut held = Value::Null;
     let mut probe = 0;
@@ -781,12 +780,15 @@ fn wait_for_leaf_unheld(hubbed: &mut Hubbed, leaf: &str, on_held: impl FnOnce())
             "waited until the deadline for {what}"
         );
         let id = format!("c_leaf_unheld_{leaf}_{probe}");
-        client.send(&command(
-            &id,
-            None,
-            "delete",
-            json!({"session": leaf, "dry_run": true}),
-        ));
+        client.send_through(
+            &wait,
+            &command(
+                &id,
+                None,
+                "delete",
+                json!({"session": leaf, "dry_run": true}),
+            ),
+        );
         let mut lines = Vec::new();
         let answer = loop {
             let line = client
@@ -810,7 +812,7 @@ fn wait_for_leaf_unheld(hubbed: &mut Hubbed, leaf: &str, on_held: impl FnOnce())
             on_held();
         }
         // This receive only paces probes; it never renews the full wait.
-        let poll = Deadline::after(std::time::Duration::from_millis(50).min(wait.left()));
+        let poll = Deadline::after(std::time::Duration::from_millis(50));
         let _paused = poll.recv(&pause);
         probe += 1;
     }
