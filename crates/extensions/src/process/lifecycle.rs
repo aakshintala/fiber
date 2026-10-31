@@ -17,7 +17,7 @@ use contract::ErrorCode;
 use support::cancel::Cancel;
 use support::lock;
 
-use super::{Shared, requests, transport};
+use super::{Shared, line::ProcessLineKind, requests, transport};
 
 /// How long the shutdown waits between TERM and KILL: a child that
 /// ignores TERM gets 800ms before KILL ends it.
@@ -334,7 +334,7 @@ fn restart(
             ));
         }
     };
-    let hello = super::envelope_line(shared, "extension_hello", payload);
+    let hello = super::envelope_line(shared, ProcessLineKind::ExtensionHello, payload);
     match lock(&shared.transport).send(hello) {
         Ok(()) => {}
         Err(super::transport::SendError::TooLarge) => {
