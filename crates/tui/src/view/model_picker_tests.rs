@@ -104,6 +104,7 @@ fn catalogue() -> Catalogue {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -1656,6 +1657,7 @@ fn a_first_party_file_row_names_its_config_file() {
                 name: None,
             }],
         }],
+        ..Default::default()
     };
     let mut app = attached(160, 48);
     app.on_models(Ok(catalogue));

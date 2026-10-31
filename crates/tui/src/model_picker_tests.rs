@@ -192,6 +192,7 @@ fn the_selection_stays_on_its_model_across_the_toggle() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
         ..ModelPicker::default()
@@ -223,6 +224,7 @@ fn move_chip_from_no_chip_takes_the_near_end_and_marks_touched() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -251,6 +253,7 @@ fn move_chip_on_a_model_with_no_levels_does_nothing() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -271,6 +274,7 @@ fn toggle_moves_the_selection_to_the_first_row_when_its_model_hides() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         scoped: vec!["acme/m1".to_owned()],
         ..ModelPicker::default()
@@ -292,6 +296,7 @@ fn open_over(models: Vec<ModelEntry>) -> ModelPicker {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -313,6 +318,7 @@ fn a_replacement_inserting_before_the_selection_keeps_its_model() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     // The selection follows `acme/m2` past the inserted row.
     let open = picker.open.as_ref().unwrap();
@@ -339,6 +345,7 @@ fn a_replacement_removing_the_selected_model_clamps() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     let open = picker.open.as_ref().unwrap();
     assert_eq!(open.selected, 3);
@@ -354,6 +361,7 @@ fn a_replacement_removing_the_selected_model_clamps() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     let open = picker.open.as_ref().unwrap();
     assert_eq!(open.selected, 1);
@@ -379,6 +387,7 @@ fn chips_follow_the_level_name_across_a_replacement() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     let open = picker.open.as_ref().unwrap();
     assert_eq!(open.chips.first().copied().flatten(), Some(1));
@@ -398,6 +407,7 @@ fn an_open_before_the_first_answer_preselects_the_current_model() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     let open = picker.open.as_ref().unwrap();
     assert_eq!(picker.catalogue.models[open.selected].reference, "acme/m2");
@@ -436,6 +446,7 @@ fn page_keys_do_nothing_closed_empty_or_without_height() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -450,6 +461,7 @@ fn page_keys_do_nothing_closed_empty_or_without_height() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         scoped: vec!["gone/x".to_owned()],
         ..ModelPicker::default()
@@ -485,6 +497,7 @@ fn the_status_says_reading_until_the_first_answer() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     assert_eq!(picker.take_read(), None);
     picker.refresh();
@@ -532,6 +545,7 @@ fn frame_row_clicks_select_without_choosing() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
         ..ModelPicker::default()
@@ -570,6 +584,7 @@ fn the_first_chip_click_follows_the_roles_cell() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -591,6 +606,7 @@ fn each_chip_click_advances_one_cell() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -717,6 +733,7 @@ fn choice_is_none_while_closed_or_with_no_scoped_row() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -728,6 +745,7 @@ fn choice_is_none_while_closed_or_with_no_scoped_row() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         scoped: vec!["gone/x".to_owned()],
         ..ModelPicker::default()
@@ -747,6 +765,7 @@ fn clicks_choose_at_the_row_and_chip() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         scoped: vec!["acme/m1".to_owned(), "zeta/z3".to_owned()],
         ..ModelPicker::default()
@@ -818,6 +837,7 @@ fn an_open_checklist_starts_marked_from_the_list() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Scope, None);
     assert_eq!(
@@ -844,6 +864,7 @@ fn toggle_mark_flips_only_the_selected_row() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Scope, None);
     picker.move_row(1);
@@ -878,6 +899,7 @@ fn adopt_scoped_keeps_touched_rows_and_derives_the_rest() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Scope, None);
     assert_eq!(
@@ -930,6 +952,7 @@ fn scope_clicks_toggle_the_mark_cell_and_select_on_any_other() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Scope, None);
     // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
@@ -971,6 +994,7 @@ fn toggle_mark_with_no_shown_row_changes_nothing() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Scope, None);
     picker.push_query('q');
@@ -997,6 +1021,7 @@ fn marks_survive_query_edits() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Scope, None);
     picker.toggle_mark();
@@ -1090,6 +1115,7 @@ fn a_read_keeps_checklist_marks_by_reference() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Scope, None);
     // Unmark the installed `acme/m1`.
@@ -1109,6 +1135,7 @@ fn a_read_keeps_checklist_marks_by_reference() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
@@ -1128,6 +1155,7 @@ fn a_read_leaves_a_choose_open_without_marks() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Choose, None);
     picker.store(Ok(Catalogue {
@@ -1136,6 +1164,7 @@ fn a_read_leaves_a_choose_open_without_marks() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
@@ -1155,6 +1184,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     };
     picker.open(Mode::Scope, None);
     assert_eq!(
@@ -1169,6 +1199,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
@@ -1182,6 +1213,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
@@ -1359,6 +1391,7 @@ fn a_replacement_with_a_query_keeps_the_selection_on_the_shown_rows() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     let open = picker.open.as_ref().unwrap();
     assert_eq!(picker.catalogue.models[open.selected].reference, "zeta/z1");
@@ -1404,6 +1437,7 @@ fn open_listed(lists: Vec<crate::catalogue::ListAge>) -> ModelPicker {
             notices: Vec::new(),
             lists,
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -1778,6 +1812,7 @@ fn open_left_out(models: Vec<ModelEntry>, groups: Vec<LeftOutGroup>) -> ModelPic
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: groups,
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -2510,6 +2545,7 @@ fn the_startup_read_counts_as_owed_until_it_answers() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };
@@ -2653,6 +2689,7 @@ fn move_row_zero_with_no_focus_moves_nothing() {
             notices: Vec::new(),
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         },
         ..ModelPicker::default()
     };

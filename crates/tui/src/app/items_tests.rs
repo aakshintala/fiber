@@ -2249,6 +2249,7 @@ fn wheel_over_the_model_picker_above_an_item_moves_the_picker() {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     app.open_model_picker(crate::model_picker::Mode::Choose);
     let picker = app.model_picker_view().expect("the picker is open");

@@ -159,6 +159,7 @@ fn choose_session_model(app: &mut App) {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }));
     assert_eq!(
         app.on_press(crate::stroke::Stroke::parse("ctrl+s").unwrap(), now),

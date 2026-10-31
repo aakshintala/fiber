@@ -1362,6 +1362,7 @@ fn catalogue_answers_decode_field_for_field() {
                     }],
                 },
             ],
+            ..Default::default()
         }
     );
 }
@@ -1386,6 +1387,27 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
     assert!(
         catalogue.left_out.is_empty(),
         "a missing left_out key decodes empty"
+    );
+    assert!(
+        catalogue.logged_out.is_empty(),
+        "a missing logged_out key decodes empty"
+    );
+    let logged_out = hub
+        .call(
+            "models",
+            args.clone(),
+            json!({"models": [], "notices": [], "lists": [],
+                   "logged_out": [{"provider": "acme", "login": true, "hint": ""}]}),
+            |r| r.models(Refresh::Cached),
+        )
+        .unwrap();
+    assert_eq!(
+        logged_out.logged_out,
+        [crate::catalogue::LoggedOutProvider {
+            provider: "acme".to_owned(),
+            login: true,
+            hint: String::new(),
+        }]
     );
     let installable = hub
         .call(
@@ -1417,6 +1439,20 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
         (
             "installable not strings",
             json!({"models": [], "notices": [], "lists": [], "installable": [1]}),
+        ),
+        (
+            "logged_out not an array",
+            json!({"models": [], "notices": [], "lists": [], "logged_out": "acme"}),
+        ),
+        (
+            "logged_out row missing hint",
+            json!({"models": [], "notices": [], "lists": [],
+                   "logged_out": [{"provider": "acme", "login": true}]}),
+        ),
+        (
+            "logged_out row with malformed login",
+            json!({"models": [], "notices": [], "lists": [],
+                   "logged_out": [{"provider": "acme", "login": "yes", "hint": ""}]}),
         ),
         (
             "a model without reference",

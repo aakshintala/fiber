@@ -2769,6 +2769,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
             }],
             lists: Vec::new(),
             left_out: Vec::new(),
+            ..Default::default()
         })
     });
     let mut started = launch();
@@ -2892,6 +2893,7 @@ fn one_model() -> crate::Catalogue {
         notices: Vec::new(),
         lists: Vec::new(),
         left_out: Vec::new(),
+        ..Default::default()
     }
 }
 
