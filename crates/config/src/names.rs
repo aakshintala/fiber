@@ -18,13 +18,14 @@ pub const SHORT_NAMES: [&str; 11] = [
 ];
 
 /// The first-party extensions under `extensions/` with short names.
-const EXTENSION_SHORT_NAMES: [&str; 6] = [
+const EXTENSION_SHORT_NAMES: [&str; 7] = [
     "claude",
     "cursor-agent",
     "hooks",
     "init",
     "memory",
     "export",
+    "codemode",
 ];
 
 const PROVIDERS: &str = "github.com/aakshintala/fiber/providers/";
@@ -100,6 +101,7 @@ mod tests {
             "init",
             "memory",
             "export",
+            "codemode",
         ] {
             let full = format!("github.com/aakshintala/fiber/extensions/{short}");
             assert_eq!(full_name(short), full);
@@ -172,7 +174,7 @@ mod tests {
                 "opencode",
                 "openrouter",
             ],
-            "extensions" => &["init", "memory", "export"],
+            "extensions" => &["init", "memory", "export", "codemode"],
             _ => &[],
         };
         names.iter().map(|name| (*name).to_owned()).collect()

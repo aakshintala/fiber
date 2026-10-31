@@ -22,6 +22,13 @@ use super::{MovePolicy, MoveReason, StopKind};
 use fakes::children::{Ready, ignores_sigterm};
 use support::group::alive;
 
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../../tests/support/sandbox_home.rs"]
+mod sandbox_home;
+
 #[test]
 fn bump_advances_the_sequence() {
     let mut inner = Inner::default();
@@ -1987,28 +1994,36 @@ fn cat_with_discard_redirect_or_true_reads() {
     );
 }
 
-fn sandbox_settings_for_test(
-    _workspace: &std::path::Path,
-    name: &str,
-) -> crate::shell::sandbox::Settings {
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let fiber_home = home.join(format!("fiber-sandbox-cmd-{name}-{}", std::process::id()));
-    crate::shell::sandbox::Settings {
+#[test]
+fn sandbox_home_is_owned_and_removed_on_drop() {
+    let (home, settings) = sandbox_settings_for_test();
+    drop(settings);
+    let root = home.root().to_path_buf();
+    let fiber_home = home.fiber_home().to_path_buf();
+    assert_eq!(fiber_home, root.join("fiber-home"));
+    assert!(fiber_home.starts_with(&root));
+    std::fs::create_dir_all(&fiber_home).expect("the test builds the home");
+    std::fs::write(fiber_home.join("marker"), "x").expect("the test marks the home");
+    drop(home);
+    assert!(!root.exists(), "dropping the home removes the tree");
+}
+
+fn sandbox_settings_for_test() -> (sandbox_home::SandboxHome, crate::shell::sandbox::Settings) {
+    let home = sandbox_home::SandboxHome::protected();
+    let settings = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: Vec::new(),
         deny_read: Vec::new(),
-        fiber_home,
-    }
+        fiber_home: home.fiber_home().to_path_buf(),
+    };
+    (home, settings)
 }
 
 #[test]
 fn sandbox_enabled_runs_a_confined_echo() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-echo");
     let work = dir.path().to_path_buf();
-    let sandbox = sandbox_settings_for_test(&work, "echo");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let ran = fakes::within(
         "a confined echo",
         Deadline::after(JOB_DEADLINE),
@@ -2046,14 +2061,8 @@ fn sandbox_enabled_runs_a_confined_echo() {
 fn sandbox_unavailable_fails_closed_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-unavailable");
     let work = dir.path().to_path_buf();
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let fiber_home = home.join(format!(
-        "fiber-sandbox-cmd-unavailable-{}",
-        std::process::id()
-    ));
+    let home = sandbox_home::SandboxHome::protected();
+    let fiber_home = home.fiber_home().to_path_buf();
     let sandbox = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: Vec::new(),
@@ -2099,11 +2108,10 @@ fn sandbox_setup_failure_aborts_spawn_without_running() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-fail");
     let work = dir.path().to_path_buf();
     let marker = work.join("marker");
-    let home = std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from,
-    );
-    let fiber_home = home.join(format!("fiber-sandbox-cmd-fail-{}", std::process::id()));
+    let home_root = fakes::TempDir::new("fiber-tools-shell-sandbox-protected");
+    let fiber_home = home_root.path().join("fiber-home");
+    assert!(fiber_home.starts_with(std::env::temp_dir()));
+    assert!(fiber_home.starts_with(home_root.path()));
     let sandbox = crate::shell::sandbox::Settings {
         enabled: true,
         allow_write: vec![std::path::PathBuf::from("/nonexistent-fiber-sandbox-allow")],
@@ -2179,7 +2187,7 @@ fn sandbox_install_failure_aborts_spawn_without_running() {
     let work = dir.path().to_path_buf();
     let ps = fakes::script(dir.path(), "ps", "exit 0");
     let marker = work.join("marker");
-    let sandbox = sandbox_settings_for_test(&work, "install-fail");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let command = format!("touch {} && echo hi", marker.display());
     let result = super::execute_inner(
         std::path::Path::new("/bin/sh"),
@@ -2238,7 +2246,7 @@ fn confined_socket_probe() {
 fn sandbox_denies_sockets_with_abi2_rules_on_this_host() {
     let dir = fakes::TempDir::new("fiber-sandbox-cmd-socket");
     let work = dir.path().to_path_buf();
-    let sandbox = sandbox_settings_for_test(&work, "socket");
+    let (_home, sandbox) = sandbox_settings_for_test();
     let executable = std::env::current_exe().expect("the test executable");
     let quoted = executable.display().to_string().replace('\'', "'\\''");
     let command = format!(
@@ -2357,7 +2365,7 @@ fn an_unchanged_command_reports_a_transaction_only_with_enabled_protection() {
         (true, false, None),
     ] {
         let dir = fakes::TempDir::new("fiber-command-empty-protection");
-        let home = fakes::TempDir::under(&real_home(), "fiber-command-empty-protection-home");
+        let home = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
         let work = dir.path().to_path_buf();
         let (sandbox, handle) = protected_pair(home.path(), &work, enabled);
         let ran = fakes::within(
@@ -2399,7 +2407,7 @@ fn an_unchanged_command_reports_a_transaction_only_with_enabled_protection() {
 #[test]
 fn a_confined_call_restores_its_protected_paths_and_reports() {
     let dir = fakes::TempDir::new("fiber-protected-exec");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-exec-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let fiber = work.join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
@@ -2446,7 +2454,7 @@ fn a_confined_call_restores_its_protected_paths_and_reports() {
 #[test]
 fn an_unconfined_call_takes_no_guard() {
     let dir = fakes::TempDir::new("fiber-protected-unconfined");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-unconfined-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let (sandbox, handle) = protected_pair(home_dir.path(), &work, false);
     let clock = FakeClock::new();
@@ -2478,7 +2486,7 @@ fn an_unconfined_call_takes_no_guard() {
 #[test]
 fn a_failed_baseline_fails_the_confined_call_closed() {
     let dir = fakes::TempDir::new("fiber-protected-setup-fail");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-setup-fail-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let fiber = work.join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
@@ -2529,7 +2537,7 @@ fn a_failed_baseline_fails_the_confined_call_closed() {
 #[test]
 fn an_adopted_call_ends_its_guard_exactly_once() {
     let dir = fakes::TempDir::new("fiber-protected-adopted");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-adopted-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let fiber = work.join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");
@@ -2637,7 +2645,7 @@ fn an_adopted_call_ends_its_guard_exactly_once() {
 #[test]
 fn a_failed_job_open_preserves_the_guard_on_resume() {
     let dir = fakes::TempDir::new("fiber-protected-resume");
-    let home_dir = fakes::TempDir::under(&real_home(), "fiber-protected-resume-home");
+    let home_dir = fakes::TempDir::under(&real_home(), "fiber-tools-shell-sandbox-protected");
     let work = dir.path().to_path_buf();
     let fiber = work.join(".fiber");
     std::fs::create_dir_all(&fiber).expect("fiber dir created");

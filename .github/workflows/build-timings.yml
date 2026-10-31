@@ -1,0 +1,93 @@
+name: Build timings
+
+# Measures where Fiber's own build time goes (#3789, step 1). Manual only:
+# `gh workflow run build-timings.yml --ref <branch>`, never on a push or a
+# pull request. It builds the whole workspace with `--timings` on Linux
+# x86_64 and macOS arm64 from a warm dependency cache (the workspace's own
+# outputs are cleaned after the restore, so the measured build recompiles
+# Fiber's crates while the dependencies stay warm), times an incremental
+# rebuild after touching one file each in `crates/tui` and `crates/support`,
+# and uploads both timing reports as artifacts. Its numbers are the evidence
+# later fix tickets pick from; it judges nothing and stays out of `ci.yml`'s
+# required aggregate job entirely.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Kept equal to ci.yml's so rust-cache's key hash matches CI's warm cache.
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  timings:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.runner }}
+    # No run history yet: generous until a few runs set a median. The closest
+    # cold-cache figures are the full-suite cold builds, 16m27s on Linux
+    # x86_64 and 30m38s on macOS arm64 (run 39564649711, which missed every
+    # cache); a build-only run should fit well inside this bound
+    # (docs/ci.md, "Job time limits").
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci-line-tables
+          save-if: false
+
+      - name: Full workspace build with timings
+        run: |
+          mkdir -p "$RUNNER_TEMP/build-timings"
+          # The shared cache restores the workspace's own build outputs as
+          # well as the dependencies', which would make this build a no-op
+          # on a commit CI already built. Clean the workspace members so the
+          # measured build recompiles Fiber's crates while the dependencies
+          # stay warm.
+          args=()
+          while IFS= read -r spec; do
+            args+=(-p "$spec")
+          done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | "\(.name)@\(.version)"')
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "cargo metadata listed no workspace members"
+            exit 1
+          fi
+          cargo clean "${args[@]}"
+          start=$(date +%s)
+          cargo build --workspace --all-targets --timings 2>&1 | tee "$RUNNER_TEMP/build-timings/full-build.log"
+          end=$(date +%s)
+          echo "full build took $((end - start)) s on ${{ matrix.runner }} from a warm dependency cache" | tee -a "$GITHUB_STEP_SUMMARY"
+          cp target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/build-timings/cargo-timing-full.html"
+
+      - name: Incremental rebuild after touching tui and support
+        run: |
+          touch crates/tui/src/appearance.rs crates/support/src/clock.rs
+          start=$(date +%s)
+          cargo build --workspace --all-targets --timings 2>&1 | tee "$RUNNER_TEMP/build-timings/incremental-build.log"
+          end=$(date +%s)
+          echo "incremental rebuild took $((end - start)) s on ${{ matrix.runner }} after touching one file each in crates/tui and crates/support" | tee -a "$GITHUB_STEP_SUMMARY"
+          cp target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/build-timings/cargo-timing-incremental.html"
+
+      - name: Upload the timing reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-timings-${{ matrix.runner }}
+          path: ${{ runner.temp }}/build-timings/
+          if-no-files-found: error
