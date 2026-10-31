@@ -166,7 +166,14 @@ fn launch() -> crate::home::Launch {
 /// An app with home state, attached, at `width` by `height`, holding a
 /// preamble naming `model` with `thinking`, `window` and `trigger` and a
 /// status naming `workspace` with `tokens` of `window`.
-fn row_app(width: u16, height: u16, workspace: &str, model: &str, thinking: &str, tokens: u64) -> App {
+fn row_app(
+    width: u16,
+    height: u16,
+    workspace: &str,
+    model: &str,
+    thinking: &str,
+    tokens: u64,
+) -> App {
     let window = 1_000_000;
     let trigger = 400_000;
     let mut app = App::new(PathBuf::from("/w"));
