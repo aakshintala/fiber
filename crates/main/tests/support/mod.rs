@@ -236,6 +236,15 @@ impl Setup {
         Self::new_under(&std::env::temp_dir())
     }
 
+    /// As [`Setup::new`], looking up the shared MCP fixture before the
+    /// deadline starts: the lookup warms the script past its first-exec
+    /// stall under its own bound, so the stall never eats the test's own
+    /// wait margin. Tests that never start the fixture keep [`Setup::new`].
+    pub(crate) fn new_with_mcp_fixture() -> Self {
+        fakes::mcp_fixture();
+        Self::new()
+    }
+
     /// As [`Setup::new`], rooted under `parent` for a short socket path.
     pub(crate) fn new_under(parent: &Path) -> Self {
         let deadline = Deadline::start();

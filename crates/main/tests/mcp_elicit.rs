@@ -277,7 +277,7 @@ fn write_fifo(deadline: Deadline, path: PathBuf) {
 
 #[test]
 fn an_elicitation_raises_one_interaction_per_field_and_the_server_gets_the_answers() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = guard(&setup);
     let dir = fixture(
         &setup,
@@ -459,7 +459,7 @@ fn an_elicitation_raises_one_interaction_per_field_and_the_server_gets_the_answe
 
 #[test]
 fn an_elicitation_with_two_calls_in_flight_names_both() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = guard(&setup);
     let dir = fixture(
         &setup,
@@ -604,7 +604,7 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
 
 #[test]
 fn a_hold_that_never_reaches_the_server_is_named() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let _guard = guard(&setup);
     let dir = fixture(
         &setup,

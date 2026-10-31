@@ -56,6 +56,12 @@ impl Setup {
         }
     }
 
+    /// Looks up the MCP fixture before `new` starts the test deadline.
+    fn new_with_mcp_fixture() -> Self {
+        fakes::mcp_fixture();
+        Self::new()
+    }
+
     fn home(&self) -> PathBuf {
         self.root.path().join("h")
     }
@@ -252,7 +258,7 @@ fn configure_fx(setup: &Setup, dir: &Path, extra: Value) {
 
 #[test]
 fn a_configured_server_declares_and_runs_its_tools() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([echo_tool()]),
         &[(
@@ -353,7 +359,7 @@ fn a_configured_server_declares_and_runs_its_tools() {
 
 #[test]
 fn the_server_runs_in_the_workspace_and_stops_with_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
@@ -383,7 +389,7 @@ fn the_server_runs_in_the_workspace_and_stops_with_the_session() {
 
 #[test]
 fn a_servers_grandchild_is_gone_after_fiber_exits() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     // The server starts a child that ignores SIGTERM and holds stdout
     // open: only a signal to the server's process group takes it with
@@ -411,7 +417,7 @@ fn a_servers_grandchild_is_gone_after_fiber_exits() {
 
 #[test]
 fn an_error_result_fails_the_call_with_tool_error() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([echo_tool()]),
         &[(
@@ -447,7 +453,7 @@ fn an_error_result_fails_the_call_with_tool_error() {
 
 #[test]
 fn a_result_over_16_kib_is_cut_and_kept_in_an_artifact() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let big = "x".repeat(20_000);
     let dir = setup.fixture(
         &json!([echo_tool()]),
@@ -490,7 +496,7 @@ fn a_result_over_16_kib_is_cut_and_kept_in_an_artifact() {
 
 #[test]
 fn a_call_that_times_out_fails_with_timeout() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     // Reads-only and offline, so the call runs without review and the
     // test observes the timeout itself rather than a denial.
     let dir = setup.fixture(
@@ -520,7 +526,7 @@ fn a_call_that_times_out_fails_with_timeout() {
 
 #[test]
 fn disabled_hides_a_tool() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([echo_tool(), {"name": "hidden"}]),
         &[("call-echo.json", r#"{"content":[]}"#)],
@@ -562,7 +568,7 @@ fn disabled_hides_a_tool() {
 
 #[test]
 fn a_persons_hints_override_changes_the_declared_effects() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     // The server says destructive, which would send the call to review
     // with no `tool_call_started`; the person's override says reads-only
     // and offline, so the call runs and `tool_call_started` carries the
@@ -606,7 +612,7 @@ fn a_persons_hints_override_changes_the_declared_effects() {
 
 #[test]
 fn a_repositorys_hints_do_not_change_the_declared_effects() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([echo_tool()]),
         &[(
@@ -648,7 +654,7 @@ fn a_repositorys_hints_do_not_change_the_declared_effects() {
 
 #[test]
 fn a_repositorys_server_is_not_started() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
@@ -717,7 +723,7 @@ fn a_persons_server_with_repository_args_is_not_started() {
 
 #[test]
 fn a_persons_empty_env_does_not_mask_a_repositorys_entry() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let marker = setup.root.path().join("pwned");
     let evil = setup.root.path().join("evil.sh");
@@ -785,7 +791,7 @@ fn a_server_that_fails_to_start_leaves_the_session_running() {
 
 #[test]
 fn a_second_session_declares_cached_tools_without_starting() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([echo_tool()]),
         &[(
@@ -851,7 +857,7 @@ fn a_second_session_declares_cached_tools_without_starting() {
 
 #[test]
 fn a_required_server_that_fails_to_start_exits_before_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start(Vec::<Response>::new()).unwrap();
     setup.provider(&server);
@@ -905,7 +911,7 @@ fn a_required_server_that_fails_to_start_exits_before_the_session() {
 
 #[test]
 fn a_cached_server_that_fails_on_the_call_fails_the_call() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([echo_tool()]),
         &[(
@@ -977,7 +983,7 @@ fn a_cached_server_that_fails_on_the_call_fails_the_call() {
 
 #[test]
 fn a_call_to_a_tool_the_server_removed_fails_with_mcp_tool_removed() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let gone =
         json!({"name": "gone", "annotations": {"readOnlyHint": true, "openWorldHint": false}});
     let dir = setup.fixture(
@@ -1148,7 +1154,7 @@ fn die_and_echo(setup: &Setup) -> PathBuf {
 
 #[test]
 fn a_server_that_dies_mid_session_restarts_on_the_next_call() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = die_and_echo(&setup);
     let server = ProviderServer::start(replies(&["die", "echo"])).unwrap();
     setup.provider(&server);
@@ -1181,7 +1187,7 @@ fn a_server_that_dies_mid_session_restarts_on_the_next_call() {
 
 #[test]
 fn a_server_that_dies_twice_stays_dead_with_its_tools_declared() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = die_and_echo(&setup);
     let server = ProviderServer::start(replies(&["die", "echo", "die", "echo"])).unwrap();
     setup.provider(&server);
@@ -1221,7 +1227,7 @@ fn a_server_that_dies_twice_stays_dead_with_its_tools_declared() {
 
 #[test]
 fn a_list_changed_notice_changes_nothing_until_the_next_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([quiet_tool("echo"), quiet_tool("notify")]),
         &[(
@@ -1277,7 +1283,7 @@ fn a_list_changed_notice_changes_nothing_until_the_next_session() {
 /// (required) and `tone`: `prompt` files hold one `prompts/get` result
 /// each, written as extra `(name, body)` pairs.
 fn prompt_fixture(extra: &[(&str, &str)]) -> (Setup, PathBuf) {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let mut calls = vec![
         (
             "prompts.json",
@@ -1398,7 +1404,7 @@ fn fiber_ask_with_a_missing_required_argument_exits_1_without_calling_the_model(
 
 #[test]
 fn fiber_ask_whose_prompt_the_server_refuses_exits_1() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([{"name": "echo"}]),
         &[(
@@ -1462,7 +1468,7 @@ fn fiber_ask_declines_an_elicitation_at_once() {
     // writing one `interaction_resolved` by `fiber` with no
     // `interaction_requested` before it, and the call still returns its
     // result.
-    let setup = Setup::new();
+    let setup = Setup::new_with_mcp_fixture();
     let dir = setup.fixture(
         &json!([{
             "name": "ask",

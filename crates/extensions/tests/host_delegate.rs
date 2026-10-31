@@ -122,6 +122,7 @@ fn completed(id: &str, status: Outcome) -> Event {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     })
 }
 

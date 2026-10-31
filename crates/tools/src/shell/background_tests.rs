@@ -57,6 +57,66 @@ fn status_of(command: &str) -> std::process::ExitStatus {
 }
 
 #[test]
+fn a_job_completion_keeps_changed_path_reports_and_omits_empty_ones() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    use contract::shapes::{ProtectedPathFailure, ProtectedPaths};
+
+    for (report, expected) in [
+        (None, None),
+        (
+            Some(ProtectedPaths {
+                restored: Vec::new(),
+                failed: Vec::new(),
+            }),
+            None,
+        ),
+        (
+            Some(ProtectedPaths {
+                restored: vec![".fiber".to_owned()],
+                failed: Vec::new(),
+            }),
+            Some(serde_json::json!({"restored": [".fiber"], "failed": []})),
+        ),
+        (
+            Some(ProtectedPaths {
+                restored: Vec::new(),
+                failed: vec![ProtectedPathFailure {
+                    path: ".git/config".to_owned(),
+                    message: "Permission denied".to_owned(),
+                }],
+            }),
+            Some(serde_json::json!({
+                "restored": [],
+                "failed": [{"path": ".git/config", "message": "Permission denied"}],
+            })),
+        ),
+    ] {
+        let end = super::to_completed_reported(
+            JobId("j_protected".to_owned()),
+            Path::new("unused-success-output"),
+            finished(
+                Some(std::process::ExitStatus::from_raw(0)),
+                None,
+                false,
+                false,
+                false,
+            ),
+            Limit {
+                ms: 60_000,
+                monitor: false,
+            },
+            report,
+        );
+        assert_eq!(end.status, Outcome::Completed);
+        assert_eq!(end.process.as_ref().and_then(|p| p.exit_code), Some(0));
+        assert!(end.error.is_none());
+        let event = serde_json::to_value(end).expect("completion serializes");
+        assert_eq!(event.get("protected_paths"), expected.as_ref());
+    }
+}
+
+#[test]
 fn the_description_is_the_first_line_cut_to_eighty_characters() {
     assert_eq!(description_of("echo hi"), "echo hi");
     assert_eq!(description_of("echo hi\nsleep 30"), "echo hi");
@@ -189,6 +249,7 @@ fn hand_off_with_saved(
         },
         cap: OUTPUT_CAP,
         spill: None,
+        protection: None,
     };
     let jobs: Arc<dyn contract::jobs::Jobs> = fakes::jobs::FakeJobs::new(dir);
     let clock: Arc<dyn contract::clock::Clock> = clock;

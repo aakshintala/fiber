@@ -89,6 +89,7 @@ fn completed(id: &str, status: Outcome) -> JobCompleted {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     }
 }
 
@@ -280,6 +281,7 @@ fn failed_delegate(
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         Some(DelegateFinished {
             job_id: id.clone(),
@@ -420,6 +422,7 @@ fn a_completed_fiber_delegate_with_its_log_lists_no_error() {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         Some(DelegateFinished {
             job_id: id.clone(),
@@ -645,6 +648,7 @@ fn a_job_that_already_ended_is_returned_at_once_and_claimed_once() {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     });
     let cancel = CancelToken::new();
     let output = run(
@@ -689,6 +693,7 @@ fn a_completed_job_names_its_exit_code_and_nothing_else() {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     });
     let output = run(
         &tool,
@@ -731,6 +736,7 @@ fn final_text_adds_a_newline_only_when_the_piece_has_none() {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     });
     let output = run(
         &tool,
@@ -1095,6 +1101,7 @@ fn stop_calls_stop_once_and_returns_the_end_it_reports() {
 
                     notice: None,
                     changed_by: None,
+                    protected_paths: None,
                 });
             }
         })),

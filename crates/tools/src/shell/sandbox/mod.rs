@@ -3,6 +3,8 @@
 //! Linux installed in the child between fork and exec, on macOS applied by
 //! spawning through `sandbox-exec`; a setup error aborts spawn.
 
+pub(crate) mod protected;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
@@ -515,16 +517,32 @@ pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupE
             add_ancestor_grants(target, &exclusions, selected, Path::new("/"), &mut rules)?;
         }
     }
-    let created = landlock::Ruleset::default()
+    // The Linux signal policy for the protected paths: Landlock signal
+    // scope from ABI 6, or the narrow seccomp supervisor rule below it.
+    // Sockets and `io_uring_setup` stay denied in both cases.
+    let policy = protected::linux_policy().map_err(|detail| SetupError::Seccomp { detail })?;
+    let builder = landlock::Ruleset::default()
         .set_compatibility(landlock::CompatLevel::BestEffort)
         .handle_access(landlock::AccessFs::from_all(selected))
         .map_err(|cause| SetupError::Ruleset {
             detail: format!("{cause:?}"),
-        })?
-        .create()
-        .map_err(|cause| SetupError::Ruleset {
-            detail: format!("{cause:?}"),
         })?;
+    let supervisor_rules = match &policy {
+        protected::LinuxPolicy::LandlockSignalScope => &[][..],
+        protected::LinuxPolicy::SupervisorSeccomp(rules) => rules,
+    };
+    let builder = if matches!(&policy, protected::LinuxPolicy::LandlockSignalScope) {
+        builder
+            .scope(landlock::Scope::Signal)
+            .map_err(|cause| SetupError::Ruleset {
+                detail: format!("{cause:?}"),
+            })?
+    } else {
+        builder
+    };
+    let created = builder.create().map_err(|cause| SetupError::Ruleset {
+        detail: format!("{cause:?}"),
+    })?;
     let mut created = created;
     for rule in rules {
         created = created
@@ -533,7 +551,7 @@ pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupE
                 detail: format!("{cause:?}"),
             })?;
     }
-    let program = compile_seccomp()?;
+    let program = compile_seccomp(supervisor_rules)?;
     Ok(Prepared {
         ruleset: Some(created),
         program,
@@ -1178,11 +1196,14 @@ fn open_nofollow(path: &Path) -> Result<OwnedFd, SetupError> {
 }
 
 /// Compiles the seccomp filter denying sockets and `io_uring_setup` with
-/// `EPERM`. All sockets are denied; there is no allow-list in this slice.
-/// An empty rule vector matches only on the syscall number, denying the
-/// call unconditionally.
+/// `EPERM`, plus the supervisor signal rules below Landlock ABI 6. All
+/// sockets are denied; there is no allow-list in this slice. An empty rule
+/// vector matches only on the syscall number, denying the call
+/// unconditionally; a supervisor rule matches its target pids.
 #[cfg(target_os = "linux")]
-fn compile_seccomp() -> Result<seccompiler::BpfProgram, SetupError> {
+fn compile_seccomp(
+    supervisor: &[(i64, Vec<seccompiler::SeccompRule>)],
+) -> Result<seccompiler::BpfProgram, SetupError> {
     use seccompiler::{SeccompAction, SeccompFilter};
     use std::collections::BTreeMap;
     let mut map: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
@@ -1196,6 +1217,9 @@ fn compile_seccomp() -> Result<seccompiler::BpfProgram, SetupError> {
         libc::SYS_io_uring_setup,
     ] {
         map.insert(syscall, Vec::new());
+    }
+    for (syscall, rules) in supervisor {
+        map.insert(*syscall, rules.clone());
     }
     let filter = SeccompFilter::new(
         map,
