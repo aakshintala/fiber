@@ -60,12 +60,14 @@ pub(crate) enum Landed {
     Nothing,
 }
 
-/// One place the focus can sit: a model by catalogue index, or a
-/// not-installed row by provider name.
+/// One place the focus can sit: a model by catalogue index, a logged-out
+/// provider or a not-installed row by provider name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Stop {
     /// A model row.
     Model(usize),
+    /// An installed provider without a credential.
+    LoggedOut(String),
     /// A not-installed provider row.
     Install(String),
 }
@@ -259,6 +261,11 @@ impl ModelPicker {
     pub(crate) fn focus(&self) -> Option<Stop> {
         let open = self.open.as_ref()?;
         if let Some(name) = &self.installs.focus
+            && self.shown_logged_out().contains(name)
+        {
+            return Some(Stop::LoggedOut(name.clone()));
+        }
+        if let Some(name) = &self.installs.focus
             && self.shown_installs().contains(name)
         {
             return Some(Stop::Install(name.clone()));
@@ -276,8 +283,39 @@ impl ModelPicker {
     pub(crate) fn install_target(&self) -> Option<String> {
         match self.focus()? {
             Stop::Install(name) => Some(name),
-            Stop::Model(_) => None,
+            Stop::Model(_) | Stop::LoggedOut(_) => None,
         }
+    }
+
+    /// The focused logged-out provider and whether `/login` supports it.
+    pub(crate) fn logout_target(&self) -> Option<(String, bool)> {
+        let Stop::LoggedOut(name) = self.focus()? else {
+            return None;
+        };
+        let provider = self
+            .catalogue
+            .logged_out
+            .iter()
+            .find(|provider| provider.provider == name)?;
+        Some((name, provider.login))
+    }
+
+    /// Clicks `row`: a logged-out row takes focus; its name cell answers
+    /// the provider only when `/login` supports it.
+    pub(crate) fn logout_click(&mut self, row: usize, cell: usize) -> Option<(String, bool)> {
+        let layout = self.layout()?;
+        let Some(RowAt::LoggedOut(name)) = layout.get(row) else {
+            return None;
+        };
+        let name = name.clone();
+        let login = self
+            .catalogue
+            .logged_out
+            .iter()
+            .find(|provider| provider.provider == name)
+            .map(|provider| provider.login)?;
+        self.installs.focus = Some(name.clone());
+        (cell == 0 && login).then_some((name, login))
     }
 
     /// Clicks `cell` of `row`: on a not-installed row the click focuses it,
@@ -329,15 +367,21 @@ impl ModelPicker {
     pub(super) fn prune_focus(&mut self) {
         if let Some(name) = &self.installs.focus
             && !self.catalogue.installable.contains(name)
+            && !self
+                .catalogue
+                .logged_out
+                .iter()
+                .any(|provider| provider.provider == *name)
         {
             self.installs.focus = None;
         }
     }
 
-    /// The places the focus walks, in order: the shown models, then the
-    /// not-installed rows.
+    /// The places the focus walks, in order: the shown models, logged-out
+    /// providers, then the not-installed rows.
     pub(super) fn stops(&self) -> Vec<Stop> {
         let mut stops: Vec<Stop> = self.shown_models().into_iter().map(Stop::Model).collect();
+        stops.extend(self.shown_logged_out().into_iter().map(Stop::LoggedOut));
         stops.extend(self.shown_installs().into_iter().map(Stop::Install));
         stops
     }
@@ -351,7 +395,7 @@ impl ModelPicker {
                 }
                 self.installs.focus = None;
             }
-            Stop::Install(name) => self.installs.focus = Some(name),
+            Stop::LoggedOut(name) | Stop::Install(name) => self.installs.focus = Some(name),
         }
     }
 

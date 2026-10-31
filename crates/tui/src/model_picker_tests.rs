@@ -6,7 +6,7 @@ use super::{
     Choice, Fresh, Mode, ModelPicker, PickerCtx, PickerView, RowAt, age, command_args, preselect,
     price_text, rebuild_cost, saves, scoped_save, shown_in, start_args, visible,
 };
-use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry};
+use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, LoggedOutProvider, ModelEntry};
 use crate::keys::Key;
 
 fn entry(
@@ -722,6 +722,23 @@ fn start_args_carry_the_model_exactly_with_a_level_override() {
         start_args(&choice("zeta/z1", None, false)),
         ("zeta/z1".to_owned(), None)
     );
+}
+
+#[test]
+fn a_logged_out_focus_is_not_a_model_choice() {
+    let mut picker = open_over(Vec::new());
+    picker.catalogue.logged_out = vec![LoggedOutProvider {
+        provider: "acme".to_owned(),
+        login: true,
+        hint: String::new(),
+    }];
+    picker.move_row(1);
+    assert_eq!(
+        picker.focus(),
+        Some(super::install::Stop::LoggedOut("acme".to_owned()))
+    );
+    assert!(picker.choice(false).is_none());
+    assert!(picker.choice(true).is_none());
 }
 
 #[test]

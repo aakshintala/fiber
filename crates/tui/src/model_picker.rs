@@ -135,6 +135,8 @@ pub(crate) struct PickerView {
     pub(crate) focused: Option<usize>,
     /// The first displayed body row in the scrollable list.
     pub(crate) top: usize,
+    /// One row per logged-out provider the picker lists, in catalogue order.
+    pub(crate) logged_out: Vec<LoggedOutRow>,
     /// One row per not-installed provider the picker lists, in order.
     pub(crate) installs: Vec<InstallRow>,
     /// What landed installs show under the list.
@@ -201,6 +203,18 @@ pub(crate) struct ModelRow {
     pub(crate) session_only: bool,
 }
 
+/// One logged-out provider's row. `at` is the `RowAt` index that
+/// `Spot::Row(at)` and `Spot::Cell(at, 0)` use.
+pub(crate) struct LoggedOutRow {
+    pub(crate) at: usize,
+    /// The provider's name, control characters turned to spaces.
+    pub(crate) provider: String,
+    /// Character indexes matched by the query.
+    pub(crate) hits: Vec<usize>,
+    /// The credential sources to set, only for providers without `/login` support.
+    pub(crate) hint: Option<String>,
+}
+
 /// One not-installed provider's row. `at` is the `RowAt` index that
 /// `Spot::Row(at)` and `Spot::Cell(at, 0)` use.
 pub(crate) struct InstallRow {
@@ -225,6 +239,8 @@ enum RowAt {
     Heading(String),
     /// A model, by catalogue index.
     Model(usize),
+    /// A provider with data but no credential, by name.
+    LoggedOut(String),
     /// A not-installed provider, by name, after the last model.
     Install(String),
     /// A placeholder-with-no-value count row, naming its provider and
@@ -607,7 +623,7 @@ impl ModelPicker {
     pub(crate) fn move_chip(&mut self, delta: isize) {
         // A not-installed row has no chip, and the hidden selection must
         // not move under it.
-        if matches!(self.focus(), Some(Stop::Install(_))) {
+        if matches!(self.focus(), Some(Stop::Install(_) | Stop::LoggedOut(_))) {
             return;
         }
         let (selected, chip) = {
@@ -833,6 +849,24 @@ impl ModelPicker {
         )
     }
 
+    /// The logged-out providers the choosing picker lists, in catalogue
+    /// order, the query keeping those it matches by name.
+    pub(crate) fn shown_logged_out(&self) -> Vec<String> {
+        let Some(open) = self.open.as_ref() else {
+            return Vec::new();
+        };
+        if open.mode != Mode::Choose {
+            return Vec::new();
+        }
+        self.catalogue
+            .logged_out
+            .iter()
+            .map(|provider| &provider.provider)
+            .filter(|name| filter::matches_name(name, &open.query))
+            .cloned()
+            .collect()
+    }
+
     /// Whether the open picker may count `provider`'s left-out models:
     /// the choosing picker only, and under a set scope without "show
     /// all" only a provider with an installed in-scope model. The query
@@ -923,14 +957,15 @@ impl ModelPicker {
         }
     }
 
-    /// Focuses the model or not-installed row `frame_row` names. Headings
-    /// and the buttons are not stops, so they select nothing.
+    /// Focuses the model, logged-out or not-installed row `frame_row` names.
+    /// Headings and the buttons are not stops, so they select nothing.
     pub(crate) fn select_frame_row(&mut self, frame_row: usize) {
         let Some(layout) = self.layout() else {
             return;
         };
         match layout.get(frame_row) {
             Some(RowAt::Model(index)) => self.go(Stop::Model(*index)),
+            Some(RowAt::LoggedOut(name)) => self.go(Stop::LoggedOut(name.clone())),
             Some(RowAt::Install(name)) => self.go(Stop::Install(name.clone())),
             Some(
                 RowAt::Filter
@@ -951,7 +986,7 @@ impl ModelPicker {
     /// toggles its marks with Enter and saves them with Ctrl+S, and
     /// never chooses.
     pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
-        if self.is_scope() || matches!(self.focus(), Some(Stop::Install(_))) {
+        if self.is_scope() || matches!(self.focus(), Some(Stop::Install(_) | Stop::LoggedOut(_))) {
             return None;
         }
         let open = self.open.as_ref()?;
@@ -996,6 +1031,7 @@ impl ModelPicker {
                 | RowAt::Heading(_)
                 | RowAt::NoMatch
                 | RowAt::LeftOut { .. }
+                | RowAt::LoggedOut(_)
                 | RowAt::Install(_),
             )
             | None => None,
@@ -1072,6 +1108,9 @@ impl ModelPicker {
         // answered, so it falls to the first model row shown.
         let focused = match self.focus() {
             Some(Stop::Model(index)) => layout.iter().position(|row| *row == RowAt::Model(index)),
+            Some(Stop::LoggedOut(name)) => layout
+                .iter()
+                .position(|row| *row == RowAt::LoggedOut(name.clone())),
             Some(Stop::Install(name)) => layout
                 .iter()
                 .position(|row| *row == RowAt::Install(name.clone())),
@@ -1080,6 +1119,7 @@ impl ModelPicker {
         // The shown models are the layout's model rows, in order.
         let mut shown = 0;
         let mut sections = Vec::new();
+        let mut logged_out = Vec::new();
         let mut installs = Vec::new();
         let left_out = self.shown_left_out(open);
         for (at, row) in layout.iter().enumerate() {
@@ -1107,6 +1147,24 @@ impl ModelPicker {
                     models: Vec::new(),
                     left_out: Vec::new(),
                 });
+            } else if let RowAt::LoggedOut(provider) = row {
+                if let Some(row) = self
+                    .catalogue
+                    .logged_out
+                    .iter()
+                    .find(|row| row.provider == *provider)
+                {
+                    logged_out.push(LoggedOutRow {
+                        at,
+                        provider: controls_to_space(provider),
+                        hits: filter::id_hits(provider, &open.query)
+                            .into_iter()
+                            .enumerate()
+                            .filter_map(|(index, hit)| hit.then_some(index))
+                            .collect(),
+                        hint: (!row.login).then(|| row.hint.clone()),
+                    });
+                }
             } else if let RowAt::Install(provider) = row {
                 installs.push(InstallRow {
                     at,
@@ -1199,6 +1257,7 @@ impl ModelPicker {
             sections,
             no_match: !open.query.is_empty()
                 && shown == 0
+                && logged_out.is_empty()
                 && installs.is_empty()
                 && left_out.is_empty(),
             status: self.status(),
@@ -1226,6 +1285,7 @@ impl ModelPicker {
             // The selection may sit off the shown rows after a read
             // answered, so it falls to the first model row shown.
             focused,
+            logged_out,
             installs,
             outcomes: self.installs.outcomes().to_vec(),
             // The checklist draws no refresh button and no refresh
@@ -1247,6 +1307,7 @@ impl ModelPicker {
         // is 1 everywhere.
         let mut layout = vec![RowAt::Filter, RowAt::Buttons];
         let installs = self.shown_installs();
+        let logged_out = self.shown_logged_out();
         let left_out = self.shown_left_out(open);
         // A typed query hiding every installed model, every
         // not-installed row and every matching count row shows one dim
@@ -1255,9 +1316,12 @@ impl ModelPicker {
         // emits no heading.
         if !open.query.is_empty()
             && rows.is_empty()
+            && logged_out.is_empty()
             && installs.is_empty()
             && left_out.is_empty()
-            && (!self.catalogue.models.is_empty() || self.has_visible_group(open))
+            && (!self.catalogue.models.is_empty()
+                || self.has_visible_group(open)
+                || (open.mode == Mode::Choose && !self.catalogue.logged_out.is_empty()))
         {
             layout.push(RowAt::NoMatch);
             return Some(layout);
@@ -1304,6 +1368,7 @@ impl ModelPicker {
                 setting: group.setting.clone(),
             });
         }
+        layout.extend(logged_out.into_iter().map(RowAt::LoggedOut));
         layout.extend(installs.into_iter().map(RowAt::Install));
         Some(layout)
     }
