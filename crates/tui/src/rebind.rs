@@ -438,7 +438,8 @@ impl KeysScreen {
         self.top = next;
         let selected = self.selected.min(total - 1);
         let start: usize = grown.iter().take(selected).sum();
-        if start.saturating_add(grown[selected]) <= next {
+        let height = grown.get(selected).copied().unwrap_or(0);
+        if start.saturating_add(height) <= next {
             self.selected = action_at(next, &grown);
         } else if start >= next.saturating_add(shown) {
             self.selected = action_at(next.saturating_add(shown).saturating_sub(1), &grown);
