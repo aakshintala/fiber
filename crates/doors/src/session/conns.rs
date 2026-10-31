@@ -23,10 +23,6 @@ pub(super) const GRACE: Duration = Duration::from_secs(2);
 /// it cut to write their lines before it shuts the sockets.
 pub(super) const CUT_FLUSH: Duration = Duration::from_millis(250);
 
-/// A control line that tells a writer the grace passed: never written to
-/// the client.
-pub(crate) const CUT: &str = "doors.cut";
-
 /// The live connections, how many writers are open, and the next connection id.
 pub(crate) struct Conns {
     state: Mutex<State>,
@@ -330,7 +326,11 @@ impl Conns {
             }
             live.cut = true;
             if let Some(wake) = &live.wake {
-                wake.push_kept(crate::client::control_line(session, CUT, 0));
+                wake.push_kept(crate::client::control_line(
+                    session,
+                    crate::client::ControlKind::Cut,
+                    0,
+                ));
             }
         }
     }
@@ -363,7 +363,11 @@ impl Conns {
         for (_, live) in &mut state.live {
             live.cut = true;
             if let Some(wake) = &live.wake {
-                wake.push_kept(crate::client::control_line(session, CUT, 0));
+                wake.push_kept(crate::client::control_line(
+                    session,
+                    crate::client::ControlKind::Cut,
+                    0,
+                ));
             }
         }
     }

@@ -527,8 +527,9 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
 
 `host.tool(name, args)` runs any tool the session can call: a built-in, an MCP
 server's tool or another extension's. It returns the call's outcome as the
-model would see it: `status`, `content`, and `reason` or `error` when the call
-did not complete. A call that does not complete is an ordinary return, not a
+model would see it: `status`, `content`, `artifact`, and `reason` or `error`
+when the call did not complete. It carries no `details` or `changes`, which
+the model never sees. A call that does not complete is an ordinary return, not a
 Lua error, so the extension decides what to do next. A codemode extension is
 built on it: the model sends one script, and the script calls tools, filters
 their output and returns only what the model needs
