@@ -642,6 +642,8 @@ fn a_notes_proposal_after_a_request_leaves_the_cache_expiry_put() {
             "kind": kind, "session_id": "s_test", "ts": ts,
             "schema_version": 1, "payload": payload,
         });
+        // A folded line is durable if and only if it carries `seq`.
+        line["seq"] = json!(ts);
         if let Some(action) = action {
             line["action_id"] = json!(action);
         }
