@@ -2376,3 +2376,27 @@ fn stderr_drain_keeps_a_character_split_across_reads() {
         snapshot.lock().unwrap()
     );
 }
+
+#[test]
+fn run_kinds_sets_aside_independently_triggered_lines() {
+    // `Run::kinds` delegates to the free helper, so a `date_changed` line
+    // the contract writes on its own trigger never reaches an ordered
+    // expectation (`docs/testing.md`, "Event streams"; #3758).
+    let run = Run {
+        code: Some(0),
+        lines: vec![
+            json!({"kind": "preamble_built"}),
+            json!({"kind": "clients"}),
+            json!({"kind": "session_status"}),
+            json!({"kind": "turn_started"}),
+            json!({"kind": "attention"}),
+            json!({"kind": "date_changed"}),
+            json!({"kind": "turn_completed"}),
+        ],
+        stderr: String::new(),
+    };
+    assert_eq!(
+        run.kinds(),
+        ["preamble_built", "turn_started", "turn_completed"]
+    );
+}
