@@ -3344,9 +3344,7 @@ silently falls back to the one that does.
 The terminal holds the budgets in `docs/performance.md`: its idle memory, idle
 CPU and time to first frame. The design keeps to them this way:
 
-- **Nothing runs while nothing happens.** With no turn, delegate or job running and
-  no animated item or notice on screen, there is no timer: no frame, no byte written (an
-  on-screen animated item or notice holds the timer, "Animation"). A still pointer sends nothing under hover.
+- **Nothing runs while nothing happens.** With no turn, delegate or job running, no animated item or notice on screen and no counting "cache resets in" row on screen, there is no timer: no frame, no byte written (an on-screen animated item or notice holds the timer, "Animation"). A counting "cache resets in" row sets one wake, separate from the animation timer, for the moment its text next changes: once a minute, once a second in its last minute, and none once it reads "expired" or leaves the screen. A still pointer sends nothing under hover.
 - **The first frame waits only for the session's last page and TUI extensions.** Keyboard detection, the logo image and session listing arrive later. The first-frame budget was measured without a TUI extension. Before the first frame, attaching reads the last page with `history`; afterward, it reads the whole log once ("History and paging"). The slow-class fold ceiling is 138 ms per MiB (`docs/performance.md`). Run [40909518207](https://github.com/aakshintala/fiber/actions/runs/40909518207) measured 56.7 ms per MiB for a 1 MiB log and 43.1 ms per MiB for a 10 MiB log on Linux x86_64. The 15 ms per MiB target remains outside the gate. Follow-up [#3652](https://github.com/aakshintala/fiber/issues/3652) tracks reducing the cost to that target. On macOS arm64, the pass takes about 12 ms per MiB, so a large session's scroll bar appears later than a small one's.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**

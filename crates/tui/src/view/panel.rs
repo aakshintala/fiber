@@ -542,6 +542,11 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
                 None => out.push(reserved_row("cache resets in", Some(Spot::Usage), text)),
                 Some(expiry) => {
                     let now = app.motion().wall_ms().unwrap_or(0);
+                    // Painted and counting: ask the frame for the
+                    // moment the text next changes (WAKE-RULED).
+                    if let Some(due) = countdown_due_wall(expiry, now) {
+                        app.motion().ask_wall(due);
+                    }
                     if now >= expiry {
                         out.push(Row {
                             line: sides(
@@ -797,6 +802,25 @@ pub(super) fn cache_countdown(remaining_ms: u64) -> String {
     } else {
         format!("{}m", secs / 60)
     }
+}
+
+/// The next wall time the countdown text changes after `now`: the
+/// minute rollover while minutes show, every second under the last
+/// minute with the 60-second crossover first, the expiry itself last;
+/// none once expired (`docs/tui.md`, "The panel"; WAKE-RULED). The
+/// one-millisecond step lands past the boundary the floor keeps, so
+/// the woken frame always reads a new text.
+pub(crate) fn countdown_due_wall(expiry_ms: u64, now_ms: u64) -> Option<u64> {
+    let remaining = expiry_ms.checked_sub(now_ms)?;
+    if remaining == 0 {
+        return None;
+    }
+    let unit = if remaining / 1000 < 60 { 1_000 } else { 60_000 };
+    Some(
+        now_ms
+            .saturating_add(remaining - remaining / unit * unit)
+            .saturating_add(1),
+    )
 }
 
 /// A token count without its trailing `token` word.

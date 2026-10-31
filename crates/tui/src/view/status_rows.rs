@@ -275,6 +275,11 @@ fn session_segments(app: &App) -> Vec<Segment> {
             spans.push(Span::raw(share));
             if let Some(expiry) = status.cache_expires {
                 let now = app.motion().wall_ms().unwrap_or(0);
+                // Painted and counting: ask the frame for the moment
+                // the text next changes (WAKE-RULED).
+                if let Some(due) = crate::view::panel::countdown_due_wall(expiry, now) {
+                    app.motion().ask_wall(due);
+                }
                 spans.push(Span::raw(" ".to_owned()));
                 if now >= expiry {
                     spans.push(Span::styled("expired".to_owned(), style(Role::Attention)));
