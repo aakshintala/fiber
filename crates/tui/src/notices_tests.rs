@@ -411,7 +411,7 @@ fn keys_notices_are_config_invalid() {
     let mut app = attached();
     // An action Fiber has no name for is ignored with a notice.
     let setup = crate::keyset::KeysSetup {
-        user: [("no_action".to_owned(), serde_json::json!("ctrl+a"))]
+        user: [("no_action".to_owned(), serde_json::json!("ctrl+y"))]
             .into_iter()
             .collect(),
     };
