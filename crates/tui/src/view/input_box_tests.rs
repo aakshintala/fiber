@@ -1823,6 +1823,57 @@ fn input_status_replacement_drops_further_lines() {
     assert!(!shown.contains("second"), "further lines drop");
 }
 
+/// A replacement keeps one target, the Session status view, over the
+/// row's full width: a click anywhere on the row opens the Session
+/// status card's view, as the working directory and the mode do
+/// (`docs/tui.md`, "Extension seams").
+#[test]
+fn input_status_replacement_keeps_a_whole_row_session_status_target() {
+    use crate::app::panel::Spot;
+    use crate::ext::tests::{SlotScript, raw};
+    use crate::mouse::TargetId;
+
+    let mut app = full(100, 30);
+    slot_app(
+        &mut app,
+        &["input_status"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    );
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+    let row: String = (0..100).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    assert!(
+        row.contains("custom"),
+        "the replacement line shows: {row:?}"
+    );
+    // The row's full width: past the stripe and gap, to the slab's
+    // edge, derived from the layout column like the paint.
+    let column = app
+        .chrome()
+        .layout()
+        .map(|layout| layout.column)
+        .expect("a column");
+    let status: Vec<Rect> = targets
+        .iter()
+        .filter(|target| target.id == TargetId::Panel(Spot::Status))
+        .filter(|target| target.rect.y == y)
+        .map(|target| target.rect)
+        .collect();
+    assert_eq!(
+        status,
+        vec![Rect::new(
+            column.x.saturating_add(1),
+            y,
+            column.width.saturating_sub(1),
+            1
+        )],
+        "the whole-row Session-status target"
+    );
+}
+
 /// An empty input_status replacement leaves the row blank: the rule
 /// stays, the built-in figures go, and the row keeps its row
 /// (`docs/tui.md`, "Extension seams").

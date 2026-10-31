@@ -1107,7 +1107,9 @@ fn input_status_value(status: &tui::ext::InputStatus<'_>) -> Value {
         "workspace",
         status.workspace.map(|workspace| json!(workspace)),
     );
-    out.insert("mode".to_owned(), json!(status.mode));
+    // The mode is always `auto` (`docs/permissions.md`, "One mode"): the
+    // input carries no mode field, so the table emits the fixed value.
+    out.insert("mode".to_owned(), json!("auto"));
     insert_present(&mut out, "model", status.model.map(|model| json!(model)));
     insert_present(
         &mut out,

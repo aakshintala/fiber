@@ -947,7 +947,6 @@ fn session_card<'a>(
 fn input_status<'a>(model: Option<&'a str>, flat: bool) -> Input<'a> {
     Input::InputStatus(InputStatus {
         workspace: Some("/w/fiber"),
-        mode: "auto",
         model,
         thinking: Some("high"),
         context: Some(Context {

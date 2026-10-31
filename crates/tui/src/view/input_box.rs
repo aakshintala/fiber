@@ -474,7 +474,6 @@ fn row_input(app: &App, flat: bool) -> InputStatus<'_> {
     let window = panel.window().filter(|window| *window > 0);
     InputStatus {
         workspace: status.map(|status| status.workspace.as_str()),
-        mode: PERMISSION_MODE,
         model: panel
             .model()
             .or_else(|| status.map(|status| status.model.as_str())),
@@ -540,11 +539,17 @@ fn paint_row(app: &App, area: Rect, bottom: &mut u16, buf: &mut Buffer, targets:
     let Some(first) = fitted.first() else {
         return;
     };
-    // A replacement owns the row with no target in this lane: the
-    // whole-row Session-status target waits on its spot.
+    // A replacement keeps one target, the Session status view, over the
+    // row's full width (`docs/tui.md`, "Extension seams"): whatever the
+    // replacement draws, a click on the row opens the Session status
+    // card's view, as the working directory and the mode do.
     let x = area.x.saturating_add(1);
     let wide = area.width.saturating_sub(1);
     buf.set_line(x, y, &first.line, wide);
+    targets.push(Target {
+        id: TargetId::Panel(Spot::Status),
+        rect: Rect::new(x, y, wide, 1),
+    });
 }
 
 /// Draws the rule above the status row: `─` in `rule` from the stripe's

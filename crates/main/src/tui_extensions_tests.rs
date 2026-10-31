@@ -2894,7 +2894,6 @@ fn an_animated_chrome_call_carries_frame_and_now() {
 fn the_input_status_table_holds_the_docs_fields() {
     let input = Input::InputStatus(tui::ext::InputStatus {
         workspace: Some("/w/fiber"),
-        mode: "auto",
         model: Some("test/model"),
         thinking: Some("high"),
         context: Some(tui::ext::Context {
@@ -2917,7 +2916,6 @@ fn the_input_status_table_holds_the_docs_fields() {
     // Absent optionals stay absent, never null.
     let bare = Input::InputStatus(tui::ext::InputStatus {
         workspace: None,
-        mode: "auto",
         model: None,
         thinking: None,
         context: None,
