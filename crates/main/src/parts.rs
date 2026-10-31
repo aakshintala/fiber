@@ -132,9 +132,7 @@ pub(crate) fn parts_with_session<'a>(
     launch: SessionLaunch,
     fiber: PathBuf,
 ) -> Result<Parts, Failure> {
-    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-    let workspace = std::env::current_dir()
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+    let (home, workspace) = crate::startup::startup()?;
     parts_inner(
         home,
         workspace,
@@ -783,11 +781,11 @@ fn parts_inner(
         reviewer_observe,
         diag,
         prompt,
-        model: Model {
-            reference: model.reference(),
-            cost: model.model.cost.clone(),
-            subscription: model.model.subscription,
-        },
+        model: Model::from_resolved(
+            model.reference(),
+            model.model.cost.clone(),
+            model.model.subscription,
+        ),
         reviewer,
         limits,
         reviewer_notes,
@@ -907,11 +905,11 @@ pub(crate) fn choose_reviewer(
     Ok((
         r#loop::Reviewer {
             provider: chosen.provider,
-            model: Model {
-                reference: model.reference(),
-                cost: model.model.cost.clone(),
-                subscription: model.model.subscription,
-            },
+            model: Model::from_resolved(
+                model.reference(),
+                model.model.cost.clone(),
+                model.model.subscription,
+            ),
             cache_lifetime: settings::cache_lifetime(config, &model.reference()),
             context_window: chosen.context_window,
             thinking_levels: model.model.thinking_levels.clone(),

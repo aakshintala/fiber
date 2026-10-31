@@ -147,6 +147,20 @@ pub struct Model {
     pub subscription: bool,
 }
 
+impl Model {
+    /// Builds a session model from a resolved reference and its metadata:
+    /// the reference with the cost and subscription flag the resolution
+    /// carried. It takes the fields' own values, not the resolved model,
+    /// because `loop` never depends on `extensions`.
+    pub fn from_resolved(reference: String, cost: Option<Cost>, subscription: bool) -> Self {
+        Self {
+            reference,
+            cost,
+            subscription,
+        }
+    }
+}
+
 /// Builds the `tool_search` tool over the deferred definitions as sent and
 /// their sources (`docs/tools.md`, "Tool search"): the search tool by
 /// role, whatever its definition names it. The loop never names the tool.
