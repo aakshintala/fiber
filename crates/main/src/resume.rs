@@ -383,6 +383,10 @@ fn resume_session(
     clippy::too_many_arguments,
     reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
 )]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one resumed assembly needs its log, fold, prompt, mode, clock, signals and executable"
+)]
 pub(crate) fn assemble_resumed(
     mut parts: crate::Parts,
     resume: crate::session_command::ResumeStart,
@@ -776,6 +780,10 @@ pub(crate) fn assemble_resumed(
     Ok(code)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one resumed session needs its log, directory, id, mode, clock, signals and recorded executable"
+)]
 fn resumed_session(
     log: Arc<Log>,
     sessions: &Path,
@@ -854,7 +862,7 @@ fn resumed_session(
         Arc::clone(&reads),
         resume,
     );
-    return crate::session_command::assemble_session(parts, inputs, signals, process);
+    crate::session_command::assemble_session(parts, inputs, signals, process)
 }
 
 /// The first line's `session_started` worktree, when it records one. Any

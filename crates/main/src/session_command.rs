@@ -98,6 +98,10 @@ impl WorkspaceStart {
     }
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "resume carries its log, fold and directory for assembly"
+)]
 enum Start {
     New {
         id: SessionId,
@@ -150,12 +154,13 @@ impl ResumeStart {
     }
 
     pub(crate) fn id(&self) -> SessionId {
-        self.dir
+        let name = self
+            .dir
             .path()
             .file_name()
             .and_then(|name| name.to_str())
-            .map(|name| SessionId(name.to_owned()))
-            .expect("resume directory has a session name")
+            .unwrap_or("");
+        SessionId(name.to_owned())
     }
 
     pub(crate) fn sessions(&self) -> Result<&Path, Failure> {
@@ -663,7 +668,7 @@ pub(crate) fn run_new(
         },
     };
     let inputs = SessionInputs::fresh(prompt, one_turn, start, fiber_path.clone(), reads);
-    return assemble_session(parts, inputs, signals, process);
+    assemble_session(parts, inputs, signals, process)
 }
 
 fn assemble_new(
@@ -1223,7 +1228,9 @@ pub(crate) fn assemble_session(
         } = inputs;
         let resume = match start {
             Start::Resume(resume) => resume,
-            _ => unreachable!(),
+            Start::New { .. } | Start::Delegate { .. } | Start::Rewound { .. } => {
+                unreachable!("a fresh start cannot assemble as resumed")
+            }
         };
         return crate::resume::assemble_resumed(
             parts, resume, prompt, one_turn, fiber_path, reads, signals, process,
