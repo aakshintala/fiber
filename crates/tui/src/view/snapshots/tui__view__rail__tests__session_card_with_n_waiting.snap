@@ -1,10 +1,12 @@
 ---
 source: crates/tui/src/view/rail_tests.rs
+assertion_line: 1248
 expression: text(&buf)
 ---
 
                                                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                                                                                                 /Users/you/work/fiber     auto
+                                                                                                                                 Session status            auto
+                                                                                                                                 /Users/you/work/fiber
 
                                                                                                                                  test/model
                                                                                                                                  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
@@ -12,14 +14,13 @@ expression: text(&buf)
                                                                                                                                  then a summary, fresh context
                                                                                                                                  tokens in / out          1 / 2
                                                                                                                                  cache hits                  0%
+                                                                                                                                 cache resets in              —
                                                                                                                                  cost                     $0.00
                                                                                                                                  cost on subscription     $0.00
                                                                                                                                  speed, last reply            —
                                                                                                                                  turns                        0
                                                                                                                                  ! 2 waiting · hidden · show
                                                                                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
 
 ⋮                                                                                                                             ⋮
 ⋮                                                                                                                             ⋮
