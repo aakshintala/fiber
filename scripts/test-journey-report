@@ -208,6 +208,7 @@ printf 'qa\nqb\n' >"$tmp/create-two/failures.txt"
 listed=$(printf -- '- %s\n- %s' qa qb)
 code=$(run_step "$tmp/create-two" "")
 expect_exit create-two "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/create-two" 2
 expect_write "$tmp/create-two" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$listed")")"
 expect_write "$tmp/create-two" 1 "$(printf 'create Journey failure: qb\n%s\nlabel=bug' "$(body qb "$listed")")"
@@ -218,6 +219,7 @@ setup_case comment-and-create
 printf 'qa\nqb\n' >"$tmp/comment-and-create/failures.txt"
 code=$(run_step "$tmp/comment-and-create" "9|Journey failure: qa")
 expect_exit comment-and-create "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/comment-and-create" 2
 expect_write "$tmp/comment-and-create" 0 "$(printf 'comment 9\n%s' "$(body qa "$listed")")"
 expect_write "$tmp/comment-and-create" 1 "$(printf 'create Journey failure: qb\n%s\nlabel=bug' "$(body qb "$listed")")"
@@ -229,6 +231,7 @@ printf 'qc\n' >"$tmp/race-recheck/failures.txt"
 listed_qc=$(printf -- '- %s' qc)
 code=$(run_step "$tmp/race-recheck" "" STUB_OPEN_FIRST="" STUB_OPEN_REST="11|Journey failure: qc")
 expect_exit race-recheck "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/race-recheck" 1
 expect_write "$tmp/race-recheck" 0 "$(printf 'comment 11\n%s' "$(body qc "$listed_qc")")"
 
@@ -237,6 +240,7 @@ setup_case lookup-fail
 printf 'qa\n' >"$tmp/lookup-fail/failures.txt"
 code=$(run_step "$tmp/lookup-fail" "" STUB_OPEN_FAIL=1)
 expect_exit lookup-fail "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/lookup-fail" 0
 expect_summary "$tmp/lookup-fail" "the open-issue search for Journey failure: qa failed, so nothing is filed"
 
@@ -245,6 +249,7 @@ setup_case recheck-fail
 printf 'qa\n' >"$tmp/recheck-fail/failures.txt"
 code=$(run_step "$tmp/recheck-fail" "" STUB_OPEN_FIRST="" STUB_OPEN_REST_FAIL=1)
 expect_exit recheck-fail "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/recheck-fail" 0
 expect_summary "$tmp/recheck-fail" "the open-issue recheck for Journey failure: qa failed, so nothing is filed"
 
@@ -253,6 +258,7 @@ setup_case pass-empty
 : >"$tmp/pass-empty/failures.txt"
 code=$(run_step "$tmp/pass-empty" "")
 expect_exit pass-empty "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/pass-empty" 0
 expect_summary "$tmp/pass-empty" "no journey failed: nothing to file"
 
@@ -260,6 +266,7 @@ expect_summary "$tmp/pass-empty" "no journey failed: nothing to file"
 setup_case pass-missing
 code=$(run_step "$tmp/pass-missing" "")
 expect_exit pass-missing "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/pass-missing" 0
 expect_summary "$tmp/pass-missing" "no journey failed: nothing to file"
 
@@ -268,6 +275,7 @@ setup_case blank-line
 printf 'qa\n\n' >"$tmp/blank-line/failures.txt"
 code=$(run_step "$tmp/blank-line" "")
 expect_exit blank-line "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/blank-line" 1
 expect_write "$tmp/blank-line" 0 "$(printf 'create Journey failure: qa\n%s\nlabel=bug' "$(body qa "$(printf -- '- %s' qa)")")"
 
@@ -276,6 +284,7 @@ setup_case no-trailing-newline
 printf 'qd' >"$tmp/no-trailing-newline/failures.txt"
 code=$(run_step "$tmp/no-trailing-newline" "")
 expect_exit no-trailing-newline "$code" 0
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/no-trailing-newline" 1
 expect_write "$tmp/no-trailing-newline" 0 "$(printf 'create Journey failure: qd\n%s\nlabel=bug' "$(body qd "$(printf -- '- %s' qd)")")"
 
@@ -290,6 +299,7 @@ env -i PATH="$PATH" HOME="$tmp/env-missing" \
   bash --noprofile --norc -eo pipefail "$tmp/run.sh" >"$tmp/env-missing/out" 2>"$tmp/env-missing/err" || code=$?
 grep -Fq "FAILURES" "$tmp/env-missing/err" || fail "env-missing: the failure does not name FAILURES"
 expect_exit env-missing "$code" 1
+# docs/ci.md:459-461: "A failure opens an issue, or comments on the open one" pins this write count (docs/testing.md:114-120).
 expect_writes "$tmp/env-missing" 0
 
 echo "scripts/test-journey-report: ok"

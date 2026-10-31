@@ -1248,7 +1248,7 @@ jobs:
   # `ci`'s needs: a journey failure never blocks a merge.
   journey:
     name: Journey suite on the release binary
-    needs: [select, lint, test_linux, test, mutants, release]
+    needs: [select, lint, test_linux, test, release]
     if: >-
       github.event_name == 'push'
       && needs.lint.result == 'success'
