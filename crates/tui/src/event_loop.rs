@@ -113,6 +113,7 @@ pub(crate) fn run_with(
     // so a line there never times setup work as a frame that never drew.
     let timing = crate::timing::Timing::new(diag);
     let first_render = timing.first_render();
+    let attached_frame = timing.attached_frame();
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
@@ -123,6 +124,7 @@ pub(crate) fn run_with(
     // any frame.
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     };
     catch_interrupts();
@@ -132,14 +134,17 @@ pub(crate) fn run_with(
     let hover = launch.hover;
     let Ok((width, height)) = term::setup(&tty, hover) else {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     };
     let Ok(out) = tty.try_clone() else {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     };
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     };
     // `App::new` maps an empty launch directory to no workspace, so a
@@ -254,7 +259,12 @@ pub(crate) fn run_with(
     // deadline started before reading. Uninterruptible overruns fail on return.
     // The queries are out; no tty or hub read precedes the first frame.
     if let Some(loader) = extensions {
+        // The load is timed but never moved: extensions may change the
+        // first frame, so they load before it draws (`docs/tui.md`,
+        // "How a TUI extension runs").
+        let load = timing.extensions();
         let (renderer, notices) = loader.load();
+        drop(load);
         app.use_renderer(renderer);
         for (code, text) in notices {
             app.push_notice(&code, text);
@@ -262,6 +272,7 @@ pub(crate) fn run_with(
     }
     if screen.draw(&mut app, None).is_err() {
         crate::timing::discard(first_render);
+        crate::timing::discard(attached_frame);
         return Ok(1);
     }
     // The frame drew: its line stands, whatever the loop meets after.
@@ -286,7 +297,13 @@ pub(crate) fn run_with(
     model_reader.ask(catalogue::Refresh::Cached, &tx);
     // Without the reader no key reaches the loop: fail instead of
     // running deaf. The guard's drop restores the terminal.
-    let reader = spawn_reader(&tty, tx.clone())?;
+    let reader = match spawn_reader(&tty, tx.clone()) {
+        Ok(reader) => reader,
+        Err(error) => {
+            crate::timing::discard(attached_frame);
+            return Err(error.into());
+        }
+    };
     let mut terminal = Loop {
         app,
         parser: Parser::default(),
@@ -302,6 +319,8 @@ pub(crate) fn run_with(
         on_attach,
         clock,
         timing,
+        attached_frame,
+        summary_span: None,
         files_out: tx.clone(),
         search: None,
         reader,
@@ -324,15 +343,21 @@ pub(crate) fn run_with(
     // asks arm it, and the loop re-arms it after every frame. Without
     // the tick nothing moving on screen moves: fail instead of running
     // still.
-    terminal
-        .tick
-        .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)?;
+    if let Err(error) =
+        terminal
+            .tick
+            .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)
+    {
+        crate::timing::discard(terminal.attached_frame.take());
+        return Err(error.into());
+    }
     terminal.tick.arm(terminal.app.take_wake());
     spawn_signal(term_signals, tx.clone());
     if let Some(signals) = signals {
         spawn_resize(signals, tx);
     }
     let code = terminal.run(&rx);
+    crate::timing::discard(terminal.attached_frame.take());
     terminal.tick.stop();
     // The writer goes before the hub hangs up and the guard drops: Stop
     // sends its mandatory abort delete at the next chunk boundary, then
@@ -442,6 +467,12 @@ struct Loop<B: Backend> {
     clock: Arc<dyn Clock>,
     /// The diagnostic writer the timed scopes share.
     timing: crate::timing::Timing,
+    /// The first draw with attached-session history, carried from
+    /// `run_with`; discarded if the loop ends before that draw.
+    attached_frame: Option<log::diag::Timer>,
+    /// The opening summary subscribe's guard, while the open holds that
+    /// stage: dropped once the open leaves it, writing one line.
+    summary_span: Option<log::diag::Timer>,
     /// Where workers post their results.
     files_out: Sender<Input>,
     /// The `@` panel's search worker, while the panel is open.
@@ -860,6 +891,10 @@ impl<B: Backend> Loop<B> {
                     );
                 } else {
                     let lines = self.app.on_line_inner(Line::Hub(hello));
+                    // The summary span starts before the send, so the
+                    // send through the acceptance is covered; the frame
+                    // top keeps it and drops it after it folds.
+                    self.poll_summary_span();
                     self.send_inner(&lines);
                     // A `hub_hello` this terminal cannot read leaves it
                     // unconnected: it says so and disconnects.
@@ -957,6 +992,10 @@ impl<B: Backend> Loop<B> {
         if self.kitty_failed.load(std::sync::atomic::Ordering::SeqCst) {
             return Some(1);
         }
+        // The summary span opens and closes here: every handled batch
+        // ends in a frame, so the send is seen on the next frame top
+        // and the acceptance on the frame after it folds.
+        self.poll_summary_span();
         // A frame past its 16 ms budget writes `tui.frame`; one within
         // budget writes no line, so scrolling leaves the log small.
         let _frame = self.timing.frame();
@@ -973,7 +1012,7 @@ impl<B: Backend> Loop<B> {
         }
         // The open's tail reads before the frame pages: the first frame
         // draws the preview it installs.
-        self.open_tail(rx);
+        let attached_history = self.open_tail(rx);
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load,
@@ -1032,6 +1071,13 @@ impl<B: Backend> Loop<B> {
         };
         if draw_failed {
             return Some(1);
+        }
+        // The attached-session history has landed in the drawn frame:
+        // the tail read completed and installed its preview before this
+        // draw. A frame before that install leaves the guard open;
+        // run_with discards it if no such frame arrives.
+        if attached_history {
+            drop(self.attached_frame.take());
         }
         // After the first post-handover draw, the writer restarts its
         // retained images whole; the re-fetched requests drain below.
@@ -1461,23 +1507,43 @@ impl<B: Backend> Loop<B> {
         self.search = Some(search);
     }
 
+    /// Starts the attach summary guard while the open's first-stage
+    /// summary subscribe is in flight and drops it once the open leaves
+    /// that stage, writing one `tui.attach_summary` line per process.
+    /// A second open finds the latch set and writes nothing. The guard
+    /// only observes: the subscribes and their answers are unchanged.
+    fn poll_summary_span(&mut self) {
+        if self.app.summary_in_flight() {
+            if self.summary_span.is_none() {
+                self.summary_span = self.timing.attach_summary();
+            }
+            return;
+        }
+        if let Some(span) = self.summary_span.take() {
+            drop(span);
+        }
+    }
+
     /// Reads the open's tail when one is due: the own-segment history
     /// windows fill it, then the preview installs. No stream means the
     /// tail ended with nothing read; a lost read ends everything
-    /// through `disconnected`, with no install. The tail read stays
-    /// untimed: the attach timers cover the first fetched page below.
-    /// Older windows and ancestors read after the first frame draws,
-    /// through the retained count.
-    fn open_tail(&mut self, rx: &Receiver<Input>) {
+    /// through `disconnected`, with no install. Returns true when the
+    /// live-stream tail read reaches its install, so the draw can end the
+    /// attached-frame guard; a missing stream or lost read returns false.
+    /// The tail wait, each answer fold and the install are timed once per
+    /// process; the first fetched page below keeps its own timer. Older
+    /// windows and ancestors read after the first frame draws, through the
+    /// retained count.
+    fn open_tail(&mut self, rx: &Receiver<Input>) -> bool {
         let Some(session) = self.app.tail_due() else {
-            return;
+            return false;
         };
         // A new open never installs or counts the old run.
         self.app.clear_tail_read();
         if !self.hub.has_stream() {
             self.app.tail_ended(None);
             self.app.install_tail();
-            return;
+            return false;
         }
         if self
             .hub
@@ -1489,17 +1555,24 @@ impl<B: Backend> Loop<B> {
                 self.clock.as_ref(),
                 self.tick.armed(),
                 hub::Phase::Tail,
+                &mut self.timing,
             )
             .is_err()
         {
-            return;
+            return false;
         }
         // The completed read's install always runs: the open still holds
         // its tail read here (only a lost connection drops it, and that
         // returns above). No page count is compared: a rebuild can
         // hold the same count, and an empty tail still installs its
-        // empty preview.
+        // empty preview. The install holds its own guard: it installs
+        // the newest candidate without another fold (`docs/tui.md`,
+        // "History and paging"); when no answer folded one, it folds
+        // the leftover candidate first, under the same guard.
+        let install = self.timing.tail_install();
         self.app.install_tail();
+        drop(install);
+        true
     }
 
     /// Reads the retained count after the first frame draws: older
@@ -1522,6 +1595,7 @@ impl<B: Backend> Loop<B> {
                 self.clock.as_ref(),
                 self.tick.armed(),
                 hub::Phase::Count,
+                &mut self.timing,
             )
             .is_err()
         {

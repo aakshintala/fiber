@@ -7,7 +7,7 @@ use contract::shapes::{Question, True};
 use ratatui::style::{Modifier, Style};
 
 use super::builder::Builder;
-use super::text::{cells, delete_before, insert_at, move_caret};
+use super::text::{cells, delete_before, edit_line, insert_at};
 use super::{Panel, PanelKey, Title};
 use crate::format::{answer_parts, width as measure};
 use crate::keys::{Edit, Key};
@@ -258,9 +258,9 @@ impl Form {
     }
 
     /// An editing key: a paste is typed on the words row, or into the note
-    /// on the Submit tab, a control character as a space; ← and → move the
-    /// text cursor on the words row and on the note row, and move between
-    /// the tabs from every other row. Every other edit does nothing.
+    /// on the Submit tab, a control character as a space; on the words
+    /// row and on the note row every line edit runs the shared single-line
+    /// editor, while ← and → move between the tabs from every other row.
     pub(crate) fn on_edit(&mut self, edit: &Edit) {
         match edit {
             Edit::Paste(text) => {
@@ -268,17 +268,47 @@ impl Form {
                     self.type_char(ch);
                 }
             }
-            Edit::Left => self.arrow(false),
-            Edit::Right => self.arrow(true),
-            Edit::ShiftEnter
-            | Edit::CtrlJ
-            | Edit::WordLeft
+            Edit::Left | Edit::Right => {
+                if let Some((text, caret)) = self.text_at() {
+                    edit_line(text, caret, edit);
+                } else {
+                    self.arrow(*edit == Edit::Right);
+                }
+            }
+            Edit::WordLeft
             | Edit::WordRight
             | Edit::DeleteWord
             | Edit::DeleteToLineStart
             | Edit::LineStart
             | Edit::LineEnd
-            | Edit::Delete => {}
+            | Edit::ShiftEnter
+            | Edit::CtrlJ
+            | Edit::Delete => {
+                if let Some((text, caret)) = self.text_at() {
+                    edit_line(text, caret, edit);
+                }
+            }
+        }
+    }
+
+    /// The text under the cursor, when it takes text: the words of the
+    /// shown question, or the note on the Submit tab. Every other row is
+    /// not text, so line edits do nothing there.
+    fn text_at(&mut self) -> Option<(&mut String, &mut usize)> {
+        match self.at {
+            Cursor::Question {
+                field,
+                row: Row::Words,
+            } => {
+                let answer = self.answers.get_mut(field)?;
+                Some((&mut answer.words, &mut answer.caret))
+            }
+            Cursor::Submit(SubmitRow::Note) => Some((&mut self.note, &mut self.note_caret)),
+            Cursor::Question {
+                row: Row::Option(_) | Row::Next,
+                ..
+            }
+            | Cursor::Submit(SubmitRow::Send) => None,
         }
     }
 
@@ -686,24 +716,10 @@ impl Form {
         }
     }
 
-    /// ← or →: one character on the words row and on the note row,
-    /// stopping at either end; from any other row, the previous or next
-    /// tab, stopping at the first question and at Submit.
+    /// ← or → from a row that takes no text: the previous or next tab,
+    /// stopping at the first question and at Submit. Text rows never reach
+    /// here; their arrows run the shared editor in `on_edit`.
     fn arrow(&mut self, right: bool) {
-        if let Cursor::Question {
-            field,
-            row: Row::Words,
-        } = self.at
-        {
-            if let Some(answer) = self.answers.get_mut(field) {
-                move_caret(&answer.words, &mut answer.caret, right);
-            }
-            return;
-        }
-        if let Cursor::Submit(SubmitRow::Note) = self.at {
-            move_caret(&self.note, &mut self.note_caret, right);
-            return;
-        }
         let tab = self.tab();
         self.open_tab(if right {
             tab.saturating_add(1)

@@ -550,7 +550,7 @@ impl ProcessExtension {
         let payload = serde_json::to_value(support::lock(&self.shared.context).hello())?;
         Ok(envelope_line(
             &self.shared,
-            "extension_hello",
+            line::ProcessLineKind::ExtensionHello,
             payload.as_object().cloned().unwrap_or_default(),
         ))
     }
@@ -597,7 +597,11 @@ impl ProcessExtension {
         .ok()
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
-        let line = envelope_line(&self.shared, "command_accepted", payload);
+        let line = envelope_line(
+            &self.shared,
+            line::ProcessLineKind::CommandAccepted,
+            payload,
+        );
         if line.len() > max_line {
             return self.rejected_line(
                 id,
@@ -638,7 +642,11 @@ impl ProcessExtension {
         .ok()
         .and_then(|payload| payload.as_object().cloned())
         .unwrap_or_default();
-        envelope_line(&self.shared, "command_rejected", payload)
+        envelope_line(
+            &self.shared,
+            line::ProcessLineKind::CommandRejected,
+            payload,
+        )
     }
 
     /// Rejects a call or reply naming a request that is no longer
@@ -802,7 +810,7 @@ pub(crate) fn hang_guard(
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
 pub(crate) fn envelope_line(
     shared: &Shared,
-    kind: &str,
+    kind: line::ProcessLineKind,
     payload: serde_json::Map<String, Value>,
 ) -> Vec<u8> {
     // The run decides the line: a sessionless run never carries a
@@ -810,7 +818,7 @@ pub(crate) fn envelope_line(
     let run = support::lock(&shared.context).run.clone();
     match run {
         context::ProcessRun::Call => line::ProcessCallLine {
-            kind: kind.to_owned(),
+            kind,
             ts: contract::clock::wall_ms(shared.clock.wall()),
             schema_version: contract::SCHEMA_VERSION,
             turn_id: None,
@@ -821,7 +829,7 @@ pub(crate) fn envelope_line(
         .to_vec(),
         context::ProcessRun::Session { session_id, .. } => {
             let envelope = contract::Envelope {
-                kind: kind.to_owned(),
+                kind: kind.name().to_owned(),
                 session_id,
                 ts: contract::clock::wall_ms(shared.clock.wall()),
                 schema_version: contract::SCHEMA_VERSION,
@@ -849,7 +857,7 @@ pub(crate) fn answer_on(
     .ok()
     .and_then(|payload| payload.as_object().cloned())
     .unwrap_or_default();
-    let line = envelope_line(shared, "command_accepted", payload);
+    let line = envelope_line(shared, line::ProcessLineKind::CommandAccepted, payload);
     if line.len() > support::lock(&shared.transport).max_line() {
         answer_off(
             shared,
@@ -884,8 +892,11 @@ pub(crate) fn answer_off(
     .and_then(|payload| payload.as_object().cloned())
     .unwrap_or_default();
     // The child may be gone: its answer dies with it.
-    match support::lock(&shared.transport).send(envelope_line(shared, "command_rejected", payload))
-    {
+    match support::lock(&shared.transport).send(envelope_line(
+        shared,
+        line::ProcessLineKind::CommandRejected,
+        payload,
+    )) {
         Ok(()) | Err(_) => {}
     }
 }

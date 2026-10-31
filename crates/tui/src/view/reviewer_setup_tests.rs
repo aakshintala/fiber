@@ -807,6 +807,50 @@ fn a_wrapped_line_hangs_under_its_text() {
     assert_eq!(cells(&hang.content), HANG);
 }
 
+#[test]
+fn an_editing_wrapped_line_keeps_its_block_on_its_last_row() {
+    // A proposal wrapping to two rows, edited: the block marks only the
+    // last row, in the text colour with no dim, and no empty row trails
+    // it (`docs/tui.md`, "Look").
+    let inner = overlay::question_inner(120);
+    let text = rows_of(2, inner - HANG, "proposal");
+    let mut fx = Fixture::empty();
+    fx.ask(
+        json!([{"kind": "files", "text": "its git remotes: origin github.com/acme/fiber"}]),
+        cite_first(&text),
+    );
+    fx.press(Key::Char('e'));
+    let body = body_of(&fx, 40);
+    let at = body
+        .iter()
+        .position(|row| row.contains("proposal"))
+        .expect("the edited field");
+    assert!(!body[at].contains('█'), "first row: {:?}", body[at]);
+    assert!(body[at + 1].ends_with('█'), "last row: {:?}", body[at + 1]);
+    // The block's cell keeps the slab behind it, in the text colour.
+    let piece = wrap(&text, inner - HANG).pop().expect("the last row");
+    let area = Rect::new(0, 0, 120, 40);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&fx.app, area, &mut buf, None);
+    let row = (0..40)
+        .find(|y| {
+            let line: String = (0..120).map(|x| buf[(x, *y)].symbol().to_owned()).collect();
+            line.contains(&piece)
+        })
+        .expect("the last row on screen");
+    let at = u16::try_from(
+        (0..120u16)
+            .position(|x| buf[(x, row)].symbol() == "█")
+            .expect("the block"),
+    )
+    .expect("a column");
+    assert_eq!(buf[(at, row)].fg, Role::Text.color());
+    assert!(
+        !buf[(at, row)].modifier.contains(Modifier::DIM),
+        "no dim marks the cursor"
+    );
+}
+
 fn width_of(span: &Span<'_>) -> usize {
     cells(&span.content)
 }
