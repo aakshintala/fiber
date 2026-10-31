@@ -49,6 +49,164 @@ impl Drop for OpenedHold {
     }
 }
 
+pub(crate) struct CaseInputs {
+    case_run: Arc<extensions::case::CaseRun>,
+    host: Arc<extensions::HostScript>,
+}
+
+enum WorkspaceStart {
+    Direct,
+    CreatedWorktree {
+        worktree: Worktree,
+        opened: doors::WorktreeOpener,
+    },
+    ExistingWorktree {
+        worktree: Worktree,
+    },
+}
+
+impl WorkspaceStart {
+    fn new(
+        worktree: Option<Worktree>,
+        opened: Option<doors::WorktreeOpener>,
+    ) -> Result<Self, Failure> {
+        match (worktree, opened) {
+            (None, None) => Ok(Self::Direct),
+            (Some(worktree), Some(opened)) => Ok(Self::CreatedWorktree { worktree, opened }),
+            (Some(worktree), None) => Ok(Self::ExistingWorktree { worktree }),
+            (None, Some(_)) => Err(failed(
+                ErrorCode::IoFailed,
+                "a worktree opener has no worktree",
+            )),
+        }
+    }
+
+    pub(crate) fn worktree(&self) -> Option<&Worktree> {
+        match self {
+            Self::Direct => None,
+            Self::CreatedWorktree { worktree, .. } | Self::ExistingWorktree { worktree } => {
+                Some(worktree)
+            }
+        }
+    }
+
+    pub(crate) fn opened(&self) -> Option<&doors::WorktreeOpener> {
+        match self {
+            Self::CreatedWorktree { opened, .. } => Some(opened),
+            Self::Direct | Self::ExistingWorktree { .. } => None,
+        }
+    }
+}
+
+#[allow(
+    clippy::large_enum_variant,
+    reason = "resume carries its log, fold and directory for assembly"
+)]
+enum Start {
+    New {
+        id: SessionId,
+        workspace: WorkspaceStart,
+        supervised: bool,
+        case_inputs: Option<CaseInputs>,
+        inherited: Vec<PathBuf>,
+    },
+    Delegate {
+        id: SessionId,
+        parent: Parent,
+        workspace: WorkspaceStart,
+        inherited: Vec<PathBuf>,
+    },
+    Rewound {
+        id: SessionId,
+        continuation: r#loop::Rewound,
+        workspace: WorkspaceStart,
+        inherited: Vec<PathBuf>,
+    },
+    Resume(ResumeStart),
+}
+
+pub(crate) struct ResumeStart {
+    pub(crate) dir: log::SessionDir,
+    pub(crate) log: Arc<Log>,
+    pub(crate) folded: r#loop::Resumed,
+    pub(crate) opened: Option<doors::WorktreeOpener>,
+}
+
+impl ResumeStart {
+    pub(crate) fn new(
+        dir: log::SessionDir,
+        log: Arc<Log>,
+        folded: r#loop::Resumed,
+        opened: Option<doors::WorktreeOpener>,
+    ) -> Result<Self, Failure> {
+        if dir.path() != log.dir() {
+            return Err(failed(
+                ErrorCode::IoFailed,
+                "The resumed log does not match the session directory.",
+            ));
+        }
+        Ok(Self {
+            dir,
+            log,
+            folded,
+            opened,
+        })
+    }
+
+    pub(crate) fn id(&self) -> SessionId {
+        let name = self
+            .dir
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        SessionId(name.to_owned())
+    }
+
+    pub(crate) fn sessions(&self) -> Result<&Path, Failure> {
+        self.dir
+            .path()
+            .parent()
+            .ok_or_else(|| failed(ErrorCode::IoFailed, "the session directory has no parent"))
+    }
+}
+
+pub(crate) struct SessionInputs {
+    prompt: Option<String>,
+    one_turn: bool,
+    start: Start,
+    fiber_path: PathBuf,
+    reads: Arc<crate::switch::Reads>,
+}
+
+impl SessionInputs {
+    fn fresh(
+        prompt: Option<String>,
+        one_turn: bool,
+        start: Start,
+        fiber_path: PathBuf,
+        reads: Arc<crate::switch::Reads>,
+    ) -> Self {
+        Self {
+            prompt,
+            one_turn,
+            start,
+            fiber_path,
+            reads,
+        }
+    }
+
+    pub(crate) fn resumed(
+        prompt: Option<String>,
+        one_turn: bool,
+        fiber_path: PathBuf,
+        reads: Arc<crate::switch::Reads>,
+        resume: ResumeStart,
+    ) -> Self {
+        Self::fresh(prompt, one_turn, Start::Resume(resume), fiber_path, reads)
+    }
+}
+
 /// Whether the session may answer an approval: the base run's
 /// answerability, and never when a program drives the session
 /// (`docs/permissions.md`, "Supervised sessions"). Both the fresh and
@@ -96,11 +254,8 @@ pub(crate) fn command_update_wiring(
 /// that: the signals' bound thread reads no relative path. With `--resume`
 /// the workspace is the launch directory the hub selected, and the session
 /// enters the recorded worktree itself instead of starting one. Stdin is never read.
-pub(crate) fn run(
-    args: cli::SessionArgs,
-    clock: Arc<dyn contract::clock::Clock>,
-    fiber: Result<PathBuf, String>,
-) -> i32 {
+pub(crate) fn run(args: cli::SessionArgs, process: &crate::startup::Process) -> i32 {
+    let clock = Arc::clone(&process.clock);
     crate::startup_log::as_session();
     if let Err(e) = std::env::set_current_dir(&args.workspace) {
         // The hub spawns a continues session with the recorded worktree
@@ -145,7 +300,7 @@ pub(crate) fn run(
             args.prompt,
             clock,
             &signals,
-            fiber,
+            process,
         );
     }
     if let Some(from) = args.rewound_from {
@@ -154,7 +309,7 @@ pub(crate) fn run(
             SessionId(from),
             clock,
             &signals,
-            fiber,
+            process,
         );
     }
     if let Some(old) = args.continues {
@@ -170,7 +325,7 @@ pub(crate) fn run(
             &args.workspace,
             clock,
             &signals,
-            fiber,
+            process,
             args.supervised,
         );
     }
@@ -220,7 +375,7 @@ pub(crate) fn run(
             adopted,
             clock,
             &signals,
-            fiber,
+            process,
         );
     }
     // A delegate's stdin is its lifeline: the parent holds the write end
@@ -247,7 +402,7 @@ pub(crate) fn run(
         adopted,
         clock,
         &signals,
-        fiber,
+        process,
         None,
         parent,
         args.supervised,
@@ -276,7 +431,7 @@ pub(crate) fn new_session(
     adopted: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
+    process: &crate::startup::Process,
     case_run: Option<Arc<extensions::case::CaseRun>>,
     parent: Option<Parent>,
     supervised: bool,
@@ -289,29 +444,35 @@ pub(crate) fn new_session(
     let reads = Arc::new(crate::switch::Reads::default());
     let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let clock = case_run.as_ref().map_or(clock, |case| case.session_clock());
-    let host = case_run.as_ref().map(|case| case.host_script());
+    let case_inputs = case_run.map(|case| CaseInputs {
+        host: case.host_script(),
+        case_run: case,
+    });
     if !worktree || adopted.is_some() {
         return match run_new(
-            id, overrides, prompt, one_turn, adopted, clock, signals, fiber, host, case_run,
-            parent, None, reads, supervised, inherited,
+            id,
+            overrides,
+            prompt,
+            one_turn,
+            adopted,
+            clock,
+            signals,
+            process,
+            case_inputs,
+            parent,
+            None,
+            reads,
+            supervised,
+            inherited,
         ) {
             Ok(code) => code,
             Err(failure) => report(signals, failure),
         };
     }
     // As `parts_with` would: a failure here leaves no session.
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
-    };
-    let launch = match std::env::current_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            return ask_failed(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
+    let (home, launch) = match crate::startup::startup() {
+        Ok(directories) => directories,
+        Err(e) => return ask_failed(e),
     };
     // Its own reads: the worktree's `git worktree add` runs through them,
     // so a signal kills git and its hook together.
@@ -340,9 +501,8 @@ pub(crate) fn new_session(
         Some(worktree),
         clock,
         signals,
-        fiber,
-        host,
-        case_run,
+        process,
+        case_inputs,
         parent,
         None,
         reads,
@@ -371,9 +531,8 @@ pub(crate) fn run_new(
     worktree: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
-    host: Option<Arc<extensions::HostScript>>,
-    case_run: Option<Arc<extensions::case::CaseRun>>,
+    process: &crate::startup::Process,
+    case_inputs: Option<CaseInputs>,
     parent: Option<Parent>,
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
@@ -387,25 +546,21 @@ pub(crate) fn run_new(
     // Armed before the parts are read: from now a signal cancels the one
     // reads every startup credential command runs through.
     shutdown::arm(signals, &reads);
-    let fiber_path = fiber
-        .clone()
-        .map_err(|message| failed(ErrorCode::IoFailed, message))?;
+    let fiber_path = process.exe.clone()?;
     // A rewind's new session runs where the old one did, with the model,
     // credential and thinking level the old log's latest build recorded,
     // as a resume keeps its recorded ones (`docs/events.md`, "Rewind").
     // The diagnostic process: a one-turn run without a rewind or a parent
     // is an ask; a delegate child runs one turn but keeps the session's
     // identity, as does a rewind continuing its session's log.
-    let process = if one_turn && rewound.is_none() && parent.is_none() {
+    let diag_process = if one_turn && rewound.is_none() && parent.is_none() {
         log::diag::Process::Ask
     } else {
         log::diag::Process::Session
     };
-    let mut parts = match &rewound {
+    let parts = match &rewound {
         Some(start) => {
-            let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+            let (home, workspace) = crate::startup::startup()?;
             let sessions = log::sessions_dir(&home, &worktree::project(&workspace));
             // The point's session lives beside the child, or in the
             // recorded parent project when the continuation names one: a
@@ -447,9 +602,9 @@ pub(crate) fn run_new(
                 folded.credential.as_deref(),
                 thinking,
                 Arc::clone(&clock),
-                host,
+                case_inputs.as_ref().map(|inputs| Arc::clone(&inputs.host)),
                 Arc::clone(&reads),
-                process,
+                diag_process,
                 seed,
                 crate::session_extensions::RepositoryScope::default(),
                 crate::parts::SessionLaunch {
@@ -475,9 +630,9 @@ pub(crate) fn run_new(
                 None,
                 None,
                 Arc::clone(&clock),
-                host,
+                case_inputs.as_ref().map(|inputs| Arc::clone(&inputs.host)),
                 Arc::clone(&reads),
-                process,
+                diag_process,
                 extensions::StateSeed::new(),
                 crate::session_extensions::RepositoryScope::default(),
                 crate::parts::SessionLaunch {
@@ -488,6 +643,111 @@ pub(crate) fn run_new(
                 fiber_path.clone(),
             )
             .map_err(|failure| ::cli::with_fix(failure, &overrides_for_fix))?
+        }
+    };
+    let workspace_start = WorkspaceStart::new(worktree, opened)?;
+    let start = match (parent, rewound) {
+        (Some(parent), None) => Start::Delegate {
+            id: id.clone(),
+            parent,
+            workspace: workspace_start,
+            inherited,
+        },
+        (_, Some(continuation)) => Start::Rewound {
+            id: id.clone(),
+            continuation,
+            workspace: workspace_start,
+            inherited,
+        },
+        (None, None) => Start::New {
+            id: id.clone(),
+            workspace: workspace_start,
+            supervised,
+            case_inputs,
+            inherited,
+        },
+    };
+    let inputs = SessionInputs::fresh(prompt, one_turn, start, fiber_path.clone(), reads);
+    assemble_session(parts, inputs, signals, process)
+}
+
+fn assemble_new(
+    mut parts: Parts,
+    inputs: SessionInputs,
+    signals: &Arc<doors::Signals>,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> Result<i32, Failure> {
+    let SessionInputs {
+        prompt,
+        one_turn,
+        start,
+        fiber_path,
+        reads,
+    } = inputs;
+    let (id, worktree, opened, supervised, case_inputs, parent, rewound, inherited) = match start {
+        Start::New {
+            id,
+            workspace,
+            supervised,
+            case_inputs,
+            inherited,
+        } => {
+            let worktree = workspace.worktree().cloned();
+            let opened = workspace.opened().cloned();
+            (
+                id,
+                worktree,
+                opened,
+                supervised,
+                case_inputs,
+                None,
+                None,
+                inherited,
+            )
+        }
+        Start::Delegate {
+            id,
+            parent,
+            workspace,
+            inherited,
+        } => {
+            let worktree = workspace.worktree().cloned();
+            let opened = workspace.opened().cloned();
+            (
+                id,
+                worktree,
+                opened,
+                false,
+                None,
+                Some(parent),
+                None,
+                inherited,
+            )
+        }
+        Start::Rewound {
+            id,
+            continuation,
+            workspace,
+            inherited,
+        } => {
+            let worktree = workspace.worktree().cloned();
+            let opened = workspace.opened().cloned();
+            (
+                id,
+                worktree,
+                opened,
+                false,
+                None,
+                None,
+                Some(continuation),
+                inherited,
+            )
+        }
+        Start::Resume(_) => {
+            return Err(failed(
+                ErrorCode::IoFailed,
+                "a resumed start cannot assemble as new",
+            ));
         }
     };
     log::crash::attach(&id);
@@ -647,7 +907,7 @@ pub(crate) fn run_new(
     // file and id, so request, extension and memory lines share them.
     diag.attach(&id);
     job_emit.set(Arc::new(log::WeakEmit::new(&log)) as _);
-    let event_output: Box<dyn io::Write + Send> = if case_run.is_some() {
+    let event_output: Box<dyn io::Write + Send> = if case_inputs.is_some() {
         Box::new(io::sink())
     } else {
         Box::new(io::stdout())
@@ -689,7 +949,9 @@ pub(crate) fn run_new(
     // A session case with nobody attached denies where it would ask a
     // person, as a headless run does: only the person fallback is removed,
     // so `attended: false` with a reviewer still allows through it.
-    let case_attended = case_run.as_ref().is_none_or(|case| case.attended());
+    let case_attended = case_inputs
+        .as_ref()
+        .is_none_or(|inputs| inputs.case_run.attended());
     let answerable = effective_answerable(!one_turn && case_attended, supervised);
     extensions.answerable(answerable);
     extensions.browse_with(
@@ -775,7 +1037,8 @@ pub(crate) fn run_new(
     let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
         fetch_prompts.get(server, prompt, text, cancel)
     });
-    let case_driver = case_run.as_ref().and_then(|case| {
+    let case_driver = case_inputs.as_ref().and_then(|inputs| {
+        let case = &inputs.case_run;
         let mut watcher = log.watch_all();
         let events = Box::new(move |wait| {
             watcher
@@ -796,7 +1059,7 @@ pub(crate) fn run_new(
             }
         }
     });
-    let run_one_turn = one_turn || (case_run.is_some() && case_driver.is_none());
+    let run_one_turn = one_turn || (case_inputs.is_some() && case_driver.is_none());
     let code = run_turn(
         &session,
         &log,
@@ -941,8 +1204,10 @@ pub(crate) fn run_new(
         match case_driver.join() {
             Ok(()) => {}
             Err(_) => {
-                if let Some(case) = &case_run {
-                    case.record_failure("the case driver panicked".to_owned());
+                if let Some(inputs) = &case_inputs {
+                    inputs
+                        .case_run
+                        .record_failure("the case driver panicked".to_owned());
                 }
             }
         }
@@ -950,6 +1215,43 @@ pub(crate) fn run_new(
     servers.stop();
     close(session, log, &home, dir.path(), &workspace, &*clock);
     Ok(code)
+}
+
+pub(crate) fn assemble_session(
+    parts: Parts,
+    inputs: SessionInputs,
+    signals: &Arc<doors::Signals>,
+    process: &crate::startup::Process,
+) -> Result<i32, Failure> {
+    let is_resume = matches!(inputs.start, Start::Resume(_));
+    if is_resume {
+        let SessionInputs {
+            prompt,
+            one_turn,
+            start,
+            fiber_path,
+            reads,
+        } = inputs;
+        let resume = match start {
+            Start::Resume(resume) => resume,
+            Start::New { .. } | Start::Delegate { .. } | Start::Rewound { .. } => {
+                unreachable!("a fresh start cannot assemble as resumed")
+            }
+        };
+        return crate::resume::assemble_resumed(
+            parts, resume, prompt, one_turn, fiber_path, reads, signals, process,
+        );
+    }
+    let clock = match &inputs.start {
+        Start::New { case_inputs, .. } => case_inputs
+            .as_ref()
+            .map_or(Arc::clone(&process.clock), |inputs| {
+                inputs.case_run.session_clock()
+            }),
+        Start::Delegate { .. } | Start::Rewound { .. } => Arc::clone(&process.clock),
+        Start::Resume(_) => unreachable!(),
+    };
+    assemble_new(parts, inputs, signals, clock)
 }
 
 /// As [`run_new`], opening the worktree's create line once the diagnostic
@@ -969,9 +1271,8 @@ pub(crate) fn run_new_with(
     worktree: Option<Worktree>,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
-    fiber: Result<PathBuf, String>,
-    host: Option<Arc<extensions::HostScript>>,
-    case_run: Option<Arc<extensions::case::CaseRun>>,
+    process: &crate::startup::Process,
+    case_inputs: Option<CaseInputs>,
     parent: Option<Parent>,
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
@@ -981,8 +1282,20 @@ pub(crate) fn run_new_with(
 ) -> Result<i32, Failure> {
     let _hold = OpenedHold::set(opened);
     run_new(
-        id, overrides, prompt, one_turn, worktree, clock, signals, fiber, host, case_run, parent,
-        rewound, reads, supervised, inherited,
+        id,
+        overrides,
+        prompt,
+        one_turn,
+        worktree,
+        clock,
+        signals,
+        process,
+        case_inputs,
+        parent,
+        rewound,
+        reads,
+        supervised,
+        inherited,
     )
 }
 
