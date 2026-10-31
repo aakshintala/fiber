@@ -1178,6 +1178,7 @@ fn wired(
                     deny_read: Vec::new(),
                     fiber_home: home.clone(),
                 })),
+                None,
             )
             .expect("the session builds")
         },
@@ -1300,6 +1301,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
                     deny_read: Vec::new(),
                     fiber_home: home.clone(),
                 })),
+                None,
             )
             .unwrap()
         },

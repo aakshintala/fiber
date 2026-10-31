@@ -17,6 +17,9 @@ use super::background::MoveAsk;
 use super::drive::{LoopEnd, Phase, Run, pump_inner};
 use super::moved::{CancelBridge, Moved};
 use super::output::{Errors, OUTPUT_CAP, Shared, bump, lock, read_errors, read_output};
+use super::sandbox::protected::{
+    Guard as ProtectionGuard, ProtectedPaths, Report as ProtectedReport,
+};
 use super::spawn::scrub_env;
 use super::spill::{Config as SpillConfig, Spill};
 use super::tty;
@@ -98,9 +101,11 @@ pub(crate) enum MoveReason {
 /// A finished command, or one handed to a job. The move rides boxed:
 /// it carries the drive state.
 pub(crate) enum Ran {
-    /// The command ended in this call.
-    Finished(Finished),
-    /// The command is still running and should become a job.
+    /// The command ended in this call, with the protected-path report of
+    /// its end: `None` when no confined transaction ran.
+    Finished(Finished, Option<ProtectedReport>),
+    /// The command is still running and should become a job. The guard
+    /// rides in the move and ends with the job.
     Moved(Box<Moved>),
 }
 
@@ -128,6 +133,7 @@ pub(crate) fn execute(
     matches: Option<&Path>,
     sandbox_settings: &super::sandbox::Settings,
     sandbox_workspace: &Path,
+    protection: Option<&ProtectedPaths>,
 ) -> Result<Ran, std::io::Error> {
     execute_inner(
         program,
@@ -143,6 +149,7 @@ pub(crate) fn execute(
         matches,
         sandbox_settings,
         sandbox_workspace,
+        protection,
         support::group::alive,
         Path::new("ps"),
         super::sandbox::install,
@@ -190,6 +197,43 @@ struct SpawnStreams {
     input: Option<contract::jobs::Input>,
     errors: Option<std::io::PipeReader>,
     read: Box<dyn Read + Send>,
+}
+
+/// Takes the protection guard for a confined Linux spawn: the baseline is
+/// taken or reused now, and the guard owns the end-of-call compare, restore
+/// and report. A baseline that cannot be read or recorded fails the call
+/// closed before spawn, as a sandbox-apply failure. Unconfined spawns, and
+/// builds without the Linux sandbox, take no guard.
+#[cfg(target_os = "linux")]
+fn acquire_protection(
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
+    protection: Option<&ProtectedPaths>,
+) -> Result<Option<ProtectionGuard>, std::io::Error> {
+    match protection {
+        Some(handle) if sandbox_settings.enabled => handle
+            .begin(sandbox_workspace)
+            .map(|begin| Some(begin.guard))
+            .map_err(|error| {
+                std::io::Error::other(SandboxApply {
+                    cause: error.to_string(),
+                })
+            }),
+        Some(_) | None => Ok(None),
+    }
+}
+
+/// No guard off Linux: no confined call runs there.
+// Mutants run on Linux, where this stub is not compiled.
+#[cfg_attr(false, mutants::skip)]
+#[cfg(not(target_os = "linux"))]
+fn acquire_protection(
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
+    protection: Option<&ProtectedPaths>,
+) -> Result<Option<ProtectionGuard>, std::io::Error> {
+    let _ = (sandbox_settings, sandbox_workspace, protection);
+    Ok(None)
 }
 
 /// Opens the terminal or the pipes for `cmd`, by move policy.
@@ -244,6 +288,7 @@ fn finish_spawned(
     policy: MovePolicy,
     jobs: Option<&dyn Jobs>,
     spill: Option<SpillConfig>,
+    protection: Option<ProtectionGuard>,
     alive: fn(u32) -> bool,
     ps: &Path,
     drive: Drive,
@@ -356,7 +401,10 @@ fn finish_spawned(
     match ended {
         LoopEnd::Finished(finished) => {
             drop(bridge);
-            Ok(Ran::Finished(finished))
+            // The output is collected: compare, restore and report now, so
+            // the foreground result carries the call's end.
+            let report = protection.map(ProtectionGuard::finish);
+            Ok(Ran::Finished(finished, report))
         }
         LoopEnd::Move(reason) => Ok(Ran::Moved(Box::new(Moved {
             reason,
@@ -364,6 +412,7 @@ fn finish_spawned(
             progress,
             cap: OUTPUT_CAP,
             spill,
+            protection,
         }))),
     }
 }
@@ -405,6 +454,7 @@ fn execute_inner(
     matches: Option<&Path>,
     sandbox_settings: &super::sandbox::Settings,
     sandbox_workspace: &Path,
+    protection: Option<&ProtectedPaths>,
     alive: fn(u32) -> bool,
     ps: &Path,
     install: fn(&mut super::sandbox::Prepared) -> Result<(), i32>,
@@ -458,6 +508,10 @@ fn execute_inner(
             },
         }
     }
+    // The protection guard is taken before the confined Linux spawn: a
+    // baseline that cannot be read or recorded stops the call here, so no
+    // confined command runs unprotected. Unconfined spawns take none.
+    let guard = acquire_protection(sandbox_settings, sandbox_workspace, protection)?;
     let tty = policy == MovePolicy::Terminal;
     let mut cmd = Command::new(program);
     cmd.arg("-c").arg(command).current_dir(workdir);
@@ -553,6 +607,7 @@ fn execute_inner(
         policy,
         jobs,
         spill,
+        guard,
         alive,
         ps,
         Drive::Plain,
@@ -651,6 +706,7 @@ pub(crate) fn execute_confined(
         policy,
         jobs,
         spill,
+        None,
         alive,
         ps,
         Drive::Gated(watch),

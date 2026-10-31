@@ -1943,6 +1943,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
                     output_tail: None,
                     notice: None,
                     changed_by: None,
+                    protected_paths: None,
                 });
             }
         }
@@ -1987,6 +1988,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
         output_tail: None,
         notice: None,
         changed_by: None,
+        protected_paths: None,
     });
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();

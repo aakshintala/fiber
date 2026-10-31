@@ -143,6 +143,7 @@ impl FakeJobs {
                     output_tail: None,
                     notice: None,
                     changed_by: None,
+                    protected_paths: None,
                 },
                 claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate: None,

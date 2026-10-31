@@ -84,6 +84,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use config::{Config, Layer, Sources};
+use contract::events::Event;
 use contract::inbox::Delivery;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -894,16 +895,40 @@ fn drain_exit_code(exited: i32, stopped: bool, code: Option<i32>) -> i32 {
     }
 }
 
+/// The headless person's protected-path warnings for one appended event:
+/// the warning lines of a foreground or adopted completion that changed
+/// a path, else nothing. The terminal UI draws its own warning from the
+/// same report; headless has no terminal, so it writes stderr.
+fn headless_protected_lines(event: &Event) -> Vec<String> {
+    // if-lets, not a wildcard match: a new event kind must decide here
+    // whether it can carry a protected-path report.
+    let report = if let Event::ToolCallCompleted(done) = event {
+        done.protected_paths.as_ref()
+    } else if let Event::JobCompleted(done) = event {
+        done.protected_paths.as_ref()
+    } else {
+        None
+    };
+    let Some(report) = report else {
+        return Vec::new();
+    };
+    report
+        .warning_lines()
+        .into_iter()
+        .map(|line| format!("fiber: {line}"))
+        .collect()
+}
+
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
 /// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
 /// what ran. `run` writes the session's first lines through
 /// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
-/// nothing was written to the session log for this process, and `run_turn` returns `code`
-/// with no `quiesce`, no `fiber_exited` and no stderr line. One cancel
-/// signal, `cancel`, serves the door and the loop, so
-/// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
-/// the exit code.
+/// nothing was written to the session log for this process, and `run_turn`
+/// returns `code` with no `quiesce`, no `fiber_exited` and no stderr line.
+/// One cancel signal, `cancel`, serves the door and the loop, so a `cancel`
+/// ends the turn the prompt starts; a shutdown's code on it is the exit
+/// code.
 #[allow(
     clippy::too_many_arguments,
     reason = "one hand-off of the turn's end: the session, log, prompt, mode, cancel, diagnostics and runner"
@@ -928,6 +953,18 @@ fn run_turn(
     // before `fiber_exited` below, so the session-end drain owns the exit
     // line.
     let _watchers = session_extensions::subscribe(log, current, &cancel);
+    // Headless `fiber ask` names restored protected paths on stderr with
+    // the call's other lines, so the person sees the same warning the
+    // terminal would draw under the call. An attached session draws its
+    // own warning and stays silent here.
+    let _protected_warnings = one_turn.then(|| {
+        log.subscribe(Arc::new(move |event: &Event, _line| {
+            let mut err = io::stderr().lock();
+            for line in headless_protected_lines(event) {
+                writeln!(err, "{line}").unwrap_or(());
+            }
+        }))
+    });
     let door = Arc::clone(&cancel);
     let turn = Arc::clone(&cancel);
     let mut committed: Option<i32> = None;

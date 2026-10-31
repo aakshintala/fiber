@@ -505,6 +505,7 @@ pub(crate) fn run_new(
         caps,
         shell_read_only,
         sandbox,
+        protection,
         home,
         project,
         workspace,
@@ -591,6 +592,7 @@ pub(crate) fn run_new(
         timing.clone(),
         shell_read_only.clone(),
         sandbox.clone(),
+        Some(protection),
     ) {
         Ok(tools) => tools,
         Err(failure) => {

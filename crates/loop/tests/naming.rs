@@ -130,6 +130,7 @@ fn a_naming_call_with_job_lines_writes_its_name_last() {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         }),
     ];
     let mut session = session(vec![Arc::new(tool)], &["name"]);

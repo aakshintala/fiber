@@ -721,22 +721,15 @@ resumes the session and delivers the command. If that resume fails
 `session_held`, the hub waits for the old process to release the lock, up to
 the 5-second shutdown bound, and the client gets `session_held` only once the
 bound has passed. Commands keep their order across that resume ("What the hub
-speaks"). A command after `close` and before `fiber_exited` still gets
-`closing`, except a `close` with `now`, which is accepted and upgrades the close. A line that arrives after the session stops reading, just before `fiber_exited`, is never read: the hub re-routes it after the clean exit, and a direct client reads end of file.
+speaks"). A command read after `close` still gets `closing`, except a `close`
+with `now`, which is accepted and upgrades the close. A line that arrives
+after the session stopped reading is re-routed after the clean exit, as the
+relayed-command table says, and a direct client reads end of file.
 
-A command the hub sent to a session that then ended without answering it is
-answered by the hub, by how the session ended:
-
-- After a clean exit (the log ends in `fiber_exited`) the session never read
-  the command, so the hub treats it as a `closing` answer and delivers it to
-  the resumed session, in the order the hub read it.
-- A command the hub had started writing to the session when the write failed may have been read, so it is rejected `indeterminate` however the session ends, and is never delivered again.
-- A command is delivered once. When the resumed session also ends without
-  answering it, or answers it `closing`, the hub rejects it `closing`.
-- A client that disconnected has its commands dropped, never delivered.
-- After a crash (the log ends in neither `fiber_exited`, `rewound` nor `moved`) the
-  session may have run the command. The hub never delivers it again: it
-  rejects it `indeterminate`, and the client decides whether to send it again.
+What the client receives for a command the session left unanswered depends
+only on how the session ended, as the tables under "What the hub speaks" say;
+an acknowledgement that consumes the in-flight write first is forwarded instead,
+and a late write result changes nothing.
 
 **A resume whose workspace is gone and cannot be made again is refused
 `io_failed`.** For a resume that needs a new session process, the hub checks
@@ -1124,16 +1117,76 @@ websocket for everything it does.
   for acknowledgements as the session sends them. The re-route rests on a
   guarantee on the session's side: every line a session reads gets exactly
   one answer on its connection before the session shuts it. The answer is
-  the command's own, or `indeterminate` when the close grace cut it. A session
-  stops reading as it ends, so a line it never read gets no answer from it. The
-  close waits up to 2 seconds for the commands it is running; one still
-  running then is answered `indeterminate` and never replayed, and a client
-  that stops reading is cut. The grace bounds the whole close: the session stops
-  waiting for a command still running at the grace, which ends when the
-  process exits, and writes one `timeout` line to its diagnostic log
-  (`docs/state.md`, "What each part holds") for each connection it stopped
-  waiting for. The hub's relay
-  threads read continuously, so the hub never meets that grace.
+  the command's own, or `indeterminate` when the close grace cut it. The two
+  tables below name every state a relayed command and its session pass
+  through, every allowed move, and what the client receives on each; the
+  rest of this section states what those moves imply. The close waits up to
+  2 seconds for the commands it is running; one still running then is
+  answered `indeterminate` and never replayed, and a client that stops
+  reading is cut. The session stops waiting for a command still running at
+  the grace, which ends when the process exits, and writes one `timeout`
+  line to its diagnostic log (`docs/state.md`, "What each part holds") for
+  each connection it stopped waiting for. The hub's relay threads read
+  continuously, so the hub never meets that grace.
+
+**A relayed command passes through these states.** `Read`: the hub read it
+from the client connection. `Writing`: a live write in flight from `Read`,
+`Queued`, or an already-rerouted command staying `Rerouted`. `Written`: the
+whole line reached the session socket, and the hub waits for its answer. `Partial`: the write failed after the session may have
+read a byte. `Queued`: held unsent on a retiring relay, never read by a session.
+`Rerouted`: handed to the resumed session, the one permitted re-route. Two
+terminal states end it: `Answered` sends exactly one line, and `Dropped` sends none.
+
+| State before | Event | State after | What the client receives |
+|---|---|---|---|
+| — | the hub reads a command with a `session_id` | Read | nothing yet |
+| Read or Writing | the session's relay is live and takes the whole line | Written | nothing yet |
+| Read | the relay is retiring and its thread is alive | Queued | nothing yet |
+| Read | no relay is published and the session connects or resumes | Written | nothing yet |
+| Read or Queued | no relay is published and the open is refused | Answered | one `command_rejected` with the refusal's code |
+| Read or Writing | the write fails before the session could read a byte | Queued | nothing yet; delivered once to the resumed session |
+| Read, Queued or Writing | the write fails after the session may have read a byte; a whole JSON body without its line feed counts | Partial | one `command_rejected indeterminate`; never delivered again, unless an acknowledgement consumed `Writing` first, which is forwarded instead and the late write result changes nothing |
+| Written after `close`, while the session still reads | the session ends | Rerouted | nothing yet; the resumed session ends it with one `closing` |
+| Written after the session stopped reading | the clean exit | Rerouted | delivered once to the resumed session, in read order |
+| Written or Writing | the session answers accepted, rejected, or `closing` while still closing | Answered | the acknowledgement; a `closing` answer here is never stranded, never `indeterminate` |
+| Read or Queued | the session's relay is live and starts the write | Writing | nothing yet |
+| Read, Queued or Writing | the session answers `closing` after the exited window: the hub confirms delivery | Written | nothing yet; the existing `Written -> Rerouted` claim below then hands the command once to the resumed session, suppressing the old answer |
+| Written | the session answers `closing` after the exited window | Rerouted | nothing yet; delivered once to the resumed session |
+| Written | the session answers `closing` after it already rerouted once | Answered | the `closing` rejection |
+| Written | the session answers `indeterminate` | Answered | the `indeterminate` rejection; never replayed |
+| Written, in the exit window | the session shuts its connection | Answered | exactly one answer before shutdown: its own, or `indeterminate` when the close grace cut it |
+| Written | the session exits cleanly without answering | Rerouted | nothing yet; delivered once to the resumed session, in read order; already rerouted once, then one `command_rejected closing` |
+| Written | the session crashes without answering | Answered | one `command_rejected indeterminate`; never delivered again |
+| Written | the session is rewound or moved without answering | Dropped | nothing; the transition already answered it |
+| Written | the relay's thread never starts, or its admission is refused, after the write | Answered | one `command_rejected` with the refusal's code; never written again |
+| Written, Queued, Partial or Rerouted | the client disconnects | Dropped | nothing |
+| Queued | the retiring relay passes it on: after the handover ahead is answered when exiting, at its end when dead | Written on the next relay | nothing yet |
+| Queued | the relay ends with no entry left | Dropped | nothing |
+| Partial | the relay ends, however the session ended | Answered | one `command_rejected indeterminate`; never delivered again |
+| Rerouted | the resumed session answers | Answered | the acknowledgement |
+| Rerouted | the resumed session also ends without answering, or answers `closing` | Answered | one `command_rejected closing` |
+
+**A session behind a relayed command passes through these states.**
+`Running`: its socket accepts connections. `Closing`: it stops reading and
+answers each command it read exactly once. `Exited`: its log ends in
+`fiber_exited`. `Resumed`: a new process runs the session. `Moved` and
+`Rewound`: its log ends in `moved` or `rewound` and names the next session.
+`Crashed`: its log ends in none of the three and its socket refuses.
+
+| State before | Event | State after | What the client receives |
+|---|---|---|---|
+| Running | the hub writes a command and the session reads it | Running | the session's answer, in command order |
+| Running | `close` without `now` | Closing | the turn in flight finishes; every command read gets exactly one answer |
+| Closing | the session ends a command it read without answering | Exited | one `closing` for it |
+| Running | the session shuts one relayed connection while running on | Running | `stream_closed` after every line the session sent; each command it left unanswered gets one `indeterminate`; the kept subscription is dropped, so the next command is `not_subscribed` |
+| Running or Closing | the process dies with none of `fiber_exited`, `rewound` or `moved` ending the log | Crashed | each sent, unanswered command gets one `indeterminate` and is never delivered again; queued commands pass on |
+| Closing | the log ends in `fiber_exited` | Exited | each sent, unanswered command goes once to the resumed session, in read order |
+| Exited | the hub resumes the session | Resumed | the resumed session's answer, or one `closing` when it ends without answering |
+| Running | an accepted `rewind` or `change_workspace` names the next session | Moved or Rewound | nothing for the commands left behind; the transition's own acknowledgement answered them. A child that fails to start at move time is retried once when the old process exits: the relay-end follow and the feed callback share one claim, so together they make at most one attempt, even when that attempt fails |
+| Moved or Rewound | the recorded child runs | Resumed | the child runs in place of the old; the old process releases its lock before the workspace is deleted |
+| Running or Closing | SIGTERM arrives while an MCP server starts | Crashed, then shutdown | the hub reaches the shutdown terminal state with no session log left behind |
+| Running or Closing | the hub shuts down | shutdown | a command in the finish window is answered before the session exits, or never sent after teardown |
+| — | the connection ends before `hub_hello` | — | the client reconnects; no command completes |
 - **A session that closes a relayed connection ends that subscription.** When
   a running session closes the connection the hub relays for a client, the hub
   sends that client `stream_closed` (`docs/events.md`) after every line the

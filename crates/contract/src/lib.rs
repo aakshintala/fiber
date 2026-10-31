@@ -7,6 +7,11 @@
 //! pure conversions of its own values, such as a wall time to milliseconds or
 //! to a UTC date.
 
+/// Environment marker set beside the hub's session environment snapshot.
+/// Its presence tells downstream session code that the hub spawned this
+/// process.
+pub const HUB_SESSION_MARKER: &str = "FIBER_HUB_SESSION";
+
 pub mod clock;
 mod codes;
 pub mod commands;
