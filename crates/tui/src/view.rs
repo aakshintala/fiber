@@ -379,9 +379,9 @@ fn render_frame(
     }
     let mut bottom = area.bottom();
     // The input box's top-edge row, once it draws; the `/` and `@`
-    // overlay sits above it.
+    // overlay sits above it. The input box draws the rule, the row and
+    // the lines, owning the bottom accounting below them.
     let mut box_top = bottom;
-    status_rows::draw_status(app, area, buf, &mut bottom, &mut targets);
     if let Some(panel) = app.panel() {
         bottom = request::draw_noted(app, &panel, area, bottom, buf, &mut targets);
     }
@@ -670,7 +670,9 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     // A shown panel wins over the offer: the panel takes the keys, so a
     // form's caret takes the cursor.
     if let Some(panel) = app.panel() {
-        return request::caret(&panel, area, status_rows::input_bottom(app, area));
+        // The approval draws from the column's bottom: no status line
+        // draws under it, so the caret shares that bottom.
+        return request::caret(&panel, area, area.bottom());
     }
     // The offer hides the draft's cursor while it swaps in for the
     // conversation.
@@ -688,9 +690,9 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         };
     }
     let (below, col) = input_box::cursor_row(app, area.width, usize::from(area.height));
-    let y = status_rows::input_bottom(app, area)
-        .checked_sub(below)
-        .filter(|y| *y >= area.y)?;
+    // The box sits on the column's bottom with the kept status lines
+    // inside it, so the caret counts up from there.
+    let y = area.bottom().checked_sub(below).filter(|y| *y >= area.y)?;
     let x = area.x.saturating_add(col.min(area.width.saturating_sub(1)));
     Some(Position::new(x, y))
 }

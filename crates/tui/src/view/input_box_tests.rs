@@ -1701,3 +1701,121 @@ fn the_status_row_roles() {
     let x = u16::try_from(cell(&bar)).expect("the bar");
     assert_eq!(buf[(x, y)].fg, Role::Info.color(), "bar fill");
 }
+
+/// A renderer filling `slots` with `script`, installed on `app`.
+fn slot_app(
+    app: &mut App,
+    slots: &[&str],
+    script: crate::ext::tests::SlotScript,
+) -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use std::rc::Rc;
+    let fake = Rc::new(crate::ext::tests::SlotRenderer::filling(slots, script));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    fake
+}
+
+/// The input_status slot draws the row: a replacement's line in place
+/// of the built-in row, with the rule staying above it
+/// (`docs/tui.md`, "Extension seams").
+#[test]
+fn input_status_replacement_draws_its_line_for_the_row() {
+    use crate::ext::tests::{SlotScript, raw};
+    let mut app = full(100, 30);
+    slot_app(
+        &mut app,
+        &["input_status"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    );
+    let shown = screen(&app, 100, 30);
+    let at = rule_row(&shown);
+    let row = shown.lines().nth(at + 1).expect("a row under the rule");
+    assert!(row.contains("custom"), "the replacement line shows: {row}");
+    assert!(!row.contains("test/model"), "the built-in row goes: {row}");
+}
+
+/// The input_status slot drops further lines: a replacement owns
+/// exactly one row (`docs/tui.md`, "Extension seams").
+#[test]
+fn input_status_replacement_drops_further_lines() {
+    use crate::ext::tests::{SlotScript, raw};
+    let mut app = full(100, 30);
+    slot_app(
+        &mut app,
+        &["input_status"],
+        SlotScript::Replace(vec![vec![raw("first")], vec![raw("second")]]),
+    );
+    let shown = screen(&app, 100, 30);
+    assert!(shown.contains("first"), "the first line shows");
+    assert!(!shown.contains("second"), "further lines drop");
+}
+
+/// An empty input_status replacement leaves the row blank: the rule
+/// stays, the built-in figures go, and the row keeps its row
+/// (`docs/tui.md`, "Extension seams").
+#[test]
+fn input_status_empty_replacement_leaves_the_row_blank() {
+    use crate::ext::tests::SlotScript;
+    let mut app = full(100, 30);
+    let plain = screen(&full(100, 30), 100, 30);
+    slot_app(&mut app, &["input_status"], SlotScript::Replace(vec![]));
+    let shown = screen(&app, 100, 30);
+    // The rule stays on its row.
+    let at = rule_row(&shown);
+    assert_eq!(at, rule_row(&plain), "the rule keeps its row");
+    // The row under it is blank but present.
+    let row = shown.lines().nth(at + 1).expect("a row under the rule");
+    let blank: String = row
+        .chars()
+        .filter(|cell| !matches!(cell, ' ' | '▌'))
+        .collect();
+    assert!(blank.is_empty(), "the row reads blank: {row:?}");
+    assert!(!shown.contains("test/model"), "the built-in row goes");
+}
+
+/// Neither slot runs while the input box itself is not built in: an
+/// open approval panel draws instead of the box, so no replacement
+/// paints and the rule never draws (`docs/tui.md`, "Extension seams").
+#[test]
+fn no_slot_runs_while_the_approval_panel_replaces_the_box() {
+    use crate::ext::tests::{SlotScript, raw};
+    let mut app = typed(100, 30, "hi");
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+    ));
+    assert!(app.panel().is_some());
+    let fake = slot_app(
+        &mut app,
+        &["input_status", "status_rows"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    );
+    let shown = screen(&app, 100, 30);
+    assert!(fake.calls.borrow().is_empty(), "neither slot runs");
+    assert!(!shown.contains("custom"), "no replacement paints");
+}
+
+/// The status_rows slot draws the line: a replacement's lines in place
+/// of the kept built-in rows under the status row, with no built-in
+/// target (`docs/tui.md`, "Extension seams").
+#[test]
+fn status_rows_replacement_draws_its_lines_under_the_row() {
+    use crate::ext::tests::{SlotScript, raw};
+    let mut app = full(100, 30);
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    slot_app(
+        &mut app,
+        &["status_rows"],
+        SlotScript::Replace(vec![vec![raw("custom line")]]),
+    );
+    let shown = screen(&app, 100, 30);
+    let at = rule_row(&shown);
+    let under: Vec<&str> = shown.lines().skip(at + 2).collect();
+    assert!(
+        under.iter().any(|row| row.contains("custom line")),
+        "the replacement line shows under the row"
+    );
+    assert!(!shown.contains("cache"), "the built-in line goes: {shown}");
+}

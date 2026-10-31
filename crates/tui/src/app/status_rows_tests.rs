@@ -120,6 +120,50 @@ fn waiting(session: &str) -> Line {
     )
 }
 
+/// The moved segments leave the status line: the working directory, the
+/// model and thinking level, the permission mode and the context bar
+/// draw in the input box's status row now, so no status-line row
+/// carries them at any width (`docs/tui.md`, "The input box").
+#[test]
+fn the_moved_segments_leave_the_status_line() {
+    let mut app = attached(60, 12);
+    app.on_line(session_line(
+        SESSION,
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "test/model", "context_window": 1_000_000,
+            "trigger_at": 400_000, "thinking": "high",
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    ));
+    app.on_line(live(
+        SESSION,
+        "one",
+        serde_json::json!({"context": {"tokens": 268_000, "window": 1_000_000}}),
+    ));
+    for width in [20u16, 60, 200] {
+        let rows = crate::view::status_rows::status(&app, width);
+        let text = rows
+            .iter()
+            .map(|row| row.line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for dropped in ["test/model", "high", "auto", "ctx", "268", "/w"] {
+            assert!(
+                !text.contains(dropped),
+                "no {dropped} in the status line at {width}: {text}"
+            );
+        }
+        assert!(
+            rows.iter()
+                .flat_map(|row| row.spots.iter())
+                .all(|(_, _, spot)| !matches!(spot, Spot::Model | Spot::Context)),
+            "no row target opens the picker or the breakdown at {width}"
+        );
+    }
+}
+
 /// An `extension_ui` widget's lines.
 fn widget(extension: &str, name: &str, lines: &[&str]) -> Line {
     session_line(
@@ -178,19 +222,28 @@ fn delegates_shed_before_status_rows() {
 }
 
 #[test]
-fn only_the_box_chrome_counts_outside_the_narrow_layout() {
+fn only_the_box_chrome_counts_with_the_panel_shown() {
     // Wide, with the panel drawn: only the input box's rule and status
-    // row count below the conversation.
+    // row count below the conversation; the cards carry the figures.
     let wide = attached(200, 40);
     assert!(!wide.chrome().layout().is_some_and(|layout| layout.narrow));
     assert_eq!(wide.narrow_fit(), None);
     assert_eq!(wide.narrow_rows(wide.below_rows()), 2);
-    // Narrow, with the panel hidden by the person.
+}
+
+#[test]
+fn the_hidden_panel_keeps_its_status_line_inside_the_box() {
+    // Wide with the panel hidden by the person: the status line draws
+    // inside the input box under its status row, so its rows count
+    // below the conversation past the rule and the row.
     let mut hidden = attached(100, 30);
     hidden.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
-    assert!(!hidden.chrome().layout().is_some_and(|layout| layout.narrow));
+    let layout = hidden.chrome().layout().expect("a laid-out session");
+    assert!(!layout.narrow);
     assert_eq!(hidden.narrow_fit(), None);
-    assert_eq!(hidden.narrow_rows(hidden.below_rows()), 2);
+    let lines = crate::view::status_rows::status(&hidden, layout.column.width).len();
+    assert_eq!(hidden.narrow_rows(hidden.below_rows()), 2 + lines);
+    assert!(lines > 0, "the fixture keeps a status row to move");
 }
 
 #[test]

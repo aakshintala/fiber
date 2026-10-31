@@ -10,6 +10,7 @@ use super::panel::{PERMISSION_MODE, bar_spans, short_tokens};
 use super::status_rows::{Joined, Segment, StatusRow, cut_row, push_segment};
 use crate::app::App;
 use crate::app::panel::Spot;
+use crate::ext::{Context, Input, InputStatus, RawSpan, SlotDraw};
 use crate::format;
 use crate::mouse::{Target, TargetId};
 use crate::surface;
@@ -66,7 +67,10 @@ pub(super) fn draw(
     let chrome = usize::from(bottom.saturating_sub(area.y)) >= rows.len() + usize::from(fits) + 2;
     let below_box = *bottom;
     if chrome {
-        put_status_row(app, area, bottom, buf, targets);
+        // The status lines sit under the status row, on the slab with
+        // no panel tint; then the row through its slot, then the rule.
+        super::status_rows::paint(app, area, buf, bottom, targets);
+        paint_row(app, area, bottom, buf, targets);
         put_rule(area, bottom, buf);
     }
     let below = *bottom;
@@ -323,30 +327,24 @@ fn status_right(app: &App) -> Joined {
     joined
 }
 
-/// Draws the input box's status row on the row above `bottom`: the
-/// working directory and the permission mode on the left; the model,
-/// the thinking level and the ctx segment right-aligned, ending one
-/// column short of the slab's edge, with at least two columns between
-/// the sides. Too wide, the working directory is cut from the left
-/// first, then the left side is cut at its right end; the right side
-/// is cut only when the slab is narrower than it, at the slab's right
-/// edge (`docs/tui.md`, "The input box"). Moves `bottom` above it.
-fn put_status_row(
-    app: &App,
-    area: Rect,
-    bottom: &mut u16,
-    buf: &mut Buffer,
-    targets: &mut Vec<Target>,
-) {
-    let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
-        return;
-    };
-    let start = area.x.saturating_add(1);
-    let end = area.right().saturating_sub(1);
-    let avail = usize::from(end.saturating_sub(start));
-    if avail == 0 {
-        return;
-    }
+/// The status row's laid sides at `avail` columns: the cut left and
+/// right rows with each side's drawn width. Shared by the built-in
+/// paint and the extension's view of it, so both cut the same way.
+struct RowSides {
+    /// The cut left side.
+    left: StatusRow,
+    /// The cut right side.
+    right: StatusRow,
+    /// The left side's drawn width in cells.
+    lw: usize,
+    /// The right side's drawn width in cells.
+    right_w: usize,
+}
+
+/// Lays the status row's sides in `room` columns: the working directory
+/// cut from the left first, then the left side at its right end; the
+/// right side only when the slab is narrower than it.
+fn row_sides(app: &App, avail: usize) -> RowSides {
     let workspace = app
         .panel_state()
         .status()
@@ -390,7 +388,44 @@ fn put_status_row(
         let lw: usize = left.line.width();
         (left, cut_row(right, rw.saturating_add(1)), lw)
     };
-    let right_w = rw.min(avail);
+    RowSides {
+        left,
+        right,
+        lw,
+        right_w: rw.min(avail),
+    }
+}
+
+/// Draws the input box's status row on the row above `bottom`: the
+/// working directory and the permission mode on the left; the model,
+/// the thinking level and the ctx segment right-aligned, ending one
+/// column short of the slab's edge, with at least two columns between
+/// the sides. Too wide, the working directory is cut from the left
+/// first, then the left side is cut at its right end; the right side
+/// is cut only when the slab is narrower than it, at the slab's right
+/// edge (`docs/tui.md`, "The input box"). Moves `bottom` above it.
+fn put_status_row(
+    app: &App,
+    area: Rect,
+    bottom: &mut u16,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) {
+    let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
+        return;
+    };
+    let start = area.x.saturating_add(1);
+    let end = area.right().saturating_sub(1);
+    let avail = usize::from(end.saturating_sub(start));
+    if avail == 0 {
+        return;
+    }
+    let RowSides {
+        left,
+        right,
+        lw,
+        right_w,
+    } = row_sides(app, avail);
     let right_x = end.saturating_sub(u16::try_from(right_w).unwrap_or(u16::MAX));
     buf.set_line(start, y, &left.line, u16::try_from(lw).unwrap_or(u16::MAX));
     buf.set_line(
@@ -412,6 +447,87 @@ fn put_status_row(
             rect: Rect::new(right_x.saturating_add(at), y, wide, 1),
         });
     }
+}
+
+/// The status row's renderer input: the same figures the row draws,
+/// folded the way its sides read them.
+fn row_input(app: &App, flat: bool) -> InputStatus<'_> {
+    let panel = app.panel_state();
+    let status = panel.status();
+    let window = panel.window().filter(|window| *window > 0);
+    InputStatus {
+        workspace: status.map(|status| status.workspace.as_str()),
+        mode: PERMISSION_MODE,
+        model: panel
+            .model()
+            .or_else(|| status.map(|status| status.model.as_str())),
+        thinking: panel.thinking(),
+        context: window.and_then(|window| {
+            status
+                .and_then(|status| status.context.as_ref())
+                .map(|context| Context {
+                    tokens: context.tokens,
+                    window,
+                })
+        }),
+        flat,
+    }
+}
+
+/// The built-in status row as extension spans: the laid sides joined
+/// into one span line, the gap between them blank. The paint below
+/// draws it; the renderer sees the same cut.
+fn row_builtin_spans(app: &App, width: u16) -> Vec<Vec<RawSpan>> {
+    let avail = usize::from(width.saturating_sub(2));
+    if avail == 0 {
+        return Vec::new();
+    }
+    let RowSides {
+        left,
+        right,
+        lw,
+        right_w,
+    } = row_sides(app, avail);
+    let mut spans = left.line.spans;
+    spans.extend(std::iter::repeat_n(
+        Span::raw(" ".to_owned()),
+        avail.saturating_sub(lw).saturating_sub(right_w),
+    ));
+    spans.extend(right.line.spans);
+    vec![crate::ext::spans::from_ratatui(&spans)]
+}
+
+/// Draws the input box's status row through its slot: a replacement's
+/// first line over the row's columns, further lines dropped; an empty
+/// replacement leaves the row blank. With no replacement the built-in
+/// row draws with its targets. Moves `bottom` above the row.
+fn paint_row(app: &App, area: Rect, bottom: &mut u16, buf: &mut Buffer, targets: &mut Vec<Target>) {
+    let bound = super::notice_rows::frame_bound(app);
+    let folded = row_input(app, bound.flat);
+    let builtin = &|_: &Input<'_>, width: u16| row_builtin_spans(app, width);
+    let Some(fitted) = bound.slot_lines(
+        SlotDraw::Paint,
+        "input_status",
+        &Input::InputStatus(folded),
+        area.width,
+        builtin,
+    ) else {
+        put_status_row(app, area, bottom, buf, targets);
+        return;
+    };
+    let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
+        return;
+    };
+    // An empty replacement leaves the row blank; the rule stays.
+    *bottom = y;
+    let Some(first) = fitted.first() else {
+        return;
+    };
+    // A replacement owns the row with no target in this lane: the
+    // whole-row Session-status target waits on its spot.
+    let x = area.x.saturating_add(1);
+    let wide = area.width.saturating_sub(1);
+    buf.set_line(x, y, &first.line, wide);
 }
 
 /// Draws the rule above the status row: `─` in `rule` from the stripe's
@@ -596,7 +712,7 @@ pub(super) fn cursor_row(app: &App, width: u16, room: usize) -> (u16, u16) {
     };
     // The rule and the status row sit under the draft; the kept status
     // lines sit under them.
-    let chrome = 2usize.saturating_add(super::status_rows::kept(app));
+    let chrome = 2usize.saturating_add(super::status_rows::kept(app, width));
     (
         to_u16(
             rows.len()
