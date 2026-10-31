@@ -40,9 +40,10 @@ fn dim_row(text: String) -> Row {
 }
 
 /// The filter row: "Type to search" dim until something is typed, then
-/// "›" dim and the query bold, with a dim block cursor either way.
+/// "›" dim and the query bold, with the cursor after it either way.
 fn filter_row(view: &PickerView) -> Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
+    let (_, cursor) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
     let mut spans = if view.filter.is_empty() {
         vec![Span::styled("Type to search ".to_owned(), dim)]
     } else {
@@ -54,7 +55,7 @@ fn filter_row(view: &PickerView) -> Row {
             ),
         ]
     };
-    spans.push(Span::styled("█".to_owned(), dim));
+    spans.push(Span::styled("█".to_owned(), cursor));
     Row {
         spans,
         right: Vec::new(),

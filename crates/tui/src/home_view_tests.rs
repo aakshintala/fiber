@@ -3223,10 +3223,20 @@ fn the_typed_picker_row_styles() {
         Some(crate::theme::Role::Info.color()),
         "{shown}"
     );
-    // Its cursor is dim.
+    // Its cursor is a block in the text colour on the slab, with no dim.
     let cursor = col(typed, "█");
+    assert_eq!(
+        buf[(cursor, typed)].style().fg,
+        Some(crate::theme::Role::Text.color()),
+        "{shown}"
+    );
+    assert_eq!(
+        buf[(cursor, typed)].bg,
+        crate::theme::Role::Surface.color(),
+        "{shown}"
+    );
     assert!(
-        buf[(cursor, typed)]
+        !buf[(cursor, typed)]
             .style()
             .add_modifier
             .contains(Modifier::DIM),

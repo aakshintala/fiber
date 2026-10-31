@@ -71,13 +71,13 @@ fn every_cell_of_the_box_rows_is_surface() {
 }
 
 #[test]
-fn the_prompt_is_info_and_the_cursor_is_a_dim_block() {
+fn the_prompt_is_info_and_the_cursor_is_a_text_coloured_block() {
     let app = typed(80, 12, "hi");
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    // The prompt in `info`, the draft after it, and the cursor as a dim
-    // block at the caret (`docs/tui.md`, "The input box").
+    // The prompt in `info`, the draft after it, and the cursor as a block
+    // in the text colour at the caret (`docs/tui.md`, "The input box").
     for x in [2, 3] {
         assert_eq!(
             buf[(x, 10)].style().fg,
@@ -87,8 +87,73 @@ fn the_prompt_is_info_and_the_cursor_is_a_dim_block() {
     }
     assert_eq!(buf[(2, 10)].symbol(), "›");
     assert_eq!(buf[(6, 10)].symbol(), "█");
-    assert_eq!(buf[(6, 10)].style().fg, Some(Role::Muted.color()));
+    assert_eq!(buf[(6, 10)].style().fg, Some(Role::Text.color()));
     assert_eq!(buf[(6, 10)].bg, Role::Surface.color());
+    assert!(
+        !buf[(6, 10)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "no dim marks the cursor"
+    );
+}
+
+#[test]
+fn the_cursor_reverses_the_covered_character() {
+    let mut app = typed(80, 12, "hi");
+    app.on_edit(crate::keys::Edit::Left);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    // The caret on `i`: the covered character stays, in the slab's
+    // colour on the text colour, with no dim (`docs/tui.md`, "The input
+    // box").
+    assert_eq!(buf[(5, 10)].symbol(), "i");
+    assert_eq!(buf[(5, 10)].style().fg, Some(Role::Surface.color()));
+    assert_eq!(buf[(5, 10)].bg, Role::Text.color());
+    assert!(
+        !buf[(5, 10)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "no dim marks the cursor"
+    );
+}
+
+#[test]
+fn the_cursor_draws_over_a_backward_selection() {
+    use crate::keys::{Button, Mouse, MouseKind};
+
+    let mut app = typed(80, 12, "hi");
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    // Press past the draft's end, then drag back onto `h`: a backward
+    // selection covering the caret's cell.
+    app.on_select(
+        &Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col: 6,
+            row: 10,
+        },
+        &targets,
+    );
+    app.on_select(
+        &Mouse {
+            kind: MouseKind::Drag(Button::Left),
+            col: 4,
+            row: 10,
+        },
+        &targets,
+    );
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    // The caret's cell draws last, over the selection: the covered `h`
+    // in the slab's colour on the text colour (`docs/tui.md`, "The input
+    // box").
+    assert_eq!(buf[(4, 10)].symbol(), "h");
+    assert_eq!(buf[(4, 10)].style().fg, Some(Role::Surface.color()));
+    assert_eq!(buf[(4, 10)].bg, Role::Text.color());
 }
 
 #[test]
@@ -118,7 +183,8 @@ fn the_box_fill_covers_empty_and_wrapped_drafts() {
             assert_eq!(buf[(x, top)].fg, edge, "top edge at {x}");
             assert_eq!(buf[(x, bottom)].fg, edge, "bottom edge at {x}");
         }
-        // The cursor marks the caret on the draft's last row.
+        // The cursor marks the caret on the draft's last row: past the
+        // end it is a block in the text colour on the slab.
         let inner = crate::surface::inset(80);
         let shown = app.input().rows(inner);
         let (cursor_row, cursor_col) = app.input().cursor(inner);
@@ -126,6 +192,12 @@ fn the_box_fill_covers_empty_and_wrapped_drafts() {
         let y = bottom - 1;
         let x = 2 + cursor_col;
         assert_eq!(buf[(x, y)].symbol(), "█", "draft {draft:?}");
+        assert_eq!(
+            buf[(x, y)].style().fg,
+            Some(Role::Text.color()),
+            "draft {draft:?}"
+        );
+        assert_eq!(buf[(x, y)].bg, Role::Surface.color(), "draft {draft:?}");
     }
 }
 
@@ -140,12 +212,14 @@ fn the_cursor_hides_with_search_open() {
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    // Typing goes to the search box: the draft shows without a cursor
+    // Typing goes to the search box: the draft shows without a cursor,
+    // and the bar's block draws in the text colour with no dim
     // (`docs/tui.md`, "The input box").
     for cell in buf.content.iter() {
         if cell.symbol() == "█" {
+            assert_eq!(cell.fg, Role::Text.color(), "only the bar's block shows");
             assert!(
-                cell.modifier.contains(ratatui::style::Modifier::DIM),
+                !cell.modifier.contains(ratatui::style::Modifier::DIM),
                 "only the bar's block shows"
             );
         }
@@ -548,9 +622,10 @@ fn no_color_draws_the_editing_hint_inside_the_sides() {
         x = x.saturating_add(wide.max(1));
     }
     assert_eq!(x, 79);
-    // The draft, the caret and both sides keep their cells.
+    // The draft, the caret and both sides keep their cells: the caret
+    // keeps its covered `r`, drawn by the cursor.
     assert_eq!(buf[(1, y)].symbol(), "›");
-    assert_eq!(buf[(16, y)].symbol(), "█");
+    assert_eq!(buf[(16, y)].symbol(), "r");
     assert_eq!(buf[(0, y)].symbol(), "│");
     assert_eq!(buf[(79, y)].symbol(), "│");
 }

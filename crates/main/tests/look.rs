@@ -1819,9 +1819,8 @@ fn needle_start(screen: &Grid, needle: &str) -> Option<(u16, u16)> {
             .filter(|x| {
                 want.iter().enumerate().all(|(dx, cell)| {
                     u16::try_from(dx).is_ok_and(|dx| {
-                        x.checked_add(dx).is_some_and(|xx| {
-                            xx < 160 && screen.cell(xx, y).symbol == *cell
-                        })
+                        x.checked_add(dx)
+                            .is_some_and(|xx| xx < 160 && screen.cell(xx, y).symbol == *cell)
                     })
                 })
             })
@@ -1877,7 +1876,11 @@ fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour
     run.write(b"\x1b[D\x1b[D");
     let covered = run.wait_screen("the cursor on b", |screen| {
         needle_start(screen, "abc").is_some_and(|(x, y)| {
-            let (a, b, c) = (screen.cell(x, y), screen.cell(x + 1, y), screen.cell(x + 2, y));
+            let (a, b, c) = (
+                screen.cell(x, y),
+                screen.cell(x + 1, y),
+                screen.cell(x + 2, y),
+            );
             a.symbol == "a"
                 && a.bg == surface
                 && b.symbol == "b"
@@ -1906,5 +1909,15 @@ fn reversed_cursor_look(config: serde_json::Value, surface: Colour, text: Colour
     assert_eq!(a.bg, surface, "the neighbours keep the slab");
     assert!(!b.dim, "no dim marks the cursor");
     assert!(!b.inverse, "no reverse marks the cursor");
-    quit(run);
+    // One Ctrl+C clears the draft, and the usual sequence quits from
+    // the empty box.
+    run.write(b"\x03");
+    run.wait_screen("the cleared draft", |grid| {
+        !grid.rows.iter().any(|row| row.contains("abc"))
+    });
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored terminal", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    assert_eq!(run.wait().status.code(), Some(0));
 }

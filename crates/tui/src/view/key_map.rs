@@ -12,6 +12,7 @@ use crate::bindings::BINDINGS;
 use crate::format::{width, wrap, wrap_joined};
 use crate::keymap::{self, Columns};
 use crate::mouse::{Target, TargetId};
+use crate::theme::Role;
 use crate::view::overlay::{self, Place, Row};
 
 /// The dim lines under the title: what the map lists, and its counts.
@@ -71,8 +72,9 @@ fn tabs_row(tab: usize) -> Row {
 }
 
 /// The search line: what it matches, the prompt, the typed query and its
-/// caret.
+/// cursor after it.
 fn search_row(query: &str) -> Row {
+    let (_, style) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
     Row {
         spans: vec![
             Span::styled(
@@ -81,7 +83,7 @@ fn search_row(query: &str) -> Row {
             ),
             Span::styled("› ".to_owned(), Style::new().add_modifier(Modifier::DIM)),
             Span::styled(query.to_owned(), Style::new().add_modifier(Modifier::BOLD)),
-            Span::styled("█".to_owned(), Style::new().add_modifier(Modifier::DIM)),
+            Span::styled("█".to_owned(), style),
         ],
         right: Vec::new(),
         targets: Vec::new(),
