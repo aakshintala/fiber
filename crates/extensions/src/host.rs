@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use config::Config;
 use contract::clock::Clock;
-use contract::diag::{DebugLog, ProviderRequest, Purpose};
+use contract::diag::{DebugLog, HttpRequest as DiagnosticRequest, ProviderPurpose};
 use contract::files::PathLock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
@@ -607,8 +607,8 @@ pub(crate) fn perform(
     execute(request, None)
 }
 
-/// As [`perform`], observed as one `provider_request` line: the provider's
-/// name, the purpose, which attempt (always 1: Lua makes no retry), the
+/// As [`perform`], observed as one `http_request` line: the identity,
+/// the purpose, which attempt (always 1: Lua makes no retry), the
 /// body lengths and the send-to-headers and send-to-end milestones. A
 /// response that never came leaves status and headers absent; a body read
 /// that failed keeps the status, the headers and the bytes read so far.
@@ -621,14 +621,31 @@ pub(crate) fn perform_observed(
     execute(request, Some(&observation))
 }
 
-/// What one observed Lua HTTP request records: the provider's registered
-/// name, why the request was made, and where the line goes with what
-/// clock stamps it. Owned and immutable: snapshotted before admission and
-/// carried to the worker, never read from shared or mutable state. No URL,
-/// credential, body, header or model is held.
+/// The request identity and its purpose, paired so a provider purpose
+/// cannot be assigned to an extension identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HttpAttribution {
+    /// A provider function's request.
+    Provider {
+        /// The provider's registered name.
+        provider: String,
+        /// The provider function's purpose.
+        purpose: ProviderPurpose,
+    },
+    /// A request outside a provider function.
+    Extension {
+        /// The extension's registered name.
+        extension: String,
+    },
+}
+
+/// What one observed Lua HTTP request records: its paired identity and
+/// purpose, and where the line goes with what clock stamps it. Owned and
+/// immutable: snapshotted before admission and carried to the worker, never
+/// read from shared or mutable state. No URL, credential, body, header or
+/// model is held.
 pub(crate) struct HttpObservation {
-    pub(crate) provider: String,
-    pub(crate) purpose: Purpose,
+    pub(crate) attribution: HttpAttribution,
     pub(crate) debug: Arc<dyn DebugLog>,
     pub(crate) clock: Arc<dyn Clock>,
 }
@@ -700,7 +717,7 @@ fn execute(
                 && let (Some(o), Some(sent)) = (observation, sent)
             {
                 let end = o.clock.now();
-                write_request(o, None, 1, request_bytes, 0, None, sent, end);
+                write_request(o, None, request_bytes, 0, None, sent, end);
             }
             return Err(transport(e));
         }
@@ -724,7 +741,6 @@ fn execute(
         write_request(
             o,
             Some(status),
-            1,
             request_bytes,
             response_bytes,
             headers_at.map(|at| ms_since(sent, at)),
@@ -741,9 +757,9 @@ fn execute(
     }
 }
 
-/// Writes the one `provider_request` line for an observed Lua request:
-/// the provider's registered name and the eligible purpose, never a URL.
-/// A Lua invocation makes no retry, so every line's attempt is 1.
+/// Writes the one `http_request` line for an observed Lua request:
+/// the recorded identity and the eligible purpose, never a URL. A Lua
+/// invocation makes no retry, so every line's attempt is 1.
 #[allow(
     clippy::too_many_arguments,
     reason = "one line's fields, each stamped at its own milestone"
@@ -751,30 +767,30 @@ fn execute(
 fn write_request(
     observation: &HttpObservation,
     status: Option<u16>,
-    attempt: u32,
     request_bytes: u64,
     response_bytes: u64,
     headers_ms: Option<u64>,
     sent: std::time::Instant,
     end: std::time::Instant,
 ) {
-    observation.debug.provider_request(&ProviderRequest {
-        provider: observation.provider.clone(),
-        model: None,
-        purpose: observation.purpose,
-        host: None,
-        path: None,
-        status,
-        attempt,
-        request_bytes,
-        response_bytes,
-        headers_ms,
-        first_token_ms: None,
-        total_ms: ms_since(sent, end),
-        prefix_hashes: None,
-        cache_read: None,
-        cache_write: None,
-    });
+    // Exactly one identity is set: the snapshot recorded a provider
+    // purpose with the provider's name, or any other target with the
+    // extension's name. The enum makes the match total: no silent
+    // preference, no unwritten line.
+    let mut line = match &observation.attribution {
+        HttpAttribution::Extension { extension } => {
+            DiagnosticRequest::for_extension(extension.clone())
+        }
+        HttpAttribution::Provider { provider, purpose } => {
+            DiagnosticRequest::for_provider(provider.clone(), *purpose)
+        }
+    };
+    line.status = status;
+    line.request_bytes = request_bytes;
+    line.response_bytes = response_bytes;
+    line.headers_ms = headers_ms;
+    line.total_ms = ms_since(sent, end);
+    observation.debug.http_request(&line);
 }
 
 /// The body's length in bytes: lengths past `u64::MAX` saturate rather

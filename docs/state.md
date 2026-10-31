@@ -235,11 +235,11 @@ for, such as a startup error, happen before anyone would think to turn a log
 on. Each process writes its own file, so every file has one writer, as a
 session log does: the hub writes `logs/hub.log`, and any other process that
 has something to record writes `logs/<kind>-<id>.log`, where `<kind>` is
-`session`, `ask` or `tui` and `<id>` its session id once its session log
-exists, or its process id until then, except a signal before Fiber starts writing `fiber_started`, which stays pid-named with no `session_id`.
+`session`, `ask`, `tui` or `cli` and `<id>` its session id once its session log
+exists, or its process id until then, except a signal before Fiber starts writing `fiber_started`, which stays pid-named with no `session_id`. A `cli` process, a Fiber command that runs once with no session such as `fiber mcp login`, is always named by its process id, and its lines carry no `session_id`.
 
 Each line is one JSON object: `ts`, `level` (`error`, `warn`, `info` or
-`debug`), `process` (`hub`, `session`, `ask` or `tui`), `session_id` when one
+`debug`), `process` (`hub`, `session`, `ask`, `tui` or `cli`), `session_id` when one
 is known, `code` and `message`, one sentence, and on a `debug` line `data`,
 an object of named values. For a failure, `code` is its code from
 `docs/errors.md`. For one of the hub's operations it is the operation's name.
@@ -252,7 +252,8 @@ and `info` lines below. At `"debug"` it also writes `debug` lines; `error`,
 `warn` and `info` lines keep their shape and carry no `data`. A process reads
 the level when it starts, so a changed value reaches new processes only. A
 debug line holds no credential, token, header value, prompt, model text, tool
-argument or configuration value.
+argument or configuration value. A websocket connection to a hub is not a
+request and writes no `http_request` line.
 
 What is recorded:
 
@@ -272,7 +273,7 @@ What is recorded:
   `device_paired` and `device_revoked`, naming the device and the client that
   acted; `session_started` and `session_resumed`, naming the session and the
   device that asked.
-- **At `debug`, a native model call's request:** one `provider_request`
+- **At `debug`, a native model call's request:** one `http_request`
   line when the call ends, with `purpose` `model_call`. `data` holds
   `provider`, `model`, `host` (the authority without userinfo), `path`
   (no query string or fragment, percent-decoded), `status` when a response
@@ -280,7 +281,7 @@ What is recorded:
   read, and `headers_ms`, `first_token_ms` and `total_ms`, whole
   milliseconds from the send. A retried call writes one line per attempt;
   a request never sent writes none.
-- **At `debug`, a Lua provider's HTTP requests:** one `provider_request`
+- **At `debug`, a Lua provider's HTTP requests:** one `http_request`
   line when the request ends, with `purpose` `model_list` for `models()`,
   `quota` for `quota()`, `token_refresh` for `credential()`, and `cost`
   for `cost()`. `data` holds `provider`, the provider's registered name,
@@ -290,20 +291,62 @@ What is recorded:
   body read that fails keeps the status, the headers and the bytes read
   before the failure. A request that validation rejects before sending
   writes no line; one that fails after writes one without `status` or
-  `headers_ms` and with zero response bytes. Only these four purposes
-  record: `sign()`, hooks, commands, timers, tools and the entry script's
-  own requests stay silent. No other field is recorded, and never a host,
-  path, model, URL, query string, credential, header value, body or token,
-  as for every line in `logs/`.
-- **At `debug`, the hub's peak memory:** a `peak_memory` line just before
-  each `hub_stopped`. `data.peak_kib` is the process's peak so far: peak RSS
-  (`VmHWM`) on Linux, and peak physical footprint on macOS
-  (`docs/performance.md`, "Measuring"). A peak that cannot be read writes no
-  line.
-- **At `debug`, a session or ask process's peak memory:** a `peak_memory`
-  line after each turn's `turn_completed` and one more at the process's
-  orderly end. `data.peak_kib` is the process's peak so far, measured the
-  same way. A peak that cannot be read writes no line.
+  `headers_ms` and with zero response bytes. No other field is recorded,
+  and never a host, path, model, URL, query string, credential, header
+  value, body or token, as for every line in `logs/`.
+- **At `debug`, any other Lua `host.http` call:** the rule is where the
+  call is made. Inside a provider function the request records that
+  function's purpose, as above; anywhere else — a hook, command, timer,
+  tool, watcher, search, effects or delegate target, or the entry
+  script — it records one `http_request` line with `purpose` `extension`
+  and the extension's registered name in `extension`, with the same
+  attempt, timing and byte rules and no `host` or `path`. The rule
+  applies to process extensions alike: a process extension's `host.http`
+  is treated as made inside that request's callback, so it records the
+  callback's purpose. `sign()` makes no request and writes none.
+- **At `debug`, what `web_fetch` fetched:** one `http_request` line per
+  actual HTTP request, each redirect hop included, with `purpose`
+  `web_fetch`. `data` holds `status` when a response came, `attempt`
+  (always 1), `request_bytes` 0, `response_bytes` as consumed, and
+  `headers_ms` and `total_ms`, whole milliseconds from that request's
+  send. A refusal or a body read that fails keeps the status and the
+  bytes consumed; a failure after the send but before a response head
+  writes one line without `status` or `headers_ms` and with zero
+  response bytes; a request never sent writes none.
+- **At `debug`, every HTTP request the MCP client makes:** one
+  `http_request` line per POST the transport sends, and one per GET or
+  DELETE it sends, with `purpose` `mcp` — the streamable transport,
+  login, discovery and token refresh alike. `data` holds `status` when a
+  response came, `attempt` (always 1), `request_bytes` as posted,
+  `response_bytes` as consumed, and `headers_ms` and `total_ms`, whole
+  milliseconds from the send. A failure after the send writes one line
+  without `status` or `headers_ms` and with zero response bytes; a
+  request never sent writes none. No other field is recorded, and never
+  a provider, model, host, path, URL, server name, credential, header
+  value or token, as for every line in `logs/`.
+- **At `debug`, an extension release check:** one `http_request` line per
+  actual HTTP request, including each redirect hop, for tag lookups,
+  checksums and binary downloads, with `purpose` `extension_release`.
+  `data` holds `host` (the authority without
+  userinfo) and `path` (no query string or fragment, percent-decoded), a
+  release path holding a tag and an asset name and no secret, plus
+  `status` when a response came, `attempt` (always 1), `request_bytes` 0,
+  `response_bytes` as read, and `headers_ms` and `total_ms`, whole
+  milliseconds from the send. A manifest-declared binary URL omits
+  `path` and keeps `host`, because its path may identify a private asset.
+  Post-send failure and body-read rules are the Lua provider's.
+- **At `debug`, the hub's memory and disk I/O:** a `resources` line just
+  before each `hub_stopped`. `data` holds `peak_kib` and `current_kib`,
+  peak and current memory, and `disk_read_bytes` and `disk_write_bytes`,
+  storage the process has read and written since it started: `VmHWM` and
+  `VmRSS` from `/proc/self/status` plus `read_bytes` and `write_bytes`
+  from `/proc/self/io` on Linux, and the matching `proc_pid_rusage`
+  fields on macOS. All four fields are written together or not at all: a
+  sample any source of which cannot be read writes no line.
+- **At `debug`, a session or ask process's memory and disk I/O:** a
+  `resources` line after each turn's `turn_completed` and one more at the
+  process's orderly end, measured the same way. A sample any source of
+  which cannot be read writes no line.
 - **At `debug`, how long a timed operation takes:** one `op_timing` line
   when it ends, written by the one timer every timed place goes through
   (`log::diag::timed`). `data` holds `op`, the operation's name, and `ms`,
@@ -357,7 +400,7 @@ What is recorded:
   the wait for its ordered completion. The scopes nest instead of adding up: a
   requested handoff holds its note's request and model scopes; a handoff
   whose note a hook writes has neither, and
-  `provider_request`'s network share sits inside `turn.model_call`. Warming
+  `http_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
   no turn scope. Also installed are the six hook chains other
   than the tool hooks: `hook.session_start`, `hook.turn_start`,
@@ -461,7 +504,7 @@ What is recorded:
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic
-lines, its `extension_log`, `provider_request`, `peak_memory` and `op_timing`
+lines, its `extension_log`, `http_request`, `resources` and `op_timing`
 lines, are recorded in `logs/<kind>-<id>.log` beside the session log, never
 in it; a hook that fails in a session, for example, is a `notice` or
 `hook_failed` there (`docs/extensions.md`, "When a hook fails"). Nothing in

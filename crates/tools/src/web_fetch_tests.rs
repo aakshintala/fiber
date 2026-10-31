@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Wake;
+use contract::diag::{DebugLog, HttpRequest, Purpose};
 use contract::shapes::Effect;
 use contract::tool::{Cancel, EffectsError, Output, Tool};
 use fakes::Deadline;
@@ -55,6 +56,11 @@ impl WebFetch {
         self.wrap = Some(wrap);
         self
     }
+
+    fn signaling_headers_received(mut self, signal: mpsc::Sender<()>) -> Self {
+        self.headers_received = Some(signal);
+        self
+    }
 }
 
 fn response(status: u16, content_type: Option<&str>, body: impl Into<Vec<u8>>) -> Response {
@@ -84,28 +90,74 @@ fn redirect(status: u16, location: &str) -> Response {
     }
 }
 
+/// A sink that records every `http_request` line.
+struct Lines {
+    lines: Mutex<Vec<HttpRequest>>,
+}
+
+impl Lines {
+    fn lines(&self) -> Vec<HttpRequest> {
+        self.lines.lock().unwrap().clone()
+    }
+}
+
+impl DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
 struct Rig {
     dir: TempDir,
     clock: Arc<FakeClock>,
     tool: Arc<WebFetch>,
+    lines: Arc<Lines>,
 }
 
 impl Rig {
+    fn observed(dir: &TempDir, clock: &Arc<FakeClock>) -> (Arc<WebFetch>, Arc<Lines>) {
+        let lines = Arc::new(Lines {
+            lines: Mutex::new(Vec::new()),
+        });
+        let tool = Arc::new(
+            WebFetch::new(dir.path().join("artifacts"), clock.clone())
+                .with_proxy(None)
+                .with_diagnostics(lines.clone()),
+        );
+        (tool, lines)
+    }
+
     fn new() -> Self {
         let dir = TempDir::new("fiber-web-fetch");
         let clock = FakeClock::new();
-        let tool =
-            Arc::new(WebFetch::new(dir.path().join("artifacts"), clock.clone()).with_proxy(None));
-        Self { dir, clock, tool }
+        let (tool, lines) = Self::observed(&dir, &clock);
+        Self {
+            dir,
+            clock,
+            tool,
+            lines,
+        }
     }
 
     fn with(self, change: impl FnOnce(WebFetch) -> WebFetch) -> Self {
-        let tool =
-            WebFetch::new(self.dir.path().join("artifacts"), self.clock.clone()).with_proxy(None);
+        // The tool is rebuilt, so the change sees the same shape as a
+        // fresh `new`: proxy fixed, diagnostics installed on this rig's
+        // sink.
+        let tool = WebFetch::new(self.dir.path().join("artifacts"), self.clock.clone())
+            .with_proxy(None)
+            .with_diagnostics(self.lines.clone());
         Self {
             tool: Arc::new(change(tool)),
             ..self
         }
+    }
+
+    fn lines(&self) -> Vec<HttpRequest> {
+        self.lines.lines()
     }
 
     fn artifacts(&self) -> std::path::PathBuf {
@@ -151,6 +203,20 @@ impl Call {
 
 fn code(output: &Output) -> Option<ErrorCode> {
     output.error.as_ref().map(|error| error.code.clone())
+}
+
+/// Asserts the line carries `web_fetch`'s fixed shape: its purpose, no
+/// identity, model, host or path, no request body, and the first attempt.
+#[track_caller]
+fn assert_fixed(line: &HttpRequest) {
+    assert_eq!(line.purpose(), Purpose::WebFetch);
+    assert_eq!(line.identity(), None);
+    assert_eq!(line.model, None);
+    assert_eq!(line.host, None);
+    assert_eq!(line.path, None);
+    assert_eq!(line.request_bytes, 0);
+    assert_eq!(line.attempt, 1);
+    assert_eq!(line.first_token_ms, None);
 }
 
 fn serve(script: impl IntoIterator<Item = Response>) -> ProviderServer {
@@ -752,6 +818,7 @@ fn a_location_header_name_is_matched_without_regard_to_case() {
 
 #[test]
 fn ten_redirects_are_followed_and_the_eleventh_fails() {
+    // docs/tools.md, "Web fetch and web search": ten hops are followed; the eleventh fails.
     let ten: Vec<_> = (1..=10).map(|n| redirect(302, &format!("/{n}"))).collect();
     let server = serve(ten.into_iter().chain([ok("text/plain", "end")]));
     let output = Rig::new().fetch(&format!("{}/0", server.url()));
@@ -773,6 +840,102 @@ fn ten_redirects_are_followed_and_the_eleventh_fails() {
         11,
         "the twelfth request is never sent"
     );
+}
+
+#[test]
+fn a_redirect_chain_writes_one_line_per_hop() {
+    let server = serve([redirect(302, "/there"), ok("text/plain", "arrived")]);
+    // The second hop's response is held, so the clock moves between the
+    // hops: the first line stamps the start, the second the later stamps.
+    server.hold_from(2, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN).left());
+    let rig = Rig::new();
+    let call = rig.start(&format!("{}/here", server.url()));
+    assert!(
+        server.await_requests(2, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "both hops are in flight"
+    );
+    rig.clock.advance_when_parked(
+        Some(rig.clock.origin() + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(5),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    server.release();
+    let output = call.wait();
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request, each redirect hop included.
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        assert_fixed(line);
+        assert!(line.headers_ms.is_some());
+        assert!(line.headers_ms.unwrap() <= line.total_ms);
+    }
+    assert_eq!(lines[0].status, Some(302));
+    assert_eq!(lines[0].response_bytes, 0);
+    assert_eq!(lines[0].headers_ms, Some(0));
+    assert_eq!(lines[0].total_ms, 0);
+    assert_eq!(lines[1].status, Some(200));
+    assert_eq!(
+        lines[1].response_bytes,
+        u64::try_from("arrived".len()).unwrap()
+    );
+    assert_eq!(lines[1].headers_ms, Some(5_000));
+    assert_eq!(lines[1].total_ms, 5_000);
+}
+
+#[test]
+fn a_redirect_limit_keeps_every_hop_then_fails_silent() {
+    // docs/tools.md, "Web fetch and web search": an eleventh redirect is not followed.
+    let eleven: Vec<_> = (1..=11).map(|n| redirect(302, &format!("/{n}"))).collect();
+    let server = serve(eleven.into_iter().chain([ok("text/plain", "never")]));
+    let rig = Rig::new();
+    let output = rig.fetch(&format!("{}/0", server.url()));
+    assert_eq!(code(&output), Some(ErrorCode::HttpError));
+    assert_eq!(
+        server.requests().len(),
+        11,
+        "the twelfth request is never sent"
+    );
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request, each redirect hop included.
+    assert_eq!(lines.len(), 11, "every hop kept its line");
+    for line in &lines {
+        assert_fixed(line);
+        assert_eq!(line.status, Some(302));
+        assert_eq!(line.response_bytes, 0);
+    }
+}
+
+#[test]
+fn a_redirect_to_a_blocked_address_keeps_the_first_line_only() {
+    // docs/tools.md, "Web fetch and web search": each hop refuses link-local addresses.
+    let server = serve([
+        redirect(302, "http://169.254.169.254/"),
+        ok("text/plain", "never"),
+    ]);
+    let rig = Rig::new();
+    let output = rig.fetch(&server.url());
+    assert_eq!(code(&output), Some(ErrorCode::BlockedHost));
+    assert_eq!(server.requests().len(), 1);
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request; a request never sent writes none.
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].status, Some(302));
+}
+
+#[test]
+fn a_redirect_to_an_invalid_target_keeps_the_first_line_only() {
+    // docs/tools.md, "Web fetch and web search": a redirect to an unparseable URL fails.
+    let server = serve([redirect(302, "ftp://example.com/x")]);
+    let rig = Rig::new();
+    let output = rig.fetch(&server.url());
+    assert_eq!(code(&output), Some(ErrorCode::HttpError));
+    assert_eq!(server.requests().len(), 1);
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": one line per actual HTTP request; a request never sent writes none.
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].status, Some(302));
 }
 
 #[test]
@@ -854,6 +1017,7 @@ fn a_name_the_resolver_maps_is_fetched_at_the_address_it_gave() {
 
 #[test]
 fn a_redirect_to_the_metadata_address_is_blocked_before_any_request() {
+    // docs/tools.md, "Web fetch and web search": every redirect hop is checked before connecting.
     for target in [
         "http://169.254.169.254/latest/meta-data/",
         "http://169.254.0.1/",
@@ -940,6 +1104,7 @@ fn one_blocked_address_among_several_blocks_the_name() {
 
 #[test]
 fn a_redirect_to_a_name_that_resolves_to_a_blocked_address_is_blocked() {
+    // docs/tools.md, "Web fetch and web search": every resolved redirect address is checked.
     let server = serve([
         redirect(302, "http://evil.test:9/"),
         ok("text/plain", "never"),
@@ -1015,9 +1180,108 @@ fn a_lookup_with_no_address_is_connection_failed() {
 }
 
 #[test]
+fn a_fetch_without_a_sink_stays_silent_but_still_fetches() {
+    let server = serve([ok("text/plain; charset=utf-8", "hello")]);
+    let dir = TempDir::new("fiber-web-fetch-silent");
+    let clock = FakeClock::new();
+    let tool = WebFetch::new(dir.path().join("artifacts"), clock.clone()).with_proxy(None);
+    let output = tool.run(
+        &arguments(&format!("{}/page", server.url())),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
+}
+
+#[test]
+fn a_blocked_address_writes_no_line() {
+    let rig = Rig::new();
+    let output = rig.fetch("http://169.254.169.254/");
+    assert_eq!(code(&output), Some(ErrorCode::BlockedHost));
+    assert!(rig.lines().is_empty());
+}
+
+#[test]
+fn an_unresolved_name_writes_no_line() {
+    let rig = Rig::new().with(|tool| {
+        tool.resolving_by(Arc::new(|_, _| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no such name",
+            ))
+        }))
+    });
+    let output = rig.fetch("http://missing.test/");
+    assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
+    assert!(rig.lines().is_empty());
+}
+
+#[test]
+fn a_name_with_no_address_writes_no_line() {
+    let rig = Rig::new().with(|tool| tool.resolving_by(Arc::new(|_, _| Ok(Vec::new()))));
+    let output = rig.fetch("http://empty.test/");
+    assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
+    assert!(rig.lines().is_empty());
+}
+
+#[test]
+fn a_call_cancelled_before_it_starts_writes_no_line() {
+    let server = serve([ok("text/plain", "never")]);
+    let rig = Rig::new();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let output = rig
+        .tool
+        .run(&arguments(&server.url()), &cancel, &Recorder::default());
+    assert_eq!(fakes::text_of(&output), "Cancelled and stopped.\n");
+    assert!(server.requests().is_empty());
+    assert!(rig.lines().is_empty());
+}
+
+#[test]
 fn a_refused_connection_is_connection_failed() {
     let output = Rig::new().fetch(&format!("{}/", fakes::refused::url()));
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
+}
+
+#[test]
+fn a_refused_connection_writes_a_line_without_a_response() {
+    let rig = Rig::new();
+    let output = rig.fetch(&format!("{}/", fakes::refused::url()));
+    assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a failure after the send but before a response head writes one line, without status or headers_ms.
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_fixed(line);
+    assert_eq!(line.status, None);
+    assert_eq!(line.headers_ms, None);
+    assert_eq!(line.response_bytes, 0);
+}
+
+#[test]
+fn an_error_status_keeps_its_status_and_prefix_bytes() {
+    let server = serve([Response::status(403, "forbidden")]);
+    let rig = Rig::new();
+    let output = rig.fetch(&server.url());
+    assert_eq!(
+        code(&output),
+        Some(ErrorCode::HttpError),
+        "{}",
+        fakes::text_of(&output)
+    );
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a refusal keeps the status and the bytes consumed.
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_fixed(line);
+    assert_eq!(line.status, Some(403));
+    assert_eq!(
+        line.response_bytes,
+        u64::try_from("forbidden".len()).unwrap()
+    );
+    assert!(line.headers_ms.is_some());
+    assert!(line.headers_ms.unwrap() <= line.total_ms);
 }
 
 #[test]
@@ -1156,6 +1420,126 @@ fn a_cancel_while_the_body_is_read_stops_the_call() {
         server.await_closed(1, Deadline::after(SIGNAL)),
         "the fetch closed the socket"
     );
+}
+
+#[test]
+fn a_deadline_while_the_body_is_read_keeps_status_and_partial_bytes() {
+    let server = serve([stall()]);
+    let (headers_tx, headers_rx) = mpsc::channel();
+    let rig = Rig::new().with(|tool| tool.signaling_headers_received(headers_tx));
+    let call = rig.start(&server.url());
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&headers_rx)
+        .expect("the client received response headers");
+    assert!(rig.clock.await_parked(
+        rig.clock.origin() + Duration::from_secs(60),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    // Past headers: the partial body is what the read is blocked on.
+    assert!(
+        server.await_partial(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the partial response was sent"
+    );
+    rig.clock.advance_when_parked(
+        Some(rig.clock.origin() + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    let output = call.wait();
+    assert_eq!(
+        code(&output),
+        Some(ErrorCode::Timeout),
+        "{}",
+        fakes::text_of(&output)
+    );
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a body read that fails keeps the status, the headers and the bytes read.
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_fixed(line);
+    assert_eq!(line.status, Some(200));
+    assert!(line.headers_ms.is_some());
+    assert_eq!(
+        line.response_bytes,
+        u64::try_from(b"partial".len()).unwrap()
+    );
+}
+
+#[test]
+fn a_cancel_while_the_body_is_read_keeps_status_and_partial_bytes() {
+    let server = serve([stall()]);
+    let (headers_tx, headers_rx) = mpsc::channel();
+    let rig = Rig::new().with(|tool| tool.signaling_headers_received(headers_tx));
+    let call = rig.start(&server.url());
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&headers_rx)
+        .expect("the client received response headers");
+    assert!(rig.clock.await_parked(
+        rig.clock.origin() + Duration::from_secs(60),
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    assert!(
+        server.await_partial(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the partial response was sent"
+    );
+    call.cancel.cancel();
+    let output = call.wait();
+    assert_eq!(code(&output), None);
+    assert_eq!(fakes::text_of(&output), "Cancelled and stopped.\n");
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a body read that fails keeps the status, the headers and the bytes read.
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_fixed(line);
+    assert_eq!(line.status, Some(200));
+    assert!(line.headers_ms.is_some());
+    assert_eq!(
+        line.response_bytes,
+        u64::try_from(b"partial".len()).unwrap()
+    );
+}
+
+#[test]
+fn a_stop_after_a_full_body_read_keeps_the_completed_line() {
+    use crate::web_fetch::http::{Ended, Get, Limit, Observe, Stop, guarded};
+    let server = serve([ok("text/plain; charset=utf-8", "hello")]);
+    let port: u16 = server.url().rsplit(':').next().unwrap().parse().unwrap();
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let uri: ureq::http::Uri = format!("{}/", server.url()).parse().unwrap();
+    let rig = Rig::new();
+    let clock: Arc<dyn contract::clock::Clock> = rig.clock.clone();
+    let cancel = CancelToken::new();
+    let deadline = rig.clock.origin() + Duration::from_secs(60);
+    let result = guarded(&clock, &cancel, deadline, Limit::Request, |hop| {
+        let request = Get {
+            uri: &uri,
+            pinned: Some(&[address]),
+            proxy: None,
+            observe: Some(Observe {
+                debug: Arc::clone(&rig.lines) as Arc<dyn DebugLog>,
+                clock: Arc::clone(&clock),
+                headers_received: None,
+            }),
+        };
+        hop.get(&request, |head, body| {
+            let mut bytes = Vec::new();
+            body.read_to_end(&mut bytes)?;
+            assert_eq!(head.status, 200);
+            cancel.cancel();
+            Ok(bytes.len())
+        })
+        .map_err(|_| ())
+    });
+    assert!(matches!(result, Err(Ended::Stopped(Stop::Cancelled))));
+    let lines = rig.lines();
+    // docs/state.md, "Diagnostic logs": a body read that fails keeps the status, the headers and the bytes read.
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_fixed(line);
+    assert_eq!(line.status, Some(200));
+    assert_eq!(line.response_bytes, u64::try_from("hello".len()).unwrap());
+    assert!(line.headers_ms.is_some());
 }
 
 #[test]

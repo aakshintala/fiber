@@ -14,10 +14,12 @@ mod common;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{Setup, manifest};
 use contract::clock::Clock;
+use contract::diag::{DebugLog, HttpRequest, Purpose};
 use extensions::{Error, Origin, Provenance, Release, Request, list, plan};
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
 use serde_json::{Value, json};
@@ -591,4 +593,85 @@ fn a_held_lock_is_busy_and_adds_nothing() {
     );
     assert_eq!(snapshot(&setup.home()), before);
     drop(held);
+}
+
+/// Every `http_request` line the observed release install writes, in order.
+#[derive(Default)]
+struct Lines {
+    lines: Mutex<Vec<HttpRequest>>,
+}
+
+impl DebugLog for Lines {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn http_request(&self, request: &HttpRequest) {
+        self.lines.lock().unwrap().push(request.clone());
+    }
+}
+
+/// An observed install writes one `extension_release` line per download:
+/// the docs and extensions archives and their checksum files, each with
+/// the server's host, the download's path, status 200, and the served
+/// body count.
+#[test]
+fn an_observed_install_writes_one_extension_release_line_per_download() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let files = Files::good();
+    let server = files.serve();
+    let lines = Arc::new(Lines::default());
+    let clock = fakes::clock::FakeClock::new();
+    let observe = extensions::Observe {
+        debug: Some(Arc::clone(&lines) as Arc<dyn DebugLog>),
+        clock: clock.as_ref(),
+    };
+    extensions::install_release_observed(&home, &release(&server), clock.as_ref(), &observe)
+        .unwrap();
+    let lines = lines.lines.lock().unwrap().clone();
+    let host = server.url().trim_start_matches("http://").to_owned();
+    let bodies = [
+        ("/download/v0.0.0/fiber-docs.tar.gz", files.docs.len()),
+        (
+            "/download/v0.0.0/fiber-docs.tar.gz.sha256",
+            files.docs_sum.len(),
+        ),
+        (
+            "/download/v0.0.0/fiber-extensions.tar.gz",
+            files.extensions.len(),
+        ),
+        (
+            "/download/v0.0.0/fiber-extensions.tar.gz.sha256",
+            files.extensions_sum.len(),
+        ),
+    ];
+    // docs/state.md, "Diagnostic logs": one line per tag lookup, checksum and binary download.
+    assert_eq!(
+        lines.len(),
+        bodies.len(),
+        "one line per archive and checksum: {lines:?}"
+    );
+    for (line, (path, bytes)) in lines.iter().zip(bodies) {
+        assert_eq!(line.purpose(), Purpose::ExtensionRelease, "{line:?}");
+        assert_eq!(line.host.as_deref(), Some(host.as_str()), "{line:?}");
+        assert_eq!(line.path.as_deref(), Some(path), "{line:?}");
+        assert_eq!(line.status, Some(200), "{line:?}");
+        assert_eq!(line.attempt, 1, "{line:?}");
+        assert_eq!(line.request_bytes, 0, "a download posts nothing: {line:?}");
+        assert_eq!(
+            line.response_bytes,
+            u64::try_from(bytes).unwrap(),
+            "the line counts what the server served: {line:?}"
+        );
+        assert_eq!(line.identity(), None, "no identity: {line:?}");
+        assert_eq!(line.model, None, "no model: {line:?}");
+        assert_eq!(line.first_token_ms, None, "no model call: {line:?}");
+        if let Some(headers) = line.headers_ms {
+            assert!(
+                headers <= line.total_ms,
+                "headers land before the end: {line:?}"
+            );
+        }
+    }
 }

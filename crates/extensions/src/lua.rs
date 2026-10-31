@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use contract::JobId;
 use contract::clock::Clock;
-use contract::diag::{DebugLog, Purpose};
+use contract::diag::{DebugLog, ProviderPurpose, Purpose};
 use serde_json::{Value, json};
 
 use crate::oauth::{Browser, LoginSlot, SystemBrowser};
@@ -1105,36 +1105,52 @@ pub(crate) enum Target {
 /// name and why an HTTP request it makes is recorded. `models`, `quota`,
 /// `credential` (a stored credential and a login alike) and `cost` are
 /// recorded; `sign` and every other target never are, whatever HTTP they
-/// send. A pure mapping of the value, as the seam holds no behaviour.
-pub(crate) fn provider_purpose(target: &Target) -> Option<(&str, Purpose)> {
+/// send. The function-name mapping is the contract's, shared with the
+/// process adapter; this only reads the target. A pure mapping of the
+/// value, as the seam holds no behaviour.
+pub(crate) fn provider_purpose(target: &Target) -> Option<(&str, ProviderPurpose)> {
     let Target::Provider { name, function, .. } = target else {
         return None;
     };
-    let purpose = match *function {
-        "models" => Purpose::ModelList,
-        "quota" => Purpose::Quota,
-        "credential" => Purpose::TokenRefresh,
-        "cost" => Purpose::Cost,
-        _ => return None,
-    };
-    Some((name, purpose))
+    Purpose::for_provider_function(function).map(|purpose| (name.as_str(), purpose))
 }
 
 /// Snapshots the owned observation context for an HTTP request about to
-/// run as `target`: the provider's registered name and the eligible
-/// purpose, with the installed sink and clock. None unless the target is
-/// an eligible provider purpose, a sink is installed and it records debug
+/// run as `target` of the extension `extension`: its purpose, with the
+/// installed sink and clock. A provider function keeps the provider's
+/// registered name and its eligible purpose; every other target — a
+/// hook, command, timer, tool, watcher, search, effects, delegate, the
+/// entry script or any target added later — records as the extension's
+/// own request. A provider function without a purpose (`sign`, or any
+/// other future one) stays silent, whatever HTTP it sends. None unless
+/// the target is eligible, a sink is installed and it records debug
 /// lines. No timer starts and nothing is written here: the admitted
 /// worker observes once it executes.
-pub(crate) fn http_observation(hub: &Hub, target: &Target) -> Option<host::HttpObservation> {
-    let (provider, purpose) = provider_purpose(target)?;
+pub(crate) fn http_observation(
+    hub: &Hub,
+    target: &Target,
+    extension: &str,
+) -> Option<host::HttpObservation> {
+    let attribution = match provider_purpose(target) {
+        Some((provider, purpose)) => host::HttpAttribution::Provider {
+            provider: provider.to_owned(),
+            purpose,
+        },
+        // Outside a provider function there is no provider purpose: the
+        // request is the extension's own. The named provider functions
+        // live in the contract's mapping, so the test is "outside a
+        // provider function" and the list cannot go stale.
+        None if matches!(target, Target::Provider { .. }) => return None,
+        None => host::HttpAttribution::Extension {
+            extension: extension.to_owned(),
+        },
+    };
     let debug = hub.diagnostics()?;
     if !debug.debugging() {
         return None;
     }
     Some(host::HttpObservation {
-        provider: provider.to_owned(),
-        purpose,
+        attribution,
         debug,
         clock: hub.clock_handle(),
     })

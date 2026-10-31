@@ -109,6 +109,7 @@ fn empty_servers(rig: &Rig, clock: &Arc<dyn contract::clock::Clock>) -> mcp::Sta
         &config::mcp_cache_dir(&rig.home),
         clock,
         "test",
+        None,
     )
 }
 
@@ -289,6 +290,7 @@ impl Fixture {
                     &cache,
                     &clock,
                     "test",
+                    None,
                     None,
                 )
             },
@@ -1552,6 +1554,7 @@ impl Fixture {
                     &clock,
                     "test",
                     None,
+                    None,
                 )
             },
         );
@@ -2259,6 +2262,7 @@ fn reload_aligns_the_resources_marker_with_the_installed_set() {
                 &cache,
                 &clock,
                 "test",
+                None,
                 None,
             )
         },

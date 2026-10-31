@@ -184,12 +184,12 @@ fn serve_with_hub_at(
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    serve_with_hub_at_peak_and_starter(
+    serve_with_hub_at_resources_and_starter(
         temp,
         idle,
         clock,
         level,
-        log::diag::peak_kib,
+        log::diag::resources_sample,
         FakeStarter::hang(&temp.dir),
     )
 }
@@ -202,20 +202,27 @@ fn serve_with_hub_at_and_starter(
     level: Level,
     starter: FakeStarter,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    serve_with_hub_at_peak_and_starter(temp, idle, clock, level, log::diag::peak_kib, starter)
+    serve_with_hub_at_resources_and_starter(
+        temp,
+        idle,
+        clock,
+        level,
+        log::diag::resources_sample,
+        starter,
+    )
 }
 
-/// [`serve_with_hub_at`] reading the peak memory with `peak`. Tests use
-/// it to check the stop pair with a deterministic `peak_memory` value.
-fn serve_with_hub_at_peak_and_starter(
+/// [`serve_with_hub_at`] reading `resources`. Tests use it to check the
+/// stop pair with a deterministic sample.
+fn serve_with_hub_at_resources_and_starter(
     temp: &Temp,
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
-    peak: fn() -> Option<u64>,
+    resources: fn() -> Option<log::diag::ResourcesSample>,
     starter: FakeStarter,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    // Keeps its own hub: the diag carries the test's level and peak reader.
+    // Keeps its own hub: the diag carries the test's level and resource reader.
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
         &temp.dir,
@@ -224,7 +231,7 @@ fn serve_with_hub_at_peak_and_starter(
         Arc::clone(&timed),
         crate::diag::open(&temp.dir, timed)
             .with_level(level)
-            .with_peak(peak),
+            .with_resources(resources),
     ));
     hub.diag
         .line(Severity::Info, None, "hub_started", "The hub started.");
@@ -373,7 +380,7 @@ fn last_two(log: &str) -> (String, String, u64) {
 }
 
 #[test]
-fn a_debug_hub_writes_peak_memory_just_before_its_idle_stop() {
+fn a_debug_hub_writes_resources_just_before_its_idle_stop() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let (done, serve_id) = serve_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
@@ -391,10 +398,10 @@ fn a_debug_hub_writes_peak_memory_just_before_its_idle_stop() {
         0
     );
     let (before, last, peak) = last_two(&temp.log());
-    // docs/state.md:288-289 promises `peak_memory` just before each `hub_stopped` at debug.
+    // docs/state.md promises `resources` just before each `hub_stopped` at debug.
     assert_eq!(
         (before.as_str(), last.as_str()),
-        ("peak_memory", "hub_stopped")
+        ("resources", "hub_stopped")
     );
     assert!(peak > 0);
 }
@@ -749,7 +756,7 @@ fn a_signal_stops_the_hub_with_its_code() {
     );
     assert!(!temp.socket().exists());
     assert!(temp.log().contains("The hub stopped: signal."));
-    assert!(!temp.log().contains("peak_memory"));
+    assert!(!temp.log().contains("resources"));
 }
 
 #[test]
@@ -1050,7 +1057,7 @@ fn a_signal_abort_flush_expires_when_the_answer_never_lands() {
 }
 
 #[test]
-fn a_debug_hub_writes_peak_memory_just_before_its_signal_stop() {
+fn a_debug_hub_writes_resources_just_before_its_signal_stop() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let (hub, got, done) = serve_with_hub_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
@@ -1066,7 +1073,7 @@ fn a_debug_hub_writes_peak_memory_just_before_its_signal_stop() {
     let (before, last, peak) = last_two(&temp.log());
     assert_eq!(
         (before.as_str(), last.as_str()),
-        ("peak_memory", "hub_stopped")
+        ("resources", "hub_stopped")
     );
     assert!(peak > 0);
 }
@@ -1117,15 +1124,22 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
 }
 
 #[test]
-fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
+fn a_signal_stop_keeps_resources_next_to_hub_stopped_during_disconnects() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let (hub, got, done) = serve_with_hub_at_peak_and_starter(
+    let (hub, got, done) = serve_with_hub_at_resources_and_starter(
         &temp,
         IDLE,
         Arc::clone(&clock),
         Level::Debug,
-        || Some(9),
+        || {
+            Some(log::diag::ResourcesSample {
+                peak_kib: 9,
+                current_kib: 9,
+                disk_read_bytes: 4096,
+                disk_write_bytes: 8192,
+            })
+        },
         FakeStarter::hang(&temp.dir),
     );
     await_idle_park(&clock, clock.origin(), "at start");
@@ -1150,8 +1164,8 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
         .position(|line| line["code"] == "hub_stopped")
         .expect("the hub logs its stop");
     assert!(at > 0, "a line comes before the stop");
-    // docs/state.md:288-289 promises the hub's peak_memory line just before hub_stopped.
-    assert_eq!(lines[at - 1]["code"], "peak_memory");
+    // docs/state.md promises the hub's resources line just before hub_stopped.
+    assert_eq!(lines[at - 1]["code"], "resources");
     assert_eq!(lines[at - 1]["data"]["peak_kib"], 9);
 }
 

@@ -257,6 +257,7 @@ fn the_readers_cached_read_lists_the_installed_models() {
         clock,
         locks,
         Arc::default(),
+        None,
     )(tui::Refresh::Cached)
     .map_err(|error| format!("the cached read: {error}"))
     .unwrap();
@@ -787,6 +788,7 @@ fn an_invalid_configuration_keeps_its_config_invalid_code() {
         Arc::new(tools::PathLocks::new()),
         Arc::default(),
         tui::Refresh::Cached,
+        None,
     )
     .unwrap_err();
     assert_eq!(error.code(), contract::ErrorCode::ConfigInvalid);
@@ -812,6 +814,7 @@ fn an_unreadable_configuration_keeps_its_io_code() {
         Arc::new(tools::PathLocks::new()),
         Arc::default(),
         tui::Refresh::Cached,
+        None,
     )
     .unwrap_err();
     assert_eq!(error.code(), contract::ErrorCode::IoFailed);
@@ -917,6 +920,7 @@ impl CommandFixture {
             Arc::clone(&self.clock),
             Arc::new(tools::PathLocks::new()),
             Arc::clone(&self.reads),
+            None,
         )
     }
 }
