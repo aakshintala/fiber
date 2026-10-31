@@ -413,13 +413,244 @@ fn setup_from_installed_home_with_provider_pick_then_first_turn() {
     );
 }
 
-/// The nightly the journey's stub feed serves, above the release
-/// binary's `0.0.0`.
-const JOURNEY_NIGHTLY: &str = "0.0.1-nightly.20240101";
+/// The nightly the journey's stub feed serves when the binary under test
+/// reports no nightly of its own: a `0.0.0` dev build or a stable release
+/// has no nightly date to count forward from, so the feed serves this
+/// fixed pair, which is newer than either.
+const JOURNEY_NIGHTLY_FALLBACK: &str = "0.0.1-nightly.20240101";
 
-/// The newer nightly the stub feed also serves: a nightly-floored install
-/// moves onto it.
-const JOURNEY_NIGHTLY_NEXT: &str = "0.0.1-nightly.20240102";
+/// The newer nightly the stub feed also serves in the fallback case: a
+/// nightly-floored install moves onto it.
+const JOURNEY_NIGHTLY_NEXT_FALLBACK: &str = "0.0.1-nightly.20240102";
+
+/// The two nightlies the stub feed serves for one run, derived from the
+/// binary under test: on a nightly binary the floor is the running
+/// nightly's date plus one day and the next plus two, so the feed stays
+/// newer than the binary and the update reaches its approval prompt; on
+/// any other binary the fallback pair stands in.
+struct JourneyNightlies {
+    floor: String,
+    next: String,
+}
+
+/// The version token of the binary under test: the word after `fiber` in
+/// its `--version` line (`fiber 0.0.1-nightly.20261031 (24a32fb)`). An
+/// execution failure or a line without one fails naming what it saw, so
+/// the failure tells whether the binary or its output broke the read.
+fn journey_version(bin: &Path) -> String {
+    let output = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .unwrap_or_else(|error| {
+            panic!(
+                "FIBER_JOURNEY_BIN --version failed for {}: {error}",
+                bin.display()
+            )
+        });
+    let line = String::from_utf8_lossy(&output.stdout);
+    line.split_whitespace()
+        .nth(1)
+        .unwrap_or_else(|| panic!("FIBER_JOURNEY_BIN --version printed no version: {line}"))
+        .to_owned()
+}
+
+/// Whether the year is a leap year: every fourth year except centuries,
+/// except every fourth century.
+fn is_nightly_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+/// The month's length in days: February follows the leap rule, the rest
+/// are fixed. A month outside 1-12 fails naming the version it came from:
+/// only the validated nightly date reaches here.
+fn days_in_nightly_month(version: &str, year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_nightly_leap_year(year) => 29,
+        2 => 28,
+        _ => panic!("{version} holds no month: {month}"),
+    }
+}
+
+/// The calendar day after the given one: the month turns on its last day
+/// and the year turns on December's, so a nightly running on either edge
+/// still feeds strictly newer nightlies.
+fn next_nightly_day(version: &str, year: u32, month: u32, day: u32) -> (u32, u32, u32) {
+    if day < days_in_nightly_month(version, year, month) {
+        (year, month, day + 1)
+    } else if month < 12 {
+        (year, month + 1, 1)
+    } else {
+        (year + 1, 1, 1)
+    }
+}
+
+/// The nightly date `days` days after the running nightly's `YYYYMMDD`
+/// date: read digit by digit out of the shape `nightly_parts` accepted,
+/// moved forward one calendar day at a time (never a digit increment, so
+/// month and year ends roll over), printed back in shape.
+fn shift_nightly_date(version: &str, date: &str, days: u32) -> String {
+    let number = |part: &str| {
+        part.parse::<u32>()
+            .unwrap_or_else(|_| panic!("{version} holds no nightly date: {date}"))
+    };
+    let (mut year, mut month, mut day) = (
+        number(&date[0..4]),
+        number(&date[4..6]),
+        number(&date[6..8]),
+    );
+    for _ in 0..days {
+        (year, month, day) = next_nightly_day(version, year, month, day);
+    }
+    format!("{year:04}{month:02}{day:02}")
+}
+
+/// The two nightlies the stub feed serves for this run: the running
+/// binary's base with its date moved one day forward for the floor and
+/// two for the next, keeping floor below next and both above the binary.
+/// A binary whose version is not a nightly keeps the fallback pair.
+fn journey_nightlies() -> JourneyNightlies {
+    let bin = journey_bin();
+    let version = journey_version(&bin);
+    let (base, date) = match extensions::nightly_parts(&version) {
+        Ok(parts) => parts,
+        Err(_) => {
+            return JourneyNightlies {
+                floor: JOURNEY_NIGHTLY_FALLBACK.to_owned(),
+                next: JOURNEY_NIGHTLY_NEXT_FALLBACK.to_owned(),
+            };
+        }
+    };
+    let floor = shift_nightly_date(&version, &date, 1);
+    let next = shift_nightly_date(&version, &date, 2);
+    JourneyNightlies {
+        floor: format!("{}.{}.{}-nightly.{floor}", base[0], base[1], base[2]),
+        next: format!("{}.{}.{}-nightly.{next}", base[0], base[1], base[2]),
+    }
+}
+
+/// Mid-month the day steps forward: below every edge, nothing turns.
+#[test]
+fn nightly_next_day_steps_mid_month() {
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20240115", 2024, 1, 15),
+        (2024, 1, 16)
+    );
+}
+
+/// A 31-day month turns the month on its last day, not before.
+#[test]
+fn nightly_next_day_turns_a_31_day_month() {
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20240130", 2024, 1, 30),
+        (2024, 1, 31)
+    );
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20240131", 2024, 1, 31),
+        (2024, 2, 1)
+    );
+}
+
+/// A 30-day month turns a day earlier: April's last day is the 30th.
+#[test]
+fn nightly_next_day_turns_a_30_day_month() {
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20240429", 2024, 4, 29),
+        (2024, 4, 30)
+    );
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20240430", 2024, 4, 30),
+        (2024, 5, 1)
+    );
+}
+
+/// February in a common year turns on the 28th: the day before steps.
+#[test]
+fn nightly_next_day_turns_a_common_february() {
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20230227", 2023, 2, 27),
+        (2023, 2, 28)
+    );
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20230228", 2023, 2, 28),
+        (2023, 3, 1)
+    );
+}
+
+/// February in a leap year holds the 29th: both sides of it step.
+#[test]
+fn nightly_next_day_holds_a_leap_february() {
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20240228", 2024, 2, 28),
+        (2024, 2, 29)
+    );
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20240229", 2024, 2, 29),
+        (2024, 3, 1)
+    );
+}
+
+/// Centuries follow the fourth-century exception: 2000 holds the 29th
+/// while 2100 turns on the 28th.
+#[test]
+fn nightly_next_day_follows_the_century_exception() {
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20000228", 2000, 2, 28),
+        (2000, 2, 29)
+    );
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.21000228", 2100, 2, 28),
+        (2100, 3, 1)
+    );
+}
+
+/// December turns the year on its last day, not before; November still
+/// turns the month.
+#[test]
+fn nightly_next_day_turns_the_year() {
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20241230", 2024, 12, 30),
+        (2024, 12, 31)
+    );
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20241231", 2024, 12, 31),
+        (2025, 1, 1)
+    );
+    assert_eq!(
+        next_nightly_day("0.0.1-nightly.20241130", 2024, 11, 30),
+        (2024, 12, 1)
+    );
+}
+
+/// The shift counts forward day by day across month and year ends and
+/// prints back in shape, never by incrementing the date's digits.
+#[test]
+fn nightly_shift_rolls_month_and_year_ends() {
+    assert_eq!(
+        shift_nightly_date("0.0.1-nightly.20240131", "20240131", 1),
+        "20240201"
+    );
+    assert_eq!(
+        shift_nightly_date("0.0.1-nightly.20240131", "20240131", 2),
+        "20240202"
+    );
+    assert_eq!(
+        shift_nightly_date("0.0.1-nightly.20241231", "20241231", 1),
+        "20250101"
+    );
+    assert_eq!(
+        shift_nightly_date("0.0.1-nightly.20240228", "20240228", 1),
+        "20240229"
+    );
+}
+
+/// A month outside 1-12 fails naming the version it came from.
+#[test]
+#[should_panic(expected = "holds no month")]
+fn nightly_next_day_rejects_a_month_outside_the_year() {
+    let _ = next_nightly_day("0.0.1-nightly.20241301", 2024, 13, 1);
+}
 
 /// The bytes the stub binary archive holds: the staged `fiber` binary.
 const JOURNEY_MARKER: &[u8] = b"binary-from-the-journey-release";
@@ -433,7 +664,7 @@ struct JourneyGithub {
 }
 
 impl JourneyGithub {
-    fn new(setup: &Setup) -> Self {
+    fn new(setup: &Setup, nightlies: &JourneyNightlies) -> Self {
         let base = setup.root.path().join("gh");
         let repo = base.join("aakshintala/fiber");
         std::fs::create_dir_all(repo.join("providers/anthropic")).unwrap();
@@ -442,7 +673,7 @@ impl JourneyGithub {
             repo.join("providers/anthropic/extension.json"),
             json!({
                 "name": "github.com/aakshintala/fiber/providers/anthropic",
-                "version": JOURNEY_NIGHTLY,
+                "version": nightlies.floor.as_str(),
                 "fiber": "0.0.0",
                 "api": 1,
             })
@@ -452,7 +683,7 @@ impl JourneyGithub {
         fakes::git::git(&repo, &["init", "--quiet"]);
         fakes::git::git(&repo, &["add", "."]);
         fakes::git::git(&repo, &["commit", "--quiet", "-m", "fiber"]);
-        for nightly in [JOURNEY_NIGHTLY, JOURNEY_NIGHTLY_NEXT] {
+        for nightly in [&nightlies.floor, &nightlies.next] {
             fakes::git::git(&repo, &["tag", &format!("v{nightly}")]);
         }
         Self {
@@ -465,7 +696,7 @@ impl JourneyGithub {
 /// pre-releases, their tag pages, and each nightly's binary, docs and
 /// extensions archives with checksums. It serves no stable tag or
 /// release asset.
-fn serve_nightly_feed() -> ProviderServer {
+fn serve_nightly_feed(nightlies: &JourneyNightlies) -> ProviderServer {
     use fakes::ustar::{archive, gzip, header, sha256};
     let binary_archive = format!(
         "fiber-{}.tar.gz",
@@ -475,7 +706,7 @@ fn serve_nightly_feed() -> ProviderServer {
     let mut routes: Vec<(String, fakes::Response)> = Vec::new();
     // Every nightly run fetches its own archives, as a real server
     // answers every request.
-    for nightly in [JOURNEY_NIGHTLY, JOURNEY_NIGHTLY_NEXT] {
+    for nightly in [&nightlies.floor, &nightlies.next] {
         let binary = gzip(&archive(&[(
             header("fiber", b'0', JOURNEY_MARKER.len() as u64, 0o644, ""),
             JOURNEY_MARKER,
@@ -520,7 +751,7 @@ fn serve_nightly_feed() -> ProviderServer {
             fakes::Response::status(200, ""),
         ));
     }
-    let list: Vec<Value> = [JOURNEY_NIGHTLY, JOURNEY_NIGHTLY_NEXT]
+    let list: Vec<Value> = [&nightlies.floor, &nightlies.next]
         .iter()
         .map(|nightly| {
             json!({ "tag_name": format!("v{nightly}"), "prerelease": true, "draft": false })
@@ -543,13 +774,13 @@ fn serve_nightly_feed() -> ProviderServer {
 /// installed record carries the nightly version. #3617's update failed
 /// on such a home, where the shared resolver fed the nightly have-value
 /// through the strict version parser; a fresh home never trips it.
-fn install_nightly_extension(setup: &Setup) {
+fn install_nightly_extension(setup: &Setup, nightlies: &JourneyNightlies) {
     let source = setup.root.path().join("nightlysrc");
     support::write_json(
         &source.join("extension.json"),
         &json!({
             "name": "github.com/aakshintala/fiber/providers/anthropic",
-            "version": JOURNEY_NIGHTLY,
+            "version": nightlies.floor.as_str(),
             "fiber": "0.0.0",
             "api": 1,
         }),
@@ -579,9 +810,10 @@ fn update_to_nightly_from_local_stub_feed() {
         // the standard `catch_unwind` wrapper applies.
         std::panic::AssertUnwindSafe(|| {
             let setup = Setup::new();
-            let server = serve_nightly_feed();
-            let github = JourneyGithub::new(&setup);
-            install_nightly_extension(&setup);
+            let nightlies = journey_nightlies();
+            let server = serve_nightly_feed(&nightlies);
+            let github = JourneyGithub::new(&setup, &nightlies);
+            install_nightly_extension(&setup, &nightlies);
             // A copy of the release binary the update renames over, so
             // the shared binary stays untouched.
             let copy = setup.root.path().join("fiber-copy");
@@ -630,7 +862,7 @@ fn update_to_nightly_from_local_stub_feed() {
 /// so the helper tags a stable one first; the record is then set to the
 /// nightly, mirroring the binary fixture's nightly-floored home. Path
 /// provenance would bypass the resolver, so the install goes through git.
-fn install_first_party_nightly_extension(setup: &Setup) {
+fn install_first_party_nightly_extension(setup: &Setup, nightlies: &JourneyNightlies) {
     const NAME: &str = "github.com/aakshintala/fiber/providers/anthropic";
     let repo = setup.root.path().join("gh/aakshintala/fiber");
     // The stable tag the install resolves; only the nightly floor moves
@@ -656,12 +888,12 @@ fn install_first_party_nightly_extension(setup: &Setup) {
     // nightly floor, and the release tag's commit as the source.
     let commit = fakes::git::git(
         &repo,
-        &["rev-list", "-n", "1", &format!("v{JOURNEY_NIGHTLY}")],
+        &["rev-list", "-n", "1", &format!("v{}", nightlies.floor)],
     );
     let path = setup.home().join("extensions/anthropic/.fiber.json");
     let mut record: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    record["version"] = Value::String(JOURNEY_NIGHTLY.into());
-    record["floor"] = Value::String(JOURNEY_NIGHTLY.into());
+    record["version"] = Value::String(nightlies.floor.clone());
+    record["floor"] = Value::String(nightlies.floor.clone());
     record["source"] = json!({ "commit": commit });
     std::fs::write(&path, serde_json::to_string(&record).unwrap()).unwrap();
 }
@@ -669,9 +901,10 @@ fn install_first_party_nightly_extension(setup: &Setup) {
 /// `fiber update --channel nightly` with a nightly-floored first-party
 /// extension installed: the person-visible approval prompt and update
 /// announcement on the release binary's terminal, and the extension
-/// record moved to the newest nightly. Evidence for #3746, whose base
-/// leaves the record damaged-skipped at its nightly floor and never
-/// reaches the resolver: this journey fails before the record moves.
+/// record moved to the newest nightly. The stub feed derives its two
+/// nightlies from the binary under test, so the update path runs on
+/// nightly binaries as well as dev ones; the record assertions name the
+/// derived pair.
 #[test]
 fn update_nightly_floored_extension_to_newest_nightly() {
     run_journey(
@@ -680,9 +913,10 @@ fn update_nightly_floored_extension_to_newest_nightly() {
         // the standard `catch_unwind` wrapper applies.
         std::panic::AssertUnwindSafe(|| {
             let setup = Setup::new();
-            let server = serve_nightly_feed();
-            let github = JourneyGithub::new(&setup);
-            install_first_party_nightly_extension(&setup);
+            let nightlies = journey_nightlies();
+            let server = serve_nightly_feed(&nightlies);
+            let github = JourneyGithub::new(&setup, &nightlies);
+            install_first_party_nightly_extension(&setup, &nightlies);
             // A copy of the release binary the update renames over, so
             // the shared binary stays untouched.
             let copy = setup.root.path().join("fiber-copy");
@@ -726,9 +960,9 @@ fn update_nightly_floored_extension_to_newest_nightly() {
             )
             .unwrap();
             // docs/extensions.md:1797, 1805-1807.
-            assert_eq!(record["version"], JOURNEY_NIGHTLY_NEXT, "{record}");
+            assert_eq!(record["version"], nightlies.next.as_str(), "{record}");
             // docs/extensions.md:1798-1799.
-            assert_eq!(record["floor"], JOURNEY_NIGHTLY, "{record}");
+            assert_eq!(record["floor"], nightlies.floor.as_str(), "{record}");
         }),
     );
 }
