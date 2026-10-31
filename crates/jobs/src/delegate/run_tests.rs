@@ -3158,6 +3158,7 @@ fn usage_envelope(seq: u64, generation: &str, cost: Option<f64>) -> Envelope {
         extension: None,
         origin_session_id: None,
         reviewer: None,
+        warming: None,
     };
     envelope(
         seq,
@@ -3827,6 +3828,7 @@ fn sibling_arrivals_racing_a_publication_lose_no_delta_and_trip_once() {
                             extension: None,
                             origin_session_id: None,
                             reviewer: None,
+                            warming: None,
                         },
                     );
                 }

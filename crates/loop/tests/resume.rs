@@ -199,6 +199,7 @@ impl support::History {
             extension: None,
             origin_session_id: None,
             reviewer: None,
+            warming: None,
             input_bytes: 1,
             input_media: None,
         })

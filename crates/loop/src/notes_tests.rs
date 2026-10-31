@@ -1,7 +1,9 @@
 use super::*;
 use crate::inbox::{TurnInput, Waited};
 use crate::{Loop, Model};
-use contract::events::{CacheLifetime, CommandResult, Event};
+use contract::events::{
+    CacheLifetime, CommandResult, Event, PreambleBuilt, PreambleReason, UsageRecorded,
+};
 use contract::inbox::{Ack, Answer, Delivery};
 use contract::notes::{AllowsTally, Evidence, NotesAsk, ProposeNotesArgs, SessionTally, Topic};
 use contract::provider::{Input, Provider};
@@ -626,6 +628,110 @@ fn a_late_cost_replaces_the_notes_calls_usage_without_a_turn_or_action() {
         assert_eq!(line.action_id, None);
         assert!(line.payload.get("reviewer").is_none());
     }
+}
+
+#[test]
+fn a_notes_proposal_after_a_request_leaves_the_cache_expiry_put() {
+    use contract::shapes::Tokens;
+    use contract::{Envelope, GenerationId};
+    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+
+    fn envelope(kind: &str, ts: u64, action: Option<&str>, payload: Value) -> Envelope {
+        let mut line = json!({
+            "kind": kind, "session_id": "s_test", "ts": ts,
+            "schema_version": 1, "payload": payload,
+        });
+        if let Some(action) = action {
+            line["action_id"] = json!(action);
+        }
+        serde_json::from_value(line).unwrap()
+    }
+
+    let provider = Arc::new(ScriptedProvider::new([Scripted::text("1 | rule")]));
+    let (mut looped, log, _home, _clock) = started(provider);
+    let before = log.count();
+    let (ack, rx) = capture();
+    looped
+        .admit_idle(
+            Delivery::ProposeNotes(ask(None), ack),
+            &mut TurnInput::of(Vec::new()),
+        )
+        .unwrap();
+    assert!(matches!(
+        received(&rx),
+        Ok(Some(CommandResult::ProposeNotes { error: None, .. }))
+    ));
+    let notes = new_lines(&log, before);
+    assert_eq!(
+        notes
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["usage_recorded"]
+    );
+    // The notes call's line carries no action and no marker.
+    assert_eq!(notes[0].action_id, None);
+    assert!(notes[0].payload.get("warming").is_none());
+
+    let mut fold = crate::status::Fold::new(
+        "-w".to_owned(),
+        "/w".to_owned(),
+        "fake/model".to_owned(),
+        None,
+        Box::new(Vec::new),
+        Box::new(|| None),
+        Box::new(|| 0),
+    );
+    let preamble = PreambleBuilt {
+        reason: PreambleReason::Start,
+        model: "fake/model".into(),
+        context_window: 1000,
+        trigger_at: None,
+        budget: None,
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::OneHour,
+        credential: None,
+        system_prompt: "s".into(),
+        tools: Vec::new(),
+        replaced: Vec::new(),
+    };
+    fold.observe(&envelope(
+        "preamble_built",
+        1000,
+        None,
+        serde_json::to_value(preamble).unwrap(),
+    ));
+    let request = UsageRecorded {
+        generation_id: GenerationId("g_1".into()),
+        model: "fake/model".into(),
+        tokens: Tokens {
+            input: 10,
+            cache_read: 0,
+            cache_write: BTreeMap::new(),
+            output: 3,
+        },
+        input_bytes: 1,
+        input_media: None,
+        web_searches: None,
+        cost: None,
+        subscription: None,
+        extension: None,
+        origin_session_id: None,
+        reviewer: None,
+        warming: None,
+    };
+    fold.observe(&envelope(
+        "usage_recorded",
+        2000,
+        Some("a1"),
+        serde_json::to_value(request).unwrap(),
+    ));
+    let pinned = fold.status().cache_expires;
+    assert_eq!(pinned, Some(2000 + 3_600_000));
+    fold.observe(&notes[0]);
+    assert_eq!(fold.status().cache_expires, pinned);
 }
 
 #[test]

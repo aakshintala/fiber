@@ -659,6 +659,7 @@ pub(crate) fn child_usage(
         extension: None,
         origin_session_id: origin,
         reviewer: None,
+        warming: None,
     }
 }
 

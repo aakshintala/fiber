@@ -2275,6 +2275,7 @@ fn hundred_copy() -> UsageRecorded {
         extension: None,
         origin_session_id: Some(SessionId("s_grandchild".into())),
         reviewer: None,
+        warming: None,
     }
 }
 

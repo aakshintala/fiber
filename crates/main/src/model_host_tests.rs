@@ -134,6 +134,7 @@ fn usage_line(generation: &str, cost: f64) -> UsageRecorded {
         extension: None,
         origin_session_id: None,
         reviewer: None,
+        warming: None,
     }
 }
 
