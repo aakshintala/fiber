@@ -1829,18 +1829,24 @@ reversed: its character in the slab's colour on the text colour. Past the
 last character it is a block in the text colour. The character under it
 stays readable in light and dark mode.
 
-The box's last row, under the draft and inside the slab, is its status row,
-in every layout: the working directory; the permission mode in
-`attention`; the model in `accent` and the thinking level in `attention`;
-and "ctx" dim, an 8-cell context bar, the size and the share of the window
-dim ("ctx ▆▆▆▆▆▆▆▆ 268k · 26%"). Segments are joined by a dim "  │  ", as
-in the status line ("The narrow layout"). The row says nothing about
-handoff: the handoff point is in the Session status card and the context
-breakdown. When the row is too wide, the working directory is cut from
-the left to keep its last part ("…/fiber"), and what still does not fit is
-cut at the slab's right edge. Clicking the ctx segment opens the context
+The box's last two rows, under the draft and inside the slab, are a rule
+and its status row, in every layout. The rule is ─ in `rule` from the
+stripe's next column to one column short of the slab's right edge. The
+status row has two sides. On the left: the working directory, then the
+permission mode in `attention`. Right-aligned, ending one column short of
+the slab's edge: the model in `accent` and the thinking level in
+`attention`, then "ctx" dim, an 8-cell context bar, the size and the share
+of the window dim ("ctx ▆▆▆▆▆▆▆▆ 268k · 26%"). Segments on each side are
+joined by a dim "  │  ", as in the status line ("The narrow layout"), and
+the two sides keep at least two columns between them. The row says nothing
+about handoff: the handoff point is in the Session status card and the
+context breakdown. When the row is too wide, the working directory is cut
+from the left to keep its last part ("…/fiber"), then the left side is cut
+at its right end; the right side is cut only when the slab is narrower than
+it, at the slab's right edge. Clicking the ctx segment opens the context
 breakdown; clicking any other segment opens the Session status card's
-view, as the status line's segments do.
+view, as the status line's segments do. An extension redraws the row
+through the `input_status` slot ("Extension seams").
 
 - Enter sends. Shift+Enter inserts a line break, with Ctrl+J for terminals
   without the kitty keyboard protocol. Pasted text keeps its line breaks. The box grows to about a third of
@@ -2787,6 +2793,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `working_line` | The working line |
 | `steering_queue` | The queued steering messages |
 | `input_box` | The input box |
+| `input_status` | The input box's status row |
 | `status_rows` | The narrow layout's status rows |
 | `view:<name>` | A swapped view, built in or one an extension adds |
 | `overlay:<name>` | An overlay an extension adds, drawn over the conversation |
@@ -2943,6 +2950,21 @@ three.
 | `messages` | The queued messages oldest-first, each with `text`, `images` (`path`, `width` and `height` in pixels), `droppable` (sent while steering), `selectable` (droppable with no image) and `selected` (the person's ⌥↑/⌥↓ choice) |
 
 Nothing draws and no renderer runs on an empty queue.
+
+**`input_status`** draws the input box's status row, under its rule. A
+replaced input box is drawn whole by the extension, so `input_status` draws
+only when the input box itself is built in. A replacement draws one line, and
+further lines are dropped. A replacement keeps one target, the Session
+status view, over the row's full width. A replacement that returns no lines
+leaves the row blank; the rule stays.
+
+| Field | What it holds |
+|---|---|
+| `workspace` | The workspace's path |
+| `mode` | The permission mode |
+| `model` | The model |
+| `thinking` | The thinking level |
+| `context` | `tokens` and `window` |
 
 **`status_rows`** draws the narrow layout's status rows.
 
