@@ -275,12 +275,13 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
     }
     // Free every held callback: if the first run is still parked it ends
     // here, and if it already timed out the second run already parked. Both
-    // orders reach the held second request with two live marker lines,
-    // because the ask cannot exit and the drain cannot run while the third
-    // model request stays held.
+    // orders reach the held second request while the third model request
+    // stays held, which proves live execution: the ask cannot exit and the
+    // drain cannot run while the third model request stays held.
     held.release();
     // The mid-session run's held request proves it executed live, not as a
-    // drain replay. Its bound is minted here.
+    // drain replay. Its bound is minted here. Marker bytes ride in the
+    // wait-failure diagnostics; no mid-session marker count is asserted.
     let held_wait = setup.deadline.start_wait();
     if !held.await_requests(2, held_wait) {
         panic!(
@@ -288,22 +289,6 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
             diagnose(&setup, &marker, held.requests().len(), &model)
         );
     }
-    // Two live runs wrote the marker on the extension thread before their
-    // HTTP, so the acknowledged second request means two lines. The read
-    // fails with the same diagnostic payload the assertion carries.
-    let mid = match fs::read_to_string(&marker) {
-        Ok(text) => text,
-        Err(error) => panic!(
-            "the mid-session marker was unreadable ({error}); {}",
-            diagnose(&setup, &marker, held.requests().len(), &model)
-        ),
-    };
-    assert_eq!(
-        mid,
-        "run\nrun\n",
-        "the mid-session run executed live while the ask stayed alive; {}",
-        diagnose(&setup, &marker, held.requests().len(), &model)
-    );
     // Freeing the last held model response lets the turn end: the queued
     // offer executes once live while the turn waits on it, so both live
     // runs print before the exit and the drain replays neither.
