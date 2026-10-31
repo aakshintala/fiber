@@ -560,7 +560,7 @@ fn click(run: &mut Run, x: u16, y: u16) {
 
 /// The settled narrow run: the scripted turn with the running delegate
 /// and job, so the input box's status row carries the `ctx` segment.
-fn narrow_settled() -> (Setup, ProviderServer, Release, Run) {
+fn narrow_settled() -> (Setup, ProviderServer, Release, Run, Grid) {
     let (setup, server, release) = panel_setup();
     let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
         .into_iter()
@@ -569,12 +569,12 @@ fn narrow_settled() -> (Setup, ProviderServer, Release, Run) {
     let mut run = Run::spawn(&setup, 100, 40, &[], &env);
     run.ready();
     run.write(b"go\r");
-    run.wait_screen("the narrow status rows", |grid| {
+    let grid = run.wait_screen("the narrow status rows", |grid| {
         grid.contents.contains("ctx")
             && grid.contents.contains("1 delegate running")
             && grid.contents.contains("1 job running")
     });
-    (setup, server, release, run)
+    (setup, server, release, run, grid)
 }
 
 /// The input box's status row above the kept status lines: the nearest
@@ -672,8 +672,7 @@ fn narrow_width_cuts_the_working_directory_first() {
 /// and the Context view opens (`docs/tui.md`, "The input box").
 #[test]
 fn clicking_ctx_opens_the_context_breakdown() {
-    let (setup, _server, release, mut run) = narrow_settled();
-    let grid = run.screen();
+    let (setup, _server, release, mut run, grid) = narrow_settled();
     assert!(
         !grid.contents.contains("/context"),
         "no breakdown before the click"
