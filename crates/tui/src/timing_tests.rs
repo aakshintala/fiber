@@ -13,7 +13,7 @@ use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
-use super::tests::{DEADLINE, hello, launch, new_loop, open};
+use super::tests::{DEADLINE, command, hello, launch, new_loop, open};
 use crate::pty_watch::{watch, watched};
 
 /// At `info` the terminal records nothing: a refused-connect run writes
@@ -1003,13 +1003,11 @@ fn attached_frame_stays_open_when_tail_is_due_without_a_stream() {
 #[test]
 fn attached_frame_stays_open_when_tail_fetch_is_lost() {
     let (home, mut lp, id) = subscribing_lp("tui-timing-attached-lost-tail");
-    let (ours, _peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (ours, peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     lp.hub.store(ours);
     lp.attached_frame = lp.timing.attached_frame();
     accept_summary(&mut lp, &id);
     let (tx, rx) = mpsc::channel();
-    tx.send(crate::Input::Disconnected)
-        .unwrap_or_else(|err| panic!("send disconnect: {err}"));
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("timing-attached-lost-tail".to_owned())
@@ -1019,6 +1017,10 @@ fn attached_frame_stays_open_when_tail_fetch_is_lost() {
             done.send((lp, result)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (_peer, request) = command(BufReader::new(peer), "tail history request");
+    assert_eq!(request["command"], "history");
+    tx.send(crate::Input::Disconnected)
+        .unwrap_or_else(|err| panic!("send disconnect during tail fetch: {err}"));
     let (lp, result) = Deadline::after(Duration::from_secs(10))
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the lost tail frame: {err}"));

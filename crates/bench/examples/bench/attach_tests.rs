@@ -648,7 +648,6 @@ fn span_samples_attribute_each_pid_log_to_its_own_sample() {
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].1["sample"], json!(0));
     assert_eq!(first[0].1["ms"], json!(11));
-    // docs/state.md:446-448,453 promises one tui.tail_wait line per process.
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].1["sample"], json!(1));
     assert_eq!(second[0].1["ms"], json!(13));
