@@ -13,6 +13,7 @@ use super::command::{Finished, MovePolicy, MoveReason};
 use super::drive::{LoopEnd, Run, finish, pump, view};
 use super::monitor::Feed;
 use super::output::{JobStream, Shared, check_start, lock};
+use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::spill::Config as SpillConfig;
 
 /// The call's cancel reaches the command through this bridge. The cancel
@@ -44,6 +45,9 @@ pub(crate) struct Moved {
     pub(super) cap: u64,
     /// Where a resumed command spills past 1 MiB, when the shell has one.
     pub(super) spill: Option<SpillConfig>,
+    /// The end-of-call owner: the job's common finish and the resumed
+    /// foreground path each consume it exactly once.
+    pub(super) protection: Option<ProtectionGuard>,
 }
 
 impl Moved {
@@ -93,28 +97,31 @@ impl Moved {
     }
 
     /// Runs the command to the end with no further move, on the job's
-    /// cancel, which [`Moved::arm`] has subscribed.
+    /// cancel, which [`Moved::arm`] has subscribed. Consumes the guard, so
+    /// the job's common finish compares, restores and reports exactly once.
     pub(crate) fn drive_job(
         mut self,
         clock: &dyn Clock,
         cancel: &dyn Cancel,
         stream: JobStream,
         feed: Option<Feed>,
-    ) -> Finished {
+    ) -> (Finished, Option<ProtectedReport>) {
         self.progress.job = Some(stream);
         self.progress.feed = feed.map(Box::new);
-        self.run(MovePolicy::Stay, clock, cancel, &Silent)
+        let (finished, protection) = self.run(MovePolicy::Stay, clock, cancel, &Silent);
+        (finished, protection.map(ProtectionGuard::finish))
     }
 
     /// Keeps running in the foreground. Used when the job could not be opened.
     /// Arms the spill, so a resumed command spills past 1 MiB as a
-    /// foreground one does.
+    /// foreground one does. Consumes the guard, so the resumed path owns
+    /// the end exactly once.
     pub(crate) fn resume(
         self,
         clock: &dyn Clock,
         cancel: &dyn Cancel,
         emit: &dyn Emit,
-    ) -> Finished {
+    ) -> (Finished, Option<ProtectedReport>) {
         if self.spill.is_some() {
             let mut inner = lock(&self.progress.shared.inner);
             if inner.spill.is_none() && inner.file.is_none() {
@@ -122,7 +129,8 @@ impl Moved {
                 check_start(&mut inner, 0);
             }
         }
-        self.run(MovePolicy::Stay, clock, cancel, emit)
+        let (finished, protection) = self.run(MovePolicy::Stay, clock, cancel, emit);
+        (finished, protection.map(ProtectionGuard::finish))
     }
 
     fn run(
@@ -131,15 +139,16 @@ impl Moved {
         clock: &dyn Clock,
         cancel: &dyn Cancel,
         emit: &dyn Emit,
-    ) -> Finished {
+    ) -> (Finished, Option<ProtectionGuard>) {
         let Moved {
             bridge,
             mut progress,
+            protection,
             ..
         } = self;
         let _bridge = bridge;
         match pump(&mut progress, policy, clock, cancel, emit) {
-            LoopEnd::Finished(finished) => finished,
+            LoopEnd::Finished(finished) => (finished, protection),
             // `Stay` does not move. Finishing here keeps a bug from spinning.
             LoopEnd::Move(_) => {
                 let view = view(&progress.shared, cancel);
@@ -151,7 +160,7 @@ impl Moved {
                 {
                     support::group::live().unlist(*listing);
                 }
-                finish(
+                let finished = finish(
                     &progress.shared,
                     progress.stop,
                     progress.sent_signal,
@@ -159,7 +168,8 @@ impl Moved {
                     view.eof,
                     emit,
                     &mut progress.stream_carry,
-                )
+                );
+                (finished, protection)
             }
         }
     }

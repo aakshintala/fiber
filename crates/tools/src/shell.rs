@@ -12,7 +12,7 @@ use contract::diag::Timing;
 use contract::emit::Emit;
 use contract::jobs::Jobs;
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, Failure, Process};
+use contract::shapes::{ContentPart, Effect, Failure, Process};
 use contract::tool::{Ask, Bound, Cancel, Effects, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -54,6 +54,7 @@ mod sed;
 
 use classify::{classify, review_when_confined};
 use command::{Finished, SandboxApply, StopKind};
+use sandbox::protected::{ProtectedPaths, Report as ProtectedReport};
 
 #[cfg(test)]
 #[path = "shell/run_effects_tests.rs"]
@@ -115,6 +116,10 @@ pub struct Shell {
     bound: Bound,
     /// A test's writer around a spill's file, if any.
     spill_wrap: Option<spill::Wrap>,
+    /// The session's shared protection handle for the project: confined
+    /// Linux spawns take their guard from it. Unconfined and read-only
+    /// calls take none.
+    protection: Option<Arc<ProtectedPaths>>,
 }
 
 impl Shell {
@@ -140,6 +145,7 @@ impl Shell {
                 end: 8192,
             },
             spill_wrap: None,
+            protection: None,
         }
     }
 
@@ -218,6 +224,17 @@ impl Shell {
     pub fn with_sandbox(self, settings: Arc<Mutex<sandbox::Settings>>) -> Self {
         Self {
             sandbox: settings,
+            ..self
+        }
+    }
+
+    /// Takes the end-of-call guard for confined Linux spawns from the
+    /// session's shared protection handle. Unconfined and read-only calls
+    /// take none.
+    #[must_use]
+    pub fn with_protection(self, protection: Arc<ProtectedPaths>) -> Self {
+        Self {
+            protection: Some(protection),
             ..self
         }
     }
@@ -348,7 +365,7 @@ impl Tool for Shell {
                 deny_read: Vec::new(),
                 fiber_home: PathBuf::new(),
             };
-            return self.run_inner(arguments, &off, cancel, emit);
+            return self.run_inner(arguments, &off, cancel, emit, Some(effects));
         }
         // Declared confined: the frozen settings either still apply, or the
         // call fails here, before any spawn.
@@ -364,7 +381,7 @@ impl Tool for Shell {
                 Err(error) => errored(error),
             };
         }
-        self.run_inner(arguments, &settings, cancel, emit)
+        self.run_inner(arguments, &settings, cancel, emit, Some(effects))
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
@@ -379,10 +396,10 @@ impl Tool for Shell {
                 deny_read: Vec::new(),
                 fiber_home: PathBuf::new(),
             };
-            return self.run_inner(arguments, &off, cancel, emit);
+            return self.run_inner(arguments, &off, cancel, emit, None);
         }
         let settings = self.selected();
-        self.run_inner(arguments, &settings, cancel, emit)
+        self.run_inner(arguments, &settings, cancel, emit, None)
     }
 
     fn bound(&self) -> Bound {
@@ -418,12 +435,15 @@ impl Shell {
     /// Runs the call under `settings`, shared by direct and loop calls. The
     /// settings are a frozen snapshot: `check_available` inside spawn sees
     /// the same value this call was decided on, never a newer reload.
+    /// `effects` is the loop's prepared decision, when the loop called:
+    /// unconfined and read-only calls take no protected-path transaction.
     fn run_inner(
         &self,
         arguments: &Map<String, Value>,
         settings: &sandbox::Settings,
         cancel: &dyn Cancel,
         emit: &dyn Emit,
+        effects: Option<&Effects>,
     ) -> Output {
         if cancel.is_cancelled() {
             return cancelled_before();
@@ -483,6 +503,18 @@ impl Shell {
             None
         };
         let side = matches.as_ref().map(matches::MatchDir::file);
+        // Unconfined and read-only calls take no protected-path
+        // transaction: a declared-not-confined call never confines, and a
+        // read-only call changes nothing to restore.
+        let protection = match (&self.protection, effects) {
+            (Some(handle), None) => Some(handle.as_ref()),
+            (Some(handle), Some(prepared))
+                if prepared.declared.confined && !is_read_only(prepared) =>
+            {
+                Some(handle.as_ref())
+            }
+            (Some(_), _) | (None, _) => None,
+        };
         let mut output = match command::execute(
             program,
             &command,
@@ -497,9 +529,10 @@ impl Shell {
             side.as_deref(),
             settings,
             &self.workspace,
+            protection,
         ) {
-            Ok(command::Ran::Finished(finished)) => {
-                from_spawn(Ok(finished), limit, &parsed.command)
+            Ok(command::Ran::Finished(finished, report)) => {
+                from_spawn_reported(Ok(finished), limit, &parsed.command, report)
             }
             Ok(command::Ran::Moved(moved)) => match &self.jobs {
                 Some(jobs) => background::take(
@@ -515,8 +548,8 @@ impl Shell {
                     started,
                 ),
                 None => {
-                    let finished = moved.resume(self.clock.as_ref(), cancel, emit);
-                    from_spawn(Ok(finished), limit, &parsed.command)
+                    let (finished, report) = moved.resume(self.clock.as_ref(), cancel, emit);
+                    from_spawn_reported(Ok(finished), limit, &parsed.command, report)
                 }
             },
             Err(err) => from_spawn(Err(err), limit, &parsed.command),
@@ -744,6 +777,31 @@ fn shell_program() -> &'static Path {
     }
 }
 
+/// A call whose declared effects are only reads changes nothing, so it
+/// takes no protected-path transaction.
+fn is_read_only(effects: &Effects) -> bool {
+    !effects.declared.effects.is_empty()
+        && effects
+            .declared
+            .effects
+            .iter()
+            .all(|effect| *effect == Effect::Reads)
+}
+
+/// Maps the spawn outcome like [`from_spawn`], carrying the call's
+/// end-of-call protected-path report into the foreground result.
+pub(crate) fn from_spawn_reported(
+    result: Result<Finished, std::io::Error>,
+    limit: Limit,
+    command: &str,
+    report: Option<ProtectedReport>,
+) -> Output {
+    match result {
+        Ok(finished) => assemble_reported(limit, finished, None, Some(command), report),
+        Err(error) => from_spawn(Err(error), limit, command),
+    }
+}
+
 fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit, command: &str) -> Output {
     match result {
         Ok(finished) => assemble(limit, finished, None, Some(command)),
@@ -779,6 +837,40 @@ fn details(command: &str, process: Option<&Process>) -> Value {
         }
     }
     Value::Object(details)
+}
+
+/// Assembles a foreground result with the protected-path report of its
+/// end: the notice names each changed path in the result text, the
+/// structured report lands in `details`, and the contract field rides for
+/// the completion. Absent when no confined transaction ran.
+pub(crate) fn assemble_reported(
+    limit: Limit,
+    finished: Finished,
+    extra: Option<&str>,
+    command: Option<&str>,
+    report: Option<ProtectedReport>,
+) -> Output {
+    let notice: Vec<String> = report
+        .as_ref()
+        .map(ProtectedReport::warning_lines)
+        .unwrap_or_default();
+    let extra = match (extra, notice.is_empty()) {
+        (None, true) => None,
+        (None, false) => Some(notice.join("\n")),
+        (Some(line), true) => Some(line.to_owned()),
+        (Some(line), false) => Some(format!("{line}\n{}", notice.join("\n"))),
+    };
+    let mut output = assemble(limit, finished, extra.as_deref(), command);
+    if let Some(inner) = report
+        .as_ref()
+        .filter(|report| !report.is_empty())
+        .and_then(|report| serde_json::to_value(report).ok())
+        && let Some(Value::Object(map)) = output.details.as_mut()
+    {
+        map.insert("protected_paths".to_owned(), inner);
+    }
+    output.protected_paths = report.as_ref().filter(|report| !report.is_empty()).cloned();
+    output
 }
 
 /// The result of a finished command: `extra`, when the job could not be

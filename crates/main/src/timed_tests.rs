@@ -193,6 +193,7 @@ fn session(
         timing,
         Default::default(),
         sandbox,
+        None,
     )
     .expect("the built-ins");
     (tools, images)

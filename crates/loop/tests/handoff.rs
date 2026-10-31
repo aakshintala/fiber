@@ -1472,6 +1472,7 @@ fn a_turn_a_job_started_goes_on_after_a_handoff() {
 
             notice: None,
             changed_by: None,
+            protected_paths: None,
         },
         claim: contract::inbox::Claim(Box::new(|| Some(Vec::new()))),
         delegate: None,

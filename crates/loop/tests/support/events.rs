@@ -80,6 +80,7 @@ pub(crate) fn completed_event(text: &str) -> Event {
         provider_item: None,
         hosts_surfaced: Vec::new(),
         loaded: None,
+        protected_paths: None,
     })
 }
 
@@ -169,6 +170,7 @@ pub(crate) fn job_completed(id: &str) -> Event {
 
         notice: None,
         changed_by: None,
+        protected_paths: None,
     })
 }
 
