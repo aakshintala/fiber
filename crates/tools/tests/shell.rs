@@ -3327,6 +3327,42 @@ fn a_confined_shell_runs_and_marks_its_effects() {
     assert!(text(&output).contains("hi"));
 }
 
+/// Guarded and unguarded confined effects side by side: both declare
+/// confined, and only the destructive form carries the guard, so the
+/// loop's fast path takes one and reviews the other.
+#[test]
+fn confined_effects_mark_the_guard_only_on_destructive_forms() {
+    let dir = fakes::TempDir::new("fiber-tools-shell-confined-guard-forms");
+    let workspace = dir.path().to_path_buf();
+    let (_home, settings) = sandbox_settings_for_integration();
+    let shell =
+        Shell::new(workspace, FakeClock::new()).with_sandbox(Arc::new(Mutex::new(settings)));
+    let guarded = shell
+        .effects(&args("rm -rf tmp"))
+        .expect("the guarded command classifies");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert!(
+        guarded.declared.confined,
+        "the sandbox still confines the guarded call"
+    );
+    assert!(
+        guarded.review_when_confined,
+        "the destructive form carries the guard"
+    );
+    let plain = shell
+        .effects(&args("echo hi"))
+        .expect("the plain command classifies");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert!(
+        plain.declared.confined,
+        "the sandbox confines the plain call"
+    );
+    assert!(
+        !plain.review_when_confined,
+        "the plain form carries no guard"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_confined_shell_restores_protected_checkout_paths_and_reports_them() {
@@ -3535,6 +3571,10 @@ fn a_confined_spawn_failure_fails_once_without_an_unconfined_retry() {
     let effects = shell
         .effects(&args(&command))
         .expect("the shell command classifies");
+    assert!(
+        effects.declared.confined,
+        "the failed call still declares confined: the start carries it"
+    );
     // The reload turns the sandbox off between the declaration and the run.
     sandbox.lock().unwrap().enabled = false;
     let output = shell.run_with_effects(
@@ -3552,6 +3592,11 @@ fn a_confined_spawn_failure_fails_once_without_an_unconfined_retry() {
     assert!(
         text(&output).contains("The sandbox could not be applied"),
         "the failure names the sandbox: {}",
+        text(&output)
+    );
+    assert!(
+        text(&output).contains("the sandbox is off"),
+        "the failure names the cause: {}",
         text(&output)
     );
     assert!(

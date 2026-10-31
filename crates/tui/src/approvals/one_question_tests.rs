@@ -515,6 +515,37 @@ fn text_input_paste_turns_control_characters_into_spaces() {
 }
 
 #[test]
+fn text_input_delete_to_line_start_clears_the_words_row() {
+    let mut question = OneQuestion::text_input("Words?".to_owned());
+    type_text(&mut question, "one two three");
+    assert_eq!(
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ one two three")
+    );
+    // Ghostty sends ⌘Backspace as `\x15`, the `delete_to_line_start` key.
+    question.on_edit(&Edit::DeleteToLineStart);
+    assert_eq!(
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ Type an answer")
+    );
+}
+
+#[test]
+fn text_input_delete_word_deletes_the_previous_word() {
+    let mut question = OneQuestion::text_input("Words?".to_owned());
+    type_text(&mut question, "one two");
+    assert_eq!(
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ one two")
+    );
+    question.on_edit(&Edit::DeleteWord);
+    assert_eq!(
+        lines(&question).get(4).map(String::as_str),
+        Some("▸ 1 ✎ one ")
+    );
+}
+
+#[test]
 fn text_input_enter_on_submit_sends_the_answer() {
     let mut question = OneQuestion::text_input("Words?".to_owned());
     press(&mut question, &[Key::Down]);

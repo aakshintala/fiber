@@ -691,10 +691,11 @@ pub(super) fn render(
             buf.set_style(clipped, crate::view::marks::selection_style());
         }
     }
-    // The cursor is a drawn dim `█` at the draft's cursor while nothing
-    // takes the keyboard (`docs/tui.md`, "The input box"). A focused
-    // chip keeps it there: the chip is the input box's keyboard. The
-    // terminal's own cursor stays where `cursor` puts it.
+    // The caret's cell draws the covered character in the slab's colour
+    // on the text colour, or a block in the text colour past the row's
+    // end, while nothing takes the keyboard (`docs/tui.md`, "The input
+    // box"). A focused chip keeps it there: the chip is the input box's
+    // keyboard. The terminal's own cursor stays where `cursor` puts it.
     let chip_focused = matches!(app.focused(), Some(TargetId::Home(spot)) if spot.is_chip());
     if app.focused().is_none() || chip_focused {
         let (row, col) = app.input().cursor(placed.inner);
@@ -705,7 +706,13 @@ pub(super) fn render(
         // The draft sits below the area's top row by construction, so
         // only the bottom needs the guard.
         if y < area.bottom() {
-            buf.set_stringn(x, y, "█", 1, style(Role::Muted));
+            let covered = row
+                .checked_sub(placed.top)
+                .and_then(|at| placed.shown.get(at))
+                .and_then(|shown| crate::view::cursor::covered_symbol(shown, usize::from(col)));
+            let (symbol, style) =
+                crate::view::cursor::cursor_cell(covered.as_deref(), Role::Surface, Role::Text);
+            buf.set_stringn(x, y, &symbol, crate::text::width(&symbol), style);
         }
     }
     // The chip row: the workspace, the model, the thinking level, and

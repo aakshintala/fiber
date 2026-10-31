@@ -13,7 +13,7 @@ use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
-use super::tests::{DEADLINE, hello, launch, new_loop, open};
+use super::tests::{DEADLINE, command, hello, launch, new_loop, open};
 use crate::pty_watch::{watch, watched};
 
 /// At `info` the terminal records nothing: a refused-connect run writes
@@ -167,6 +167,7 @@ fn first_render_writes_one_line_in_the_wire_shape() {
     let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     drop(timing.first_render());
     let lines = op_lines(home.path());
+    // docs/state.md:430-432 promises the entry-to-first-draw operation.
     assert_terminal_wire(&lines, "tui.first_render");
     assert_eq!(lines[0]["data"]["ms"], 0, "the frozen clock reads zero");
 }
@@ -180,9 +181,47 @@ fn discarded_first_render_writes_nothing() {
     let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     crate::timing::discard(timing.first_render());
     crate::timing::discard(None);
+    // docs/state.md:430-432 says setup before the first draw writes none.
     assert!(
         !log_file(home.path()).exists(),
         "a discarded guard writes no line"
+    );
+}
+
+/// The attached-frame guard starts with the first-render guard, outlives
+/// that first draw, and writes once when the attached history draws.
+#[test]
+fn attached_frame_nests_beyond_first_render() {
+    let home = fakes::TempDir::new("tui-timing-attached-frame-nesting");
+    let clock = FakeClock::new();
+    let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    let first_render = timing.first_render();
+    let attached_frame = timing.attached_frame();
+    drop(first_render);
+    let lines = op_lines(home.path());
+    // docs/state.md:431-435: first-render and attached-frame share entry; attached-frame ends later.
+    assert_terminal_wire(&lines, "tui.first_render");
+    drop(attached_frame);
+    let attached: Vec<Value> = op_lines(home.path())
+        .into_iter()
+        .filter(|line| line["data"]["op"] == "tui.attached_frame")
+        .collect();
+    // docs/state.md:432-435 promises one attached-frame line per process.
+    assert_terminal_wire(&attached, "tui.attached_frame");
+}
+
+/// An attached-frame guard discarded before attached history draws writes
+/// no line.
+#[test]
+fn discarded_attached_frame_writes_nothing() {
+    let home = fakes::TempDir::new("tui-timing-attached-frame-discard");
+    let clock = FakeClock::new();
+    let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    crate::timing::discard(timing.attached_frame());
+    // docs/state.md:432-435 says an attach that ends before the draw writes none.
+    assert!(
+        !log_file(home.path()).exists(),
+        "a discarded attached-frame guard writes no line"
     );
 }
 
@@ -196,6 +235,7 @@ fn log_read_writes_once_per_process() {
     drop(timing.log_read());
     drop(timing.log_read());
     let lines = op_lines(home.path());
+    // docs/state.md:435-440 promises one first-page read line per process.
     assert_terminal_wire(&lines, "tui.log_read");
 }
 
@@ -209,7 +249,110 @@ fn transcript_writes_once_per_process() {
     drop(timing.transcript());
     drop(timing.transcript());
     let lines = op_lines(home.path());
+    // docs/state.md:438-440 promises one successful transcript-fold line per process.
     assert_terminal_wire(&lines, "tui.transcript");
+}
+
+/// The extension load writes one `tui.extensions` line in the wire shape.
+#[test]
+fn extensions_writes_one_line_in_the_wire_shape() {
+    let home = fakes::TempDir::new("tui-timing-extensions");
+    let clock = FakeClock::new();
+    let timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.extensions());
+    let lines = op_lines(home.path());
+    // docs/state.md:428-429 promises one line when the loader exists.
+    assert_terminal_wire(&lines, "tui.extensions");
+}
+
+/// The opening summary subscribe writes once: a second attach writes
+/// nothing.
+#[test]
+fn attach_summary_writes_once_per_process() {
+    let home = fakes::TempDir::new("tui-timing-attach-summary");
+    let clock = FakeClock::new();
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.attach_summary());
+    // docs/state.md:444-446,453 promises at most one summary line per process.
+    assert!(
+        timing.attach_summary().is_none(),
+        "a second attach takes no summary guard"
+    );
+    let lines = op_lines(home.path());
+    // docs/state.md:444-446,453 promises the scope and once-per-process count.
+    assert_terminal_wire(&lines, "tui.attach_summary");
+}
+
+/// The pre-frame tail read writes once: the post-frame count takes no
+/// guard, so a second tail phase writes nothing.
+#[test]
+fn tail_wait_writes_once_per_process() {
+    let home = fakes::TempDir::new("tui-timing-tail-wait");
+    let clock = FakeClock::new();
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.tail_wait());
+    // docs/state.md:446-448,453 promises at most one tail-wait line per process.
+    assert!(
+        timing.tail_wait().is_none(),
+        "a second tail phase takes no guard"
+    );
+    let lines = op_lines(home.path());
+    // docs/state.md:446-448,453 promises the scope and once-per-process count.
+    assert_terminal_wire(&lines, "tui.tail_wait");
+}
+
+/// The first answer fold writes once per process: a later fold writes no
+/// second line.
+#[test]
+fn preview_fold_writes_once_per_process() {
+    let home = fakes::TempDir::new("tui-timing-preview-fold");
+    let clock = FakeClock::new();
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.preview_fold());
+    // docs/state.md:448-450,453 promises at most one answer-fold line per process.
+    assert!(
+        timing.preview_fold().is_none(),
+        "a later answer fold takes no guard"
+    );
+    let lines = op_lines(home.path());
+    // docs/state.md:448-450,453 promises the scope and once-per-process count.
+    assert_terminal_wire(&lines, "tui.preview_fold");
+}
+
+/// The pre-frame install writes once: a second install takes no guard,
+/// so a second open writes nothing.
+#[test]
+fn tail_install_writes_once_per_process() {
+    let home = fakes::TempDir::new("tui-timing-tail-install");
+    let clock = FakeClock::new();
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    drop(timing.tail_install());
+    // docs/state.md:450-454 promises at most one install line per process.
+    assert!(
+        timing.tail_install().is_none(),
+        "a second install takes no guard"
+    );
+    let lines = op_lines(home.path());
+    // docs/state.md:450-454 promises the scope and once-per-process count.
+    assert_terminal_wire(&lines, "tui.tail_install");
+}
+
+/// At `info` the attach spans record nothing: the extension load, the
+/// summary, the tail wait, a fold and the install write no file.
+#[test]
+fn attach_spans_write_nothing_at_info() {
+    let home = fakes::TempDir::new("tui-timing-attach-spans-info");
+    let mut timing = crate::timing::Timing::info();
+    crate::timing::discard(timing.extensions());
+    crate::timing::discard(timing.attach_summary());
+    crate::timing::discard(timing.tail_wait());
+    crate::timing::discard(timing.preview_fold());
+    crate::timing::discard(timing.tail_install());
+    crate::timing::discard(None);
+    assert!(
+        !home.path().join("logs").exists(),
+        "at info no attach span writes a line"
+    );
 }
 
 /// A frame the scripted clock pushes over budget writes `tui.frame`.
@@ -223,6 +366,7 @@ fn frame_over_budget_writes_through_the_loop() {
     let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.frame(&rx), None);
     let lines = op_lines(home.path());
+    // docs/state.md:441-443 promises an over-budget frame line.
     assert_terminal_wire(&lines, "tui.frame");
     assert!(
         lines[0]["data"]["ms"].as_u64().is_some_and(|ms| ms >= 20),
@@ -242,6 +386,7 @@ fn frame_within_budget_writes_nothing() {
     lp.timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
     let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.frame(&rx), None);
+    // docs/state.md:441-443 says an in-budget frame writes none.
     assert!(
         !log_file(home.path()).exists(),
         "a frame within budget writes no line"
@@ -413,12 +558,14 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
         .filter(|line| line["data"]["op"] == "tui.log_read")
         .cloned()
         .collect();
+    // docs/state.md:435-440 promises one first-page read line per process.
     assert_terminal_wire(&log_read, "tui.log_read");
     let transcript: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.transcript")
         .cloned()
         .collect();
+    // docs/state.md:438-440 promises one successful transcript-fold line per process.
     assert_terminal_wire(&transcript, "tui.transcript");
 }
 
@@ -524,12 +671,14 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
         .filter(|line| line["data"]["op"] == "tui.log_read")
         .cloned()
         .collect();
+    // docs/state.md:435-440 promises one first-page read line per process.
     assert_terminal_wire(&log_read, "tui.log_read");
     let transcript: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.transcript")
         .cloned()
         .collect();
+    // docs/state.md:438-440 says a failed fetch leaves the transcript latch unset.
     assert!(
         transcript.is_empty(),
         "a failed fetch leaves tui.transcript unset: {transcript:?}"
@@ -568,13 +717,326 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
         .filter(|line| line["data"]["op"] == "tui.log_read")
         .cloned()
         .collect();
+    // docs/state.md:435-440 promises one first-page read line per process.
     assert_terminal_wire(&log_read, "tui.log_read");
     let transcript: Vec<Value> = lines
         .iter()
         .filter(|line| line["data"]["op"] == "tui.transcript")
         .cloned()
         .collect();
+    // docs/state.md:438-440 promises one successful transcript-fold line per process.
     assert_terminal_wire(&transcript, "tui.transcript");
+}
+
+/// A debug-diag loop whose launch open sent its summary subscribe: the
+/// hello went in. Returns the home (for its log), the loop, and the
+/// subscribe's id, for the caller to accept.
+fn subscribing_lp(name: &str) -> (fakes::TempDir, super::Loop<TestBackend>, String) {
+    let home = fakes::TempDir::new(name);
+    let clock = FakeClock::new();
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.clock = dyn_clock(&clock);
+    lp.timing = crate::timing::Timing::new(debug_diag(home.path(), dyn_clock(&clock)));
+    lp.app = crate::app::testkit::home_with(
+        80,
+        24,
+        crate::home::Launch {
+            location: crate::LaunchLocation::Local {
+                workspace: std::path::PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git: false,
+            },
+            hover: true,
+            version: "0.0.1".to_owned(),
+            model: None,
+            thinking: None,
+            logo_glyph: "\u{237b}".to_owned(),
+            keys: crate::KeysSetup::default(),
+            rail_share: 15.0,
+            panel_share: 21.0,
+            panel_cards: Vec::new(),
+            open_at: crate::OpenAt::Session(
+                contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                None,
+            ),
+            ..Default::default()
+        },
+    );
+    lp.app.set_size(60, 12);
+    // The link comes up: the launch open sends the summary subscribe.
+    let lines = lp.app.on_line(crate::link::Line::Hub(hello()));
+    let summary = lines
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a summary subscribe goes out: {lines:?}"));
+    let id = summary["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{summary}"))
+        .to_owned();
+    (home, lp, id)
+}
+
+/// Every line of `lines` is a terminal `op_timing` wire line for `op`.
+fn assert_terminal_wires(lines: &[serde_json::Value], op: &str) {
+    assert!(!lines.is_empty(), "at least one line for {op}");
+    for line in lines {
+        assert_terminal_wire(std::slice::from_ref(line), op);
+    }
+}
+
+/// Accepts the launch open's summary subscribe, so the open reaches the
+/// commands-due stage.
+fn accept_summary(lp: &mut super::Loop<TestBackend>, id: &str) {
+    let _ = lp
+        .app
+        .on_line(crate::link::Line::Session(contract::Envelope {
+            kind: "command_accepted".to_owned(),
+            session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: [("command_id".to_owned(), json!(id))].into_iter().collect(),
+        }));
+}
+
+/// The opening summary subscribe is timed through its acceptance: the
+/// poll starts the guard while the summary is in flight and drops it on
+/// the frame after the acceptance folds, writing one
+/// `tui.attach_summary` line. A repeated poll while the summary is in
+/// flight starts no second guard.
+#[test]
+fn summary_span_covers_the_send_through_the_acceptance() {
+    let (home, mut lp, id) = subscribing_lp("tui-timing-summary-span");
+    assert!(lp.app.summary_in_flight(), "the summary is in flight");
+    lp.poll_summary_span();
+    assert!(
+        lp.summary_span.is_some(),
+        "the poll starts the guard while the summary is in flight"
+    );
+    // A repeated poll while the summary is in flight starts no second
+    // guard: flipping the `is_none` check would drop the first guard
+    // here and lose the send-to-acceptance span.
+    lp.poll_summary_span();
+    assert!(
+        lp.summary_span.is_some(),
+        "a repeated poll keeps the one guard"
+    );
+    // The acceptance folds: the commands line goes out and the open
+    // leaves the summary stage.
+    accept_summary(&mut lp, &id);
+    assert!(
+        !lp.app.summary_in_flight(),
+        "the acceptance leaves the summary stage"
+    );
+    lp.poll_summary_span();
+    assert!(
+        lp.summary_span.is_none(),
+        "the poll drops the guard after the acceptance"
+    );
+    let lines = op_lines(home.path());
+    // docs/state.md:444-446,453 promises the scope and once-per-process count.
+    assert_terminal_wire(&lines, "tui.attach_summary");
+}
+
+/// A latched summary timer starts no second guard: the poll leaves the
+/// span unset while a second summary is in flight, so a second open
+/// writes no second line.
+#[test]
+fn summary_poll_starts_nothing_once_the_latch_is_set() {
+    let (home, mut lp, _) = subscribing_lp("tui-timing-summary-latch");
+    // The latch is set, as a first open left it: dropping the guard
+    // writes that first open's line.
+    crate::timing::discard(lp.timing.attach_summary());
+    assert!(lp.app.summary_in_flight(), "the summary is in flight");
+    lp.poll_summary_span();
+    assert!(
+        lp.summary_span.is_none(),
+        "a latched timer starts no guard for a second open"
+    );
+    // docs/state.md:444-446,453 promises at most one summary line per process.
+    assert!(
+        !log_file(home.path()).exists(),
+        "a second open writes no second line"
+    );
+}
+
+/// The attached-frame guard survives the session draw while the summary
+/// is still in flight, then ends after the tail read installs and draws
+/// its preview. The open's pre-frame tail read is timed end to end: one
+/// `tui.tail_wait` line spans the whole fetch, one `tui.preview_fold`
+/// line covers the answer fold (the empty seed fold writes none), and
+/// one `tui.tail_install` line covers installation, which installs the
+/// newest candidate without another fold (`docs/tui.md`, "History and
+/// paging"). A `Phase::Count` read takes no attach guard, so swapping
+/// the arms leaves none here (`docs/state.md`, "Diagnostic logs").
+#[test]
+fn attached_frame_waits_for_the_tail_install_and_draw() {
+    let (home, mut lp, id) = subscribing_lp("tui-timing-open-tail");
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub.store(ours);
+    lp.attached_frame = lp.timing.attached_frame();
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-open-tail-hub".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(theirs);
+            let mut text = String::new();
+            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                if command["command"] != "history" {
+                    continue;
+                }
+                let id = command["id"].clone();
+                let payload = json!({"command_id": id, "result": {"lines": []}});
+                let envelope = contract::Envelope {
+                    kind: "command_accepted".to_owned(),
+                    session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                    ts: 0,
+                    schema_version: contract::SCHEMA_VERSION,
+                    turn_id: None,
+                    action_id: None,
+                    seq: None,
+                    payload: payload.as_object().cloned().unwrap_or_default(),
+                };
+                if tx
+                    .send(crate::Input::Hub(crate::link::Line::Session(envelope)))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    assert_eq!(lp.frame_inner(&rx), None);
+    assert!(
+        lp.attached_frame.is_some(),
+        "the draw before summary acceptance leaves the guard open"
+    );
+    accept_summary(&mut lp, &id);
+    // The frame's tail read blocks in `recv`: it runs on a thread of its
+    // own and the loop arrives through one deadline, so a wait that never
+    // ends fails here instead of hanging the suite (`docs/testing.md`,
+    // "Waits and timeouts").
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-open-tail".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            assert_eq!(lp.frame_inner(&rx), None);
+            done.send(lp).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let lp = Deadline::after(Duration::from_secs(10))
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the tail read and draw: {err}"));
+    assert!(
+        lp.attached_frame.is_none(),
+        "the successful tail install ends the guard after its draw"
+    );
+    drop(lp);
+    let lines = op_lines(home.path());
+    let attached: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.attached_frame")
+        .cloned()
+        .collect();
+    // docs/state.md:432-435 promises one line at the first attached-history draw.
+    assert_terminal_wire(&attached, "tui.attached_frame");
+    let waits: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.tail_wait")
+        .cloned()
+        .collect();
+    // docs/state.md:446-448,453 promises one tail-wait line per process.
+    assert_terminal_wire(&waits, "tui.tail_wait");
+    let folds: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.preview_fold")
+        .cloned()
+        .collect();
+    // docs/state.md:448-450,453 promises one answer-fold line per process.
+    assert_eq!(folds.len(), 1, "the answer fold only: {folds:?}");
+    // docs/state.md:448-450,453 promises one answer-fold line per process.
+    assert_terminal_wires(&folds, "tui.preview_fold");
+    let installs: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["data"]["op"] == "tui.tail_install")
+        .cloned()
+        .collect();
+    // docs/state.md:450-454 promises one install line per process.
+    assert_eq!(
+        installs.len(),
+        1,
+        "the install without another fold: {installs:?}"
+    );
+    // docs/state.md:450-454 promises one install line per process.
+    assert_terminal_wires(&installs, "tui.tail_install");
+}
+
+/// A due opening with no hub stream installs no attached-frame timing:
+/// there is no fetched history to draw.
+#[test]
+fn attached_frame_stays_open_when_tail_is_due_without_a_stream() {
+    let (home, mut lp, id) = subscribing_lp("tui-timing-attached-no-stream");
+    lp.attached_frame = lp.timing.attached_frame();
+    accept_summary(&mut lp, &id);
+    let (_tx, rx) = mpsc::channel();
+    assert_eq!(lp.frame_inner(&rx), None);
+    assert!(
+        lp.attached_frame.is_some(),
+        "a due open without a stream does not end the guard"
+    );
+    crate::timing::discard(lp.attached_frame.take());
+    // docs/state.md:432-435 promises no line when an attach has no stream.
+    assert!(
+        !log_file(home.path()).exists(),
+        "no stream means no attached-frame line"
+    );
+}
+
+/// A lost tail wait has no fetched history to draw, even though it began
+/// with a live stream.
+#[test]
+fn attached_frame_stays_open_when_tail_fetch_is_lost() {
+    let (home, mut lp, id) = subscribing_lp("tui-timing-attached-lost-tail");
+    let (ours, peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub.store(ours);
+    lp.attached_frame = lp.timing.attached_frame();
+    accept_summary(&mut lp, &id);
+    let (tx, rx) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-attached-lost-tail".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            let result = lp.frame_inner(&rx);
+            done.send((lp, result)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (_peer, request) = command(BufReader::new(peer), "tail history request");
+    assert_eq!(request["command"], "history");
+    tx.send(crate::Input::Disconnected)
+        .unwrap_or_else(|err| panic!("send disconnect during tail fetch: {err}"));
+    let (lp, result) = Deadline::after(Duration::from_secs(10))
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the lost tail frame: {err}"));
+    assert_eq!(result, None);
+    assert!(
+        lp.attached_frame.is_some(),
+        "a lost tail read does not end the guard"
+    );
+    crate::timing::discard(lp.attached_frame);
+    // docs/state.md:432-435 promises no attached-frame line when no history draw occurs.
+    assert!(
+        op_lines(home.path())
+            .iter()
+            .all(|line| line["data"]["op"] != "tui.attached_frame"),
+        "a lost tail read means no attached-frame line"
+    );
 }
 
 /// A refused connect still draws its first frame, and only it.
@@ -621,5 +1083,6 @@ fn refused_connect_writes_only_first_render() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
     let lines = op_lines(home.path());
+    // docs/state.md:430-432 promises the entry-to-first-draw operation.
     assert_terminal_wire(&lines, "tui.first_render");
 }

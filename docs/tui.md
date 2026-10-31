@@ -662,8 +662,9 @@ Its first row is the filter: "Type to search" dim until something is
 typed, then "›" dim and the query bold, with the cursor ("The input box") either
 way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
 under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
-while every model shows, and "⟳ refresh all" dim at the right end. Each
-provider is a section, a blank row between them: the provider's name dim,
+while every model shows, and "⟳ refresh all" dim at the right end. These
+counts include models only, not logged-out or not-installed provider rows.
+Each provider is a section, a blank row between them: the provider's name dim,
 then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
 `attention` while its list refreshes. In the choosing picker, a provider
 with models left out for a placeholder with no value shows one count row
@@ -696,21 +697,35 @@ thinking" dim for a model with none. On the focused model the levels are in
 ("[high]"); elsewhere they are dim. ← and → move between the focused
 model's chips. A model chosen for this session only gets a third row,
 "ⓢ this session only · nothing saved" dim. While a query is typed, the
-characters of each id it matched are underlined and bold; a query that
-matches no model, no count row and no not-installed row shows one
-line, "No models match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+characters of each id it matched are underlined and bold. If no model, count
+row, logged-out row or not-installed row matches, the picker shows one dim line,
+"No models match", and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
 Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 
-Below the last provider section, after a blank row, the choosing picker
-lists each first-party provider no installed extension declares, one row
+After the model sections and their left-out count rows, the choosing picker
+lists each installed provider with provider data but no credential, one row
+per provider in provider-name order. It never lists the scripted provider.
+When model sections precede these rows, a blank row separates them. A
+login-capable provider's row shows the gutter, its name in `accent`, and
+" · not logged in" dim. Enter or clicking its name closes the picker and
+opens `/login` with that provider focused. After a successful login, the
+provider's models appear the next time you open the picker. A provider with
+a `credential_label` instead shows its declared environment variables or
+file paths in a dim suffix, such as " · set AWS_ACCESS_KEY_ID to log in".
+Enter or clicking its name sends nothing. The row still takes focus. These rows
+appear only in the choosing picker, before not-installed rows. Typing filters
+them by provider name.
+
+After any logged-out rows, the choosing picker lists each first-party provider no installed extension declares, one row
 each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
-`accent`, " · not installed" dim. The scripted provider is never listed
+`accent`, " · not installed" dim. When other list rows precede them, a
+blank row separates them. The scripted provider is never listed
 (`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
-`/scoped-models` list none. Typing filters these rows by provider name as it
-filters models, and a query that matches no model, no count row and no not-installed row
-still shows the one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
-walk the models and then these rows; no row is focused until ↓ or a click
-puts it there, so Enter with no row focused does what it does with none
+`/scoped-models` list neither group. Typing filters these rows by provider
+name as it filters models. "Show all" leaves both row groups as they are.
+↑ and ↓ walk models, logged-out providers and then these rows; no row is
+focused until ↓ or a click puts it there, so Enter with no row focused does
+what it does with none
 listed (a query that hides every model focuses nothing). The focused row
 reads as a focused model does, with "› " in its gutter, bold, on the bar.
 Enter, or a click on the name, installs the provider as `fiber extension
@@ -1905,7 +1920,7 @@ through the `input_status` slot ("Extension seams").
 | Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
 | Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
-| Delete a word | `delete_word` | ⌥Backspace | |
+| Delete a word | `delete_word` | ⌥Backspace, Ctrl+Backspace, Ctrl+W | |
 | Delete to the start of the line | `delete_to_line_start` | Ctrl+U | |
 | Start or end of the line | `line_start_end` | Ctrl+A Ctrl+E; ⌘← ⌘→ where the terminal passes them | |
 | Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | `open_in_editor` | Ctrl+G | click the token |
@@ -1996,6 +2011,10 @@ A global action acts in all six. The rest act only where they are listed:
   `model_picker`.
 - Input and Steering: `line_break`, `search_prompts`, `move_word`,
   `delete_word`, `delete_to_line_start`, `line_start_end`, `paste_image`.
+- Every row in an overlay that takes text, as well: `move_word`,
+  `delete_word`, `delete_to_line_start` and `line_start_end`. That is an
+  approval's feedback, a question form's words row and its note, and
+  `text_input`.
 - Input: `send`, `recall_prompt`, `focus_rail`.
 - Steering: `amend_steering`.
 - Conversation: `delete_session`, `focus_next_prev`, `open_focused`,
@@ -3172,8 +3191,11 @@ do not carry over to Linux; the call counts do.
 One slot has focus at a time: the input box, an open view, or the overlay on
 top. An extension's view or overlay takes focus when it opens.
 
-- **Keys** reach the focused slot first, as names such as `ctrl+o`, `alt+up`
-  or `shift+enter`, and typed text as text. A paste is one event. The handler
+- **Keys** reach the focused slot's `on_key` first, as names such as
+  `ctrl+o`, `alt+up` or `shift+enter`, and typed text as text. Typed text is
+  what bare typing names below. A paste is one event holding the whole pasted
+  text before the built-in box collapses it, so a replaced box sees the raw
+  text (`docs/extensions.md`, "Commands and screens"). The handler
   returns whether it handled the key. A key it did not handle goes to the key
   map as if no extension were there.
 - **Whole-screen bindings act before the built-in key map.** An eligible
@@ -3188,12 +3210,17 @@ top. An extension's view or overlay takes focus when it opens.
   settle before the fallthrough, and action events keep their built-in
   settle behavior. Only Ctrl+C reaches the bindings from the `/keys`
   screen, so no screen code skips dispatch: Ctrl+C itself is unregistrable.
-- **Esc** closes whatever is on top, unless the focused slot handles it
-  itself.
+- **Esc** closes whatever is on top, or interrupts the turn, unless the
+  focused slot handles it itself.
 - **The second Ctrl+C always quits** ("Quit"), whatever the focused
   slot does, so a slot that swallows every key cannot trap the person. The
-  first Ctrl+C is the slot's.
-- **A click** on a span with a `click` id goes to that slot's click handler.
+  first Ctrl+C is the slot's, even with the box empty; unhandled, it clears
+  the draft or arms the quit prompt as built in. The terminal counts the
+  presses itself: a Ctrl+C within about a second of an earlier one quits,
+  whether or not the slot handled the earlier one. The second Ctrl+C is the
+  only key the terminal keeps from the focused slot.
+- **A click** on a span with a `click` id goes to that slot's click handler,
+  with the id and the session on screen.
   The wheel, a drag and any click it does not handle go to the terminal, so
   scrolling and selection keep working.
 
@@ -3202,7 +3229,15 @@ once keyboard detection finishes ("Keys", "Rules"). An extension that binds
 one also binds a key that works without the protocol, as the built-ins do.
 Every click target an extension draws is a focus stop in navigate mode
 ("Moving through the conversation"), so its widgets need no focus order of
-their own.
+their own. The terminal finds them in the cached spans, whose `click` ids are
+part of the renderer's output, so the cache key needs nothing more and finding
+them calls no Lua. Enter on a focused stop makes the same click call.
+
+A key or click handler runs only when input arrives, so it adds nothing while
+nothing happens ("Performance"). Its declared timeout bounds it. The frame
+budgets in `docs/performance.md` are measured without a TUI extension, and a
+handler's time is the extension author's cost, as its timers are
+("Animation").
 
 ### Animation
 

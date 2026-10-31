@@ -192,16 +192,19 @@ pub(super) fn draw_typed_picker(
     for row in &body_rows {
         let focused = overall(row).is_some_and(|at| Some(at) == focus);
         match row {
-            TypedRow::Typed => body.push(overlay::Row {
-                spans: vec![
-                    Span::styled("› ".to_owned(), info),
-                    Span::raw(cut(&typed.text, text)),
-                    Span::styled("█".to_owned(), dim),
-                ],
-                right: Vec::new(),
-                targets: Vec::new(),
-                barred: false,
-            }),
+            TypedRow::Typed => {
+                let (_, style) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
+                body.push(overlay::Row {
+                    spans: vec![
+                        Span::styled("› ".to_owned(), info),
+                        Span::raw(cut(&typed.text, text)),
+                        Span::styled("█".to_owned(), style),
+                    ],
+                    right: Vec::new(),
+                    targets: Vec::new(),
+                    barred: false,
+                });
+            }
             TypedRow::Completion(at) => {
                 let name = &typed.completions[*at];
                 body.push(overlay::Row {
