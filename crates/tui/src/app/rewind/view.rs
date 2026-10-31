@@ -385,6 +385,7 @@ pub(super) fn render(
         below.extend(detail(cursor.point(), fold, jobs));
     }
     Frame {
+        joins: Vec::new(),
         title: "Rewind".to_owned(),
         command: "/rewind".to_owned(),
         rows,

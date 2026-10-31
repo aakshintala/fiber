@@ -13,6 +13,7 @@ use crate::app::App;
 use crate::format;
 use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
+use crate::rows::Join;
 use crate::theme::Role;
 use crate::view::overlay;
 
@@ -328,6 +329,11 @@ pub(crate) struct Frame {
     /// The rows, each in cells drawn left to right, some with a click
     /// target of their own, each with how it draws.
     pub(crate) rows: Vec<Vec<(String, Option<Spot>, Ink)>>,
+    /// How each row's text joins the row before it: the first display
+    /// line of a wrapped action breaks, its continuations wrap
+    /// (`docs/tui.md`, "Selection and copy"). Short or missing means a
+    /// break; only the rebinding screen fills it.
+    pub(crate) joins: Vec<Join>,
     /// The selection and the first row shown.
     pub(crate) list: List,
     /// Lines below the rows: what a write said, when a key applies.
@@ -482,7 +488,13 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
     let shown = rows_height(frame, usize::from(area.height));
     let mut noted = Vec::new();
     let mut y = area.y.saturating_add(1);
-    for cells in frame.rows.iter().skip(frame.list.top()).take(shown) {
+    for (at, cells) in frame
+        .rows
+        .iter()
+        .enumerate()
+        .skip(frame.list.top())
+        .take(shown)
+    {
         let gutter = frame.list.is_gutter();
         let x = if gutter {
             area.x.saturating_add(crate::text::to_u16(GUTTER))
@@ -499,7 +511,7 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
             x,
             end: area.right(),
             text: cut,
-            join: crate::rows::Join::Break,
+            join: frame.joins.get(at).copied().unwrap_or(Join::Break),
         });
         y = y.saturating_add(1);
     }

@@ -139,8 +139,9 @@ fn keys_failed_save_80x24() {
 }
 
 #[test]
-fn the_frame_targets_hold_the_cross_and_a_row_per_action() {
-    // Tall enough for every row to show: the draw clips to the area.
+fn the_frame_targets_hold_the_cross_and_a_target_per_display_line() {
+    // Tall enough for every wrapped line to show: the draw clips to
+    // the area.
     let mut app = attached(80, 60);
     slash_keys(&mut app);
     let targets = drawn(&app, 80, 60);
@@ -150,11 +151,17 @@ fn the_frame_targets_hold_the_cross_and_a_row_per_action() {
             .any(|target| target.id == TargetId::View(Spot::Close)),
         "{targets:?}"
     );
+    // Every display line of every wrapped action takes a target, not
+    // one per action.
+    let grown = crate::rebind::heights(app.keys(), 80);
+    let frame = app.keys_frame(60).expect("the screen is open");
+    let shown = crate::swapped::rows_height(&frame, 60);
+    let total: usize = grown.iter().sum();
     let rows = targets
         .iter()
         .filter(|target| matches!(target.id, TargetId::View(Spot::Row(_))))
         .count();
-    assert_eq!(rows, crate::bindings::BINDINGS.len(), "{targets:?}");
+    assert_eq!(rows, total.min(shown), "{targets:?}");
 }
 
 #[test]

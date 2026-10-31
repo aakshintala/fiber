@@ -10,6 +10,7 @@ use super::{
 };
 use crate::keys::Key;
 use crate::mouse::TargetId;
+use crate::rows::Join;
 use crate::theme::Role;
 
 /// A list after pressing `keys` over `rows` rows shown `height` at a time.
@@ -186,6 +187,7 @@ fn about_groups_thousands() {
 /// A frame of `rows` one-cell rows, one line below and a footer.
 fn frame(rows: usize) -> Frame {
     Frame {
+        joins: Vec::new(),
         title: "Settings".to_owned(),
         command: "/settings".to_owned(),
         rows: (0..rows)
@@ -245,6 +247,7 @@ fn top_row(title: &str, command: &'static str, width: u16) -> Buffer {
     let area = Rect::new(0, 0, width, 3);
     let mut buf = Buffer::empty(area);
     let frame = Frame {
+        joins: Vec::new(),
         title: title.to_owned(),
         command: command.to_owned(),
         rows: Vec::new(),
@@ -351,6 +354,7 @@ fn a_narrow_top_row_drops_the_command_before_esc() {
 #[test]
 fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
     let frame = Frame {
+        joins: Vec::new(),
         title: "Models".to_owned(),
         command: "/model".to_owned(),
         rows: vec![
@@ -399,6 +403,7 @@ fn a_heading_cell_is_bold_and_a_muted_cell_is_muted() {
 #[test]
 fn a_role_cell_draws_its_role_and_a_muted_cell_is_faint() {
     let frame = Frame {
+        joins: Vec::new(),
         title: "Context".to_owned(),
         command: "/context".to_owned(),
         rows: vec![
@@ -696,6 +701,7 @@ fn drag_over(
 
 fn made_frame(rows: &[&str], below: &[&str], field: Option<(&str, usize)>) -> Frame {
     Frame {
+        joins: Vec::new(),
         title: "Keys".to_owned(),
         command: "/keys".to_owned(),
         rows: rows
@@ -858,6 +864,80 @@ fn list_wheel_shifts_the_window_and_clamps_the_selection() {
 fn wheel_window_keeps_a_past_end_selection() {
     assert_eq!(wheel_window(false, 20, 0, 20, 6, 3), (20, 3));
     assert_eq!(wheel_window(true, 20, 6, 20, 6, 3), (20, 3));
+}
+
+/// The rebinding screen notes how each display line joins the one
+/// before: the first line of a wrapped action breaks, its
+/// continuations wrap, and every other row breaks
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn rebind_continuations_note_wrap_joins_while_first_lines_break() {
+    use crate::keyset::Keyset;
+    let keys = Keyset::default();
+    let screen = crate::rebind::KeysScreen::default();
+    let frame = screen.frame(&keys, 80, 24);
+    let grown = crate::rebind::heights(&keys, 80);
+    // The delete_session action wraps its keys after the comma.
+    let at: usize = (0..7).map(|action| grown[action]).sum();
+    assert_eq!(&frame.joins[at..at + 2], &[Join::Break, Join::WrapSpace]);
+    // A single-line action notes one break.
+    let single: usize = (0..3).map(|action| grown[action]).sum();
+    assert_eq!(&frame.joins[single..single + 1], &[Join::Break]);
+}
+
+/// A drag over a wrapped rebinding action copies it whole: the
+/// continuation joins onto the first line with no newline
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_a_wrapped_rebind_action_copies_it_whole() {
+    use crate::app::Effect;
+    use crate::keyset::Keyset;
+    let keys = Keyset::default();
+    let screen = crate::rebind::KeysScreen::default();
+    let frame = screen.frame(&keys, 80, 24);
+    let grown = crate::rebind::heights(&keys, 80);
+    let start: usize = (0..7).map(|action| grown[action]).sum();
+    let top = u16::try_from(1 + start).expect("a row");
+    let mut app = app();
+    let effect = drag_over(
+        &mut app,
+        &frame,
+        80,
+        24,
+        (2, top),
+        (79, top.saturating_add(1)),
+    );
+    // The two display lines join with the dropped space and no newline.
+    let first: String = frame.rows[start]
+        .iter()
+        .map(|(text, _, _)| text.as_str())
+        .collect();
+    let second: String = frame.rows[start + 1]
+        .iter()
+        .map(|(text, _, _)| text.as_str())
+        .collect();
+    assert_eq!(
+        effect,
+        Effect::Copy(format!("{} {}", first.trim_end(), second.trim_end()))
+    );
+}
+
+/// The lines below the rows and the field note breaks of their own:
+/// after a wrapped row they start new lines (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn below_and_field_note_breaks_after_a_wrap() {
+    use crate::app::Effect;
+    let mut frame = made_frame(&["a", "b"], &["note one"], None);
+    frame.joins = vec![Join::Break, Join::Wrap];
+    let mut noted = app();
+    let effect = drag_over(&mut noted, &frame, 80, 24, (2, 1), (79, 22));
+    assert_eq!(effect, Effect::Copy("ab\nnote one".to_owned()));
+    let mut fielded = made_frame(&["a", "b"], &[], Some(("query text", 10)));
+    fielded.joins = vec![Join::Break, Join::Wrap];
+    let mut other = app();
+    let effect = drag_over(&mut other, &fielded, 80, 24, (2, 22), (6, 22));
+    assert_eq!(effect, Effect::Copy("query".to_owned()));
 }
 
 /// A selection exactly on the new top stays, and a target exactly on the
