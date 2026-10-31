@@ -20,9 +20,9 @@ expression: "screen(&app, 80, 24)"
  ⌘← ⌘→                       line_start_end Start or end of the line
  Ctrl+G                      open_in_editor Open the draft, or a pasted token, i
  Ctrl+V                      paste_image Paste an image
- Ctrl+O                      toggle_ledgers Open or close the ledgers
- Shift+Tab                   navigate Move focus from the input box into the con
  Press the key for Start a new session · Esc cancel
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

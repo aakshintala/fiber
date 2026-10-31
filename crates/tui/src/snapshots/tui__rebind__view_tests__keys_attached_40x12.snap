@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/rebind_view_tests.rs
-assertion_line: 97
 expression: "screen(&app, 40, 12)"
 ---
   Keys  /keys                Esc returns
@@ -9,9 +8,9 @@ expression: "screen(&app, 40, 12)"
  Esc                         close_or_in
  Ctrl+C                      clear_then_
 ⋮⌥0                          go_home Go
-⋮Ctrl+N                      new_session
-⋮⌥1 ⌥2 ⌥3 ⌥4 ⌥5 ⌥6 ⌥7 ⌥8 ⌥9  rail_row_n
- ↑↓ move · Enter rebind · r reset · Dele
- ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+⋮↑↓ move · Enter rebind · r reset · Dele
+⋮▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
+ ▌─────────────────────────────────────
+ ▌auto               ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

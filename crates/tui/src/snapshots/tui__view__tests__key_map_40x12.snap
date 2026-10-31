@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view_tests.rs
-assertion_line: 1140
 expression: "sized(&mut app, 40, 12)"
 ---
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -8,10 +7,10 @@ expression: "sized(&mut app, 40, 12)"
   Key map                            ✕
 
   All  Sessions  The input box  The co
-  Type to search shortcuts› █
-  › Sessions         Send a     Enter
 
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────
+▌auto                ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

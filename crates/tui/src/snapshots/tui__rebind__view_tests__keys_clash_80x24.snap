@@ -19,10 +19,10 @@ expression: "screen(&app, 80, 24)"
  Ctrl+U                      delete_to_line_start Delete to the start of the lin
  ⌘← ⌘→                       line_start_end Start or end of the line
  Ctrl+G                      open_in_editor Open the draft, or a pasted token, i
- Ctrl+V                      paste_image Paste an image
- Ctrl+O                      toggle_ledgers Open or close the ledgers
  Ctrl+O is bound to Open or close the ledgers
  Enter swap · Esc cancel
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
