@@ -161,7 +161,14 @@ fn context_after_cd_shows_the_total_against_the_inherited_window() {
     // the first-request placeholder.
     run.write(b"/context\r");
     let grid = run.wait_screen("the context total against the inherited window", |grid| {
-        grid.contents.contains("of the 100k window")
+        grid.contents.contains("Largest tool results")
+            && grid.contents.contains("of the 100k window")
+            && grid.contents.contains("tokens")
+            && !grid
+                .contents
+                .contains("The context shows after the session's first request.")
+            && !grid.contents.contains("automatic handoff")
+            && !grid.contents.contains("handoff 70k")
     });
     // settled: the wait matched the sizes row and the window tail with
     // no input in between, so the grid it returns is the settled view.
