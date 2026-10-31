@@ -117,6 +117,60 @@ fn reconnect(server: &str, name: &'static str, seen: mpsc::Sender<&'static str>)
 }
 
 #[test]
+fn reconnect_collection_sees_pending_batches_without_exposing_them_to_nested_drains() {
+    let (tx, rx) = mpsc::channel();
+    let mut queue = Queue::new(rx);
+    let (seen, answers) = mpsc::channel();
+    let mut pending = queue.pending([
+        Delivery::Cancelled,
+        reconnect("db", "batched", seen.clone()),
+        reconnect("other", "different", seen.clone()),
+    ]);
+    // The batch belongs to idle admission, not a nested running drain:
+    // prompts behind an idle command must not be rejected as busy.
+    assert!(queue.try_recv().is_err());
+    assert!(queue.take_messages().is_empty());
+    tx.send(reconnect("db", "queued", seen)).unwrap();
+    for ack in queue.take_reconnects("db", std::path::Path::new("/"), None) {
+        (ack.0)(Ok(None));
+    }
+    // docs/mcp.md, "Servers, their state and the per-server commands":
+    // waiting duplicates join once; different servers remain untouched.
+    assert_eq!(
+        answers.try_iter().collect::<Vec<_>>(),
+        ["batched", "queued"]
+    );
+    assert!(matches!(pending.next(), Some(Delivery::Cancelled)));
+    assert!(
+        matches!(pending.next(), Some(Delivery::McpReconnect(args, _)) if args.server == "other")
+    );
+    assert!(pending.next().is_none());
+}
+
+#[test]
+fn a_transition_in_an_older_pending_batch_stops_collection_in_newer_batches() {
+    let (tx, rx) = mpsc::channel();
+    let mut queue = Queue::new(rx);
+    let (seen, answers) = mpsc::channel();
+    let mut older = queue.pending([
+        reconnect("db", "before", seen.clone()),
+        Delivery::Close(Ack(Box::new(|_| {}))),
+    ]);
+    let mut newer = queue.pending([reconnect("db", "newer", seen.clone())]);
+    tx.send(reconnect("db", "channel", seen)).unwrap();
+    for ack in queue.take_reconnects("db", std::path::Path::new("/"), None) {
+        (ack.0)(Ok(None));
+    }
+    // docs/invocation.md, "Lifecycle": commands after close retain their
+    // own closing verdict, even when held in another admission snapshot.
+    assert_eq!(answers.try_iter().collect::<Vec<_>>(), ["before"]);
+    assert!(matches!(older.next(), Some(Delivery::Close(_))));
+    assert!(older.next().is_none());
+    assert!(matches!(newer.next(), Some(Delivery::McpReconnect(..))));
+    assert!(matches!(queue.try_recv(), Ok(Delivery::McpReconnect(..))));
+}
+
+#[test]
 fn reconnect_drain_stops_at_close_rewind_and_a_move_to_another_folder() {
     let root = fakes::TempDir::new("reconnect-boundary");
     let other = root.path().join("other");

@@ -118,7 +118,11 @@ pub(crate) struct Gate {
     /// unknown, as `commands` is empty until set.
     servers_refresh: OnceLock<ServersRefresh>,
     mcp_login: OnceLock<McpLogin>,
+    /// Validated reconnect attempts, inserted before start work and removed
+    /// after final collection, including on rejection or unwind.
     reconnect_flights: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    /// Set before delivering a rewind or workspace move; never cleared in
+    /// this session, so later reconnects keep the normal admission path.
     transition_delivered: AtomicBool,
     /// The already-read check the `import` driver command consults, wired
     /// by the session process before the session runs.

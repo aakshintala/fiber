@@ -205,6 +205,8 @@ pub(crate) struct State {
     /// restart (`docs/mcp.md`, "Servers, their state and the
     /// per-server commands").
     pub(crate) servers: Arc<mcp::Servers>,
+    /// The session's shared reconnect attempts; each provider start inserts
+    /// after validation and removes after final collection or early exit.
     pub(crate) reconnect_flights: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
     /// Test-only record of the `prepare_inner` stage boundaries the
     /// current preparation reached, in order. Production builds have
