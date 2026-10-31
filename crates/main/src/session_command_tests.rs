@@ -120,11 +120,11 @@ fn an_isolated_fork_adopts_before_reading_its_point() {
             login_shell: false,
             supervised: false,
         };
-        std::process::exit(super::run(
-            args,
-            fakes::clock::FakeClock::new(),
-            Err("not needed".into()),
-        ));
+        let process = crate::startup::Process {
+            clock: fakes::clock::FakeClock::new(),
+            exe: Err(crate::failed(ErrorCode::IoFailed, "not needed")),
+        };
+        std::process::exit(super::run(args, &process));
     }
     let root = fakes::TempDir::new("fiber-fork-adoption");
     let workspace = root.path().join("fork");

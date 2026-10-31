@@ -3143,10 +3143,10 @@ fn the_signal_thread_sends_each_taken_signal() {
     }
 }
 
-/// The attached-frame guard ends only after a successful draw with the
-/// attached session's history and a live hub stream.
+/// A session draw and live stream do not finish the guard before the
+/// launch open has fetched and installed its history.
 #[test]
-fn attached_frame_stops_at_the_first_draw_holding_history() {
+fn attached_frame_waits_for_a_completed_tail_read() {
     let home = fakes::TempDir::new("event-loop-attached-frame");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let diag = Arc::new(log::diag::Diag::new(
@@ -3166,21 +3166,16 @@ fn attached_frame_stops_at_the_first_draw_holding_history() {
     let (_tx, rx) = mpsc::channel();
     assert_eq!(lp.frame_inner(&rx), None);
     assert!(
-        lp.attached_frame.is_none(),
-        "the drawn history stops the guard"
+        lp.attached_frame.is_some(),
+        "a session draw before the open tail read leaves the guard open"
     );
+    crate::timing::discard(lp.attached_frame.take());
     let path = home
         .path()
         .join("logs")
         .join(format!("tui-{}.log", std::process::id()));
-    let text = std::fs::read_to_string(path).unwrap_or_else(|err| panic!("read log: {err}"));
-    let attached: Vec<serde_json::Value> = text
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .filter(|line: &serde_json::Value| line["data"]["op"] == "tui.attached_frame")
-        .collect();
-    // docs/state.md:432-435 promises one line at the first attached-history draw.
-    assert_eq!(attached.len(), 1, "one attached-frame line: {attached:?}");
+    // docs/state.md:432-435 ends the scope only at the installed-history draw.
+    assert!(!path.exists(), "no completed tail read means no line");
 }
 
 /// A home frame with a hub stream does not finish the attached-frame
