@@ -687,16 +687,10 @@ fn a_paste_of_digits_chooses_nothing() {
 
 #[test]
 fn every_other_edit_does_nothing() {
-    let edits = [
-        Edit::ShiftEnter,
-        Edit::CtrlJ,
-        Edit::WordLeft,
-        Edit::WordRight,
-        Edit::DeleteWord,
-        Edit::LineStart,
-        Edit::LineEnd,
-        Edit::Delete,
-    ];
+    // The words row and the note take the word and line edits through the
+    // shared editor; only a line break, forward delete and anything else
+    // outside it do nothing there.
+    let edits = [Edit::ShiftEnter, Edit::CtrlJ, Edit::Delete];
     for edit in edits {
         let mut form = base_and_name(true);
         type_text(&mut form, "ab");
@@ -713,10 +707,7 @@ fn delete_to_line_start_clears_the_words_row() {
     assert_eq!(cursor_line(&form), "▸ 4 ✎ one two three");
     // Ghostty sends ⌘Backspace as `\x15`, the `delete_to_line_start` key.
     form.on_edit(&Edit::DeleteToLineStart);
-    assert_eq!(
-        answer(&form)["answers"],
-        json!([{"skipped": true}])
-    );
+    assert_eq!(answer(&form)["answers"], json!([{"skipped": true}]));
     assert!(
         cursor_line(&form).starts_with("▸ 4 ✎ Type an answer"),
         "{}",
