@@ -1736,6 +1736,14 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   reply arrives. crossterm parses both replies but hands them only to a call
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
+- **Input is read in the order it arrives.** Each key, paste or mouse report
+  becomes one event, in the order its bytes came: a bound control character
+  then a letter is the binding's action, then the letter, and nothing else.
+  A byte that starts no key is dropped and reading goes on from the next
+  byte. A control character with no binding is dropped whole, a two-byte C1
+  control included. An escape sequence cut by a byte that cannot continue it
+  drops its `ESC [`, and reading goes on from that byte. Invalid UTF-8 drops
+  one byte and keeps the rest.
 - **Every action has a key.** Every action also has a mouse target or a slash
   command, except editing the draft in the input box and search, choosing
   in the model picker or the credential picker for this session only, and
