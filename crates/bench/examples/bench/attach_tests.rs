@@ -648,6 +648,7 @@ fn span_samples_attribute_each_pid_log_to_its_own_sample() {
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].1["sample"], json!(0));
     assert_eq!(first[0].1["ms"], json!(11));
+    // The same docs/state.md:446-448,453 promise applies to this process.
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].1["sample"], json!(1));
     assert_eq!(second[0].1["ms"], json!(13));
