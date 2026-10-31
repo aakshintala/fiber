@@ -11,9 +11,8 @@ use contract::events::{CommandRejected, Event};
 use contract::{CommandId, Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
 
-use super::level::{LEVEL, Switch, Writing, apply};
-use crate::session::{Answered, CUT};
-use crate::session::{Gate, envelope};
+use super::level::{Switch, Writing, apply};
+use crate::session::{Answered, Gate, envelope};
 
 /// A first subscribe's deferred response: the loop's answer to the
 /// delivered switch, emitted before anything the seeded watcher holds.
@@ -23,9 +22,6 @@ pub(crate) struct Prelude {
     pub(crate) response: mpsc::Receiver<Vec<Envelope>>,
     pub(crate) after: Vec<Envelope>,
 }
-
-/// Wakes a connection's writer so it leaves `recv`.
-pub(crate) const STOP: &str = "doors.stop";
 
 /// Which connection a writer serves, and the reader thread whose reads it
 /// answers.
@@ -194,29 +190,35 @@ pub(crate) fn write_loop(
         // what the cut decided now and carries on: `Session::quiesce`
         // cuts while the log is open, and ending here would strand
         // `fiber_exited`, which is written after the quiesce wait.
-        if line.kind == CUT {
-            if let Some(flight) = flight
-                && flight.gate.accepted.unanswered(flight.reader) > 0
-            {
-                write_cut(&mut writing, stream.as_mut(), flight);
+        match ControlKind::recognize(&line.kind) {
+            Some(ControlKind::Cut) => {
+                if let Some(flight) = flight
+                    && flight.gate.accepted.unanswered(flight.reader) > 0
+                {
+                    // The cut already decided. Its result is ignored here:
+                    // a failed flush still leaves the writer reading.
+                    write_cut(&mut writing, stream.as_mut(), flight);
+                }
+                continue;
             }
-            continue;
-        }
-        if line.kind == STOP {
-            match flight {
-                Some(flight) if flight.gate.conns.stopped() => stop_seen = true,
-                Some(_) | None => return Ended::Done,
+            Some(ControlKind::Stop) => {
+                match flight {
+                    Some(flight) if flight.gate.conns.stopped() => stop_seen = true,
+                    Some(_) | None => return Ended::Done,
+                }
+                continue;
             }
-            continue;
-        }
-        if line.kind == LEVEL {
-            if apply(&mut writing, &switches, stream.as_mut(), flight).is_err() {
-                return Ended::Failed;
+            Some(ControlKind::Level) => {
+                if apply(&mut writing, &switches, stream.as_mut(), flight).is_err() {
+                    return Ended::Failed;
+                }
+                continue;
             }
-            continue;
-        }
-        if write_one(&line, &mut writing, stream.as_mut(), flight).is_err() {
-            return Ended::Done;
+            None => {
+                if write_one(&line, &mut writing, stream.as_mut(), flight).is_err() {
+                    return Ended::Done;
+                }
+            }
         }
     }
 }
@@ -262,21 +264,21 @@ fn past_end(
                 .note(crate::session::tests::Probe::WriterPastEnd);
         }
         let line = writing.watcher.recv_after_end();
-        match line.kind.as_str() {
-            CUT => {}
-            STOP => {
+        match ControlKind::recognize(&line.kind) {
+            Some(ControlKind::Cut) => {}
+            Some(ControlKind::Stop) => {
                 if flight.is_none() {
                     return Past::Ended(Ended::Done);
                 }
                 stop_seen = true;
             }
-            LEVEL => {
+            Some(ControlKind::Level) => {
                 if apply(writing, switches, stream, flight).is_err() {
                     return Past::Ended(Ended::Failed);
                 }
                 return Past::Switched;
             }
-            _ => {
+            None => {
                 if write_one(&line, writing, stream, flight).is_err() {
                     return Past::Ended(Ended::Done);
                 }
@@ -293,8 +295,9 @@ fn past_end(
 /// streaming, so `fiber_exited` still reaches the client.
 fn write_cut(writing: &mut Writing, stream: &mut dyn Write, flight: &Flight) -> Ended {
     while let Ok(Some(line)) = writing.watcher.try_recv() {
-        if matches!(line.kind.as_str(), STOP | CUT | LEVEL) {
-            continue;
+        match ControlKind::recognize(&line.kind) {
+            Some(ControlKind::Stop | ControlKind::Cut | ControlKind::Level) => continue,
+            None => {}
         }
         if write_one(&line, writing, stream, Some(flight)).is_err() {
             return Ended::Done;
@@ -415,11 +418,11 @@ impl ControlKind {
 }
 
 /// A control line for `session`, such as the one that stops its writer.
-pub(crate) fn control_line(session: &SessionId, kind: &str, token: u64) -> Envelope {
+pub(crate) fn control_line(session: &SessionId, kind: ControlKind, token: u64) -> Envelope {
     let mut payload = Map::new();
     payload.insert("token".to_owned(), Value::from(token));
     Envelope {
-        kind: kind.to_owned(),
+        kind: kind.name().to_owned(),
         session_id: session.clone(),
         ts: 0,
         schema_version: SCHEMA_VERSION,

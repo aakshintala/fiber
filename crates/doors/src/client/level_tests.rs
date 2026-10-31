@@ -205,7 +205,10 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
             response: None,
         })
         .unwrap();
-    outbox.swap(control_line(&id, LEVEL, 0), injector);
+    outbox.swap(
+        control_line(&id, crate::client::ControlKind::Level, 0),
+        injector,
+    );
     log.append(&notice(), None, None).unwrap();
     log.append(
         &Event::SessionStatus(contract::events::SessionStatus {
@@ -324,7 +327,7 @@ fn a_line_at_the_cutoff_is_skipped_never_written() {
         watcher: new,
         summary: true,
         cutoff,
-        prelude: vec![control_line(&id, "x.ack", 7)],
+        prelude: vec![ordinary_envelope(&id, "x.ack", 7)],
         response: None,
     })
     .unwrap();
@@ -482,7 +485,10 @@ fn a_lowering_waits_for_the_deferred_response_after_its_drain() {
             response: Some(resp_rx),
         })
         .unwrap();
-    outbox.swap(control_line(&id, LEVEL, 0), injector);
+    outbox.swap(
+        control_line(&id, crate::client::ControlKind::Level, 0),
+        injector,
+    );
     // The drain arrives, but no acceptance: the loop has not answered yet,
     // and nothing after the answer can precede it.
     let text = held.wait_for(
@@ -586,7 +592,10 @@ fn a_raising_writes_nothing_before_its_deferred_response() {
             response: Some(resp_rx),
         })
         .unwrap();
-    outbox.swap(control_line(&id, LEVEL, 0), injector);
+    outbox.swap(
+        control_line(&id, crate::client::ControlKind::Level, 0),
+        injector,
+    );
     // No line can precede the answer, not even the seeded history: the
     // writer is parked at the response wait, past every write it could
     // make before the loop's answer (the old-level line was skipped,
@@ -643,7 +652,7 @@ fn a_cancelled_response_ends_the_switch_as_an_error() {
         watcher: new,
         summary: true,
         cutoff,
-        prelude: vec![control_line(&id, "x.ack", 7)],
+        prelude: vec![ordinary_envelope(&id, "x.ack", 7)],
         response: Some(resp_rx),
     })
     .unwrap();
@@ -740,7 +749,11 @@ fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
         }),
     );
     injector.push_kept(answer);
-    injector.push_kept(control_line(&gate.session_id, crate::client::STOP, 0));
+    injector.push_kept(control_line(
+        &gate.session_id,
+        crate::client::ControlKind::Stop,
+        0,
+    ));
     assert!(
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer returns once STOP follows the answer"
@@ -788,9 +801,9 @@ fn a_level_change_after_the_log_ends_moves_the_writer_to_the_new_watcher() {
             response: None,
         })
         .unwrap();
-    old.push_kept(control_line(&id, LEVEL, 0));
+    old.push_kept(control_line(&id, crate::client::ControlKind::Level, 0));
     fresh_injector.push_kept(settled_acceptance(&id, &clock, "c_after"));
-    fresh_injector.push_kept(control_line(&id, crate::client::STOP, 0));
+    fresh_injector.push_kept(control_line(&id, crate::client::ControlKind::Stop, 0));
     assert!(
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer follows the switch and ends at STOP on the new queue"
@@ -833,7 +846,7 @@ fn control_boundary_lines_carry_literal_names_and_tokens() {
     ];
     for (kind, literal, token) in cases {
         assert_eq!(kind.name(), literal);
-        let line = control_line(&session, kind.name(), token);
+        let line = control_line(&session, kind, token);
         assert_eq!(line.kind, literal);
         assert_eq!(line.session_id, session);
         assert_eq!(line.ts, 0);
@@ -923,7 +936,7 @@ fn control_boundary_full_level_writer_forwards_ordinary_envelopes() {
     let near = ordinary_envelope(&id, "doors.stopx", 3);
     injector.push_kept(ack.clone());
     injector.push_kept(near.clone());
-    injector.push_kept(control_line(&id, ControlKind::Stop.name(), 0));
+    injector.push_kept(control_line(&id, ControlKind::Stop, 0));
     let ended = Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("stop ends the full-level writer");
