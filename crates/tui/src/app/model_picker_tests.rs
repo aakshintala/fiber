@@ -1039,6 +1039,148 @@ fn open(app: &mut App) {
     assert!(app.model_picker_open());
 }
 
+/// A picker with one logged-out provider and a `/login` seam listing
+/// `acme` before `zed`.
+fn logged_out_app(login: bool) -> (App, Arc<crate::configure_fake::Fake>) {
+    use crate::catalogue::LoggedOutProvider;
+    use crate::configure::{LoginKind, LoginTarget};
+
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    if let Ok(mut targets) = seam.targets.lock() {
+        *targets = Ok(vec![
+            LoginTarget {
+                name: "acme".to_owned(),
+                kind: LoginKind::Key,
+            },
+            LoginTarget {
+                name: "zed".to_owned(),
+                kind: LoginKind::Key,
+            },
+        ]);
+    }
+    let mut app = home();
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    let mut catalogue = three();
+    catalogue.logged_out.push(LoggedOutProvider {
+        provider: "zed".to_owned(),
+        login,
+        hint: if login {
+            String::new()
+        } else {
+            "TOKEN".to_owned()
+        },
+    });
+    app.on_models(Ok(catalogue));
+    open(&mut app);
+    (app, seam)
+}
+
+/// Moves from the first model onto the sole logged-out row.
+fn focus_logged_out(app: &mut App, login: bool) {
+    for _ in 0..3 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    assert_eq!(
+        app.model_picker.logout_target(),
+        Some(("zed".to_owned(), login))
+    );
+}
+
+/// Enters a key for the provider focused when `/login` opened.
+fn store_focused_login(app: &mut App, seam: &crate::configure_fake::Fake) {
+    use crate::keys::Edit;
+
+    assert!(app.login_view().is_some(), "the opened view is /login");
+    assert!(!app.model_picker_open(), "the picker closed for /login");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    app.on_edit(Edit::Paste("secret\n".to_owned()));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(seam.stores(), [("zed".to_owned(), None)]);
+}
+
+#[test]
+fn enter_on_a_login_capable_logged_out_row_opens_login_on_that_provider() {
+    let (mut app, seam) = logged_out_app(true);
+    focus_logged_out(&mut app, true);
+
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+
+    store_focused_login(&mut app, &seam);
+}
+
+#[test]
+fn clicking_a_login_capable_logged_out_name_opens_login_on_that_provider() {
+    use crate::swapped::Spot;
+
+    let (mut app, seam) = logged_out_app(true);
+    let row = app.model_picker_view().unwrap().logged_out[0].at;
+
+    assert_eq!(app.model_picker_click(Spot::Cell(row, 0)), Effect::None);
+
+    store_focused_login(&mut app, &seam);
+}
+
+#[test]
+fn label_only_logged_out_rows_keep_the_picker_open_on_enter_and_click() {
+    use crate::swapped::Spot;
+
+    let (mut app, seam) = logged_out_app(false);
+    focus_logged_out(&mut app, false);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(!app.config_view_open());
+
+    let row = app.model_picker_view().unwrap().logged_out[0].at;
+    assert_eq!(app.model_picker_click(Spot::Cell(row, 0)), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(!app.config_view_open());
+    assert!(app.login_view().is_none());
+    assert!(seam.stores().is_empty());
+}
+
+#[test]
+fn a_login_handoff_during_a_remote_install_keeps_the_picker_and_reports_the_guard() {
+    use crate::app::Link;
+    use crate::configure_fake::Fake;
+    use crate::remote::{Remote, Router};
+    use std::path::PathBuf;
+
+    let (mut app, seam) = logged_out_app(true);
+    app.model_picker
+        .catalogue
+        .installable
+        .push("openai".to_owned());
+    app.set_remote(Arc::new(Remote::new(
+        Arc::new(Fake::new(vec![])),
+        PathBuf::from("/client"),
+        Router::new(),
+    )));
+    app.outbox.link = Link::Up;
+    focus_logged_out(&mut app, true);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        app.take_install_start().map(|start| start.provider),
+        Some("openai".to_owned())
+    );
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(
+        app.model_picker.logout_target(),
+        Some(("zed".to_owned(), true))
+    );
+
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+
+    assert!(app.model_picker_open());
+    assert!(!app.config_view_open());
+    assert!(app.login_view().is_none());
+    assert!(
+        app.notice()
+            .is_some_and(|notice| notice.contains(App::INSTALLING_TEXT))
+    );
+    assert!(seam.stores().is_empty());
+}
+
 /// The `model` line an Enter or click sent, parsed.
 fn sent(effect: Effect) -> serde_json::Value {
     let Effect::Send(lines) = effect else {

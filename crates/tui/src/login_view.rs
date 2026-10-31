@@ -365,6 +365,27 @@ impl Login {
         login
     }
 
+    /// The view opened with `provider` focused when it is listed; an
+    /// absent provider keeps the normal `/login` first-target focus.
+    pub(crate) fn open_on(ctx: &Ctx<'_>, provider: &str) -> Self {
+        let mut login = Self::open(ctx);
+        let Some(target) = login
+            .targets
+            .iter()
+            .position(|target| target.name == provider)
+        else {
+            return login;
+        };
+        if let Some(item) = login
+            .items
+            .iter()
+            .position(|item| *item == Item::Target(target))
+        {
+            login.selected = item;
+        }
+        login
+    }
+
     /// The selected row.
     fn selected(&self) -> Option<Item> {
         self.items.get(self.selected).copied()

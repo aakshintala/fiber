@@ -162,9 +162,10 @@ impl App {
     }
 
     /// A click on the open picker's `spot`: the ✕ closes it, the buttons
-    /// act as their keys, a row selects, and a name or chip cell chooses.
-    /// A click always saves: Ctrl+S is the only path to a session-only
-    /// choice.
+    /// act as their keys, a row selects, a not-installed name installs, a
+    /// login-capable logged-out name opens `/login`, and a model name or
+    /// chip chooses. A click always saves: Ctrl+S is the only path to a
+    /// session-only choice.
     pub(crate) fn model_picker_click(&mut self, spot: Spot) -> super::Effect {
         match spot {
             Spot::Close => {
@@ -178,6 +179,11 @@ impl App {
             Spot::Cell(row, cell) => {
                 if let Some(provider) = self.model_picker.install_click(row, cell) {
                     return self.start_install(provider);
+                }
+                // A login-capable provider name hands off to `/login`;
+                // label-only rows are focused but take no action.
+                if let Some((provider, true)) = self.model_picker.logout_click(row, cell) {
+                    return self.open_login_on(&provider);
                 }
                 match self.model_picker.click_cell(row, cell) {
                     Some(choice) => self.choose(choice),
@@ -944,9 +950,10 @@ impl App {
     /// and for the global actions' keys, so quitting and every global
     /// action keep their keys. Enter toggles
     /// the checklist's focused mark and types nothing; on a choosing
-    /// picker Enter chooses and saves, Ctrl+S chooses for this session
-    /// only. Every other key but the picker's own does nothing, and no
-    /// key cycles.
+    /// picker Enter installs, opens `/login` for a login-capable logged-out
+    /// provider or chooses a model, and saves. Ctrl+S chooses a model for
+    /// this session only. Every other key but the picker's own does nothing,
+    /// and no key cycles.
     pub(in crate::app) fn model_picker_key(&mut self, key: &Key) -> Option<super::Effect> {
         if !self.model_picker_open() {
             return None;
@@ -1022,6 +1029,11 @@ impl App {
                 // approval.
                 if let Some(provider) = self.model_picker.install_target() {
                     return Some(self.start_install(provider));
+                }
+                // Login-capable logged-out providers reuse the swapped
+                // `/login` view; a credential-label row stays focused.
+                if let Some((provider, true)) = self.model_picker.logout_target() {
+                    return Some(self.open_login_on(&provider));
                 }
                 Some(match self.model_picker.choice(false) {
                     Some(choice) => self.choose(choice),
