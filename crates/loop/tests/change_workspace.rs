@@ -198,7 +198,7 @@ impl FakeJobs {
         {
             return;
         }
-        let wait = Deadline::after(DEADLINE);
+        let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
         loop {
             match watcher.recv_timeout(wait.left()) {
                 Some(Ok(Some(line))) if is_end(&line, id) => return,
