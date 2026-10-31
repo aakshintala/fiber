@@ -427,13 +427,7 @@ fn put_rule(area: Rect, bottom: &mut u16, buf: &mut Buffer) {
     if avail == 0 {
         return;
     }
-    buf.set_stringn(
-        start,
-        y,
-        &"─".repeat(usize::from(avail)),
-        usize::from(avail),
-        style(Role::Rule),
-    );
+    buf.set_stringn(start, y, "─".repeat(avail), avail, style(Role::Rule));
     *bottom = y;
 }
 

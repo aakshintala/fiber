@@ -166,16 +166,9 @@ fn launch() -> crate::home::Launch {
 /// An app with home state, attached, at `width` by `height`, holding a
 /// preamble naming `model` with `thinking`, `window` and `trigger` and a
 /// status naming `workspace` with `tokens` of `window`.
-fn row_app(
-    width: u16,
-    height: u16,
-    workspace: &str,
-    model: &str,
-    thinking: &str,
-    tokens: u64,
-    window: u64,
-    trigger: u64,
-) -> App {
+fn row_app(width: u16, height: u16, workspace: &str, model: &str, thinking: &str, tokens: u64) -> App {
+    let window = 1_000_000;
+    let trigger = 400_000;
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(launch());
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -209,16 +202,7 @@ fn row_app(
 /// A full-data app at `width` by `height`: workspace `/w/fiber`, model
 /// `test/model`, thinking `high`, 268000 of 1000000 with a trigger.
 fn full(width: u16, height: u16) -> App {
-    row_app(
-        width,
-        height,
-        "/w/fiber",
-        "test/model",
-        "high",
-        268_000,
-        1_000_000,
-        400_000,
-    )
+    row_app(width, height, "/w/fiber", "test/model", "high", 268_000)
 }
 
 /// The rule row's index on `screen`: the first row of `─` past the
@@ -234,12 +218,6 @@ fn rule_row(screen: &str) -> usize {
             !trimmed.is_empty() && trimmed.chars().all(|cell| cell == '─')
         })
         .expect("a rule row")
-}
-
-/// The status row on `screen`: the row under the rule.
-fn status_row(screen: &str) -> &str {
-    let at = rule_row(screen);
-    screen.lines().nth(at + 1).expect("a row under the rule")
 }
 
 /// One session envelope for the box's keyboard tests.
@@ -1433,7 +1411,7 @@ fn the_working_directory_is_cut_from_the_left_first() {
     // and two columns past it keep shorter tails behind an ellipsis.
     let head = "w".repeat(avail - 62);
     let right = "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · 26%";
-    assert_eq!(crate::format::width(&right), 45);
+    assert_eq!(crate::format::width(right), 45);
     // The exact fit shows the whole directory; longer ones shed from
     // the left to the same room, keeping their tails.
     for (ws, left) in [
@@ -1447,16 +1425,7 @@ fn the_working_directory_is_cut_from_the_left_first() {
             format!("…{}/longer/repos/fiber  │  auto", &head[14..]),
         ),
     ] {
-        let app = row_app(
-            100,
-            30,
-            &ws,
-            "test/model",
-            "high",
-            268_000,
-            1_000_000,
-            400_000,
-        );
+        let app = row_app(100, 30, &ws, "test/model", "high", 268_000);
         let area = Rect::new(0, 0, 100, 30);
         let mut buf = Buffer::empty(area);
         crate::view::render(&app, area, &mut buf, None);
