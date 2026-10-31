@@ -94,11 +94,12 @@ if [ "$scope" != platform ]; then
       echo "== cargo fmt --check"
       cargo fmt --check "${package_args[@]}"
     fi
-    echo "== signal sites, compiled-in list, image and tui isolation, preserve-order"
+    echo "== signal sites, compiled-in list, image and tui isolation, crate edges, preserve-order"
     cargo xtask signal-sites
     cargo xtask compiled-in
     cargo xtask image-isolation
     cargo xtask tui-isolation
+    cargo xtask crate-edges
     cargo xtask preserve-order
     echo "== architecture rules 3, 4 and 5"
     cargo xtask session-paths

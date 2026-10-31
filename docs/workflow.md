@@ -99,7 +99,8 @@ those.
   `cargo clippy -p <crate> --all-targets -- -D warnings` and
   `cargo nextest run -p <crate>`, then `cargo xtask signal-sites`,
   `cargo xtask compiled-in`, `cargo xtask image-isolation`,
-  `cargo xtask tui-isolation`, `cargo xtask must-succeed` and
+  `cargo xtask tui-isolation`, `cargo xtask crate-edges`,
+  `cargo xtask must-succeed` and
   `cargo xtask dependency-list`. `main` has no library target, so its clippy and nextest take `--bins --tests` in place of
   `--all-targets`. `log` shares its name with a dependency, so its clippy and
   nextest take `-p log@0.0.0`; `cargo fmt` takes plain `-p log`.
