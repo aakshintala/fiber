@@ -720,6 +720,40 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: ${{ runner.temp }}/release
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only the backstop saves the build cache (docs/ci.md); a release restores it.
+          shared-key: ci-line-tables
+          save-if: false
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      # The journey suite, against the Linux binary this run just built: a
+      # failure reports through the nightly report workflow and never stops
+      # the publish, so this step tolerates it (docs/ci.md, "The journey suite").
+      - name: Run the journey suite against the built binary
+        continue-on-error: true
+        env:
+          SUITE_OUT: ${{ runner.temp }}/journey
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/release/fiber-x86_64-unknown-linux-musl.tar.gz"
+          [ -f "$archive" ] || { printf 'release: %s\n' "the Linux release archive is missing: $archive." >&2; exit 1; }
+          mkdir -p "$SUITE_OUT"
+          tar -xzf "$archive" -C "$SUITE_OUT" fiber
+          bin="$SUITE_OUT/fiber"
+          [ -x "$bin" ] || { printf 'release: %s\n' "FIBER_JOURNEY_BIN is not executable: $bin." >&2; exit 1; }
+          failures="$SUITE_OUT/journey-failures.txt"
+          : > "$failures" || { printf 'release: %s\n' "cannot write FIBER_JOURNEY_FAILURES at $failures." >&2; exit 1; }
+          FIBER_JOURNEY_BIN="$bin" FIBER_JOURNEY_FAILURES="$failures" cargo nextest run -p main --test main_journeys
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: journey-failures
+          path: ${{ runner.temp }}/journey/journey-failures.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Create the draft, upload every asset, publish last
         env:
           GH_TOKEN: ${{ github.token }}

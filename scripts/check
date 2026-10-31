@@ -156,6 +156,7 @@ EOF
         crates/main/tests/install_fixture/bin/sysctl \
         crates/main/tests/release_pack_fixture/bin/gh
       shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/test-flake-report scripts/leak-scan scripts/test-leak-scan scripts/look-diff scripts/test-look-diff scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/cache-prune scripts/check-docs scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/mutants-shard-finish scripts/test-mutants-shard-finish scripts/paging-jig scripts/release-size scripts/release-pack scripts/stored-results scripts/lib/release.sh
+      shellcheck --shell=bash scripts/test-journey-report
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi
@@ -186,6 +187,8 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   scripts/test-flaky-tests
   echo "== flake-report self-test"
   scripts/test-flake-report
+  echo "== journey-report self-test"
+  scripts/test-journey-report
   echo "== mutants-rotation self-test"
   scripts/test-mutants-rotation
   echo "== mutants-shard-finish self-test"
