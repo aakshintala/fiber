@@ -747,7 +747,10 @@ fn forked_context_does_not_reuse_parent_preamble_sizes() {
     app.on_line(context_status_for(OTHER, 12, 200));
     open_context(&mut app);
     let shown = screen(&app, 100, 40).0;
-    assert!(shown.contains("12 tokens · 6% of the 200 window"), "{shown}");
+    assert!(
+        shown.contains("12 tokens · 6% of the 200 window"),
+        "{shown}"
+    );
     assert!(!shown.contains("system prompt"), "{shown}");
     assert!(!shown.contains("tool definitions"), "{shown}");
     assert!(!shown.contains("parent result"), "{shown}");
@@ -790,10 +793,14 @@ fn attaching_another_session_does_not_use_cached_status_for_context() {
     let mut app = attached(100, 40);
     app.on_line(context_preamble());
     app.on_line(context_status(50, 100));
-    assert_eq!(app.panel_state().window(), Some(100));
+    let parent = app.session().unwrap().clone();
+    assert_eq!(app.panel_state().window_for(&parent), Some(100));
     app.attach(SessionId(OTHER.to_owned()));
+    let child = app.session().unwrap().clone();
     assert!(app.panel_state().status().is_some());
-    assert_eq!(app.panel_state().window(), None);
+    assert!(app.panel_state().status_for(&parent).is_some());
+    assert!(app.panel_state().status_for(&child).is_none());
+    assert_eq!(app.panel_state().window_for(&child), None);
     open_context(&mut app);
     let shown = screen(&app, 100, 40).0;
     assert!(
@@ -802,7 +809,8 @@ fn attaching_another_session_does_not_use_cached_status_for_context() {
     );
 
     app.on_line(context_status_for(OTHER, 50, 200));
-    assert_eq!(app.panel_state().window(), Some(200));
+    assert!(app.panel_state().status_for(&child).is_some());
+    assert_eq!(app.panel_state().window_for(&child), Some(200));
     let refreshed = screen(&app, 100, 40).0;
     assert!(
         refreshed.contains("50 tokens · 25% of the 200 window"),

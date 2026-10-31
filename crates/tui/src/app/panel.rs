@@ -115,10 +115,8 @@ pub(crate) struct PanelState {
     pub(crate) quota: quota::Query,
     widgets: Vec<Widget>,
     status: Option<SessionStatus>,
-    /// Whether `status` arrived after this attachment. Keep the cached
-    /// payload, but do not use its context window until the new session
-    /// reports its own status.
-    status_current: bool,
+    /// The session whose `session_status` supplied `status`.
+    status_session: Option<SessionId>,
     model: Option<String>,
     thinking: Option<String>,
     thinking_state: ThinkingState,
@@ -172,7 +170,7 @@ impl PanelState {
             "session_status" => {
                 if let Some(status) = super::read!(envelope, SessionStatus) {
                     self.status = Some(status);
-                    self.status_current = true;
+                    self.status_session = Some(envelope.session_id.clone());
                 }
             }
             "session_started" => {
@@ -414,21 +412,24 @@ impl PanelState {
     }
 
     /// The context window in force: the latest own `preamble_built`'s,
-    /// or the inherited window `session_status` reports when the
-    /// session logged no `preamble_built` of its own — a rewind, a fork
-    /// or a workspace change continues another log (`docs/tui.md`,
-    /// "Swapped views").
-    pub(crate) fn window(&self) -> Option<u64> {
+    /// or the active session's reported window when it logged no own
+    /// preamble (`docs/tui.md`, "Swapped views").
+    pub(crate) fn window_for(&self, session: &SessionId) -> Option<u64> {
         self.window.or_else(|| {
-            if !self.status_current {
-                return None;
-            }
-            self.status
-                .as_ref()?
+            self.status_for(session)?
                 .context
                 .as_ref()
                 .map(|context| context.window)
         })
+    }
+
+    /// The cached status only when it belongs to `session`.
+    pub(crate) fn status_for(&self, session: &SessionId) -> Option<&SessionStatus> {
+        if self.status_session.as_ref() == Some(session) {
+            self.status.as_ref()
+        } else {
+            None
+        }
     }
 
     /// The latest `preamble_built`'s handoff point, in tokens.
@@ -558,12 +559,10 @@ impl PanelState {
         self.workspace = None;
         // The new attachment folds its own `preamble_built` and
         // `session_status`: the old window and handoff point end here.
-        // Keep the cached status for unrelated panel state, but wait for
-        // the new session's status before using its reported context
-        // window (`docs/tui.md`, "Swapped views").
+        // Keep the cached status; its session identity prevents it from
+        // supplying the new attachment's context (`docs/tui.md`, "Swapped views").
         self.window = None;
         self.trigger_at = None;
-        self.status_current = false;
         // A new attachment has no running call, so no streamed thinking.
         self.thinking_state = ThinkingState::Idle;
     }

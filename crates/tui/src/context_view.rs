@@ -46,6 +46,12 @@ impl ContextFold {
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
         match envelope.kind.as_str() {
             "session_started" => {
+                self.preamble = false;
+                self.system = 0;
+                self.tools = 0;
+                self.results = 0;
+                self.largest.clear();
+                self.names.clear();
                 self.forked = envelope
                     .payload
                     .get("forked_from")

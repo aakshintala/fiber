@@ -817,9 +817,11 @@ install still running.
   tokens-per-byte rate, and the view says the sizes are approximate.
   Until a request gives a rate, and when the session logged no
   `preamble_built` of its own, it shows the total alone. After attaching,
-  the terminal waits for that session's `session_status` before using its
-  reported context window; it does not reuse the previous session's context
-  total or window. It is drawn indented two columns: "268k tokens" bold,
+  the terminal uses context totals and windows only from that session's
+  `session_status`, and uses that status's reported window when there is
+  no own preamble; it does not reuse the previous session's context. A
+  `session_started` also clears preamble-derived category estimates, so a
+  fork cannot reuse its parent's. It is drawn indented two columns: "268k tokens" bold,
   then " · 26% of the 1M window · automatic handoff at 400k" dim; the bar,
   one █ run per category in its colour, ▁ in `rule` for the room left, and │
   in `attention` at the handoff
