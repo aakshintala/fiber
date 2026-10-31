@@ -146,17 +146,29 @@ fn question_legend() -> Row {
 fn question_body(setup: &Setup, inner: usize) -> Vec<Row> {
     let mut rows = vec![topic_row(setup)];
     rows.extend(paragraph(setup.topic().question(), inner, Style::new()));
-    let field = format!("{}█", setup.answer());
-    for (at, text) in wrap(&field, inner.saturating_sub(2))
-        .into_iter()
-        .enumerate()
+    let room = inner.saturating_sub(2);
+    let mut wrapped = wrap(setup.answer(), room);
+    // The cursor trails the answer, starting its own row when the last
+    // one is full, as the block did inside the wrapped field before.
+    if wrapped
+        .last()
+        .is_some_and(|last| crate::format::width(last) >= room)
     {
+        wrapped.push(String::new());
+    }
+    let (_, cursor) = super::cursor::cursor_cell(None, Role::Surface, Role::Text);
+    let last = wrapped.len().saturating_sub(1);
+    for (at, text) in wrapped.into_iter().enumerate() {
         let lead = if at == 0 {
             Span::styled("› ", bold())
         } else {
             Span::raw("  ")
         };
-        rows.push(row(vec![lead, Span::raw(text)]));
+        let mut spans = vec![lead, Span::raw(text)];
+        if at == last {
+            spans.push(Span::styled("█".to_owned(), cursor));
+        }
+        rows.push(row(spans));
     }
     if let Some(message) = setup.error() {
         rows.extend(paragraph(message, inner, dim()));
@@ -198,7 +210,7 @@ fn line_rows(line: &LineRow<'_>, inner: usize) -> Vec<Row> {
     };
     let shown = line
         .editing
-        .map_or_else(|| line.text.to_owned(), |field| format!("{field}█"));
+        .map_or_else(|| line.text.to_owned(), |field| field.to_owned());
     let tight = if line.focused {
         struck
     } else {
@@ -206,10 +218,14 @@ fn line_rows(line: &LineRow<'_>, inner: usize) -> Vec<Row> {
     };
     let mut rows = Vec::new();
     if tight {
-        let spans = [
+        let mut spans = vec![
             Span::styled(line.layer.tag().to_owned(), tag_style),
             Span::styled(format!(" {shown}"), text_style),
         ];
+        if line.editing.is_some() {
+            let (_, cursor) = super::cursor::cursor_cell(None, Role::Surface, Role::Text);
+            spans.push(Span::styled("█".to_owned(), cursor));
+        }
         for (at, mut pieces) in wrap_spans(&spans, inner).into_iter().enumerate() {
             if at == 0 {
                 pieces.insert(0, marker.clone());
@@ -221,7 +237,20 @@ fn line_rows(line: &LineRow<'_>, inner: usize) -> Vec<Row> {
         return rows;
     }
     let tag = format!("{:<TAG_W$}", line.layer.tag());
-    let text = wrap(&shown, inner.saturating_sub(HANG).max(1));
+    let room = inner.saturating_sub(HANG).max(1);
+    let mut text = wrap(&shown, room);
+    // The cursor trails the field, starting its own hanging row when the
+    // last row is full, as the block did inside the wrapped field before.
+    let editing = line.editing.is_some();
+    if editing
+        && text
+            .last()
+            .is_some_and(|last| crate::format::width(last) >= room)
+    {
+        text.push(String::new());
+    }
+    let (_, cursor) = super::cursor::cursor_cell(None, Role::Surface, Role::Text);
+    let last = text.len().saturating_sub(1);
     for (at, piece) in text.into_iter().enumerate() {
         let mut spans = if at == 0 {
             vec![
@@ -233,6 +262,9 @@ fn line_rows(line: &LineRow<'_>, inner: usize) -> Vec<Row> {
             vec![Span::raw(" ".repeat(HANG))]
         };
         spans.push(Span::styled(piece, text_style));
+        if editing && at == last {
+            spans.push(Span::styled("█".to_owned(), cursor));
+        }
         let mut made = row(spans);
         made.barred = line.focused && at == 0;
         rows.push(made);

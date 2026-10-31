@@ -27,13 +27,14 @@ fn dim_row(text: String) -> Row {
     }
 }
 
-/// The query row: `› <query>█`, the query bold.
+/// The query row: `› <query>` with the cursor after it, the query bold.
 fn query_row(query: &str) -> Row {
+    let (_, style) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
     Row {
         spans: vec![
             Span::styled("› ".to_owned(), Style::new().fg(Role::Accent.color())),
             Span::styled(query.to_owned(), Style::new().add_modifier(Modifier::BOLD)),
-            Span::styled("█".to_owned(), Style::new().add_modifier(Modifier::DIM)),
+            Span::styled("█".to_owned(), style),
         ],
         right: Vec::new(),
         targets: Vec::new(),

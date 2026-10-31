@@ -1425,11 +1425,12 @@ fn an_overflowing_label_keeps_its_caret_in_its_row() {
     let mut buf = Buffer::empty(area);
     let mut targets_out = Vec::new();
     login.draw(area, &mut buf, &mut targets_out);
+    // Caret at the start: the head shows with the first cell in the
+    // slab's colour on the text colour.
     let caret = (0..24).any(|y| {
         (0..80).any(|x| {
-            buf[(x, y)]
-                .modifier
-                .contains(ratatui::style::Modifier::REVERSED)
+            buf[(x, y)].fg == crate::theme::Role::Surface.color()
+                && buf[(x, y)].bg == crate::theme::Role::Text.color()
         })
     });
     assert!(caret, "no reversed caret cell");
@@ -2520,9 +2521,9 @@ fn a_host_caret_rides_its_cell_with_the_end_block_after_it() {
     // The caret at the end draws the block after the text; one cell in
     // draws it on its cell with no trailing block. With `>=` flipped
     // to `<` the end loses its block while the middle gains one.
-    assert_eq!(host_spans("", 0, 80), ["█"]);
-    assert_eq!(host_spans("ab", 2, 80), ["ab█"]);
-    assert_eq!(host_spans("ab", 1, 80), ["a█b"]);
+    assert_eq!(host_spans("", 0, 80), ["", "█"]);
+    assert_eq!(host_spans("ab", 2, 80), ["ab", "█"]);
+    assert_eq!(host_spans("ab", 1, 80), ["a", "b", ""]);
 }
 
 #[test]

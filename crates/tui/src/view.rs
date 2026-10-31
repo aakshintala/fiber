@@ -21,6 +21,7 @@ pub(crate) mod chrome;
 mod clear;
 mod completions;
 mod conversation;
+pub(crate) mod cursor;
 mod drag;
 mod history;
 mod home;

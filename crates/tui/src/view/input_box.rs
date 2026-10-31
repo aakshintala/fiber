@@ -113,14 +113,22 @@ pub(super) fn draw(
     } else if let Some(hint) = item_hint(app) {
         draw_hint(area, below, &rows, (cursor_row, cursor_col), &hint, buf);
     }
+    draw_selection(app, area, below, &rows, top, buf);
     if cursor_shown(app) {
         let (x, y) = caret_cell(area, below, &rows, cursor_row, cursor_col);
-        // The cursor is a drawn dim `█` (`docs/tui.md`, "The input box").
-        // The terminal's own cursor stays where `super::cursor` puts it.
-        // The row always sits inside the area: the caret's row shows.
-        buf.set_stringn(x, y, "█", 1, style(Role::Muted));
+        // The caret's cell draws over the selection: the covered
+        // character in the slab's colour on the text colour, or a block
+        // in the text colour past the last character (`docs/tui.md`,
+        // "The input box"). The terminal's own cursor stays where
+        // `super::cursor` puts it. The row always sits inside the area:
+        // the caret's row shows.
+        let covered = rows
+            .get(cursor_row)
+            .and_then(|row| super::cursor::covered_symbol(row, usize::from(cursor_col)));
+        let (symbol, style) =
+            super::cursor::cursor_cell(covered.as_deref(), Role::Surface, Role::Text);
+        buf.set_stringn(x, y, &symbol, crate::text::width(&symbol), style);
     }
-    draw_selection(app, area, below, &rows, top, buf);
     token_targets(app, area, below, (top, rows.len()), targets);
     box_top
 }
