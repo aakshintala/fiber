@@ -41,7 +41,8 @@ the pull request is marked ready, which starts the full run.
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report without gating it
 directly: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`,
-`flake_report`, `bug_red_linux`, `bug_red_macos`. The bug-red legs report
+`flake_report`, `bug_red_linux`, `bug_red_macos`, `journey`, `journey_report`.
+The bug-red legs report
 nextest's status to the `bug_red` collector, which is in the verdict's
 `needs`; their raw results are not selection entries. The docs check fails
 when any other job is missing from `needs`, so a new job, such as a new
