@@ -734,7 +734,9 @@ fn a_duplicate_behind_a_rejected_reconnect_keeps_its_own_verdict() {
         assert_eq!(failure.message, "nothing declares unknown");
     }
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(kinds(&w.looped), ["session_started"]);
+    let mut recorded = kinds(&w.looped);
+    recorded.sort();
+    assert_eq!(recorded, ["session_started"]);
 }
 
 #[test]
@@ -826,7 +828,11 @@ fn reconnect_duplicates_accept_after_the_shared_outcome_and_a_later_retry_runs()
                 .is_ok()
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(kinds(&w.looped), ["session_started", expected, expected]);
+        // Count outcomes without pinning incidental event order; the ack
+        // callback above checks the required publication-before-accept edge.
+        let mut recorded = kinds(&w.looped);
+        recorded.sort();
+        assert_eq!(recorded, [expected, expected, "session_started"]);
     }
 }
 
