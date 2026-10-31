@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 /// `ts`, `schema_version`, the optional turn, action and sequence
 /// carriers, and the kind-specific body. A key a consumer does not know
 /// is ignored when reading, as for the session envelope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum ProcessLineKind {
     /// The sessionless hello, carrying the session's identity.
     ExtensionHello,
@@ -23,7 +23,7 @@ pub(crate) enum ProcessLineKind {
 }
 
 impl ProcessLineKind {
-    /// The wire name, byte-identical to the previous string literal.
+    /// The wire name.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::ExtensionHello => "extension_hello",
@@ -34,7 +34,7 @@ impl ProcessLineKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ProcessCallLine {
     /// The only discriminator a consumer switches on.
     pub kind: ProcessLineKind,

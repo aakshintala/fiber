@@ -1,7 +1,7 @@
 use super::{ProcessCallLine, ProcessLineKind};
 
 #[test]
-fn every_line_kind_names_its_wire_name() {
+fn every_line_kind_names_and_serializes_its_wire_name() {
     for (kind, name) in [
         (ProcessLineKind::ExtensionHello, "extension_hello"),
         (ProcessLineKind::ExtensionRequest, "extension_request"),
@@ -9,17 +9,6 @@ fn every_line_kind_names_its_wire_name() {
         (ProcessLineKind::CommandRejected, "command_rejected"),
     ] {
         assert_eq!(kind.name(), name);
-    }
-}
-
-#[test]
-fn the_serialized_line_carries_the_kind_name() {
-    for (kind, name) in [
-        (ProcessLineKind::ExtensionHello, "extension_hello"),
-        (ProcessLineKind::ExtensionRequest, "extension_request"),
-        (ProcessLineKind::CommandAccepted, "command_accepted"),
-        (ProcessLineKind::CommandRejected, "command_rejected"),
-    ] {
         let line = ProcessCallLine {
             kind,
             ts: 7,
