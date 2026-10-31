@@ -1826,7 +1826,7 @@ fn an_mcp_servers_result_reads_its_rows_and_omits_absent_keys() {
          "auth_url": "http://127.0.0.1:9/cb?code=a"},
         {"name": "up", "layer": "global", "state": "ready",
          "reason": "", "tools": 1, "approved": true},
-        {"name": "new", "layer": "project", "state": "connecting",
+        {"name": "new", "layer": "project", "state": "not-started",
          "reason": "", "approved": true}]} }));
     assert_eq!(
         result,
@@ -1853,7 +1853,7 @@ fn an_mcp_servers_result_reads_its_rows_and_omits_absent_keys() {
                 McpServerRow {
                     name: "new".into(),
                     layer: McpServerLayer::Project,
-                    state: McpServerState::Connecting,
+                    state: McpServerState::NotStarted,
                     reason: String::new(),
                     tools: None,
                     approved: true,
