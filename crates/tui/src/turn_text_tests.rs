@@ -45,7 +45,12 @@ fn request_turn_pins_only_what_its_copy_does_not_hold() {
     let missing = request_turn(&mut pages, 0, &[]);
     assert_eq!(missing, vec![0]);
     // The pending copy's page is asked for: it loads before the copy runs.
-    let page = pages.index().pages().first().expect("page 0 exists").clone();
+    let page = pages
+        .index()
+        .pages()
+        .first()
+        .expect("page 0 exists")
+        .clone();
     let want = (page.session.clone(), page.first_seq..=page.last_seq);
     let asked = pages.needs(usize::MAX / 2, 1);
     assert!(
