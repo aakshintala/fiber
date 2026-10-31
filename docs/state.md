@@ -429,7 +429,10 @@ What is recorded:
   loader exists it writes once per process, and without one it writes none
   (`docs/tui.md`, "How a TUI extension runs"). `tui.first_render` covers
   entry through the first draw and writes at most once per process; a setup
-  failure before the draw discards it and writes none. `tui.attached_frame`
+  failure before the draw discards it and writes none. `tui.attached_frame` covers
+  the same entry through the first draw that holds the attached session's
+  history, written once per process; an attach with no stream, or one that ends
+  before that draw, writes none. `tui.attached_frame`
   starts at the `tui.first_render` entry and ends at the first draw holding
   attached-session history; it writes once per process. Without a stream, or
   if the draw never happens, it writes none. `tui.log_read` covers the first
