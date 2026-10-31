@@ -21,8 +21,9 @@ use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
 
 use serde_json::json;
+use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
-use support::{Setup, TRUECOLOUR, write_json};
+use support::{Deadline, Setup, TRUECOLOUR, write_json};
 
 /// `error` in the dark theme.
 const ERROR: Colour = Colour::Rgb(255, 93, 115);
@@ -30,23 +31,6 @@ const ERROR: Colour = Colour::Rgb(255, 93, 115);
 const SURFACE: Colour = Colour::Rgb(26, 26, 34);
 /// `turn` in the dark theme.
 const TURN: Colour = Colour::Rgb(16, 16, 23);
-
-/// The hold FIFO, held open read+write so a parked `head -n 1 <hold>`
-/// stays alive through every view, hint and steer assertion until the
-/// test drops it. The watchdog is armed before the open, so the first
-/// fallible step is already watched, and reaps the process group on
-/// drop.
-fn new_hold(setup: &Setup, pattern: &str) -> (fs::File, fakes::Watchdog) {
-    let hold = setup.workspace().join("hold");
-    fakes::fifo(&hold);
-    let guard = fakes::Watchdog::matching(pattern);
-    let release = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&hold)
-        .unwrap();
-    (release, guard)
-}
 
 /// The reviewer answers and the allow-rules both fixtures share: the
 /// parent's steps differ, but every tool call is allowed either way.
@@ -83,7 +67,7 @@ fn write_shared(setup: &Setup, command: &str) {
 /// without the foreground's 30-second move wait; the held job still
 /// parks the delegate until the test releases it. No tty job starts,
 /// so releasing the hold finishes the delegate alone.
-fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
+fn delegate_setup() -> (Setup, Hold) {
     let setup = Setup::new();
     let command = format!("head -n 1 {}", setup.workspace().join("hold").display());
     write_json(
@@ -113,9 +97,56 @@ fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
         ]}),
     );
     write_shared(&setup, &command);
-    let hold = setup.workspace().join("hold");
-    let (release, guard) = new_hold(&setup, hold.to_str().unwrap());
-    (setup, release, guard)
+    let hold = Hold::park(&setup, &command);
+    (setup, hold)
+}
+
+/// Dropping the helper without any release write reaps the parked holder:
+/// the parent-death cleanup path, which is the leak this helper closes.
+/// The pre-drop guard pins the test against vacuity: `try_matching_exits`
+/// passes when nothing matches, so without a live match on the holder's
+/// own pid the reap below would prove nothing.
+#[test]
+fn hold_drop_releases_and_reaps_the_holder() {
+    let setup = Setup::new();
+    // Pid-scoped like the job command, so parallel tests cannot
+    // cross-match; the absolute path keeps the helper on its hold-path
+    // derivation.
+    let command = format!(
+        "head -n 1 {} #{}",
+        setup.workspace().join("hold").display(),
+        std::process::id()
+    );
+    let hold = support::hold::Hold::park(&setup, &command);
+    // A second read+write handle, held open across the drop below: the
+    // helper's own handle closing must not EOF-release the holder, so the
+    // reap proves the watchdog kill rather than the EOF path. Still no
+    // release write anywhere in this test.
+    let second = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(setup.workspace().join("hold"))
+        .unwrap();
+    let mut holder = Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = holder.id();
+    assert!(fakes::pid_alive(pid), "the holder lives before the drop");
+    let pattern = setup.workspace().join("hold").to_str().unwrap().to_owned();
+    let listed = pattern.clone();
+    fakes::wait_until("the holder to park", setup.deadline, move || {
+        fakes::matching(&listed)
+            .map(|pids| pids.contains(&pid))
+            .unwrap_or(false)
+    });
+    drop(hold);
+    fakes::try_matching_exits(pattern.as_str(), setup.deadline)
+        .unwrap_or_else(|error| panic!("the dropped helper reaps its holder: {error}"));
+    drop(second);
+    let _exited = holder.wait();
 }
 
 /// Only the tty job is held: the parent starts one scripted `shell`
@@ -125,7 +156,7 @@ fn delegate_setup() -> (Setup, fs::File, fakes::Watchdog) {
 /// would push the status row's stop and outcome under the row's cut.
 /// The command returns with the setup: the panel names the job row by
 /// it, so the test clicks only the row that names it.
-fn job_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
+fn job_setup() -> (Setup, Hold, String) {
     let setup = Setup::new();
     // A shell comment with this process id keeps the watchdog's
     // pattern to this test's `head`: parallel tests hold their own.
@@ -145,8 +176,8 @@ fn job_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
         ]}),
     );
     write_shared(&setup, &command);
-    let (release, guard) = new_hold(&setup, &format!("hold #{}", std::process::id()));
-    (setup, release, guard, command)
+    let hold = Hold::park(&setup, &command);
+    (setup, hold, command)
 }
 
 /// The binary started at 160x48 and prompted, so the target item starts.
@@ -245,7 +276,7 @@ fn assert_span_tint(grid: &Grid, y: u16, needle: &str, tint: Colour) {
 
 #[test]
 fn the_delegate_view_matches_the_doc() {
-    let (setup, release, _guard) = delegate_setup();
+    let (setup, hold) = delegate_setup();
     let mut run = start_run(&setup);
     // The parent's turn completes before the click, so the panel row's
     // position is final: the completed footer proves the turn is done,
@@ -368,7 +399,8 @@ fn the_delegate_view_matches_the_doc() {
                 .contents
                 .contains("steering goes to ◆ review the parser")
     });
-    finish_and_quit(run, release, "steering goes to ◆ review the parser");
+    let cleanup = setup.deadline.cleanup_phase();
+    finish_and_quit(run, hold, cleanup, "steering goes to ◆ review the parser");
 }
 
 #[test]
@@ -420,7 +452,7 @@ fn fifo_release_written_before_reader_opens_is_read() {
 
 #[test]
 fn the_job_pty_view_matches_the_doc() {
-    let (setup, release, _guard, command) = job_setup();
+    let (setup, hold, command) = job_setup();
     let mut run = start_run(&setup);
     // The Jobs card starts closed; its title toggles the list. The
     // completed turn is the session-event signal that makes the held
@@ -523,18 +555,23 @@ fn the_job_pty_view_matches_the_doc() {
         caret < col_at(&grid, y_hint, hint),
         "the hint never covers the caret"
     );
-    finish_and_quit(run, release, "type into the job");
+    let cleanup = setup.deadline.cleanup_phase();
+    finish_and_quit(run, hold, cleanup, "type into the job");
 }
 
-/// Writes `release` a line so `head` reads it and exits and the one
+/// Writes the release line so `head` reads it and exits and the one
 /// held item finishes, closes the view, quits, and asserts the exit:
 /// every wait is a screen predicate. The release is a written line,
 /// never a dropped writer: the test's open end keeps the pipe alive
 /// until the held `head` reads the line, while dropping the last writer
 /// before `head` opens the FIFO strands it there forever
-/// (`docs/testing.md`, "Waits and timeouts").
-fn finish_and_quit(mut run: Run, mut release: fs::File, closed_needle: &str) {
-    release.write_all(b"\n").unwrap();
+/// (`docs/testing.md`, "Waits and timeouts"). The holder already exited
+/// on this path, so the helper stands its watchdog down instead of
+/// dropping into its kill; a panic before the stand-down still drops
+/// into the kill.
+/// (`docs/testing.md`, "Running tests").
+fn finish_and_quit(mut run: Run, mut hold: Hold, deadline: Deadline, closed_needle: &str) {
+    hold.release().write_all(b"\n").unwrap();
     run.wait_screen("the finish folds", |grid| {
         !grid.contents.contains("■ stop")
             && (grid.contents.contains("completed") || grid.contents.contains("failed"))
@@ -548,4 +585,5 @@ fn finish_and_quit(mut run: Run, mut release: fs::File, closed_needle: &str) {
     run.write(b"\x03\x03\r");
     let exited = run.wait();
     assert_eq!(exited.status.code(), Some(0));
+    hold.stand_down(deadline);
 }

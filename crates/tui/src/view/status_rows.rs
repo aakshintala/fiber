@@ -223,12 +223,12 @@ fn session_segments(app: &App) -> Vec<Segment> {
             style(Role::Attention),
         )]));
     }
-    let window = panel.window().filter(|window| *window > 0);
-    if let Some((window, context)) = window.and_then(|window| {
-        status
-            .and_then(|status| status.context.as_ref())
-            .map(|context| (window, context))
-    }) {
+    let context = app.session().and_then(|session| {
+        let window = panel.window_for(session).filter(|window| *window > 0)?;
+        let context = panel.status_for(session)?.context.as_ref()?;
+        Some((window, context))
+    });
+    if let Some((window, context)) = context {
         out.push(context_segment(context.tokens, window, panel.trigger_at()));
     }
     if let Some(spend) = app.attached_spend() {

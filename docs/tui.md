@@ -535,8 +535,13 @@ With the rail hidden and sessions waiting, the Session status card ends with "! 
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
 shows the rail.
 
-The context bar is drawn against `preamble_built`'s `context_window` and
-`trigger_at`. Per-file counts come from `tool_call_completed`'s `changes`,
+The context bar is drawn against the window `session_status` reports and
+the handoff point the session's own `preamble_built` names. That window is
+the latest own build's `context_window`, or the inherited one when the
+session logged no `preamble_built` of its own. A session started by a
+rewind, a fork or a workspace change has no handoff point of its own, so
+its bar draws against the inherited window with no marker. Per-file counts
+come from `tool_call_completed`'s `changes`,
 never from `details`, which has no fixed shape a client may rely on
 (`docs/events.md`).
 
@@ -825,10 +830,18 @@ install still running.
   and messages, which takes the rest of the session's context total. Each
   of the first three is estimated from its bytes at the session's own
   tokens-per-byte rate, and the view says the sizes are approximate.
-  Until a request gives a rate, it shows the total alone. It is drawn
-  indented two columns: "268k tokens" bold, then " · 26% of the 1M window ·
-  automatic handoff at 400k" dim; the bar, one █ run per category in its
-  colour, ▁ in `rule` for the room left, and │ in `attention` at the handoff
+  Until a request gives a rate, and when the session logged no
+  `preamble_built` of its own, it shows the total alone. After attaching,
+  the terminal uses context totals and windows only from that session's
+  `session_status`, and uses that status's reported window when there is
+  no own preamble; it does not reuse the previous session's context. A
+  `session_started` also clears preamble-derived category estimates, so a
+  fork cannot reuse its parent's. Largest results stay in bytes until this
+  session has its own first-request rate; the view never reuses a prior
+  session's rate. It is drawn indented two columns: "268k tokens" bold,
+  then " · 26% of the 1M window · automatic handoff at 400k" dim; the bar,
+  one █ run per category in its colour, ▁ in `rule` for the room left, and │
+  in `attention` at the handoff
   point, with "handoff 400k" in `attention` right-aligned under the marker;
   one row per category, "■ " in its colour, the name padded to 20 columns,
   the size and its share dim; then "Largest tool results" bold, one row
