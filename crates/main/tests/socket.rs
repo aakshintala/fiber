@@ -1167,18 +1167,10 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
         line["payload"]["command_id"] == "c_msg"
     });
     assert_eq!(answered.last().unwrap()["kind"], "command_accepted");
-    // Opening a FIFO for writing blocks until the shell opens it for
-    // reading, so the release runs on a thread bounded by the test's
-    // deadline (`docs/testing.md`, "Waits and timeouts").
-    let (released, done) = mpsc::channel();
-    let rendezvous = hold.path().to_owned();
-    thread::spawn(move || {
-        released.send(fs::write(&rendezvous, "go\n")).unwrap();
-    });
-    setup
-        .deadline
-        .recv_or_fail(&done, "the FIFO release write")
-        .unwrap();
+    // The helper keeps the FIFO open read+write, so this write never
+    // waits for the shell reader: the three bytes fit the empty FIFO
+    // and stay buffered until the shell reads them.
+    fs::write(hold.path(), "go\n").unwrap();
     let mut lines = answered;
     lines.extend(until_client(
         setup.deadline,

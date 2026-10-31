@@ -23,7 +23,7 @@ use std::process::{Command, Stdio};
 use serde_json::json;
 use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
-use support::{Setup, TRUECOLOUR, write_json};
+use support::{Deadline, Setup, TRUECOLOUR, write_json};
 
 /// `error` in the dark theme.
 const ERROR: Colour = Colour::Rgb(255, 93, 115);
@@ -399,7 +399,8 @@ fn the_delegate_view_matches_the_doc() {
                 .contents
                 .contains("steering goes to ◆ review the parser")
     });
-    finish_and_quit(run, hold, "steering goes to ◆ review the parser");
+    let cleanup = setup.deadline.cleanup_phase();
+    finish_and_quit(run, hold, cleanup, "steering goes to ◆ review the parser");
 }
 
 #[test]
@@ -554,17 +555,22 @@ fn the_job_pty_view_matches_the_doc() {
         caret < col_at(&grid, y_hint, hint),
         "the hint never covers the caret"
     );
-    finish_and_quit(run, hold, "type into the job");
+    let cleanup = setup.deadline.cleanup_phase();
+    finish_and_quit(run, hold, cleanup, "type into the job");
 }
 
-/// Writes `release` a line so `head` reads it and exits and the one
+/// Writes the release line so `head` reads it and exits and the one
 /// held item finishes, closes the view, quits, and asserts the exit:
 /// every wait is a screen predicate. The release is a written line,
 /// never a dropped writer: the test's open end keeps the pipe alive
 /// until the held `head` reads the line, while dropping the last writer
 /// before `head` opens the FIFO strands it there forever
-/// (`docs/testing.md`, "Waits and timeouts").
-fn finish_and_quit(mut run: Run, mut hold: Hold, closed_needle: &str) {
+/// (`docs/testing.md`, "Waits and timeouts"). The holder already exited
+/// on this path, so the helper stands its watchdog down instead of
+/// dropping into its kill; a panic before the stand-down still drops
+/// into the kill.
+/// (`docs/testing.md`, "Running tests").
+fn finish_and_quit(mut run: Run, mut hold: Hold, deadline: Deadline, closed_needle: &str) {
     hold.release().write_all(b"\n").unwrap();
     run.wait_screen("the finish folds", |grid| {
         !grid.contents.contains("■ stop")
@@ -579,4 +585,5 @@ fn finish_and_quit(mut run: Run, mut hold: Hold, closed_needle: &str) {
     run.write(b"\x03\x03\r");
     let exited = run.wait();
     assert_eq!(exited.status.code(), Some(0));
+    hold.stand_down(deadline);
 }
