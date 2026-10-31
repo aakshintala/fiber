@@ -94,7 +94,6 @@ pub(crate) fn session_continues(
         None,
         None,
         None,
-        None,
         reads,
         supervised,
         Vec::new(),

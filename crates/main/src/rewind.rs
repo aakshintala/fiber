@@ -191,7 +191,6 @@ pub(crate) fn session_forked(
         signals,
         process,
         None,
-        None,
         Some(parent.clone()),
         Some(r#loop::Rewound {
             factory: Some(crate::builtin::tool_search_factory()),
@@ -338,7 +337,6 @@ pub(crate) fn session_rewound(
         process,
         None,
         None,
-        None,
         Some(r#loop::Rewound {
             factory: Some(crate::builtin::tool_search_factory()),
             from: point,
@@ -443,7 +441,6 @@ fn session_moved(
         clock,
         signals,
         process,
-        None,
         None,
         None,
         Some(r#loop::Rewound {
