@@ -1499,12 +1499,39 @@ sends driver commands, including its own extension's commands. A crash in a
 TUI extension cannot stop the session (`docs/invocation.md`, "Processes").
 
 A TUI extension registers each slot it fills with `fiber.slot(name, {
-timeout, render, animate })`, the same shape as `fiber.command` above:
-`timeout` in milliseconds is required, `render` draws the slot, and `animate`
-is present only on a slot that animates (`docs/tui.md`, "Animation"). A
-missing `timeout` fails at registration, as a missing callback `timeout` does
-("How an extension runs"). A slot takes no `key` field yet: naming one
-refuses the load.
+timeout, render, animate, on_key, on_click })`, the same shape as
+`fiber.command` above: `timeout` in milliseconds is required, `render` draws
+the slot, and `animate` is present only on a slot that animates
+(`docs/tui.md`, "Animation"). A missing `timeout` fails at registration, as a
+missing callback `timeout` does ("How an extension runs").
+
+`on_key` and `on_click` are optional, and each is `{ timeout, run }` with its
+own timeout. `on_key` acts only on a slot that takes focus: the input box, a
+view or an overlay. `run` receives `session_id` and one of three keys:
+`{ key = "ctrl+o" }` for a named key in the canonical grammar of `keys`,
+`{ text = "a" }` for typed text, and `{ paste = "…" }` for a bracketed paste
+as one event holding the whole pasted text. `on_click` acts on any slot whose
+spans carry `click` ids, and `run` receives `{ session_id = "…", click =
+"<id>" }`. Each returns `true` when it handled the input, as `fiber.key`'s
+`run` does below. Enter on a click target that has focus in navigate mode
+calls `on_click` as a click does (`docs/tui.md`, "Input and focus").
+
+`fiber.on_focus({ timeout, run })` runs `run` when the session on screen
+changes, with `{ session_id = "…" }`, or no `session_id` key on home. It
+runs as an event handler does and may make host calls. Its return value is
+ignored. An extension registers it once, and a second call records one
+rejection and is skipped.
+
+A TUI extension adds a slash command with `fiber.command(name, {
+description, timeout, run })` in `tui/init.lua`, and `run` runs in the
+terminal's VM. It receives `{ session_id = "…", args = "…" }`: the session
+on screen, with no `session_id` key on home, and the text after the name,
+`""` when there is none. Its return value is ignored. The terminal shows one
+`/` list, and a name registered twice, by either half of any extensions,
+follows the rule above: neither gets it, a `notice` names both, and the
+configuration rename applies. A TUI command never takes a built-in
+command's name, so `/quit` and `/reload` stay reachable. Naming one records
+one rejection and skips that registration.
 
 An animated slot declares `animate = { interval_ms = N }`, a whole number of
 milliseconds above 0: below 120 ms the terminal fires at 120 ms instead. Any
