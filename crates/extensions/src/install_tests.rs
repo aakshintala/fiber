@@ -764,9 +764,7 @@ fn a_record_with_a_bad_floor_is_a_bad_record() {
         "1".to_owned(),
         "true".to_owned(),
         r#"{"x":1}"#.to_owned(),
-        "\"1.2\"".to_owned(),
         "\"x\"".to_owned(),
-        "\"v1\"".to_owned(),
     ] {
         let dir = record_dir(
             &dirs.root,
