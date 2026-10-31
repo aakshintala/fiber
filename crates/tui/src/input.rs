@@ -883,7 +883,7 @@ impl Piece {
 }
 
 /// A word is a run of alphanumeric characters or `_`.
-fn is_word_char(ch: char) -> bool {
+pub(crate) fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 

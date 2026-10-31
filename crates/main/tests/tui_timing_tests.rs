@@ -283,8 +283,11 @@ fn a_debug_resume_records_first_render_log_read_and_transcript_once_each() {
     // No `tui.frame` assertion: a loaded machine can push a real frame
     // past 16 ms, so absence would flake; suppression is pinned in the
     // `log` crate and over-budget wiring in the `tui` crate.
+    // docs/state.md:430-432 promises one first-render line.
     assert_terminal_wire(&ops(&setup, pid, "tui.first_render"), "tui.first_render");
+    // docs/state.md:435-440 promises one first-page read line.
     assert_terminal_wire(&ops(&setup, pid, "tui.log_read"), "tui.log_read");
+    // docs/state.md:438-440 promises one transcript line after a successful load.
     assert_terminal_wire(&ops(&setup, pid, "tui.transcript"), "tui.transcript");
     for line in op_lines(&setup, pid) {
         if line["process"] != "tui" {
@@ -315,4 +318,73 @@ fn at_default_no_debug_line_is_written() {
         let line: Value = serde_json::from_str(line).unwrap();
         assert_ne!(line["level"], "debug", "the default stays silent: {line}");
     }
+}
+
+/// The loaded reply slot decorates seeded history on the first attached
+/// frame, before the attached-frame record is checked.
+#[test]
+fn a_debug_resume_records_extension_and_attached_frame() {
+    let setup = Setup::new();
+    seed(&setup, json!({"diagnostics": {"level": "debug"}}));
+    let extension = setup.root.path().join("attached-frame-extension");
+    write_json(
+        &extension.join("extension.json"),
+        &json!({
+            "name": "attached-frame",
+            "version": "v3.0.0",
+            "fiber": "0.0.0",
+            "api": 1
+        }),
+    );
+    fs::create_dir_all(extension.join("tui")).unwrap();
+    fs::write(extension.join("init.lua"), "").unwrap();
+    fs::write(
+        extension.join("tui/init.lua"),
+        concat!(
+            "fiber.slot('reply',{timeout=100,render=function(input,width) ",
+            "return {{{text='ATTACHED-EXTENSION ' .. input.text}}} end})",
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(extension),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+
+    let mut run = Run::spawn(
+        &setup,
+        COLS,
+        ROWS,
+        &["resume", ID],
+        &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+    );
+    let pid = run.id();
+    run.ready();
+    let grid = run.wait_screen("attached history through the loaded reply slot", |grid| {
+        grid.contents.contains("ATTACHED-EXTENSION") && grid.contents.contains(LAST)
+    });
+    assert!(grid.contents.contains("ATTACHED-EXTENSION"), "{grid:?}");
+    assert!(
+        grid.contents.contains(LAST),
+        "attached history is visible: {grid:?}"
+    );
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    // docs/state.md:428-429 promises one line when the TUI loader exists.
+    assert_terminal_wire(&ops(&setup, pid, "tui.extensions"), "tui.extensions");
+    // docs/state.md:432-435 promises one line at the first attached-history draw.
+    assert_terminal_wire(
+        &ops(&setup, pid, "tui.attached_frame"),
+        "tui.attached_frame",
+    );
 }

@@ -775,7 +775,7 @@ fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
     // duplicated, missing or reordered event fails (`docs/testing.md`,
     // "Event streams").
     assert_eq!(
-        support::kinds_without_attention(&lines),
+        support::kinds(&lines),
         [
             "repository_code_offered",
             "repository_code_resolved",

@@ -8,10 +8,10 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use self::install::{error_row, install_row, outcome_rows};
+use self::install::{error_row, install_row, logged_out_row, outcome_rows};
 use super::overlay::{self, Place, Row};
 use crate::format::width as cells;
-use crate::model_picker::{Fresh, LeftOutRow, ModelRow, PickerView, Progress};
+use crate::model_picker::{Fresh, LeftOutRow, LoggedOutRow, ModelRow, PickerView, Progress};
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot;
 use crate::text::to_u16;
@@ -40,9 +40,10 @@ fn dim_row(text: String) -> Row {
 }
 
 /// The filter row: "Type to search" dim until something is typed, then
-/// "›" dim and the query bold, with a dim block cursor either way.
+/// "›" dim and the query bold, with the cursor after it either way.
 fn filter_row(view: &PickerView) -> Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
+    let (_, cursor) = crate::view::cursor::cursor_cell(None, Role::Surface, Role::Text);
     let mut spans = if view.filter.is_empty() {
         vec![Span::styled("Type to search ".to_owned(), dim)]
     } else {
@@ -54,7 +55,7 @@ fn filter_row(view: &PickerView) -> Row {
             ),
         ]
     };
-    spans.push(Span::styled("█".to_owned(), dim));
+    spans.push(Span::styled("█".to_owned(), cursor));
     Row {
         spans,
         right: Vec::new(),
@@ -408,19 +409,21 @@ struct Count<'view> {
 }
 
 /// One windowed item, in draw order: a section's count rows stand
-/// after its heading and before its models, and the not-installed rows
-/// follow every section.
+/// after its heading and before its models, followed by logged-out rows
+/// and then the not-installed rows.
 enum Item<'view> {
     Model(Flat<'view>),
     Count(Count<'view>),
+    LoggedOut(&'view LoggedOutRow),
 }
 
 impl<'view> Item<'view> {
-    /// The item's provider: what opens a heading on a change.
-    fn provider(&self) -> &'view str {
+    /// The item's provider, when it opens or continues a model section.
+    fn provider(&self) -> Option<&'view str> {
         match self {
-            Item::Model(flat) => flat.provider,
-            Item::Count(count) => count.provider,
+            Item::Model(flat) => Some(flat.provider),
+            Item::Count(count) => Some(count.provider),
+            Item::LoggedOut(_) => None,
         }
     }
 
@@ -430,15 +433,16 @@ impl<'view> Item<'view> {
         match self {
             Item::Model(flat) => flat.row.at,
             Item::Count(count) => count.row.at,
+            Item::LoggedOut(row) => row.at,
         }
     }
 
     /// The body rows the item takes past its heading: two per model,
-    /// three for a session-only choice, one per count row.
+    /// three for a session-only choice, and one per count or logged-out row.
     fn rows(&self) -> usize {
         match self {
             Item::Model(flat) => 2 + usize::from(flat.row.session_only),
-            Item::Count(_) => 1,
+            Item::Count(_) | Item::LoggedOut(_) => 1,
         }
     }
 }
@@ -462,30 +466,39 @@ fn items(view: &PickerView) -> Vec<Item<'_>> {
             }));
         }
     }
+    out.extend(view.logged_out.iter().map(Item::LoggedOut));
     out
 }
 
 /// The body rows the items from `start` to `end` take. The items are the
-/// section items and then the not-installed rows. A model takes two rows,
-/// three for a session-only choice, a count row takes one, with a heading
-/// row above each provider's first shown item and a blank row between
-/// sections. A not-installed row takes one, two with its error, and the
-/// first in the window takes a blank row above it when anything precedes
-/// it there.
+/// section items, logged-out rows and then the not-installed rows. A model
+/// takes two rows, three for a session-only choice, a count or logged-out
+/// row takes one, with a heading above each provider section and a blank
+/// between sections and row groups. A not-installed row takes one, two
+/// with its error, and the first in the window takes a blank above it when
+/// anything precedes it there.
 fn rows_for(view: &PickerView, items: &[Item], start: usize, end: usize) -> usize {
     let mut rows = 0;
+    let logged_out_start = items
+        .iter()
+        .position(|item| matches!(item, Item::LoggedOut(_)))
+        .unwrap_or(items.len());
     // A window starting inside a provider continues it with no heading;
-    // any other provider change opens one.
+    // any other provider change opens one. Logged-out rows have no heading.
     let mut before = start
         .checked_sub(1)
         .and_then(|at| items.get(at))
-        .map(|item| item.provider());
+        .and_then(Item::provider);
     for at in start..end {
         if let Some(item) = items.get(at) {
-            let headed = before.is_none_or(|provider| provider != item.provider());
-            before = Some(item.provider());
-            if headed {
-                rows += if at == start { 1 } else { 2 };
+            if let Some(provider) = item.provider() {
+                let headed = before.is_none_or(|previous| previous != provider);
+                before = Some(provider);
+                if headed {
+                    rows += if at == start { 1 } else { 2 };
+                }
+            } else if at == logged_out_start && at > start {
+                rows += 1;
             }
             rows += item.rows();
         } else if let Some(install) = view.installs.get(at.saturating_sub(items.len())) {
@@ -544,10 +557,10 @@ fn model_fit(view: &PickerView, height: u16) -> usize {
     usize::from(height.saturating_sub(CHROME)).saturating_sub(reserved)
 }
 
-/// The page step over `view` at `height`: the windowed focusable
-/// model and install stops, which the list pages by less one. Count
-/// rows consume viewport and window rows but never focus, so they stay
-/// in the window without growing the step.
+/// The page step over `view` at `height`: the windowed focusable model,
+/// logged-out and install stops, which the list pages by less one. Count
+/// rows consume viewport and window rows but never focus, so they stay in
+/// the window without growing the step.
 pub(crate) fn page_step(view: &PickerView, height: u16) -> usize {
     let fit = model_fit(view, height);
     let shown = items(view);
@@ -555,7 +568,7 @@ pub(crate) fn page_step(view: &PickerView, height: u16) -> usize {
     let mut step = 0;
     for at in start..end {
         if let Some(item) = shown.get(at) {
-            if matches!(item, Item::Model(_)) {
+            if matches!(item, Item::Model(_) | Item::LoggedOut(_)) {
                 step += 1;
             }
         } else if view.installs.get(at.saturating_sub(shown.len())).is_some() {
@@ -604,12 +617,38 @@ fn count_row(row: &LeftOutRow) -> Row {
 /// marked for the existing short-viewport trim.
 fn display_rows(view: &PickerView, priced: bool) -> DisplayRows {
     let items = items(view);
+    let logged_out_start = items
+        .iter()
+        .position(|item| matches!(item, Item::LoggedOut(_)))
+        .unwrap_or(items.len());
     let mut rows = Vec::new();
     let mut item_starts = Vec::new();
     let mut before: Option<&str> = None;
     let mut first = true;
     for (at, item) in items.iter().enumerate() {
-        let provider = item.provider();
+        let Some(provider) = item.provider() else {
+            if at == logged_out_start && !rows.is_empty() {
+                rows.push(DisplayRow {
+                    row: Row {
+                        spans: Vec::new(),
+                        right: Vec::new(),
+                        targets: Vec::new(),
+                        barred: false,
+                    },
+                    focus: None,
+                    trim_count: false,
+                });
+            }
+            item_starts.push(rows.len());
+            if let Item::LoggedOut(logged_out) = item {
+                rows.push(DisplayRow {
+                    row: logged_out_row(logged_out, Some(logged_out.at) == view.focused),
+                    focus: Some(logged_out.at),
+                    trim_count: false,
+                });
+            }
+            continue;
+        };
         let headed = before.is_none_or(|previous| previous != provider);
         item_starts.push(rows.len());
         let trim_count = headed && matches!(item, Item::Count(_));
@@ -629,6 +668,7 @@ fn display_rows(view: &PickerView, priced: bool) -> DisplayRows {
             let state = match item {
                 Item::Model(flat) => flat.state,
                 Item::Count(count) => count.state,
+                Item::LoggedOut(_) => unreachable!("logged-out rows have no provider heading"),
             };
             rows.push(DisplayRow {
                 row: heading_row(provider, state, &view.spinner),
@@ -677,6 +717,7 @@ fn display_rows(view: &PickerView, priced: bool) -> DisplayRows {
                     }
                 }
             }
+            Item::LoggedOut(_) => unreachable!("handled without a provider heading"),
         }
         debug_assert!(at < items.len());
     }

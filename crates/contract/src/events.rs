@@ -69,10 +69,42 @@ pub enum Class {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Empty {}
 
-/// Declares [`Event`] from one row per kind: the variant, its payload type,
-/// the kind's name and its class.
+/// Declares [`Event`] and [`EventKind`] from one row per kind: the variant,
+/// its payload type, the kind's name and its class.
 macro_rules! kinds {
     ($($variant:ident($payload:ty) = $name:literal, $class:ident;)+) => {
+        /// A known event kind, or an unrecognized name kept for tolerant readers.
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum EventKind {
+            $(
+                #[doc = concat!("The `", $name, "` event kind.")]
+                $variant,
+            )+
+            /// A kind this build does not recognize, kept exactly as read.
+            Unknown(String),
+        }
+
+        impl EventKind {
+            /// Parses a kind name without reading its payload.
+            ///
+            /// Names in the event table become their corresponding variant;
+            /// every other name is retained in [`EventKind::Unknown`].
+            pub fn from_name(name: &str) -> Self {
+                match name {
+                    $($name => Self::$variant,)+
+                    name => Self::Unknown(name.to_owned()),
+                }
+            }
+
+            /// Returns the original envelope name for this kind.
+            pub fn name(&self) -> &str {
+                match self {
+                    $(Self::$variant => $name,)+
+                    Self::Unknown(name) => name,
+                }
+            }
+        }
+
         /// One event, by kind, with its payload. It serializes as its payload
         /// alone.
         #[derive(Debug, Clone, PartialEq, Serialize)]

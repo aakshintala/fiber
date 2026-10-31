@@ -26,6 +26,35 @@ pub(crate) struct Run {
     /// Every diagnostic-log text the run's homes wrote, or why one could
     /// not be read.
     logs: Vec<Result<String, String>>,
+    /// The attach workload's per-sample, per-fixture span rows,
+    /// harvested from its samples; every other workload leaves this
+    /// empty.
+    spans: idle::Samples,
+}
+
+/// How many samples the debug pass takes of `workload` per fixture: the
+/// attach workload runs five, like the timed path (`docs/performance.md`,
+/// "Measuring"), so its spans hold five observations per fixture; every
+/// other workload runs once. One debug-only run never stands in for the
+/// five timed samples.
+const ATTACH_DEBUG_RUNS: u32 = 5;
+
+/// The debug sample count of `workload`.
+fn debug_runs(workload: &'static idle::Workload) -> u32 {
+    if workload.name == crate::attach::SAMPLED[0].name {
+        ATTACH_DEBUG_RUNS
+    } else {
+        1
+    }
+}
+
+/// The attach workload's span rows from its samples: the `attach_span_ms`
+/// values in sample order. Every other workload's samples hold none.
+fn attach_spans(samples: idle::Samples) -> idle::Samples {
+    samples
+        .into_iter()
+        .filter(|(metric, _)| *metric == crate::attach::SPAN_METRIC)
+        .collect()
 }
 
 /// The workloads the debug pass repeats, in selection order: each timing
@@ -111,7 +140,10 @@ fn tally(logs: &[Result<String, String>]) -> (Value, Value, Vec<String>) {
 
 /// One workload's `op_breakdown` entry: its name, its run's wall-clock
 /// time, the tallied operations and provider requests, and its notes. An
-/// `error` key is added when the workload erred.
+/// `error` key is added when the workload erred. The attach workload's
+/// entry also carries its per-sample, per-fixture `spans`: the Phase 1
+/// evidence, separate from the tallied totals. A successful attach run
+/// with no spans fails the diagnostic result with an error.
 fn entry(workload: &str, run: Run) -> Value {
     let (ops, provider_request, tallied) = tally(&run.logs);
     let mut notes = run.notes;
@@ -123,8 +155,22 @@ fn entry(workload: &str, run: Run) -> Value {
         "provider_request": provider_request,
         "notes": notes
     });
-    if let (Err(err), Some(fields)) = (run.result, entry.as_object_mut()) {
+    if let Err(err) = run.result
+        && let Some(fields) = entry.as_object_mut()
+    {
         fields.insert("error".to_owned(), json!(err));
+    }
+    if workload == crate::attach::SAMPLED[0].name {
+        let spans: Vec<Value> = run.spans.into_iter().map(|(_, value)| value).collect();
+        if let Some(fields) = entry.as_object_mut() {
+            // Missing spans fail the diagnostic result rather than passing
+            // as a spanless attach: without them there is no Phase 1
+            // evidence.
+            if spans.is_empty() && !fields.contains_key("error") {
+                fields.insert("error".to_owned(), json!("no attach spans were recorded"));
+            }
+            fields.insert("spans".to_owned(), Value::Array(spans));
+        }
     }
     entry
 }
@@ -147,8 +193,11 @@ pub(crate) fn debug_pass(
     head.metric_runs.insert("op_breakdown", 1);
 }
 
-/// One workload's debug run: the workload once, timed on `clock`, in a
-/// debug home of its own. The home's logs are drained after it is gone.
+/// One workload's debug run: the workload, timed on `clock`, in a debug
+/// home of its own. The attach workload runs five samples per fixture,
+/// like the timed path, so its spans hold five observations per fixture;
+/// every other workload runs once. The home's logs are drained after it
+/// is gone.
 pub(crate) fn run_debug(
     fiber: &Path,
     clock: &dyn Clock,
@@ -165,6 +214,7 @@ pub(crate) fn run_debug(
                 notes: Vec::new(),
                 ms: 0.0,
                 logs: Vec::new(),
+                spans: Vec::new(),
             };
         }
     };
@@ -173,12 +223,15 @@ pub(crate) fn run_debug(
         clock,
         idle,
         path,
-        runs: 1,
+        runs: debug_runs(workload),
         paging,
     };
     let mut notes = Vec::new();
     let started = clock.now();
-    let result = crate::run_once(&ctx, workload, &mut notes).map(|_| ());
+    let (result, spans) = match crate::run_once(&ctx, workload, &mut notes) {
+        Ok(samples) => (Ok(()), attach_spans(samples)),
+        Err(err) => (Err(err), Vec::new()),
+    };
     let ms = idle::ms(clock, started).as_f64().unwrap_or_default();
     if let Err(err) = home.finish() {
         notes.push(format!("cleanup: {err}"));
@@ -189,6 +242,7 @@ pub(crate) fn run_debug(
         notes,
         ms,
         logs,
+        spans,
     }
 }
 

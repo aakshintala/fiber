@@ -23,7 +23,9 @@ mod support;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
@@ -775,4 +777,88 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
     hub_guard.wait_gone();
     client_guard.wait_gone();
     drop((server, served.hub, cleanup));
+}
+
+/// A hello slice that outlives a zero outer bound names the outer wait's
+/// own timeout, the bounds behind it and what the hub had written: the
+/// diagnostic path for the loaded-hub sightings, driven without a loaded
+/// hub. The far end gets two seconds to answer while the outer wait holds
+/// nothing, so the slice's work is still blocked when the zero bound
+/// expires and `within`'s `waited 0ns` timeout fires on every run. Only
+/// the enriched panic can follow `give_up`, so its text also proves the
+/// live child was reaped. A missing `hub.log` and an empty one report
+/// distinctly.
+#[test]
+fn hello_slice_timeout_reports_bounds_and_hub_state() {
+    let setup = support::Setup::new();
+    let spawn_live = || {
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        support::HubProc::spawn_command(setup.deadline, &mut command)
+    };
+    let wait = support::Deadline::after(Duration::ZERO);
+    let entry = "hello wait entered with helper root left 0ns (test)";
+    let slices = [Duration::from_secs(10)];
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hub_start::hello_slice(
+            &setup,
+            spawn_live(),
+            wait,
+            Duration::from_secs(2),
+            entry,
+            &slices,
+        )
+    }));
+    let message = outcome
+        .err()
+        .and_then(|payload| payload.downcast::<String>().ok().map(|boxed| *boxed))
+        .expect("the zero-bound slice panics");
+    assert!(
+        message.contains("waited 0ns for the installed hub's hello"),
+        "the panic keeps the outer wait's timeout text: {message}"
+    );
+    assert!(
+        message.contains(entry),
+        "the panic names the hello wait's entry bounds: {message}"
+    );
+    assert!(
+        message.contains("failing root left"),
+        "the panic names the root bound at the failure: {message}"
+    );
+    assert!(
+        message.contains("started-wait left"),
+        "the panic names the started-wait bound at the failure: {message}"
+    );
+    assert!(
+        message.contains("10s"),
+        "the panic names each slice's until: {message}"
+    );
+    assert!(
+        message.contains("was still running"),
+        "the panic names the live child's state: {message}"
+    );
+    assert!(
+        message.contains("hub.log missing"),
+        "a fresh home holds no hub.log: {message}"
+    );
+    fs::create_dir_all(setup.home().join("logs")).unwrap();
+    fs::write(setup.home().join("logs").join("hub.log"), "").unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hub_start::hello_slice(
+            &setup,
+            spawn_live(),
+            wait,
+            Duration::from_secs(2),
+            entry,
+            &slices,
+        )
+    }));
+    let message = outcome
+        .err()
+        .and_then(|payload| payload.downcast::<String>().ok().map(|boxed| *boxed))
+        .expect("the zero-bound slice panics again");
+    assert!(
+        message.contains("hub.log empty (0 bytes)"),
+        "an empty hub.log reports distinctly from a missing one: {message}"
+    );
 }

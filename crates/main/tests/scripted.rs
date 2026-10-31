@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
-    HubProc, Run, SessionGuard, Setup, connect_hub, hello, kinds_without_attention as kinds,
-    recv_reply, run_to_exit, subscribe, until, write_json,
+    HubProc, Run, SessionGuard, Setup, connect_hub, hello, kinds, recv_reply, run_to_exit,
+    subscribe, until, write_json,
 };
 
 impl Run {
