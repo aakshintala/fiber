@@ -165,7 +165,8 @@ program or waiting on a test.
   stall for seconds on macOS (`docs/testing.md`, the first-run stall). The
   path helper returns `fakes::WarmedJig`, which warms before returning, and
   exec sites take it, so an unwarmed jig path does not compile.
-  `fakes::warm_up` is for an already-built `CARGO_BIN_EXE_*` product binary;
+  `fakes::warm_up` is for an already-built `CARGO_BIN_EXE_*` product binary
+  and the checked-in MCP fixture script (see `fakes::mcp_fixture`);
   a jig example binary starts through `WarmedJig::warm`.
 - **Its own logic is tested from shared support.** Code in a jig that a
   test checks without running the binary, such as its argument parsing,

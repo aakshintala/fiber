@@ -30,14 +30,26 @@ use std::time::Duration;
 /// timeouts").
 const JIG_DEADLINE: Duration = Duration::from_secs(50);
 
-/// The example `cargo test` built beside this test binary
-/// (`target/<profile>/examples/paging`), so the test starts no cargo and
-/// waits on no build lock.
-fn example_path() -> PathBuf {
+/// The built `paging` example beside this test binary
+/// (`target/<profile>/examples/paging`), wrapped so no path reference to
+/// it can reach an exec site: the only use is the hard-link source in
+/// [`Jig::new`], so the type exposes that link operation and nothing else —
+/// no `&Path`, no `AsRef<Path>`. The test starts no cargo and waits on no
+/// build lock.
+struct ColdJigSource(PathBuf);
+
+impl ColdJigSource {
+    /// Links the built example to `link` and reports link errors.
+    fn hard_link(&self, link: &Path) -> std::io::Result<()> {
+        std::fs::hard_link(&self.0, link)
+    }
+}
+
+fn example_path() -> ColdJigSource {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.join("examples").join("paging")
+    ColdJigSource(path.join("examples").join("paging"))
 }
 
 /// The built jig through this test's own path, with a directory for its
@@ -72,7 +84,7 @@ impl Jig {
         let bin = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
         std::fs::create_dir_all(&bin).unwrap();
         let link = bin.join("paging");
-        if let Err(err) = std::fs::hard_link(example_path(), &link) {
+        if let Err(err) = example_path().hard_link(&link) {
             panic!("hard-linking `paging` to {}: {err}", link.display());
         }
         // The hard link shares the example's inode, so one warm-up covers both

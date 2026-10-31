@@ -29,7 +29,7 @@ impl WarmedJig {
     /// Warms `path` by running it with `args` and asserting its exit is
     /// `exit`, then holds the warmed path. A jig example binary starts
     /// through this; [`warm_up`] is for an already-built `CARGO_BIN_EXE_*`
-    /// product binary.
+    /// product binary and the checked-in MCP fixture script.
     #[track_caller]
     pub fn warm(path: PathBuf, args: &[&str], exit: i32) -> Self {
         warm_up(&path, args, exit);
@@ -46,8 +46,8 @@ impl WarmedJig {
 /// its exit is `exit`: no state, so a failed warm-up affects no later call.
 /// The child leads its own process group and a watchdog guards it, as the
 /// sibling jig wrappers do (`docs/testing/running.md`). For an already-built
-/// `CARGO_BIN_EXE_*` product binary; a jig example binary starts through
-/// [`WarmedJig::warm`].
+/// `CARGO_BIN_EXE_*` product binary and the checked-in MCP fixture script
+/// (`mcp_fixture`); a jig example binary starts through [`WarmedJig::warm`].
 ///
 /// # Panics
 ///
