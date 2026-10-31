@@ -775,6 +775,11 @@ pub(crate) fn assemble_session(
                     return Err(failed(ErrorCode::IoFailed, "MCP startup was not prepared"));
                 }
             };
+            // The session's sink observes each `web_fetch` request at debug; at
+            // any other level the fetch stays silent.
+            let debug = diag
+                .debugging()
+                .then(|| Arc::clone(&diag) as Arc<dyn DebugLog>);
             let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
                 fiber_path.clone(),
                 &home,
@@ -790,6 +795,7 @@ pub(crate) fn assemble_session(
                 skills,
                 extensions.tools(),
                 timing.clone(),
+                debug,
                 shell_read_only.clone(),
                 sandbox.clone(),
                 Some(protection),
@@ -1225,6 +1231,11 @@ pub(crate) fn assemble_session(
                     return Err(failed(ErrorCode::IoFailed, "MCP startup was not prepared"));
                 }
             };
+            // The session's sink observes each `web_fetch` request at debug; at
+            // any other level the fetch stays silent.
+            let debug = diag
+                .debugging()
+                .then(|| Arc::clone(&diag) as Arc<dyn DebugLog>);
             let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
                 fiber_path.clone(),
                 &home,
@@ -1240,6 +1251,7 @@ pub(crate) fn assemble_session(
                 skills,
                 extensions.tools(),
                 timing.clone(),
+                debug,
                 shell_read_only.clone(),
                 sandbox.clone(),
                 Some(protection),
