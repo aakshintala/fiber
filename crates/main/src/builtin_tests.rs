@@ -1256,6 +1256,7 @@ fn builtin_tools_carry_the_protection_handle_to_files_and_shell() {
         skills(),
         None,
         Default::default(),
+        Default::default(),
         std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
             enabled: true,
             allow_write: Vec::new(),
