@@ -100,7 +100,7 @@ fn moving_clamps_at_both_ends() {
     );
 }
 
-/// PageUp and PageDown move (`docs/tui.md:2077`); the step is the whole
+/// PageUp and PageDown move (`docs/tui.md:2109`); the step is the whole
 /// actions fitting from the top less one, at least one — the `List::key`
 /// "by the height less one" precedent translated from display lines to
 /// fitting actions, so a page down lands on the last fitting action's
@@ -683,7 +683,7 @@ fn wheel_pulls_a_leaving_selection_to_the_nearest_shown_action() {
 /// ends, resting inside wrapped actions instead of snapping to their
 /// starts: down from the top the window lands on lines 3, 6 and 9,
 /// and back up it returns by the same lines.
-/// (`docs/tui.md:584`).
+/// (`docs/tui.md:589`).
 #[test]
 fn wheel_up_into_a_wrapped_action_moves_at_most_three_display_lines() {
     let keys = keys();
@@ -857,7 +857,7 @@ fn wheel_clamps_at_the_last_action() {
 /// Wheel steps near the ends move only the lines left, and steps at
 /// the ends hold: every step off an end moves one to three display
 /// lines, never more and never zero, in both directions
-/// (`docs/tui.md:584`).
+/// (`docs/tui.md:589`).
 #[test]
 fn wheel_moves_short_steps_at_the_ends_and_holds_at_them() {
     let keys = keys();
@@ -1052,7 +1052,7 @@ fn an_action_taller_than_the_window_shows_its_top_lines() {
 /// The wheel moves three display lines a step even at an action
 /// taller than the window: down from its first line and up from the
 /// first line after it each move the top, never stalling on the
-/// action's start (`docs/tui.md:584`).
+/// action's start (`docs/tui.md:589`).
 #[test]
 fn wheel_moves_three_display_lines_at_a_taller_than_window_action() {
     let keys = keys();

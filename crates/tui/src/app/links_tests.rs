@@ -1093,7 +1093,7 @@ fn a_swapped_view_on_home_tints_the_focused_row_and_lifts_the_hovered_row() {
     use ratatui::style::Modifier;
     // The `/keys` screen on home draws through the swapped-view early
     // return, with one target per display line and every action wrapped
-    // to its tallest column count (`docs/tui.md:2068`: every
+    // to its tallest column count (`docs/tui.md:2100`: every
     // display line of a wrapped action takes a mouse target — the first
     // action wraps to two lines, so at least three display lines exist
     // to bar two and hover another).
