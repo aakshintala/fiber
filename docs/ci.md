@@ -41,7 +41,8 @@ the pull request is marked ready, which starts the full run.
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report without gating it
 directly: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`,
-`flake_report`, `bug_red_linux`, `bug_red_macos`. The bug-red legs report
+`flake_report`, `bug_red_linux`, `bug_red_macos`, `journey`, `journey_report`.
+The bug-red legs report
 nextest's status to the `bug_red` collector, which is in the verdict's
 `needs`; their raw results are not selection entries. The docs check fails
 when any other job is missing from `needs`, so a new job, such as a new
@@ -151,7 +152,9 @@ issue for the test's file, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The aggregate `main` integration binary
 is keyed by its first test-module segment, as in `Flaky tests:
 main::reviewer_setup`; a root-level `main` test falls back to `Flaky tests:
-main`, while every other binary keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
+main`, while a unit-test binary is keyed per file, as in
+`Flaky tests: extensions::host::exec`, and a single-file integration binary
+keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
@@ -223,6 +226,9 @@ On Linux x86_64 alone:
 - no crate but `tui` and `main` has `ratatui` or `crossterm` in its normal
   dependency tree (`cargo xtask tui-isolation`), so no other crate depends on
   a crate admitted only for the terminal
+- every direct normal dependency between workspace crates is granted by the
+  quoted allow-list in `docs/architecture.md`, "The call rules"
+  (`cargo xtask crate-edges`)
 - no crate enables serde_json's `preserve_order` feature in any crate linked into a workspace binary or test, over every target and feature; build-dependency edges are excluded (`cargo xtask
   preserve-order`), so prompt bytes stay cacheable (`docs/prompt-cache.md`)
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in
@@ -457,7 +463,7 @@ After the backstop passes on `main`, and in the nightly before it publishes,
 the journey suite drives that commit's release binary through the paths a
 person walks (`docs/testing.md`, "Journeys"). A failure opens an issue, or
 comments on the open one. It never blocks a merge, and it is not part of the
-gate.
+gate. In the nightly, a failure reports and does not stop the publish.
 
 ## Toolchain
 
@@ -534,7 +540,7 @@ regenerates it and fails when the committed copy differs.
 
 ## Manually dispatched workflows
 
-Three workflows never run on a push or a pull request. Someone starts them with
+Four workflows never run on a push or a pull request. Someone starts them with
 `gh workflow run <file> --ref <branch>`, and GitHub allows that only once the
 workflow file is on `main`.
 
@@ -551,6 +557,10 @@ workflow file is on `main`.
   process and for the fiber processes alone, the fiber processes' self time per
   function (`fiber-symbols.txt`), and the harness's JSON. Its timings run under perf,
   so they are not budget evidence.
+- `build-timings.yml` builds the whole workspace with `--timings` on Linux
+  x86_64 and macOS arm64 from a warm dependency cache, times an incremental
+  rebuild after touching one file each in `crates/tui` and `crates/support`,
+  and uploads both timing reports as artifacts (#3789, step 1).
 
 ## Job time limits
 

@@ -2756,30 +2756,22 @@ fn transition_allows_each_documented_move_and_refuses_the_rest() {
             let order = AckOrder::default();
             stage_command(&order, from);
             match order.transition(&CommandId("c_1".to_owned()), to) {
-                Ok(previous) => {
+                Ok(()) => {
                     assert!(
                         allowed(from, to),
                         "the move from {from:?} to {to:?} is refused"
                     );
-                    assert_eq!(previous, from, "the move reports what it moved from");
                     assert_eq!(
                         order.state(&CommandId("c_1".to_owned())),
                         Some(to),
                         "the move lands"
                     );
                 }
-                Err(IllegalTransition::Forbidden {
-                    id,
-                    from: at,
-                    to: want,
-                }) => {
+                Err(IllegalTransition::Forbidden) => {
                     assert!(
                         !allowed(from, to),
                         "the move from {from:?} to {to:?} is allowed"
                     );
-                    assert_eq!(id, CommandId("c_1".to_owned()));
-                    assert_eq!(at, from);
-                    assert_eq!(want, to);
                     assert_eq!(
                         order.state(&CommandId("c_1".to_owned())),
                         Some(from),

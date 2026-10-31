@@ -1117,6 +1117,55 @@ fn the_isolation_checks_fail_a_crate_that_links_an_isolated_crate() {
     );
 }
 
+fn crate_edges_workspace() -> TempDir {
+    let dir = workspace();
+    dir.write("docs/architecture.md", "## The call rules\n");
+    dir
+}
+
+#[test]
+fn crate_edges_cli_reports_each_unlisted_normal_edge() {
+    let dir = crate_edges_workspace();
+    let (code, out) = xtask(&dir, &["crate-edges"], &[], "");
+    assert_eq!(code, 1, "{out}");
+    let edges: Vec<&str> = out.lines().filter(|line| line.contains('→')).collect();
+    assert_eq!(
+        edges,
+        [
+            "crate-edges: b → a: docs/architecture.md, \"The call rules\", has no sentence for b",
+            "crate-edges: c → a: docs/architecture.md, \"The call rules\", has no sentence for c",
+        ]
+    );
+}
+
+#[test]
+fn crate_edges_cli_filters_dev_build_and_nonmember_edges_but_keeps_target_normal() {
+    let dir = crate_edges_workspace();
+    dir.write(
+        "crates/b/Cargo.toml",
+        "[package]\nname = \"b\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dev-dependencies]\na = { path = \"../a\" }\nc = { path = \"../c\" }\n\n[build-dependencies]\nc = { path = \"../c\" }\n\n[target.'cfg(unix)'.dependencies]\nrenamed_a = { package = \"a\", path = \"../a\" }\n",
+    );
+    dir.write(
+        "crates/c/Cargo.toml",
+        "[package]\nname = \"c\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\noutside = { path = \"../../outside\" }\n\n[dev-dependencies]\na = { path = \"../a\" }\n\n[build-dependencies]\na = { path = \"../a\" }\n",
+    );
+    let (code, out) = xtask(&dir, &["crate-edges"], &[], "");
+    assert_eq!(code, 1, "{out}");
+    let edges: Vec<&str> = out.lines().filter(|line| line.contains('→')).collect();
+    assert_eq!(
+        edges,
+        ["crate-edges: b → a: docs/architecture.md, \"The call rules\", has no sentence for b"]
+    );
+}
+
+#[test]
+fn crate_edges_cli_requires_architecture_doc() {
+    let dir = workspace();
+    let (code, out) = xtask(&dir, &["crate-edges"], &[], "");
+    assert_eq!(code, 2);
+    assert!(out.starts_with("xtask: docs/architecture.md: "), "{out}");
+}
+
 #[test]
 fn the_docs_check_fails_a_broken_link() {
     let dir = workspace();
@@ -1161,8 +1210,8 @@ fn docs_only_reports_whether_the_files_are_docs() {
 
 #[test]
 fn ci_needs_passes_fails_and_errors() {
-    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bug_red_linux:\n    runs-on: ubuntu-24.04\n  bug_red_macos:\n    runs-on: macos-26\n  bug_red:\n    needs: [bug_red_linux, bug_red_macos]\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint, stress, bug_red]\n    runs-on: ubuntu-24.04\n";
-    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report without gating it directly: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `bug_red_linux`, `bug_red_macos`. Done.\n";
+    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bug_red_linux:\n    runs-on: ubuntu-24.04\n  bug_red_macos:\n    runs-on: macos-26\n  bug_red:\n    needs: [bug_red_linux, bug_red_macos]\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  journey:\n    runs-on: ubuntu-24.04\n  journey_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint, stress, bug_red]\n    runs-on: ubuntu-24.04\n";
+    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report without gating it directly: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `bug_red_linux`, `bug_red_macos`, `journey`, `journey_report`. Done.\n";
     const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports without gating the verdict directly, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
     let dir = workspace();
     dir.write(".github/workflows/ci.yml", WORKFLOW);
