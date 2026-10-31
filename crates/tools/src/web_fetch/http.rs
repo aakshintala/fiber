@@ -297,7 +297,12 @@ impl Hop {
         let headers = request.observe.as_ref().map(|observe| {
             #[cfg(test)]
             if let Some(signal) = &observe.headers_received {
-                let _ = signal.send(());
+                match signal.send(()) {
+                    Ok(()) => {}
+                    Err(std::sync::mpsc::SendError(())) => {
+                        // The test may stop listening; its signal must not fail the fetch.
+                    }
+                }
             }
             observe.clock.now()
         });
