@@ -104,6 +104,102 @@ fn try_recv_takes_held_before_receiver() {
     assert!(matches!(queue.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
 
+fn reconnect(server: &str, name: &'static str, seen: mpsc::Sender<&'static str>) -> Delivery {
+    Delivery::McpReconnect(
+        contract::commands::McpServerArgs {
+            server: server.into(),
+        },
+        Ack(Box::new(move |outcome| {
+            assert!(outcome.unwrap().is_none());
+            seen.send(name).unwrap();
+        })),
+    )
+}
+
+#[test]
+fn reconnect_drain_stops_at_close_rewind_and_a_move_to_another_folder() {
+    let root = fakes::TempDir::new("reconnect-boundary");
+    let other = root.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    for transition in [
+        Delivery::Close(Ack(Box::new(|_| {}))),
+        Delivery::Rewind(
+            contract::CommandId("rewind".into()),
+            contract::commands::RewindArgs::AtEnd,
+            Ack(Box::new(|_| {})),
+        ),
+        Delivery::ChangeWorkspace(
+            contract::CommandId("move".into()),
+            contract::commands::ChangeWorkspaceArgs {
+                path: other.display().to_string(),
+            },
+            Ack(Box::new(|_| {})),
+        ),
+        Delivery::ChangeWorkspace(
+            contract::CommandId("missing".into()),
+            contract::commands::ChangeWorkspaceArgs {
+                path: "missing".into(),
+            },
+            Ack(Box::new(|_| {})),
+        ),
+    ] {
+        let (tx, rx) = mpsc::channel();
+        let mut queue = Queue::new(rx);
+        let (seen, answers) = mpsc::channel();
+        tx.send(Delivery::Cancelled).unwrap();
+        tx.send(reconnect("db", "first", seen.clone())).unwrap();
+        tx.send(reconnect("other", "different", seen.clone()))
+            .unwrap();
+        tx.send(reconnect("db", "second", seen.clone())).unwrap();
+        tx.send(transition).unwrap();
+        tx.send(reconnect("db", "after", seen)).unwrap();
+        for ack in queue.take_reconnects("db", root.path(), None) {
+            (ack.0)(Ok(None));
+        }
+        // Only pre-transition duplicates join; everything else retains
+        // arrival order (`docs/invocation.md`, "Lifecycle").
+        assert_eq!(answers.try_iter().collect::<Vec<_>>(), ["first", "second"]);
+        let held: Vec<_> = queue.try_iter().collect();
+        assert_eq!(held.len(), 4);
+        assert!(matches!(&held[0], Delivery::Cancelled));
+        assert!(matches!(&held[1], Delivery::McpReconnect(args, _) if args.server == "other"));
+        assert!(matches!(
+            &held[2],
+            Delivery::Close(..) | Delivery::Rewind(..) | Delivery::ChangeWorkspace(..)
+        ));
+        assert!(matches!(&held[3], Delivery::McpReconnect(args, _) if args.server == "db"));
+    }
+}
+
+#[test]
+fn reconnect_drain_joins_past_a_same_folder_move_without_taking_it() {
+    let root = fakes::TempDir::new("reconnect-same-folder");
+    for path in [".", "~/"] {
+        let (tx, rx) = mpsc::channel();
+        let mut queue = Queue::new(rx);
+        let (seen, answers) = mpsc::channel();
+        tx.send(reconnect("db", "before", seen.clone())).unwrap();
+        tx.send(Delivery::ChangeWorkspace(
+            contract::CommandId("same".into()),
+            contract::commands::ChangeWorkspaceArgs { path: path.into() },
+            Ack(Box::new(|_| {})),
+        ))
+        .unwrap();
+        tx.send(reconnect("db", "after", seen)).unwrap();
+        for ack in queue.take_reconnects("db", root.path(), Some(root.path())) {
+            (ack.0)(Ok(None));
+        }
+        // Same-folder moves reject without ending the session
+        // (`docs/invocation.md`, "Driver commands").
+        assert_eq!(answers.try_iter().collect::<Vec<_>>(), ["before", "after"]);
+        assert!(matches!(
+            queue.try_recv(),
+            Ok(Delivery::ChangeWorkspace(..))
+        ));
+        assert!(queue.try_recv().is_err());
+    }
+}
+
 #[test]
 fn blocking_reads_return_held_even_after_disconnect() {
     let (tx, rx) = mpsc::channel();

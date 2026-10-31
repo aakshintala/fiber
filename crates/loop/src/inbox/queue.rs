@@ -48,6 +48,41 @@ impl Queue {
             .map_or_else(|| self.rx.recv_timeout(duration), Ok)
     }
 
+    /// Collects duplicates up to a session-ending delivery, retaining
+    /// everything else in order. A move to the current folder is rejected
+    /// without ending the session, so duplicates behind it still join.
+    pub(crate) fn take_reconnects(
+        &mut self,
+        server: &str,
+        workspace: &std::path::Path,
+        home: Option<&std::path::Path>,
+    ) -> Vec<contract::inbox::Ack> {
+        let mut joined = Vec::new();
+        let mut stopped = false;
+        for delivery in self.try_iter() {
+            if !stopped {
+                stopped = matches!(&delivery, Delivery::Close(..) | Delivery::Rewind(..));
+                if let Delivery::ChangeWorkspace(_, args, _) = &delivery {
+                    stopped = !crate::rewind::workspace::resolve(&args.path, workspace, home)
+                        .is_ok_and(|target| {
+                            crate::rewind::workspace::is_same_folder(&target, workspace)
+                        });
+                }
+                if let Delivery::McpReconnect(args, _) = &delivery
+                    && args.server == server
+                {
+                    let Delivery::McpReconnect(_, ack) = delivery else {
+                        unreachable!("the matching delivery is a reconnect");
+                    };
+                    joined.push(ack);
+                    continue;
+                }
+            }
+            self.held.push_back(delivery);
+        }
+        joined
+    }
+
     pub(crate) fn take_extension_jobs(&mut self) -> Vec<Delivery> {
         self.take_where(|delivery| matches!(delivery, Delivery::ExtensionJob(..)))
     }

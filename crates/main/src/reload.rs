@@ -205,6 +205,7 @@ pub(crate) struct State {
     /// restart (`docs/mcp.md`, "Servers, their state and the
     /// per-server commands").
     pub(crate) servers: Arc<mcp::Servers>,
+    pub(crate) reconnect_flights: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
     /// Test-only record of the `prepare_inner` stage boundaries the
     /// current preparation reached, in order. Production builds have
     /// no such field: the hook below only appends, never pauses or
@@ -326,6 +327,7 @@ impl State {
             sandbox,
             sandbox_notice_reported,
             servers: servers_handle,
+            reconnect_flights: session.reconnect_flights(),
             artifacts,
             images,
             #[cfg(test)]
