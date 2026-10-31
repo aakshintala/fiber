@@ -125,6 +125,12 @@ fn down(app: &mut App, n: usize) {
     }
 }
 
+/// The first display line of action `at` at the test width: the screen
+/// wraps at the 80-wide column, so every frame index is a line.
+fn first_line(app: &App, at: usize) -> usize {
+    crate::rebind::heights(app.keys(), 80).iter().take(at).sum()
+}
+
 #[test]
 fn slash_keys_opens_the_screen_with_the_draft_cleared() {
     for attached in [false, true] {
@@ -467,9 +473,9 @@ fn wheel(col: u16, row: u16, down: bool) -> crate::keys::Mouse {
 }
 
 /// The wheel over the `/keys` screen shifts its Browse window three
-/// rows, never the conversation under it (`docs/tui.md`, "Swapped
-/// views"; see #3578). Three Downs put the selection mid-window, so
-/// the window moves under it.
+/// actions, never the conversation under it (`docs/tui.md`, "Swapped
+/// views"; see #3578). Three Downs move the selection three actions
+/// down, and the wheel steps the window under it.
 #[test]
 fn wheel_over_keys_steps_browse_not_the_conversation() {
     let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
@@ -484,19 +490,20 @@ fn wheel_over_keys_steps_browse_not_the_conversation() {
         tap(&mut app, "Down");
     }
     let frame = app.keys_frame(24).expect("the screen is open");
-    assert_eq!(frame.list.selected(), 3);
+    assert_eq!(frame.list.selected(), first_line(&app, 3));
     let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
     let frame = app.keys_frame(24).expect("the screen is open");
     assert_eq!(
         frame.list.top(),
-        shown_top + 3,
-        "one wheel step shifts the visible rows three"
+        first_line(&app, 3),
+        "one wheel step shifts the window three actions"
     );
+    assert_eq!(shown_top, first_line(&app, 0));
     assert_eq!(
         frame.list.selected(),
-        3,
+        first_line(&app, 3),
         "a selection still on screen stays where it was"
     );
 }
@@ -564,39 +571,41 @@ fn wheel_over_a_notice_over_keys_moves_neither_list_nor_conversation() {
         "the overlay swallows the wheel before the hidden list"
     );
     assert_eq!(app.top(), top, "the wheel left the conversation");
-    // Above the slab the list shows: the wheel shifts its window.
+    // Above the slab the list shows: the wheel shifts its window three
+    // actions from the fresh top.
     let frame = app.keys_frame(24).expect("the screen is open");
     assert_eq!(frame.list.selected(), before);
+    assert_eq!(frame.list.top(), first_line(&app, 0));
     app.on_wheel(&wheel(slab.x, slab.y.saturating_sub(1), true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
     assert_eq!(
         app.keys_frame(24).expect("the screen is open").list.top(),
-        frame.list.top() + 3,
+        first_line(&app, 3),
         "outside the slab the wheel reaches the list"
     );
 }
 
-/// The wrapper shifts the Browse window three rows per call, keeping
-/// the selection while it shows: down from the top row clamps the
-/// selection to the new top, and back up keeps it.
+/// The wrapper shifts the Browse window three actions per call,
+/// keeping the selection while it shows: down from the top action
+/// clamps the selection to the new top, and back up keeps it.
 #[test]
-fn keys_screen_wheel_shifts_browse_three_rows() {
+fn keys_screen_wheel_shifts_browse_three_actions() {
     let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
     app.open_keys();
     assert_eq!(app.keys_screen_wheel(false), Effect::None);
     let frame = app.keys_frame(24).expect("the screen is open");
-    assert_eq!(frame.list.top(), 3);
+    assert_eq!(frame.list.top(), first_line(&app, 3));
     assert_eq!(
         frame.list.selected(),
-        3,
-        "the selection clamps to the new top row"
+        first_line(&app, 3),
+        "the selection clamps to the new top action"
     );
     assert_eq!(app.keys_screen_wheel(true), Effect::None);
     let frame = app.keys_frame(24).expect("the screen is open");
-    assert_eq!(frame.list.top(), 0);
+    assert_eq!(frame.list.top(), first_line(&app, 0));
     assert_eq!(
         frame.list.selected(),
-        3,
+        first_line(&app, 3),
         "a selection still on screen stays where it was"
     );
 }
@@ -613,7 +622,7 @@ fn keys_screen_wheel_through_an_open_notice_scrolls() {
     assert_eq!(app.keys_screen_wheel(false), Effect::None);
     assert_eq!(
         app.keys_frame(24).expect("the screen is open").list.top(),
-        3,
+        first_line(&app, 3),
         "the wrapper leaves the notice swallow to the router"
     );
 }

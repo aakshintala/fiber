@@ -50,6 +50,26 @@ fn attached(width: u16, height: u16) -> App {
     app
 }
 
+/// An app attached to [`SESSION`] before sizing, so the layout takes
+/// the conversation column: at 160 by 40 the column is 102 wide, as in
+/// the chrome layout tests.
+fn attached_sized(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        rail_share: 15.0,
+        panel_share: 21.0,
+        ..Default::default()
+    });
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.set_size(width, height);
+    app
+}
+
 /// Types `/keys` and presses Enter.
 fn slash_keys(app: &mut App) {
     for ch in "/keys".chars() {
@@ -136,6 +156,31 @@ fn keys_failed_save_80x24() {
     tap(&mut app, "enter");
     tap(&mut app, "ctrl+t");
     insta::assert_snapshot!("keys_failed_save_80x24", screen(&app, 80, 24));
+}
+
+/// Attached wide, the screen wraps at the conversation column, not
+/// the screen: at 160 by 40 the column is 102 wide, so the move_word
+/// keys wrap inside the column's 18-wide keys instead of standing
+/// whole as at 160 wide.
+#[test]
+fn keys_attached_160x40_wraps_at_the_column_width() {
+    let mut app = attached_sized(160, 40);
+    assert_eq!(app.column_width(), 102);
+    // The columns at the column width differ from the screen width's:
+    // natural widths stand at 160, the share runs at 102.
+    assert_eq!(super::columns(app.keys(), 102), (18, 20, 60));
+    assert_eq!(super::columns(app.keys(), 160), (27, 20, 91));
+    slash_keys(&mut app);
+    let rows: Vec<String> = screen(&app, 160, 40).lines().map(str::to_owned).collect();
+    let at = rows
+        .iter()
+        .position(|row| row.contains("Ctrl+←") && !row.contains("Ctrl+→,"))
+        .expect("a row wrapping the move_word keys");
+    assert!(
+        rows[at.saturating_add(1)].contains("Ctrl+→,"),
+        "the continuation shows the wrapped keys: {:?}",
+        rows
+    );
 }
 
 #[test]
