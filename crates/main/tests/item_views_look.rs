@@ -135,6 +135,15 @@ fn hold_drop_releases_and_reaps_the_holder() {
         std::process::id()
     );
     let hold = support::hold::Hold::park(&setup, &command);
+    // A second read+write handle, held open across the drop below: the
+    // helper's own handle closing must not EOF-release the holder, so the
+    // reap proves the watchdog kill rather than the EOF path. Still no
+    // release write anywhere in this test.
+    let second = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(setup.workspace().join("hold"))
+        .unwrap();
     let mut holder = Command::new("sh")
         .arg("-c")
         .arg(&command)
@@ -153,7 +162,8 @@ fn hold_drop_releases_and_reaps_the_holder() {
     drop(hold);
     fakes::try_matching_exits(pattern.as_str(), setup.deadline)
         .unwrap_or_else(|error| panic!("the dropped helper reaps its holder: {error}"));
-    let _ = holder.wait();
+    drop(second);
+    let _exited = holder.wait();
 }
 
 /// Only the tty job is held: the parent starts one scripted `shell`
