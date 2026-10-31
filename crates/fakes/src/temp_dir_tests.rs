@@ -407,6 +407,28 @@ fn spawn_cwd_holder(dir: &TempDir, ready: &Ready) -> ChildGuard {
     ))
 }
 
+/// Spawns a shell with the same shape as [`spawn_cwd_holder`], except it
+/// execs `sleep 2`: the holder is alive for the drop's first scan and
+/// exits on its own well inside the bound, so the drop removes the
+/// directory without any explicit reap.
+fn spawn_short_holder(dir: &TempDir, ready: &Ready) -> ChildGuard {
+    ChildGuard(Some(
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("echo $$ > \"$2\"; exec sleep 2")
+            .arg("sh")
+            .arg(dir.path())
+            .arg(ready.path())
+            .current_dir(dir.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    ))
+}
+
 /// Spawns a shell that holds `dir` through an open file after changing
 /// directory away from it, then signals readiness and sleeps: the
 /// file-descriptor holder the working-directory scan misses. Linux only:
@@ -555,7 +577,7 @@ fn an_open_file_holder_fails_the_drop_naming_the_directory_and_the_holder() {
 fn an_exiting_holder_lets_the_drop_remove_the_directory() {
     let dir = TempDir::new("holder-gone");
     let ready = Ready::new(dir.path());
-    let holder = spawn_cwd_holder(&dir, &ready);
+    let holder = spawn_short_holder(&dir, &ready);
     let reported = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
     assert_eq!(reported, [holder.pid()]);
     let path = dir.path().to_path_buf();
@@ -566,7 +588,6 @@ fn an_exiting_holder_lets_the_drop_remove_the_directory() {
             Ok(()) | Err(_) => {}
         }
     });
-    reap_holder(holder);
     Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(
         &finished,
         "the drop to remove the directory after its holder exited",
