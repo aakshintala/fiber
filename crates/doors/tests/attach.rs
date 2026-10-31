@@ -25,6 +25,7 @@ use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use support::*;
 
+use contract::events::EventKind;
 use contract::events::{
     Clients, Empty, Event, FiberExited, InputItem, TurnCompleted, TurnOutcome, TurnStarted,
 };
@@ -971,6 +972,193 @@ fn a_line_that_is_not_an_envelope_is_not_printed() {
         // `schema_version`. Every line a session writes is an
         // envelope, so none of the turn's own lines looks like this.
         write_line(writer, r#"{"kind":"note"}"#);
+        write_line(
+            writer,
+            &enveloped(
+                "turn_completed",
+                serde_json::json!({"outcome": "completed"}),
+            ),
+        );
+    });
+
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        None,
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (code, out) = attached(finished, "attach to return");
+    assert_eq!(code.unwrap(), 0);
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(
+        kinds_of_text(&text),
+        ["turn_started", "turn_completed"].map(String::from)
+    );
+    stood_in(server, "the stand-in to see the connection end");
+}
+
+#[test]
+fn a_kind_from_a_newer_build_inside_the_turn_prints_through_with_its_name() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let id = SessionId(mint("s_"));
+    let socket = run.join(&id.0);
+    // The stand-in answers both commands, then writes a turn holding one
+    // line whose kind no released build knows, between `turn_started` and
+    // `turn_completed`. Unknown is never a known case, so the turn still
+    // completes and the line prints through with its name intact.
+    let server = stand_in(&socket, SCHEMA_VERSION, |_, _, prompted, writer| {
+        let command = prompted["id"].as_str().unwrap().to_owned();
+        write_line(
+            writer,
+            &enveloped(
+                "turn_started",
+                serde_json::json!({"input": [{"command_id": command}]}),
+            ),
+        );
+        write_line(
+            writer,
+            &enveloped("kind_from_a_newer_build", serde_json::json!({})),
+        );
+        write_line(
+            writer,
+            &enveloped(
+                "turn_completed",
+                serde_json::json!({"outcome": "completed"}),
+            ),
+        );
+    });
+
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        None,
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (code, out) = attached(finished, "attach to return");
+    assert_eq!(code.unwrap(), 0);
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(
+        kinds_of_text(&text),
+        ["turn_started", "kind_from_a_newer_build", "turn_completed"].map(String::from)
+    );
+    assert_eq!(
+        EventKind::from_name("kind_from_a_newer_build"),
+        EventKind::Unknown("kind_from_a_newer_build".to_owned()),
+        "the unknown name parses to its own case, keeping its text"
+    );
+    stood_in(server, "the stand-in to see the connection end");
+}
+
+#[test]
+fn answers_for_another_command_do_not_end_the_credential_wait() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let id = SessionId(mint("s_"));
+    let socket = run.join(&id.0);
+    // The fake session answers the credential with two wrong-id lines
+    // first: a rejection and an acceptance for another command. Only the
+    // credential's own rejection ends the wait; the strangers are ignored.
+    let server = stand_in(&socket, SCHEMA_VERSION, |mut reader, _, second, writer| {
+        assert_eq!(second["command"], "credential");
+        write_line(
+            writer,
+            &enveloped(
+                "command_rejected",
+                serde_json::json!({"command_id": "c_someone_else",
+                    "code": "tool_error", "message": "not yours"}),
+            ),
+        );
+        write_line(
+            writer,
+            &enveloped(
+                "command_accepted",
+                serde_json::json!({"command_id": "c_someone_else"}),
+            ),
+        );
+        write_line(
+            writer,
+            &enveloped(
+                "command_rejected",
+                serde_json::json!({"command_id": second["id"],
+                    "code": "credential_missing", "message": "no such label"}),
+            ),
+        );
+        // Attach returns on the credential's own rejection, closing the
+        // connection, so the next read is the EOF, within DEADLINE.
+        let mut next = String::new();
+        match reader.read_line(&mut next) {
+            Ok(0) => {}
+            Ok(_) => panic!("no prompt is sent after the rejection: {next}"),
+            Err(error) => panic!("the connection ends after the rejection: {error}"),
+        }
+    });
+
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        Some("nope".into()),
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (failed, out) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
+    assert!(
+        matches!(
+            &failed,
+            SessionError::Rejected { code, message }
+            if *code == ErrorCode::CredentialMissing && message == "no such label"
+        ),
+        "only the credential's own rejection ends the wait: {failed:?}"
+    );
+    assert!(out.is_empty(), "a rejection prints nothing");
+    stood_in(server, "the stand-in to see the connection end");
+}
+
+#[test]
+fn answers_for_another_command_do_not_end_the_prompt_wait() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let id = SessionId(mint("s_"));
+    let socket = run.join(&id.0);
+    // The stand-in answers the prompt, then sends a rejection and an
+    // acceptance for another command before the turn: the strangers are
+    // skipped and the turn still completes.
+    let server = stand_in(&socket, SCHEMA_VERSION, |_, _, prompted, writer| {
+        let command = prompted["id"].as_str().unwrap().to_owned();
+        write_line(
+            writer,
+            &enveloped(
+                "command_rejected",
+                serde_json::json!({"command_id": "c_someone_else",
+                    "code": "tool_error", "message": "not yours"}),
+            ),
+        );
+        write_line(
+            writer,
+            &enveloped(
+                "command_accepted",
+                serde_json::json!({"command_id": "c_someone_else"}),
+            ),
+        );
+        write_line(
+            writer,
+            &enveloped(
+                "turn_started",
+                serde_json::json!({"input": [{"command_id": command}]}),
+            ),
+        );
         write_line(
             writer,
             &enveloped(
