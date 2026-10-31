@@ -1719,21 +1719,18 @@ fn the_row_aims_its_segments_at_the_picker_and_the_breakdown() {
         vec![Rect::new(start, y, wide, 1)],
         "the breakdown target"
     );
-    // No target on the working directory or the permission mode yet:
-    // the Session-status spot follows on the panel grant.
+    // The working directory and the permission mode each open the
+    // Session status card's view (`docs/tui.md`, "The input box").
     let (ws_start, ws_wide) = cells("/w/fiber");
     let (mode_start, mode_wide) = cells("auto");
-    let plain = [(ws_start, ws_wide), (mode_start, mode_wide)];
-    for target in targets.iter().filter(|target| target.rect.y == y) {
-        for (start, wide) in plain {
-            let end = start.saturating_add(wide);
-            let rect = target.rect;
-            assert!(
-                rect.right() <= start || rect.x >= end,
-                "no target over the directory or the mode: {rect:?}"
-            );
-        }
-    }
+    assert_eq!(
+        cover(Spot::Status),
+        vec![
+            Rect::new(ws_start, y, ws_wide, 1),
+            Rect::new(mode_start, y, mode_wide, 1),
+        ],
+        "the status targets"
+    );
 }
 
 /// The status row's roles: the model in `accent`, the permission mode

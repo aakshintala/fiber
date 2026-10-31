@@ -1,7 +1,7 @@
 //! Tests for the session screen's chrome on the app: the column's width,
 //! rewrapping, the gutter and the panel's hide.
 
-use super::super::{App, Target};
+use super::super::{App, Effect, Target};
 use super::header;
 use crate::home::Launch;
 use crate::keys::Key;
@@ -557,6 +557,25 @@ fn the_draft_wraps_at_the_inset_width() {
     assert_eq!(app.input_height(), 1);
     app.on_key(Key::Char('d'), now);
     assert_eq!(app.input_height(), 2);
+}
+
+/// Clicking the working directory or the permission mode opens the
+/// Session status card's view (`docs/tui.md`, "The input box").
+#[test]
+fn clicking_the_directory_or_the_mode_opens_the_session_status_view() {
+    use crate::app::panel::Spot;
+
+    let mut app = attached(100, 30);
+    app.on_line(status(SESSION, "s"));
+    let (_, targets) = draw(&app, 100, 30);
+    let status: Vec<TargetId> = targets
+        .iter()
+        .filter(|target| target.id == TargetId::Panel(Spot::Status))
+        .map(|target| target.id)
+        .collect();
+    assert_eq!(status.len(), 2, "the directory and the mode");
+    assert_eq!(app.on_click(status[0]), Effect::None);
+    assert!(app.session_view_open());
 }
 
 #[test]

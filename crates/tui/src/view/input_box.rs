@@ -208,12 +208,15 @@ fn status_left(workspace: &str, room: usize) -> StatusRow {
     if !workspace.is_empty() {
         push_segment(
             &mut full,
-            Segment::plain(vec![Span::raw(workspace.to_owned())]),
+            Segment::spotted(vec![Span::raw(workspace.to_owned())], Spot::Status),
         );
     }
     push_segment(
         &mut full,
-        Segment::plain(vec![Span::styled(PERMISSION_MODE, style(Role::Attention))]),
+        Segment::spotted(
+            vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
+            Spot::Status,
+        ),
     );
     let wide: usize = full
         .spans
@@ -235,11 +238,14 @@ fn status_left(workspace: &str, room: usize) -> StatusRow {
         };
         push_segment(
             &mut cut,
-            Segment::plain(vec![Span::raw(format!("…{tail}"))]),
+            Segment::spotted(vec![Span::raw(format!("…{tail}"))], Spot::Status),
         );
         push_segment(
             &mut cut,
-            Segment::plain(vec![Span::styled(PERMISSION_MODE, style(Role::Attention))]),
+            Segment::spotted(
+                vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
+                Spot::Status,
+            ),
         );
         return cut_row(cut, room.saturating_add(1));
     }
@@ -250,7 +256,10 @@ fn status_left(workspace: &str, room: usize) -> StatusRow {
     };
     push_segment(
         &mut rest,
-        Segment::plain(vec![Span::styled(PERMISSION_MODE, style(Role::Attention))]),
+        Segment::spotted(
+            vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
+            Spot::Status,
+        ),
     );
     cut_row(rest, room.saturating_add(1))
 }
