@@ -1441,8 +1441,10 @@ attaches later never sees them.
 The reopened session closes the cut-short turn's card with "▣ cut short: Fiber
 stopped at 14:18", at the time of the last line written. A call that started
 and never completed reads "? may have run; not run again" in its ledger row. A
-↺ resumed band follows. The jobs the new process marked `orphaned` are one line
-naming them all; clicking it shows each job's message.
+↺ resumed band follows. The jobs the new process marked `orphaned`, which no keeper
+accounted for, are one line naming them all; clicking it shows each job's
+message. A job the keeper finished while the session was gone gets its usual
+completion row.
 
 ### Naming the session
 
