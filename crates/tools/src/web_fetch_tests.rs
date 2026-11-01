@@ -1433,11 +1433,10 @@ fn a_cancel_while_the_body_is_read_stops_the_call() {
 #[track_caller]
 fn wait_for_body(rx: &Receiver<u64>, bytes: usize, what: &str) {
     let wanted = u64::try_from(bytes).unwrap();
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let mut read = 0;
     while read < wanted {
-        read = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-            .recv(rx)
-            .unwrap_or_else(|_| panic!("{what}"));
+        read = deadline.recv(rx).unwrap_or_else(|_| panic!("{what}"));
     }
 }
 
