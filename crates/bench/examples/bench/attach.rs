@@ -406,7 +406,10 @@ pub(crate) fn attach_remainder(
             .get("ms")
             .and_then(Value::as_u64)
             .ok_or_else(|| malformed(format!("{op} holds no whole milliseconds: {row}")))?;
-        if children[index].replace(ms).is_some() {
+        let child = children
+            .get_mut(index)
+            .ok_or_else(|| malformed(format!("{op} is not a tracked attach span")))?;
+        if child.replace(ms).is_some() {
             return Err(malformed(format!("{op} is recorded twice")));
         }
     }
