@@ -4510,7 +4510,7 @@ fn three_sample_pr_files_gate_on_stored_evidence_not_sample_count() {
 
 #[test]
 fn both_attach_fixtures_gate_the_absolute_bound() {
-    // docs/performance.md:72,324: exactly 50 ms per fixture passes;
+    // docs/performance.md:72,326-328: exactly 50 ms per fixture passes;
     // over-50 cases live in the base-tolerance tests below.
     for (ten_head, one_head) in [
         ([50.0; 5], [31.0; 5]),
@@ -4541,10 +4541,9 @@ fn both_attach_fixtures_gate_the_absolute_bound() {
 
 #[test]
 fn attach_base_over_50_waives_the_absolute_bound_within_tolerance() {
-    // docs/performance.md:324,327: a comparable base median already over
-    // 50 ms waives the flat bound; the fixture fails only past its
-    // tolerance-adjusted base, and the row still names the over-50 breach.
-    // `—` counts as 10 %; each over-ceiling fixture produces one named failure.
+    // docs/performance.md:326-332,334-335: over 50 ms and exactly 10 % over a
+    // comparable base passes, and the report names each median. Just over
+    // 10 % produces one named failure per fixture. `—` counts as 10 %.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         // Exactly 10 % over base passes the strict comparison on both
         // fixtures while naming each breach.
@@ -4603,52 +4602,12 @@ fn attach_base_over_50_waives_the_absolute_bound_within_tolerance() {
 }
 
 #[test]
-fn attach_absolute_bound_holds_without_a_comparable_base_over_50() {
-    // docs/performance.md:324,327: a base at or under 50 ms, or no usable
-    // base at all, keeps the flat 50 ms bound on its own; each over-ceiling
-    // fixture produces one named failure.
+fn attach_absolute_bound_holds_without_a_usable_base() {
+    // docs/performance.md:330-332,334-335,338-339: with no base, a failed
+    // base, a missing or malformed base metric, or a different base CPU, the
+    // 50 ms bound holds on its own. Each over-ceiling fixture produces one
+    // named failure, and the report names the median.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
-        // A base exactly at 50 ms is not over it: head 50.1 ms fails.
-        let (h, b) = attach_pair(&[50.1; 5], &[50.1; 5], &[50.0; 5], &[50.0; 5], cpu);
-        let out = judge(&h, Some(&b), Event::PullRequest);
-        assert_eq!(out.failures.len(), 2, "{cpu}: {:?}", out.failures);
-        assert!(
-            out.failures.iter().all(|f| f.contains("absolute bound")),
-            "{cpu}: {:?}",
-            out.failures
-        );
-        // A faster base keeps the absolute bound too, under either
-        // tolerance cell: the relative leg never waives an over-50 head.
-        for tolerance in ["—", "25 %"] {
-            let doc = doc_with(
-                "| 50 ms | 50 ms | 50 ms | — | — |",
-                &format!("| 50 ms | 50 ms | 50 ms | {tolerance} | {tolerance} |"),
-            );
-            let (h, faster) = attach_pair(&[50.1; 5], &[50.1; 5], &[40.0; 5], &[40.0; 5], cpu);
-            let out = judge_doc(&doc, &h, Some(&faster), Event::PullRequest);
-            assert_eq!(
-                out.failures.len(),
-                2,
-                "{cpu} {tolerance}: {:?}",
-                out.failures
-            );
-            for fixture in ["1 MiB", "10 MiB"] {
-                assert!(
-                    has(&out.failures, &format!("terminal_attach_ms {fixture}")),
-                    "{cpu} {tolerance}: {:?}",
-                    out.failures
-                );
-            }
-            assert!(
-                out.failures.iter().all(|f| f.contains("absolute bound")),
-                "{cpu} {tolerance}: {:?}",
-                out.failures
-            );
-            let line = row(&out.comment, "Terminal to its first frame, attaching");
-            assert!(line.ends_with("| fail |"), "{cpu} {tolerance}: {line}");
-        }
-        // No usable base — none, failed, missing, malformed or
-        // different-CPU — fails the same way, once per fixture.
         let (_, slower) = attach_pair(&[50.1; 5], &[50.1; 5], &[60.0; 5], &[60.0; 5], cpu);
         let missing = without_metric(&slower, "terminal_attach_ms");
         let malformed = with_metric(slower.clone(), "terminal_attach_ms", json!("bad"));
@@ -4668,81 +4627,205 @@ fn attach_absolute_bound_holds_without_a_comparable_base_over_50() {
             };
             let out = judge(&h, b.as_ref(), event);
             assert_eq!(out.failures.len(), 2, "{cpu}: {:?}", out.failures);
-            let line = row(&out.comment, "Terminal to its first frame, attaching");
-            assert!(line.ends_with("| fail |"), "{cpu}: {line}");
-        }
-    }
-}
-
-#[test]
-fn attach_base_at_50_keeps_the_absolute_bound() {
-    // docs/performance.md:323-324: the waiver needs a comparable base
-    // median "also over 50 ms", which excludes equality. A base exactly
-    // at 50 ms leaves the flat bound in force: an over-50 head fails the
-    // absolute bound, and the row claims no 10 % base-relative waiver.
-    // Targets the `base_median > ceiling` match guard: `>=` would add
-    // "+10% over base 50.0 ms" to the row.
-    for cpu in [FAST_MODEL, SLOW_MODEL] {
-        let (h, b) = attach_pair(&[55.0; 5], &[55.0; 5], &[50.0; 5], &[50.0; 5], cpu);
-        let out = judge(&h, Some(&b), Event::PullRequest);
-        assert_eq!(out.failures.len(), 2, "{cpu}: {:?}", out.failures);
-        assert!(
-            out.failures.iter().all(|f| f.contains("absolute bound")),
-            "{cpu}: {:?}",
-            out.failures
-        );
-        for fixture in ["1 MiB", "10 MiB"] {
             assert!(
-                has(&out.failures, &format!("terminal_attach_ms {fixture}")),
+                out.failures.iter().all(|f| f.contains("absolute bound")),
                 "{cpu}: {:?}",
                 out.failures
             );
+            let line = row(&out.comment, "Terminal to its first frame, attaching");
+            assert!(line.ends_with("| fail |"), "{cpu}: {line}");
+            for fixture in ["1 MiB", "10 MiB"] {
+                assert!(
+                    line.contains(&format!("{fixture}: 50.1 ms over 50.0 ms")),
+                    "{cpu}: {line}"
+                );
+            }
         }
-        let line = row(&out.comment, "Terminal to its first frame, attaching");
-        assert!(line.ends_with("| fail |"), "{cpu}: {line}");
-        assert!(line.contains("55.0 ms"), "{cpu}: {line}");
-        assert!(!line.contains("over base 50.0 ms"), "{cpu}: {line}");
     }
 }
 
 #[test]
-fn attach_base_at_50_with_numeric_tolerance_keeps_the_absolute_bound() {
-    // docs/performance.md:323-324,328: the relative leg needs a base
-    // "also over 50 ms", so a base exactly at 50 ms never takes it, even
-    // with a numeric tolerance. Head 50.1 ms over base 50.0 ms at 10 %
-    // fails the absolute bound. Targets the `base_median > ceiling`
-    // branch condition: `>=` would tolerate the head within 10 % of base
-    // and leave no failure.
+fn attach_fails_only_when_over_50_and_over_the_base() {
+    // docs/performance.md:326-330,334-335: a fixture fails only when its
+    // median is over 50 ms and more than 10 % over the comparable base.
+    // Within 10 % passes and is named. Under 50 ms passes. Each
+    // over-ceiling fixture produces one named failure. The within note is
+    // attached only by `over_ceiling && !over_base`. Replacing that `&&`
+    // with `||` still names the within-tolerance breach, so the case that
+    // is over the ceiling and over its base must show the breach without
+    // the note. Targets `over_base && (tolerance.is_some() ||
+    // over_ceiling)`: `&&` replaced by `||` fails the under-50 head that
+    // is over its base; `||` replaced by `&&` drops the relative failure
+    // on the over-ceiling, over-base head; `median > ceiling` replaced by
+    // `>=` fails the exactly-50 head.
+    for cpu in [FAST_MODEL, SLOW_MODEL] {
+        let (h, b) = attach_pair(&[50.1; 5], &[50.1; 5], &[48.0; 5], &[48.0; 5], cpu);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| pass |"), "{cpu}: {line}");
+        let class = if cpu == FAST_MODEL { "fast" } else { "slow" };
+        for fixture in ["1 MiB", "10 MiB"] {
+            assert!(
+                line.contains(&format!(
+                    "{fixture}: 50.1 ms over 50.0 ms {class} ceiling (absolute bound breached, within +10% over base 48.0 ms)"
+                )),
+                "{cpu}: {line}"
+            );
+        }
+        // More than 10 % over the base fails once per fixture, as the
+        // relative bound, and the report still names the median.
+        let (h, b) = attach_pair(&[55.0; 5], &[55.0; 5], &[40.0; 5], &[40.0; 5], cpu);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures.len(), 2, "{cpu}: {:?}", out.failures);
+        assert!(
+            out.failures.iter().all(|f| f.contains("relative bound")),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        assert!(
+            out.failures.iter().all(|f| !f.contains("absolute bound")),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| fail |"), "{cpu}: {line}");
+        for fixture in ["1 MiB", "10 MiB"] {
+            assert!(
+                line.contains(&format!("{fixture}: 55.0 ms over 50.0 ms {class} ceiling")),
+                "{cpu}: {line}"
+            );
+            assert!(
+                !line.contains(&format!(
+                    "{fixture}: 55.0 ms over 50.0 ms {class} ceiling (absolute bound breached, within +10% over base 40.0 ms)"
+                )),
+                "{cpu}: {line}"
+            );
+        }
+        // One fixture over the margin fails; the other, within 10 %, only
+        // names its median.
+        let (h, b) = attach_pair(&[60.0; 5], &[50.1; 5], &[40.0; 5], &[48.0; 5], cpu);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures.len(), 1, "{cpu}: {:?}", out.failures);
+        assert!(
+            has(&out.failures, "terminal_attach_ms 10 MiB"),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(
+            line.contains("1 MiB: 50.1 ms over 50.0 ms"),
+            "{cpu}: {line}"
+        );
+        assert!(line.ends_with("| fail |"), "{cpu}: {line}");
+        // Under 50 ms passes even when more than 10 % over the base.
+        let (h, b) = attach_pair(&[49.0; 5], &[49.0; 5], &[30.0; 5], &[30.0; 5], cpu);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| pass |"), "{cpu}: {line}");
+        assert!(!line.contains("over 50.0 ms"), "{cpu}: {line}");
+        // Exactly 50 ms passes, including against a base more than 10 % lower.
+        let (h, b) = attach_pair(&[50.0; 5], &[50.0; 5], &[40.0; 5], &[40.0; 5], cpu);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| pass |"), "{cpu}: {line}");
+        assert!(!line.contains("over 50.0 ms"), "{cpu}: {line}");
+        // Under the ceiling and within 10 % of the base: the row passes
+        // and names the median, with no within note.
+        let (h, b) = attach_pair(&[40.0; 5], &[40.0; 5], &[40.0; 5], &[40.0; 5], cpu);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| pass |"), "{cpu}: {line}");
+        for fixture in ["1 MiB", "10 MiB"] {
+            assert!(
+                line.contains(&format!(
+                    "{fixture}: 40.0 ms ({class} ceiling 50.0 ms, absolute bound); {fixture}: +10% over base 40.0 ms"
+                )),
+                "{cpu}: {line}"
+            );
+        }
+        assert!(!line.contains("absolute bound breached"), "{cpu}: {line}");
+        assert!(!line.contains("over 50.0 ms"), "{cpu}: {line}");
+    }
+}
+
+#[test]
+fn attach_numeric_tolerance_applies_below_and_above_the_ceiling() {
+    // docs/performance.md:326-330,334-335,336-339: a numeric tolerance is
+    // the margin on either side of 50 ms. Head 52 ms over base 45 ms at 25 %
+    // (bound 56.25 ms) passes and is named; 57 ms produces one named failure
+    // per fixture. Head 50.1 ms over base 50.0 ms at 10 % passes. Targets
+    // using 10 % where the cell names 25 %: 52 ms would then fail.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         let doc = doc_with(
+            "| 50 ms | 50 ms | 50 ms | — | — |",
+            "| 50 ms | 50 ms | 50 ms | 25 % | 25 % |",
+        );
+        let (h, b) = attach_pair(&[52.0; 5], &[52.0; 5], &[45.0; 5], &[45.0; 5], cpu);
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| pass |"), "{cpu}: {line}");
+        assert!(line.contains("52.0 ms over 50.0 ms"), "{cpu}: {line}");
+        assert!(line.contains("+25% over base 45.0 ms"), "{cpu}: {line}");
+        let (h, b) = attach_pair(&[57.0; 5], &[57.0; 5], &[45.0; 5], &[45.0; 5], cpu);
+        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
+        assert_eq!(out.failures.len(), 2, "{cpu}: {:?}", out.failures);
+        assert!(
+            out.failures.iter().all(|f| f.contains("relative bound")),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let ten = doc_with(
             "| 50 ms | 50 ms | 50 ms | — | — |",
             "| 50 ms | 50 ms | 50 ms | 10 % | 10 % |",
         );
         let (h, b) = attach_pair(&[50.1; 5], &[50.1; 5], &[50.0; 5], &[50.0; 5], cpu);
-        let out = judge_doc(&doc, &h, Some(&b), Event::PullRequest);
-        assert_eq!(out.failures.len(), 2, "{cpu}: {:?}", out.failures);
-        assert!(
-            out.failures.iter().all(|f| f.contains("absolute bound")),
+        let out = judge_doc(&ten, &h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
             "{cpu}: {:?}",
             out.failures
         );
-        for fixture in ["1 MiB", "10 MiB"] {
-            assert!(
-                has(&out.failures, &format!("terminal_attach_ms {fixture}")),
-                "{cpu}: {:?}",
-                out.failures
-            );
-        }
         let line = row(&out.comment, "Terminal to its first frame, attaching");
-        assert!(line.ends_with("| fail |"), "{cpu}: {line}");
-        assert!(line.contains("50.1 ms"), "{cpu}: {line}");
+        assert!(line.ends_with("| pass |"), "{cpu}: {line}");
+        assert!(line.contains("50.1 ms over 50.0 ms"), "{cpu}: {line}");
     }
 }
 
 #[test]
 fn attach_head_at_50_with_no_base_passes() {
-    // docs/performance.md:323,331: a fixture fails only when its median
-    // exceeds 50 ms, and without a usable comparable base only the
+    // docs/performance.md:326-330,338-339: a fixture fails only when its
+    // median is over 50 ms, and without a usable comparable base only the
     // absolute bound can fail it. Head exactly at 50 ms with no base
     // passes, shows its measured 50.0 ms, and stays advisory. Targets the
     // `median > ceiling` fallback: `>=` would fail the exactly-50 fixture.
@@ -4772,10 +4855,10 @@ fn attach_head_at_50_with_no_base_passes() {
 
 #[test]
 fn attach_numeric_tolerance_over_50_base_judges_the_relative_leg() {
-    // docs/performance.md:324,327,328: with a numeric tolerance and a base
-    // over 50 ms, the boundary is the tolerance-adjusted base. Base 60 ms
-    // at 25 % puts it at exactly 75 ms: the boundary passes while naming
-    // the breach, just above fails; each over-ceiling fixture fails once.
+    // docs/performance.md:326-330,334-335,336-339: with a numeric tolerance,
+    // the boundary is the tolerance-adjusted base. Base 60 ms at 25 % puts
+    // it at exactly 75 ms: the boundary passes while naming the breach, and
+    // just above produces one named failure per over-ceiling fixture.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         let doc = doc_with(
             "| 50 ms | 50 ms | 50 ms | — | — |",
@@ -4813,8 +4896,9 @@ fn attach_numeric_tolerance_over_50_base_judges_the_relative_leg() {
 
 #[test]
 fn attach_numeric_tolerance_keeps_the_relative_leg_below_the_absolute_ceiling() {
-    // docs/performance.md:72,309-314: either leg fails, once per fixture;
-    // dash disables only the relative leg. Numeric tolerance is strict.
+    // docs/performance.md:336-339: either breach fails, once per fixture;
+    // `—` disables only the relative comparison below the ceiling. Numeric
+    // tolerance is strict.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         for (ten, one, base, fixtures) in [
             (39.9, 40.0, 32.0, vec![]),
