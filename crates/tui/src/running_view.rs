@@ -51,6 +51,7 @@ pub(crate) fn all_delegates_frame(app: &App, list: List) -> Frame {
         )]);
     }
     Frame {
+        joins: Vec::new(),
         title: "Delegates".to_owned(),
         command: "/delegates".to_owned(),
         rows,
@@ -203,6 +204,7 @@ fn frame(
         )]);
     }
     Frame {
+        joins: Vec::new(),
         title: title.to_owned(),
         command: "delegates · jobs".to_owned(),
         rows,

@@ -441,6 +441,7 @@ impl Skills {
     pub(crate) fn frame(&self, width: usize, height: usize) -> Frame {
         if let Some(text) = &self.text {
             return Frame {
+                joins: Vec::new(),
                 title: format!("Skill {}", text.name),
                 command: "/skills".to_owned(),
                 rows: wrap(&text.raw, width)
@@ -468,6 +469,7 @@ impl Skills {
             below.insert(0, "Reading the skills…".to_owned());
         }
         Frame {
+            joins: Vec::new(),
             title: "Skills".to_owned(),
             command: "/skills".to_owned(),
             rows,
