@@ -971,6 +971,11 @@ fn session_value(card: &tui::ext::SessionCard<'_>) -> Value {
     );
     insert_present(&mut out, "spend", card.spend.as_ref().map(spend_value));
     insert_present(&mut out, "budget", card.budget.map(|budget| json!(budget)));
+    insert_present(
+        &mut out,
+        "cache_expires",
+        card.cache_expires.map(|expiry| json!(expiry)),
+    );
     insert_present(&mut out, "speed", card.speed.map(|speed| json!(speed)));
     out.insert("turns".to_owned(), json!(card.turns));
     out.insert(

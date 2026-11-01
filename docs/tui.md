@@ -3061,6 +3061,7 @@ five-file cut does, and the replacement inherits the cap.
 | `context` | `tokens`, `window` and `trigger_at` |
 | `spend` | `cost` with `tokens` (`input`, `output`, `cache_read`, `cache_write`) and `subscription_cost`; when the session reports none, the attached spend falls back to `cost` alone; absent when there is no spend at all |
 | `budget` | The spend budget; absent when unset |
+| `cache_expires` | When the session's prompt cache expires, as `ts`; absent when unset |
 | `speed` | The last reply's output speed in tokens per second; absent before the first timed reply |
 | `turns` | How many turns the session ran |
 | `tools_down` | The tools that are down |
