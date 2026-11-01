@@ -1284,8 +1284,8 @@ queue. ⌥↑ and ⌥↓ select a row and load it into the input box, Enter send
 The steering card sits under the working line and is drawn as a panel card
 ("The panel"): a `surface` slab edged ▄ and ▀ in `surface`, with two columns
 of padding on the left and one on the right, and a stripe in `attention` down
-its left edge. Its title row is "Steering" bold in `attention`, with "N queued"
-in `info` and " · joins at the next step" dim, right-aligned. Each message
+its left edge. Its title row is "Steering" bold in `attention`, with "N queued ·
+joins at the next step" dim, right-aligned. Each message
 follows on its own entry: "↳ " in `attention`, the text in the text colour,
 and a dim "✕" right-aligned. A message too long for the card wraps, its
 continuation lines starting under the text rather than under the ↳. A
@@ -2553,7 +2553,7 @@ The roles, in order, with each built-in theme's values:
 | `type` | type names | `#7dd3fc` | `#0b7285` |
 | `constant` | constants: `true`, `null`, `ALL_CAPS` names | `#7dd3fc` | `#0b7285` |
 | `operator` | operators | the terminal's foreground | `#1f2328` |
-| `info` | inline code, a call's kind, an approval's tool name and rule prefix, the input box's › and the workspace picker's, "Copied", the context bar's fill, the steering card's count | `#7dd3fc` | `#0b7285` |
+| `info` | inline code, a call's kind, an approval's tool name and rule prefix, the input box's › and the workspace picker's, "Copied", the context bar's fill | `#7dd3fc` | `#0b7285` |
 | `secondary` | the git branch, the handoff band's label, the question form's stripe, title and marks, the delegates' ◆ | `#b39ddb` | `#6f42c1` |
 | `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` | `#d0d7de` |
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
