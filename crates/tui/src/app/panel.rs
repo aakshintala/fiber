@@ -39,6 +39,8 @@ pub(crate) enum Spot {
     Model,
     /// The Session card's context rows: opens the context breakdown.
     Context,
+    /// The status row's working directory and permission mode: opens the Session status card's view (`docs/tui.md`, "The input box").
+    Status,
     /// The Session card's spend rows: opens the usage view (`docs/tui.md`,
     /// "The panel").
     Usage,
@@ -800,6 +802,7 @@ impl App {
             Spot::Waiting => self.show_rail(),
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
             Spot::Context => self.open_session_view(super::SessionView::Context),
+            Spot::Status => self.open_session_view(super::SessionView::Status),
             Spot::Usage => self.open_session_view(super::SessionView::Usage),
             Spot::Quota => self.quota_view(),
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
