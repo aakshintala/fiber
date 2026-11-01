@@ -22,8 +22,9 @@ no bubblewrap. A confined call takes the confined fast path unless the destructi
 `unconfined: true` runs outside the sandbox and is reviewed exactly as with
 the sandbox off. A confined call whose sandbox cannot be applied fails;
 Fiber never reruns it unconfined. This slice adds no
-`/sandbox` toggle, and no delegate inheritance. A delegate does not inherit
-its parent's setting in this slice.
+`/sandbox` toggle. Each Fiber delegate inherits the parent's effective sandbox
+settings at launch, including changes made during the session. Fresh spawns,
+forks and resumes all take a new snapshot.
 
 The sandbox's own read deny follows whatever the credential deny covers:
 Fiber home's `credentials/`, `file` sources, and whatever #3025 adds, plus
@@ -39,18 +40,22 @@ the person's `sandbox.deny_read` paths.
 
 ## What it cannot do
 
-- Write outside the workspace and temp: not directly, not through a
-  grandchild, not through `python -c`, not through a symlink that leads out.
+- Write outside the workspace, temp and granted paths: not directly, not
+  through a grandchild, not through `python -c`, not through a symlink that
+  leads out. A linked worktree needs Git metadata outside its workspace:
+  its git directory and the shared `objects/`, `refs/` and `logs/`
+  subdirectories. These grants do not grant the shared directory as a whole
+  or socket access for pushes.
 - Open any socket: no internet, DNS, localhost TCP or Unix sockets, on
   Linux by the seccomp filter and on macOS by the Seatbelt policy's deny by
   default. This blocks the hub, session socket, `docker.sock` and
   ssh-agent. There is no setting that grants a socket; a command that
   needs one runs with `unconfined: true` and is reviewed.
 - Change the shared `.git/config` and hooks, a worktree's `.git` pointer
-  file or workspace-local `.fiber/` without trace. A confined call can write
-  those paths when they sit inside a writable root, but Fiber records them
-  before the call and restores them after it, reporting each change
-  ("Protected paths" below).
+  file, its git directory's `commondir` file or workspace-local `.fiber/`
+  without trace. On Linux, Fiber records them before the call and restores
+  them after it, reporting each change ("Protected paths" below). On macOS,
+  the policy denies writes to them even within a granted Git directory.
 - Signal a process outside it below Landlock ABI 6. From ABI 6, Landlock
   signal scoping covers every process outside the sandbox; below it a
   confined call can still `kill` same-user processes outside, though it
@@ -62,9 +67,12 @@ the person's `sandbox.deny_read` paths.
 ## Protected paths
 
 A confined call can still change the paths the session depends on: the
-shared `.git/config` and hooks, each registered worktree's `.git` pointer,
-and workspace-local `.fiber/`. Those paths stay writable inside the sandbox,
-so Fiber records them before the call and restores them after it.
+shared `.git/config` and hooks, each registered worktree's `.git` pointer
+and git directory's `commondir` file, and workspace-local `.fiber/`. On Linux,
+those paths stay writable inside the sandbox, so Fiber records them before
+the call and restores them after it. Git grants use the recorded pointer and
+`commondir` bytes, never a running call's edits. On macOS, the policy denies
+writes to those paths.
 
 Each confined call starts by checking the project's baseline. The baseline
 is one JSON file per project under Fiber home, recording the protected
@@ -92,8 +100,10 @@ the baseline stays fixed while any call is active. Every probe is
 non-blocking, so a call ending under the baseline lock cannot deadlock a
 call starting under the active lock.
 
-The restore also runs under the sandbox's own limits, which depend on the
-kernel. From Landlock ABI 6, signal scoping covers every process outside
+The supervisor restores paths after collecting the call's final output,
+outside the call's confinement. Restoration is not a sandbox write grant.
+Protection against signals from the call depends on the kernel. From
+Landlock ABI 6, signal scoping covers every process outside
 the sandbox and no seccomp signal rule is added. Below ABI 6, signals aimed
 at the session or its hub fail with `EPERM`: `kill`, `tkill` and `tgkill`
 toward either process, either process group or every process, and
@@ -155,8 +165,8 @@ path text is interpolated into the profile source.
 Commits keep working on main checkouts and on worktrees: the worktree's own
 git directory stays writable, as do the shared `objects/`, `refs/` and
 `logs/` directories. Deny wins over those grants, so `.git/config`,
-`.git/hooks/`, a worktree's `.git` pointer file, `.fiber/`, and the shared
-hooks and config stay unwritable. Unix sockets have no Seatbelt operation
+`.git/hooks/`, a worktree's `.git` pointer file, its git directory's
+`commondir` file, `.fiber/`, and the shared hooks and config stay unwritable. Unix sockets have no Seatbelt operation
 of their own; the default deny covers their creation, and explicit denies
 name the refusal for IP, DNS and launchd. One file-ioctl allow preserves
 the inherited pty, so `stty` on the shell's own terminal keeps working while
