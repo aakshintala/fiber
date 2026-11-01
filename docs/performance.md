@@ -231,18 +231,39 @@ reply on screen, which is the first frame, and to the scroll bar, which is the
 pass end. The same run records the attaching terminal's
 peak RSS and its RssAnon 10 s after the last reply appears, for the 10 MiB
 session; the busy turn records its session's RssAnon 10 s after the turn
-completes. The same run splits each attach into stages,
-reported as `attach_stage_ms`: the `fold` stage feeds the fold-per-MiB
-budget above, and every other stage stays diagnostic, never gating.
-`terminal` is the spawn-to-tail
-time above; `hub_replay` replays it with no terminal, timing a `subscribe` at
-`full` over a raw hub-socket client from the send to its acknowledgement.
-`parse`, `fold` and `frames_1`, `frames_4096` and `frames_64` run in the
-paging jig, built in the release profile, over the session's `events.jsonl`:
-parsing each line, folding it into the app in batches of up to 4,096 lines, and drawing one frame, one frame
-per 4,096 lines and one per 64 lines. The table also shows the residual, the
-terminal time minus the hub replay, the parse, the fold and the single frame:
-process start, home and the extra frames.
+completes. The same run splits each attach into stages, reported as `attach_stage_ms`:
+the `fold` stage feeds the fold-per-MiB budget above, and every other stage
+is diagnostic, never gating. The `terminal` stage measures the resume
+binary from spawning `fiber resume <id>` to the last reply on screen;
+`hub_replay` runs a raw hub-socket client without the terminal and measures a
+`subscribe` at `full` from send to acknowledgement. `parse`, `fold`
+and `frames_1`, `frames_4096` and `frames_64` run in the release-built paging
+jig over the session's `events.jsonl`: parsing each line, folding lines into
+the app in batches of up to 4,096, and drawing one frame, one frame per 4,096
+lines and one per 64 lines.
+
+The live `attach_span_ms` rows come from debug runs of the resume binary.
+In the resume binary, `tui.attach_setup` measures from `run_with` entry
+through the initial unattached draw. In the resume binary, `tui.attach_wait`
+measures from that draw through the first due tail attempt. In the resume
+binary, `tui.attach_tail` measures from the first due attempt through the
+tail install it reaches, across false-returning attempts. In the resume
+binary, `tui.attach_prepare` measures from the tail install's return to
+immediately before the attached-history draw. In the resume binary,
+`tui.attach_draw` measures that draw from start through completion.
+
+The resume binary's `tui.attached_frame` operation measures from `run_with`
+entry through the first completed draw holding attached-session history.
+The derived `tui.attached_frame_remainder` subtracts the five `tui.attach_*`
+spans from that parent in each diagnostic sample. The parent contains those children,
+so do not subtract them again. These live spans and the remainder are
+diagnostic; they add no budget, `limits` entry or bench entry.
+
+Subtract `tui.attached_frame` once from `terminal_attach_ms` to get the
+unattributed residual. It includes process start, home setup and the gap
+between internal draw completion and the external PTY reader's observation.
+The paging jig's `hub_replay`, `parse`, `fold` and frame timings remain
+comparators, not summands.
 
 The harness also runs each timing workload and each busy workload once more,
 in a home of its own whose `diagnostics.level` is `"debug"`, on the head
