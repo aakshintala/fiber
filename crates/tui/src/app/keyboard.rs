@@ -171,8 +171,9 @@ impl App {
             // falls through to the bindings below.
             let effect = if self.notice_overlay().is_none() {
                 let height = self.keys_height();
+                let width = self.keys_width();
                 let outcome = match self.keyboard.screen.as_mut() {
-                    Some(screen) => screen.press(&stroke, &self.keyboard.keys, height),
+                    Some(screen) => screen.press(&stroke, &self.keyboard.keys, width, height),
                     None => Outcome::Nothing,
                 };
                 match outcome {
@@ -415,18 +416,21 @@ impl App {
         self.keyboard
             .screen
             .as_ref()
-            .map(|screen| screen.frame(&self.keyboard.keys, height))
+            .map(|screen| screen.frame(&self.keyboard.keys, self.keys_width(), height))
     }
 
-    /// A click on the screen's `spot`: the ✕ closes it, a row selects
-    /// while browsing. The click entry settles after the dispatch.
+    /// A click on the screen's `spot`: the ✕ closes it, a display line
+    /// selects its action while browsing. The click entry settles after
+    /// the dispatch.
     pub(crate) fn keys_screen_click(&mut self, spot: Spot) -> Effect {
         let height = self.keys_height();
-        let close = self
-            .keyboard
-            .screen
-            .as_mut()
-            .is_some_and(|screen| matches!(screen.click(spot, height), Outcome::Close));
+        let width = self.keys_width();
+        let close = self.keyboard.screen.as_mut().is_some_and(|screen| {
+            matches!(
+                screen.click(spot, &self.keyboard.keys, width, height),
+                Outcome::Close
+            )
+        });
         if close {
             self.keyboard.screen = None;
         }
@@ -434,14 +438,15 @@ impl App {
         Effect::None
     }
 
-    /// Shifts the `/keys` screen's list three rows for a wheel step while
-    /// browsing; Capture and Clash swallow through the wrapper. The
-    /// router swallows the wheel over the notice overlay's own slab
-    /// before calling. Away from `bindings_press`.
+    /// Shifts the `/keys` screen's list three display lines for a wheel
+    /// step while browsing; Capture and Clash swallow through the
+    /// wrapper. The router swallows the wheel over the notice overlay's
+    /// own slab before calling. Away from `bindings_press`.
     pub(crate) fn keys_screen_wheel(&mut self, up: bool) -> Effect {
         let height = self.keys_height();
+        let width = self.keys_width();
         if let Some(screen) = self.keyboard.screen.as_mut() {
-            let _ = screen.wheel(up, &self.keyboard.keys, height);
+            let _ = screen.wheel(up, &self.keyboard.keys, width, height);
         }
         Effect::None
     }
@@ -453,6 +458,17 @@ impl App {
             usize::from(self.screen.height())
         } else {
             self.conversation_height()
+        }
+    }
+
+    /// The screen's draw width in columns: the screen's on home, or the
+    /// attached conversation column's, mirroring the frame's own area
+    /// choice, so the frame wraps at the width it draws.
+    fn keys_width(&self) -> usize {
+        if self.on_home() {
+            usize::from(self.screen.width())
+        } else {
+            usize::from(self.column_width())
         }
     }
 

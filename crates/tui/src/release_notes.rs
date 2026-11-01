@@ -68,6 +68,7 @@ pub(crate) fn frame(
         }
     }
     let mut frame = Frame {
+        joins: Vec::new(),
         title: "Release notes".to_owned(),
         command: "/release-notes".to_owned(),
         rows,

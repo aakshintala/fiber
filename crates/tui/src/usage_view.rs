@@ -129,6 +129,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
         budget_row(&mut rows, budget, session.cost.unwrap_or(0.0));
     }
     Frame {
+        joins: Vec::new(),
         title: "Usage".to_owned(),
         command: "/usage".to_owned(),
         rows,
