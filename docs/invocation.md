@@ -162,11 +162,22 @@ credential a session uses"). A new session takes its label from
 | `import <claude-code \| codex>` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
 | `stop [--hub <name>]` | Shuts down every running session, then the hub. It waits for the sockets to close, then prints what it stopped. With nothing running it prints `Nothing running.`. With `--hub`, it stops the sessions and the hub process: a login service on that machine may start the hub again, and the output does not say so. |
-| `stop --all [--yes]` | Stops every session and keeper on this machine, then the hub, and prints what it stopped. It needs no hub: it finds sessions and keepers by their sockets under `run/` (`docs/state.md`, "What each part holds"). Each session gets `close` with `now`; each keeper gets a stop that ends every job and delegate as a shutdown does, then exits (`docs/tools.md`, "The keeper"). In a terminal it asks first, counting as `/close all` does: sessions, how many are working, and keepers. `--yes` skips the question. Without a terminal and without `--yes` it is a usage error naming `--yes`. The opening exchange on a session's or keeper's socket and the stop message are frozen across versions, so any newer Fiber stops any older session or keeper, straight after a breaking update. It never signals a recorded process id. |
 | `feedback [<prompt>] [-] [--session <id>]` | Writes a feedback report with the description, version, platform, `fiber doctor` output and diagnostics, and prints the issue link. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |
 | `version` | Prints the version. |
+
+`fiber stop --all [--yes]` stops every session and keeper on this machine,
+then the hub, and prints what it stopped. It needs no hub: it finds sessions
+and keepers by their sockets under `run/` (`docs/state.md`, "What each part
+holds"). Each session gets `close` with `now`; each keeper gets a stop that
+ends every job and delegate as a shutdown does, then exits (`docs/tools.md`,
+"The keeper"). In a terminal it asks first, counting as `/close all` does:
+sessions, how many are working, and keepers. `--yes` skips the question.
+Without a terminal and without `--yes` it is a usage error naming `--yes`. The
+opening exchange on a session's or keeper's socket and the stop message are
+frozen across versions, so any newer Fiber stops any older session or keeper,
+straight after a breaking update. It never signals a recorded process id.
 
 `doctor` prints the version, the default model and the provider it needs, each
 installed provider with one line per credential label and where its key comes
