@@ -156,19 +156,54 @@ impl World {
         support::complete_lines(&text)
     }
 
+    fn has_durable_log(&self) -> bool {
+        let path = support::session_dir(&self.setup, &self.id).join("events.jsonl");
+        let Ok(text) = fs::read_to_string(path) else {
+            return false;
+        };
+        support::complete_lines(&text)
+            .first()
+            .is_some_and(|line| line["kind"] == "session_started")
+    }
+
+    /// The `sessions` answer waits for the hub's initial scan and shows
+    /// whether it has registered this live or exited session.
+    fn session_is_listed(&self, client: &Socket) -> bool {
+        client.send(
+            &json!({"id": "c_finish_sessions", "command": "sessions", "args": {}}).to_string(),
+        );
+        let answer = support::recv_answer(client, "c_finish_sessions", "the sessions answer");
+        assert_eq!(answer["kind"], "command_accepted", "{answer}");
+        let listed = |entries: &Value| {
+            entries
+                .as_array()
+                .is_some_and(|entries| entries.iter().any(|entry| entry["session_id"] == self.id))
+        };
+        listed(&answer["payload"]["result"]["live"])
+            || listed(&answer["payload"]["result"]["exited"])
+    }
+
     /// Closes the session through the hub and waits for the exit the close
     /// caused, before the hub goes away: a session the hub started outlives
     /// the hub, and an idle session never hears a close the dead hub never
     /// relayed. The subscribe fold replays earlier exits, so only an exit
     /// after the close's answer belongs to this close; waiting for any exit
     /// can return on a replayed one while the session still runs.
-    fn close_and_wait_exit(&self) {
+    fn close_and_wait_exit(&self, missing_log_is_expected: bool) {
         let last = self.client();
-        // The session may already have exited and been removed before
-        // this subscribe lands (see #3533): a subscribe the hub cannot
-        // serve is refused `session_not_found`, and there is no second
-        // close to send then. Any other rejection still panics below, and
-        // the close acknowledgement stays strict.
+        let listed = self.session_is_listed(&last);
+        let had_durable_log = self.has_durable_log();
+        let readiness = if had_durable_log && listed {
+            "the hub listed the durable session"
+        } else if had_durable_log {
+            "the hub omitted a durable session from its listing"
+        } else {
+            "the test reached finish without a durable session log"
+        };
+        assert!(
+            missing_log_is_expected || (listed && had_durable_log),
+            "finish readiness: {readiness}; listed={listed}, durable_log={had_durable_log}"
+        );
         last.send(&command(
             "c_finish_sub",
             &self.id,
@@ -177,6 +212,18 @@ impl World {
         ));
         let ack = support::recv_answer(&last, "c_finish_sub", "the subscribe acknowledgement");
         if ack["kind"] == "command_rejected" && ack["payload"]["code"] == "session_not_found" {
+            let side = if listed && had_durable_log {
+                "the hub rejected a listed session with a durable log"
+            } else if had_durable_log {
+                "the hub did not list the durable session before finish"
+            } else {
+                "the test sent finish before a durable log was available"
+            };
+            assert!(
+                missing_log_is_expected && !had_durable_log,
+                "{side}; c_finish_sub was refused session_not_found: {ack}; hub.log tail:\n{}",
+                support::hub_log_tail(&self.setup.hub_log())
+            );
             return;
         }
         assert_eq!(ack["kind"], "command_accepted", "{ack}");
@@ -194,9 +241,17 @@ impl World {
         });
     }
 
-    fn finish(mut self) {
+    fn finish(self) {
+        self.finish_with_missing_log(false);
+    }
+
+    fn finish_after_session_removal(self) {
+        self.finish_with_missing_log(true);
+    }
+
+    fn finish_with_missing_log(mut self, missing_log_is_expected: bool) {
         if self.guard.is_some() {
-            self.close_and_wait_exit();
+            self.close_and_wait_exit(missing_log_is_expected);
         }
         let hub = self.hub.lock().unwrap().take();
         if let Some(hub) = hub {
@@ -217,7 +272,7 @@ impl World {
         let diagnostics = exit_wait_diagnostics(&self);
         if self.guard.is_some() {
             let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.close_and_wait_exit();
+                self.close_and_wait_exit(false);
             }));
             if let Err(payload) = closed {
                 panic!("{}", with_exit_diagnostics(payload, &diagnostics));
@@ -906,21 +961,15 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
 
 #[test]
 fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
-    // The forced teardown for #3533: the probe's close exits the session,
-    // the test collects the close acknowledgement and the exit signal as
-    // a set, waits out the socket removal and the session processes, the
-    // retired session's directory is removed, and only then `finish`
-    // runs, so the finish subscribe deterministically names a removed
-    // session. The finish must return without sending `c_finish` instead
-    // of panicking on `session_not_found`.
+    // The probe's close exits the session. After collecting its
+    // acknowledgement and exit, the test waits for the socket and process
+    // to go away, removes the session directory, then finishes. With no
+    // durable log, the hub cannot resume the session and must not receive a
+    // second close.
     //
-    // The removal stands in for a prune between the exit and the finish
-    // (see #3533): a subscribe for a session the hub cannot serve is
-    // refused `session_not_found` (`crates/hub/src/relay.rs`, the failed
-    // write in `attach_inner`, and `crates/hub/src/resume.rs`, the log
-    // lookup in `attempt`). Awaiting the exit alone lets the hub settle
-    // and resume instead, so the removal is forced here the way a prune
-    // between the exit and the finish would.
+    // Waiting for the process to exit alone leaves the log resumable. This
+    // removal establishes the distinct case where `session_not_found` is
+    // expected (`docs/invocation.md`, "Lifecycle").
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
@@ -971,18 +1020,15 @@ fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
         .expect("the retired session's directory removes");
     drop(probe);
     drop(first);
-    world.finish();
+    world.finish_after_session_removal();
 }
 
 #[test]
 fn a_finish_without_a_close_leaves_no_session_running() {
     // The session runs idle with the ask run's exit already in its log: a
     // fresh subscribe replays that exit while the session lives, so an exit
-    // on the stream does not mean the session is gone. The old
-    // subscribe/close/wait-any-exit sequence ends its wait on that replay
-    // before the close is answered, so finishing must still close the
-    // session before the hub goes away: an idle session never hears a
-    // close the dead hub never relayed, and `wait_gone` times out.
+    // on the stream does not mean the session is gone. Cleanup still needs
+    // to close the live session before the hub goes away.
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
@@ -992,13 +1038,10 @@ fn a_finish_without_a_close_leaves_no_session_running() {
     until(&first, "c_after's acknowledgement", |line| {
         is_answer(line, "c_after")
     });
-    // The old sequence: a fresh subscribe replays the ask run's exit at
-    // once, the close is sent, and any exit ends the wait. The replay was
-    // queued at subscribe time, before the close reached the session, so
-    // the wait ends on the replay with the close still unanswered: the
-    // precise failing ordering. The session then hears the close and exits
-    // on its own; on the base, `finish` killed the hub in this window with
-    // the close still in flight, stranding the idle session.
+    // The fresh subscribe replays the ask run's exit before this close is
+    // answered. The following wait can therefore finish while the close is
+    // still in flight; `finish` must keep the hub alive until teardown is
+    // confirmed.
     let probe = world.client();
     subscribe(&probe, "c_probe_sub", &id);
     probe.send(&close(&id));
