@@ -1292,7 +1292,7 @@ fn sandbox_child_provider(setup: &Setup, server: &fakes::ProviderServer) {
 #[test]
 fn a_confined_push_reaches_the_reviewer_and_a_block_never_spawns_it() {
     use serde_json::json;
-    use support::{function_call, stream};
+    use support::{function_call, hello, stream, text_reply};
     let setup = Setup::new_with_sandbox_root();
     let server = fakes::ProviderServer::start([
         stream(&[function_call(
@@ -1305,8 +1305,13 @@ fn a_confined_push_reaches_the_reviewer_and_a_block_never_spawns_it() {
             "shell",
             &json!({"command": "git -C . push origin branch"}),
         )]),
-        stream(&[json!({"type":"response.output_item.done", "item": {
-            "type":"message", "content":[{"type":"output_text", "text":"block no pushes"}]}})]),
+        // The reviewer asks in two stages: `check` sends the call to the
+        // second stage, whose `block` verdict with a reason denies it. The
+        // denial returns to the model, whose closing turn needs a scripted
+        // answer like every other terminal turn.
+        text_reply("check"),
+        text_reply("block no pushes"),
+        hello(),
     ])
     .unwrap();
     setup.provider(&server);
