@@ -1125,28 +1125,42 @@ fn the_item_views_top_row_closes_them() {
     }
     // Tear down in the open: kill the run, then close the release (EOF
     // lets every blocked `head` read and exit) and re-kill the hold
-    // pattern until no holder is left. Dropping the last writer before a
-    // head opens the FIFO strands it there forever (`docs/testing.md`,
-    // "Waits and timeouts"), and the drop's one-shot watchdog kill only
-    // reaps what has exec'd by then, so a head whose first schedule lands
-    // after teardown would outlive the temp dir. The bounded re-kill
-    // closes that window: if it expires, the temp-dir detector still
-    // reports the straggler.
-    let pattern = hold
-        .path()
-        .to_str()
-        .unwrap_or_else(|| panic!("the hold path is UTF-8: {}", hold.path().display()))
-        .to_owned();
+    // pattern until no holder can still start. Dropping the last writer
+    // before a head opens the FIFO strands it there forever
+    // (`docs/testing.md`, "Waits and timeouts"), and the drop's one-shot
+    // watchdog kill only reaps what has exec'd by then, so a head whose
+    // first schedule lands after teardown would outlive the temp dir.
+    // The zero has to hold across passes: a first listing can find no
+    // holder only because the starter has not exec'd yet. If cleanup
+    // cannot complete, the expiry is reported here and the temp-dir
+    // detector still reports the straggler.
+    let pattern = hold.path().display().to_string();
     drop(run);
     drop(hold);
     let deadline = setup.deadline.cleanup_phase();
+    let mut quiet = 0;
+    let mut clean = false;
     while !deadline.left().is_zero() {
         if fakes::kill_matching(pattern.as_str()).is_err() {
             break;
         }
-        let within = fakes::Deadline::after(std::time::Duration::from_millis(100));
-        if fakes::try_matching_exits(pattern.as_str(), within).is_ok() {
-            break;
+        if fakes::matching_exits(
+            pattern.as_str(),
+            fakes::Deadline::after(std::time::Duration::from_millis(100)),
+        ) {
+            quiet += 1;
+            if quiet >= 3 {
+                clean = true;
+                break;
+            }
+        } else {
+            quiet = 0;
         }
+    }
+    if !clean {
+        let stragglers = fakes::matching(pattern.as_str()).unwrap_or_default();
+        panic!(
+            "3875 cleanup: the hold pattern never stayed clear (stragglers: {stragglers:?}); the temp-dir detector is skipped while unwinding"
+        );
     }
 }
