@@ -554,6 +554,10 @@ fn fold_fixture_tmp(text: &str) -> String {
                 }
                 start -= c.len_utf8();
             }
+            // The cut marker is runner-varying too (a short fixture path
+            // renders whole): drop it with the path so cut and uncut rows
+            // canonicalize to the same form.
+            let prefix = row[..start].strip_suffix('…').unwrap_or(&row[..start]);
             let hex = row[fh + 4..]
                 .bytes()
                 .take_while(u8::is_ascii_hexdigit)
@@ -571,10 +575,36 @@ fn fold_fixture_tmp(text: &str) -> String {
                 return row.to_owned();
             };
             let rest = rest.trim_start_matches(' ');
-            format!("{}{CANON}{rest}", &row[..start])
+            format!("{prefix}{CANON}{rest}")
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[test]
+fn fold_fixture_tmp_canon_is_runner_stable() {
+    let cut = "  …e/aakshintala/.cache/tmp/fh-60e61f8a/w  │  auto  fake/alpha-1  │  ctx rest";
+    let whole = "  /tmp/fh-60e61f8a/w  │  auto  fake/alpha-1  │  ctx rest";
+    let striped = "  ▌/home/u/.cache/tmp/fh-60e61f8a/w  │  auto     fake/m  │  ctx rest";
+    let plain = "  ▌/tmp/fh-60e61f8a/w  │  auto     fake/m  │  ctx rest";
+    assert_eq!(
+        fold_fixture_tmp(cut),
+        "  [workspace]/w │ auto fake/alpha-1  │  ctx rest"
+    );
+    assert_eq!(
+        fold_fixture_tmp(whole),
+        "  [workspace]/w │ auto fake/alpha-1  │  ctx rest"
+    );
+    assert_eq!(
+        fold_fixture_tmp(striped),
+        "  ▌[workspace]/w │ auto fake/m  │  ctx rest"
+    );
+    assert_eq!(
+        fold_fixture_tmp(plain),
+        "  ▌[workspace]/w │ auto fake/m  │  ctx rest"
+    );
+    let other = "  ordinary row without the fixture";
+    assert_eq!(fold_fixture_tmp(other), other);
 }
 
 /// An image pasted from the clipboard, answered, the session closed and
