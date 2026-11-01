@@ -421,7 +421,7 @@ impl App {
                     self.draft.set(&format!("/{chosen} "));
                 } else {
                     let draft = self.draft.expand();
-                    super::commands::trace_enter(
+                    Self::trace_enter(
                         "panel",
                         &draft,
                         true,

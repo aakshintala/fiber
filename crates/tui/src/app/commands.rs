@@ -1102,13 +1102,13 @@ pub(super) fn on_enter(&mut self) -> Effect {
         && draft.starts_with('/')
         && !draft.contains(char::is_whitespace);
     let selected = self.completion.selected;
-    trace_enter("on-enter", &draft, open, selected, "");
+    Self::trace_enter("on-enter", &draft, open, selected, "");
     if self.refuse_unknown_slash() {
-        trace_enter("refuse", &draft, open, selected, "kept");
+        Self::trace_enter("refuse", &draft, open, selected, "kept");
         return Effect::None;
     }
     if let Some(effect) = self.built_in() {
-        trace_enter(
+        Self::trace_enter(
             "built-in",
             &draft,
             open,
@@ -1176,10 +1176,10 @@ pub(super) fn on_enter(&mut self) -> Effect {
             }
             (Phase::Attached { session, busy }, None) => {
                 let (kind, command) = if *busy {
-                    trace_enter("steer", &self.draft.expand(), false, self.completion.selected, "busy");
+                    Self::trace_enter("steer", &self.draft.expand(), false, self.completion.selected, "busy");
                     (Kind::Steer, "steer")
                 } else {
-                    trace_enter("prompt", &self.draft.expand(), false, self.completion.selected, "idle");
+                    Self::trace_enter("prompt", &self.draft.expand(), false, self.completion.selected, "idle");
                     (Kind::Prompt, "prompt")
                 };
                 (kind, session_command(&id, command, session, Some(args)))
