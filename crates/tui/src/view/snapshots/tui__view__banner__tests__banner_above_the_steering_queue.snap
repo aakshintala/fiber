@@ -2,8 +2,6 @@
 source: crates/tui/src/view/banner_tests.rs
 expression: "screen(&app, 60)"
 ---
-                                                      ▀▀▀▀▀
-                                                 you 00:00
                                                            ┃
   ⚠ connection_failed · Connection lost.                   ✕
 Connection lost · reconnecting (attempt 1)…
@@ -13,4 +11,6 @@ Connection lost · reconnecting (attempt 1)…
   ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to dr
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────────────────────────
+▌auto                                    ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

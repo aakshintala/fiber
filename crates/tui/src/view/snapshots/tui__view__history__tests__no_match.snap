@@ -1,9 +1,7 @@
 ---
 source: crates/tui/src/view/history_tests.rs
-assertion_line: 144
 expression: "screen(&app, 80, 24)"
 ---
-
 
 
 
@@ -12,13 +10,12 @@ expression: "screen(&app, 80, 24)"
 
                       Prompt history                     ✕
 
-                      › zzz█
-                      no matching prompts                      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                                fix the build ▐
-                      Enter recalls · Esc closes               ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                                                     you 00:00
-                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                      › zzz█                                   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                      no matching prompts                       fix the build ▐
+                                                               ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                      Enter recalls · Esc closes                     you 00:00
 
+                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                 run the tests ▐
                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -26,4 +23,6 @@ expression: "screen(&app, 80, 24)"
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────────────────────────────────────────────
+▌auto                                                        ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -1,6 +1,6 @@
 use super::*;
 use crate::rules::RustFile;
-use crate::select::tests::members;
+use crate::select::tests::{members, members_with_unrun_test};
 
 fn file(krate: &str, path: &str, source: &str) -> RustFile {
     RustFile {
@@ -1468,4 +1468,53 @@ fn a_hunk_count_past_u32_is_an_error_naming_the_path() {
             }
         }
     }
+}
+
+const JOURNEY: &str = "#[test]\nfn walks_a_journey() {}\n";
+const JOURNEY_HUNK: &str = "@@ -1,0 +1,2 @@\n+#[test]\n+fn walks_a_journey() {}\n";
+
+#[test]
+fn a_test_in_a_test_false_target_selects_nothing() {
+    let sources = [file("main", "crates/main/tests/main_journeys.rs", JOURNEY)];
+    let diff = diff_file("crates/main/tests/main_journeys.rs", JOURNEY_HUNK);
+    let result = changed_tests(&diff, &members_with_unrun_test(), &sources);
+    assert_eq!(result, Ok(vec![]));
+}
+
+#[test]
+fn a_test_false_target_leaves_a_sibling_binary_selected() {
+    let sources = [
+        file("main", "crates/main/tests/main_journeys.rs", JOURNEY),
+        file("main", "crates/main/tests/journeys.rs", JOURNEY),
+    ];
+    let diff = format!(
+        "{}{}",
+        diff_file("crates/main/tests/main_journeys.rs", JOURNEY_HUNK),
+        diff_file("crates/main/tests/journeys.rs", JOURNEY_HUNK),
+    );
+    let result = changed_tests(&diff, &members_with_unrun_test(), &sources);
+    assert_eq!(
+        result,
+        Ok(vec![refer(
+            "main",
+            Some("main::journeys"),
+            false,
+            "walks_a_journey"
+        )])
+    );
+}
+
+#[test]
+fn the_same_test_is_selected_when_no_target_declares_test_false() {
+    let sources = [file("main", "crates/main/tests/main_journeys.rs", JOURNEY)];
+    let diff = diff_file("crates/main/tests/main_journeys.rs", JOURNEY_HUNK);
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer(
+            "main",
+            Some("main::main_journeys"),
+            false,
+            "walks_a_journey"
+        )]
+    );
 }
