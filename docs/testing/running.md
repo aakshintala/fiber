@@ -156,5 +156,5 @@ cargo nextest run -p main --test main_journeys
 ```
 
 Without the variables the run panics naming the missing one, not how to
-satisfy it. A journey failure does not make the gate red: the journey job
-is not in the aggregate `CI` job's `needs`, so it cannot block a merge.
+satisfy it. A journey failure does not block a merge (`docs/ci.md`,
+"The journey suite").
