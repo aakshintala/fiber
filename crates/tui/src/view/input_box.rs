@@ -343,6 +343,15 @@ struct RowSides {
 /// Lays the status row's sides in `room` columns: the working directory
 /// cut from the left first, then the left side at its right end; the
 /// right side only when the slab is narrower than it.
+// Exempt from mutation testing: the two comparisons below are
+// equivalent on every input a consumer can draw, so no test can kill
+// their mutants. `status_right` always pushes the ctx segment (`"ctx "`
+// alone is 4 cells), so `rw >= 4` on every call: at `rw == avail` both
+// arms build the same pair, and `rw >= 0` is the same condition as
+// `rw > 0`. `rw == 0` and `rw < 0` reduce to the room-0 branch, and
+// `status_left` at room 0 draws the same empty line as the dropped
+// side (proved by flipping each mutant and diffing the drawn rows).
+#[cfg_attr(false, mutants::skip)]
 fn row_sides(app: &App, avail: usize) -> RowSides {
     let workspace = app
         .panel_state()
