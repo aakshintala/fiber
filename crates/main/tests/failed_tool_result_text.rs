@@ -1,4 +1,8 @@
-//! A timed-out MCP call sends its error message as the tool result text.
+//! A timed-out MCP call sends its error message as the tool result text,
+//! on the Anthropic protocol (`docs/testing.md`, "Levels"): the built
+//! `fiber` runs in its own process group with its own `FIBER_HOME`,
+//! holding an ordinary provider whose base URL is the fake server, and a
+//! configured fixture server whose tool never answers.
 
 #![allow(
     clippy::unwrap_used,
@@ -12,56 +16,32 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, function_call, hello, stream};
-
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-    #[allow(dead_code, reason = "held only for its drop")]
-    guard: Watchdog,
-}
+use support::{KillGroup, Setup, StdoutRun, write_json};
 
 impl Setup {
-    fn new_with_mcp_fixture() -> Self {
-        fakes::mcp_fixture();
-        let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fa");
-        let guard = Watchdog::matching(&root.path().display().to_string());
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
-        Self {
-            deadline,
-            root,
-            guard,
-        }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
-    fn provider(&self, server: &ProviderServer) {
+    /// Installs a provider `fake` with model `m` on `protocol` at the fake
+    /// server, and makes `fake/m` the configured model.
+    fn provider_on(&self, server: &ProviderServer, protocol: &str) {
         let source = self.root.path().join("src");
         write_json(
             &source.join("extension.json"),
             &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
         );
+        let model = json!({"id": "m", "protocol": protocol,
+            "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+            "input": ["text", "image"]});
         write_json(
             &source.join("providers/fake.json"),
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
+                "models": [model]
             }),
         );
         extensions::plan(
@@ -80,6 +60,8 @@ impl Setup {
         );
     }
 
+    /// Adds `servers` under `mcp.servers` to the global configuration,
+    /// keeping the configured model.
     fn configure(&self, servers: &Value) {
         write_json(
             &self.home().join("config.json"),
@@ -87,6 +69,8 @@ impl Setup {
         );
     }
 
+    /// Writes the fixture server's directory: `tools.json` and one result
+    /// file per `(name, body)` pair. Returns the directory.
     fn fixture(&self, tools: &Value, calls: &[(&str, &str)]) -> PathBuf {
         let dir = self.root.path().join("fx");
         fs::create_dir_all(&dir).unwrap();
@@ -97,7 +81,13 @@ impl Setup {
         dir
     }
 
-    fn run(&self, args: &[&str]) -> Run {
+    /// Runs `fiber` in its own process group, waits for it under the test's
+    /// [`Deadline`], and asserts that nothing it started is left in the
+    /// group, after a timeout too (`docs/testing.md`, "Running tests").
+    /// A watchdog beside it kills that group if this process dies first.
+    #[track_caller]
+    fn run(&self, args: &[&str]) -> StdoutRun {
+        let home = self.home();
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -106,14 +96,14 @@ impl Setup {
             .envs(fakes::check_run())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home())
+            .env("FIBER_HOME", home)
             .env("FIBER_TEST_FAKE_KEY", "sk-test")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let (child, watchdog) = support::spawn_watched(&mut command);
         let group = child.id();
-        let guard = support::KillGroup(group);
+        let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match self.deadline.recv(&finished) {
@@ -131,37 +121,11 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
-        Run::new(output)
+        StdoutRun::from(output)
     }
 }
 
-fn write_json(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
-}
-
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
-impl Run {
-    fn new(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines = stdout
-            .lines()
-            .filter(|l| !support::is_status(l))
-            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-            .collect();
-        Self {
-            code: output.status.code(),
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
-    }
-}
-
+/// Configures one fixture server `fx` in `dir` and returns nothing.
 fn configure_fx(setup: &Setup, dir: &Path, extra: Value) {
     let mut server = json!({
         "command": "/bin/bash",
@@ -176,64 +140,114 @@ fn configure_fx(setup: &Setup, dir: &Path, extra: Value) {
     setup.configure(&json!({"fx": server}));
 }
 
-fn tool_output_of(body: &[u8]) -> Option<String> {
-    let parsed: Value = serde_json::from_slice(body).ok()?;
-    parsed["input"].as_array()?.iter().find_map(|item| {
-        if item["type"] != "function_call_output" {
-            return None;
-        }
-        if let Value::String(text) = &item["output"] {
-            Some(text.clone())
-        } else {
-            Some(item["output"].to_string())
-        }
-    })
+/// An `anthropic-messages` stream of `events`, then its end.
+fn anthropic(events: &[Value]) -> Response {
+    let mut all = vec![json!({"type": "message_start", "message": {"id": "msg_1"}})];
+    all.extend(events.iter().cloned());
+    all.push(
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+        "usage": {"input_tokens": 10, "output_tokens": 3}}),
+    );
+    all.push(json!({"type": "message_stop"}));
+    Response::stream(
+        all.iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// An `anthropic-messages` reply calling `mcp__fx__hang` with no arguments.
+fn anthropic_hang() -> Response {
+    anthropic(&[
+        json!({"type": "content_block_start", "index": 0, "content_block": {
+            "type": "tool_use", "id": "toolu_1", "name": "mcp__fx__hang", "input": {}}}),
+        json!({"type": "content_block_stop", "index": 0}),
+    ])
+}
+
+/// An `anthropic-messages` reply of `Hello.`.
+fn anthropic_hello() -> Response {
+    anthropic(&[
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello."}}),
+        json!({"type": "content_block_stop", "index": 0}),
+    ])
+}
+
+/// The `tool_result` blocks the fake provider received, in arrival order.
+fn tool_results(server: &ProviderServer) -> Vec<Value> {
+    server
+        .requests()
+        .iter()
+        .filter_map(|request| {
+            let body: Value = serde_json::from_slice(&request.body).ok()?;
+            body["messages"]
+                .as_array()?
+                .iter()
+                .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+                .find(|block| block["type"] == "tool_result")
+        })
+        .collect()
+}
+
+/// Whether the error result `block` carries no text: what the provider
+/// answers with HTTP 400 `content cannot be empty if is_error is true`.
+fn is_empty_error(block: &Value) -> bool {
+    block["is_error"] == json!(true)
+        && (block["content"] == json!("") || block["content"] == json!([]))
 }
 
 #[test]
 fn a_timed_out_call_sends_its_error_message_as_the_tool_result() {
     let setup = Setup::new_with_mcp_fixture();
+    let _guard = Watchdog::matching(&setup.root.path().display().to_string());
     let dir = setup.fixture(
         &json!([{"name": "hang", "annotations": {"readOnlyHint": true, "openWorldHint": false}}]),
         &[("call-hang.json", "hang")],
     );
     let server = ProviderServer::start_responding(|request| {
-        if tool_output_of(&request.body).is_none() {
-            return stream(&[function_call("call_hang", "mcp__fx__hang", &json!({}))]);
-        }
-        let output = tool_output_of(&request.body).unwrap_or_default();
-        if output.is_empty() {
-            return Response::status(
+        let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+        let result = body["messages"]
+            .as_array()
+            .into_iter()
+            .flat_map(|messages| messages.iter())
+            .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+            .find(|block| block["type"] == "tool_result");
+        match result {
+            None => anthropic_hang(),
+            Some(block) if is_empty_error(&block) => Response::status(
                 400,
-                json!({"error": {"message": "messages.164.content.0.tool_result: content cannot be empty if is_error is true"}})
+                json!({"type": "error", "error": {"type": "invalid_request_error",
+                    "message": "messages.164.content.0.tool_result: content cannot be empty if is_error is true"}})
                     .to_string(),
-            );
+            ),
+            Some(_) => anthropic_hello(),
         }
-        hello()
     })
     .unwrap();
-    setup.provider(&server);
+    setup.provider_on(&server, "anthropic-messages");
     configure_fx(&setup, &dir, json!({"timeout_ms": 200}));
 
     let run = setup.run(&["ask", "hang"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let requests = server.requests();
-    assert!(requests.len() >= 2, "expected two model requests");
-    let output = tool_output_of(&requests[1].body).unwrap_or_default();
+    let result = tool_results(&server)
+        .into_iter()
+        .find(|block| block["is_error"] == json!(true))
+        .expect("the timed-out result reached the provider");
+    assert_eq!(result["is_error"], json!(true));
+    let content = result["content"].as_str().unwrap();
     assert!(
-        !output.is_empty(),
+        !content.is_empty(),
         "the timed-out result reached the provider empty: 400 messages.164.content.0.tool_result: content cannot be empty if is_error is true"
     );
     assert!(
-        output.contains("did not answer"),
-        "the timed-out result carries the timeout message, got: {output}"
+        content.contains("did not answer"),
+        "the timed-out result carries the timeout message, got: {content}"
     );
-    let completed = run
-        .lines
-        .iter()
-        .find(|line| line["kind"] == "tool_call_completed")
-        .unwrap();
+    let completed = run.first("tool_call_completed");
     assert_eq!(completed["payload"]["status"], "failed");
     assert_eq!(completed["payload"]["error"]["code"], "timeout");
 }
