@@ -865,3 +865,54 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
         "an empty hub.log reports distinctly from a missing one: {message}"
     );
 }
+
+/// The hub's boot-time `git rev-parse` probe gets past a `git` wrapper
+/// that re-selects the gate: the gate delegates to a fixture wrapper that
+/// re-execs `git` by PATH lookup instead of naming a binary, so without
+/// the PATH strip the probe exec-loops on the gate's own directory and the
+/// hub never says hello, by construction on every machine, whatever the
+/// harness puts on PATH. Expect success: the test never asserts the
+/// give-up panic; without the strip it fails carrying the Task 2 signature
+/// (still-running hub, missing hub.log, the park in the capture), and with
+/// it the hub gets past the probe and says hello, with no assertion
+/// change.
+#[test]
+fn hub_hello_past_a_self_selecting_git_wrapper() {
+    let setup = support::Setup::new();
+    let root = setup.root.path().join("repro");
+    let wbin = root.join("wbin");
+    fs::create_dir_all(&wbin).unwrap();
+    // Fixture wrapper standing in for any delegate that re-resolves `git`:
+    // it re-execs `git` by PATH lookup, so the gate's `exec` of it comes
+    // back to the gate's own directory, deterministically.
+    let reselect = root.join("reselect-git");
+    fs::write(&reselect, "#!/bin/sh\nexec git \"$@\"\n").unwrap();
+    fs::set_permissions(&reselect, fs::Permissions::from_mode(0o755)).unwrap();
+    let fifo = root.join("probe.fifo");
+    fakes::fifo(&fifo);
+    let signal = root.join("entered");
+    write_git_gate(&wbin, &signal, &fifo, &reselect);
+    let path = format!(
+        "{}:{}",
+        wbin.display(),
+        std::env::var_os("PATH").unwrap().to_string_lossy()
+    );
+    let served = hub_start::serve_installed(
+        &setup,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(
+                &setup.home().join("config.json"),
+                &json!({"hub": {"port": port}}),
+            );
+            let mut command = setup.fiber(&["hub", "serve", "--installed"]);
+            command.env("PATH", &path);
+            command
+        },
+    );
+    assert_eq!(served.hub.1.kind, "hub_hello");
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
+    drop(served.hub);
+}
