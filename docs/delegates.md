@@ -143,6 +143,8 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   (`docs/tools.md`, "Asking the person").
 - There is no status field beyond `job_completed`'s `completed`, `failed` and
   `cancelled`.
+- A failed delegate's job report adds the `Provider said:` line per
+  `docs/errors.md`, "The shape".
 - The wake is built only from logged fields. Nothing in it is rendered from the
   clock.
 
