@@ -668,6 +668,48 @@ pub(crate) fn files_holding(roots: &[PathBuf], needle: &[u8]) -> Vec<PathBuf> {
     found
 }
 
+/// The hub stderr a [`HubProc::spawn_command_captured`] drain thread keeps:
+/// the live text plus the drain's EOF completion, so a teardown read waits
+/// for the drain instead of racing it. Rides beside `HubProc`, so no struct
+/// field is added and every existing construction and destructure stays
+/// unchanged.
+pub(crate) struct CapturedStderr {
+    snapshot: Arc<Mutex<String>>,
+    drained: mpsc::Receiver<()>,
+}
+
+impl CapturedStderr {
+    /// An already-drained capture holding `text`: for callers with no drain
+    /// thread, whose snapshot is complete by construction.
+    pub(crate) fn drained_text(text: String) -> Self {
+        let (done_tx, drained) = mpsc::channel();
+        done_tx.send(()).unwrap_or(());
+        Self {
+            snapshot: Arc::new(Mutex::new(text)),
+            drained,
+        }
+    }
+
+    /// The drained text: waits for the drain thread's EOF under `bound`,
+    /// then clones the complete snapshot, yielding what was captured even
+    /// when the lock is poisoned. On a missed bound clones what arrived
+    /// with an incompleteness marker instead of replacing the caller's
+    /// panic: EOF is already available (every write end is closed once the
+    /// child is reaped), so only thread scheduling is outstanding.
+    pub(crate) fn text(&self, bound: Deadline) -> String {
+        let complete = bound.recv(&self.drained).is_ok();
+        let mut text = self
+            .snapshot
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+        if !complete {
+            text.push_str("(stderr drain incomplete: showing what arrived)\n");
+        }
+        text
+    }
+}
+
 /// A hub the test started: killed on drop unless forgotten after a clean wait.
 pub(crate) struct HubProc {
     pub(crate) child: Child,
@@ -700,20 +742,21 @@ impl HubProc {
 
     /// Spawns the `hub serve` command `serve` like
     /// [`spawn_command`](Self::spawn_command), keeping its piped stderr: a
-    /// drain thread appends every chunk to the returned snapshot as it
-    /// arrives, plus the first read error as its own trailing marker, and
-    /// exits at EOF with no join. The snapshot rides beside `HubProc`, so
-    /// no struct field is added and every existing construction and
-    /// destructure stays unchanged.
+    /// drain thread appends every chunk to the returned capture as it
+    /// arrives, plus the first read error as its own trailing marker, then
+    /// signals EOF and exits with no join. The capture rides beside
+    /// `HubProc`, so no struct field is added and every existing
+    /// construction and destructure stays unchanged.
     pub(crate) fn spawn_command_captured(
         deadline: Deadline,
         serve: &mut Command,
-    ) -> (Self, Arc<Mutex<String>>) {
+    ) -> (Self, CapturedStderr) {
         let mut child = serve.spawn().unwrap();
         let group = child.id();
         let _ = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         let snapshot = Arc::new(Mutex::new(String::new()));
+        let (done_tx, drained) = mpsc::channel();
         if let Some(mut pipe) = stderr_pipe {
             let copy = Arc::clone(&snapshot);
             thread::spawn(move || {
@@ -725,7 +768,10 @@ impl HubProc {
                         Err(poisoned) => poisoned.into_inner().push_str(&marker),
                     }
                 }
+                done_tx.send(()).unwrap_or(());
             });
+        } else {
+            done_tx.send(()).unwrap_or(());
         }
         let watchdog = Watchdog::group(group);
         (
@@ -735,7 +781,7 @@ impl HubProc {
                 group,
                 deadline,
             },
-            snapshot,
+            CapturedStderr { snapshot, drained },
         )
     }
 
@@ -2480,6 +2526,30 @@ fn stderr_drain_sibling_preserves_the_first_read_error() {
     };
     assert_eq!(drain_stderr_to_snapshot(&mut again, &blank), "half\n");
     assert_eq!(*blank.lock().unwrap(), "half\n");
+}
+
+#[test]
+fn captured_stderr_marks_an_incomplete_drain() {
+    // No completion sent: the drain is still running, so a zero bound
+    // expires at once and the clone carries what arrived with the marker,
+    // never a panic. The sender stays alive, so the miss is a timeout, not
+    // a disconnect.
+    let snapshot = Arc::new(Mutex::new("half\n".to_owned()));
+    let (_live, drained) = mpsc::channel::<()>();
+    let capture = CapturedStderr { snapshot, drained };
+    let text = capture.text(Deadline::after(Duration::ZERO));
+    assert!(
+        text.contains("half\n"),
+        "an incomplete drain still clones what arrived: {text}"
+    );
+    assert!(
+        text.contains("(stderr drain incomplete: showing what arrived)"),
+        "an incomplete drain reads as its own marker, never as whole: {text}"
+    );
+    // A drained capture clones whole with no marker, even on a zero bound:
+    // the completion is already there.
+    let whole = CapturedStderr::drained_text("all\n".to_owned());
+    assert_eq!(whole.text(Deadline::after(Duration::ZERO)), "all\n");
 }
 
 #[test]

@@ -15,13 +15,12 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use contract::clock::Clock;
 use fakes::MUST_SUCCEED_WITHIN;
 
-use crate::support::{Deadline, HubProc, Setup, SystemClock, bounded};
+use crate::support::{CapturedStderr, Deadline, HubProc, Setup, SystemClock, bounded};
 
 /// Hub start attempts `serve_installed` makes, each on a fresh port.
 /// What a hello wait leaves of the deadline for its report and cleanup.
@@ -57,16 +56,6 @@ fn truncate_section(text: &str) -> String {
     cut
 }
 
-/// Clones the hub's stderr snapshot, yielding what the drain thread
-/// captured even when it poisoned the lock: the dump never replaces the
-/// timeout panic with its own.
-fn snapshot_text(stderr: &Arc<Mutex<String>>) -> String {
-    stderr
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
-}
-
 /// The hub child's captured stderr, or the marker for nothing captured
 /// yet: a hub still running when the wait gave up may simply not have
 /// flushed, while an exited hub's pipes drained at EOF. Absence reads as
@@ -91,13 +80,14 @@ fn stderr_section(snapshot: &str, status: Option<ExitStatus>) -> String {
 }
 
 /// The home's resolved state and log directories: paths only, never file
-/// contents, so no secret or token can ride along.
+/// contents, so no secret or token can ride along. Capped like every other
+/// capture section, so a long valid home cannot push the report's head out.
 fn dirs_section(home: &Path) -> String {
-    format!(
+    truncate_section(&format!(
         "state dir {}, log dir {}",
         home.join("run").display(),
         home.join("logs").display()
-    )
+    ))
 }
 
 /// Per-thread park state for `pid` from `/proc/<pid>/task`: each thread's
@@ -243,9 +233,10 @@ fn report(setup: &Setup, status: Option<ExitStatus>, stderr: &str, threads: &str
 /// hub still running), and panics with `why` and the report. The capture
 /// reads the live pid before any wait on the child; a zombie, a vanished
 /// pid, or a failed read prints its marker as text. Kill-and-reap still
-/// precedes the panic exactly as before, and the stderr snapshot is cloned
-/// only after the reap, so the drain thread has seen EOF.
-fn give_up(setup: &Setup, mut process: HubProc, stderr: &Arc<Mutex<String>>, why: &str) -> ! {
+/// precedes the panic exactly as before, and the stderr text waits for the
+/// drain's EOF under its own bound before cloning, so a slow drain cannot
+/// omit what the hub wrote.
+fn give_up(setup: &Setup, mut process: HubProc, capture: &CapturedStderr, why: &str) -> ! {
     let pid = process.child.id();
     let threads = hub_threads(pid);
     let status = process.child.try_wait().unwrap();
@@ -255,7 +246,12 @@ fn give_up(setup: &Setup, mut process: HubProc, stderr: &Arc<Mutex<String>>, why
     }
     panic!(
         "{why}: the hub {}",
-        report(setup, status, &snapshot_text(stderr), &threads)
+        report(
+            setup,
+            status,
+            &capture.text(Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+            &threads
+        )
     );
 }
 
@@ -356,7 +352,7 @@ fn is_hello_timeout(text: &str) -> bool {
 pub(crate) fn hello_slice(
     setup: &Setup,
     process: HubProc,
-    stderr: &Arc<Mutex<String>>,
+    capture: &CapturedStderr,
     wait: Deadline,
     bound: Duration,
     entry: &str,
@@ -389,7 +385,7 @@ pub(crate) fn hello_slice(
                 give_up(
                     setup,
                     process,
-                    stderr,
+                    capture,
                     &format!(
                         "{text} ({})",
                         hello_account(entry, setup.deadline.left(), wait.left(), attempts),
@@ -408,7 +404,7 @@ pub(crate) fn hello_slice(
 fn await_hello(
     setup: &Setup,
     mut process: HubProc,
-    stderr: &Arc<Mutex<String>>,
+    capture: &CapturedStderr,
     helper_left: Duration,
 ) -> Result<(doors::hub::Hub, HubProc), (ExitStatus, String)> {
     let entry_left = setup.deadline.left();
@@ -431,7 +427,7 @@ fn await_hello(
             give_up(
                 setup,
                 process,
-                stderr,
+                capture,
                 &format!(
                     "waited for the installed hub's hello ({})",
                     hello_account(&entry, failing_left, failing_left, &attempts),
@@ -442,7 +438,7 @@ fn await_hello(
         let (slice, back) = hello_slice(
             setup,
             process,
-            stderr,
+            capture,
             setup.deadline,
             bound,
             &entry,
@@ -471,7 +467,7 @@ fn await_hello(
             give_up(
                 setup,
                 process,
-                stderr,
+                capture,
                 &format!(
                     "the installed hub's hello failed with {error} ({})",
                     hello_account(
@@ -510,8 +506,8 @@ pub(crate) fn serve_installed(
         let port = ports();
         let logged = setup.hub_log().len();
         let mut command = serve(port);
-        let (process, stderr) = HubProc::spawn_command_captured(setup.deadline, &mut command);
-        match await_hello(setup, process, &stderr, helper_left) {
+        let (process, capture) = HubProc::spawn_command_captured(setup.deadline, &mut command);
+        match await_hello(setup, process, &capture, helper_left) {
             Ok((hub, process)) => return Served { port, hub, process },
             Err((status, account)) => {
                 let log = setup.hub_log();
@@ -523,7 +519,12 @@ pub(crate) fn serve_installed(
                 panic!(
                     "the installed hub's hello on 127.0.0.1:{port}, attempt {attempt} of {attempts} with helper root left {helper_left:?} and failing root left {:?} ({account}): the hub {}",
                     setup.deadline.left(),
-                    report(setup, Some(status), &snapshot_text(&stderr), EXITED_THREADS)
+                    report(
+                        setup,
+                        Some(status),
+                        &capture.text(Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+                        EXITED_THREADS
+                    )
                 );
             }
         }
@@ -550,7 +551,7 @@ mod tests {
         CAPTURE_CHARS, MUST_SUCCEED_WITHIN, connect_attempt, give_up, hello_bound, hub_threads,
         is_hello_timeout, report, serve_installed, slices_shown, truncate_section,
     };
-    use crate::support::{Deadline, HubProc, Setup};
+    use crate::support::{CapturedStderr, Deadline, HubProc, Setup};
 
     #[test]
     fn slices_shown_collapses_runs_and_keeps_singles() {
@@ -829,11 +830,11 @@ mod tests {
     fn give_up_text(
         setup: &Setup,
         process: HubProc,
-        stderr: &Arc<Mutex<String>>,
+        capture: &CapturedStderr,
         why: &str,
     ) -> String {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            give_up(setup, process, stderr, why);
+            give_up(setup, process, capture, why);
         }));
         outcome
             .err()
@@ -856,13 +857,12 @@ mod tests {
         fakes::fifo(&fifo);
         let process = spawn_fifo_stub(setup.deadline, &fifo);
         let pid = process.child.id();
-        let stderr = Arc::new(Mutex::new(
-            "hub stderr line 1\nhub stderr line 2\n".to_owned(),
-        ));
+        let capture =
+            CapturedStderr::drained_text("hub stderr line 1\nhub stderr line 2\n".to_owned());
         let message = give_up_text(
             &setup,
             process,
-            &stderr,
+            &capture,
             "waited for the installed hub's hello (test)",
         );
         assert!(
@@ -916,11 +916,11 @@ mod tests {
         let fifo = setup.home().join("stub.fifo");
         fakes::fifo(&fifo);
         let process = spawn_fifo_stub(setup.deadline, &fifo);
-        let stderr = Arc::new(Mutex::new(String::new()));
+        let capture = CapturedStderr::drained_text(String::new());
         let message = give_up_text(
             &setup,
             process,
-            &stderr,
+            &capture,
             "waited for the installed hub's hello (test)",
         );
         assert!(
@@ -932,6 +932,23 @@ mod tests {
             "an empty hub.log reports distinctly from a missing one: {message}"
         );
         fs::remove_file(&fifo).unwrap_or(());
+    }
+
+    /// A long valid home truncates with the cut mark instead of pushing
+    /// the report's head out; a short one passes through whole.
+    #[test]
+    fn dirs_section_truncates_a_long_home() {
+        let long = Path::new("/h").join("x".repeat(CAPTURE_CHARS + 1));
+        let cut = super::dirs_section(&long);
+        assert!(
+            cut.starts_with("state dir "),
+            "the truncation keeps the head: {cut}"
+        );
+        assert!(cut.ends_with("..."), "a cut ends in its mark");
+        assert_eq!(
+            super::dirs_section(Path::new("/h")),
+            "state dir /h/run, log dir /h/logs"
+        );
     }
 
     /// A pid with no task directory reads as its own marker, never as
@@ -966,30 +983,33 @@ mod tests {
             .process_group(0);
         let process = HubProc::spawn_command(setup.deadline, &mut command);
         let pid = process.child.id();
-        // The stub's `Z` state in `/proc/<pid>/stat` proves it exited
-        // without reaping it: `try_wait` itself reaps, so only a stat read
-        // observes the zombie.
-        let wait = Deadline::after(MUST_SUCCEED_WITHIN).start_wait();
-        loop {
-            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-            let zombie = stat
-                .rsplit_once(')')
-                .is_some_and(|(_, tail)| tail.split_whitespace().next() == Some("Z"));
-            if zombie {
-                break;
-            }
-            if wait.left().is_zero() {
-                panic!("the true stub exits at once, but the wait expired");
-            }
-            thread::yield_now();
-        }
+        // A reap-free exit probe: `waitid` with `WNOWAIT` reports the exit
+        // while leaving the child a zombie for `hub_threads` to name, which
+        // `try_wait` itself would reap away. Blocking code runs on a thread
+        // and the test receives under its own bound, which fails naming the
+        // wait instead of hanging the runner.
+        let (exited_tx, exited_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                let waited = rustix::process::waitid(
+                    rustix::process::WaitId::Pid(rustix::process::Pid::from_child(&process.child)),
+                    rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOWAIT,
+                );
+                exited_tx.send(waited.map(|_| ())).unwrap_or(());
+            });
+            // The scope joins the probe afterwards; the stub exits at once,
+            // so even the failure path joins promptly instead of hanging.
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&exited_rx, "the true stub to exit")
+                .unwrap_or_else(|error| panic!("reap-free wait for the true stub: {error}"));
+        });
         let threads = hub_threads(pid);
         assert!(
             threads.contains("no live threads"),
             "an exited unreaped child names its zombie state: {threads}"
         );
-        let stderr = Arc::new(Mutex::new(String::new()));
-        let message = give_up_text(&setup, process, &stderr, "waited (test)");
+        let capture = CapturedStderr::drained_text(String::new());
+        let message = give_up_text(&setup, process, &capture, "waited (test)");
         assert!(
             message.contains("exited"),
             "the panic names the hub's exit: {message}"

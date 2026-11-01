@@ -31,7 +31,8 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::pty::Run;
 use support::{
-    HubProc, SessionGuard, connect_hub, is_status, run_to_exit, session_dir, write_json,
+    CapturedStderr, HubProc, SessionGuard, connect_hub, is_status, run_to_exit, session_dir,
+    write_json,
 };
 
 /// The pty size the journeys draw on.
@@ -801,12 +802,12 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
     let wait = support::Deadline::after(Duration::ZERO);
     let entry = "hello wait entered with helper root left 0ns (test)";
     let slices = [Duration::from_secs(10)];
-    let stderr = Arc::new(Mutex::new(String::new()));
+    let capture = CapturedStderr::drained_text(String::new());
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hub_start::hello_slice(
             &setup,
             spawn_live(),
-            &stderr,
+            &capture,
             wait,
             Duration::from_secs(2),
             entry,
@@ -851,7 +852,7 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
         hub_start::hello_slice(
             &setup,
             spawn_live(),
-            &stderr,
+            &capture,
             wait,
             Duration::from_secs(2),
             entry,
