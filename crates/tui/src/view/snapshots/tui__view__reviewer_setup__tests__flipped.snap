@@ -1,9 +1,7 @@
 ---
 source: crates/tui/src/view/reviewer_setup_tests.rs
-assertion_line: 512
 expression: "checked(flipped(), \"flipped\", 1)"
 ---
-
 
 
 
@@ -22,10 +20,10 @@ expression: "checked(flipped(), \"flipped\", 1)"
             5 reviewer allows for acme-cli query --json
             › [global]       shell.read_only."acme-cli query".flags =
                              ["--json"]
-⋮           was per-project · Tab flipped it                                              ⋮
+            was per-project · Tab flipped it
 ⋮           kubectl -n x get pods · 5 · words after the command: an entry would           ⋮
 ⋮           cover other subcommands                                                       ⋮
-            acme-cli --json · 3 · one word: an entry names a subcommand
+⋮           acme-cli --json · 3 · one word: an entry names a subcommand                   ⋮
 
             Tab flip layer · Enter confirm · e edit · x strike · Esc back
 
@@ -39,7 +37,8 @@ expression: "checked(flipped(), \"flipped\", 1)"
 
 
 
-
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █
+ ▌───────────────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                                 ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

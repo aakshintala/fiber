@@ -2,10 +2,8 @@
 source: crates/tui/src/view/steering_queue_tests.rs
 expression: "screen(&queued(60, 12), 60, 12)"
 ---
-                                                      ▄▄▄▄▄
-                                                       hi ▐┃
-                                                      ▀▀▀▀▀┃
-                                                 you 00:00 ┃
+                                                      ▀▀▀▀▀
+                                                 you 00:00
                                                            ┃
   • Steering, joins the turn at the next step
   ↳ use the parser  ✕
@@ -13,4 +11,6 @@ expression: "screen(&queued(60, 12), 60, 12)"
   ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to dr
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────────────────────────
+▌auto                                    ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

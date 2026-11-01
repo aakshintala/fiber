@@ -21,9 +21,9 @@ expression: "screen(&app, 80, 24)"
    ↑               recall_prompt        Recall an earlier prompt from the
                                         project of the session on screen
    ←               focus_rail           Move focus from an empty input box into
-                                        the rail
-   Ctrl+R          search_prompts       Search those prompts
  ↑↓ move · Enter rebind · r reset · Delete unbind · Esc close
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

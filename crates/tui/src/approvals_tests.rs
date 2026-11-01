@@ -1350,7 +1350,7 @@ mod through_the_app {
         let now = fakes::clock::FakeClock::new().now();
         let mut app = attached();
         app.set_size(60, 20);
-        assert_eq!(app.conversation_height(), 17);
+        assert_eq!(app.conversation_height(), 15);
         feed(&mut app, standing_ask(S_A, "a_1", "r_1", "one"));
         // Header, facts, two choices and the hint with the panel's edges
         // replace the input line.
@@ -1365,7 +1365,7 @@ mod through_the_app {
         assert_eq!(app.conversation_height(), 8);
         press(&mut app, Key::Esc, 1, now);
         assert!(app.panel().is_none());
-        assert_eq!(app.conversation_height(), 16);
+        assert_eq!(app.conversation_height(), 14);
     }
 
     #[test]

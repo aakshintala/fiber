@@ -496,27 +496,27 @@ fn row_click_selects_and_pages_reach_the_wrapped_tail() {
 fn resize_keeps_the_tail_and_clamps_a_stale_selection() {
     let mut app = attached_app(80, 24, VERSION, SOURCE);
     open_notes(&mut app);
-    app.set_size(50, 12);
+    app.set_size(50, 14);
     let narrow_rows = app.session_view_screen(0).unwrap().rows.len();
     for _ in 0..narrow_rows + 2 {
         app.on_key(Key::PageDown, now());
     }
     let tailed = app.session_view_screen(0).unwrap();
     assert_eq!(tailed.list.selected(), narrow_rows.saturating_sub(1));
-    assert!(screen(&app, 50, 12).0.contains("india-juliet-kilo-lima"));
+    assert!(screen(&app, 50, 14).0.contains("india-juliet-kilo-lima"));
     // Widening shortens the wrapped list under the stored selection:
     // the redrawn frame clamps it, so the tail stays on screen with
     // no further key.
-    app.set_size(80, 24);
+    app.set_size(80, 26);
     let widened = app.session_view_screen(0).unwrap();
     assert_eq!(
         widened.list.selected(),
         widened.rows.len().saturating_sub(1)
     );
-    assert!(screen(&app, 80, 24).0.contains("india-juliet-kilo-lima"));
+    assert!(screen(&app, 80, 26).0.contains("india-juliet-kilo-lima"));
     // Narrowing again leaves a valid selection and a nonblank view.
-    app.set_size(50, 12);
+    app.set_size(50, 14);
     let narrowed = app.session_view_screen(0).unwrap();
     assert!(narrowed.list.selected() < narrowed.rows.len());
-    assert!(screen(&app, 50, 12).0.contains("Release notes"));
+    assert!(screen(&app, 50, 14).0.contains("Release notes"));
 }

@@ -1,29 +1,28 @@
 ---
 source: crates/tui/src/view/history_tests.rs
-assertion_line: 138
 expression: "screen(&app, 80, 24)"
 ---
 
 
+                              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄d sessions? ▐
+                                                                  ▀▀▀▀▀▀▀▀▀▀▀▀▀
+                Prompt history                                 ✕     you 00:00
 
-
-              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                                  d sessions? ▐
-                Prompt history                                 ✕  ▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                                                     you 00:00
                 › back█
-                3 matches · newest first
-                  roll back the handoff note                      ▄▄▄▄▄▄▄▄▄▄▄▄▄
-                › back up the state file before the migration     e migration ▐
-                  how do I backfill embeddings for old sessions?  ▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                                                     you 00:00
-                Enter recalls · Esc closes
+                3 matches · newest first                          ▄▄▄▄▄▄▄▄▄▄▄▄▄
+                  roll back the handoff note                      e migration ▐
+                › back up the state file before the migration     ▀▀▀▀▀▀▀▀▀▀▀▀▀
+                  how do I backfill embeddings for old sessions?     you 00:00
 
-              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                   roll back the handoff note ▐
+                Enter recalls · Esc closes
+                                                                  ▄▄▄▄▄▄▄▄▄▄▄▄▄
+              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀andoff note ▐
                                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                      you 00:00
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────────────────────────────────────────────
+▌auto                                                        ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
