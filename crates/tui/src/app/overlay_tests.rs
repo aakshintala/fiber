@@ -2962,6 +2962,84 @@ fn the_preview_is_exact_for_the_last_turns() {
     );
 }
 
+/// The preview walks back by whole turns until its rows fill the screen.
+/// `docs/tui.md:2714-2717` says the preview starts at a turn's start and
+/// fills up from its last row.
+#[test]
+fn the_preview_backfills_whole_turns_until_the_screen_fills() {
+    let mut app = reading();
+    app.set_size(80, 40);
+    let height = app.conversation_height();
+    let total_at_width = |lines: &[Line]| {
+        let mut pages = app.attached_screen().pages().fresh();
+        for line in lines {
+            if let Line::Session(envelope) = line {
+                pages.apply(envelope);
+            }
+        }
+        pages.index().total()
+    };
+    let (all, expected_total, full_total) = (1..=128)
+        .find_map(|middle_texts| {
+            let mut seq = 0u64;
+            let older = roomy_turn(&mut seq, "a_old", "older reply", 1);
+            let middle = roomy_turn(&mut seq, "a_middle", "middle reply", middle_texts);
+            let newest = roomy_turn(&mut seq, "a_newest", "newest reply", 1);
+            let newest_total = total_at_width(&newest);
+            let mut pair = middle.clone();
+            pair.extend(newest.clone());
+            let mut all = older;
+            all.extend(middle);
+            all.extend(newest);
+            let pair_total = total_at_width(&pair);
+            let all_total = total_at_width(&all);
+            (newest_total < height && pair_total >= height && pair_total < all_total)
+                .then_some((all, pair_total, all_total))
+        })
+        .unwrap_or_else(|| panic!("turns that straddle the conversation height"));
+
+    let full_lines = all;
+    let all = envelopes(&full_lines);
+    let first = doors(&all, &json!({}));
+    assert_eq!(first.len(), all.len(), "the first answer holds the history");
+    assert!(app.tail_next().is_some(), "the tail read starts");
+    app.tail_lines(first);
+    let preview = app
+        .preview
+        .as_ref()
+        .unwrap_or_else(|| panic!("the first answer folds a preview"));
+    assert_eq!(
+        preview.pages.index().total(),
+        expected_total,
+        "the preview includes the newest whole turns, not the older turn"
+    );
+    assert!(expected_total < full_total);
+
+    let preview_rows: Vec<String> = preview
+        .pages
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    let mut whole = app.attached_screen().pages().fresh();
+    for line in &full_lines {
+        if let Line::Session(envelope) = line {
+            whole.apply(envelope);
+        }
+    }
+    let whole_rows: Vec<String> = whole
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    assert!(preview_rows.len() >= height && whole_rows.len() >= height);
+    assert_eq!(
+        &preview_rows[preview_rows.len() - height..],
+        &whole_rows[whole_rows.len() - height..],
+        "the bounded preview draws the same last screenful as the whole history"
+    );
+}
+
 /// The landing adds the lines above a filled preview: the open
 /// holds the filled tail, the pass replays the whole log through to
 /// its end, and the landed screen keeps the preview's rows with the
