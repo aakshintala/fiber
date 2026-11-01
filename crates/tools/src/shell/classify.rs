@@ -1187,7 +1187,7 @@ pub(super) fn one_grep(command: &str) -> bool {
 
 /// Whether `command` holds a built-in destructive form anywhere in its
 /// text (`docs/tools.md`, "What a tool declares"): `rm -r`, `rm -rf`,
-/// `git reset --hard`, `git clean`, `git checkout --` or `git restore`.
+/// `git reset --hard`, `git clean`, `git checkout --`, `git restore` or `git push`.
 /// The scan runs before parsing and never claims a complete parse: a word
 /// sequence in any `;`-, `&`-, `|`-, group- or newline-separated component
 /// matches, whether the parser accepts the command or not. Quotes do not
@@ -1205,6 +1205,31 @@ pub(super) fn review_when_confined(command: &str) -> bool {
             || git_clean(&words)
             || git_checkout_dashdash(&words)
             || git_restore(&words)
+            || git_push(&words)
+    })
+}
+
+/// Git global options precede the subcommand. The scan remains textual:
+/// wrappers, quoting and an echoed form do not hide a push from review.
+fn git_push(words: &[&str]) -> bool {
+    words.iter().enumerate().any(|(at, word)| {
+        if command_name(word) != "git" {
+            return false;
+        }
+        let mut rest = words
+            .iter()
+            .skip(at + 1)
+            .map(|word| word.trim_matches(['\'', '"']));
+        while let Some(word) = rest.next() {
+            match word {
+                "-C" | "-c" => {
+                    let _value = rest.next();
+                }
+                option if option.starts_with('-') => {}
+                subcommand => return subcommand == "push",
+            }
+        }
+        false
     })
 }
 

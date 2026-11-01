@@ -1114,7 +1114,8 @@ fn macos_prepare_failure_names_the_unresolvable_root() {
     let mut fixture = MacosFixture::new();
     let missing = fixture.dir.path().join("missing-write");
     fixture.settings.allow_write.push(missing.clone());
-    let error = prepare(&fixture.settings, &fixture.workspace).expect_err("no grant is missing");
+    let error =
+        prepare(&fixture.settings, &fixture.workspace, None).expect_err("no grant is missing");
     assert!(
         error.to_string().contains(&*missing.to_string_lossy()),
         "the setup error names the root: {error}"
@@ -1131,7 +1132,7 @@ fn macos_profile_grants_roots_denies_and_names_no_paths() {
     let secret = fixture.dir.path().join("secret");
     std::fs::write(&secret, "secret").expect("write secret");
     fixture.settings.deny_read.push(secret.clone());
-    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("a profile builds");
     let profile = &prepared.profile;
     for rule in [
         "(deny default)",
@@ -1201,7 +1202,7 @@ fn macos_profile_keeps_hostile_paths_literal() {
     std::fs::create_dir_all(&newline).expect("create newline dir");
     fixture.settings.allow_write.push(hostile.clone());
     fixture.settings.deny_read.push(newline.clone());
-    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("a profile builds");
     for dynamic in ["we'ird (dir)", "line\nbreak"] {
         assert!(
             !prepared.profile.contains(dynamic),
@@ -1232,7 +1233,7 @@ fn macos_profile_denies_a_link_and_its_target() {
     let link = fixture.dir.path().join("link");
     symlink(&target, &link).expect("link to the target");
     fixture.settings.deny_read.push(link.clone());
-    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("a profile builds");
     for expected in [&link, &target] {
         assert!(
             prepared
@@ -1253,7 +1254,7 @@ fn macos_profile_protects_a_checkout_gitdir() {
     let fixture = MacosFixture::new();
     let gitdir = fixture.workspace.join(".git");
     std::fs::create_dir_all(&gitdir).expect("create git dir");
-    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("a profile builds");
     let resolved = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
     assert_eq!(
         MacosFixture::binding(&prepared, "FIBER_GITDIR"),
@@ -1274,6 +1275,11 @@ fn macos_profile_follows_a_worktree_pointer() {
     let gitdir = fixture.dir.path().join("real-gitdir");
     std::fs::create_dir_all(&gitdir).expect("create gitdir");
     std::fs::write(gitdir.join("commondir"), "../common").expect("write commondir");
+    std::fs::write(
+        gitdir.join("gitdir"),
+        fixture.workspace.join(".git").to_str().unwrap(),
+    )
+    .expect("write the belonging back-pointer");
     let common = fixture.dir.path().join("common");
     for name in ["objects", "refs", "logs", "hooks"] {
         std::fs::create_dir_all(common.join(name)).expect("create common dir");
@@ -1283,7 +1289,7 @@ fn macos_profile_follows_a_worktree_pointer() {
         format!("gitdir: {}\n", gitdir.display()),
     )
     .expect("write the worktree pointer");
-    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("a profile builds");
     let gitdir_resolved = std::fs::canonicalize(&gitdir).expect("resolve gitdir");
     let common_resolved = std::fs::canonicalize(&common).expect("resolve common");
     assert_eq!(
@@ -1296,6 +1302,7 @@ fn macos_profile_follows_a_worktree_pointer() {
     );
     for rule in [
         "(allow file-write* (subpath (param \"FIBER_GITDIR\")))",
+        "(deny file-write* (literal (string-append (param \"FIBER_GITDIR\") \"/commondir\")))",
         "(deny file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/hooks\")))",
         "(deny file-write* (literal (string-append (param \"FIBER_COMMONDIR\") \"/config\")))",
         "(deny file-write* (literal (string-append (param \"FIBER_WS\") \"/.git\")))",
@@ -1315,7 +1322,7 @@ fn macos_profile_follows_a_worktree_pointer() {
 fn macos_absolute_git_pointer_at_root_grants_neither() {
     let fixture = MacosFixture::new();
     std::fs::write(fixture.workspace.join(".git"), "gitdir: /\n").expect("write hostile pointer");
-    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("a profile builds");
     let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
     let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
     assert_eq!(
@@ -1349,7 +1356,7 @@ fn macos_git_pointer_at_a_non_git_dir_grants_neither() {
         format!("gitdir: {}\n", plain.display()),
     )
     .expect("write hostile pointer");
-    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("a profile builds");
     let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
     let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
     assert_eq!(
@@ -1385,7 +1392,7 @@ fn macos_git_pointer_with_root_commondir_grants_neither() {
         format!("gitdir: {}\n", gitdir.display()),
     )
     .expect("write the worktree pointer");
-    let prepared = prepare(&fixture.settings, &fixture.workspace).expect("a profile builds");
+    let prepared = prepare(&fixture.settings, &fixture.workspace, None).expect("a profile builds");
     let workspace = std::fs::canonicalize(&fixture.workspace).expect("resolve workspace");
     let fallback = workspace.join(".git").to_str().expect("utf8").to_owned();
     assert_eq!(
@@ -1614,6 +1621,172 @@ fn macos_a_line_past_the_stash_budget_is_a_miss() {
 use super::protected::{ProtectedPaths, Report, baseline};
 
 /// A Fiber home for the protection state, beside the fixture.
+#[cfg(target_os = "linux")]
+#[test]
+fn recorded_git_grants_survive_a_live_commondir_retarget_and_restore_it() {
+    let repo = fakes::git::repo("fiber-recorded-grants");
+    let second = fakes::git::repo("fiber-foreign-grants");
+    let workspace = linked(repo.path(), "linked");
+    let home = protected_home(&repo);
+    let handle = open_handle(&home, &workspace);
+    let begin = handle
+        .begin(&workspace)
+        .expect("begin records the assigned repository");
+    let path = baseline_file(&home);
+    let entries = baseline::read_baseline(&path).unwrap().entries;
+    let pointer = std::fs::read_to_string(workspace.join(".git")).unwrap();
+    let gitdir = PathBuf::from(pointer.trim().strip_prefix("gitdir: ").unwrap());
+    let commondir = gitdir.join("commondir");
+    let original = std::fs::read(&commondir).unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| Path::new(&entry.path) == commondir)
+    );
+    let common = repo.path().join(".git").canonicalize().unwrap();
+    for name in ["config", "hooks"] {
+        assert!(
+            entries
+                .iter()
+                .any(|entry| Path::new(&entry.path) == common.join(name))
+        );
+    }
+    for name in ["objects", "refs", "logs"] {
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| Path::new(&entry.path) == common.join(name))
+        );
+    }
+    std::fs::write(&commondir, second.path().join(".git").to_str().unwrap()).unwrap();
+    assert_eq!(
+        super::recorded_git_roots(&workspace, &entries),
+        vec![
+            gitdir,
+            common.join("objects"),
+            common.join("refs"),
+            common.join("logs")
+        ]
+    );
+    let sandbox_home = fixture();
+    super::prepare(
+        &workspace_settings(sandbox_home.path()),
+        &workspace,
+        Some(&path),
+    )
+    .expect("prepare uses the original baseline while live identity differs");
+    let mut settings = workspace_settings(sandbox_home.path());
+    settings.deny_read = vec![common.join("refs/private")];
+    assert!(
+        super::prepare(&settings, &workspace, Some(&path)).is_err(),
+        "Git write grants cannot bypass a read deny"
+    );
+    let report = begin.guard.finish();
+    assert_eq!(std::fs::read(&commondir).unwrap(), original);
+    assert_eq!(
+        report.restored,
+        vec![baseline::display(repo.path(), &commondir)]
+    );
+    assert!(report.failed.is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn retarget_after_open_refuses_begin_and_foreign_workspace_refuses_approved_write() {
+    let repo = fakes::git::repo("fiber-fixed-identity");
+    let second = fakes::git::repo("fiber-other-identity");
+    let workspace = linked(repo.path(), "linked");
+    let home = protected_home(&repo);
+    let handle = open_handle(&home, &workspace);
+    let pointer = std::fs::read_to_string(workspace.join(".git")).unwrap();
+    let commondir =
+        PathBuf::from(pointer.trim().strip_prefix("gitdir: ").unwrap()).join("commondir");
+    let original = std::fs::read(&commondir).unwrap();
+    std::fs::write(&commondir, second.path().join(".git").to_str().unwrap()).unwrap();
+    let error = handle
+        .begin(&workspace)
+        .expect_err("a live retarget cannot select another baseline");
+    assert!(
+        error
+            .message
+            .contains("belongs to another project identity"),
+        "{error:?}"
+    );
+    assert!(
+        !home.join("projects").exists(),
+        "refusal precedes baseline creation"
+    );
+    let error = handle
+        .note_approved_write(second.path(), &second.path().join(".git/config"))
+        .expect_err("another workspace cannot advance this baseline");
+    assert!(
+        error.contains("belongs to another project identity"),
+        "{error}"
+    );
+    std::fs::write(&commondir, original).unwrap();
+    assert!(
+        handle
+            .begin(&workspace)
+            .expect("the original identity still works")
+            .guard
+            .finish()
+            .is_empty()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recorded_git_grants_require_the_workspaces_back_pointer() {
+    let repo = fakes::git::repo("fiber-belonging-grants");
+    let workspace = linked(repo.path(), "linked");
+    let entries = baseline::snapshot(&workspace).unwrap();
+    assert_eq!(super::recorded_git_roots(&workspace, &entries).len(), 4);
+    let unrelated = repo.path().join("unrelated");
+    std::fs::create_dir(&unrelated).unwrap();
+    std::fs::copy(workspace.join(".git"), unrelated.join(".git")).unwrap();
+    let mut foreign = entries.clone();
+    foreign.push(baseline::snapshot_entry(&unrelated.join(".git"), "unrelated/.git").unwrap());
+    assert!(super::recorded_git_roots(&unrelated, &foreign).is_empty());
+    let pointer = std::fs::read_to_string(workspace.join(".git")).unwrap();
+    let gitdir = PathBuf::from(pointer.trim().strip_prefix("gitdir: ").unwrap());
+    std::fs::write(
+        gitdir.join("gitdir"),
+        unrelated.join(".git").to_str().unwrap(),
+    )
+    .unwrap();
+    assert!(super::recorded_git_roots(&workspace, &entries).is_empty());
+    std::fs::remove_file(gitdir.join("gitdir")).unwrap();
+    assert!(super::recorded_git_roots(&workspace, &entries).is_empty());
+    assert!(super::recorded_git_roots(repo.path(), &[]).is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recorded_git_missing_baseline_fails_closed_and_hostile_pointers_grant_nothing() {
+    let root = fixture();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let settings = workspace_settings(&root.path().join("fiber-home"));
+    let missing = root.path().join("missing-baseline.json");
+    assert!(super::prepare(&settings, &workspace, Some(&missing)).is_err());
+    assert!(super::prepare(&settings, &workspace, None).is_ok());
+    assert!(super::recorded_git_roots(&workspace, &[]).is_empty());
+    for pointer in [
+        "gitdir: /",
+        "gitdir: ",
+        "not a git pointer",
+        "gitdir:",
+        "gitdir: /nonexistent",
+    ] {
+        std::fs::write(workspace.join(".git"), pointer).unwrap();
+        let entry = baseline::snapshot_entry(&workspace.join(".git"), ".git").unwrap();
+        assert!(
+            super::recorded_git_roots(&workspace, &[entry]).is_empty(),
+            "{pointer}"
+        );
+    }
+}
+
 fn protected_home(dir: &fakes::TempDir) -> std::path::PathBuf {
     dir.path().join("fiber-home")
 }

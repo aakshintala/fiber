@@ -469,7 +469,11 @@ fn unresolvable(configured: &Path) -> Unavailable {
 /// Prepares the Landlock grants and the seccomp program. A setup error
 /// aborts spawn; the call fails and never runs unconfined.
 #[cfg(target_os = "linux")]
-pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupError> {
+pub fn prepare(
+    settings: &Settings,
+    workspace: &Path,
+    baseline: Option<&Path>,
+) -> Result<Prepared, SetupError> {
     use landlock::{Access as _, Compatible as _, RulesetAttr as _, RulesetCreatedAttr as _};
     check_available(settings, workspace)?;
     let selected = landlock::ABI::V2;
@@ -484,6 +488,26 @@ pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupE
             .allow_write
             .iter()
             .map(|root| ("an allow_write path", root.as_path())),
+    );
+    let git_roots = match baseline {
+        Some(path) => {
+            let recorded =
+                protected::baseline::read_baseline(path).map_err(|source| SetupError::Open {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            recorded_git_roots(workspace, &recorded.entries)
+        }
+        None => Vec::new(),
+    };
+    check_roots(
+        settings,
+        &git_roots.iter().map(PathBuf::as_path).collect::<Vec<_>>(),
+    )?;
+    roots.extend(
+        git_roots
+            .iter()
+            .map(|root| ("worktree Git data", root.as_path())),
     );
     for (label, root) in roots {
         let resolved = std::fs::canonicalize(root).map_err(|source| SetupError::Resolve {
@@ -558,6 +582,41 @@ pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupE
     })
 }
 
+#[cfg(target_os = "linux")]
+fn recorded_git_roots(workspace: &Path, entries: &[protected::baseline::Entry]) -> Vec<PathBuf> {
+    let text = |path: &Path| {
+        entries.iter().find_map(|entry| {
+            if Path::new(&entry.path) != path {
+                return None;
+            }
+            match &entry.kind {
+                protected::baseline::EntryKind::File { bytes, .. } => {
+                    std::str::from_utf8(bytes).ok()
+                }
+                protected::baseline::EntryKind::Dir { .. }
+                | protected::baseline::EntryKind::Symlink { .. }
+                | protected::baseline::EntryKind::Missing => None,
+            }
+        })
+    };
+    let Some(pointer) = text(&workspace.join(".git")) else {
+        return Vec::new();
+    };
+    let Some(gitdir) = pointer_gitdir(workspace, pointer) else {
+        return Vec::new();
+    };
+    let common = common_dir(&gitdir, text(&gitdir.join("commondir")).unwrap_or_default());
+    if !belongs_to_workspace(workspace, &gitdir) || !is_git_layout(&common) {
+        return Vec::new();
+    }
+    vec![
+        gitdir,
+        common.join("objects"),
+        common.join("refs"),
+        common.join("logs"),
+    ]
+}
+
 /// Installs a prepared policy in the child between fork and exec. Takes the
 /// ruleset out of the borrowed policy and consumes it through
 /// `restrict_self`, whose drop only closes a file descriptor: a syscall,
@@ -613,7 +672,11 @@ pub struct Prepared {
 #[cfg(target_os = "macos")]
 // mutants run on Linux, where it is not compiled.
 #[cfg_attr(false, mutants::skip)]
-pub fn prepare(settings: &Settings, workspace: &Path) -> Result<Prepared, SetupError> {
+pub fn prepare(
+    settings: &Settings,
+    workspace: &Path,
+    _baseline: Option<&Path>,
+) -> Result<Prepared, SetupError> {
     check_available(settings, workspace)?;
     build_profile(settings, workspace)
 }
@@ -700,6 +763,7 @@ fn build_profile(settings: &Settings, workspace: &Path) -> Result<Prepared, Setu
          (deny file-write* (subpath (string-append (param \"FIBER_WS\") \"/.fiber\")))\n\
          (deny file-write* (subpath (string-append (param \"FIBER_COMMONDIR\") \"/hooks\")))\n\
          (deny file-write* (literal (string-append (param \"FIBER_COMMONDIR\") \"/config\")))\n\
+         (deny file-write* (literal (string-append (param \"FIBER_GITDIR\") \"/commondir\")))\n\
          ; Sockets reach nothing: deny-default refuses what no rule grants,\n\
          ; and the explicit denies below name the refusal. Unix sockets have\n\
          ; no Seatbelt operation of their own; the default deny covers their\n\
@@ -750,9 +814,7 @@ struct GitLayout {
 /// A hostile `.git` pointer names an absolute path the checkout author
 /// chose, so the pointer target earns a write grant only when it is a
 /// recognized layout; anything else grants neither directory.
-#[cfg(target_os = "macos")]
-// mutants run on Linux, where it is not compiled.
-#[cfg_attr(false, mutants::skip)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn is_git_layout(path: &Path) -> bool {
     path.is_dir()
         && (path.join("HEAD").exists()
@@ -787,33 +849,15 @@ fn discover_git(workspace: &Path) -> GitLayout {
     if !meta.is_file() {
         return layout;
     }
-    let pointer = read_capped(&dot_git);
-    let Some(rest) = pointer.strip_prefix("gitdir: ") else {
+    let pointer = read_capped(&dot_git).unwrap_or_default();
+    let Some(gitdir) = pointer_gitdir(workspace, &pointer) else {
         return layout;
     };
-    let declared = rest.lines().next().unwrap_or_default().trim();
-    if declared.is_empty() {
-        return layout;
-    }
-    let gitdir = if Path::new(declared).is_absolute() {
-        PathBuf::from(declared)
-    } else {
-        workspace.join(declared)
-    };
-    let gitdir = rooted_path(&gitdir);
-    let common = match read_capped(&gitdir.join("commondir")).lines().next() {
-        Some(line) if !line.trim().is_empty() => {
-            let text = line.trim();
-            if Path::new(text).is_absolute() {
-                PathBuf::from(text)
-            } else {
-                gitdir.join(text)
-            }
-        }
-        _ => gitdir.clone(),
-    };
-    let common = rooted_path(&common);
-    if !is_git_layout(&gitdir) || !is_git_layout(&common) {
+    let common = common_dir(
+        &gitdir,
+        &read_capped(&gitdir.join("commondir")).unwrap_or_default(),
+    );
+    if !belongs_to_workspace(workspace, &gitdir) || !is_git_layout(&common) {
         return layout;
     }
     GitLayout {
@@ -823,25 +867,45 @@ fn discover_git(workspace: &Path) -> GitLayout {
 }
 
 /// Reads at most 4 KiB: the git pointer files prepare reads are one line.
-#[cfg(target_os = "macos")]
-// mutants run on Linux, where it is not compiled.
-#[cfg_attr(false, mutants::skip)]
-fn read_capped(path: &Path) -> String {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_capped(path: &Path) -> std::io::Result<String> {
     use std::io::Read as _;
     let mut text = String::new();
-    if let Ok(file) = std::fs::File::open(path)
-        && file.take(4096).read_to_string(&mut text).is_err()
-    {
-        return String::new();
+    std::fs::File::open(path)?
+        .take(4096)
+        .read_to_string(&mut text)?;
+    Ok(text)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn pointer_gitdir(workspace: &Path, pointer: &str) -> Option<PathBuf> {
+    let declared = pointer.strip_prefix("gitdir: ")?.lines().next()?.trim();
+    if declared.is_empty() {
+        return None;
     }
-    text
+    Some(rooted_path(&workspace.join(declared)))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn common_dir(gitdir: &Path, text: &str) -> PathBuf {
+    let declared = text.lines().next().unwrap_or_default().trim();
+    rooted_path(&gitdir.join(declared))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn belongs_to_workspace(workspace: &Path, gitdir: &Path) -> bool {
+    let Ok(back) = read_capped(&gitdir.join("gitdir")) else {
+        return false;
+    };
+    let back = back.trim();
+    !back.is_empty()
+        && is_git_layout(gitdir)
+        && rooted_path(&gitdir.join(back)) == rooted_path(&workspace.join(".git"))
 }
 
 /// The canonical path when it resolves, else the lexical absolute: deny
 /// rules still name the configured spelling when the target is missing.
-#[cfg(target_os = "macos")]
-// mutants run on Linux, where it is not compiled.
-#[cfg_attr(false, mutants::skip)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn rooted_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| normalize_absolute(path))
 }

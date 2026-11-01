@@ -8,6 +8,47 @@ use super::super::read_only::{COMMANDS, Flag};
 use super::classify;
 
 #[test]
+fn push_stays_reviewed_with_wrappers_options_and_quoted_text() {
+    for command in [
+        "git push",
+        "git push origin main",
+        "sudo /usr/bin/git push",
+        "echo git push",
+        "echo ok; git push",
+        "git push | cat",
+        "'git' 'push'",
+        "echo \"git push\"",
+        "git -C /repo push origin",
+        "git -c push.default=current push",
+        "git --no-pager push",
+        "git --git-dir=/repo/.git push",
+        "git -C /repo -c a=b --no-pager push",
+        "git push 'unterminated",
+        "git -- push",
+    ] {
+        assert!(super::review_when_confined(command), "{command}");
+    }
+    for command in [
+        "git fetch",
+        "git status",
+        "git pull",
+        "git pushing",
+        "git pus",
+        "git -C push status",
+        "git -c push status",
+        "git --git-dir=push status",
+        "git -C",
+        "git -c",
+        "git --no-pager",
+        "git -C /repo status",
+        "push",
+        "git",
+    ] {
+        assert!(!super::review_when_confined(command), "{command}");
+    }
+}
+
+#[test]
 fn one_grep_accepts_only_one_plain_builtin_command() {
     for command in [
         "grep x a.txt",

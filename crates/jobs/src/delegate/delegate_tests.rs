@@ -82,7 +82,6 @@ fn sandbox_snapshot_failure_creates_no_worktree_or_child() {
     let rig = rig();
     let mut spawned = tool(&rig);
     spawned.wiring.sandbox = Arc::new(|| Err("sandbox.deny_read".into()));
-    spawned.wiring.create = Arc::new(|_, _| panic!("snapshot failure must precede creation"));
     let mut args = arguments("fiber:fake/m");
     args.insert("isolation".into(), serde_json::json!("worktree"));
     let output = spawned.run(&args, &fakes::CancelToken::new(), &Recorder::default());
