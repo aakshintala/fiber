@@ -8,7 +8,7 @@ use contract::provider::{ModelCall, ModelRequest, Provider, ToolDefinition};
 use serde_json::{Map, Value};
 
 use crate::Endpoint;
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 pub use crate::bedrock_converse_decode::decode;
 use crate::bedrock_converse_decode::decode_tracked;
 use crate::bedrock_converse_request::{body, hashes, sends_output_limit, wire_tools};

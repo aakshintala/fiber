@@ -35,7 +35,7 @@ pub struct Queue {
     /// A one-shot pause before the real acquisition, armed by one test:
     /// `None` unless the race test holds it, so the shipped path sends
     /// and waits on nothing extra.
-    #[cfg(any(test, feature = "test-gates"))]
+    #[cfg(any(test, debug_assertions))]
     entry_gate: Mutex<Option<EntryGate>>,
 }
 
@@ -86,7 +86,7 @@ pub struct Duplicate;
 /// the holder fires `entered` and blocks on `release` before attempting
 /// the real lock. The test's release sender drops when the test ends,
 /// which releases a still-blocked holder instead of hanging it.
-#[cfg(any(test, feature = "test-gates"))]
+#[cfg(any(test, debug_assertions))]
 pub struct EntryGate {
     /// Fired once the holder reaches the gate.
     pub entered: std::sync::mpsc::Sender<()>,
@@ -102,13 +102,13 @@ impl Queue {
                 entries: VecDeque::new(),
                 admitted: HashSet::new(),
             }),
-            #[cfg(any(test, feature = "test-gates"))]
+            #[cfg(any(test, debug_assertions))]
             entry_gate: Mutex::new(None),
         }
     }
 
     /// Arms the one-shot acquisition pause the race test holds.
-    #[cfg(any(test, feature = "test-gates"))]
+    #[cfg(any(test, debug_assertions))]
     pub fn hold_entry_for_test(&self, gate: EntryGate) {
         *lock(&self.entry_gate) = Some(gate);
     }
@@ -117,7 +117,7 @@ impl Queue {
     /// gate's own lock is released before blocking, so it takes no lock
     /// into the wait.
     fn acquire(&self) -> MutexGuard<'_, Inner> {
-        #[cfg(any(test, feature = "test-gates"))]
+        #[cfg(any(test, debug_assertions))]
         {
             let gate = lock(&self.entry_gate).take();
             if let Some(gate) = gate {
