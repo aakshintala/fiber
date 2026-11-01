@@ -636,6 +636,53 @@ fn a_symlink_loop_makes_the_sandbox_unavailable() {
     assert_eq!(unavailable.code(), contract::ErrorCode::ToolError);
 }
 
+/// Git opens /dev/null read-write on the commit path, so the Linux profile
+/// grants exactly the device literal with read and write only: a confined
+/// commit succeeds, /dev/null stays usable both ways, and no sibling
+/// device becomes writable (writes are never granted outside the profile's
+/// roots; /dev/null is a sink, so its grant carries no information).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_commit_reaches_only_the_null_device() {
+    let fixture = HomeFixture::new(&[]);
+    let repo = fixture.workspace.join("repo");
+    std::fs::create_dir_all(&repo).expect("create repo");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "{args:?}");
+    };
+    git(&["init", "--quiet"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    std::fs::write(repo.join("file"), "contents").expect("write file");
+    git(&["add", "."]);
+    let committed = fixture.confined(&format!(
+        "cd {} && git commit --quiet -m base",
+        repo.display()
+    ));
+    assert_eq!(
+        committed.status.and_then(|status| status.code()),
+        Some(0),
+        "a confined commit succeeds"
+    );
+    let null = fixture.confined("echo hi > /dev/null && cat /dev/null");
+    assert_eq!(
+        null.status.and_then(|status| status.code()),
+        Some(0),
+        "/dev/null stays readable and writable"
+    );
+    let zero = fixture.confined("echo hi > /dev/zero");
+    assert_ne!(
+        zero.status.and_then(|status| status.code()),
+        Some(0),
+        "no sibling device becomes writable"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_permission_denied_during_deny_resolution_makes_the_sandbox_unavailable() {

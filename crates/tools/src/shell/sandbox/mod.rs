@@ -519,6 +519,13 @@ pub fn prepare(
         let access = landlock::AccessFs::from_all(selected);
         rules.push(landlock::PathBeneath::new(rule_fd, access));
     }
+    // Git opens /dev/null read-write on the commit path. The device is a
+    // sink, so grant exactly the device literal with read and write only:
+    // no subpath, no /dev prefix, no other device. macOS already ships the
+    // same literal grant in its Seatbelt profile.
+    let null_fd = open_nofollow(Path::new("/dev/null"))?;
+    let null_access = landlock::AccessFs::ReadFile | landlock::AccessFs::WriteFile;
+    rules.push(landlock::PathBeneath::new(null_fd, null_access));
     // Deny every configured path and every resolved target, skipping no
     // entry that leads to any of them.
     let resolved_denies = resolve_denies(settings)?;
