@@ -1072,7 +1072,7 @@ fn panel_card_item_at(grid: &Grid, card: &str, description: &str) -> Option<(u16
 
 #[test]
 fn the_item_views_top_row_closes_them() {
-    let (setup, _hold, command) = running_setup();
+    let (setup, hold, command) = running_setup();
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
@@ -1122,5 +1122,31 @@ fn the_item_views_top_row_closes_them() {
             "the conversation after clicking the item's top row",
             |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
         );
+    }
+    // Tear down in the open: kill the run, then close the release (EOF
+    // lets every blocked `head` read and exit) and re-kill the hold
+    // pattern until no holder is left. Dropping the last writer before a
+    // head opens the FIFO strands it there forever (`docs/testing.md`,
+    // "Waits and timeouts"), and the drop's one-shot watchdog kill only
+    // reaps what has exec'd by then, so a head whose first schedule lands
+    // after teardown would outlive the temp dir. The bounded re-kill
+    // closes that window: if it expires, the temp-dir detector still
+    // reports the straggler.
+    let pattern = hold
+        .path()
+        .to_str()
+        .unwrap_or_else(|| panic!("the hold path is UTF-8: {}", hold.path().display()))
+        .to_owned();
+    drop(run);
+    drop(hold);
+    let deadline = setup.deadline.cleanup_phase();
+    while !deadline.left().is_zero() {
+        if fakes::kill_matching(pattern.as_str()).is_err() {
+            break;
+        }
+        let within = fakes::Deadline::after(std::time::Duration::from_millis(100));
+        if fakes::try_matching_exits(pattern.as_str(), within).is_ok() {
+            break;
+        }
     }
 }
