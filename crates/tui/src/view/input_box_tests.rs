@@ -5,8 +5,10 @@ use std::path::PathBuf;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 
 use super::draw;
+use super::status_left;
 use crate::app::App;
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
@@ -1650,6 +1652,37 @@ fn narrow_slabs_pin_the_fill_boundaries() {
         }
     }
     assert!(saw_cut && saw_exact && saw_zero_room);
+}
+
+/// The tail-cut guard is strict: when the shed exactly fills the
+/// workspace the side is cut at its right end (mode only) instead of
+/// cutting a zero-keep tail (`docs/tui.md`, "The input box").
+#[test]
+fn exact_workspace_fill_skips_the_tail_cut() {
+    // "/w/fiber" is 8 cells, "auto" 4, and the joiner 5: the full
+    // side is 17, so room 10 sheds 7 (the tail cut runs), room 9
+    // sheds exactly 8 (no cut), room 8 sheds 9.
+    let cut = status_left("/w/fiber", 10);
+    let cut_text: String = spans_text(&cut.line);
+    assert!(cut_text.contains('…'), "{cut_text:?}");
+    let plain = status_left("/w/fiber", 8);
+    let plain_text: String = spans_text(&plain.line);
+    assert!(!plain_text.contains("fiber"), "{plain_text:?}");
+    // The edge itself: no ellipsis, the mode draws whole. Under `<=`
+    // the tail cut runs with zero keep and the row starts with `…`.
+    let row = status_left("/w/fiber", 9);
+    let text: String = spans_text(&row.line);
+    assert!(!text.contains('…'), "{text:?}");
+    assert!(text.starts_with("auto"), "{text:?}");
+}
+
+/// The joined spans' text, for unit tests that call the row builders
+/// directly instead of rendering a screen.
+fn spans_text(line: &Line) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 /// A wide slab keeps the working directory: with room past the gap the
