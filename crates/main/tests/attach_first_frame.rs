@@ -107,7 +107,20 @@ fn steady_status_row(row: &str, workspace: &str) -> String {
     if mode.is_empty() || ctx.is_empty() {
         panic!("a mode and a ctx segment in {row:?}");
     }
-    format!("{mode}{JOINER}{ctx}")
+    // The figures after the bar (a size and share, or dashes) arrive a
+    // frame late, so the key drops them the way the workspace and model
+    // are dropped above. The bar stays exact, and the doc-fixed slot
+    // width (17 cells in rule, known or not) stays in their place, so a
+    // reflow fails instead of passing.
+    let mut head = ctx.split_whitespace();
+    let head = format!(
+        "{} {}",
+        head.next()
+            .unwrap_or_else(|| panic!("a ctx bar in {row:?}")),
+        head.next()
+            .unwrap_or_else(|| panic!("a ctx bar in {row:?}")),
+    );
+    format!("{mode}{JOINER}{head} 17")
 }
 /// The scripted reply to the live prompt.
 const REPLY: &str = "the scripted reply";
@@ -346,7 +359,8 @@ fn the_first_frame_shows_the_last_rows_and_no_frame_shows_others_before_the_bar(
             .collect();
         // The status row sits second to last, above the box's bottom
         // edge: factor its two data-dependent segments out, keeping the
-        // mode and ctx segments exact. Anything else there fails here.
+        // mode and the ctx bar and width exact. Anything else there fails
+        // here.
         let at = tail
             .len()
             .checked_sub(2)
