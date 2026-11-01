@@ -887,6 +887,76 @@ fn start_quota_server() -> (ProviderServer, std::sync::mpsc::Receiver<()>) {
     (server, quota_rx)
 }
 
+/// Person rows on `contents`: `you HH:MM` under the prompt bubble
+/// (`docs/tui.md`, "Turns"). The rail and panel grips draw `⋮` on three
+/// mid-height rows (`docs/tui.md`, "Layout"), and a prompt row there
+/// still counts.
+fn you_rows(contents: &str) -> usize {
+    contents
+        .lines()
+        .filter(|line| line.trim_start_matches([' ', '⋮']).starts_with("you "))
+        .count()
+}
+
+/// Wheel steps a scroll toward an off-screen row may take. One step
+/// moves three rows (`docs/tui.md`, "Turns"), and the bound covers the
+/// quota journey's 48-row screen.
+const SCROLL_BOUND: usize = 16;
+
+/// A cell in the conversation column of the quota journey's 160 by 48
+/// screen. The rail is 24 columns and the panel 34, so column 76 is the
+/// conversation's middle; row 16 sits above the input box. SGR
+/// coordinates are 1-based.
+const CONVERSATION_WHEEL: (u16, u16) = (76, 16);
+
+/// Whether a stable conversation row moved. `down` is the on-screen
+/// direction, which is where a wheel-up carries a row.
+fn anchor_moved(prev: &[String], next: &[String], down: bool) -> bool {
+    for needle in ["Hello.", "used 90%", "you "] {
+        let before = prev.iter().position(|row| row.contains(needle));
+        let after = next.iter().position(|row| row.contains(needle));
+        if let (Some(before), Some(after)) = (before, after)
+            && after != before
+            && (after > before) == down
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Scrolls the conversation up until `pred` holds, at most `bound` wheel
+/// steps, then waits on `pred`. The wait's deadline names `what` and
+/// shows the last grid (`docs/testing/screens.md`, "Screens"). The count
+/// is how many steps moved the rows, so the caller can wheel back to the
+/// followed bottom.
+fn scroll_up_then_wait(
+    run: &mut Run,
+    mut grid: Grid,
+    bound: usize,
+    what: &str,
+    pred: impl Fn(&Grid) -> bool,
+) -> (Grid, usize) {
+    let mut steps = 0;
+    for _ in 0..bound {
+        if pred(&grid) {
+            break;
+        }
+        let prev = grid.rows.clone();
+        run.write(&wheel_up(CONVERSATION_WHEEL));
+        grid = run.wait_screen("one wheel step toward the waited rows", |next| {
+            pred(next) || anchor_moved(&prev, &next.rows, true)
+        });
+        if anchor_moved(&prev, &grid.rows, true) {
+            steps += 1;
+        }
+        if pred(&grid) {
+            break;
+        }
+    }
+    (run.wait_screen(what, pred), steps)
+}
+
 /// A quota notice in the middle of a conversation, then the next prompt
 /// drawn as the person's: two turns on the fake Lua provider, the quota
 /// fetch landing between them. Evidence for #3581, whose parent drew the
@@ -994,18 +1064,34 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
                 "the quota window: {}",
                 shown.contents
             );
-            // Only the person's prompt floats above its card: one `you`
-            // row per turn (`docs/tui.md`, "Turns").
+            // One `you` row per turn, both on screen (`docs/tui.md`,
+            // "Turns"). Scroll up to the bound when one has left the
+            // top, then wait: the deadline shows the last grid
+            // (`docs/testing/screens.md`, "Screens").
+            let (with_rows, steps) = scroll_up_then_wait(
+                &mut run,
+                shown,
+                SCROLL_BOUND,
+                "the two you-rows are visible",
+                |grid| you_rows(&grid.contents) == 2,
+            );
             assert_eq!(
-                shown
-                    .contents
-                    .lines()
-                    .filter(|line| line.trim_start().starts_with("you "))
-                    .count(),
+                you_rows(&with_rows.contents),
                 2,
                 "one you row per turn: {}",
-                shown.contents
+                with_rows.contents
             );
+            // A wheel up pauses following. The steps that moved the rows
+            // wheel back down, which follows again at the bottom
+            // (`docs/tui.md`, "Turns"), so the second answer draws.
+            let mut grid = with_rows;
+            for _ in 0..steps {
+                let prev = grid.rows.clone();
+                run.write(&wheel_down(CONVERSATION_WHEEL));
+                grid = run.wait_screen("the conversation following again", |next| {
+                    anchor_moved(&prev, &next.rows, false)
+                });
+            }
             run.turn_finished(from);
             // The second answer drew beside the first: two turns, two
             // answers on the grid.
@@ -1323,6 +1409,11 @@ fn find_grid_row(rows: &[String], needle: &str) -> Option<u16> {
         .and_then(|y| u16::try_from(y).ok())
 }
 
+/// One wheel step up at `coord`: SGR button 64.
+fn wheel_up(coord: (u16, u16)) -> Vec<u8> {
+    format!("\x1b[<64;{};{}M", coord.0, coord.1).into_bytes()
+}
+
 /// One wheel step down at `coord`: SGR button 65.
 fn wheel_down(coord: (u16, u16)) -> Vec<u8> {
     format!("\x1b[<65;{};{}M", coord.0, coord.1).into_bytes()
@@ -1466,14 +1557,19 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 "the header heads the table: {:?}",
                 pre.rows
             );
-            let third = pre.rows[usize::from(first) + 2]
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_owned();
+            // The header is a list row, so a step of three carries off the
+            // first two keys. Take the next row that holds a key and wait
+            // on the row that step moves it to.
+            let (lands, key) = (usize::from(first)..pre.rows.len())
+                .find_map(|row| {
+                    let word = pre.rows[row].split_whitespace().find(|word| *word != "›")?;
+                    let lands = row.checked_sub(3)?;
+                    (lands >= usize::from(first) - 1).then_some((lands, word.to_owned()))
+                })
+                .expect("a settings key");
             run.write(&wheel_down(at));
             let post = run.wait_screen("the wheeled settings", |grid| {
-                grid.rows[usize::from(first) - 1].contains(&third)
+                grid.rows[lands].contains(&key)
             });
             assert!(
                 !post.rows[usize::from(first) - 1].contains("budget.usd"),
@@ -1491,19 +1587,56 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             );
             // The keys screen: one row per binding.
             run.write(b"/keys\r");
+            let mut probe: Option<(u16, usize, String)> = None;
             let pre = run.wait_screen("the open keys", |grid| {
-                shows(grid, "Keys") && shows(grid, "Send a prompt")
+                let Some(first) = find_grid_row(&grid.rows, "Send a prompt") else {
+                    return false;
+                };
+                let Some((at_row, action)) =
+                    (usize::from(first)..grid.rows.len()).find_map(|row| {
+                        grid.rows[row]
+                            .split_whitespace()
+                            .find(|word| word.contains('_'))
+                            .map(|word| (row, word.to_owned()))
+                    })
+                else {
+                    return false;
+                };
+                let stays = at_row >= usize::from(first) + 3;
+                if stays && grid.rows[at_row - 3].contains(&action) {
+                    return false;
+                }
+                if !shows(grid, "Keys") {
+                    return false;
+                }
+                probe = Some((first, at_row, action));
+                true
             });
-            let first = find_grid_row(&pre.rows, "Send a prompt").expect("the first binding row");
-            let third = pre.rows[usize::from(first) + 3]
-                .split_whitespace()
-                .find(|word| word.contains('_'))
-                .unwrap_or_default()
-                .to_owned();
-            run.write(&wheel_down(at));
-            let post = run.wait_screen("the wheeled keys", |grid| {
-                grid.rows[usize::from(first)].contains(&third)
-            });
+            // settled: "the open keys" checked the binding row, the action
+            // word, and, when the step keeps it, that the landing row does
+            // not already hold that word.
+            let (first, at_row, action) = probe.expect("an action name on a binding row");
+            // Rebind::wheel adds 3 to the display-line top, so an action
+            // fewer than three rows below the first leaves the list.
+            let post = if at_row < usize::from(first) + 3 {
+                run.write(&wheel_down(at));
+                run.wait_screen("the wheeled keys", |grid| {
+                    grid.rows.iter().all(|row| !row.contains(&action))
+                })
+            } else {
+                let lands = at_row - 3;
+                // settled: "the open keys" checked this row does not already
+                // hold the action word.
+                assert!(
+                    !pre.rows[lands].contains(&action),
+                    "the wait would pass before the wheel moved: {:?}",
+                    pre.rows
+                );
+                run.write(&wheel_down(at));
+                run.wait_screen("the wheeled keys", |grid| {
+                    grid.rows[lands].contains(&action)
+                })
+            };
             assert!(
                 !post.rows[usize::from(first)].contains("Send a prompt"),
                 "the first binding scrolled out: {:?}",
