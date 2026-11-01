@@ -1284,7 +1284,7 @@ queue. ⌥↑ and ⌥↓ select a row and load it into the input box, Enter send
 The steering card sits under the working line and is drawn as a panel card
 ("The panel"): a `surface` slab edged ▄ and ▀ in `surface`, with two columns
 of padding on the left and one on the right, and a stripe in `attention` down
-its left edge. Its title row is "Steering" bold in `accent`, with "N queued"
+its left edge. Its title row is "Steering" bold in `attention`, with "N queued"
 in `info` and " · joins at the next step" dim, right-aligned. Each message
 follows on its own entry: "↳ " in `attention`, the text in the text colour,
 and a dim "✕" right-aligned. A message too long for the card wraps, its
@@ -2536,12 +2536,12 @@ The roles, in order, with each built-in theme's values:
 |---|---|---|---|
 | `text` | the full text colour: replies, the draft, anything with no role of its own | the terminal's foreground | `#1f2328` |
 | `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, block quote bars, grips, the logo's counters | `text`, dim | `text`, dim |
-| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's title and selection bar, a project header's name, links, the ▣ line and the steering card's title | `#6eaafe` | `#0969da` |
+| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's title and selection bar, a project header's name, links and the ▣ line | `#6eaafe` | `#0969da` |
 | `heading` | markdown headings | `#ff9f43` | `#bc4c00` |
 | `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` | `#0969da` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` | `#bc4c00` |
 | `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown, a failed login's reason | `#ff5d73` | `#cf222e` |
-| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", the steering card's stripe and marks, notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
+| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", the steering card's title, stripe and marks, notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
 | `added` | lines added: an edited file's `+N`, added lines in a diff | `#73c991` | `#1a7f37` |
 | `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` | `#cf222e` |
 | `code_text` | code with no syntax role | the terminal's foreground | `#1f2328` |
