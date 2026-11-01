@@ -54,7 +54,7 @@ impl App {
             } else {
                 0
             };
-            loop {
+            let (fresh, busy, floor) = loop {
                 let mut fresh = self.attached_screen().pages().fresh();
                 fresh.set_image_ids(self.images.id_allocator.clone());
                 let mut busy = None;
@@ -68,8 +68,11 @@ impl App {
                     }
                 }
                 fresh.flush();
+                let floor = lines
+                    .get(start)
+                    .and_then(|line| line.seq.map(|seq| (line.session_id.clone(), seq)));
                 if !own_session || fresh.index().total() >= height || start == 0 {
-                    break (fresh, busy);
+                    break (fresh, busy, floor);
                 }
                 start = lines
                     .get(..start)
@@ -77,8 +80,11 @@ impl App {
                     .iter()
                     .rposition(|line| line.kind == "turn_started")
                     .unwrap_or(0);
-            }
+            };
+            self.installed_floor = floor;
+            (fresh, busy)
         } else {
+            self.installed_floor = None;
             let mut fresh = self.attached_screen().pages().fresh();
             fresh.set_image_ids(self.images.id_allocator.clone());
             (fresh, None)
@@ -175,8 +181,7 @@ impl App {
     /// and shows no history. The screen follows, the overlay shows the
     /// preview, and the screen freezes for the raise. The tail stays
     /// behind as the post-frame count's cursor: older own-segment
-    /// windows and ancestors read through it without refolding the
-    /// preview.
+    /// windows and ancestors read through it after the first frame.
     pub(crate) fn install_tail(&mut self) {
         if self.preview.is_none() {
             self.fold_preview(true);
@@ -193,14 +198,8 @@ impl App {
         };
         *self.attached_screen_mut().pages_mut() = preview.pages;
         self.attached_screen_mut().follow();
-        // The candidate's oldest folded line bounds the count: lines at
-        // or after it already show, so the count folds only older ones.
-        // An empty candidate leaves no floor, so the count keeps its
-        // old behavior.
-        self.installed_floor = tail
-            .turn_lines()
-            .and_then(|lines| lines.first())
-            .and_then(|line| line.seq.map(|seq| (line.session_id.clone(), seq)));
+        // `fold_preview` kept the oldest line actually folded: older lines
+        // remain for the count phase, while the preview is not folded twice.
         self.count = Some(tail);
         self.overlay = Overlay::Shown {
             session,
@@ -220,8 +219,8 @@ impl App {
     }
 
     /// The args of the post-frame count's next read: none once the walk
-    /// reached the chain root or ended, or when no count runs. Never
-    /// folds: the count folds once at its end, above the preview.
+    /// reached the chain root or ended, or when no count runs. It only
+    /// holds earlier windows; the final fold happens after the read ends.
     pub(crate) fn tail_count_next(&self) -> Option<Value> {
         let tail = self.count.as_ref()?;
         if tail.chain_done() {
@@ -253,11 +252,11 @@ impl App {
         Self::end_read(self.count.as_mut(), notice, &mut self.notices);
     }
 
-    /// Ends the post-frame count: folds the ancestor prefix once with
-    /// the line following it as its trailer and carries its runs above
-    /// the installed preview. The preview itself never refolds: the
-    /// trailer closes the count fold so the ancestor run carries
-    /// instead of staying open behind it.
+    /// Ends the post-frame count. When the read reaches seq zero, fold
+    /// the complete held history and trim resident cards to the viewport;
+    /// the first frame's bounded preview remains untouched until then.
+    /// If the read ended before seq zero, preserve the existing partial
+    /// count behavior by carrying only the older ancestor prefix.
     pub(crate) fn finish_count(&mut self) {
         let Some(tail) = self.count.take() else {
             return;
@@ -272,14 +271,34 @@ impl App {
         };
         let mut grown = self.attached_screen().pages().fresh();
         grown.set_image_ids(self.images.id_allocator.clone());
-        let (prefix, trailer) = tail.count_parts(&opening, self.installed_floor.as_ref());
-        for line in prefix {
-            grown.apply(line);
+        if let Some(lines) = tail
+            .turn_lines()
+            .filter(|lines| lines.first().and_then(|line| line.seq) == Some(Seq(0)))
+        {
+            // The first-frame preview folds only its visible tail. Once the
+            // count walk reaches the segment start, rebuild the complete
+            // index and retain only pages the viewport can draw.
+            grown.hold();
+            for line in lines {
+                grown.apply(line);
+            }
+            grown.flush();
+            self.attached_screen().pages().carry_opens(&mut grown);
+            let height = self.conversation_height();
+            let top = grown.index().total().saturating_sub(height);
+            grown.trim(top, height);
+            *self.attached_screen_mut().pages_mut() = grown;
+            self.attached_screen_mut().follow();
+        } else {
+            let (prefix, trailer) = tail.count_parts(&opening, self.installed_floor.as_ref());
+            for line in prefix {
+                grown.apply(line);
+            }
+            if let Some(trailer) = trailer {
+                grown.apply(trailer);
+            }
+            grown.carry_chain(self.attached_screen_mut().pages_mut());
         }
-        if let Some(trailer) = trailer {
-            grown.apply(trailer);
-        }
-        grown.carry_chain(self.attached_screen_mut().pages_mut());
     }
 
     /// Starts the pass on the raise's ack: the preview stays on the
