@@ -370,6 +370,15 @@ fn the_first_frame_shows_the_last_rows_and_no_frame_shows_others_before_the_bar(
         }
         let row = std::mem::take(&mut tail[at]);
         tail[at] = steady_status_row(&row, &workspace);
+        // The box top edge takes the scroll bar's left margin once the
+        // bar lands, so the key drops the margin the way the status row
+        // drops its figures; the edge must still be an unbroken rule of
+        // its own glyph, so a moved or redrawn edge fails here.
+        let edge = tail[1].trim();
+        if edge.is_empty() || !edge.chars().all(|cell| cell == '▀') {
+            panic!("the box top edge in {:?}", tail[1]);
+        }
+        tail[1] = String::from("box edge");
         tail
     };
     let first = tail(&screens[first_last]);
