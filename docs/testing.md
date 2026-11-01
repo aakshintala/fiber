@@ -341,4 +341,5 @@ unless its fix PR names the journey that already covers the path.
 
 The gate runs the screen journeys in `crates/main/tests/terminal.rs`,
 `crates/main/tests/journeys.rs` and `crates/main/tests/inline_images.rs`; the
-main journeys in `crates/main/tests/main_journeys.rs` run on `main`.
+main journeys in `crates/main/tests/main_journeys.rs` run on `main`. To run
+them on a developer machine, see `docs/testing/running.md`, "Journey suite".
