@@ -572,6 +572,46 @@ pub(crate) enum SecretClass {
     GoogleApiKey,
 }
 
+/// The reviewer input one set line stores, converted from the loop's own
+/// `Reviewed` snapshot so emission stores exactly what the reviewer was
+/// sent at the call's request position.
+pub(crate) fn reviewed_items(reviewed: &[r#loop::Reviewed]) -> Vec<ReviewedItem> {
+    reviewed
+        .iter()
+        .map(|item| {
+            let (kind, seq, at, action) = match &item.shown {
+                r#loop::Shown::Call(action) => {
+                    (ReviewedKind::Call, None, None, Some(action.0.clone()))
+                }
+                r#loop::Shown::Person(kept) => (
+                    ReviewedKind::Person,
+                    Some(kept.seq.0),
+                    Some(kept.item),
+                    None,
+                ),
+                r#loop::Shown::Reply(_) => (ReviewedKind::Reply, None, None, None),
+            };
+            let text = match &item.input {
+                contract::provider::Input::User { text, .. } => text.clone(),
+                // The renderer only writes person, call and reply items,
+                // which all read as the person's text.
+                contract::provider::Input::Assistant { .. }
+                | contract::provider::Input::Reasoning { .. }
+                | contract::provider::Input::ToolCall { .. }
+                | contract::provider::Input::ToolResult { .. }
+                | contract::provider::Input::ToolSearchResult { .. } => String::new(),
+            };
+            ReviewedItem {
+                kind,
+                seq,
+                item: at,
+                action,
+                text,
+            }
+        })
+        .collect()
+}
+
 impl SecretClass {
     /// The name the final-set scan reports the drop under.
     pub(crate) fn name(self) -> &'static str {
@@ -648,6 +688,18 @@ pub(crate) enum DropKind {
     KeyFile,
     /// A closed secret matcher fired, named by its class.
     Secret(&'static str),
+}
+
+impl DropKind {
+    /// The name the loud drop report uses.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            DropKind::ProbeKeys => "probe-keys",
+            DropKind::CredentialsDir => "credentials-dir",
+            DropKind::KeyFile => "key-file",
+            DropKind::Secret(class) => class,
+        }
+    }
 }
 
 /// The key-file basenames, beside the `credentials` AWS shared file.
@@ -750,10 +802,15 @@ pub(crate) struct SampleOpts {
 }
 
 impl SampleOpts {
-    /// Whether sampling or importer flags ask for label-input emission.
+    /// Whether sampling, scrub-context or importer flags ask for
+    /// label-input emission. Scrub-context values alone imply emission, so
+    /// raw owner values never reach the default path by accident.
     pub(crate) fn wants_sampled(&self) -> bool {
         self.sample.is_some()
             || self.scrub
+            || self.home.is_some()
+            || self.owner_name.is_some()
+            || self.owner_email.is_some()
             || !self.import_claude.is_empty()
             || !self.import_pi.is_empty()
     }
@@ -1566,6 +1623,8 @@ pub(crate) struct FoldedFile {
     pub entries: Vec<SetLine>,
     /// One count per unsupported native tool, in first-drop order.
     pub dropped: Vec<(String, u64)>,
+    /// The raw workspace the file names, for the allowlist check.
+    pub workspace_raw: String,
 }
 
 /// Folds one native session file's lines in file order into label-input
@@ -1660,6 +1719,7 @@ fn fold_native_file(
             NativeLine::Skip => {}
         }
     }
+    folded.workspace_raw = workspace.clone();
     Ok(folded)
 }
 
