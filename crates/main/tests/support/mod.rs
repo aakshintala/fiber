@@ -33,6 +33,7 @@ pub(crate) mod journey;
 pub(crate) mod package;
 pub(crate) mod pty;
 pub(crate) mod repo_provider;
+pub(crate) mod review_sweep;
 
 #[allow(
     unused_imports,
