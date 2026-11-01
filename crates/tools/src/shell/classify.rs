@@ -1211,6 +1211,9 @@ pub(super) fn review_when_confined(command: &str) -> bool {
 
 /// Git global options precede the subcommand. The scan remains textual:
 /// wrappers, quoting and an echoed form do not hide a push from review.
+/// A long global holding `=` is one word; the long globals taking a
+/// separated value consume the next word, so `git --git-dir /repo/.git`
+/// does not read the directory as the subcommand.
 fn git_push(words: &[&str]) -> bool {
     words.iter().enumerate().any(|(at, word)| {
         if command_name(word) != "git" {
@@ -1224,6 +1227,21 @@ fn git_push(words: &[&str]) -> bool {
             match word {
                 "-C" | "-c" => {
                     let _value = rest.next();
+                }
+                option if option.starts_with("--") => {
+                    if !option.contains('=')
+                        && [
+                            "--git-dir",
+                            "--work-tree",
+                            "--namespace",
+                            "--super-prefix",
+                            "--config-env",
+                            "--exec-path",
+                        ]
+                        .contains(&option)
+                    {
+                        let _value = rest.next();
+                    }
                 }
                 option if option.starts_with('-') => {}
                 subcommand => return subcommand == "push",
