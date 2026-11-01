@@ -1943,3 +1943,85 @@ fn status_rows_replacement_draws_its_lines_under_the_row() {
     );
     assert!(!shown.contains("cache"), "the built-in line goes: {shown}");
 }
+
+/// A renderer recording the context figures the input_status slot is
+/// handed on every call, `None` where the row shows dashes.
+#[derive(Debug, Default)]
+struct ContextRecorder {
+    seen: std::cell::RefCell<Vec<Option<(u64, u64)>>>,
+}
+
+impl crate::ext::Renderer for ContextRecorder {
+    fn name(&self) -> &str {
+        "context-recorder"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "input_status"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        if let crate::ext::Input::InputStatus(row) = input {
+            self.seen.borrow_mut().push(
+                row.context
+                    .as_ref()
+                    .map(|context| (context.tokens, context.window)),
+            );
+        }
+        crate::ext::tests::decide("context-recorder", || Ok(Vec::new()))
+    }
+}
+
+/// The input_status slot is handed the context figures, and a zero window
+/// names none: the row shows dashes (`docs/tui.md`, "The input box").
+#[test]
+fn the_input_status_input_drops_a_zero_window() {
+    use std::rc::Rc;
+    let mut app = full(100, 30);
+    let fake = Rc::new(ContextRecorder::default());
+    let renderer: Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    let _ = screen(&app, 100, 30);
+    let seen = fake.seen.take();
+    assert_eq!(seen.last(), Some(&Some((268_000, 1_000_000))));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "test/model", "context_window": 0,
+            "trigger_at": 0, "thinking": "high", "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+        }),
+    ));
+    let _ = screen(&app, 100, 30);
+    let seen = fake.seen.take();
+    assert_eq!(seen.last(), Some(&None));
+}
+
+/// A decorating renderer on the input_status slot is handed the built-in
+/// row, so the row's figures reach the screen (`docs/tui.md`, "Extension
+/// seams").
+#[test]
+fn the_input_status_builtin_row_reaches_a_decorating_renderer() {
+    use crate::ext::tests::SlotScript;
+    let mut app = full(100, 30);
+    slot_app(
+        &mut app,
+        &["input_status"],
+        SlotScript::Decorate {
+            badge: Vec::new(),
+            trim: 0,
+        },
+    );
+    let shown = screen(&app, 100, 30);
+    let at = rule_row(&shown);
+    let row = shown.lines().nth(at + 1).expect("a row under the rule");
+    assert!(row.contains("test/model"), "{row:?}");
+}

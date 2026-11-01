@@ -1474,3 +1474,150 @@ fn cut_row_keeps_a_spot_covering_the_last_column() {
 fn cut_row_drops_a_spot_starting_at_the_edge() {
     assert!(cut_spots(vec![(99, 5, Spot::Usage)], 100).is_empty());
 }
+
+/// What the status_rows slot is handed on one call, owned so a test
+/// keeps it past the draw.
+#[derive(Debug)]
+struct Folded {
+    /// The Session card's branch: the name, `detached`, or `none`.
+    branch: String,
+    /// The Session card's context: tokens and window.
+    context: Option<(u64, u64)>,
+    /// The Session card's waiting count.
+    session_waiting: Option<usize>,
+    /// The row's waiting count.
+    waiting: Option<usize>,
+    /// How many changed files the row was handed.
+    files: usize,
+}
+
+/// A renderer filling the status_rows slot with no lines, recording the
+/// figures each call folds.
+#[derive(Debug, Default)]
+struct Recorder {
+    seen: std::cell::RefCell<Vec<Folded>>,
+}
+
+impl crate::ext::Renderer for Recorder {
+    fn name(&self) -> &str {
+        "recorder"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "status_rows"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        if let crate::ext::Input::StatusRows(rows) = input {
+            let session = &rows.session;
+            self.seen.borrow_mut().push(Folded {
+                branch: match session.branch {
+                    Some(crate::ext::BranchName::Named(name)) => name.to_owned(),
+                    Some(crate::ext::BranchName::Detached) => "detached".to_owned(),
+                    None => "none".to_owned(),
+                },
+                context: session
+                    .context
+                    .as_ref()
+                    .map(|context| (context.tokens, context.window)),
+                session_waiting: session.waiting,
+                waiting: rows.waiting,
+                files: rows.changed_files.files.len(),
+            });
+        }
+        crate::ext::tests::decide("recorder", || Ok(Vec::new()))
+    }
+}
+
+/// Draws `app` at `width` by `height` with a recorder on the status_rows
+/// slot, returning what each call was handed.
+fn recorded(app: &mut App, width: u16, height: u16) -> Vec<Folded> {
+    let fake = std::rc::Rc::new(Recorder::default());
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    draw(app, width, height);
+    fake.seen.take()
+}
+
+/// The status_rows slot is handed the Session card's branch and the
+/// changed files the row counts (`docs/tui.md`, "Extension seams").
+#[test]
+fn the_status_rows_input_folds_the_branch_and_the_changed_files() {
+    let mut app = full_app();
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    let seen = recorded(&mut app, 160, 30);
+    let last = seen.last().expect("the slot is drawn");
+    assert_eq!(last.branch, "main");
+    assert_eq!(last.files, 2);
+}
+
+/// The Session card's context as the slot is handed it, for a session
+/// whose preamble and status name `window`. Each case draws a fresh app:
+/// the status lines cache their first draw.
+fn context_seen(window: u64) -> Option<(u64, u64)> {
+    let mut app = attached(160, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    app.on_line(context_status(100, window));
+    app.on_line(preamble("test/model", window));
+    let seen = recorded(&mut app, 160, 30);
+    seen.last().expect("drawn").context
+}
+
+/// A zero window names no context, and a window above zero does
+/// (`docs/tui.md`, "The input box").
+#[test]
+fn the_status_rows_input_drops_a_zero_window() {
+    assert_eq!(context_seen(0), None);
+    assert_eq!(context_seen(1000), Some((100, 1000)));
+}
+
+/// The waiting counts the slot is handed, on the Session card and on the
+/// row, with `others` sessions waiting: each is `None` at zero and the
+/// count above it (`docs/tui.md`, "The input box").
+fn waiting_seen(others: bool) -> (Option<usize>, Option<usize>) {
+    let mut app = attached(160, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    app.on_key(Key::AltR, fakes::clock::FakeClock::new().now());
+    if others {
+        app.on_line(waiting(OTHER));
+    }
+    let seen = recorded(&mut app, 160, 30);
+    let last = seen.last().expect("drawn");
+    (last.session_waiting, last.waiting)
+}
+
+/// The waiting count reaches the slot only above zero.
+#[test]
+fn the_status_rows_input_reads_a_waiting_count_only_above_zero() {
+    assert_eq!(waiting_seen(false), (None, None));
+    assert_eq!(waiting_seen(true), (Some(1), Some(1)));
+}
+
+/// A decorating renderer on the status_rows slot is handed the built-in
+/// lines, so the figures the built-in draws reach the screen.
+#[test]
+fn the_status_rows_builtin_lines_reach_a_decorating_renderer() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let mut app = full_app();
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["status_rows"],
+        SlotScript::Decorate {
+            badge: Vec::new(),
+            trim: 0,
+        },
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    let (screen, _) = draw(&app, 160, 30);
+    assert!(screen.contains("cache"), "{screen}");
+}
