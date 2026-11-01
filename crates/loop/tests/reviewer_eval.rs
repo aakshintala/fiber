@@ -1063,10 +1063,6 @@ fn foreign_fold_drops_unsupported_calls_with_the_count() {
     );
 }
 
-/// How long the jig exchange may take once the binary has started: the
-/// same bound the `review_jig` tests use.
-const JIG_DEADLINE: Duration = Duration::from_secs(10);
-
 /// One prompt turn, asserting it completes.
 fn prompt_turn(session: &mut Session, text: &str) {
     session.inbox.send(delivery(text)).unwrap();
@@ -1519,7 +1515,7 @@ fn example_path() -> fakes::WarmedJig {
 
 /// Runs the built `review` binary with `args`, closing stdin so no read
 /// blocks. A warm-up absorbs the first-exec stall on every call, then one
-/// [`JIG_DEADLINE`] covers the exchange and the exit; the watchdog reaps
+/// 10 s bound covers the exchange and the exit; the watchdog reaps
 /// the process group on every path, including failure.
 fn run_review(args: &[&str]) -> Output {
     let warmed = example_path();
@@ -1532,18 +1528,19 @@ fn run_review(args: &[&str]) -> Output {
         .spawn()
         .unwrap();
     child.stdin.take();
-    wait_under(child, JIG_DEADLINE)
+    wait_under(child)
 }
 
-/// Waits at most `bound` for `child` to exit, reaping it on every path:
+/// Waits at most 10 s for `child` to exit, reaping it on every path:
 /// on expiry the child's process group is killed first, then the test
-/// fails naming what it waited for.
-fn wait_under(child: Child, bound: Duration) -> Output {
+/// fails naming what it waited for. The bound is a literal so the
+/// budget-bounds gate reads it as short.
+fn wait_under(child: Child) -> Output {
     let group = child.id();
     let watchdog = fakes::Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match fakes::Deadline::after(bound).recv(&finished) {
+    let output = match fakes::Deadline::after(Duration::from_secs(10)).recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => {
             fakes::kill_group(group, "KILL").unwrap_or(false);
