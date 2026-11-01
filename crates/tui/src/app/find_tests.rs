@@ -1497,7 +1497,7 @@ fn matches_stay_in_page_then_render_order_after_rescans() {
 
 /// An app with three `needle` replies on one page.
 pub(super) fn three_matches() -> (App, Vec<contract::Envelope>) {
-    let mut app = attached(40, 10);
+    let mut app = attached(40, 12);
     let mut log = Vec::new();
     let mut seq = 0u64;
     text_turn(
@@ -1794,7 +1794,7 @@ fn an_expansion_clears_the_selection() {
 
 #[test]
 fn revealing_scrolls_only_when_the_match_is_not_shown() {
-    let mut app = attached(40, 10);
+    let mut app = attached(40, 12);
     let mut log = Vec::new();
     let mut seq = 0u64;
     let mut replies = vec!["filler", "filler", "filler", "filler", "needle five"];
@@ -1946,7 +1946,7 @@ fn a_page_cut_after_the_query_starts_scans_the_new_page() {
 
 #[test]
 fn identical_lines_walk_one_occurrence_at_a_time() {
-    let mut app = attached(40, 10);
+    let mut app = attached(40, 12);
     let mut log = Vec::new();
     let mut seq = 0u64;
     text_turn(
@@ -1974,7 +1974,7 @@ fn identical_lines_walk_one_occurrence_at_a_time() {
     assert_eq!(count(&app), "1 of 2");
     assert_eq!(app.find.current().cloned().map(|kept| kept.nth), Some(0));
     // Only one occurrence is current on screen at a time.
-    let marks = app.find_marks(Rect::new(0, 0, 40, 10));
+    let marks = app.find_marks(Rect::new(0, 0, 40, 12));
     assert!(!marks.is_empty());
     let mut rows: Vec<u16> = marks
         .iter()

@@ -172,7 +172,7 @@ fn each_entry_is_its_line_with_one_line_either_side() {
 #[test]
 fn the_entries_that_fit_are_three_rows_each() {
     for (conversation, expected) in [(6, 0), (7, 1), (9, 1), (10, 2)] {
-        let app = turned(40, conversation + 3, &["needle"]);
+        let app = turned(40, conversation + 5, &["needle"]);
         assert_eq!(app.conversation_height(), usize::from(conversation));
         assert_eq!(app.results_height(), expected);
     }
@@ -198,7 +198,7 @@ fn a_click_on_the_top_row_closes_results_and_keeps_the_bar() {
 fn up_down_and_page_keys_move_the_selection() {
     let replies: Vec<String> = (0..12).map(|n| format!("match {n}")).collect();
     let refs: Vec<&str> = replies.iter().map(String::as_str).collect();
-    let mut app = turned(40, 25, &refs);
+    let mut app = turned(40, 27, &refs);
     scan(&mut app, "match");
     open(&mut app);
     // Up holds at the first entry however far it would go.
@@ -250,10 +250,10 @@ fn enter_jumps_to_the_match_and_closes_the_view() {
 
 #[test]
 fn a_click_on_an_entry_jumps() {
-    let mut app = turned(40, 17, &["needle one", "needle two", "needle three"]);
+    let mut app = turned(40, 19, &["needle one", "needle two", "needle three"]);
     scan(&mut app, "needle");
     open(&mut app);
-    let (_, targets) = draw(&app, 40, 17);
+    let (_, targets) = draw(&app, 40, 19);
     let id = targets
         .iter()
         .find(|target| target.id == TargetId::FindResult(2))
@@ -397,7 +397,7 @@ fn no_selection_starts_over_the_view() {
 
 #[test]
 fn the_view_opens_on_the_current_match_by_its_place() {
-    let mut app = turned(40, 10, &["needle one", "needle two", "needle three"]);
+    let mut app = turned(40, 12, &["needle one", "needle two", "needle three"]);
     scan(&mut app, "needle");
     // The first match sits one row above the viewport, so the second is
     // current and one Enter moves to the third.
@@ -453,7 +453,7 @@ fn the_selected_entry_stays_on_its_occurrence_when_matches_appear_before_it() {
 
 #[test]
 fn an_equal_match_either_side_of_the_old_ordinal_selects_the_first() {
-    let mut app = attached(40, 10);
+    let mut app = attached(40, 12);
     app.on_line(line(
         "assistant_message_delta",
         json!({"text": "alpha needle"}),

@@ -2,13 +2,11 @@
 source: crates/tui/src/turn/answers_tests.rs
 expression: answered_screen(30)
 ---
-
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ● Asked 2 questions    4s ▸
 
- you answered · 00:00 ────── ┃
- Base         main           ┃
- (Recommended), dev, "and    ┃
+ you answered · 00:00 ──────
+ Base         main
+ (Recommended), dev, "and
  tags"                       ┃
  Name         skipped        ┃
  note "by friday"            ┃
@@ -17,4 +15,6 @@ expression: answered_screen(30)
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌────────────────────────────
+▌auto      ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

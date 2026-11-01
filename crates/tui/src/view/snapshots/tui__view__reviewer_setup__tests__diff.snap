@@ -1,9 +1,7 @@
 ---
 source: crates/tui/src/view/reviewer_setup_tests.rs
-assertion_line: 517
 expression: "checked(diff(), \"diff\", 0)"
 ---
-
 
 
 
@@ -22,10 +20,10 @@ expression: "checked(diff(), \"diff\", 0)"
                 ### Source control
                 - github.com/acme/* are ours
               - - github.com/acme-old/* are ours
-⋮             + - github.com/acme-labs/* are ours                                         ⋮
+              + - github.com/acme-labs/* are ours
 ⋮             + ### Routine actions                                                       ⋮
 ⋮             + - squash-merging my own pull requests once CI passes                      ⋮
-
+⋮                                                                                         ⋮
               shell.read_only · ~/.fiber/projects/fiber/config.json
               + shell.read_only."acme-cli query".flags = ["--json"]
 
@@ -39,7 +37,8 @@ expression: "checked(diff(), \"diff\", 0)"
 
 
 
-
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █
+ ▌───────────────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                                 ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

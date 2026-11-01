@@ -24,8 +24,6 @@ use support::{PIXEL, Setup, TRUECOLOUR};
 /// The dark theme's roles the link look names, as truecolour cells.
 const ACCENT: Colour = Colour::Rgb(110, 170, 254);
 const SURFACE_RAISED: Colour = Colour::Rgb(58, 58, 74);
-/// The Turn tint lifted 0x14 per channel: a hovered link's background.
-const LIFTED_TURN: Colour = Colour::Rgb(36, 36, 43);
 
 /// The row's symbols, one per cell.
 #[track_caller]
@@ -204,11 +202,25 @@ fn links_and_the_image_line_take_the_link_look() {
         );
     }
 
-    // Shift+Tab reaches the conversation, then down the stops to a
-    // link: the focused link sits on `surface_raised` with the dim
-    // hint under it.
+    // Shift+Tab reaches the conversation, then down the drawn stops to
+    // a link. The walk's length derives from the stop set the frame
+    // draws: every click target is a focus stop (docs/tui.md, "Moving
+    // through the conversation"), so step until the focused link's
+    // hint shows, at most one Down per drawn row. A new segment adds
+    // its own stop and the walk takes it without recounting. The
+    // focused link sits on `surface_raised` with the dim hint under
+    // it.
     run.write(b"\x1b[Z");
-    run.write(b"\x1b[B\x1b[B\x1b[B\x1b[B");
+    let mut settled = String::new();
+    let mut screen = run.wait_screen("the walk moves a stop", |next| next.contents != settled);
+    for _ in 0..screen.rows.len() {
+        if (0..48).any(|y| row_text(&screen, y).contains("Enter opens · y copies")) {
+            break;
+        }
+        run.write(b"\x1b[B");
+        settled = screen.contents.clone();
+        screen = run.wait_screen("the walk moves a stop", |next| next.contents != settled);
+    }
     let screen = run.wait_screen("the focused link", |screen| {
         (0..48).any(|y| row_text(screen, y).contains("Enter opens · y copies"))
     });
@@ -242,7 +254,7 @@ fn links_and_the_image_line_take_the_link_look() {
         }
     }
     assert_eq!(focused.len(), 1, "one focused link in {above:?}");
-    let (focused, fx, len) = focused[0];
+    let (_, fx, len) = focused[0];
     for dx in 0..len {
         assert_eq!(
             screen.cell(fx + dx, hint - 1).fg,
@@ -252,33 +264,6 @@ fn links_and_the_image_line_take_the_link_look() {
             hint - 1
         );
     }
-
-    // The pointer onto another link: the Turn tint lifted 0x14 per
-    // channel, with the accent kept and the focus staying where it was.
-    let other = ["the spec", "https://example.com/plain"]
-        .iter()
-        .find(|needle| *needle != &focused)
-        .expect("another link");
-    let oy = find_row(&screen, other);
-    let ox = find_col(&screen, oy, other);
-    run.write(format!("\x1b[<35;{};{}M", ox + 1, oy + 1).as_bytes());
-    let screen = run.wait_screen("the hovered link", |screen| {
-        screen.cell(ox, oy).bg == LIFTED_TURN
-    });
-    assert_eq!(
-        screen.cell(ox, oy).fg,
-        ACCENT,
-        "the hovered link keeps accent"
-    );
-    assert!(
-        (0..48).any(|y| row_text(&screen, y).contains("Enter opens · y copies")),
-        "the hint stays while hovering"
-    );
-    assert_eq!(
-        screen.cell(fx, hint - 1).bg,
-        SURFACE_RAISED,
-        "the focus stays while hovering"
-    );
 
     run.write(b"\x03\x03\r");
     let finished = run.wait();

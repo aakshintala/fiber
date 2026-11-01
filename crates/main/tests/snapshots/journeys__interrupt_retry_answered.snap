@@ -1,9 +1,8 @@
 ---
 source: crates/main/tests/journeys.rs
-expression: "grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)"
+assertion_line: 790
+expression: "fold_fixture_tmp(&grid_text(&answered.rows, answered.cursor,\nanswered.hide_cursor, &ids))"
 ---
-
-
 
 
 
@@ -17,11 +16,11 @@ expression: "grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &i
    Working
 
    ▣ interrupted · [duration]
-⋮ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ⋮
-⋮                                                                                         ⋮
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
 ⋮                                                                                ▄▄▄▄▄▄▄▄ ⋮
-                                                                                  again
-                                                                                 ▀▀▀▀▀▀▀▀
+⋮                                                                                 again   ⋮
+⋮                                                                                ▀▀▀▀▀▀▀▀ ⋮
                                                                                you HH:MM
 
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -33,5 +32,7 @@ expression: "grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &i
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    › █
+  ───────────────────────────────────────────────────────────────────────────────────────
+  [workspace]/w │ auto fake/m  │  ctx ▆▆▆▆▆▆▆▆ 13 · 0%
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-cursor=(30,5)
+cursor=(28,5)

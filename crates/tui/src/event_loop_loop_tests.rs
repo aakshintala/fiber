@@ -945,8 +945,10 @@ fn opened() -> (
     Sender<Input>,
     mpsc::Receiver<Input>,
 ) {
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so paging covers the old window.
     let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(60, 12);
+    app.set_size(60, 14);
     let hello = contract::HubLine {
         kind: "hub_hello".to_owned(),
         ts: 0,
@@ -960,7 +962,7 @@ fn opened() -> (
     }
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let screen =
-        Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+        Screen::new(TestBackend::new(60, 14), 60, 14).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = Loop::for_test(app, screen);
     lp.hub.store(ours);
     let (tx, rx) = mpsc::channel();
