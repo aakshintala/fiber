@@ -610,22 +610,43 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
         scrolled,
         "the conversation never scrolled its thought row into view"
     );
-    // Open the ledger and the call. The marker is recorded after the call
-    // opens: opening flips the thought row from its collapsed to its
-    // expanded mark, and the expansion lands below it, so the row keeps
-    // its screen row.
+    // Open the ledger and the call. Opening flips the thought row from
+    // its collapsed to its expanded mark, and the expansion lands below
+    // it, so the thought row is still on screen above the opened call.
     let (_grid, gutter) = open_ledger(&mut run);
-    let grid = open_call(&mut run, gutter, "shell", "awk", "exit 0");
-    let top_y = find_row(&grid.rows, THOUGHT).expect("the thought row above the opened call");
+    open_call(&mut run, gutter, "shell", "awk", "exit 0");
+    let grid = run.screen();
+    find_row(&grid.rows, THOUGHT).expect("the thought row above the opened call");
+    // Reveal the more row of the opened call: the taller input box leaves
+    // no scroll position showing both the thought row and the more row,
+    // so scroll the conversation down until the more row shows. Each step
+    // must move the rows, so a step that would sit on the bottom clamp
+    // fails the wait instead of settling short.
+    let grid = {
+        let mut shown = run.screen();
+        let mut revealed = false;
+        for _ in 0..6 {
+            let prev = run.screen();
+            run.write(WHEEL_DOWN);
+            shown = run.wait_screen("the more row scrolling into view", |next| {
+                prev.rows != next.rows
+            });
+            if shown.rows.iter().any(|row| row.contains("more lines")) {
+                revealed = true;
+                break;
+            }
+        }
+        assert!(
+            revealed,
+            "the conversation never scrolled its more row into view"
+        );
+        shown
+    };
+    // Re-anchor the scroll marker on the call's header: the reveal moved
+    // the thought row off the top, and the header is stable across the
+    // open, so it proves the view's wheel left the conversation alone.
+    let top_y = find_row(&grid.rows, "✓ shell").expect("the opened call's header row");
     let top_marker = grid.rows[usize::from(top_y)].clone();
-    // Click the more row of the opened call. The turn is taller than the
-    // screen, so the shared helper's settled wait (which also wants the
-    // completed paint on screen) never lands: the turn already finished
-    // before the ledger opened, so the first grid showing the more row
-    // has its final position.
-    let grid = run.wait_screen("the more row", |grid| {
-        grid.rows.iter().any(|row| row.contains("more lines"))
-    });
     // Dismiss the reviewer notice first: while it is up, the click on the
     // more row below misses, so the view never opens.
     let notice_row = find_row(&grid.rows, "no_model").expect("the reviewer notice");
