@@ -19,9 +19,6 @@ similar.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-# The steering queue's acquisition gate for the race tests, which see
-# `contract` without `cfg(test)`.
-contract = { path = "../contract", features = ["test-gates"] }
 fakes = { path = "../fakes" }
 # The mid-`jobs wait` cancel test enters the production `JobsTool::wait`
 # on a real registry.

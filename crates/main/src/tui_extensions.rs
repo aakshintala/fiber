@@ -850,6 +850,7 @@ fn input_value(input: &Input<'_>) -> Value {
         Input::WorkingLine(line) => working_line_value(line),
         Input::SteeringQueue(queue) => steering_queue_value(queue),
         Input::StatusRows(rows) => status_rows_value(rows),
+        Input::InputStatus(status) => input_status_value(status),
         Input::Card(card) => card_value(card),
     }
 }
@@ -1098,6 +1099,36 @@ fn status_rows_value(rows: &tui::ext::StatusRows<'_>) -> Value {
     );
     insert_present(&mut out, "quota", rows.quota.as_ref().map(quota_value));
     out.insert("flat".to_owned(), json!(rows.flat));
+    Value::Object(out)
+}
+
+/// The input box's status row: the working directory, the permission
+/// mode, the model and thinking level, and the context's tokens with
+/// the window they fill (`docs/tui.md`, "Extension seams").
+fn input_status_value(status: &tui::ext::InputStatus<'_>) -> Value {
+    let mut out = serde_json::Map::new();
+    insert_present(
+        &mut out,
+        "workspace",
+        status.workspace.map(|workspace| json!(workspace)),
+    );
+    // The mode is always `auto` (`docs/permissions.md`, "One mode"): the
+    // input carries no mode field, so the table emits the fixed value.
+    out.insert("mode".to_owned(), json!("auto"));
+    insert_present(&mut out, "model", status.model.map(|model| json!(model)));
+    insert_present(
+        &mut out,
+        "thinking",
+        status.thinking.map(|thinking| json!(thinking)),
+    );
+    insert_present(
+        &mut out,
+        "context",
+        status
+            .context
+            .map(|context| json!({"tokens": context.tokens, "window": context.window})),
+    );
+    out.insert("flat".to_owned(), json!(status.flat));
     Value::Object(out)
 }
 

@@ -20,6 +20,114 @@ pub(crate) fn stress_count(labels: &str) -> u32 {
     }
 }
 
+fn strip_ansi(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for sequence_character in chars.by_ref() {
+                if ('@'..='~').contains(&sequence_character) {
+                    break;
+                }
+            }
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
+fn iteration_summary(line: &str) -> Option<(u32, u32, usize)> {
+    let line = line.trim_start().strip_prefix("Stress test ")?;
+    let (_, line) = line.split_once(" iteration ")?;
+    let (iteration, summary) = line.split_once(": ")?;
+    let (iteration, total) = iteration.split_once('/')?;
+    let iteration = iteration.parse().ok()?;
+    let total = total.parse().ok()?;
+    let (executed, run) = summary.split_once(' ')?;
+    let executed = executed.parse().ok()?;
+    let run = run
+        .strip_prefix("test run:")
+        .or_else(|| run.strip_prefix("tests run:"))?;
+    if !run.starts_with(' ') {
+        return None;
+    }
+    Some((iteration, total, executed))
+}
+
+fn stress_run_summary(line: &str) -> Option<(u32, u32, u32)> {
+    let line = line.trim_start().strip_prefix("Summary ")?;
+    let (_, line) = line.split_once("] ")?;
+    let (iterations, passed) = line.split_once(" stress run iterations: ")?;
+    let (completed, total) = iterations.split_once('/')?;
+    let (passed, status) = passed.split_once(' ')?;
+    if status != "passed" {
+        return None;
+    }
+    Some((
+        completed.parse().ok()?,
+        total.parse().ok()?,
+        passed.parse().ok()?,
+    ))
+}
+
+fn check_stress_output(log: &str, count: u32, tests: usize) -> Result<(), String> {
+    let log = strip_ansi(log);
+    let mut iteration_count = 0;
+    let mut run_summaries = Vec::new();
+    for line in log.lines() {
+        if let Some((iteration, total, executed)) = iteration_summary(line) {
+            iteration_count += 1;
+            if total != count {
+                return Err(format!(
+                    "iteration {iteration}/{total} does not match the planned count {count}"
+                ));
+            }
+            if executed != tests {
+                return Err(format!(
+                    "iteration {iteration}/{total} ran {executed} tests; plan names {tests}"
+                ));
+            }
+        }
+        if let Some(summary) = stress_run_summary(line) {
+            run_summaries.push(summary);
+        }
+    }
+    if iteration_count != count {
+        return Err(format!(
+            "expected {count} iteration summaries, found {iteration_count}"
+        ));
+    }
+    let [(completed, total, passed)] = run_summaries.as_slice() else {
+        return Err(format!(
+            "expected one stress run summary, found {}",
+            run_summaries.len()
+        ));
+    };
+    let (completed, total, passed) = (*completed, *total, *passed);
+    if completed != count || total != count || passed != count {
+        return Err(format!(
+            "stress run summary says {completed}/{total} iterations and {passed} passed; expected {count}/{count} and {count} passed"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn stress_check_command(args: &[String]) -> Result<bool, String> {
+    let path = crate::flag(args, "--log")?;
+    let count: u32 = crate::flag(args, "--count")?
+        .parse()
+        .map_err(|error| format!("--count: {error}"))?;
+    let tests: usize = crate::flag(args, "--tests")?
+        .parse()
+        .map_err(|error| format!("--tests: {error}"))?;
+    let log = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+    check_stress_output(&log, count, tests).map_err(|error| format!("stress output: {error}"))?;
+    println!("stress-check: ok ({count} iterations, {tests} tests each)");
+    Ok(true)
+}
+
 /// The stress job's measured time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Cost {
@@ -78,6 +186,20 @@ pub(crate) fn touched_retries(list: &str, touched: &[TestRef]) -> Vec<String> {
         }
     }
     failures
+}
+
+/// One sorted `test` line per distinct planned test.
+fn plan_test_lines(touched: &[TestRef]) -> Vec<String> {
+    let mut lines: Vec<String> = touched
+        .iter()
+        .map(|test| {
+            let id = test.binary.as_deref().unwrap_or(&test.package);
+            format!("test\t{id} {}", test.name)
+        })
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines
 }
 
 /// The `--summary` block `stress-plan` appends, over the printed `test`
@@ -143,11 +265,7 @@ pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     for package in &packages {
         println!("package\t{package}");
     }
-    let mut lines = Vec::new();
-    for test in &touched {
-        let id = test.binary.as_deref().unwrap_or(&test.package);
-        lines.push(format!("test\t{id} {}", test.name));
-    }
+    let lines = plan_test_lines(&touched);
     for line in &lines {
         println!("{line}");
     }

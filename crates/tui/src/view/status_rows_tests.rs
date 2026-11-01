@@ -242,12 +242,19 @@ fn row_one_follows_the_card_order_and_is_cut_at_the_edge() {
         100,
     ));
     let (screen, _) = draw(&app, 100, 30);
-    // The draw lays the row one column in, past the grip.
-    let row: &str = screen.lines().next_back().unwrap_or_default().trim_start();
+    // The draw lays the row one column in, past the grip; the slab
+    // floor is last, so row one sits one up, carrying the box's `▌`
+    // stripe ("The input box"). Cards keep their order, minus the
+    // segments that moved to the status row.
+    let row: &str = screen
+        .lines()
+        .rev()
+        .nth(1)
+        .unwrap_or_default()
+        .trim_start()
+        .trim_start_matches('\u{258c}');
     assert!(
-        row.starts_with(
-            "\u{00b1} 2 files +13 \u{2212}5  \u{2502}  0 waiting  \u{2502}  /w  \u{2502}  a-model-with-a-very-long-name"
-        ),
+        row.starts_with("\u{00b1} 2 files +13 \u{2212}5  \u{2502}  0 waiting  \u{2502}  $1.50  \u{2502}  cache 0%"),
         "{row}"
     );
     assert!(!row.contains("and-going"), "{row}");
@@ -270,49 +277,58 @@ fn row_one_shows_the_context_share_and_a_zero_window_shows_none() {
     app.on_line(context_status(50, 0));
     app.on_line(preamble("test/model", 0));
     let (screen, _) = draw(&app, 100, 30);
-    assert!(!screen.contains("ctx"), "{screen}");
+    // With a zero window the input box's status row ("The input box")
+    // keeps the `ctx` segment with its bar, size and share blank.
+    assert!(
+        screen.contains("ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586} \u{2014} \u{00b7} \u{2014}"),
+        "{screen}"
+    );
+    assert!(
+        !screen
+            .lines()
+            .rev()
+            .nth(1)
+            .unwrap_or_default()
+            .contains("ctx"),
+        "{screen}"
+    );
+}
+
+/// The input box's status row as text: the context bar lives there
+/// (`docs/tui.md`, "The input box"), found through its status target
+/// so the panel's cards cannot leak into the per-session asserts.
+fn box_row(app: &App) -> String {
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    let y = targets
+        .iter()
+        .filter(|target| matches!(target.id, TargetId::Panel(Spot::Status)))
+        .map(|target| target.rect.y)
+        .max()
+        .expect("a status row");
+    (0..100).map(|x| buf[(x, y)].symbol()).collect()
 }
 
 #[test]
 fn status_row_context_comes_from_the_attached_session_only() {
     let mut app = attached(100, 30);
     app.on_line(context_status(50, 100));
-    assert!(
-        super::status(&app, 100)[0]
-            .line
-            .to_string()
-            .contains("ctx "),
-        "{}",
-        super::status(&app, 100)[0].line
-    );
+    assert!(box_row(&app).contains("50%"), "{}", box_row(&app));
 
+    // The box row always carries the ctx segment: unknown figures show
+    // as dashes, so per-session sourcing asserts the figures, not the
+    // label. SESSION's half-window share is 50%.
     app.attach(contract::SessionId(OTHER.to_owned()));
     app.on_line(preamble_for(OTHER, "test/model", 200));
-    let attached_without_status = super::status(&app, 100);
-    assert!(!attached_without_status.is_empty());
-    assert!(
-        attached_without_status
-            .iter()
-            .all(|row| !row.line.to_string().contains("ctx "))
-    );
+    let unknown = box_row(&app);
+    assert!(unknown.contains("—"), "{unknown:?}");
+    assert!(!unknown.contains("50"), "{unknown:?}");
 
     app.on_line(context_status_for(OTHER, 12, 200));
-    let refreshed = super::status(&app, 100);
-    assert!(
-        refreshed
-            .iter()
-            .any(|row| row.line.to_string().contains("ctx ")),
-        "{:?}",
-        refreshed
-            .iter()
-            .map(|row| row.line.to_string())
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        refreshed
-            .iter()
-            .all(|row| !row.line.to_string().contains("50"))
-    );
+    let refreshed = box_row(&app);
+    assert!(refreshed.contains("6%"), "{refreshed:?}");
+    assert!(!refreshed.contains("50"), "{refreshed:?}");
 }
 
 #[test]
@@ -374,8 +390,10 @@ fn an_empty_row_two_takes_no_row() {
     let (screen, _) = draw(&app, 100, 30);
     let rows: Vec<&str> = screen.lines().collect();
     let bottom = rows.len() - 1;
-    assert!(rows[bottom].contains("$1.50"), "{}", screen);
-    assert_eq!(rows[bottom - 2], " ▌ › █", "{}", screen);
+    // The slab floor is last, so row one sits one up, above the status
+    // row, the rule and the input row.
+    assert!(rows[bottom - 1].contains("$1.50"), "{}", screen);
+    assert_eq!(rows[bottom - 4], " ▌ › █", "{}", screen);
 }
 
 /// A `session_status` with billed `cost` and `subscription` spend.
@@ -477,8 +495,16 @@ fn n_waiting_leads_row_one_while_the_rail_is_not_drawn() {
     app.on_line(waiting(OTHER));
     app.on_key(Key::AltR, fakes::clock::FakeClock::new().now());
     let (screen, targets) = draw(&app, 110, 30);
-    // The grip leaves column 0 blank, so the row starts with a space.
-    let row: &str = screen.lines().next_back().unwrap_or_default().trim_start();
+    // Row one sits inside the box now, so it carries the box's `▌`
+    // stripe ("The input box"); the slab floor is last, so row one
+    // sits one up.
+    let row: &str = screen
+        .lines()
+        .rev()
+        .nth(1)
+        .unwrap_or_default()
+        .trim_start()
+        .trim_start_matches('\u{258c}');
     assert!(row.starts_with("1 waiting  \u{2502}  "), "{row}");
     assert!(
         targets
@@ -518,7 +544,8 @@ fn the_waiting_target_covers_only_its_segment() {
         waiting[0],
         Rect::new(
             column.x.saturating_add(1),
-            29,
+            // The slab floor takes the last row, so row one sits one up.
+            28,
             u16::try_from("1 waiting".len()).unwrap_or(u16::MAX),
             1
         )
@@ -561,15 +588,16 @@ fn no_narrow_rows_drawn_outside_the_narrow_layout() {
     assert!(!screen.contains('▸'), "{screen}");
     assert!(!screen.contains('▾'), "{screen}");
     // The rail takes 30 columns at this width, so the input box starts
-    // there.
+    // there. The rule and status row sit under the input row, above
+    // the slab floor.
     assert_eq!(
-        screen.lines().rev().nth(1),
+        screen.lines().rev().nth(3),
         Some("                              ▌ › █")
     );
     // The row above the input box is blank inside the column: past the
     // drawn cursor.
     assert_eq!(
-        buf.cell((5, 38))
+        buf.cell((5, 36))
             .map(|cell| cell.symbol().to_owned())
             .as_deref(),
         Some(" ")
@@ -797,10 +825,11 @@ fn the_draft_cursor_sits_above_one_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(1));
     let at = cursor.expect("a cursor on the input row");
-    // The input row, its lower surface edge, then the one status row.
-    assert_eq!(usize::from(at.y), rows.len() - 3);
+    // The input row, the rule, the status row, then the one status
+    // line row above the slab floor.
+    assert_eq!(usize::from(at.y), rows.len() - 5);
     assert!(rows[usize::from(at.y)].contains('›'), "{rows:?}");
-    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+    assert!(rows[rows.len() - 2].contains("$1.50"), "{rows:?}");
 }
 
 #[test]
@@ -809,11 +838,12 @@ fn the_draft_cursor_sits_above_two_status_rows() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(2));
     let at = cursor.expect("a cursor on the input row");
-    // The input row, its lower surface edge, then row 1 and row 2.
-    assert_eq!(usize::from(at.y), rows.len() - 4);
+    // The input row, the rule, the status row, then row 1 and row 2
+    // above the slab floor.
+    assert_eq!(usize::from(at.y), rows.len() - 6);
     assert!(rows[usize::from(at.y)].contains('›'), "{rows:?}");
-    assert!(rows[rows.len() - 2].contains("$1.50"), "{rows:?}");
-    assert!(rows[rows.len() - 1].contains("1 job running"), "{rows:?}");
+    assert!(rows[rows.len() - 3].contains("$1.50"), "{rows:?}");
+    assert!(rows[rows.len() - 2].contains("1 job running"), "{rows:?}");
 }
 
 #[test]
@@ -833,22 +863,30 @@ fn the_draft_cursor_tracks_the_kept_status_rows_on_short_screens() {
         let keep = app.narrow_fit().map(|fit| fit.status).unwrap_or(0);
         kept.insert(keep);
         let at = cursor.expect("a cursor on the input row");
-        // The cursor stays on the input row while the lower surface edge
-        // and kept status rows move beneath it.
-        assert_eq!(usize::from(at.y), usize::from(height) - keep - 2);
+        // The cursor stays on the input row while the rule, the status
+        // row and kept status rows move beneath it, above the floor.
+        assert_eq!(usize::from(at.y), usize::from(height) - keep - 4);
         assert!(rows[usize::from(at.y)].contains('›'), "{height}: {rows:?}");
         let below = &rows[usize::from(at.y) + 1..];
-        assert_eq!(below.len(), keep + 1, "{height}: {rows:?}");
+        assert_eq!(below.len(), keep + 3, "{height}: {rows:?}");
         assert!(
-            below[0].trim_start().chars().all(|cell| cell == '▀'),
+            below[0].trim_start().starts_with("\u{258c}\u{2500}"),
             "{height}: {rows:?}"
         );
+        assert!(below[1].contains("/w"), "{height}: {rows:?}");
         if keep >= 1 {
-            assert!(below[1].contains("$1.50"), "{height}: {rows:?}");
+            assert!(below[2].contains("$1.50"), "{height}: {rows:?}");
         }
         if keep >= 2 {
-            assert!(below[2].contains("1 job running"), "{height}: {rows:?}");
+            assert!(below[3].contains("1 job running"), "{height}: {rows:?}");
         }
+        assert!(
+            below[below.len() - 1]
+                .trim_start()
+                .chars()
+                .all(|cell| cell == '▀'),
+            "{height}: {rows:?}"
+        );
     }
     // The sweep covers each side of both shedding boundaries.
     assert!(
@@ -936,17 +974,18 @@ fn the_approval_panel_draws_above_the_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     // An approval has no text cursor.
     assert!(cursor.is_none());
-    // The panel's bottom edge sits above the status row.
-    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+    // The status line shows only while the panel does not ("The narrow
+    // layout"), so the panel's bottom row is the slab floor.
+    assert!(!rows.iter().any(|row| row.contains("$1.50")), "{rows:?}");
     assert!(
-        rows[rows.len() - 2]
+        rows[rows.len() - 1]
             .trim_start()
             .chars()
             .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
-        rows[rows.len() - 5].contains("Deny  type to add feedback"),
+        rows[rows.len() - 4].contains("Deny  type to add feedback"),
         "{rows:?}"
     );
 }
@@ -1009,22 +1048,23 @@ fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
     let (rows, cursor, _) = rendered(&app, 100, 30);
     assert_eq!(app.narrow_fit().map(|fit| fit.status), Some(1));
     let at = cursor.expect("a caret in the words row");
-    // The caret's row holds the typed words, above the panel's last row,
-    // its bottom edge, and the status row beneath it.
+    // The caret's row holds the typed words, above the panel's last
+    // row; the status line shows only while the panel does not ("The
+    // narrow layout"), so the slab floor is last.
     assert!(rows[usize::from(at.y)].contains("qx"), "{rows:?}");
     assert!(usize::from(at.y) < rows.len() - 3, "{rows:?}");
     assert!(
-        rows[rows.len() - 2]
+        rows[rows.len() - 1]
             .trim_start()
             .chars()
             .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
-        rows[rows.len() - 3].contains("type to answer in words"),
+        rows[rows.len() - 2].contains("type to answer in words"),
         "{rows:?}"
     );
-    assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
+    assert!(!rows.iter().any(|row| row.contains("$1.50")), "{rows:?}");
 }
 
 #[test]
@@ -1144,39 +1184,18 @@ fn status_row_one_lists_every_segment_in_its_roles() {
     let rows = crate::view::status_rows::status(&app, 160);
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
+    // The working directory, model, thinking level, permission mode and
+    // context live in the input box's status row ("The input box"), so
+    // the status line leaves them out ("The narrow layout").
     assert_eq!(
         row.line.to_string(),
-        "/Users/you/work/fiber  \u{2502}  git main  \u{2502}  test/model high  \u{2502}  auto  \u{2502}  ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586} 268.0k  \u{2502}  $4.12  \u{2502}  cache 9% 42m  \u{2502}  tools \u{2717} github down  \u{2502}  \u{00b1} 2 files +13 \u{2212}5"
+        "git main  \u{2502}  $4.12  \u{2502}  cache 9% 42m  \u{2502}  tools \u{2717} github down  \u{2502}  \u{00b1} 2 files +13 \u{2212}5"
     );
     // The joiner is dim.
     assert_eq!(style_of(row, "  \u{2502}  "), style(Role::Muted));
     // "git" dim, the branch in secondary, spotted alone.
     assert_eq!(style_of(row, "git"), style(Role::Muted));
     assert_eq!(style_of(row, "main"), style(Role::Secondary));
-    // The model in accent, thinking and auto in attention.
-    assert_eq!(style_of(row, "test/model"), style(Role::Accent));
-    assert_eq!(style_of(row, "high"), style(Role::Attention));
-    assert_eq!(style_of(row, "auto"), style(Role::Attention));
-    // "ctx" dim, five cells of fill in info over three in rule: 268k
-    // of the 400k handoff over eight cells.
-    assert_eq!(style_of(row, "ctx"), style(Role::Muted));
-    assert_eq!(
-        row.line
-            .spans
-            .iter()
-            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Info))
-            .count(),
-        5
-    );
-    assert_eq!(
-        row.line
-            .spans
-            .iter()
-            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Rule))
-            .count(),
-        3
-    );
-    assert_eq!(style_of(row, "268.0k"), ratatui::style::Style::default());
     // Dim `cache` with its share and the time until it resets, dim
     // `tools` with its error value, dim `±` with the added and
     // removed totals.
@@ -1190,12 +1209,11 @@ fn status_row_one_lists_every_segment_in_its_roles() {
     assert_eq!(
         row.spots,
         [
-            (30, 4, Spot::Branch),
-            (68, 19, Spot::Context),
-            (92, 5, Spot::Usage),
-            (108, 6, Spot::Usage),
-            (119, 19, Spot::Tools),
-            (143, 16, Spot::ChangedFiles),
+            (4, 4, Spot::Branch),
+            (13, 5, Spot::Usage),
+            (29, 6, Spot::Usage),
+            (40, 19, Spot::Tools),
+            (64, 16, Spot::ChangedFiles),
         ]
     );
 }
@@ -1207,7 +1225,6 @@ fn status_row_one_lists_every_segment_in_its_roles() {
 #[test]
 fn the_cache_segment_shows_the_time_until_it_resets() {
     use crate::theme::{Role, style};
-    use contract::clock::Clock;
     let mut app = full_app();
     let clock = fakes::clock::FakeClock::new();
     app.set_now(clock.now(), 0);
@@ -1239,20 +1256,21 @@ fn the_cache_segment_shows_the_time_until_it_resets() {
     }
 }
 
-/// Row 1 cut at 100: the text ends in `…` keeping its styles, past the
-/// terminal's right edge, and only the visible targets keep.
+/// Row 1 cut at 61: the shorter row still ends in `…` keeping its
+/// styles, past the terminal's right edge, and only the visible
+/// targets keep.
 #[test]
 fn status_row_one_cut_at_the_edge() {
     let app = full_app();
-    let rows = crate::view::status_rows::status(&app, 100);
+    let rows = crate::view::status_rows::status(&app, 61);
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
-    assert_eq!(crate::format::width(&row.line.to_string()), 99);
+    assert_eq!(crate::format::width(&row.line.to_string()), 60);
     assert!(row.line.to_string().ends_with('\u{2026}'));
-    assert!(row.line.to_string().starts_with("/Users/you/work/fiber"));
+    assert!(row.line.to_string().starts_with("git main"));
     for (start, wide, _) in &row.spots {
-        assert!(usize::from(*start) < 99, "{}", row.line);
-        assert!(start.saturating_add(*wide) <= 99, "{}", row.line);
+        assert!(usize::from(*start) < 60, "{}", row.line);
+        assert!(start.saturating_add(*wide) <= 60, "{}", row.line);
     }
     // The branch survives the cut; the changed files do not.
     assert!(row.spots.iter().any(|(_, _, spot)| *spot == Spot::Branch));
@@ -1283,7 +1301,8 @@ fn status_row_one_at_the_floors() {
 
 /// The 8-cell bar fills toward the handoff point with no marker: at
 /// zero, below, at and past the trigger, and against the window with
-/// none.
+/// none. It lives in the input box's status row ("The input box"), so
+/// row one carries no bar and no `ctx`.
 #[test]
 fn the_narrow_bar_fills_without_a_marker() {
     use crate::theme::{Role, style};
@@ -1293,14 +1312,12 @@ fn the_narrow_bar_fills_without_a_marker() {
     // marker anywhere in the row: every `│` is the dim joiner.
     app.on_line(full_status());
     let row = &crate::view::status_rows::status(&app, 100)[0];
-    assert_eq!(
+    assert!(
+        row.line.spans.iter().all(|span| span.content != "\u{2586}"),
+        "{}",
         row.line
-            .spans
-            .iter()
-            .filter(|span| span.content == "\u{2586}" && span.style == style(Role::Info))
-            .count(),
-        5
     );
+    assert!(!row.line.to_string().contains("ctx"), "{}", row.line);
     assert!(
         row.line
             .spans
@@ -1309,10 +1326,17 @@ fn the_narrow_bar_fills_without_a_marker() {
         "{}",
         row.line
     );
+    // The bar fills in the input box's status row instead.
+    let (screen, _) = draw(&app, 100, 30);
+    assert!(
+        screen.contains("ctx \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}"),
+        "{screen}"
+    );
 }
 
-/// Without a status the row count matches the base's: the model with
-/// the waiting segment draws one row, and nothing held draws no row.
+/// Without a status the row count matches the base's: the waiting
+/// segment draws one row, and nothing held draws no row. The model
+/// lives in the input box's status row ("The input box"), not here.
 #[test]
 fn without_a_status_the_row_count_matches_the_base() {
     // The preamble's model with no status: one row with the waiting
@@ -1321,7 +1345,7 @@ fn without_a_status_the_row_count_matches_the_base() {
     app.on_line(preamble("test/model", 100));
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].line.to_string(), "0 waiting  \u{2502}  test/model");
+    assert_eq!(rows[0].line.to_string(), "0 waiting");
     // The waiting segment opens the row and carries its target.
     assert_eq!(waiting_spots(&app, 100), vec![(0, 9)]);
     // Nothing held: only the waiting segment's row, while the rail is
@@ -1332,8 +1356,9 @@ fn without_a_status_the_row_count_matches_the_base() {
     assert_eq!(rows[0].line.to_string(), "0 waiting");
 }
 
-/// A status with nothing else takes one row: the working directory
-/// always names one segment.
+/// A status with nothing else takes one row: the waiting segment
+/// opens it. The working directory names its segment in the input
+/// box's status row ("The input box"), not here ("The narrow layout").
 #[test]
 fn a_status_with_nothing_else_takes_one_row() {
     let mut app = attached(100, 30);
@@ -1341,11 +1366,11 @@ fn a_status_with_nothing_else_takes_one_row() {
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
     assert!(rows[0].line.to_string().starts_with("0 waiting"));
-    assert!(rows[0].line.to_string().contains("/w"));
+    assert!(!rows[0].line.to_string().contains("/w"));
 }
 
-/// The status rows draw on the `panel` tint one column in; with no
-/// colour no tint is laid.
+/// The status rows draw on the slab's `surface` tint one column in;
+/// with no colour no tint is laid.
 #[test]
 fn status_rows_draw_on_the_panel_tint() {
     use crate::theme::Role;
@@ -1354,10 +1379,12 @@ fn status_rows_draw_on_the_panel_tint() {
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let mut buf = ratatui::buffer::Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    let bottom = buf.area.bottom().saturating_sub(1);
-    // The row's cells sit on the panel tint from column 1.
-    assert_eq!(buf[(1, bottom)].bg, Role::Panel.color());
-    assert_eq!(buf[(98, bottom)].bg, Role::Panel.color());
+    // The slab floor takes the last row, so row one sits one up, on
+    // the slab's surface tint ("The input box" is a `surface` slab).
+    let bottom = buf.area.bottom().saturating_sub(2);
+    // The row's cells sit on the surface tint from column 1.
+    assert_eq!(buf[(1, bottom)].bg, Role::Surface.color());
+    assert_eq!(buf[(98, bottom)].bg, Role::Surface.color());
     // With no colour the tint goes and the text stays.
     crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let mut bare = ratatui::buffer::Buffer::empty(area);
@@ -1443,12 +1470,12 @@ fn the_tools_segment_joins_down_servers_with_a_space() {
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
     // Sorted: gateway before relay, one space between the values; the
-    // row is cut at the edge, so the second value's head shows.
+    // shorter row shows both values whole ("The narrow layout").
     assert!(
         rows[0]
             .line
             .to_string()
-            .contains("tools \u{2717} gateway down \u{2717} relay d\u{2026}"),
+            .contains("tools \u{2717} gateway down \u{2717} relay down"),
         "{}",
         rows[0].line
     );
@@ -1487,4 +1514,151 @@ fn cut_row_keeps_a_spot_covering_the_last_column() {
 #[test]
 fn cut_row_drops_a_spot_starting_at_the_edge() {
     assert!(cut_spots(vec![(99, 5, Spot::Usage)], 100).is_empty());
+}
+
+/// What the status_rows slot is handed on one call, owned so a test
+/// keeps it past the draw.
+#[derive(Debug)]
+struct Folded {
+    /// The Session card's branch: the name, `detached`, or `none`.
+    branch: String,
+    /// The Session card's context: tokens and window.
+    context: Option<(u64, u64)>,
+    /// The Session card's waiting count.
+    session_waiting: Option<usize>,
+    /// The row's waiting count.
+    waiting: Option<usize>,
+    /// How many changed files the row was handed.
+    files: usize,
+}
+
+/// A renderer filling the status_rows slot with no lines, recording the
+/// figures each call folds.
+#[derive(Debug, Default)]
+struct Recorder {
+    seen: std::cell::RefCell<Vec<Folded>>,
+}
+
+impl crate::ext::Renderer for Recorder {
+    fn name(&self) -> &str {
+        "recorder"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "status_rows"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        if let crate::ext::Input::StatusRows(rows) = input {
+            let session = &rows.session;
+            self.seen.borrow_mut().push(Folded {
+                branch: match session.branch {
+                    Some(crate::ext::BranchName::Named(name)) => name.to_owned(),
+                    Some(crate::ext::BranchName::Detached) => "detached".to_owned(),
+                    None => "none".to_owned(),
+                },
+                context: session
+                    .context
+                    .as_ref()
+                    .map(|context| (context.tokens, context.window)),
+                session_waiting: session.waiting,
+                waiting: rows.waiting,
+                files: rows.changed_files.files.len(),
+            });
+        }
+        crate::ext::tests::decide("recorder", || Ok(Vec::new()))
+    }
+}
+
+/// Draws `app` at `width` by `height` with a recorder on the status_rows
+/// slot, returning what each call was handed.
+fn recorded(app: &mut App, width: u16, height: u16) -> Vec<Folded> {
+    let fake = std::rc::Rc::new(Recorder::default());
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    draw(app, width, height);
+    fake.seen.take()
+}
+
+/// The status_rows slot is handed the Session card's branch and the
+/// changed files the row counts (`docs/tui.md`, "Extension seams").
+#[test]
+fn the_status_rows_input_folds_the_branch_and_the_changed_files() {
+    let mut app = full_app();
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    let seen = recorded(&mut app, 160, 30);
+    let last = seen.last().expect("the slot is drawn");
+    assert_eq!(last.branch, "main");
+    assert_eq!(last.files, 2);
+}
+
+/// The Session card's context as the slot is handed it, for a session
+/// whose preamble and status name `window`. Each case draws a fresh app:
+/// the status lines cache their first draw.
+fn context_seen(window: u64) -> Option<(u64, u64)> {
+    let mut app = attached(160, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    app.on_line(context_status(100, window));
+    app.on_line(preamble("test/model", window));
+    let seen = recorded(&mut app, 160, 30);
+    seen.last().expect("drawn").context
+}
+
+/// A zero window names no context, and a window above zero does
+/// (`docs/tui.md`, "The input box").
+#[test]
+fn the_status_rows_input_drops_a_zero_window() {
+    assert_eq!(context_seen(0), None);
+    assert_eq!(context_seen(1000), Some((100, 1000)));
+}
+
+/// The waiting counts the slot is handed, on the Session card and on the
+/// row, with `others` sessions waiting: each is `None` at zero and the
+/// count above it (`docs/tui.md`, "The input box").
+fn waiting_seen(others: bool) -> (Option<usize>, Option<usize>) {
+    let mut app = attached(160, 30);
+    app.on_line(idle(SESSION, "one"));
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    app.on_key(Key::AltR, fakes::clock::FakeClock::new().now());
+    if others {
+        app.on_line(waiting(OTHER));
+    }
+    let seen = recorded(&mut app, 160, 30);
+    let last = seen.last().expect("drawn");
+    (last.session_waiting, last.waiting)
+}
+
+/// The waiting count reaches the slot only above zero.
+#[test]
+fn the_status_rows_input_reads_a_waiting_count_only_above_zero() {
+    assert_eq!(waiting_seen(false), (None, None));
+    assert_eq!(waiting_seen(true), (Some(1), Some(1)));
+}
+
+/// A decorating renderer on the status_rows slot is handed the built-in
+/// lines, so the figures the built-in draws reach the screen.
+#[test]
+fn the_status_rows_builtin_lines_reach_a_decorating_renderer() {
+    use crate::ext::tests::{SlotRenderer, SlotScript};
+    let mut app = full_app();
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    let fake = std::rc::Rc::new(SlotRenderer::filling(
+        &["status_rows"],
+        SlotScript::Decorate {
+            badge: Vec::new(),
+            trim: 0,
+        },
+    ));
+    let renderer: std::rc::Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    let (screen, _) = draw(&app, 160, 30);
+    assert!(screen.contains("cache"), "{screen}");
 }

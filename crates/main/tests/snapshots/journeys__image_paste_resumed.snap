@@ -1,5 +1,6 @@
 ---
 source: crates/main/tests/journeys.rs
+assertion_line: 673
 expression: "grid_text(&resumed.rows, resumed.cursor, resumed.hide_cursor, &ids)"
 ---
 
@@ -18,10 +19,8 @@ expression: "grid_text(&resumed.rows, resumed.cursor, resumed.hide_cursor, &ids)
 
 
 ⋮                                                                                         ⋮
-⋮                                                                                         ⋮
-⋮                                                                                         ⋮
-                                                                          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                                           what is this
+⋮                                                                         ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ⋮
+⋮                                                                          what is this   ⋮
                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                           ▣ i_[id]… · 1×1
                                                                                you HH:MM
@@ -33,5 +32,7 @@ expression: "grid_text(&resumed.rows, resumed.cursor, resumed.hide_cursor, &ids)
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    › █
+  ───────────────────────────────────────────────────────────────────────────────────────
+  auto                                                                 ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-cursor=(30,5)
+cursor=(28,5)

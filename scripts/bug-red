@@ -12,10 +12,16 @@
 #        scripts/bug-red --collect LINUX_STATUS MACOS_STATUS
 # A pull request that changes only docs passes at once, with a message
 # saying so: the doc was wrong and the code was right, so no test can show
-# the bug. --report writes nextest's status class to GITHUB_OUTPUT and lets
-# the collector decide whether this leg passed. --collect accepts a test
-# failure on either platform, but requires a build on both.
+# the bug. A red commit whose only test files belong to `test = false`
+# targets passes too, with a message saying so: those tests run only on push
+# until #3899 step 6, so a plain nextest filter would match none of them.
+# --report writes nextest's status class, or `docs` or `journey` for those
+# two cases, to GITHUB_OUTPUT and lets the collector decide whether this leg
+# passed. --collect accepts a test failure on either platform, but requires
+# a build on both.
 set -euo pipefail
+
+journey_only="the red commit's only touched tests are journey tests, which pull-request CI does not run until #3899 step 6"
 
 if [ "${1-}" = --collect ]; then
   [ "$#" -eq 3 ] || { echo "usage: scripts/bug-red --collect LINUX_STATUS MACOS_STATUS" >&2; exit 2; }
@@ -27,6 +33,14 @@ if [ "${1-}" = --collect ]; then
       exit 0
     fi
     echo "bug-red: docs-only result disagrees between legs (linux=$linux_status, macos=$macos_status)"
+    exit 1
+  fi
+  if [ "$linux_status" = journey ] || [ "$macos_status" = journey ]; then
+    if [ "$linux_status" = journey ] && [ "$macos_status" = journey ]; then
+      echo "bug-red: both legs confirm $journey_only"
+      exit 0
+    fi
+    echo "bug-red: journey-only result disagrees between legs (linux=$linux_status, macos=$macos_status)"
     exit 1
   fi
   for status in "$linux_status" "$macos_status"; do
@@ -111,6 +125,11 @@ fi
 # shellcheck disable=SC2046
 plan=$(cargo xtask bug-filter $(git diff --name-only --diff-filter=AM "$red^" "$red"))
 filter=$(sed -n 's/^filter\t//p' <<<"$plan")
+if [ -z "$filter" ] && [ -n "$(sed -n 's/^unrun\t//p' <<<"$plan")" ]; then
+  echo "bug-red: ok, $journey_only"
+  report_status journey
+  exit 0
+fi
 if [ -z "$filter" ]; then
   echo "bug-red: the red commit changes no test file, so no test shows the bug"
   exit 1

@@ -43,6 +43,7 @@ A failed model call adds two optional fields:
   `status` is absent. Before it is stored, every credential value and every
   header value the credential, `credential()` or `sign()` supplied is replaced
   with `[redacted]`. Fiber's `message` then names the provider and the function, such as "codex's credential() failed. Run `fiber login codex`." or, for a provider `fiber login` cannot fix, "bedrock's credential() failed.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
+- A delegate that ends on a failed model call carries that call's `provider` on its `job_completed.error`. What the model is told about the job adds the line `Provider said: <provider.message>` after Fiber's message (`docs/delegates.md`).
 
 A hub `command_rejected` for `delete` with `code: session_held` also carries
 `held`: the ids of every session in the set another process holds, in the order
@@ -350,6 +351,7 @@ the lines that carry it.
 | `invalid_arguments` | driver command, hub command, extension call, tool call, notice | the arguments failed the tool's schema or checks, or a driver or hub command's `args` (`docs/invocation.md`, "Driver commands" and "The hub") | event |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason | — |
 | `io_failed` | exit, driver command, hub command, extension call, notice | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:`; or the hub could not start the worker thread for a file search or a device login, or the file search worker stopped; the message says which; or the hub link dropped before a confirmed stop finished, and the message starts `Not deleted: the hub link dropped` | event |
+| `keeper_timeout` | job | the session stayed gone for 2 hours after a crash, so its keeper stopped the job (`docs/tools.md`, "The keeper") | — |
 | `log_corrupt` | exit, hub command, driver command (`rewind`), job | a log line that cannot be encoded, or one read back that does not parse | — |
 | `login_url` | notice | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login; the message gives the URL to open, and the code to enter for a device-code login | condition |
 | `malformed` | driver command, hub command, notice | a command line that is not a JSON object, has no string `id` or `command`, has `args` of the wrong type, or has a key no command line takes (`docs/invocation.md`, "Driver commands"), or a hub command's answer carried no code the terminal can read | event |
@@ -372,7 +374,7 @@ the lines that carry it.
 | `nonzero_exit` | tool call, job | a process exited nonzero | — |
 | `not_found` | extension call, tool call, hub command, driver command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files"), or `revoke` names no paired device (`docs/invocation.md`, "Remote clients"), or `artifact_page` names no file (`docs/invocation.md`, "Driver commands") | — |
 | `notes_unchanged` | notice | `/reviewer-setup` reached its diff and the save would change neither layer's notes or read-only entries, so no file was written (`docs/tui.md`, "Rules") | event |
-| `orphaned` | job | the process that ran the job died | — |
+| `orphaned` | job | the job's keeper died before it wrote the job's end, or the session had no keeper (`docs/tools.md`, "The keeper") | — |
 | `output_cap` | job | a job's output file passed 5 GB | — |
 | `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run | — |
 | `pairing_failed` | hub connection | a pairing code was wrong, already used or more than 10 minutes old (`docs/invocation.md`, "Remote clients") | — |

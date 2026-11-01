@@ -13,7 +13,6 @@ expression: "checked(question(), \"question\", 0)"
 
 
 
-
           ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
             Reviewer setup                                                    ✕
@@ -21,12 +20,11 @@ expression: "checked(question(), \"question\", 0)"
             Topic 1 of 6 · Source control
             Which accounts, organisations and repositories are your own or your
             organisation's?
-⋮           › github.com/acme, and my account amogh-dev█                                  ⋮
+            › github.com/acme, and my account amogh-dev█
 ⋮                                                                                         ⋮
 ⋮           Enter answer · Esc back                                                       ⋮
-
+⋮                                                                                         ⋮
           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
 
 
 
@@ -41,4 +39,6 @@ expression: "checked(question(), \"question\", 0)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █
+ ▌───────────────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                                 ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

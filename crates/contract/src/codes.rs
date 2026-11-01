@@ -110,6 +110,8 @@ codes! {
     InvalidRequest,
     /// A filesystem failure; the message names the path.
     IoFailed,
+    /// The session stayed gone for 2 hours after a crash, so its keeper stopped the job.
+    KeeperTimeout,
     /// A log line that cannot be encoded, or does not parse.
     LogCorrupt,
     /// A login a person must finish; the message holds the URL and any device code.
@@ -161,7 +163,7 @@ codes! {
     NotSubscribed,
     /// `/reviewer-setup` ended with no change to either layer of the notes.
     NotesUnchanged,
-    /// The process that ran the job died.
+    /// The job's keeper died before it wrote the job's end, or there was no keeper.
     Orphaned,
     /// A job's output file passed 5 GB.
     OutputCap,

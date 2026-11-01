@@ -180,15 +180,15 @@ pub(crate) fn install_prelude(
 /// opens the file, so the `go_module` signal in tests needs this pause.
 /// Each registration fires once, and the loader holds no lock while it
 /// runs, so a test stays free to answer.
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 type LoadObserver = (PathBuf, Box<dyn FnOnce() + Send>);
 
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 static LOAD_OBSERVERS: std::sync::Mutex<Vec<LoadObserver>> = std::sync::Mutex::new(Vec::new());
 
 /// Runs `notify` once, before the next load of the file at canonical `path`
 /// opens it. Test-only.
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 pub fn observe_load(path: PathBuf, notify: Box<dyn FnOnce() + Send>) {
     support::lock(&LOAD_OBSERVERS).push((path, notify));
 }
@@ -214,7 +214,7 @@ pub(super) fn load_file(
     };
     // A test observer for this file fires here, after the directory check
     // and before the open, holding no lock while it runs.
-    #[cfg(any(test, feature = "test-hooks"))]
+    #[cfg(any(test, debug_assertions))]
     let notify = {
         let mut observers = support::lock(&LOAD_OBSERVERS);
         observers
@@ -222,7 +222,7 @@ pub(super) fn load_file(
             .position(|(watched, _)| *watched == path)
             .map(|found| observers.remove(found).1)
     };
-    #[cfg(any(test, feature = "test-hooks"))]
+    #[cfg(any(test, debug_assertions))]
     if let Some(notify) = notify {
         notify();
     }

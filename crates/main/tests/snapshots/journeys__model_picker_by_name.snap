@@ -1,6 +1,7 @@
 ---
 source: crates/main/tests/journeys.rs
-expression: "grid_text(&filtered.rows, filtered.cursor, filtered.hide_cursor, &ids)"
+assertion_line: 326
+expression: "fold_fixture_tmp(&grid_text(&filtered.rows, filtered.cursor,\nfiltered.hide_cursor, &ids))"
 ---
   Models  /model                                                               Esc returns
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -29,9 +30,9 @@ expression: "grid_text(&filtered.rows, filtered.cursor, filtered.hide_cursor, &i
 
 
 
-
-
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    ›
+  ───────────────────────────────────────────────────────────────────────────────────────
+  [workspace]/w │ auto fake/alpha-1  │  ctx ▆▆▆▆▆▆▆▆ 13 · 0%
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 cursor=hidden

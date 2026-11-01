@@ -1,5 +1,5 @@
 use super::*;
-use crate::select::tests::{members, strings};
+use crate::select::tests::{members, members_with_unrun_test, strings};
 
 #[test]
 fn test_files_map_to_their_tests() {
@@ -394,4 +394,37 @@ fn test_files_are_named_or_under_tests() {
     assert!(is_test_file("tests/journey.rs"));
     assert!(!is_test_file("src/tests_helper.rs"));
     assert!(!is_test_file("src/a/tests/fixture.rs"));
+}
+
+#[test]
+fn a_test_false_target_is_left_out_of_the_filter_and_named_unrun() {
+    let files = strings(&[
+        "crates/main/tests/main_journeys.rs",
+        "crates/main/tests/journeys.rs",
+        "crates/main/src/app.rs",
+    ]);
+    let members = members_with_unrun_test();
+    let (expression, packages) = test_filter(&files, &members, &[]);
+    assert_eq!(expression, "binary_id(main::journeys)");
+    assert_eq!(packages, strings(&["main"]));
+    assert_eq!(
+        unrun_test_files(&files, &members),
+        strings(&["crates/main/tests/main_journeys.rs"])
+    );
+}
+
+#[test]
+fn only_a_test_false_target_leaves_an_empty_filter_and_names_it_unrun() {
+    let files = strings(&["crates/main/tests/main_journeys.rs"]);
+    let members = members_with_unrun_test();
+    let (expression, packages) = test_filter(&files, &members, &[]);
+    assert_eq!(expression, "");
+    assert_eq!(packages, Vec::<String>::new());
+    assert_eq!(unrun_test_files(&files, &members), files);
+}
+
+#[test]
+fn no_unrun_test_is_named_without_a_test_false_target() {
+    let files = strings(&["crates/main/tests/main_journeys.rs", "docs/events.md"]);
+    assert_eq!(unrun_test_files(&files, &members()), Vec::<String>::new());
 }

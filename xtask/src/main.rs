@@ -20,12 +20,14 @@
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
-//!   as tab-separated lines
+//!   and the `unrun` ones in `test = false` targets, as tab-separated lines
 //! - `stress-plan --base REV [--labels L] [--summary FILE]`: the test functions the
 //!   working tree adds or changes against the merge base with REV, as tab-separated lines,
 //!   appending the job-summary block to FILE when given
 //! - `touched-retries --base REV --list FILE`: whether any test the working tree adds or
 //!   changes passed only on retry, reading the retry list in FILE; exit 1 when one did
+//! - `stress-check --log FILE --count N --tests T`: checks the nextest stress output
+//!   has N iteration summaries, each with T executed tests, and a complete run summary
 //! - `stress-cost --start S --end E --count N --tests T --outcome O`: the stress job's
 //!   wall time and runner minutes, as the job-summary block
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
@@ -267,9 +269,13 @@ fn run(args: &[String]) -> Result<bool, String> {
             for package in packages {
                 println!("package\t{package}");
             }
+            for path in select::unrun_test_files(rest, &members) {
+                println!("unrun\t{path}");
+            }
             Ok(true)
         }
         "stress-plan" => stress::plan_command(rest),
+        "stress-check" => stress::stress_check_command(rest),
         "touched-retries" => stress::touched_retries_command(rest),
         "stress-cost" => stress::cost_command(rest),
         "docs-only" => {
@@ -781,38 +787,51 @@ fn relative(path: &Path, root: &str) -> String {
 
 fn workspace_members() -> Result<Members, String> {
     let (root, packages) = packages()?;
+    Ok(members_from(&root, &packages))
+}
+
+/// The workspace members `cargo metadata` describes: its workspace root and
+/// the `packages` it lists. Pure, so a fixture can stand in for the command.
+fn members_from(root: &str, packages: &[Value]) -> Members {
     let dir_of = |package: &Value| {
         relative(
             Path::new(text(package, "manifest_path"))
                 .parent()
                 .unwrap_or(Path::new("")),
-            &root,
+            root,
         )
     };
     let by_dir: BTreeMap<String, &str> = packages
         .iter()
         .map(|p| (dir_of(p), text(p, "name")))
         .collect();
-    Ok(packages
+    packages
         .iter()
         .map(|package| {
             let deps = array(package, "dependencies")
                 .iter()
-                .filter_map(|d| by_dir.get(&relative(Path::new(d.get("path")?.as_str()?), &root)))
+                .filter_map(|d| by_dir.get(&relative(Path::new(d.get("path")?.as_str()?), root)))
                 .map(|name| (*name).to_owned())
                 .collect();
             let library = array(package, "targets")
                 .iter()
                 .any(|t| array(t, "kind").iter().any(|k| k.as_str() == Some("lib")));
+            let unrun_tests = array(package, "targets")
+                .iter()
+                .filter(|t| array(t, "kind").iter().any(|k| k.as_str() == Some("test")))
+                .filter(|t| t.get("test").and_then(Value::as_bool) == Some(false))
+                .map(|t| relative(Path::new(text(t, "src_path")), root))
+                .collect();
             let member = Member {
                 dir: dir_of(package),
                 version: text(package, "version").to_owned(),
                 deps,
                 library,
+                unrun_tests,
             };
             (text(package, "name").to_owned(), member)
         })
-        .collect())
+        .collect()
 }
 
 /// (crate, dependency) for every dependency a workspace Cargo.toml names,
@@ -899,3 +918,7 @@ fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
     }
     Ok(files)
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;

@@ -5,6 +5,14 @@ use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
+/// How long a test-side wait lasts when it contains the fake server's own
+/// socket timeouts: twice `MUST_SUCCEED_WITHIN`, so a stalled server step
+/// expires first and its panic names the step (`docs/testing.md`, "Waits
+/// and timeouts"). The socket timeouts stay `MUST_SUCCEED_WITHIN`: that
+/// bound is a hang guard sized for full parallelism, and shortening it
+/// manufactures flakes instead of diagnosing them.
+const OUTER_WITHIN: Duration = Duration::from_secs(2 * MUST_SUCCEED_WITHIN.as_secs());
+
 fn direct() -> Via {
     Via {
         proxy: None,
@@ -62,7 +70,7 @@ fn await_step<T: Send + 'static>(what: &str, step: impl FnOnce() -> T + Send + '
     std::thread::spawn(move || {
         done.send(step()).unwrap_or(());
     });
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, what)
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&rx, what) // ruling: #3729
 }
 
 /// Reads one masked client frame: a stalled echo fails at the caller naming
@@ -107,8 +115,8 @@ fn exits(via: &mut Via) -> Receiver<&'static str> {
 }
 fn both(rx: &Receiver<&'static str>) {
     let mut names = [
-        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(rx, "first websocket pump exit"),
-        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(rx, "second websocket pump exit"),
+        Deadline::after(OUTER_WITHIN).recv_or_fail(rx, "first websocket pump exit"), // ruling: #3729
+        Deadline::after(OUTER_WITHIN).recv_or_fail(rx, "second websocket pump exit"), // ruling: #3729
     ];
     names.sort();
     assert_eq!(names, ["net-ws-in", "net-ws-out"]);
@@ -178,8 +186,7 @@ fn messages_lines_ping_pong_and_lossy_utf8_cross_the_pair() {
     let _stream = caller_write(stream, b"a\xff\n".to_vec(), "client write lossy line");
     eof(read, "client EOF after close");
     both(&exit);
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&done, "server completed the bridge exchange");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "server completed the bridge exchange"); // ruling: #3729
 }
 
 fn server_close(payload: Vec<u8>) {
@@ -194,7 +201,7 @@ fn server_close(payload: Vec<u8>) {
     let stream = connect_with(&endpoint, &via).unwrap();
     eof(stream, "client EOF after server close");
     both(&exit);
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "close echoed and server EOF");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "close echoed and server EOF"); // ruling: #3729
 }
 #[test]
 fn server_close_without_a_code_is_echoed() {
@@ -219,7 +226,7 @@ fn dropping_the_pair_sends_normal_close_and_ends_both_pumps() {
     let exit = exits(&mut via);
     drop(connect_with(&endpoint, &via).unwrap());
     both(&exit);
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "caller EOF closed websocket");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "caller EOF closed websocket"); // ruling: #3729
 }
 
 #[test]
@@ -243,7 +250,7 @@ fn eof_after_an_unterminated_client_line_still_sends_normal_close() {
     stream.shutdown(Shutdown::Write).unwrap();
     eof(stream, "client EOF after shutdown with incomplete line");
     both(&exit);
-    Deadline::after(MUST_SUCCEED_WITHIN)
+    Deadline::after(OUTER_WITHIN) // ruling: #3729
         .recv_or_fail(&done, "normal close after the incomplete client line");
 }
 
@@ -263,7 +270,7 @@ fn line_feed_in_a_server_message_closes_1007() {
     let stream = connect_with(&endpoint, &via).unwrap();
     eof(stream, "client EOF after 1007 close");
     both(&exit);
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "invalid message refused");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "invalid message refused"); // ruling: #3729
 }
 
 #[test]
@@ -277,7 +284,7 @@ fn upgrade_reply_uses_the_idle_bound() {
     });
     let result = fakes::within(
         "upgrade idle bound",
-        Deadline::after(MUST_SUCCEED_WITHIN),
+        Deadline::after(OUTER_WITHIN), // ruling: #3729
         move || {
             let via = Via {
                 limits: crate::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
@@ -289,15 +296,14 @@ fn upgrade_reply_uses_the_idle_bound() {
     );
     assert!(matches!(result, Err(Error::Stalled { idle }) if idle == Duration::from_millis(100)));
     drop(release);
-    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&done, "silent upgrade server released");
+    fakes::Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "silent upgrade server released"); // ruling: #3729
 }
 
 #[test]
 fn an_idle_websocket_keeps_its_read_open_after_the_upgrade() {
     fakes::within(
         "idle websocket read",
-        Deadline::after(MUST_SUCCEED_WITHIN),
+        Deadline::after(OUTER_WITHIN), // ruling: #3729
         || {
             let (release, hold) = mpsc::channel::<()>();
             let (endpoint, done) = server(move |mut peer| {
@@ -368,8 +374,7 @@ fn tls_receive_and_shutdown_do_not_wait_for_a_held_send() {
     let exit = exits(&mut via);
     let mut stream = connect_with(&endpoint, &via).unwrap();
     stream = caller_write(stream, b"held send\n".to_vec(), "client write held send");
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&is_held, "sender encrypted and released TLS state");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&is_held, "sender encrypted and released TLS state"); // ruling: #3729
     send_frame.send(()).unwrap();
     let (line, lines) = mpsc::channel();
     std::thread::spawn(move || {
@@ -378,23 +383,21 @@ fn tls_receive_and_shutdown_do_not_wait_for_a_held_send() {
         line.send(text).unwrap();
     });
     assert_eq!(
-        Deadline::after(MUST_SUCCEED_WITHIN)
+        Deadline::after(OUTER_WITHIN) // ruling: #3729
             .recv_or_fail(&lines, "TLS plaintext while the sender is held"),
         "while held\n"
     );
     close_peer.send(()).unwrap();
     assert_eq!(
-        Deadline::after(MUST_SUCCEED_WITHIN)
-            .recv_or_fail(&exit, "in-pump shutdown without the send lock"),
+        Deadline::after(OUTER_WITHIN).recv_or_fail(&exit, "in-pump shutdown without the send lock"), // ruling: #3729
         "net-ws-in"
     );
     drop(release);
     assert_eq!(
-        Deadline::after(MUST_SUCCEED_WITHIN)
-            .recv_or_fail(&exit, "held out-pump exits on the shut socket"),
+        Deadline::after(OUTER_WITHIN).recv_or_fail(&exit, "held out-pump exits on the shut socket"), // ruling: #3729
         "net-ws-out"
     );
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "TLS server closed");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "TLS server closed"); // ruling: #3729
 }
 
 #[test]
@@ -423,8 +426,7 @@ fn shutdown_with_unread_caller_bytes_still_delivers_eof() {
         b"hold the sender\n".to_vec(),
         "client write hold the sender",
     );
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&is_held, "out-pump held before the TCP write");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&is_held, "out-pump held before the TCP write"); // ruling: #3729
     // The out-pump cannot read these bytes: it is parked inside its send.
     stream = caller_write(
         stream,
@@ -433,17 +435,17 @@ fn shutdown_with_unread_caller_bytes_still_delivers_eof() {
     );
     close_peer.send(()).unwrap();
     assert_eq!(
-        Deadline::after(MUST_SUCCEED_WITHIN)
+        Deadline::after(OUTER_WITHIN) // ruling: #3729
             .recv_or_fail(&exit, "in-pump shutdown while caller bytes are queued"),
         "net-ws-in"
     );
     drop(release);
     assert_eq!(
-        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "out-pump ends after shutdown"),
+        Deadline::after(OUTER_WITHIN).recv_or_fail(&exit, "out-pump ends after shutdown"), // ruling: #3729
         "net-ws-out"
     );
     eof(stream, "caller EOF after shutdown with queued bytes");
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "server socket closed");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "server socket closed"); // ruling: #3729
 }
 
 #[test]
@@ -475,13 +477,11 @@ fn a_peer_that_never_reads_expires_the_write_and_ends_both_pumps() {
         eof(reader, "client EOF after the websocket write stalls");
         finished.send(()).unwrap();
     });
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&eof_rx, "EOF after the websocket write stalls");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&eof_rx, "EOF after the websocket write stalls"); // ruling: #3729
     both(&exit);
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&writer_rx, "pair writer released by shutdown");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&writer_rx, "pair writer released by shutdown"); // ruling: #3729
     drop(release);
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "non-reading peer released");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "non-reading peer released"); // ruling: #3729
 }
 
 #[test]
@@ -518,7 +518,7 @@ fn an_unread_pair_is_bounded_and_completed_lines_stay_intact() {
         assert_eq!(line.len(), 65536);
         assert!(line.iter().all(|byte| *byte == b'x'));
     }
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "flooding server stopped");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "flooding server stopped"); // ruling: #3729
 }
 
 #[test]
@@ -539,5 +539,5 @@ fn a_reset_peer_ends_the_pair_and_both_pumps() {
     );
     eof(stream, "client EOF after reset with unread bytes");
     both(&exit);
-    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "peer reset with unread bytes");
+    Deadline::after(OUTER_WITHIN).recv_or_fail(&done, "peer reset with unread bytes"); // ruling: #3729
 }

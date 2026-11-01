@@ -1111,7 +1111,7 @@ arrived after `sessions` was sent.
 - **A streaming reply renders in place,** formatted as it arrives. The
   conversation follows new output and pauses when the person scrolls up. The
   mouse wheel over the conversation scrolls it 3 rows a step, a starting
-  point, not a measurement; PageUp and PageDown scroll a screen. The
+  point, not a measurement; PageUp and PageDown page it ("Keys"). The
   conversation's last column is its scroll bar and never holds text:
   while the conversation has more rows than it shows, a thumb of ┃ in
   `scroll`, with no track, shows where the rows on screen sit among all of
@@ -1441,8 +1441,10 @@ attaches later never sees them.
 The reopened session closes the cut-short turn's card with "▣ cut short: Fiber
 stopped at 14:18", at the time of the last line written. A call that started
 and never completed reads "? may have run; not run again" in its ledger row. A
-↺ resumed band follows. The jobs the new process marked `orphaned` are one line
-naming them all; clicking it shows each job's message.
+↺ resumed band follows. The jobs the new process marked `orphaned`, which no keeper
+accounted for, are one line naming them all; clicking it shows each job's
+message. A job the keeper finished while the session was gone gets its usual
+completion row.
 
 ### Naming the session
 
@@ -1805,6 +1807,9 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   workspace is chosen ("Home"). On home, Esc on a focused row goes back to the session the person came from ("Home"). It returns focus to the input box from
   the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
+- **PageUp and PageDown move one screen** wherever something scrolls: the
+  conversation, every view, every picker and every list. A screen is the
+  scrolling region's own visible rows, not the terminal's height.
 - **The reviewer setup** opens with `/reviewer-setup`. Inside it Enter, Esc,
   ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
   panel's legend says. The ✕ and a press outside the panel, which is Esc,
@@ -2325,7 +2330,7 @@ list: "↑↓ move · Enter delete · Esc close".
   Delete opens nothing, and Enter does nothing and leaves the question
   open. If the session left while the question showed, Enter sends nothing
   and closes it.
-- **Stopping every session** is `/close all`, on home or over a session. It asks in an overlay: the title "Close all", "2 sessions, 1 working, 0 open elsewhere" dim (live top-level sessions on this hub, how many of them are working, how many are open elsewhere, counted as in the quit prompt), then two choices, "Enter" to close all and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter sends each live top-level session `close` with `now` and leaves the terminal on home; Esc closes the question. With no live session it opens nothing and says "No sessions to close."; with the link down it opens nothing and keeps the draft. `/quit` straight after it exits without asking once those sessions have left, since none is working. Quit's own behaviour does not change.
+- **Stopping every session** is `/close all`, on home or over a session. It asks in an overlay: the title "Close all", "2 sessions, 1 working, 0 open elsewhere, 1 keeper" dim (live top-level sessions on this hub, how many of them are working, how many are open elsewhere, counted as in the quit prompt, and the keepers of sessions that are gone, `docs/tools.md`, "The keeper"), then two choices, "Enter" to close all and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter sends each live top-level session `close` with `now` and each of those keepers its stop, as `fiber stop` does (`docs/invocation.md`), and leaves the terminal on home; Esc closes the question. With no live session and no keeper it opens nothing and says "No sessions to close."; with the link down it opens nothing and keeps the draft. `/quit` straight after it exits without asking once those sessions have left, since none is working. Quit's own behaviour does not change.
 
 ### Getting the person's attention
 
@@ -2659,6 +2664,14 @@ every pending image is dropped and nothing more is written.
   keeping its proportions. A click opens it in the system viewer, from a
   copy the terminal writes to `cache/images/` in Fiber home
   (`docs/state.md`).
+- Under its grid an image has a caption, its one line `▣ <file> · W×H`, and a
+  click on either opens the viewer. In the prompt bubble a caption wider than
+  the bubble shortens the file name first and keeps the size.
+- A PNG shows inline as stored. A JPEG or WebP shows inline when the
+  launch names the `fiber` executable to convert it through `fiber image
+  --png`; otherwise, like any other type, it is its one line.
+- A steering message's images are one clickable line each under its text,
+  even where images show inline.
 - The terminal holds the image and moves it with the text, through kitty's
   Unicode placeholders. Fiber keeps no decoded image and sends nothing again
   on a scroll.
@@ -2856,6 +2869,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `working_line` | The working line |
 | `steering_queue` | The queued steering messages |
 | `input_box` | The input box |
+| `input_status` | The input box status row |
 | `status_rows` | The input box's status line |
 | `view:<name>` | A swapped view, built in or one an extension adds |
 | `overlay:<name>` | An overlay an extension adds, drawn over the conversation |

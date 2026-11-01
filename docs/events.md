@@ -1362,7 +1362,9 @@ Durable. What a monitor delivered to the model.
 
 #### `delegate_finished`
 
-Durable. Written just before `job_completed`.
+Durable. Written just before `job_completed`, except for a delegate that
+ended while its parent was gone, whose `job_completed` the keeper wrote
+(`docs/delegates.md`, "Events").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -1413,13 +1415,17 @@ the model saw.
 `job_completed` has no `denied`: the starting call is what gets denied.
 `error.code` values defined here are `nonzero_exit` and `timeout` (as on
 `tool_call_completed`), `signal` (a process killed by a signal Fiber did not
-send), `indeterminate`, `orphaned`, `flooded`, and `output_cap`. The output
-tail is the first time those bytes enter the log, unless a hook changed the notice.
+send), `indeterminate`, `orphaned`, `keeper_timeout`, `flooded`, and
+`output_cap`. The output tail is the first time those bytes enter the log,
+unless a hook changed the notice.
 
 Only the loop thread writes durable events, and it drains its inbox at step
 boundaries (`docs/architecture.md`, "One inbox"), so `job_completed` and
 `job_line` are written at the step boundary where the model receives them.
-Their position in the log is the delivery point.
+Their position in the log is the delivery point. The exception is a
+`job_completed` the keeper writes while its session is gone, which carries no
+`output_tail`, `notice` or `changed_by`: its delivery point is the next
+turn's `turn_started` (`docs/tools.md`, "The keeper").
 
 ### Command acknowledgements
 
@@ -1504,15 +1510,20 @@ What the reader can tell about work that was in flight, from the log alone:
 | `tool_call_requested` with `provider_item` | the provider ran it; Fiber never reviews, runs or answers it on resume |
 | `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown, unless a `fiber_exited` with `suspended_on` names an `interaction_requested` with `resumes: true` that call raised: the call was waiting on the person, and resuming runs it again, with no second `tool_call_started`, so it raises the request again |
 | `tool_call_completed` | ran, with its outcome |
-| `job_started`, no `job_completed` | the process that ran it died; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned` |
+| `job_started`, no `job_completed`, no keeper answers | the job's keeper died, or the session had none; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned` |
+| `job_started`, no `job_completed`, the keeper answers | the job is still running under the keeper; the resumed session takes it back (`docs/tools.md`, "The keeper") |
+| `job_completed` written while the session was gone | the keeper wrote it; the model is sent it with the next turn |
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |
 | `fiber_started`, no `fiber_exited`, `rewound` or `moved` after it | that process died rather than exited |
 | `rewound` or `moved` last | the session continued elsewhere |
 | `handoff_started`, no `handoff_completed` | the process died during a handoff; the handoff did not take effect, and the model's context is what it was before it |
 
-On open, Fiber writes that `job_completed` and does not touch any process. A
-crash does not kill a child in its own process group, so Fiber cannot know
-whether the job finished or still runs, and the status is not `cancelled`.
+A resume takes the log back from the keeper before it opens the log
+(`docs/tools.md`, "The keeper"), so a job the keeper ran is either completed in
+the log or still running. On open, Fiber writes `orphaned` only for a job no
+keeper accounts for, and does not touch any process: with no keeper, Fiber
+cannot know whether the job finished or still runs, and the status is not
+`cancelled`.
 
 Fiber re-runs no call a crash left without a result, even one that only reads.
 The turn it belonged to ended with the crash, so a re-run would answer the
@@ -1680,9 +1691,12 @@ under one key per record (`docs/extensions.md`, "Extension state").
 writer truncates a partial line before appending, so a power cut cannot make a
 session unopenable.
 
-**One writer per session, enforced by a lock file.** A second Fiber process
-opening the same session refuses and names the holder, plainly, rather than
-hanging or corrupting the log. Readers need no lock at all: append-only plus
+**One writer at a time, enforced by a lock file.** The writer is the session
+process, or its keeper while the session is gone (`docs/tools.md`, "The
+keeper"), and the lock passes between them only by the keeper's handover. A
+second Fiber process opening the same session refuses and names the holder,
+plainly, rather than hanging or corrupting the log; one that finds the
+session's keeper holding the lock takes the handover instead. Readers need no lock at all: append-only plus
 "stop at the last complete line" is the whole protocol.
 
 ## The session directory

@@ -42,10 +42,12 @@ assumes the heavy end.
   parent starts one for each Fiber delegate.
 - No session has a pipe driver. Every driver is a client over the session's
   socket. `fiber ask`'s stdout is a watcher.
-- A Fiber delegate is a child process of its parent, as a delegate on any
-  other harness is. The parent is an ordinary client over the delegate's
-  socket, and holds a pipe to the delegate's stdin that it never writes to.
-  End of file on that pipe starts the delegate's shutdown.
+- A Fiber delegate is a child process of its parent session's keeper, the
+  small process that also runs the session's shell commands
+  ([#3878](https://github.com/aakshintala/fiber/issues/3878)). The parent is an
+  ordinary client over the delegate's socket. The keeper holds a pipe to the
+  delegate's stdin that it never writes to. End of file on that pipe starts
+  the delegate's shutdown.
 - Every session starts its own MCP servers and process extensions, a
   delegate included. Nothing is shared between sessions (`docs/mcp.md`,
   "Where servers run"; `docs/extensions.md`).
@@ -77,7 +79,8 @@ assumes the heavy end.
 - Stopping a delegate is a signal to its process group, which always works.
   A crash in C code (Lua, ring), an out-of-memory kill or a panic ends one
   delegate and nothing else. An out-of-memory kill in an image child ends
-  that child, not the session. A delegate whose parent died stops within
+  that child, not the session. A delegate whose parent died carries on
+  under the keeper and finishes its task; one whose keeper died stops within
   the shutdown bound, because the kernel closes its lifeline.
 - Every client, local or remote, has one address, one protocol and one place
   where it is authenticated. Locally, being the account that owns Fiber home

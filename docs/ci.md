@@ -42,6 +42,9 @@ Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report without gating it
 directly: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`,
 `flake_report`, `bug_red_linux`, `bug_red_macos`, `journey`, `journey_report`.
+A run can conclude `failure` while `CI` passes, when the job that failed is
+one of these: the merge verdict is the `CI` check, never the run's
+conclusion.
 The bug-red legs report
 nextest's status to the `bug_red` collector, which is in the verdict's
 `needs`; their raw results are not selection entries. The docs check fails
@@ -199,9 +202,14 @@ The `stress` job runs on a ready pull request on Linux x86_64 beside the
 test jobs and builds from the same restored cache. The tests it runs are
 the test functions the diff adds or changes, found by
 `cargo xtask stress-plan` with the same test-file rules as the red-commit
-check, and a diff that touches no test function skips the run. The count
-is read from the linked issue's labels. The job is in `ci`'s `needs`, so
-one failure stops the merge. It writes its wall
+check, and a diff that touches no test function skips the run. A test
+function in a target whose `Cargo.toml` declares `test = false` is not one:
+only an explicit `--test <name>` builds such a target, so a plain filter
+matches nothing in it, and a diff whose touched test functions are all in
+such targets skips the run. A run whose
+filter matches no test, or whose iteration runs fewer tests than the plan
+names, fails the job. The count is read from the linked issue's labels. The job is in `ci`'s `needs`,
+so one failure stops the merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched
 test still gets nextest's one retry but a pass on that retry fails the
 test job (`cargo xtask touched-retries`).
@@ -324,7 +332,16 @@ On Linux x86_64 alone:
   (`docs/workflow.md`, "The pull request"). A pull request whose every
   changed file is a docs file, as "Selection" defines it, passes the check
   with a message saying so: the doc was wrong and the code was right, so no
-  test can show the bug. The label is read when the run's selection job
+  test can show the bug. Test files in a target whose `Cargo.toml` declares
+  `test = false` (today `main_journeys`) are left out of the plan, because
+  only an explicit `--test <name>` runs them. A pull request whose red
+  commit's only test files are such files passes the check, with a message
+  saying its only touched tests are journey tests, which pull-request CI
+  does not run until #3899 step 6; the legs agree on that result or the
+  check fails. A red commit that also holds another test file runs that
+  file and needs it to fail, and any other empty plan fails. When the
+  journey target joins pull-request CI (#3899, step 6), the plans emit
+  `--test <name>` for it instead. The label is read when the run's selection job
   runs, so a relabel takes effect at the next push or a whole-run rerun;
   rerunning only the failed job keeps the old reading.
 - each profiling feature built once, without running it:

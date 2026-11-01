@@ -117,6 +117,13 @@ monitor or a delegate. It has its own id and its own ending, and it survives
 cancellation of the turn that started it.
 _Avoid_: background session, task, process
 
+### Keeper
+
+The small process that runs a session's shell commands and delegates, so
+they outlive a crash of the session. While the session is gone it writes their
+endings to the session log, and a resumed session takes them back.
+_Avoid_: daemon, supervisor
+
 ### Journey
 
 A binary-level test that walks one flow a person takes, end to end. See

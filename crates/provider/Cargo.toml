@@ -17,12 +17,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 ureq.workspace = true
 
-[features]
-test-hooks = []
-
 [dev-dependencies]
 fakes = { path = "../fakes" }
-provider = { path = ".", features = ["test-hooks"] }
 
 # The jigs (docs/testing.md, "Jigs"): binary jigs. `decode` has no unit
 # tests of its own; `record`'s are in `tests/support/record.rs`, run inside

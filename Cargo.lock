@@ -957,7 +957,6 @@ dependencies = [
  "base64 0.23.1",
  "config",
  "contract",
- "extensions",
  "fakes",
  "flate2",
  "log 0.0.0",
@@ -2368,7 +2367,6 @@ dependencies = [
  "contract",
  "fakes",
  "net",
- "provider",
  "serde_json",
  "support",
  "thiserror 2.0.21",
@@ -3160,7 +3158,6 @@ dependencies = [
  "libc",
  "ring",
  "rustix",
- "support",
  "thiserror 2.0.21",
 ]
 

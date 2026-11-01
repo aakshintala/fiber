@@ -13,7 +13,6 @@ expression: "checked(outside(), \"outside\", 1)"
 
 
 
-
           ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
             Reviewer setup                                                   ✕
@@ -21,12 +20,11 @@ expression: "checked(outside(), \"outside\", 1)"
             Topic 2 of 6 · Internal hosts
             Which internal hosts, registries and services count as inside?
             answer: only corp.example hosts and registries count as inside
-⋮           › [global]       corp.example hosts and registries count as inside            ⋮
+            › [global]       corp.example hosts and registries count as inside
 ⋮                                                                                         ⋮
 ⋮           Tab flip layer · Enter confirm · e edit · x strike · Esc back                 ⋮
-
+⋮                                                                                         ⋮
           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
 
 
 
@@ -41,4 +39,6 @@ expression: "checked(outside(), \"outside\", 1)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █
+ ▌───────────────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                                 ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
