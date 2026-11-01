@@ -937,6 +937,7 @@ fn session_card<'a>(
         spend,
         cache_expires: None,
         budget: Some(20.0),
+        cache_expires: None,
         speed: Some(64),
         turns: 12,
         tools_down,

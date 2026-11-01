@@ -377,7 +377,7 @@ fn percent_decode(text: &str) -> String {
 
 /// Whether `line` is the remote server's first start failing as
 /// not-logged-in: the signal the login test's first `mcp_servers` query
-/// waits for, so it never reads the `connecting` row of a start still in
+/// waits for, so it never reads the `not-started` row of a start still in
 /// flight (`docs/mcp.md`, "Servers, their state and the per-server
 /// commands"). It names the server and the reason, so no other server's
 /// failure releases the wait early.
@@ -431,7 +431,7 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
     // The session settles every server before it records their startup
     // failures together (`loop::mcp_servers_started`), so once both
     // `mcp_server_failed` lines are observed the `up` row is ready too,
-    // never the `connecting` of a start still in flight: an initial
+    // never the `not-started` of a start still in flight: an initial
     // ready emits no event of its own (`crates/mcp/src/slot.rs` records
     // `Ready` only on restart), and the failures are written only after
     // every start reported. A `full` subscribe replays the log, so either
@@ -548,7 +548,7 @@ fn login_against_a_fake_authorization_server_makes_the_server_ready() {
     // replays the log, so the failure may already sit in the startup
     // lines the startup wait read past: only when it does not, wait for
     // its live line. Either way the failure is recorded before the first
-    // query, so the row reads `needs-login`, never the `connecting` of a
+    // query, so the row reads `needs-login`, never the `not-started` of a
     // start still in flight.
     if !driver.startup.iter().any(remote_not_logged_in) {
         until(
@@ -764,6 +764,12 @@ fn reconnect_of_an_unapproved_repository_server_gives_the_approve_advice() {
     let db = Driver::row(&rows, "db");
     assert_eq!(db["layer"], "repository", "{db:?}");
     assert_eq!(db["approved"], false, "{db:?}");
+    // The server is declared but nothing has called it, so it never
+    // started and records no failure: it reads `not-started` with no
+    // tool count (`docs/mcp.md`, "Servers, their state and the
+    // per-server commands").
+    assert_eq!(db["state"], "not-started", "{db:?}");
+    assert!(db.get("tools").is_none(), "{db:?}");
 
     let rejected = driver.command("c_reconnect", "mcp_reconnect", json!({"server": "db"}));
     assert_eq!(rejected["kind"], "command_rejected", "{rejected:?}");
@@ -839,6 +845,94 @@ fn two_quick_reconnects_spawn_the_server_once() {
         2,
         "the failed start plus one restart spawn"
     );
+    driver.finish();
+}
+
+#[test]
+fn two_quick_reconnects_join_a_start_that_fails() {
+    let setup = support::Setup::new_with_mcp_fixture();
+    let dir = fixture_dir(&setup, "fx");
+    let spawns = setup.root.path().join("spawns");
+    let sync = setup.root.path().join("sync");
+    let release = setup.root.path().join("release");
+    fakes::fifo(&sync);
+    fakes::fifo(&release);
+    let wrapper = setup.root.path().join("flaky.sh");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/bash\nprintf 'spawn\\n' >> \"{}\"\nif [ \"$(wc -l < \"{}\")\" -eq 1 ]; then exit 1; fi\nprintf 'started\\n' > \"{}\"\nread -r release < \"{}\"\nexit 1\n",
+            spawns.display(), spawns.display(), sync.display(), release.display(),
+        ),
+    )
+    .unwrap();
+    let _model = configure(
+        &setup,
+        &json!({
+            "flaky": {
+                "command": "/bin/bash",
+                "args": [wrapper.display().to_string()],
+                "env": {"PATH": std::env::var_os("PATH").unwrap().to_str().unwrap()},
+            },
+            "up": {
+                "command": "/bin/bash",
+                "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+            },
+        }),
+    );
+    let driver = Driver::start(
+        setup,
+        &doors::mint("s_"),
+        &std::env::var_os("PATH").unwrap(),
+    );
+    let rows = driver.servers("c_before");
+    assert_eq!(Driver::row(&rows, "flaky")["state"], "failed", "{rows:?}");
+
+    driver
+        .client
+        .send(r#"{"id":"c_one","command":"mcp_reconnect","args":{"server":"flaky"}}"#);
+    fakes::within(
+        "the reconnect's start rendezvous",
+        driver.setup.deadline.start_wait(),
+        move || {
+            let mut line = String::new();
+            BufReader::new(fs::File::open(sync).unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            assert_eq!(line, "started\n");
+        },
+    );
+    driver
+        .client
+        .send(r#"{"id":"c_two","command":"mcp_reconnect","args":{"server":"flaky"}}"#);
+    // The second answer precedes release: it joins the executing start
+    // (`docs/mcp.md`, "Servers, their state and the per-server commands").
+    let second = support::recv_answer(
+        &driver.client,
+        "c_two",
+        "the joined reconnect acknowledgement",
+    );
+    assert_eq!(second["kind"], "command_accepted", "{second:?}");
+    assert!(second["payload"].get("result").is_none(), "{second:?}");
+    let mut writer = fakes::within(
+        "the reconnect's release reader",
+        driver.setup.deadline.start_wait(),
+        move || fs::OpenOptions::new().write(true).open(release).unwrap(),
+    );
+    writer.write_all(b"release\n").unwrap();
+    let first = support::recv_answer(
+        &driver.client,
+        "c_one",
+        "the first reconnect acknowledgement",
+    );
+    assert_eq!(first["kind"], "command_accepted", "{first:?}");
+    let rows = driver.servers("c_after");
+    assert_eq!(Driver::row(&rows, "flaky")["state"], "failed", "{rows:?}");
+    assert_eq!(Driver::row(&rows, "up")["state"], "ready", "{rows:?}");
+    // A reconnect during a start starts nothing, even when it fails
+    // (`docs/mcp.md`, "Servers, their state and the per-server commands").
+    assert_eq!(fs::read_to_string(&spawns).unwrap().lines().count(), 2);
+    drop(writer);
     driver.finish();
 }
 

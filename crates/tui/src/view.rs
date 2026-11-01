@@ -760,3 +760,7 @@ pub(crate) fn text(buf: &Buffer) -> String {
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tool_group_nesting_tests.rs"]
+mod tool_group_nesting_tests;

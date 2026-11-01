@@ -4526,3 +4526,130 @@ fn a_rebuilt_conversation_lists_the_added_folders_and_keeps_the_add_message() {
     let added_text = user_text(&rebuilt[1]);
     assert!(added_text.contains("/shared"), "{added_text}");
 }
+
+#[test]
+fn a_failed_result_with_text_keeps_its_own_text() {
+    let requested = Event::ToolCallRequested(ToolCallRequested {
+        name: "mcp__fx__echo".into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    });
+    let completed = Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Failed,
+        reason: None,
+        error: Some(contract::shapes::Failure {
+            code: contract::ErrorCode::ToolError,
+            message: "tool failed".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        process: None,
+        content: vec![contract::shapes::ContentPart::Text {
+            text: "no such thing".into(),
+        }],
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        protected_paths: None,
+        provider_item: None,
+        hosts_surfaced: Vec::new(),
+        loaded: None,
+    });
+    let lines = vec![
+        line("tool_call_requested", &requested, Some("a_1")),
+        line("tool_call_completed", &completed, Some("a_1")),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    let result = rebuilt
+        .iter()
+        .find_map(|input| match input {
+            Input::ToolResult {
+                action_id,
+                text,
+                is_error,
+                ..
+            } => (action_id.0 == "a_1").then(|| (text.clone(), *is_error)),
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
+        })
+        .expect("the rebuilt conversation holds the failed result");
+    assert!(result.1);
+    assert_eq!(result.0, "no such thing");
+}
+
+#[test]
+fn a_resumed_log_holding_a_failed_empty_result_sends_its_error_message() {
+    let requested = Event::ToolCallRequested(ToolCallRequested {
+        name: "mcp__fx__hang".into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    });
+    let completed = Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Failed,
+        reason: None,
+        error: Some(contract::shapes::Failure {
+            code: contract::ErrorCode::Timeout,
+            message: "The MCP server `fx` did not answer `hang` within 200 ms.".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        process: None,
+        content: Vec::new(),
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        protected_paths: None,
+        provider_item: None,
+        hosts_surfaced: Vec::new(),
+        loaded: None,
+    });
+    let lines = vec![
+        line("tool_call_requested", &requested, Some("a_1")),
+        line("tool_call_completed", &completed, Some("a_1")),
+        line(
+            "fiber_started",
+            &Event::FiberStarted(FiberStarted {
+                version: "0.0.0".into(),
+                resumed: true,
+            }),
+            None,
+        ),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    let result = rebuilt
+        .iter()
+        .find_map(|input| match input {
+            Input::ToolResult {
+                action_id,
+                text,
+                is_error,
+                ..
+            } => (action_id.0 == "a_1").then(|| (text.clone(), *is_error)),
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
+        })
+        .expect("the rebuilt conversation holds the failed result");
+    assert!(result.1);
+    assert_eq!(
+        result.0,
+        "The MCP server `fx` did not answer `hang` within 200 ms."
+    );
+}

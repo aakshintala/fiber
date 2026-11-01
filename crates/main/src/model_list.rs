@@ -22,13 +22,16 @@ use crate::switch::Reads;
 /// thread off the loop, with Fiber home, the workspace, the clock, the
 /// locks and the process's shared reads. Every picker read runs through
 /// the same [`Reads`], so the terminal's cancel at exit reaches one in
-/// flight.
+/// flight. The terminal's diagnostic writer installs before entry runs:
+/// at debug an entry script's own `host.http` records its line; at info
+/// no writer passes and entry requests stay unobserved.
 pub(crate) fn reader(
     home: PathBuf,
     workspace: PathBuf,
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
     reads: Arc<Reads>,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> tui::ReadModels {
     Arc::new(move |refresh| {
         catalogue(
@@ -38,6 +41,7 @@ pub(crate) fn reader(
             Arc::clone(&locks),
             Arc::clone(&reads),
             refresh,
+            debug.clone(),
         )
         .map_err(|error| error.to_string())
     })
@@ -59,6 +63,7 @@ pub(crate) fn catalogue(
     locks: Arc<dyn PathLock>,
     reads: Arc<Reads>,
     refresh: tui::Refresh,
+    debug: Option<Arc<dyn contract::diag::DebugLog>>,
 ) -> Result<tui::Catalogue, cli::ModelListsError> {
     let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
         reads.credential(command, timeout, &*clock)
@@ -69,7 +74,14 @@ pub(crate) fn catalogue(
         refresh,
         clock.wall(),
         &|config| {
-            SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks), None)
+            SessionExtensions::load_with_diagnostics(
+                &home,
+                config,
+                Arc::clone(&clock),
+                Arc::clone(&locks),
+                None,
+                debug.clone(),
+            )
         },
         &run,
         clock.as_ref(),

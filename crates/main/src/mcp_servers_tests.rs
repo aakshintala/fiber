@@ -132,6 +132,98 @@ fn userinfo_is_a_named_config_error_without_exposing_credentials() {
 }
 
 #[test]
+fn reconnect_validation_precedes_the_flight_and_each_start_clears_it() {
+    use std::sync::{Arc, Mutex};
+    fakes::within(
+        "reconnect flights",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            let setup = Setup::new();
+            let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+            let servers = empty_servers(&setup.rig, &clock);
+            let flights = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+            let reconnect = super::reconnect_server(
+                sources_of(&setup.rig),
+                Arc::clone(&servers),
+                Arc::new(|_, _| {}),
+                setup.rig.root.path().join("artifacts"),
+                Arc::new(DummyImages),
+                clock,
+                Arc::clone(&flights),
+            );
+            let mut collections = 0;
+            let mut collect = |server: &str| {
+                assert_eq!(server, "db");
+                assert!(flights.lock().unwrap().contains(server));
+                collections += 1;
+            };
+            for (config, code) in [
+                (
+                    json!({"mcp":{"servers":{}}}),
+                    contract::ErrorCode::InvalidArguments,
+                ),
+                (
+                    json!({"mcp":{"servers":{"db":{}}}}),
+                    contract::ErrorCode::InvalidArguments,
+                ),
+                (
+                    json!({"mcp":{"servers":{"db":{"command":[]}}}}),
+                    contract::ErrorCode::ConfigInvalid,
+                ),
+            ] {
+                setup.global(&config);
+                let failure = reconnect("db", &mut collect)
+                    .err()
+                    .expect("invalid config never starts");
+                assert_eq!(failure.code, code);
+                assert!(flights.lock().unwrap().is_empty());
+            }
+            setup.global(&json!({}));
+            setup.repository(&json!({"mcp":{"servers":{"db":{"command":"/bin/sh"}}}}));
+            let failure = reconnect("db", &mut collect)
+                .err()
+                .expect("repository offer owns this server");
+            assert_eq!(failure.code, contract::ErrorCode::McpServerUnapproved);
+            assert!(failure.message.contains("fiber approve"));
+            assert!(flights.lock().unwrap().is_empty());
+            setup.repository(&json!({}));
+            let fixture = setup.rig.root.path().join("ready");
+            std::fs::create_dir(&fixture).unwrap();
+            std::fs::write(
+                fixture.join("tools.json"),
+                r#"[{"name":"list","inputSchema":{"type":"object"}}]"#,
+            )
+            .unwrap();
+            std::fs::write(fixture.join("fail-start"), "").unwrap();
+            setup.global(&json!({"mcp":{"servers":{"db":{"command":fakes::mcp_fixture(),"args":[fixture]}}}}));
+            let failed =
+                reconnect("db", &mut collect).expect("a failed start is an accepted attempt");
+            assert!(matches!(
+                &failed.records[..],
+                [contract::tool::ServerRecord::Failed(_)]
+            ));
+            assert!(flights.lock().unwrap().is_empty());
+            std::fs::remove_file(fixture.join("fail-start")).unwrap();
+            let ready = reconnect("db", &mut collect).expect("retry after the failed start");
+            assert!(
+                servers.running("db"),
+                "the retry adopted its running server"
+            );
+            assert_eq!(ready.tools.len(), 1);
+            assert_eq!(ready.tools[0].1.definition().name, "mcp__db__list");
+            assert!(flights.lock().unwrap().is_empty());
+            let again = reconnect("db", &mut collect).expect("ready server is a no-op");
+            assert!(again.records.is_empty());
+            assert!(flights.lock().unwrap().is_empty());
+            assert_eq!(
+                collections, 3,
+                "validated attempts collect; rejected commands never publish a flight"
+            );
+        },
+    );
+}
+
+#[test]
 fn no_servers_starts_nothing() {
     let setup = Setup::new();
     let specs = setup.specs();
@@ -168,6 +260,7 @@ fn empty_servers(
         &config::mcp_cache_dir(&rig.home),
         clock,
         "test",
+        None,
     );
     assert!(started.failed.is_empty());
     std::sync::Arc::new(started.servers)
@@ -191,18 +284,7 @@ fn reconnecting_a_repository_server_is_invalid_arguments() {
     let config = setup.rig.config(Vec::<String>::new());
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let servers = empty_servers(&setup.rig, &clock);
-    let images: std::sync::Arc<dyn contract::images::Images> = std::sync::Arc::new(DummyImages);
-    let error = super::adopt_server(
-        &config,
-        &sources_of(&setup.rig),
-        &servers,
-        "db",
-        &setup.rig.root.path().join("artifacts"),
-        &images,
-        &clock,
-    )
-    .err()
-    .expect("a repository server never adopts");
+    let error = super::adoption_spec(&config, "db").expect_err("a repository server never adopts");
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
     assert!(
         error.message.contains("is a repository server"),
@@ -266,7 +348,7 @@ fn a_ready_after_a_failure_clears_the_failure() {
     assert_eq!(rows[0].name, "db");
     assert_eq!(
         rows[0].state,
-        contract::events::McpServerState::Connecting,
+        contract::events::McpServerState::NotStarted,
         "{rows:?}"
     );
     servers.stop();
@@ -277,7 +359,7 @@ fn a_settled_failure_reads_needs_login_before_its_line_is_written() {
     // The pre-commit gap: the startup settles every server before the
     // door's commit writes their failure lines, and the door serves
     // queries from before that commit, so a query in the gap reads the
-    // settled row, never the `connecting` of a start still in flight.
+    // settled row, never the `not-started` of a start still in flight.
     // The seed carries the settled failure the commit is about to
     // write (`docs/mcp.md`, "Servers, their state and the per-server
     // commands").
@@ -399,7 +481,7 @@ fn a_ready_line_clears_the_seed() {
     assert_eq!(rows[0].name, "remote");
     assert_eq!(
         rows[0].state,
-        contract::events::McpServerState::Connecting,
+        contract::events::McpServerState::NotStarted,
         "{rows:?}"
     );
 }
@@ -429,7 +511,7 @@ fn an_old_ready_does_not_clear_the_seed() {
     // A resume inherits the old session's ready, then this startup
     // settles the same server as not-logged-in: the seed supersedes
     // the history, so the row reads `needs-login`, never the
-    // `connecting` an old ready folded over the seed would leave. A
+    // `not-started` an old ready folded over the seed would leave. A
     // mutant that folds the whole log over the seed fails here.
     let seed = seed_of(contract::events::ServerFailure::NotLoggedIn);
     let ready = contract::events::Event::McpServerReady(contract::events::McpServerReady {
@@ -449,7 +531,7 @@ fn an_old_ready_does_not_clear_the_seed() {
 fn a_logged_failure_without_a_seed_reads_failed() {
     // A mid-session death lands in the log with no seed entry: the fold
     // still records its row, so the server reads `failed`, never the
-    // `connecting` of a start with nothing settled. A mutant that drops
+    // `not-started` of a start with nothing settled. A mutant that drops
     // the failure arm of the fold fails here.
     let failed = contract::events::Event::McpServerFailed(settled_failure(
         contract::events::ServerFailure::StartFailed,
@@ -1119,6 +1201,7 @@ fn pending(
         Vec::new(),
         std::sync::Arc::new(DummyImages),
         None,
+        None,
     )
     .expect("the pending MCP start")
 }
@@ -1170,6 +1253,7 @@ fn wired(
                 &delegates,
                 skills,
                 extension_tools,
+                None,
                 None,
                 Default::default(),
                 std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
@@ -1293,6 +1377,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
                 &delegates,
                 skills(),
                 Vec::new(),
+                None,
                 None,
                 Default::default(),
                 std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {

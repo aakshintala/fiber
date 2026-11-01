@@ -62,6 +62,10 @@ pub(crate) struct Call {
     pub(crate) action: String,
     pub(crate) name: String,
     pub(crate) arguments: Value,
+    /// The outer call this call ran inside, from `ran_by`'s
+    /// `outer_action_id`; `None` on the model's own calls and on
+    /// `command_id`-anchored inners, which never nest.
+    pub(crate) outer_action_id: Option<contract::ActionId>,
     /// How it ended; `None` while it runs.
     pub(crate) status: Option<CallStatus>,
     pub(crate) changes: Vec<FileChange>,
@@ -197,6 +201,19 @@ pub(crate) struct Streaming {
     pub(crate) text: String,
 }
 
+/// The mutable rendering state one [`Group::call_tree`] walk threads
+/// through: the gutter and indent, the width, the image layout, the
+/// drawn flags and the rows. One struct, so the walk takes at most
+/// seven arguments.
+struct CallTreeRender<'a> {
+    gutter: &'a mut String,
+    blank: &'a str,
+    width: u16,
+    layout: &'a crate::image::Layout,
+    drawn: &'a mut [bool],
+    out: &'a mut Rows,
+}
+
 impl Group {
     /// Widens the group's span to `ts`.
     pub(in crate::turn) fn touch(&mut self, ts: u64) {
@@ -307,7 +324,21 @@ impl Group {
         let mut edit_missing = 0u64;
         let mut write_paths: Vec<&str> = Vec::new();
         let mut write_missing = 0u64;
+        // Every call with an inner pointing at it never counts as a
+        // kind of its own, at any depth: the summary reads what the
+        // inner calls did.
+        let mut outers: Vec<&str> = Vec::new();
         for call in self.calls() {
+            if let Some(outer) = call.outer_action_id.as_ref()
+                && !outers.contains(&outer.0.as_str())
+            {
+                outers.push(&outer.0);
+            }
+        }
+        for call in self.calls() {
+            if outers.contains(&call.action.as_str()) {
+                continue;
+            }
             match kind(&call.name, &call.arguments) {
                 Kind::Read => match call.arguments.get("path").and_then(Value::as_str) {
                     Some(path) => {
@@ -565,14 +596,12 @@ impl Group {
     /// gutter with the width less the gutter drawn; without one, or when
     /// it falls back, the built-in row draws.
     fn ledger(&self, width: u16, layout: &crate::image::Layout, out: &mut Rows) {
-        let max = usize::from(width);
         for section in &self.sections {
             let mut gutter = format!("{:>5} ", section.step);
             // A step number longer than five digits widens the gutter
             // past six columns; its later rows stay blank but keep the
             // grown width, so every column stays put.
             let gutter_cells = crate::format::width(&gutter);
-            let gutter_shift = u16::try_from(gutter_cells).unwrap_or(u16::MAX);
             let blank = " ".repeat(gutter_cells);
             for (code, attempt) in &section.failed {
                 let gutter = std::mem::replace(&mut gutter, blank.clone());
@@ -587,71 +616,210 @@ impl Group {
                     out,
                 );
             }
-            for call in &section.calls {
-                let gutter = std::mem::replace(&mut gutter, blank.clone());
-                let output = first_result_line(call.content());
-                let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
-                let input = self.ledger_input(call, &output, flat);
-                // The gutter stays with the terminal: the renderer draws
-                // what follows it with the width less the gutter drawn.
-                let after_gutter = width.saturating_sub(gutter_shift);
-                let builtin = |input: &Input<'_>, w: u16| {
-                    let Input::LedgerRow(built) = input else {
-                        return Vec::new();
-                    };
-                    vec![crate::ext::spans::from_ratatui(&self.builtin_row(built, w))]
-                };
-                let wrapped = Input::LedgerRow(input);
-                let specific = format!("ledger_row:{}", call.name);
-                let (slot, selection) = match out.fills_for(&specific) {
-                    crate::ext::SlotSelection::Absent => {
-                        ("ledger_row", out.fills_for("ledger_row"))
-                    }
-                    selection @ (crate::ext::SlotSelection::Draw { .. }
-                    | crate::ext::SlotSelection::Suppressed) => (specific.as_str(), selection),
-                };
-                let rendered = match selection {
-                    crate::ext::SlotSelection::Draw { extension } => {
-                        out.ext_lines(slot, &extension, &wrapped, after_gutter, &builtin)
-                    }
-                    crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => {
-                        None
-                    }
-                };
-                match rendered {
-                    Some(fitted) => {
-                        for (index, line) in fitted.iter().enumerate() {
-                            let mark = if index == 0 {
-                                gutter.clone()
-                            } else {
-                                blank.clone()
-                            };
-                            let (row, text) = gutter_row(mark, gutter_shift, line, max);
-                            out.push_text((row, Some(Target::Call(call.id))), text);
+            // The section's calls as outer groups: a call whose outer
+            // names a call of this section nests under it, at any depth;
+            // every other call draws top-level, in push order, so an inner
+            // arriving before its outer still lands under it.
+            let mut children: Vec<Vec<usize>> = vec![Vec::new(); section.calls.len()];
+            let mut roots: Vec<usize> = Vec::new();
+            for (index, call) in section.calls.iter().enumerate() {
+                let parent = call.outer_action_id.as_ref().and_then(|outer| {
+                    section
+                        .calls
+                        .iter()
+                        .position(|other| other.action == outer.0)
+                        .filter(|at| *at != index)
+                });
+                match parent {
+                    Some(at) => {
+                        if let Some(siblings) = children.get_mut(at) {
+                            siblings.push(index);
+                        } else {
+                            roots.push(index);
                         }
                     }
-                    None => {
-                        let row = fit(
-                            {
-                                let mut row = vec![dim_span(gutter)];
-                                row.extend(self.builtin_row(&input, after_gutter));
-                                row
-                            },
-                            max,
-                        );
-                        out.push((Line::from(row), Some(Target::Call(call.id))));
-                    }
+                    None => roots.push(index),
                 }
-                for warning in call.protected() {
-                    let row = fit(crate::format::warning_line(warning), max);
-                    out.push((Line::from(row), Some(Target::Call(call.id))));
-                }
-                crate::turn::images::call_rows(&call.images, width, layout, out);
-                if out.open_scope(Target::Call(call.id), call.open) {
-                    super::opened::rows(call, width, out);
-                }
-                out.end_scope();
             }
+            // Reachable from the roots through the children. Calls no
+            // tree reaches — a contradictory anchor strands them outside
+            // every tree — still draw, flat and top-level in push order.
+            // A call hidden inside a closed outer stays hidden: it is
+            // reached, only not drawn.
+            let mut reached = vec![false; section.calls.len()];
+            let mut stack: Vec<usize> = roots.clone();
+            while let Some(index) = stack.pop() {
+                if reached.get(index).is_some_and(|reached| *reached) {
+                    continue;
+                }
+                if let Some(slot) = reached.get_mut(index) {
+                    *slot = true;
+                }
+                if let Some(inners) = children.get(index) {
+                    stack.extend(inners.iter().copied());
+                }
+            }
+            // Each call draws once, so no anchor cycle nests forever.
+            let mut drawn = vec![false; section.calls.len()];
+            let mut render = CallTreeRender {
+                gutter: &mut gutter,
+                blank: blank.as_str(),
+                width,
+                layout,
+                drawn: drawn.as_mut_slice(),
+                out: &mut *out,
+            };
+            for root in roots {
+                self.call_tree(section, &children, root, 0, &mut render);
+            }
+            for index in 0..section.calls.len() {
+                let stranded = reached.get(index).is_some_and(|reached| !reached)
+                    && render.drawn.get(index).is_some_and(|drawn| !drawn);
+                if stranded {
+                    self.call_tree(section, &children, index, 0, &mut render);
+                }
+            }
+        }
+    }
+
+    /// One call's ledger rows at `depth`: its row two columns further in
+    /// per level, its warning and image rows, then its opened body when
+    /// open — the arguments block with each inner call's rows under it
+    /// when it has inners, else its own result. Each call draws once, so
+    /// no anchor cycle nests forever.
+    fn call_tree(
+        &self,
+        section: &Section,
+        children: &[Vec<usize>],
+        index: usize,
+        depth: usize,
+        render: &mut CallTreeRender<'_>,
+    ) {
+        let Some(call) = section.calls.get(index) else {
+            return;
+        };
+        if render.drawn.get(index).is_some_and(|drawn| *drawn) {
+            return;
+        }
+        if let Some(done) = render.drawn.get_mut(index) {
+            *done = true;
+        }
+        let inners: &[usize] = match children.get(index) {
+            Some(inners) => inners,
+            None => &[],
+        };
+        let max = usize::from(render.width);
+        let mark = std::mem::replace(&mut *render.gutter, render.blank.to_owned());
+        // The indent composes with the fit: the content keeps the width
+        // past the gutter less two columns per level.
+        let pad = "  ".repeat(depth);
+        let indent = u16::try_from(pad.len()).unwrap_or(u16::MAX);
+        let shift = u16::try_from(crate::format::width(render.blank)).unwrap_or(u16::MAX);
+        let output = first_result_line(call.content());
+        let flat = render.out.seam.as_ref().is_some_and(|seam| seam.flat);
+        let input = self.ledger_input(call, &output, flat);
+        // The gutter stays with the terminal: the renderer draws what
+        // follows it with the width less the gutter and indent drawn.
+        let after_gutter = render.width.saturating_sub(shift).saturating_sub(indent);
+        let builtin = |input: &Input<'_>, w: u16| {
+            let Input::LedgerRow(built) = input else {
+                return Vec::new();
+            };
+            vec![crate::ext::spans::from_ratatui(&self.builtin_row(built, w))]
+        };
+        let wrapped = Input::LedgerRow(input);
+        let specific = format!("ledger_row:{}", call.name);
+        let (slot, selection) = match render.out.fills_for(&specific) {
+            crate::ext::SlotSelection::Absent => ("ledger_row", render.out.fills_for("ledger_row")),
+            selection @ (crate::ext::SlotSelection::Draw { .. }
+            | crate::ext::SlotSelection::Suppressed) => (specific.as_str(), selection),
+        };
+        let rendered = match selection {
+            crate::ext::SlotSelection::Draw { extension } => {
+                render
+                    .out
+                    .ext_lines(slot, &extension, &wrapped, after_gutter, &builtin)
+            }
+            crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
+        };
+        match rendered {
+            Some(fitted) => {
+                for (index, line) in fitted.iter().enumerate() {
+                    let head = if index == 0 {
+                        format!("{mark}{pad}")
+                    } else {
+                        format!("{}{pad}", render.blank)
+                    };
+                    let shift = shift.saturating_add(indent);
+                    let (row, text) = gutter_row(head, shift, line, max);
+                    render
+                        .out
+                        .push_text((row, Some(Target::Call(call.id))), text);
+                }
+            }
+            None => {
+                let row = fit(
+                    {
+                        let mut row = vec![dim_span(format!("{mark}{pad}"))];
+                        row.extend(self.builtin_row(&input, after_gutter));
+                        row
+                    },
+                    max,
+                );
+                render
+                    .out
+                    .push((Line::from(row), Some(Target::Call(call.id))));
+            }
+        }
+        for warning in call.protected() {
+            let row = fit(crate::format::warning_line(warning), max);
+            render
+                .out
+                .push((Line::from(row), Some(Target::Call(call.id))));
+        }
+        crate::turn::images::call_rows(&call.images, render.width, render.layout, &mut *render.out);
+        if render.out.open_scope(Target::Call(call.id), call.open) {
+            if inners.is_empty() {
+                let width = render.width;
+                super::opened::rows(call, width, &mut *render.out);
+            } else {
+                let width = render.width;
+                self.arguments_block(call, width, &mut *render.out);
+                for inner in inners {
+                    self.call_tree(
+                        section,
+                        children,
+                        *inner,
+                        depth.saturating_add(1),
+                        &mut *render,
+                    );
+                }
+            }
+        }
+        render.out.end_scope();
+    }
+
+    /// An opened outer's arguments block: the script source for
+    /// codemode, dim text under the eight-column indent, at most
+    /// `super::opened::OPENED_LINES` lines; the inner rows follow it,
+    /// never capped.
+    fn arguments_block(&self, call: &Call, width: u16, out: &mut Rows) {
+        let Some(text) = arguments_text(call) else {
+            return;
+        };
+        let max = usize::from(width);
+        if max == 0 {
+            return;
+        }
+        let room = width.saturating_sub(8);
+        let mut scratch = Rows::default();
+        for line in text.lines().take(super::opened::OPENED_LINES) {
+            scratch.push((crate::format::dim(line.to_owned()), None));
+        }
+        scratch.pad(0, 8, room);
+        let (rows, texts) = scratch.into_parts();
+        for ((line, _), text) in rows.into_iter().zip(texts) {
+            out.push_text((line, None), text);
         }
     }
 
@@ -1209,6 +1377,23 @@ fn pad_target(target: &str, room: usize) -> String {
         format!("{kept}…{}", " ".repeat(fill))
     } else {
         format!("{target}{}", " ".repeat(room - cells))
+    }
+}
+
+/// An outer's arguments as text: the script in its `source` argument
+/// for codemode, the string itself when a string, else its JSON; none
+/// when it has none.
+fn arguments_text(call: &Call) -> Option<String> {
+    if let Some(source) = call.arguments.get("source").and_then(Value::as_str) {
+        return Some(source.to_owned());
+    }
+    match &call.arguments {
+        Value::Null => None,
+        Value::String(text) => Some(text.clone()),
+        arguments @ Value::Bool(_)
+        | arguments @ Value::Number(_)
+        | arguments @ Value::Array(_)
+        | arguments @ Value::Object(_) => serde_json::to_string_pretty(arguments).ok(),
     }
 }
 

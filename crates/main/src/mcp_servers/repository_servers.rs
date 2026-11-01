@@ -402,6 +402,7 @@ impl Later {
             // The original session's context follows its late servers:
             // structs keep their shape, so it is read from the servers.
             servers.timing(),
+            servers.debug_sink(),
         );
         if let Some(failure) = started.required_failed {
             started.servers.stop();

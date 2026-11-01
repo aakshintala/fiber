@@ -20,6 +20,9 @@ pub(super) fn provider(
         env!("CARGO_PKG_VERSION"),
         &seam.origin,
         clock.as_ref(),
+        // First-party binaries record on the hub writer at debug; at
+        // info no writer passes and the downloads stay silent.
+        seam.hub_writer(&config, &clock),
     )
     .map_err(|error| ConfigureError {
         code: error.code(),

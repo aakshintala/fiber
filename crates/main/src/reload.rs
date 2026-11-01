@@ -205,6 +205,9 @@ pub(crate) struct State {
     /// restart (`docs/mcp.md`, "Servers, their state and the
     /// per-server commands").
     pub(crate) servers: Arc<mcp::Servers>,
+    /// The session's shared reconnect attempts; each provider start inserts
+    /// after validation and removes after final collection or early exit.
+    pub(crate) reconnect_flights: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
     /// Test-only record of the `prepare_inner` stage boundaries the
     /// current preparation reached, in order. Production builds have
     /// no such field: the hook below only appends, never pauses or
@@ -326,6 +329,7 @@ impl State {
             sandbox,
             sandbox_notice_reported,
             servers: servers_handle,
+            reconnect_flights: session.reconnect_flights(),
             artifacts,
             images,
             #[cfg(test)]
@@ -410,6 +414,11 @@ impl State {
             &self.sources.workspace,
             &scope,
             &now.loader.clock,
+            // A reloaded repository copy's binary download records on
+            // the session sink; at info no writer passes.
+            self.diag
+                .debugging()
+                .then(|| self.diag.clone() as Arc<dyn contract::diag::DebugLog>),
         );
         let mut extensions = self.current.get().reload_repository(
             &self.sources.home,
@@ -417,6 +426,12 @@ impl State {
             now.loader.clock.clone(),
             now.loader.locks.clone(),
             set,
+            // The sink installs before the first entry script runs, so
+            // a reloaded entry's own `host.http` still records; at info
+            // no writer passes and entry requests stay unobserved.
+            self.diag
+                .debugging()
+                .then(|| self.diag.clone() as Arc<dyn contract::diag::DebugLog>),
         );
         // A required repository extension that did not load rejects the
         // reload before anything is published: `current` is unchanged.

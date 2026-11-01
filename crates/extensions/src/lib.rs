@@ -120,7 +120,7 @@ pub use lua_provider::{
 pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use package::{Package, PackageOptions};
-pub use prepare::platform;
+pub use prepare::{Observe, platform};
 pub use providers::{
     Model, Providers, START_ONLY, StartedRefresh, Unconfigured, UnconfiguredModel,
     leave_out_invalid, refresh_lists,
@@ -129,6 +129,8 @@ pub use release::fetch_nightly_tag;
 pub use release::install_docs_if_missing;
 pub use release::latest_stable_tag;
 pub use release::{Release, install_release};
+pub use release::{fetch_nightly_tag_observed, latest_stable_tag_observed};
+pub use release::{install_docs_if_missing_observed, install_release_observed};
 pub use repository::{
     ApprovedExtension, ApprovedServer, CopyHold, CopyRemoval, Decision, Fetch, Index, KeptCopy,
     Pending, RepoItem, RepositorySet, ServerApproval, SessionOffer, SpawnGuard, Store,
@@ -140,7 +142,7 @@ pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
 pub use tui_vm::{KeyBinding, KeyForm, KeyRejection, RenderOut, Span, TuiVm};
 pub use update::release_triple;
-pub use update::{StagedUpdate, Target, stage_update};
+pub use update::{StagedUpdate, Target, stage_update, stage_update_observed};
 
 /// The extension API's major version this Fiber speaks
 /// (`docs/extensions.md`, "The extension API version").

@@ -143,8 +143,13 @@ fn waiting(session: &str) -> Line {
 
 /// A `session_status` with `context` tokens of `window`.
 fn context_status(tokens: u64, window: u64) -> Line {
+    context_status_for(SESSION, tokens, window)
+}
+
+/// A `session_status` with context for `session`.
+fn context_status_for(session: &str, tokens: u64, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "session_status",
         serde_json::json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
@@ -160,8 +165,13 @@ fn context_status(tokens: u64, window: u64) -> Line {
 
 /// A `preamble_built` naming `model` with `window`.
 fn preamble(model: &str, window: u64) -> Line {
+    preamble_for(SESSION, model, window)
+}
+
+/// A `preamble_built` for `session` naming `model` and `window`.
+fn preamble_for(session: &str, model: &str, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "preamble_built",
         serde_json::json!({
             "reason": "start", "model": model, "context_window": window,
@@ -261,6 +271,48 @@ fn row_one_shows_the_context_share_and_a_zero_window_shows_none() {
     app.on_line(preamble("test/model", 0));
     let (screen, _) = draw(&app, 100, 30);
     assert!(!screen.contains("ctx"), "{screen}");
+}
+
+#[test]
+fn status_row_context_comes_from_the_attached_session_only() {
+    let mut app = attached(100, 30);
+    app.on_line(context_status(50, 100));
+    assert!(
+        super::status(&app, 100)[0]
+            .line
+            .to_string()
+            .contains("ctx "),
+        "{}",
+        super::status(&app, 100)[0].line
+    );
+
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    app.on_line(preamble_for(OTHER, "test/model", 200));
+    let attached_without_status = super::status(&app, 100);
+    assert!(!attached_without_status.is_empty());
+    assert!(
+        attached_without_status
+            .iter()
+            .all(|row| !row.line.to_string().contains("ctx "))
+    );
+
+    app.on_line(context_status_for(OTHER, 12, 200));
+    let refreshed = super::status(&app, 100);
+    assert!(
+        refreshed
+            .iter()
+            .any(|row| row.line.to_string().contains("ctx ")),
+        "{:?}",
+        refreshed
+            .iter()
+            .map(|row| row.line.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        refreshed
+            .iter()
+            .all(|row| !row.line.to_string().contains("50"))
+    );
 }
 
 #[test]

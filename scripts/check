@@ -141,6 +141,7 @@ crates/main/tests/release_notes.rs 4
 crates/main/tests/steer_drawn.rs 2
 crates/main/tests/stream_closed_notice.rs 2
 crates/main/tests/terminal.rs 2
+crates/main/tests/tui_context_after_cd.rs 1
 crates/main/tests/tui_extensions.rs 2
 crates/main/tests/wheel_scroll.rs 1
 EOF

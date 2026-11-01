@@ -286,6 +286,7 @@ fn test_session(
         drive: None,
         clock,
         startup_timeout: super::package::Package::DEFAULT_STARTUP_TIMEOUT,
+        diagnostics: None,
     }
 }
 

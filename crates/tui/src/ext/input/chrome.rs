@@ -146,6 +146,8 @@ pub struct SessionCard<'a> {
     pub spend: Option<Spend<'a>>,
     /// The latest preamble's budget, in US dollars; none when unset.
     pub budget: Option<f64>,
+    /// When the session's prompt cache expires, as `ts`; none when unset.
+    pub cache_expires: Option<u64>,
     /// The last reply's output speed, in tokens per second.
     pub speed: Option<u64>,
     /// How many turns have completed.

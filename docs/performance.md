@@ -249,7 +249,7 @@ in a home of its own whose `diagnostics.level` is `"debug"`, on the head
 binary and only with `--only all`. It does not rerun the fsyncs pass, and this
 run is never a timing or memory sample. It records, per workload, the run's
 wall-clock time, each `op_timing` operation in the run's `logs/` files with its
-count and total `ms`, and `provider_request`'s count and total `total_ms`
+count and total `ms`, and `http_request`'s count and total `total_ms`
 (`docs/state.md`), as `op_breakdown`. The `bench-report`
 comment shows it under "Debug run"; it is reported, never gated.
 

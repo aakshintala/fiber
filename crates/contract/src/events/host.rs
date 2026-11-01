@@ -632,7 +632,7 @@ pub struct McpServerRow {
     pub state: McpServerState,
     /// The failure's sentence; empty when the server did not fail.
     pub reason: String,
-    /// Its tool count; absent while `connecting`.
+    /// Its tool count; absent while `not-started`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<u64>,
     /// False only on a repository's server nobody approved.
@@ -659,8 +659,8 @@ pub enum McpServerLayer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum McpServerState {
     /// Declared but never started this session, with no failure recorded.
-    #[serde(rename = "connecting")]
-    Connecting,
+    #[serde(rename = "not-started")]
+    NotStarted,
     /// Running, with its tools declared.
     #[serde(rename = "ready")]
     Ready,

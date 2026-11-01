@@ -1,8 +1,8 @@
 //! Native provider requests and session memory at the binary level
 //! (`docs/state.md`, "Diagnostic logs"): the built `fiber` runs `ask`
 //! against fake provider servers. With the default nothing debug is
-//! written; a debug run writes one `provider_request` per attempt and a
-//! `peak_memory` per turn and at the orderly end.
+//! written; a debug run writes one `http_request` per attempt and a
+//! `resources` per turn and at the orderly end.
 
 #![allow(
     clippy::unwrap_used,
@@ -92,7 +92,7 @@ fn ask_debug(setup: &Setup, server: &ProviderServer, extra: Value) -> Run {
 }
 
 #[test]
-fn ask_debug_writes_one_provider_request_and_two_peak_memory_lines() {
+fn ask_debug_writes_one_http_request_and_two_resources_lines() {
     let setup = Setup::new();
     let body_len = hello().body.len();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -107,16 +107,20 @@ fn ask_debug_writes_one_provider_request_and_two_peak_memory_lines() {
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let requests: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(requests.len(), 1, "one call writes one line");
     let line = requests[0];
     assert_eq!(line["level"], "debug");
     assert_eq!(line["process"], "ask");
     assert_eq!(line["session_id"], id.as_str());
-    assert_eq!(line["message"], "A provider request ended.");
+    assert_eq!(line["message"], "An HTTP request ended.");
     let data = &line["data"];
     assert_eq!(data["provider"], "fake");
+    assert!(
+        data.get("extension").is_none(),
+        "no extension on a provider purpose: {data}"
+    );
     assert_eq!(data["model"], "m");
     assert_eq!(data["purpose"], "model_call");
     let url = server.url();
@@ -173,9 +177,12 @@ fn ask_debug_writes_one_provider_request_and_two_peak_memory_lines() {
     }
     let peaks: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "peak_memory")
+        .filter(|line| line["code"] == "resources")
         .collect();
+    // docs/state.md, "Diagnostic logs": a resources line after each turn's turn_completed and one more at the orderly end.
     assert_eq!(peaks.len(), 2, "one turn and one orderly exit");
+    let mut disk_read = 0;
+    let mut disk_write = 0;
     for peak in &peaks {
         assert_eq!(peak["process"], "ask");
         assert_eq!(peak["session_id"], id.as_str());
@@ -183,10 +190,20 @@ fn ask_debug_writes_one_provider_request_and_two_peak_memory_lines() {
             peak["data"]["peak_kib"].as_u64().unwrap() > 0,
             "positive on Linux and macOS: {peak}"
         );
+        assert!(
+            peak["data"]["current_kib"].as_u64().unwrap() > 0,
+            "positive on Linux and macOS: {peak}"
+        );
+        let read = peak["data"]["disk_read_bytes"].as_u64().unwrap();
+        let written = peak["data"]["disk_write_bytes"].as_u64().unwrap();
+        assert!(read >= disk_read, "counters never go back: {peak}");
+        assert!(written >= disk_write, "counters never go back: {peak}");
+        disk_read = read;
+        disk_write = written;
     }
     assert_eq!(
         lines.last().unwrap()["code"],
-        "peak_memory",
+        "resources",
         "the last diagnostic line is the final memory"
     );
 }
@@ -209,7 +226,7 @@ fn a_retried_call_writes_one_line_per_attempt() {
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let requests: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0]["data"]["attempt"], 1);
@@ -261,14 +278,14 @@ fn two_logical_calls_restart_attempts_at_one() {
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let attempts: Vec<u64> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .map(|line| line["data"]["attempt"].as_u64().unwrap())
         .collect();
     assert_eq!(attempts, vec![1, 1], "each logical call starts at 1");
 }
 
 #[test]
-fn at_default_no_provider_request_is_written() {
+fn at_default_no_http_request_is_written() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
@@ -285,8 +302,8 @@ fn at_default_no_provider_request_is_written() {
         "{lines:?}"
     );
     assert!(
-        lines.iter().all(|line| line["code"] != "provider_request"
-            && line["code"] != "peak_memory"
+        lines.iter().all(|line| line["code"] != "http_request"
+            && line["code"] != "resources"
             && line["code"] != "op_timing"),
         "no native request, memory or timing line at the default: {lines:?}"
     );
@@ -315,8 +332,8 @@ fn a_repository_level_is_ignored_for_native_requests() {
     );
     let lines = log_lines(&setup);
     assert!(
-        lines.iter().all(|line| line["code"] != "provider_request"
-            && line["code"] != "peak_memory"
+        lines.iter().all(|line| line["code"] != "http_request"
+            && line["code"] != "resources"
             && line["code"] != "op_timing"),
         "the repository value stays ignored: {lines:?}"
     );
@@ -381,7 +398,7 @@ fn a_query_bearing_url_is_logged_without_it() {
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let requests: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(requests.len(), 1);
     let data = &requests[0]["data"];
@@ -425,13 +442,13 @@ fn an_orderly_model_failure_still_writes_final_memory() {
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let attempts: Vec<u64> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .map(|line| line["data"]["attempt"].as_u64().unwrap())
         .collect();
     assert_eq!(attempts, vec![1, 2]);
     let peaks: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "peak_memory")
+        .filter(|line| line["code"] == "resources")
         .collect();
     assert_eq!(
         peaks.len(),
@@ -445,7 +462,7 @@ fn an_orderly_model_failure_still_writes_final_memory() {
     );
     assert_eq!(
         lines.last().unwrap()["code"],
-        "peak_memory",
+        "resources",
         "the last diagnostic line is the final memory"
     );
 }
@@ -474,12 +491,12 @@ fn a_session_close_without_a_turn_writes_only_exit_memory() {
     assert!(server.requests().is_empty(), "no turn ran");
     let lines = diagnostic_file(&setup, &format!("session-{id}.log"));
     assert!(
-        lines.iter().all(|line| line["code"] != "provider_request"),
+        lines.iter().all(|line| line["code"] != "http_request"),
         "no request without a turn"
     );
     let peaks: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "peak_memory")
+        .filter(|line| line["code"] == "resources")
         .collect();
     assert_eq!(peaks.len(), 1, "only the exit memory: {lines:?}");
     assert_eq!(peaks[0]["process"], "session");
@@ -499,7 +516,7 @@ fn a_startup_failure_writes_no_request_or_memory() {
     assert!(
         lines
             .iter()
-            .all(|line| line["code"] != "provider_request" && line["code"] != "peak_memory"),
+            .all(|line| line["code"] != "http_request" && line["code"] != "resources"),
         "no request, turn or exit memory without a session: {lines:?}"
     );
 }
@@ -524,14 +541,14 @@ fn a_resumed_ask_keeps_the_ask_process_and_restarts_attempts() {
     }
     let attempts: Vec<u64> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .map(|line| line["data"]["attempt"].as_u64().unwrap())
         .collect();
     assert_eq!(attempts, vec![1, 1], "each ask run starts at 1");
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line["code"] == "peak_memory")
+            .filter(|line| line["code"] == "resources")
             .count(),
         4,
         "each ask run writes its turn and exit memory"
@@ -541,7 +558,7 @@ fn a_resumed_ask_keeps_the_ask_process_and_restarts_attempts() {
         second
             .kinds()
             .iter()
-            .all(|kind| *kind != "provider_request" && *kind != "peak_memory"),
+            .all(|kind| *kind != "http_request" && *kind != "resources"),
         "{:?}",
         second.kinds()
     );
@@ -642,19 +659,19 @@ fn a_delegate_child_uses_its_own_process_and_id() {
     }
     let child_requests: Vec<&Value> = child_lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(child_requests.len(), 1);
     assert_eq!(child_requests[0]["data"]["provider"], "pb");
     assert_eq!(child_requests[0]["data"]["model"], "m");
     assert!(
-        child_lines.iter().any(|line| line["code"] == "peak_memory"),
+        child_lines.iter().any(|line| line["code"] == "resources"),
         "the child writes its exit memory"
     );
     let parent_lines = diagnostic_file(&setup, &format!("ask-{parent_id}.log"));
     let parent_requests: Vec<&Value> = parent_lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert!(
         parent_requests
@@ -676,14 +693,14 @@ fn ask_debug_diagnostics(setup: &Setup, server: &ProviderServer, extra: Value) -
     ask_debug(setup, server, merged)
 }
 
-/// The single `provider_request` line of a one-call debug run.
+/// The single `http_request` line of a one-call debug run.
 #[allow(clippy::indexing_slicing, reason = "len checked on the line above")]
 fn the_request(setup: &Setup, run: &Run) -> Value {
     let id = run.session_id().to_owned();
     let lines = diagnostic_file(setup, &format!("ask-{id}.log"));
     let requests: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(requests.len(), 1, "one call writes one line");
     let line = *requests.first().expect("one call writes one line");
@@ -772,7 +789,7 @@ fn a_retried_call_with_diagnostics_joins_by_session_and_attempt() {
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let requests: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(requests.len(), 2, "one line per attempt");
     for line in &requests {
@@ -848,7 +865,7 @@ fn a_second_turn_keeps_the_first_turns_prefix_hashes() {
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let requests: Vec<&Value> = lines
         .iter()
-        .filter(|line| line["code"] == "provider_request")
+        .filter(|line| line["code"] == "http_request")
         .collect();
     assert_eq!(requests.len(), 2, "one line per turn");
     for line in &requests {
@@ -976,6 +993,50 @@ fn each_protocol_writes_one_diagnostics_line() {
             assert!(
                 !wire.contains(sentinel),
                 "no content in the line on {protocol}: {sentinel}"
+            );
+        }
+    }
+}
+
+/// A debug turn grows the session's `events.jsonl`: the file the session
+/// writes, never filesystem free space, measured before and after the
+/// turn's own completion.
+#[test]
+fn a_debug_turn_grows_the_session_events_file() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    // No session exists before the turn, so the turn starts from zero
+    // bytes: a fresh home holds no session log.
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    assert!(!sessions.exists(), "no session exists before the turn");
+    let before = 0;
+    let run = ask_debug(&setup, &server, json!({}));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let events = support::session_dir(&setup, run.session_id()).join("events.jsonl");
+    let after = fs::metadata(&events).unwrap().len();
+    assert!(
+        after > before,
+        "the turn wrote and fsynced the session log ({} bytes): {}",
+        after,
+        events.display()
+    );
+    let lines = diagnostic_file(&setup, &format!("ask-{}.log", run.session_id()));
+    let peaks: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "resources")
+        .collect();
+    // docs/state.md, "Diagnostic logs": a resources line after each turn's turn_completed and one more at the orderly end.
+    assert_eq!(peaks.len(), 2, "one turn and one orderly exit");
+    for peak in &peaks {
+        for field in [
+            "peak_kib",
+            "current_kib",
+            "disk_read_bytes",
+            "disk_write_bytes",
+        ] {
+            assert!(
+                peak["data"][field].is_u64(),
+                "all four fields present: {peak}"
             );
         }
     }

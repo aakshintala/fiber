@@ -2,7 +2,7 @@
 //! logs"): the built `fiber` runs `ask` against the fake provider server.
 //! With the default nothing debug is written; a repository's value is
 //! ignored with a `config_key_ignored` notice; a debug hub writes a
-//! positive `peak_memory` through the Part 1 path.
+//! positive `resources` through the Part 1 path.
 
 #![allow(
     clippy::unwrap_used,
@@ -253,7 +253,7 @@ fn journey_config(setup: &Setup, servers: Value) {
 /// one-tool-call paragraph, `mcp.connect` by the MCP paragraph,
 /// `jobs.start` by the jobs paragraph, `hook.turn_start` by the hook
 /// chains paragraph, and `log.*` by the session-log paragraph; the
-/// `provider_request` and `peak_memory` lines by their own paragraphs.
+/// `http_request` and `resources` lines by their own paragraphs.
 #[test]
 fn a_debug_journey_times_the_session_core_matrix() {
     let setup = Setup::new_with_mcp_fixture();
@@ -308,19 +308,19 @@ fn a_debug_journey_times_the_session_core_matrix() {
             "one {op} line"
         );
     }
-    // (`docs/state.md`, "Diagnostic logs") promises one `provider_request`
-    // line per ended model call and one `peak_memory` line per turn end.
+    // (`docs/state.md`, "Diagnostic logs") promises one `http_request`
+    // line per ended model call and one `resources` line per turn end.
     assert!(
         log_lines(&setup)
             .iter()
-            .any(|line| line["code"] == "provider_request"),
-        "one provider_request line"
+            .any(|line| line["code"] == "http_request"),
+        "one http_request line"
     );
     assert!(
         log_lines(&setup)
             .iter()
-            .any(|line| line["code"] == "peak_memory"),
-        "one peak_memory line"
+            .any(|line| line["code"] == "resources"),
+        "one resources line"
     );
     for line in &lines {
         let data = line["data"].as_object().expect("data is an object");
@@ -331,7 +331,7 @@ fn a_debug_journey_times_the_session_core_matrix() {
             );
         }
     }
-    for line in &lines {
+    for line in log_lines(&setup) {
         let raw = line.to_string();
         for leaked in [
             "sk-test",
@@ -349,7 +349,7 @@ fn a_debug_journey_times_the_session_core_matrix() {
 }
 
 #[test]
-fn a_debug_hub_writes_positive_peak_memory() {
+fn a_debug_hub_writes_positive_resources() {
     let setup = Setup::new();
     write_json(
         &setup.home().join("config.json"),
@@ -364,7 +364,10 @@ fn a_debug_hub_writes_positive_peak_memory() {
     let lines = log_lines(&setup);
     let peak = lines
         .iter()
-        .find(|line| line["code"] == "peak_memory")
-        .expect("one peak_memory line");
+        .find(|line| line["code"] == "resources")
+        .expect("one resources line");
     assert!(peak["data"]["peak_kib"].as_u64().unwrap() > 0, "{peak}");
+    assert!(peak["data"]["current_kib"].as_u64().unwrap() > 0, "{peak}");
+    assert!(peak["data"]["disk_read_bytes"].is_u64(), "{peak}");
+    assert!(peak["data"]["disk_write_bytes"].is_u64(), "{peak}");
 }

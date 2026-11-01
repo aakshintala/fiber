@@ -42,9 +42,14 @@ fn session_line(kind: &str, payload: serde_json::Value) -> Line {
 
 /// One envelope of the attached session at `ts`.
 fn timed_line(kind: &str, ts: u64, payload: serde_json::Value) -> Line {
+    timed_line_for("s_aaaaaaaaaaaaaaaa", kind, ts, payload)
+}
+
+/// One envelope of `session` at `ts`.
+fn timed_line_for(session: &str, kind: &str, ts: u64, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
         kind: kind.to_owned(),
-        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        session_id: contract::SessionId(session.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,
@@ -64,6 +69,15 @@ fn fold_widget(app: &mut App, extension: &str, widget: &str, lines: &[&str]) {
 
 /// A `session_status` with `spend` and `context`.
 fn status_line(spend: serde_json::Value, context: Option<serde_json::Value>) -> Line {
+    status_line_for("s_aaaaaaaaaaaaaaaa", spend, context)
+}
+
+/// A `session_status` with `spend` and `context` for `session`.
+fn status_line_for(
+    session: &str,
+    spend: serde_json::Value,
+    context: Option<serde_json::Value>,
+) -> Line {
     let mut payload = serde_json::json!({
         "name": "work", "workspace": "/Users/you/work/fiber", "project": "-w",
         "state": "idle", "started": 0, "calls": 0, "since": 0, "spend": spend,
@@ -72,7 +86,7 @@ fn status_line(spend: serde_json::Value, context: Option<serde_json::Value>) -> 
     if let Some(context) = context {
         payload["context"] = context;
     }
-    session_line("session_status", payload)
+    timed_line_for(session, "session_status", 0, payload)
 }
 
 /// A spend with `input`, `read`, `written`, `output`, billed `cost` and
@@ -278,15 +292,20 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
 /// A `preamble_built` with `trigger`: `None` leaves automatic handoff
 /// off.
 fn preamble_line(trigger: Option<u64>) -> Line {
+    preamble_line_for("s_aaaaaaaaaaaaaaaa", 1000, trigger)
+}
+
+/// A `preamble_built` for `session` with `window` and `trigger`.
+fn preamble_line_for(session: &str, window: u64, trigger: Option<u64>) -> Line {
     let mut payload = serde_json::json!({
-        "reason": "start", "model": "test/model", "context_window": 1000,
+        "reason": "start", "model": "test/model", "context_window": window,
         "thinking": "high", "tool_choice": "auto", "cache_lifetime": "5m",
         "system_prompt": "", "tools": [],
     });
     if let Some(trigger) = trigger {
         payload["trigger_at"] = trigger.into();
     }
-    session_line("preamble_built", payload)
+    timed_line_for(session, "preamble_built", 0, payload)
 }
 
 /// A waiting `session_status` for another live session than the
@@ -698,6 +717,39 @@ fn a_full_context_fills_every_cell() {
             .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(10) + "100% of window"),
         "{drawn:?}"
     );
+}
+
+#[test]
+fn session_card_uses_context_from_the_attached_session_only() {
+    let mut app = attached(160, 40);
+    app.on_line(status_line(
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
+        Some(serde_json::json!({"tokens": 50, "window": 100})),
+    ));
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .any(|row| row.contains("50% of window"))
+    );
+
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    app.on_line(preamble_line_for("s_bbbbbbbbbbbbbbbb", 200, Some(80)));
+    let attached_without_status = texts(&app, 40);
+    assert!(
+        attached_without_status
+            .iter()
+            .all(|row| !row.contains("50% of window")),
+        "{attached_without_status:?}"
+    );
+
+    app.on_line(status_line_for(
+        "s_bbbbbbbbbbbbbbbb",
+        spend(1, 0, 0, 2, serde_json::json!(0.0), 0.0),
+        Some(serde_json::json!({"tokens": 10, "window": 200})),
+    ));
+    let refreshed = texts(&app, 40);
+    assert!(refreshed.iter().any(|row| row.contains("5% of window")));
+    assert!(refreshed.iter().all(|row| !row.contains("50% of window")));
 }
 
 #[test]

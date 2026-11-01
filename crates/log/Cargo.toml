@@ -19,7 +19,7 @@ serde_json.workspace = true
 support = { path = "../support" }
 thiserror.workspace = true
 
-# The peak physical footprint for a `peak_memory` line (docs/dependencies.md).
+# The process's resources for a `resources` line (docs/dependencies.md).
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 
