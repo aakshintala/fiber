@@ -180,7 +180,7 @@ fn declared_prefixes(
                 let parts: Vec<&str> = declarer_rel.split('/').collect();
                 let parent_prefixes = match parts.as_slice() {
                     ["tests", _binary] => vec![String::new()],
-                    ["tests", _, rest @ ..] if !rest.is_empty() => {
+                    ["tests", _, ..] => {
                         let declared = walk(declarer, members, by_target, sources, stack)?;
                         if declared.is_empty() {
                             layout_scope(declarer, package, members, sources)
