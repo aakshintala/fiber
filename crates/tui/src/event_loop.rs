@@ -1978,6 +1978,14 @@ mod attach_span_tests {
 
     /// The session every attach test opens.
     const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+    const ATTACH_TIMINGS: [&str; 6] = [
+        "tui.attach_setup",
+        "tui.attach_wait",
+        "tui.attach_tail",
+        "tui.attach_prepare",
+        "tui.attach_draw",
+        "tui.attached_frame",
+    ];
 
     /// A clock stepping 20 ms on every monotonic read, so each stamped
     /// boundary lands on its own instant with no sleep.
@@ -2035,6 +2043,17 @@ mod attach_span_tests {
         text.lines()
             .map(|line| {
                 serde_json::from_str(line).unwrap_or_else(|err| panic!("a line parses: {err}"))
+            })
+            .collect()
+    }
+
+    /// Only the five spans and their parent, excluding other terminal
+    /// timings that share the diagnostic file.
+    fn attach_op_lines(home: &std::path::Path) -> Vec<serde_json::Value> {
+        op_lines(home)
+            .into_iter()
+            .filter(|line| {
+                ATTACH_TIMINGS.contains(&line["data"]["op"].as_str().unwrap_or_default())
             })
             .collect()
     }
@@ -2165,15 +2184,14 @@ mod attach_span_tests {
         lp.attached_frame = lp.timing.attached_frame();
         let (_tx, rx) = mpsc::channel();
         assert_eq!(lp.frame_inner(&rx), None);
-        assert!(op_lines(home.path()).is_empty());
+        assert!(attach_op_lines(home.path()).is_empty());
         lp.timing.discard_attach_spans();
         crate::timing::discard(lp.attached_frame.take());
-        assert!(op_lines(home.path()).is_empty());
+        assert!(attach_op_lines(home.path()).is_empty());
     }
 
-    /// A due attempt with no stream runs the install yet returns false:
-    /// the install line stands, the five spans stay retained, and the
-    /// teardown discard writes none of them.
+    /// A due attempt with no stream returns false: the five spans stay
+    /// retained, and the teardown discard writes none of them.
     #[test]
     fn attach_spans_stay_held_through_a_streamless_due_attempt() {
         let home = fakes::TempDir::new("event-loop-attach-spans-no-stream");
@@ -2182,29 +2200,15 @@ mod attach_span_tests {
         let mut lp = attach_loop(&home, app);
         let (_tx, rx) = mpsc::channel();
         assert!(!lp.open_tail(&rx), "no stream returns false");
-        let lines = op_lines(home.path());
-        let installs: Vec<serde_json::Value> = lines
-            .iter()
-            .filter(|line| line["data"]["op"] == "tui.tail_install")
-            .cloned()
-            .collect();
-        assert_span_wire(&installs, "tui.tail_install");
         assert!(
-            lines.iter().all(|line| !line["data"]["op"]
-                .as_str()
-                .unwrap_or_default()
-                .starts_with("tui.attach_")),
-            "no attach span emits before its draw: {lines:?}"
+            attach_op_lines(home.path()).is_empty(),
+            "no attach span emits before its draw"
         );
         lp.timing.discard_attach_spans();
         crate::timing::discard(lp.attached_frame.take());
-        let lines = op_lines(home.path());
         assert!(
-            lines.iter().all(|line| !line["data"]["op"]
-                .as_str()
-                .unwrap_or_default()
-                .starts_with("tui.attach_")),
-            "the discard writes no span: {lines:?}"
+            attach_op_lines(home.path()).is_empty(),
+            "the discard writes no attach timing"
         );
     }
 
@@ -2228,23 +2232,12 @@ mod attach_span_tests {
         // as lost instead of hanging the frame.
         drop(tx);
         assert_eq!(lp.frame_inner(&rx), None);
-        let lines = op_lines(home.path());
+        let lines = attach_op_lines(home.path());
         let ops: Vec<&str> = lines
             .iter()
             .map(|line| line["data"]["op"].as_str().unwrap_or_default())
             .collect();
-        assert_eq!(
-            ops,
-            [
-                "tui.attach_setup",
-                "tui.attach_wait",
-                "tui.attach_tail",
-                "tui.attach_prepare",
-                "tui.attach_draw",
-                "tui.attached_frame"
-            ],
-            "{lines:?}"
-        );
+        assert_eq!(ops, ATTACH_TIMINGS, "{lines:?}");
         for line in &lines {
             let op = line["data"]["op"].as_str().unwrap_or_default();
             assert_span_wire(std::slice::from_ref(line), op);
@@ -2255,10 +2248,10 @@ mod attach_span_tests {
     }
 
     /// A rejected history answer ends the read with its message yet
-    /// still installs: the attempt returns true and the draw emits all
-    /// five spans. The worker parks in its history wait (the socket
-    /// read is the signal), the test answers the waited command, and
-    /// the socket deadline bounds a missing command.
+    /// still installs: the frame's attempt draws and emits all five
+    /// spans. The worker parks in its history wait (the socket read is
+    /// the signal), the test answers the waited command, and the socket
+    /// deadline bounds a missing command.
     #[test]
     fn attach_spans_emit_at_a_rejected_history_install() {
         let home = fakes::TempDir::new("event-loop-attach-spans-rejected");
@@ -2278,7 +2271,7 @@ mod attach_span_tests {
                 let held = rx
                     .lock()
                     .unwrap_or_else(|err| panic!("take the channel: {err}"));
-                lp.open_tail(&held)
+                lp.frame_inner(&held)
             });
             let mut command = String::new();
             std::io::BufReader::new(&peer)
@@ -2304,32 +2297,17 @@ mod attach_span_tests {
                     .unwrap_or_default(),
             })))
             .unwrap_or_else(|err| panic!("answer the waited command: {err}"));
-            assert!(worker.join().unwrap(), "a rejected read still installs");
+            // The frame's later count read sees the closed channel and
+            // returns as lost, after the attached-history draw emitted.
+            drop(tx);
+            assert_eq!(worker.join().unwrap(), None, "the rejected history draws");
         });
-        // Reads past the answered wait fail fast as lost instead of
-        // hanging the frame.
-        drop(tx);
-        let rx = rx
-            .into_inner()
-            .unwrap_or_else(|err| panic!("take the channel back: {err}"));
-        assert_eq!(lp.frame_inner(&rx), None);
-        let lines = op_lines(home.path());
+        let lines = attach_op_lines(home.path());
         let ops: Vec<&str> = lines
             .iter()
             .map(|line| line["data"]["op"].as_str().unwrap_or_default())
             .collect();
-        assert_eq!(
-            ops,
-            [
-                "tui.attach_setup",
-                "tui.attach_wait",
-                "tui.attach_tail",
-                "tui.attach_prepare",
-                "tui.attach_draw",
-                "tui.attached_frame"
-            ],
-            "{lines:?}"
-        );
+        assert_eq!(ops, ATTACH_TIMINGS, "{lines:?}");
         for line in &lines {
             let op = line["data"]["op"].as_str().unwrap_or_default();
             assert_span_wire(std::slice::from_ref(line), op);
