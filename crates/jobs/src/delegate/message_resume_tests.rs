@@ -74,6 +74,7 @@ struct Launched {
     parent: SessionId,
     prompt: String,
     workspace: std::path::PathBuf,
+    sandbox: Vec<String>,
     worktree: Option<contract::shapes::Worktree>,
     resume: bool,
 }
@@ -177,6 +178,7 @@ fn resume_rig_with_steer(
             parent: launched.parent.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
+            sandbox: launched.sandbox.clone(),
             worktree: launched.worktree.clone(),
             resume: matches!(launched.start, Start::Resume),
         });
@@ -266,6 +268,13 @@ fn resume_rig_with_steer(
         },
     );
     let tool = Arc::new(DelegateMessage {
+        sandbox: Arc::new(|| {
+            Ok(vec![
+                "sandbox.enabled=true".into(),
+                "sandbox.allow_write=[]".into(),
+                "sandbox.deny_read=[\"/resume-secret\"]".into(),
+            ])
+        }),
         finish: crate::support::clean_finish(),
         depth: 0,
         registry: Arc::clone(&registry),
@@ -740,6 +749,14 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     let launched = rig.launched.lock().unwrap();
     assert_eq!(launched.len(), 1);
     assert!(launched[0].resume);
+    assert_eq!(
+        launched[0].sandbox,
+        [
+            "sandbox.enabled=true",
+            "sandbox.allow_write=[]",
+            "sandbox.deny_read=[\"/resume-secret\"]"
+        ]
+    );
     assert_eq!(launched[0].session_id.0, "s_d000000000000001");
     assert_eq!(launched[0].job_id, id);
     assert_eq!(launched[0].parent.0, "s_parent");

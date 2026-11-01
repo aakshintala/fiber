@@ -217,6 +217,8 @@ pub struct Launched {
     /// "The tools"). Empty on a resume, whose own log already holds
     /// them.
     pub added: Vec<PathBuf>,
+    /// Effective sandbox configuration overrides captured at this launch.
+    pub sandbox: Vec<String>,
     /// The parent's pre-created worktree, absent without isolation.
     pub worktree: Option<contract::shapes::Worktree>,
     /// What this launch starts: a fresh child or a resume of the

@@ -174,6 +174,12 @@ impl DelegateMessage {
                 Ok(after) => after,
                 Err(reason) => return Err(StartFailed::Boundary(reason)),
             };
+            let sandbox = (self.sandbox)().map_err(|key| {
+                StartFailed::Spawn(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("cannot inherit {key}: path is not UTF-8"),
+                ))
+            })?;
             let launched = Launched {
                 depth: self.depth.saturating_add(1),
                 session_id: resumable.delegate.delegate_session_id.clone(),
@@ -185,6 +191,7 @@ impl DelegateMessage {
                 // already holds every inherited root, so no argv carries
                 // them again.
                 added: Vec::new(),
+                sandbox,
                 worktree: None,
                 start: Start::Resume,
             };
