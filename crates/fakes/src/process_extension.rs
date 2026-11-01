@@ -19,16 +19,22 @@ use crate::Watchdog;
 use crate::deadline::Deadline;
 use serde_json::Value;
 
-#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+#[allow(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a test helper; a failure is the test's"
+)]
+#[track_caller]
 fn example_path() -> crate::WarmedJig {
     let mut path = std::env::current_exe().expect("the test binary knows its path");
     path.pop();
     path.pop();
-    crate::WarmedJig::warm(
-        path.join("examples").join("process-extension"),
-        &["bogus-mode"],
-        2,
-    )
+    let path = path.join("examples").join("process-extension");
+    assert!(
+        path.exists(),
+        "crates/fakes/examples/process-extension is not built; run cargo build -p fakes --example process-extension (scripts/check does this for you)"
+    );
+    crate::WarmedJig::warm(path, &["bogus-mode"], 2)
 }
 
 /// One run of the fixture: the example's captured stdout lines, its stdin,
