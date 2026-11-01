@@ -2664,6 +2664,14 @@ every pending image is dropped and nothing more is written.
   keeping its proportions. A click opens it in the system viewer, from a
   copy the terminal writes to `cache/images/` in Fiber home
   (`docs/state.md`).
+- Under its grid an image has a caption, its one line `▣ <file> · W×H`, and a
+  click on either opens the viewer. In the prompt bubble a caption wider than
+  the bubble shortens the file name first and keeps the size.
+- A PNG shows inline as stored. A JPEG or WebP shows inline when the
+  launch names the `fiber` executable to convert it through `fiber image
+  --png`; otherwise, like any other type, it is its one line.
+- A steering message's images are one clickable line each under its text,
+  even where images show inline.
 - The terminal holds the image and moves it with the text, through kitty's
   Unicode placeholders. Fiber keeps no decoded image and sends nothing again
   on a scroll.
