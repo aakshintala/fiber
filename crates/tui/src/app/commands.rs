@@ -1077,46 +1077,18 @@ impl App {
         true
     }
 
-/// One line for `FIBER_ENTER_LOG`: the draft, whether the `/` panel is
-/// open, the selected row, and where Enter went. Diagnosis only.
-pub(super) fn trace_enter(label: &str, draft: &str, open: bool, selected: usize, detail: &str) {
-    let Ok(path) = std::env::var("FIBER_ENTER_LOG") else {
-        return;
-    };
-    let line = format!("label={label} draft={draft:?} open={open} selected={selected} detail={detail}\n");
-    let mut file = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        Ok(file) => file,
-        Err(_) => return,
-    };
-    let _ = std::io::Write::write_all(&mut file, line.as_bytes());
-}
-
-/// Enter sends the draft: `start` with no session, `prompt` when
-/// idle, `steer` during a turn, and `shell` for a `!` command whenever
-/// attached. A draft holding an image sends its content as a prompt
-/// or `steer`, never as a built-in or a `!` command. An unknown slash
-/// command is refused before any of that, keeping the draft.
-pub(super) fn on_enter(&mut self) -> Effect {
-    let draft = self.draft.expand();
-    let open = !self.completion.slash_closed
-        && draft.starts_with('/')
-        && !draft.contains(char::is_whitespace);
-    let selected = self.completion.selected;
-    Self::trace_enter("on-enter", &draft, open, selected, "");
-    if self.refuse_unknown_slash() {
-        Self::trace_enter("refuse", &draft, open, selected, "kept");
-        return Effect::None;
-    }
-    if let Some(effect) = self.built_in() {
-        Self::trace_enter(
-            "built-in",
-            &draft,
-            open,
-            selected,
-            &format!("{effect:?}"),
-        );
-        return effect;
-    }
+    /// Enter sends the draft: `start` with no session, `prompt` when
+    /// idle, `steer` during a turn, and `shell` for a `!` command whenever
+    /// attached. A draft holding an image sends its content as a prompt
+    /// or `steer`, never as a built-in or a `!` command. An unknown slash
+    /// command is refused before any of that, keeping the draft.
+    pub(super) fn on_enter(&mut self) -> Effect {
+        if self.refuse_unknown_slash() {
+            return Effect::None;
+        }
+        if let Some(effect) = self.built_in() {
+            return effect;
+        }
         // In an item view Enter steers the open delegate; a `/`
         // built-in already ran above, and anything it leaves (such as
         // `/close`) falls through to the attached session.
@@ -1176,10 +1148,8 @@ pub(super) fn on_enter(&mut self) -> Effect {
             }
             (Phase::Attached { session, busy }, None) => {
                 let (kind, command) = if *busy {
-                    Self::trace_enter("steer", &self.draft.expand(), false, self.completion.selected, "busy");
                     (Kind::Steer, "steer")
                 } else {
-                    Self::trace_enter("prompt", &self.draft.expand(), false, self.completion.selected, "idle");
                     (Kind::Prompt, "prompt")
                 };
                 (kind, session_command(&id, command, session, Some(args)))
