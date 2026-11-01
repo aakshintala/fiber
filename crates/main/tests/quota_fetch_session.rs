@@ -377,7 +377,10 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     config["hub"] = json!({"idle_exit_ms": 200});
     fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
-    let mut run = support::pty::Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    // Two extra rows for the branch's taller input box: the conversation
+    // holds both turns' `you` rows only once the viewport covers the two
+    // rows the box takes. The count below stays exactly two.
+    let mut run = support::pty::Run::spawn(&setup, 160, 50, &[], &TRUECOLOUR);
     run.ready();
     let from = run.output().len();
     run.write(b"first\r");
