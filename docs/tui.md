@@ -69,7 +69,7 @@ its own. From the top:
    the new worktree switch, the model and thinking chips and "Enter starts a
    session".
 
-A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
+A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Backspace archives an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete, Backspace and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -158,8 +158,9 @@ Enter on a focused chip does what a click does: the workspace chip opens the
 workspace picker, the new worktree switch toggles, the model chip opens the
 model picker, and the thinking chip opens it at the model's thinking chips.
 The chip stays focused behind the picker. With no session, ↑ on the entry bar
-does nothing. Typing or Backspace while a chip or a row is focused goes to the
-entry bar. A focused chip is drawn as a hovered one ("Mouse and hover").
+does nothing. Typing while a chip or a row is focused goes to the entry bar,
+and so does Backspace on a chip; Backspace on a row acts as "The session
+list" says. A focused chip is drawn as a hovered one ("Mouse and hover").
 
 The first frame draws at once. The session list fills in when the hub's feed
 arrives (`docs/performance.md`).
@@ -257,6 +258,11 @@ list is one row tall, it shows the focused row's first line.
   workspace appears like any other exited session. When there are more, a
   last row reads "… N more", and Enter or a click on it lists
   the rest of the project's exited sessions in place.
+- **The project's archived sessions** sit under a dim "archived · N" after
+  its exited rows, folded. Enter or a click on that line lists them in place,
+  the most recent first, each drawn as an exited row, and again folds them.
+  The line is left out when N is 0. An archived session is on neither the
+  exited rows nor the rail ("Archiving" in `docs/invocation.md`).
 The focused row is drawn on the selection bar. With no session, the list's
 rows hold two dim lines, centred: "No sessions yet." and "Type below and
 press Enter to start one."
@@ -266,14 +272,14 @@ Live sessions come from the hub's feed, across every project, grouped by the
 then from the hub's paged query for older ones, grouped by the `project` on
 each row.
 
-Each project's "exited · N", "… N more" and the rail's "N ✓" count from the `total` of a `recent` scoped to that project. The terminal asks for one when the project first appears, after a reconnect, and when one of the project's sessions leaves or is deleted, with one ask in flight per project; it never adjusts a count itself. Until the first answer arrives, N counts the rows loaded. "… N more" counts the rows the hub holds past those shown, and opening it pages the project's `recent`.
+Each project's "exited · N", "… N more" and the rail's "N ✓" count from the `total` of a `recent` scoped to that project, and "archived · N" from the `total` of one with `archived`. The terminal asks for them when the project first appears, after a reconnect, and when one of the project's sessions leaves, is deleted or is archived, with one ask of each in flight per project; it never adjusts a count itself. Until the first answer arrives, N counts the rows loaded. "… N more" counts the rows the hub holds past those shown, and opening it pages the project's `recent`.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
 the hub. A resume the hub refuses because the workspace is gone shows
 "Cannot resume: <path> no longer exists. Delete removes the session.": it
-adds no rail card, and the row stays under "exited". A ✕ on a live row stops that session ("Quit"). Delete on a
-focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. Delete on a
-selected exited row deletes that session through the hub, after asking, and
+adds no rail card, and the row stays under "exited". Opening an archived row resumes it the same way, which unarchives it. A ✕ on a live row stops that session ("Quit"). Delete on a
+focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. A ✕ on an exited row, or Backspace on it, archives that session through the hub and asks nothing, since opening it undoes that. Backspace on a live, unreadable or archived row does nothing, and an archived row has no ✕. Delete or Shift+Backspace on a
+selected exited or archived row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
 "Deleting and pruning"). `/delete` deletes the session on screen instead:
 it asks the hub for the exact sessions the delete would remove, asks the
@@ -286,7 +292,11 @@ the backstop. A stop the hub refuses deletes nothing and names the session
 still running; a stop with no answer shows `Stop status unknown`. A delete
 refused because a session is running again keeps the attached session with a
 `Not deleted` notice and does not retry; any other post-stop refusal returns
-home with its stopped rows and the hub's message. A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
+home with its stopped rows and the hub's message. `/archive` archives the
+session on screen: it stops that session the way `/delete` does, with the
+delegates that shut down with it, and waits for the same exit evidence, then
+archives that one session and goes home. It asks nothing. A stop the hub
+refuses archives nothing, with `/delete`'s notices. A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
 
 The mouse wheel over the list's rows scrolls the list by three rows,
 leaving the focus where it is.
@@ -1952,7 +1962,8 @@ through the `input_status` slot ("Extension seams").
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
-| Delete the selected exited, or a live one with Delete session in the session list | `delete_session` | Delete, or Backspace, on the row | click the row's ✕ |
+| Delete the selected exited, or a live one with Delete session in the session list | `delete_session` | Delete, or Shift+Backspace, on the row | click a live row's ✕ |
+| Archive the selected exited session in the session list | `archive_session` | Backspace on the row | click an exited row's ✕; `/archive` |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
@@ -1985,7 +1996,10 @@ through the `input_status` slot ("Extension seams").
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
 Every key bound to `delete_session` acts as Delete does. A rebound character key
-stops on home's list and types on a focused rail. `[]` unbinds it.
+stops on home's list and types on a focused rail. `[]` unbinds it. Every key
+bound to `archive_session` acts as Backspace does on home's rows, and nowhere
+else. Delete is the key that deletes without the kitty keyboard protocol,
+where Shift+Backspace arrives as Backspace and archives.
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
@@ -1993,7 +2007,7 @@ so it does not redraw the screen as it does in some terminal programs.
 
 The key map docks at the bottom, full width, in the overlay frame ("Look",
 "Overlays"). Its title is "Key map" with a ✕, then two dim lines: "Every
-binding by area, with its other paths." and the counts ("38 actions, 26 with
+binding by area, with its other paths." and the counts ("39 actions, 27 with
 other paths"). After a blank row comes a row of tabs, "All" and then each
 area, two columns apart: the chosen tab bold, drawn dark on white, the rest
 dim; ← and → move between them. Under the tabs, the search line reads "Type
@@ -2054,7 +2068,7 @@ A global action acts in all six. The rest act only where they are listed:
   `text_input`.
 - Input: `send`, `recall_prompt`, `focus_rail`.
 - Steering: `amend_steering`.
-- Conversation: `delete_session`, `focus_next_prev`, `open_focused`,
+- Conversation: `delete_session`, `archive_session`, `focus_next_prev`, `open_focused`,
   `copy_focused`, `focus_area`.
 - Search: `search_results`, `search_next_prev`.
 
@@ -2159,6 +2173,7 @@ later release still applies.
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
 | `/close [all]`, `/stop [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
+| `/archive` | Stops the session and its cascade as `/delete` does, then archives that one session and goes home, asking nothing ("The session list"). |
 | `/delete` | Asks before stopping the session and its cascade, then deletes the exact confirmed set permanently; it never retries a refusal ("The session list"). |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |
@@ -2314,7 +2329,7 @@ list: "↑↓ move · Enter delete · Esc close".
     (`docs/invocation.md`, "Lifecycle").
   - "Close all" sends each working session `close` with `now`. The prompt says how many of them are also
     open elsewhere: a session's `clients` on its `session_status`, less the terminal's own `full` connection to it when it holds one.
-- **Stopping one session** is `/close`, the ✕ on its home row, or Delete on
+- **Stopping one session** is `/close`, the ✕ on its live home row, or Delete on
   its focused home row or rail card. It sends `close` with `now`, which ends
   its turn, stops its jobs and delegates, and exits it
   (`docs/invocation.md`, "Shutdown"). Delete asks first, in an overlay: the
