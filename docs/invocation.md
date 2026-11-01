@@ -850,7 +850,7 @@ rationale and the rejected layouts are
   the delegate's stdin that it never writes to: end of file on it means the
   keeper is gone, and the delegate shuts down ("Shutdown"). A dropped socket
   connection is only a client leaving; the parent reconnects. Delegates on
-  other harnesses are child processes of the session (`docs/delegates.md`;
+  other harnesses are child processes of the keeper too (`docs/delegates.md`;
   `docs/tools.md`, "The keeper").
 - **An image child is a short-lived process, one per image or PDF.** The session
   starts it by running `fiber` again with an internal command, not a door,
@@ -1017,12 +1017,13 @@ own log is complete. The resumed parent reads that delegate's log, writes its
 `delegate_finished` if the keeper wrote its end, and writes any
 `usage_recorded` lines it is missing (`docs/loop.md`, "Spending budget").
 
-A delegate on another harness is a child of its session, not of the keeper.
-A command whose output goes to a pipe its dead session held dies at its next
-write, and anything else keeps running unwatched (macOS arm64,
-`research/shutdown/crash-cleanup.md`); its job completes `orphaned` on
-resume (`docs/events.md`, "Resume"). If the keeper itself dies, its jobs are
-left the same way.
+A delegate on another harness is kept the same way, and its end reaches the
+log by the rule in `docs/tools.md`, "The keeper".
+
+If the keeper itself dies, a command whose output goes to a pipe the keeper
+held dies at its next write, and anything else keeps running unwatched
+(macOS arm64, `research/shutdown/crash-cleanup.md`); its job completes
+`orphaned` on resume (`docs/events.md`, "Resume").
 
 **The terminal and the hub.** Closing the terminal closes its connections,
 and each session follows "Lifecycle". Stopping the hub ends its relays, and
