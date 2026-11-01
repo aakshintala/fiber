@@ -19,6 +19,7 @@ use contract::events::{
 };
 
 use super::{App, Effect, Kind, mint};
+use crate::context_view::Handoff;
 use crate::input::Draft;
 use crate::shell;
 use crate::view::panel::delegates::DELEGATES_SHOWN;
@@ -114,6 +115,8 @@ pub(crate) struct PanelState {
     pub(crate) quota: quota::Query,
     widgets: Vec<Widget>,
     status: Option<SessionStatus>,
+    /// The session whose `session_status` supplied `status`.
+    status_session: Option<SessionId>,
     model: Option<String>,
     thinking: Option<String>,
     thinking_state: ThinkingState,
@@ -167,6 +170,7 @@ impl PanelState {
             "session_status" => {
                 if let Some(status) = super::read!(envelope, SessionStatus) {
                     self.status = Some(status);
+                    self.status_session = Some(envelope.session_id.clone());
                 }
             }
             "session_started" => {
@@ -407,14 +411,43 @@ impl PanelState {
         self.workspace.as_deref()
     }
 
-    /// The latest `preamble_built`'s context window, in tokens.
-    pub(crate) fn window(&self) -> Option<u64> {
-        self.window
+    /// The context window in force: the latest own `preamble_built`'s,
+    /// or the active session's reported window when it logged no own
+    /// preamble (`docs/tui.md`, "Swapped views").
+    pub(crate) fn window_for(&self, session: &SessionId) -> Option<u64> {
+        self.window.or_else(|| {
+            self.status_for(session)?
+                .context
+                .as_ref()
+                .map(|context| context.window)
+        })
+    }
+
+    /// The cached status only when it belongs to `session`.
+    pub(crate) fn status_for(&self, session: &SessionId) -> Option<&SessionStatus> {
+        if self.status_session.as_ref() == Some(session) {
+            self.status.as_ref()
+        } else {
+            None
+        }
     }
 
     /// The latest `preamble_built`'s handoff point, in tokens.
     pub(crate) fn trigger_at(&self) -> Option<u64> {
         self.trigger_at
+    }
+
+    /// The automatic handoff point in force: the latest own
+    /// `preamble_built`'s, known off when that build sets none, or
+    /// unknown when the session logged no `preamble_built` of its own.
+    /// A build always sets the window, so a window means an own build
+    /// replaced the inherited one (`docs/tui.md`, "Swapped views").
+    pub(crate) fn handoff(&self) -> Handoff {
+        match (self.window.is_some(), self.trigger_at) {
+            (true, Some(point)) => Handoff::At(point),
+            (true, None) => Handoff::Off,
+            (false, _) => Handoff::Unknown,
+        }
     }
 
     /// The latest `preamble_built`'s budget, in US dollars; `None` when
@@ -524,6 +557,12 @@ impl PanelState {
         self.due = true;
         self.quota.attached();
         self.workspace = None;
+        // The new attachment folds its own `preamble_built` and
+        // `session_status`: the old window and handoff point end here.
+        // Keep the cached status; its session identity prevents it from
+        // supplying the new attachment's context (`docs/tui.md`, "Swapped views").
+        self.window = None;
+        self.trigger_at = None;
         // A new attachment has no running call, so no streamed thinking.
         self.thinking_state = ThinkingState::Idle;
     }

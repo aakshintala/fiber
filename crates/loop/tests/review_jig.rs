@@ -279,12 +279,13 @@ fn missing_notes_file_is_an_input_error_naming_the_path() {
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/review`), so the test starts no cargo and
-/// waits on no build lock.
-fn example_path() -> PathBuf {
+/// waits on no build lock. Warming before returning means every exec site
+/// holds only a warmed path.
+fn example_path() -> fakes::WarmedJig {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.join("examples").join("review")
+    fakes::WarmedJig::warm(path.join("examples").join("review"), &["--bogus"], 2)
 }
 
 /// Runs the built `review` binary on `dir` with `answers` as its stdin
@@ -294,8 +295,8 @@ fn example_path() -> PathBuf {
 /// [`JIG_DEADLINE`] covers the exchange and the exit; the watchdog reaps
 /// the process group on every path, including failure.
 fn run_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> Output {
-    fakes::warm_up(&example_path(), &["--bogus"], 2);
-    let mut child = Command::new(example_path())
+    let warmed = example_path();
+    let mut child = Command::new(warmed.path())
         .arg(dir)
         .args(args)
         .stdin(Stdio::piped())
@@ -1579,7 +1580,8 @@ fn bad_argv_and_notes_fail_through_the_binary() {
     );
     assert_eq!(missing.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&missing.stderr).contains("/nonexistent/review-notes.md"));
-    let none = Command::new(example_path())
+    let warmed = example_path();
+    let none = Command::new(warmed.path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1890,13 +1892,14 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
         .write(true)
         .open(&release_path)
         .unwrap();
+    let warmed = example_path();
     let mut child = Command::new("/bin/sh")
         .arg("-c")
         .arg(r#"printf '%s\n' "$$" > "$1"; IFS= read -r release < "$2"; shift 2; exec "$@""#)
         .arg("sh")
         .arg(ready.path())
         .arg(&release_path)
-        .arg(example_path())
+        .arg(warmed.path())
         .arg(dir)
         .args(args)
         .stdin(Stdio::piped())

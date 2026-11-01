@@ -26,12 +26,13 @@ mod support;
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/check`), so the test starts no cargo and
-/// waits on no build lock.
-fn example_path() -> PathBuf {
+/// waits on no build lock. Warming before returning means every exec site
+/// holds only a warmed path.
+fn example_path() -> fakes::WarmedJig {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.join("examples").join("check")
+    fakes::WarmedJig::warm(path.join("examples").join("check"), &[], 2)
 }
 
 /// Runs the built `check` binary over `dir` and waits for it. The child is
@@ -39,8 +40,8 @@ fn example_path() -> PathBuf {
 /// wait and leaves no process behind.
 #[track_caller]
 fn run_jig(dir: &Path) -> Output {
-    fakes::warm_up(&example_path(), &[], 2);
-    let child = Command::new(example_path())
+    let warmed = example_path();
+    let child = Command::new(warmed.path())
         .arg(dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

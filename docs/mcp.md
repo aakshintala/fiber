@@ -308,9 +308,9 @@ every configured server: its name, the layer that declares it (`global`,
 failed, its tool count, and for a repository's server whether it is
 approved. The state is one of:
 
-- `connecting`: declared but never started this session, and no failure
-  recorded. A server with a cached tool list that this session has not
-  started yet shows as `connecting`.
+- `not-started`: declared but not started this session, and no failure
+  recorded. Servers start on first use ("Starting servers"), so a server
+  nothing has called yet is `not-started`, cached tool list or not.
 - `ready`: running, with its tools declared.
 - `failed`: the last start failed, and the row carries the
   `mcp_server_failed` `error.message` sentence ("Starting servers").
@@ -319,7 +319,7 @@ approved. The state is one of:
 
 The tool count is the rows the `tools` driver answer declares for that
 server (`docs/tools.md`, "Seeing the tools"), so the two views never
-disagree; a `connecting` server shows no count until it lists.
+disagree; a `not-started` server shows no count until it lists.
 
 `mcp_reconnect` is a driver command that restarts one failed server, as
 reload restarts changed and dead servers above, and answers with its

@@ -618,6 +618,7 @@ impl Settings {
                 current,
                 list,
             } => Frame {
+                joins: Vec::new(),
                 title: format!("Settings › {THEME}"),
                 command: "/settings".to_owned(),
                 rows: names
@@ -645,6 +646,7 @@ impl Settings {
                     self.said.clone()
                 };
                 Frame {
+                    joins: Vec::new(),
                     title: "Settings".to_owned(),
                     command: "/settings".to_owned(),
                     rows: self.lines(width),
@@ -665,6 +667,7 @@ impl Settings {
                     layer_name(field.layer())
                 ));
                 Frame {
+                    joins: Vec::new(),
                     title: "Settings".to_owned(),
                     command: "/settings".to_owned(),
                     rows: self.lines(width),

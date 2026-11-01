@@ -432,12 +432,10 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             edge: false,
         }),
     }
-    let window = panel.window().filter(|window| *window > 0);
-    let context = window.and_then(|window| {
-        panel
-            .status()
-            .and_then(|status| status.context.as_ref())
-            .map(|context| (window, context))
+    let context = app.session().and_then(|session| {
+        let window = panel.window_for(session).filter(|window| *window > 0)?;
+        let context = panel.status_for(session)?.context.as_ref()?;
+        Some((window, context))
     });
     // The context bar and the two lines under it draw from the first
     // frame. Figures not known yet show dim dashes, so no row moves

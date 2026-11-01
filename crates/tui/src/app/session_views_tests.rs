@@ -481,11 +481,15 @@ fn a_delegate_started_line_adds_a_delegate_row_for_its_calls() {
 }
 
 fn context_preamble() -> Line {
+    context_preamble_for(SESSION, 100)
+}
+
+fn context_preamble_for(session: &str, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "preamble_built",
         json!({
-            "reason": "start", "model": "model/m", "context_window": 100,
+            "reason": "start", "model": "model/m", "context_window": window,
             "trigger_at": 80, "system_prompt": "sys",
             "tools": [{"name": "read", "registered_by": "builtin", "deferred": false,
                 "definition": {"a": 1}}],
@@ -496,8 +500,12 @@ fn context_preamble() -> Line {
 }
 
 fn context_status(tokens: u64, window: u64) -> Line {
+    context_status_for(SESSION, tokens, window)
+}
+
+fn context_status_for(session: &str, tokens: u64, window: u64) -> Line {
     session_line(
-        SESSION,
+        session,
         "session_status",
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
@@ -528,15 +536,19 @@ fn context_usage(input_media: Option<bool>) -> Line {
 }
 
 fn context_tool(name: &str, result: &str) -> [Line; 2] {
+    context_tool_for(SESSION, name, result)
+}
+
+fn context_tool_for(session: &str, name: &str, result: &str) -> [Line; 2] {
     [
         session_line(
-            SESSION,
+            session,
             "tool_call_requested",
             json!({"name": name, "arguments": {}}),
             Some("a_1"),
         ),
         session_line(
-            SESSION,
+            session,
             "tool_call_completed",
             json!({"status": "completed", "content": [{"type": "text", "text": result}]}),
             Some("a_1"),
@@ -688,6 +700,148 @@ fn a_fork_counts_its_own_results_and_completed_handoff_clears_them() {
     assert!(after.contains("■ tool results"), "{after}");
     assert!(after.contains("~0 0%"), "{after}");
     assert!(after.contains("none since the last handoff"), "{after}");
+}
+
+/// A session that continues another log without a `preamble_built` of its
+/// own, as after a move, a rewind or a fork (see #3756): the total comes
+/// from its `session_status`, the window from the one that status reports,
+/// and the unknown handoff point draws no marker and no off row.
+#[test]
+fn context_without_an_own_preamble_uses_the_reported_window() {
+    let mut app = attached(100, 40);
+    app.on_line(context_status(50, 200));
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(
+        shown.contains("50 tokens · 25% of the 200 window"),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains("The context shows after the session's first request."),
+        "{shown}"
+    );
+    assert!(!shown.contains("automatic handoff"), "{shown}");
+    assert!(shown.contains("none since the last handoff"), "{shown}");
+    // A later preamble of its own replaces the inherited window and the
+    // unknown handoff point.
+    app.on_line(context_preamble());
+    let after = screen(&app, 100, 40).0;
+    assert!(
+        after.contains("50 tokens · 50% of the 100 window · automatic handoff at 80"),
+        "{after}"
+    );
+}
+
+/// A rewound child keeps the total and window from its own status but
+/// cannot reuse the parent's preamble sizes or tool results (see #3756).
+#[test]
+fn rewound_context_does_not_reuse_parent_preamble_sizes() {
+    let mut app = attached(100, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_request_started());
+    app.on_line(context_usage(None));
+    app.on_line(context_status(50, 100));
+    for line in context_tool("read", "parent result") {
+        app.on_line(line);
+    }
+    open_context(&mut app);
+    let parent_view = screen(&app, 100, 40).0;
+    assert!(parent_view.contains("system prompt"), "{parent_view}");
+    assert!(parent_view.contains("tool definitions"), "{parent_view}");
+    assert!(parent_view.contains("tool results"), "{parent_view}");
+    assert!(parent_view.contains("read"), "{parent_view}");
+
+    app.attach(SessionId(OTHER.to_owned()));
+    app.on_line(session_line(
+        OTHER,
+        "session_started",
+        json!({
+            "workspace": "/w",
+            "variables": {"path": "", "names": [], "source": "inherited"},
+            "forked_from": {"session_id": SESSION, "seq": 8},
+            "rewind": {"note": "", "summary": null},
+        }),
+        None,
+    ));
+    for line in context_tool_for(OTHER, "read", "child result") {
+        app.on_line(line);
+    }
+    app.on_line(context_status_for(OTHER, 12, 200));
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(
+        shown.contains("12 tokens · 6% of the 200 window"),
+        "{shown}"
+    );
+    assert!(!shown.contains("system prompt"), "{shown}");
+    assert!(!shown.contains("tool definitions"), "{shown}");
+    assert!(!shown.contains("parent result"), "{shown}");
+    assert!(shown.contains("read"), "{shown}");
+    assert!(shown.contains("12 bytes"), "{shown}");
+    assert!(!shown.contains("~12 tokens"), "{shown}");
+    assert!(!shown.contains("■ tool results"), "{shown}");
+}
+
+/// An own `preamble_built` without a handoff point means automatic
+/// handoff is off, not unknown (see #3756): the breakdown keeps the
+/// existing off row.
+#[test]
+fn context_with_a_triggerless_preamble_keeps_the_off_row() {
+    let mut app = attached(100, 40);
+    app.on_line(context_status(50, 100));
+    app.on_line(session_line(
+        SESSION,
+        "preamble_built",
+        json!({
+            "reason": "start", "model": "model/m", "context_window": 100,
+            "system_prompt": "sys",
+            "tools": [{"name": "read", "registered_by": "builtin", "deferred": false,
+                "definition": {"a": 1}}],
+            "tool_choice": "auto", "cache_lifetime": "5m",
+        }),
+        Some("a_1"),
+    ));
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(
+        shown.contains("50 tokens · 50% of the 100 window"),
+        "{shown}"
+    );
+    assert!(shown.contains("automatic handoff off"), "{shown}");
+    assert!(!shown.contains("handoff at"), "{shown}");
+}
+
+/// Attaching another session preserves the old status payload but cannot
+/// pair its context total with the new session's own preamble window
+/// before that session reports `session_status` (see #3756).
+#[test]
+fn attaching_another_session_does_not_use_cached_status_for_context() {
+    let mut app = attached(100, 40);
+    app.on_line(context_preamble());
+    app.on_line(context_status(50, 100));
+    let parent = app.session().unwrap().clone();
+    assert_eq!(app.panel_state().window_for(&parent), Some(100));
+    app.attach(SessionId(OTHER.to_owned()));
+    let child = app.session().unwrap().clone();
+    assert!(app.panel_state().status().is_some());
+    assert!(app.panel_state().status_for(&parent).is_some());
+    assert!(app.panel_state().status_for(&child).is_none());
+    assert_eq!(app.panel_state().window_for(&child), None);
+    app.on_line(context_preamble_for(OTHER, 200));
+    assert_eq!(app.panel_state().window_for(&child), Some(200));
+    open_context(&mut app);
+    let shown = screen(&app, 100, 40).0;
+    assert!(!shown.contains("50 tokens"), "{shown}");
+    assert!(!shown.contains("25% of the 200 window"), "{shown}");
+
+    app.on_line(context_status_for(OTHER, 50, 200));
+    assert!(app.panel_state().status_for(&child).is_some());
+    assert_eq!(app.panel_state().window_for(&child), Some(200));
+    let refreshed = screen(&app, 100, 40).0;
+    assert!(
+        refreshed.contains("50 tokens · 25% of the 200 window"),
+        "{refreshed}"
+    );
 }
 
 #[test]

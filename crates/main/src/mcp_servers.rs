@@ -612,6 +612,7 @@ impl crate::reload::State {
                 self.artifacts.clone(),
                 Arc::clone(&self.images),
                 self.log.clock().clone(),
+                Arc::clone(&self.reconnect_flights),
             ),
         }
     }
@@ -722,7 +723,7 @@ fn servers_refresh(
                             Some(count()),
                         ),
                         None => (
-                            contract::events::McpServerState::Connecting,
+                            contract::events::McpServerState::NotStarted,
                             String::new(),
                             None,
                         ),
@@ -902,8 +903,18 @@ fn reconnect_server(
     artifacts: std::path::PathBuf,
     images: Arc<dyn contract::images::Images>,
     clock: Arc<dyn contract::clock::Clock>,
+    flights: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 ) -> r#loop::ReconnectServer {
-    Arc::new(move |server: &str| {
+    struct Flight<'a> {
+        flights: &'a std::sync::Mutex<std::collections::BTreeSet<String>>,
+        server: &'a str,
+    }
+    impl Drop for Flight<'_> {
+        fn drop(&mut self) {
+            support::lock(self.flights).remove(self.server);
+        }
+    }
+    Arc::new(move |server: &str, collect: &mut dyn FnMut(&str)| {
         let (_, project) =
             cli::project_of(&sources.home, &sources.workspace).map_err(|failure| Rejection {
                 code: failure.code(),
@@ -952,7 +963,19 @@ fn reconnect_server(
                 message: failure.message,
             });
         }
-        let (used, removed, records) = if servers.has_slot(server) {
+        let adoption = if servers.has_slot(server) {
+            None
+        } else {
+            Some(adoption_spec(&config, server)?)
+        };
+        support::lock(&flights).insert(server.to_owned());
+        let flight = Flight {
+            flights: &flights,
+            server,
+        };
+        let (used, removed, records) = if let Some(spec) = adoption {
+            adopt_server(spec, &sources, &servers, &artifacts, &images, &clock)?
+        } else {
             let Some(restarted) = mcp::restart(&servers, server, &artifacts, &images) else {
                 return Err(Rejection {
                     code: contract::ErrorCode::InvalidArguments,
@@ -962,10 +985,6 @@ fn reconnect_server(
                 });
             };
             (restarted.used, restarted.removed, restarted.records)
-        } else {
-            adopt_server(
-                &config, &sources, &servers, server, &artifacts, &images, &clock,
-            )?
         };
         for name in &removed {
             declare(name.as_str(), None);
@@ -973,6 +992,8 @@ fn reconnect_server(
         for (_, tool, info) in &used {
             declare(&tool.definition().name, Some(info.clone()));
         }
+        collect(server);
+        drop(flight);
         Ok(r#loop::Reconnected {
             tools: used
                 .into_iter()
@@ -996,24 +1017,9 @@ type Adopted = (
     Vec<contract::tool::ServerRecord>,
 );
 
-/// Starts the one server the session never started and adopts its slot,
-/// so the restart serves it exactly once: a second failure stays a
-/// failure the log carries, and a success declares its tools. A declared
-/// server with nothing runnable, or a repository server the offer flow
-/// owns, is `invalid_arguments`, not a start.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one server's startup inputs, as at session start"
-)]
-fn adopt_server(
-    config: &config::Config,
-    sources: &config::Sources,
-    servers: &Arc<mcp::Servers>,
-    server: &str,
-    artifacts: &std::path::Path,
-    images: &Arc<dyn contract::images::Images>,
-    clock: &Arc<dyn contract::clock::Clock>,
-) -> Result<Adopted, Rejection> {
+/// Rejects servers the repository offer owns or that have nothing
+/// runnable before publishing an executing start.
+fn adoption_spec(config: &config::Config, server: &str) -> Result<mcp::ServerSpec, Rejection> {
     let invalid = |message: String| Rejection {
         code: contract::ErrorCode::InvalidArguments,
         message,
@@ -1032,6 +1038,19 @@ fn adopt_server(
             "The MCP server `{server}` has nothing runnable to start; fix its declaration and reload."
         )));
     };
+    Ok(spec)
+}
+
+/// Starts the validated server and adopts its slot. Failure is an outcome
+/// written by the loop, not a rejected driver command.
+fn adopt_server(
+    spec: mcp::ServerSpec,
+    sources: &config::Sources,
+    servers: &Arc<mcp::Servers>,
+    artifacts: &std::path::Path,
+    images: &Arc<dyn contract::images::Images>,
+    clock: &Arc<dyn contract::clock::Clock>,
+) -> Result<Adopted, Rejection> {
     let started = mcp::start_observed(
         vec![spec],
         &sources.workspace,
