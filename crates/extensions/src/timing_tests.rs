@@ -11,6 +11,8 @@
 use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::VecDeque;
 use std::fs;
+use std::io::{ErrorKind, Write};
+use std::net::{Shutdown, TcpListener};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
@@ -634,27 +636,80 @@ fn milestones_come_from_the_send() {
     }
 }
 
+fn incomplete_response_server(prefix: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Deadline::after(Duration::from_secs(50));
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(accepted) => break accepted,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    assert!(
+                        !deadline.left().is_zero(),
+                        "the client connected to the partial-response server"
+                    );
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("accepting the partial-response client: {error}"),
+            }
+        };
+        let head = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            prefix.len() + 1
+        );
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(&prefix).unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
+    });
+    (format!("http://{address}/"), server)
+}
+
 #[test]
 fn partial_read_keeps_status_headers_and_count() {
     let prefix = vec![9u8; 5];
-    let server = ProviderServer::start([Response::stall(200, prefix.clone(), 100)]).unwrap();
-    let again = ProviderServer::start([Response::stall(200, prefix.clone(), 100)]).unwrap();
-    let plain = perform(&get(&server.url(), Some(Duration::from_millis(300)))).unwrap_err();
-    let (sink, _) = Watching::new();
-    let seen = perform_observed(
-        &get(&again.url(), Some(Duration::from_millis(300))),
-        observed(
-            "p",
-            ProviderPurpose::ModelList,
-            sink.clone(),
-            FakeClock::new(),
-        ),
+    // The server sends the full head and this prefix, then closes before
+    // fulfilling the declared length. EOF makes the partial read fail
+    // without racing a real client timeout against response delivery.
+    let (url, server) = incomplete_response_server(prefix.clone());
+    let request = get(&url, None);
+    let plain = fakes::within(
+        "plain partial read",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || perform(&request),
     )
     .unwrap_err();
-    // The same classified error on both paths: the passed backstop is a
-    // timeout, never elapsed wall milliseconds.
+    fakes::within(
+        "plain partial-response server",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || server.join(),
+    )
+    .unwrap();
+    let (url, server) = incomplete_response_server(prefix.clone());
+    let (sink, _) = Watching::new();
+    let request = get(&url, None);
+    let observation = observed(
+        "p",
+        ProviderPurpose::ModelList,
+        sink.clone(),
+        FakeClock::new(),
+    );
+    let seen = fakes::within(
+        "observed partial read",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || perform_observed(&request, observation),
+    )
+    .unwrap_err();
+    fakes::within(
+        "observed partial-response server",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || server.join(),
+    )
+    .unwrap();
+    // Both paths classify the deterministic incomplete response alike.
     assert_eq!(plain, seen);
-    assert_eq!(plain.0, ErrorCode::Timeout);
+    assert_eq!(plain.0, ErrorCode::ConnectionFailed);
     // The partial reply keeps its status, its headers and the bytes read
     // before the failure, not the configured length.
     let records = sink.records();
