@@ -1123,22 +1123,24 @@ fn the_item_views_top_row_closes_them() {
             |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
         );
     }
-    // Tear down in the open: kill the run, then close the release (EOF
-    // lets every blocked `head` read and exit) and re-kill the hold
-    // pattern until no holder can still start. Dropping the last writer
-    // before a head opens the FIFO strands it there forever
+    // Tear down in the open: kill the run, unlink the FIFO, then close
+    // the release (EOF lets every blocked `head` read and exit) and
+    // re-kill the hold pattern until no holder matches. Dropping the
+    // last writer before a head opens the FIFO strands it there forever
     // (`docs/testing.md`, "Waits and timeouts"), and the drop's one-shot
-    // watchdog kill only reaps what has exec'd by then, so a head whose
-    // first schedule lands after teardown would outlive the temp dir.
-    // The zero has to hold across passes: a first listing can find no
-    // holder only because the starter has not exec'd yet. If cleanup
-    // cannot complete, the expiry is reported here and the temp-dir
-    // detector still reports the straggler.
+    // watchdog kill only reaps what has exec'd by then. Unlinking first
+    // closes the delayed-start window the ticket names: a head that
+    // starts after the unlink fails its open with ENOENT and exits
+    // within milliseconds, which the temp-dir detector's bounded wait
+    // absorbs, so cleanup may stop at the first zero. The re-kill still
+    // reaps openers caught mid-syscall across the unlink. If cleanup
+    // cannot complete, it panics naming the stragglers; the temp-dir
+    // detector is skipped while unwinding.
     let pattern = hold.path().display().to_string();
     drop(run);
+    fs::remove_file(hold.path()).unwrap();
     drop(hold);
     let deadline = setup.deadline.cleanup_phase();
-    let mut quiet = 0;
     let mut clean = false;
     while !deadline.left().is_zero() {
         if fakes::kill_matching(pattern.as_str()).is_err() {
@@ -1148,13 +1150,8 @@ fn the_item_views_top_row_closes_them() {
             pattern.as_str(),
             fakes::Deadline::after(std::time::Duration::from_millis(100)),
         ) {
-            quiet += 1;
-            if quiet >= 3 {
-                clean = true;
-                break;
-            }
-        } else {
-            quiet = 0;
+            clean = true;
+            break;
         }
     }
     if !clean {
