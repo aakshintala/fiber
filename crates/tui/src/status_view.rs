@@ -80,6 +80,7 @@ pub(crate) fn frame(facts: &Facts<'_>, list: List) -> Frame {
         entry("clients", status.map(|status| status.clients.to_string())),
     ];
     Frame {
+        joins: Vec::new(),
         title: "Status".to_owned(),
         command: "/status".to_owned(),
         rows,

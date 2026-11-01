@@ -237,6 +237,7 @@ impl Mcp {
             self.said.clone()
         };
         Frame {
+            joins: Vec::new(),
             title: "MCP servers".to_owned(),
             command: "/mcp".to_owned(),
             rows,

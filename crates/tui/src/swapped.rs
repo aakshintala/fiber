@@ -13,6 +13,7 @@ use crate::app::App;
 use crate::format;
 use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
+use crate::rows::Join;
 use crate::theme::Role;
 use crate::view::overlay;
 
@@ -200,6 +201,16 @@ impl List {
         }
     }
 
+    /// Sets the selected display line and the first shown one
+    /// independently, with no clamping or scrolling: a view whose
+    /// selection and scroll move on different lines puts each where
+    /// its own rule says, so the selected line may sit above the
+    /// first shown one. The gutter mark stays as it was.
+    pub(crate) fn set_line_window(&mut self, selected_line: usize, top_line: usize) {
+        self.selected = selected_line;
+        self.top = top_line;
+    }
+
     /// The selected row's index.
     pub(crate) fn selected(&self) -> usize {
         self.selected
@@ -328,6 +339,11 @@ pub(crate) struct Frame {
     /// The rows, each in cells drawn left to right, some with a click
     /// target of their own, each with how it draws.
     pub(crate) rows: Vec<Vec<(String, Option<Spot>, Ink)>>,
+    /// How each row's text joins the row before it: the first display
+    /// line of a wrapped action breaks, its continuations wrap
+    /// (`docs/tui.md`, "Selection and copy"). Short or missing means a
+    /// break; only the rebinding screen fills it.
+    pub(crate) joins: Vec<Join>,
     /// The selection and the first row shown.
     pub(crate) list: List,
     /// Lines below the rows: what a write said, when a key applies.
@@ -482,7 +498,13 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
     let shown = rows_height(frame, usize::from(area.height));
     let mut noted = Vec::new();
     let mut y = area.y.saturating_add(1);
-    for cells in frame.rows.iter().skip(frame.list.top()).take(shown) {
+    for (at, cells) in frame
+        .rows
+        .iter()
+        .enumerate()
+        .skip(frame.list.top())
+        .take(shown)
+    {
         let gutter = frame.list.is_gutter();
         let x = if gutter {
             area.x.saturating_add(crate::text::to_u16(GUTTER))
@@ -499,7 +521,7 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
             x,
             end: area.right(),
             text: cut,
-            join: crate::rows::Join::Break,
+            join: frame.joins.get(at).copied().unwrap_or(Join::Break),
         });
         y = y.saturating_add(1);
     }
@@ -549,6 +571,21 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
     crate::view::marks::paint_selection(app, buf, crate::app::SurfaceId::Swapped, area);
 }
 
+/// Whether display line `at` belongs to the focused action's span: the
+/// selected first line and the wrap continuations after it, up to the
+/// next break. A wrapped action reads as one row barred on every line.
+fn focused_span(frame: &Frame, at: usize) -> bool {
+    let selected = frame.list.selected();
+    if at < selected {
+        return false;
+    }
+    if at == selected {
+        return true;
+    }
+    ((selected.saturating_add(1))..=at)
+        .all(|row| matches!(frame.joins.get(row), Some(Join::Wrap | Join::WrapSpace)))
+}
+
 /// Draws `frame` into `area`: the top row, then what fits top down,
 /// the footer on the last row.
 pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
@@ -579,6 +616,12 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
             rect: line,
         });
         let gutter = frame.list.is_gutter();
+        // The rebinding screen notes how its wrapped lines join: its
+        // focused action reads barred on every display line, with the
+        // gutter mark on the first only. Every other view keeps its
+        // shape: a plain list bars its selected row, a gutter list
+        // notes no bar.
+        let span = gutter && !frame.joins.is_empty();
         let mut x = area.x;
         if gutter {
             if at == frame.list.selected() {
@@ -604,7 +647,12 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
             }
             x = end;
         }
-        if !gutter && at == frame.list.selected() {
+        let barred = if span {
+            focused_span(frame, at)
+        } else {
+            !gutter && at == frame.list.selected()
+        };
+        if barred {
             buf.set_style(line, SELECTED);
         }
         y = y.saturating_add(1);

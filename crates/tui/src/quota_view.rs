@@ -181,6 +181,7 @@ pub(crate) fn frame(
         entry_rows(&mut out, info, notice_at, width, now_ms);
     }
     Frame {
+        joins: Vec::new(),
         title: "Quota".to_owned(),
         command: if fetching {
             "/quota · fetching".to_owned()
