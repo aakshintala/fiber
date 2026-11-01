@@ -22,8 +22,9 @@ mod support;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -511,8 +512,9 @@ fn pair_client(hub: &support::Setup, client: &support::Setup, port: u16) {
     );
 }
 
-/// The `git` on this test's own `PATH`: the gate wrapper delegates to it
-/// once released, so the path is absolute and never the wrapper itself.
+/// The first `git` on this test's own `PATH`: it may itself be a wrapper,
+/// which is safe because the gate strips its own directory from `PATH`
+/// before the `exec`, so the wrapper cannot re-select the gate.
 fn real_git() -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|dir| dir.join("git"))
@@ -528,9 +530,10 @@ fn real_git() -> PathBuf {
 /// is the test's fifo rendezvous below, never the file.
 fn write_git_gate(dir: &Path, signal: &Path, fifo: &Path, real: &Path) {
     let script = format!(
-        "#!/bin/sh\ncase \" $* \" in\n*\" clone \"*)\nprintf '%s\\n' \"$*\" >> '{}'\nread -r _ < '{}'\n;;\nesac\nexec '{}' \"$@\"\n",
+        "#!/bin/sh\ncase \" $* \" in\n*\" clone \"*)\nprintf '%s\\n' \"$*\" >> '{}'\nread -r _ < '{}'\n;;\nesac\nPATH=$(printf '%s' \"$PATH\" | awk -v RS=: -v ORS=: -v d='{}' '$0 != d' | sed 's/:$//')\nexec '{}' \"$@\"\n",
         signal.display(),
         fifo.display(),
+        dir.display(),
         real.display(),
     );
     fs::write(dir.join("git"), script).unwrap();
@@ -791,18 +794,36 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
 #[test]
 fn hello_slice_timeout_reports_bounds_and_hub_state() {
     let setup = support::Setup::new();
+    // A test-controlled live child: it parks opening the test-held FIFO
+    // for write, which blocks until a reader arrives, and no reader
+    // arrives during the probe, so it stays alive across the zero-bound
+    // slice exactly as the sleep did. Its own process group makes the
+    // give-up's kill effective, so the reap and the drain's EOF follow in
+    // milliseconds instead of riding a natural exit.
+    let fifo = setup.home().join("live.fifo");
+    fakes::fifo(&fifo);
     let spawn_live = || {
-        let mut command = Command::new("sleep");
-        command.arg("30");
-        support::HubProc::spawn_command(setup.deadline, &mut command)
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("exec > \"$1\"")
+            .arg("live-stub")
+            .arg(&fifo)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        support::HubProc::spawn_command_captured(setup.deadline, &mut command)
     };
     let wait = support::Deadline::after(Duration::ZERO);
     let entry = "hello wait entered with helper root left 0ns (test)";
     let slices = [Duration::from_secs(10)];
+    let (process, capture) = spawn_live();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hub_start::hello_slice(
             &setup,
-            spawn_live(),
+            process,
+            &capture,
             wait,
             Duration::from_secs(2),
             entry,
@@ -843,10 +864,12 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
     );
     fs::create_dir_all(setup.home().join("logs")).unwrap();
     fs::write(setup.home().join("logs").join("hub.log"), "").unwrap();
+    let (process, capture) = spawn_live();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hub_start::hello_slice(
             &setup,
-            spawn_live(),
+            process,
+            &capture,
             wait,
             Duration::from_secs(2),
             entry,
@@ -861,4 +884,55 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
         message.contains("hub.log empty (0 bytes)"),
         "an empty hub.log reports distinctly from a missing one: {message}"
     );
+}
+
+/// The hub's boot-time `git rev-parse` probe gets past a `git` wrapper
+/// that re-selects the gate: the gate delegates to a fixture wrapper that
+/// re-execs `git` by PATH lookup instead of naming a binary, so without
+/// the PATH strip the probe exec-loops on the gate's own directory and the
+/// hub never says hello, by construction on every machine, whatever the
+/// harness puts on PATH. Expect success: the test never asserts the
+/// give-up panic; without the strip it fails carrying the Task 2 signature
+/// (still-running hub, missing hub.log, the park in the capture), and with
+/// it the hub gets past the probe and says hello, with no assertion
+/// change.
+#[test]
+fn hub_hello_past_a_self_selecting_git_wrapper() {
+    let setup = support::Setup::new();
+    let root = setup.root.path().join("repro");
+    let wbin = root.join("wbin");
+    fs::create_dir_all(&wbin).unwrap();
+    // Fixture wrapper standing in for any delegate that re-resolves `git`:
+    // it re-execs `git` by PATH lookup, so the gate's `exec` of it comes
+    // back to the gate's own directory, deterministically.
+    let reselect = root.join("reselect-git");
+    fs::write(&reselect, "#!/bin/sh\nexec git \"$@\"\n").unwrap();
+    fs::set_permissions(&reselect, fs::Permissions::from_mode(0o755)).unwrap();
+    let fifo = root.join("probe.fifo");
+    fakes::fifo(&fifo);
+    let signal = root.join("entered");
+    write_git_gate(&wbin, &signal, &fifo, &reselect);
+    let path = format!(
+        "{}:{}",
+        wbin.display(),
+        std::env::var_os("PATH").unwrap().to_string_lossy()
+    );
+    let served = hub_start::serve_installed(
+        &setup,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(
+                &setup.home().join("config.json"),
+                &json!({"hub": {"port": port}}),
+            );
+            let mut command = setup.fiber(&["hub", "serve", "--installed"]);
+            command.env("PATH", &path);
+            command
+        },
+    );
+    assert_eq!(served.hub.1.kind, "hub_hello");
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
+    drop(served.hub);
 }

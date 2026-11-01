@@ -315,10 +315,24 @@ pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
         wide,
         style(Role::Muted),
     );
-    let height = usize::from(area.height).saturating_sub(1);
-    let rows = app.item_output_rows(area.width, to_u16(height));
-    for (index, row) in rows.iter().enumerate() {
+    // A failed model call keeps the provider's own words on their own
+    // labelled line, directly under the path line.
+    let provider_rows: Vec<String> = view
+        .provider
+        .as_ref()
+        .and_then(contract::shapes::ProviderFailure::provider_line)
+        .map(|line| line.lines().map(str::to_owned).collect())
+        .unwrap_or_default();
+    let room = usize::from(area.height).saturating_sub(1);
+    let shown = provider_rows.len().min(room);
+    for (index, row) in provider_rows.iter().take(shown).enumerate() {
         let y = area.y.saturating_add(to_u16(index).saturating_add(1));
+        buf.set_stringn(area.x, y, format::cut(row, wide), wide, style(Role::Text));
+    }
+    let rows = app.item_output_rows(area.width, to_u16(room.saturating_sub(shown)));
+    let top = to_u16(shown.saturating_add(1));
+    for (index, row) in rows.iter().enumerate() {
+        let y = area.y.saturating_add(top.saturating_add(to_u16(index)));
         buf.set_stringn(area.x, y, format::cut(row, wide), wide, style(Role::Text));
     }
 }

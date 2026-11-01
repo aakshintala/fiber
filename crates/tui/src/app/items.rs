@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
+use contract::shapes::ProviderFailure;
 use contract::{ActionId, Envelope, JobId, SessionId};
 
 use super::{App, Effect, Kind, Phase, mint, session_command};
@@ -62,6 +63,9 @@ pub(super) struct JobRecord {
     delegate: Option<DelegateRun>,
     /// How the job ended and the `job_completed` envelope's `ts`.
     outcome: Option<(String, u64)>,
+    /// The failed model call's provider report, folded from the
+    /// `job_completed` error; the view draws its labelled line.
+    provider: Option<ProviderFailure>,
     /// The job's live output since the terminal attached; dropped at
     /// `job_completed` unless the job's view is open.
     output: Option<Output>,
@@ -118,6 +122,9 @@ pub(crate) struct ItemView {
     pub(crate) session_label: Option<String>,
     /// Whether the item still runs.
     pub(crate) running: bool,
+    /// The failed model call's provider report, when the job's error
+    /// carries one; the body draws its labelled line.
+    pub(crate) provider: Option<ProviderFailure>,
     /// What opening or steering last refused with.
     pub(crate) message: Option<String>,
     /// Whether a transcript is swapped in: a running or completed fiber
@@ -186,6 +193,7 @@ impl Items {
                 started_ts: 0,
                 delegate: None,
                 outcome: None,
+                provider: None,
                 output: None,
                 tty: false,
                 protected: Vec::new(),
@@ -318,6 +326,7 @@ impl App {
             session_label,
             running,
             message: open.message.clone(),
+            provider: record.provider.clone(),
             has_transcript,
             output_path: record.output_path.clone(),
             job_id: open.job_id.clone(),
@@ -674,6 +683,7 @@ impl App {
                     };
                     let record = self.items.record(&done.job_id);
                     record.outcome = Some((word.to_owned(), envelope.ts));
+                    record.provider = done.error.as_ref().and_then(|error| error.provider.clone());
                     record.protected = done
                         .protected_paths
                         .as_ref()

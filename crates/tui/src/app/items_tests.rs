@@ -1017,6 +1017,86 @@ fn a_completed_job_folds_its_protected_paths_report() {
 }
 
 #[test]
+fn a_completed_job_folds_its_provider_report() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    job_started(
+        &mut app,
+        "j_2",
+        "build the workspace",
+        wall_ms(&clock),
+        "a_1",
+    );
+    app.on_line(session_line(
+        "job_completed",
+        json!({"job_id": "j_2", "status": "failed",
+            "error": {"code": "invalid_request",
+                "message": "pa answered HTTP 400.",
+                "provider": {"name": "pa", "status": 400,
+                    "message": "content cannot be empty"}}}),
+    ));
+    let folded = app
+        .items
+        .jobs
+        .get(&JobId("j_2".to_owned()))
+        .expect("a record")
+        .provider
+        .clone();
+    assert_eq!(
+        folded,
+        Some(contract::shapes::ProviderFailure {
+            name: "pa".to_owned(),
+            status: Some(400),
+            message: "content cannot be empty".to_owned(),
+        }),
+        "the fold keeps the provider report as data"
+    );
+    open(&mut app, "j_2");
+    assert_eq!(
+        app.item_view().expect("a view").provider,
+        folded,
+        "the view carries the folded report"
+    );
+}
+
+#[test]
+fn a_completed_job_without_provider_folds_none() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    job_started(
+        &mut app,
+        "j_2",
+        "build the workspace",
+        wall_ms(&clock),
+        "a_1",
+    );
+    app.on_line(session_line(
+        "job_completed",
+        json!({"job_id": "j_2", "status": "failed",
+            "error": {"code": "invalid_request",
+                "message": "pa answered HTTP 400."}}),
+    ));
+    let folded = app
+        .items
+        .jobs
+        .get(&JobId("j_2".to_owned()))
+        .expect("a record")
+        .provider
+        .clone();
+    assert_eq!(folded, None, "no provider folds to none");
+    open(&mut app, "j_2");
+    assert_eq!(
+        app.item_view().expect("a view").provider,
+        None,
+        "the view carries none"
+    );
+}
+
+#[test]
 fn a_closed_completed_job_shows_its_protected_paths_warning_when_opened() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = home();
