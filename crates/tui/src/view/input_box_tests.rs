@@ -1605,6 +1605,74 @@ fn the_right_side_is_cut_only_when_the_slab_is_narrower() {
     }
 }
 
+/// The fill boundaries: the full fixture's right side is 45 cells, so
+/// sweeping narrow screens parks the cut, the exact fill and the
+/// zero-room window (`docs/tui.md`, "The input box"). Below 45 the
+/// right side cuts at the slab's edge with the left side dropped; at
+/// exactly 45 it draws whole with the left side dropped, cell-for-cell
+/// like the cut narrower; just above, the room hits zero and the left
+/// side still drops while the right draws whole.
+#[test]
+fn narrow_slabs_pin_the_fill_boundaries() {
+    let mut saw_cut = false;
+    let mut saw_exact = false;
+    let mut saw_zero_room = false;
+    for screen in 46u16..=52 {
+        let app = full(screen, 30);
+        let area = Rect::new(0, 0, screen, 30);
+        let mut buf = Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        let shown = crate::view::text(&buf);
+        let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+        let row = row_cells(&buf, &app, y);
+        let avail = usize::from(
+            app.chrome()
+                .layout()
+                .map(|layout| layout.column.width)
+                .expect("a column"),
+        ) - 2;
+        assert_eq!(crate::format::width(&row), avail, "{row:?} at {screen}");
+        if avail < 45 {
+            // Narrower than the right side: cut at the slab's edge.
+            saw_cut = true;
+            assert!(row.ends_with('…'), "{row:?} at {screen}");
+            assert!(!row.contains("fiber"), "{row:?} at {screen}");
+        } else if avail == 45 {
+            // Exactly full: whole right side, dropped left side.
+            saw_exact = true;
+            assert!(!row.contains("fiber"), "{row:?} at {screen}");
+            assert!(row.ends_with("26%"), "{row:?} at {screen}");
+        } else if avail <= 47 {
+            // No room: the left side still drops, the right draws whole.
+            saw_zero_room = true;
+            assert!(!row.contains("fiber"), "{row:?} at {screen}");
+            assert!(row.ends_with("26%"), "{row:?} at {screen}");
+        }
+    }
+    assert!(saw_cut && saw_exact && saw_zero_room);
+}
+
+/// A wide slab keeps the working directory: with room past the gap the
+/// left side draws (`docs/tui.md`, "The input box").
+#[test]
+fn a_wide_slab_keeps_the_working_directory() {
+    let app = full(110, 30);
+    let area = Rect::new(0, 0, 110, 30);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+    let row = row_cells(&buf, &app, y);
+    let avail = usize::from(
+        app.chrome()
+            .layout()
+            .map(|layout| layout.column.width)
+            .expect("a column"),
+    ) - 2;
+    assert!(row.contains("fiber"), "{row:?}");
+    assert_eq!(crate::format::width(&row), avail, "{row:?}");
+}
+
 /// Before the preamble names the model or the first status lands, the
 /// row keeps both sides fixed: the mode on the left, the model slot
 /// blank, and the ctx segment with an empty 8-cell bar and dashes for
