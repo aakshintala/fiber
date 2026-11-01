@@ -391,6 +391,35 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         |grid| !grid.contents.contains(LAST),
         seen_report,
     );
+    // Leaving the screen does not prove the request was sent: the scroll
+    // continues until `seen` shows it (recorded before the reply), and the
+    // settled-screen wait below checks the notice.
+    loop {
+        let requested = seen.lock().unwrap().iter().any(|command| {
+            command.starts_with("history from=Some(0) ") && !command.contains("to=None")
+        });
+        if requested {
+            break;
+        }
+        assert!(
+            batches < 200,
+            "the top page was never requested after {batches} batches of 5: hub saw {:?}",
+            seen.lock().unwrap(),
+        );
+        let from = driver.output().len();
+        for _ in 0..5 {
+            driver.write(b"\x1b[5~");
+        }
+        batches += 1;
+        driver.wait_bytes(
+            from,
+            FRAME_END,
+            &format!(
+                "a frame for top-page batch {batches}; hub saw {:?}",
+                seen.lock().unwrap()
+            ),
+        );
+    }
     // The open may already have asked for the top page while landing:
     // either way exactly one failure notice shows for it, and the
     // scroll below asserts the loop keeps drawing past it.
