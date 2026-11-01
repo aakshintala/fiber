@@ -139,6 +139,19 @@ grant and a file gets a file grant. The denied path itself gets nothing.
 - Hard links to a denied file outside the denied path read as that other path
   and are out of scope.
 
+## On both platforms
+
+`/dev/null` is readable and writable on both platforms, outside the
+ancestor walk and the write roots. No other device is granted, except the
+shell's inherited terminal, which keeps working.
+
+Commits keep working on main checkouts and on worktrees: the worktree's own
+git directory stays writable, as do the shared `objects/`, `refs/` and
+`logs/` directories. Deny wins over those grants, so `.git/config`,
+`.git/hooks/`, a worktree's `.git` pointer file, its git directory's
+`commondir` file, `.fiber/`, and the shared hooks and config stay
+unwritable.
+
 ## On Linux
 
 The policy is Landlock plus a seccomp filter, applied in the shell's
@@ -147,9 +160,10 @@ reports unavailable and calls are reviewed. Non-Linux builds do not apply
 this Linux policy.
 
 Landlock grants read and execute on the entries the ancestor walk allows,
-full access beneath each granted write root, and read and write on granted
-files; the seccomp filter fails `socket()` with `AF_UNIX`, `AF_INET` or
-`AF_INET6`, and `io_uring_setup`, with `EPERM`.
+full access beneath each granted write root, read and write on granted
+files, and read and write on `/dev/null`; the seccomp filter fails
+`socket()` with `AF_UNIX`, `AF_INET` or `AF_INET6`, and `io_uring_setup`,
+with `EPERM`.
 
 ## On macOS
 
@@ -162,15 +176,12 @@ workspace, the system temp directory (which reads `$TMPDIR`), `/tmp`, and
 `-DNAME=<path>` binding, referenced through its fixed parameter name; no
 path text is interpolated into the profile source.
 
-Commits keep working on main checkouts and on worktrees: the worktree's own
-git directory stays writable, as do the shared `objects/`, `refs/` and
-`logs/` directories. Deny wins over those grants, so `.git/config`,
-`.git/hooks/`, a worktree's `.git` pointer file, its git directory's
-`commondir` file, `.fiber/`, and the shared hooks and config stay unwritable. Unix sockets have no Seatbelt operation
-of their own; the default deny covers their creation, and explicit denies
-name the refusal for IP, DNS and launchd. One file-ioctl allow preserves
-the inherited pty, so `stty` on the shell's own terminal keeps working while
-`ps` and `pgrep` stay unavailable.
+Devices and commits behave as in "On both platforms" above. The macOS
+mechanism is Seatbelt: a literal grant for `/dev/null`, and one file-ioctl
+allow preserving the inherited pty, so `stty` on the shell's own terminal
+keeps working while `ps` and `pgrep` stay unavailable. Unix sockets have
+no Seatbelt operation of their own; the default deny covers their creation,
+and explicit denies name the refusal for IP, DNS and launchd.
 
 The wrapped shell prints a fixed-prefix marker line before it runs the user
 program; the reader strips exactly that first line, so user output is
