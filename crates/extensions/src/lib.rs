@@ -24,18 +24,18 @@ mod install;
 mod installed;
 mod login;
 mod lua;
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 #[doc(hidden)]
 pub use lua::observe_load;
 
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 type LoginWaitObserver = (String, Box<dyn FnOnce(std::thread::ThreadId) + Send>);
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 static LOGIN_WAIT_OBSERVERS: std::sync::Mutex<Vec<LoginWaitObserver>> =
     std::sync::Mutex::new(Vec::new());
 
 /// Runs `notify` once with the VM thread's id when the extension records a login wait.
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 #[doc(hidden)]
 pub fn observe_login_wait(
     extension: String,
@@ -45,7 +45,7 @@ pub fn observe_login_wait(
 }
 
 /// Fires one login-wait observer, holding no lock while it runs.
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 pub(crate) fn login_wait_recorded(extension: &str) {
     let notify = {
         let mut observers = support::lock(&LOGIN_WAIT_OBSERVERS);

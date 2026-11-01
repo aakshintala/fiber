@@ -48,12 +48,13 @@ from outside, through a test seam such as a fake writer or the injected clock. A
 `#[cfg(test)]` hook inside a production function is used only where no outside
 seam can reach the behaviour, such as a race's pause point (`docs/testing.md`,
 "Waits and timeouts"), and the plan that needs one says why. Integration tests under
-`tests/` reach such a hook through the crate's `test-hooks` feature, which
-only the crate's own dev-dependency on itself enables, so release builds
-never compile it. The one approved exception is `support`'s `test-hooks`
-seam, which `config`'s dev-dependency on `support` also enables, so
-`config`'s tests reach the shared atomic write's failure-injection hooks
-through the primitive that owns them.
+`tests/`, and the tests of a crate that depends on the hook's crate, reach
+such a hook through `#[cfg(debug_assertions)]`. Every dev-profile build
+sets it and `[profile.release]` does not, so the released binary never
+compiles a hook. Test builds are therefore dev-profile only:
+`cargo test --release` does not compile for a crate whose tests use a hook,
+such as `config`, which reaches the shared atomic write's failure-injection
+hooks in `support`, and no workflow or script runs one.
 
 cargo-mutants stops each mutant's test run after 120 s, set with `--timeout 120`
 in `.github/workflows/ci.yml` (`mutants`). A mutant stopped there fails CI as a
