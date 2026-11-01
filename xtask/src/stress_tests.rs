@@ -393,3 +393,26 @@ fn a_singular_iteration_run_is_counted() {
     let output = " Stress test [   0.001s] iteration 1/1: 1 test run: 1 passed\n     Summary [   0.001s] 1/1 stress run iterations: 1 passed\n";
     assert_eq!(check_stress_output(output, 1, 1), Ok(()));
 }
+
+#[test]
+fn stress_check_command_returns_its_parser_result() {
+    let temp = fakes::TempDir::new("xtask-stress-check");
+    temp.write("valid.log", CI_STRESS_OUTPUT_STRIPPED);
+    temp.write("invalid.log", "not nextest output");
+
+    let args = |path: &str| {
+        vec![
+            "--log".to_owned(),
+            temp.path().join(path).to_string_lossy().into_owned(),
+            "--count".to_owned(),
+            "30".to_owned(),
+            "--tests".to_owned(),
+            "8".to_owned(),
+        ]
+    };
+    assert_eq!(stress_check_command(&args("valid.log")), Ok(true));
+    assert_eq!(
+        stress_check_command(&args("invalid.log")),
+        Err("stress output: expected 30 iteration summaries, found 0".to_owned())
+    );
+}
