@@ -531,7 +531,9 @@ fn open_with_a_line_keeps_a_command_with_arguments_working() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&finished).ok(),
+        Deadline::after(Duration::from_secs(10))
+            .recv(&finished)
+            .ok(),
         Some(Outcome::Done(Ok(())))
     );
     assert_eq!(argv(&fake), want);
@@ -550,7 +552,9 @@ fn open_without_a_line_keeps_a_command_with_arguments_working() {
         .spawn(move || done.send(open(&command, &path, None, &clock)).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&finished).ok(),
+        Deadline::after(Duration::from_secs(10))
+            .recv(&finished)
+            .ok(),
         Some(Outcome::Done(Ok(())))
     );
     assert_eq!(argv(&fake), want);
