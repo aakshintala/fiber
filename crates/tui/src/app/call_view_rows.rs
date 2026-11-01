@@ -177,6 +177,35 @@ fn markers(input: &RowsInput<'_>) -> Vec<((u64, usize), bool)> {
 /// or past it that a held page draws, or the end of the final held
 /// fragment when the file ends with no later start. `None` while the
 /// edge's pages are still missing or paged out.
+/// The row to park the window on when the page at `offset` completes a
+/// kept edge: two rows above the end marker its arrival anchors, so the
+/// head segment's last rows show above the marker. `None` when no end
+/// edge ends in the landed page, or its marker anchors in another page.
+pub(in crate::app) fn edge_anchor_row(
+    input: &RowsInput<'_>,
+    rows: &[Row],
+    offset: u64,
+) -> Option<usize> {
+    let kept = input.kept?;
+    kept.iter()
+        .filter_map(|[_, end]| (*end < input.size).then_some(*end))
+        .filter(|end| *end >= offset)
+        .filter_map(|edge| marker_for(input, edge))
+        .filter(|(at, _)| *at == offset)
+        .filter_map(|(at, index)| {
+            rows.iter().position(|row| {
+                row.source
+                    == Source::Marker {
+                        offset: at,
+                        index,
+                        resume: false,
+                    }
+            })
+        })
+        .min()
+        .map(|marker_at| marker_at.saturating_sub(2))
+}
+
 fn marker_for(input: &RowsInput<'_>, edge: u64) -> Option<(u64, usize)> {
     let mut first = true;
     let mut ends_newline = true;
@@ -397,4 +426,257 @@ pub(in crate::app) fn window(
 ) -> (usize, usize) {
     let top = list.top().min(rows.len().saturating_sub(1));
     (top, shown_height(height, below))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn row(source: Source) -> Row {
+        Row {
+            cells: vec![("t".to_owned(), Ink::Plain)],
+            source,
+        }
+    }
+
+    fn page(lines: &[u64], next: Option<u64>) -> (BTreeMap<u64, Page>, BTreeMap<u64, Seg>) {
+        (
+            BTreeMap::from([(
+                0,
+                Page {
+                    text: String::new(),
+                },
+            )]),
+            BTreeMap::from([(
+                0,
+                Seg {
+                    lines: lines.to_vec(),
+                    next,
+                    ends_newline: true,
+                },
+            )]),
+        )
+    }
+
+    fn rows_input<'a>(
+        kept: &'a Option<Vec<[u64; 2]>>,
+        size: u64,
+        pages: &'a BTreeMap<u64, Page>,
+        segs: &'a BTreeMap<u64, Seg>,
+    ) -> RowsInput<'a> {
+        RowsInput {
+            prefix: &[],
+            plain: &[],
+            closing: &[],
+            numbering: None,
+            paged: true,
+            kept: kept.as_ref(),
+            size,
+            complete: true,
+            pages,
+            segs,
+        }
+    }
+
+    #[test]
+    fn completing_page_parks_two_rows_above_its_end_marker() {
+        let kept = Some(vec![[0, 150]]);
+        let (pages, segs) = page(&[0, 100, 200], Some(14400));
+        let input = rows_input(&kept, 1000, &pages, &segs);
+        // The edge at 150 anchors at page 0 line 2, so the marker sits
+        // at index 4 with two prefix rows ahead of the page: parking
+        // two above it lands on index 2.
+        let rows = vec![
+            row(Source::Prefix(0)),
+            row(Source::Prefix(1)),
+            row(Source::Page {
+                offset: 0,
+                index: 0,
+            }),
+            row(Source::Page {
+                offset: 0,
+                index: 1,
+            }),
+            row(Source::Marker {
+                offset: 0,
+                index: 2,
+                resume: false,
+            }),
+            row(Source::Page {
+                offset: 0,
+                index: 2,
+            }),
+        ];
+        assert_eq!(edge_anchor_row(&input, &rows, 0), Some(2));
+        // A marker in the first two rows saturates at the top.
+        let rows = vec![
+            row(Source::Page {
+                offset: 0,
+                index: 0,
+            }),
+            row(Source::Marker {
+                offset: 0,
+                index: 2,
+                resume: false,
+            }),
+            row(Source::Page {
+                offset: 0,
+                index: 2,
+            }),
+        ];
+        assert_eq!(edge_anchor_row(&input, &rows, 0), Some(0));
+        // Two end edges in the landed page park under the earlier
+        // marker even when the later edge comes first: the 250 edge
+        // anchors at line 3, below the 150 edge.
+        let kept = Some(vec![[0, 250], [0, 150]]);
+        let (pages, segs) = page(&[0, 100, 200, 300], Some(14400));
+        let input = rows_input(&kept, 1000, &pages, &segs);
+        let rows = vec![
+            row(Source::Page {
+                offset: 0,
+                index: 0,
+            }),
+            row(Source::Page {
+                offset: 0,
+                index: 1,
+            }),
+            row(Source::Marker {
+                offset: 0,
+                index: 2,
+                resume: false,
+            }),
+            row(Source::Page {
+                offset: 0,
+                index: 2,
+            }),
+            row(Source::Marker {
+                offset: 0,
+                index: 3,
+                resume: false,
+            }),
+            row(Source::Page {
+                offset: 0,
+                index: 3,
+            }),
+        ];
+        assert_eq!(edge_anchor_row(&input, &rows, 0), Some(0));
+        let rows = vec![
+            row(Source::Marker {
+                offset: 0,
+                index: 2,
+                resume: false,
+            }),
+            row(Source::Page {
+                offset: 0,
+                index: 2,
+            }),
+        ];
+        assert_eq!(edge_anchor_row(&input, &rows, 0), Some(0));
+    }
+
+    #[test]
+    fn other_pages_edges_and_missing_kept_park_nothing() {
+        // No kept ranges: no edges, no anchor.
+        let (pages, segs) = page(&[0, 100, 200], Some(14400));
+        let input = rows_input(&None, 1000, &pages, &segs);
+        let rows = vec![row(Source::Marker {
+            offset: 0,
+            index: 2,
+            resume: false,
+        })];
+        assert_eq!(edge_anchor_row(&input, &rows, 0), None);
+        // An end past the file size is no edge, and neither is an end
+        // exactly at it: only a strictly earlier end leaves a marker.
+        let kept = Some(vec![[0, 100000]]);
+        let input = rows_input(&kept, 500, &pages, &segs);
+        assert_eq!(edge_anchor_row(&input, &rows, 0), None);
+        let kept = Some(vec![[0, 500]]);
+        let input = rows_input(&kept, 500, &pages, &segs);
+        assert_eq!(edge_anchor_row(&input, &rows, 0), None);
+        // A kept start alone is a resume edge, never an end anchor.
+        let kept = Some(vec![[500, 200000]]);
+        let input = rows_input(&kept, 112293, &pages, &segs);
+        assert_eq!(edge_anchor_row(&input, &rows, 0), None);
+        // The edge lives in page 0 but page 0 paged out: the anchor the
+        // landed page offers is a proxy for the older edge, not its own.
+        let kept = Some(vec![[0, 150]]);
+        let mut pages = BTreeMap::new();
+        pages.insert(
+            72000,
+            Page {
+                text: String::new(),
+            },
+        );
+        let mut segs = BTreeMap::new();
+        segs.insert(
+            0,
+            Seg {
+                lines: vec![0, 100, 200],
+                next: Some(72000),
+                ends_newline: true,
+            },
+        );
+        segs.insert(
+            72000,
+            Seg {
+                lines: vec![72000, 72100],
+                next: None,
+                ends_newline: true,
+            },
+        );
+        let input = rows_input(&kept, 112293, &pages, &segs);
+        let rows = vec![
+            row(Source::Page {
+                offset: 72000,
+                index: 0,
+            }),
+            row(Source::Marker {
+                offset: 72000,
+                index: 0,
+                resume: false,
+            }),
+        ];
+        assert_eq!(edge_anchor_row(&input, &rows, 72000), None);
+        // The edge sits past the landed page's last line start: its
+        // anchor lands in the next page, not here.
+        let (pages, mut segs) = page(&[0, 100], Some(14400));
+        segs.insert(
+            14400,
+            Seg {
+                lines: vec![14400, 14500],
+                next: None,
+                ends_newline: true,
+            },
+        );
+        let mut held = pages;
+        held.insert(
+            14400,
+            Page {
+                text: String::new(),
+            },
+        );
+        let input = rows_input(&kept, 100000, &held, &segs);
+        let rows = vec![
+            row(Source::Page {
+                offset: 0,
+                index: 0,
+            }),
+            row(Source::Page {
+                offset: 0,
+                index: 1,
+            }),
+            row(Source::Page {
+                offset: 14400,
+                index: 0,
+            }),
+            row(Source::Marker {
+                offset: 14400,
+                index: 0,
+                resume: false,
+            }),
+        ];
+        assert_eq!(edge_anchor_row(&input, &rows, 0), None);
+    }
 }

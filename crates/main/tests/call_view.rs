@@ -540,11 +540,6 @@ const THOUGHT: &str = "Ran 1 command";
 /// the rows even while the thought row is still above the viewport.
 const FILLER_FIRST: &str = "F0001";
 
-/// PageUp steps bound for the paged-up re-anchor: the call holds 77
-/// output rows and a step pages about a window, so six steps cover any
-/// entry point into the view.
-const MAX_PAGE_UPS: usize = 6;
-
 /// The wheel over a call's view scrolls the view, never the hidden
 /// conversation (`docs/tui.md:576`, "Swapped views"; see #3578): with the
 /// conversation scrolled up to its thought row, three wheel-downs over
@@ -662,33 +657,26 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     let x = text.find("more lines").unwrap_or(20) as u16 + 1;
     click(&mut run, x, row);
     // The view follows to the resume marker at the tail.
-    let grid = run.wait_screen("the call's view", |grid| {
+    run.wait_screen("the call's view", |grid| {
         grid.rows
             .iter()
             .any(|row| row.contains("── the model's view resumes ──"))
     });
-    // Page up until the window re-anchors to the held head segment: the
-    // ups page past the held tail window, so the tail pages drop and the
-    // end marker lands with the head segment's last output rows above
-    // it. The marker appears only once its edge pages are held, so it
-    // signals the refetch that fills this segment has landed. Each step
-    // must move the rows, so a step that would sit on the top clamp
-    // fails the wait instead of settling short.
+    // Two PageUps page past the held tail window: the first lands the
+    // selection on the window's top row and draws no change (every page
+    // wanted is already held, so the pump idles), and the second moves
+    // the window into refetch territory. The fetch walk then drops the
+    // tail pages and re-anchors to the held head segment, whose last
+    // output rows are 036 and 037 above the end marker. The marker
+    // appears only once its edge pages are held, so it signals the
+    // refetch that fills this segment has landed.
     let marker = "── end of the model's view ──";
-    let grid = {
-        let mut prev = grid;
-        let mut found = None;
-        for _ in 0..MAX_PAGE_UPS {
-            run.write(b"\x1b[5~");
-            let next = run.wait_screen("the settled paged-up view", |next| prev.rows != next.rows);
-            if next.rows.iter().any(|row| row.contains(marker)) {
-                found = Some(next);
-                break;
-            }
-            prev = next;
-        }
-        found.expect("the paged-up view settled on the held head segment")
-    };
+    run.write(b"\x1b[5~");
+    run.write(b"\x1b[5~");
+    let grid = run.wait_screen(
+        "the paged-up view settled on the held head segment",
+        |grid| grid.rows.iter().any(|row| row.contains(marker)),
+    );
     // The head segment ends at the end marker: the nearest numbered row
     // above it is the segment's last row, so one less is the settled
     // first output number the wheel math counts from.
