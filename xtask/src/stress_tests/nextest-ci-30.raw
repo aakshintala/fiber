@@ -1,0 +1,61 @@
+[32;1m Stress test[0m iteration [1m1[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m30[0m iterations remaining)
+[32;1m Stress test[0m [   0.019s] iteration [1m1[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m2[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m29[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m2[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m3[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m28[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m3[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m4[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m27[0m iterations remaining)
+[32;1m Stress test[0m [   0.019s] iteration [1m4[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m5[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m26[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m5[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m6[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m25[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m6[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m7[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m24[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m7[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m8[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m23[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m8[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m9[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m22[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m9[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m10[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m21[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m10[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m11[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m20[0m iterations remaining)
+[32;1m Stress test[0m [   0.020s] iteration [1m11[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m12[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m19[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m12[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m13[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m18[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m13[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m14[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m17[0m iterations remaining)
+[32;1m Stress test[0m [   0.019s] iteration [1m14[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m15[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m16[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m15[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m16[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m15[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m16[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m17[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m14[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m17[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m18[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m13[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m18[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m19[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m12[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m19[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m20[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m11[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m20[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m21[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m10[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m21[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m22[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m9[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m22[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m23[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m8[0m iterations remaining)
+[32;1m Stress test[0m [   0.019s] iteration [1m23[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m24[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m7[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m24[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m25[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m6[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m25[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m26[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m5[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m26[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m27[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m4[0m iterations remaining)
+[32;1m Stress test[0m [   0.016s] iteration [1m27[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m28[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m3[0m iterations remaining)
+[32;1m Stress test[0m [   0.017s] iteration [1m28[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m29[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m2[0m iterations remaining)
+[32;1m Stress test[0m [   0.018s] iteration [1m29[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m Stress test[0m iteration [1m30[0m/[1m30[0m ([1m00:00:00[0m elapsed so far, [1m1[0m iteration remaining)
+[32;1m Stress test[0m [   0.016s] iteration [1m30[0m/[1m30[0m: [1m8[0m tests run: [1m8[0m [32;1mpassed[0m, [1m1136[0m [33;1mskipped[0m
+[32;1m     Summary[0m [   0.531s] [1m30[0m/[1m30[0m stress run iterations: [1m30[0m [32;1mpassed[0m
