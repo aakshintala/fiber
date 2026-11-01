@@ -1469,7 +1469,7 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             let third = pre.rows[usize::from(first) + 2]
                 .split_whitespace()
                 .next()
-                .unwrap_or_default()
+                .expect("a key on the third settings row")
                 .to_owned();
             run.write(&wheel_down(at));
             let post = run.wait_screen("the wheeled settings", |grid| {
@@ -1495,15 +1495,21 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 shows(grid, "Keys") && shows(grid, "Send a prompt")
             });
             let first = find_grid_row(&pre.rows, "Send a prompt").expect("the first binding row");
-            let third = pre.rows[usize::from(first) + 3]
-                .split_whitespace()
-                .find(|word| word.contains('_'))
-                .unwrap_or_default()
-                .to_owned();
+            // One step moves three rows. A wrapped binding's alias row
+            // carries no action name, so take the first action name at or
+            // below the third row and wait for it where the step puts it.
+            let (at_row, third) = (usize::from(first) + 3..pre.rows.len())
+                .find_map(|row| {
+                    pre.rows[row]
+                        .split_whitespace()
+                        .find(|word| word.contains('_'))
+                        .map(|word| (row, word.to_owned()))
+                })
+                .expect("an action name below the first binding");
+            let lands = at_row - 3;
             run.write(&wheel_down(at));
-            let post = run.wait_screen("the wheeled keys", |grid| {
-                grid.rows[usize::from(first)].contains(&third)
-            });
+            let post =
+                run.wait_screen("the wheeled keys", |grid| grid.rows[lands].contains(&third));
             assert!(
                 !post.rows[usize::from(first)].contains("Send a prompt"),
                 "the first binding scrolled out: {:?}",
