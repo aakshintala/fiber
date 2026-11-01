@@ -197,6 +197,115 @@ grep -Fxq 'status=docs' "$tmp/github-output.txt" || {
 }
 cd "$top"
 
+# A test file of a `test = false` target is one a plain nextest run never
+# builds. The throwaway `unrun.rs` stands for it: this cargo wraps the stub
+# and has bug-filter name `*/tests/unrun.rs` as `unrun` instead of putting
+# it in the filter, as the real bug-filter does for such a target.
+mkdir -p "$tmp/bin-unrun"
+cat >"$tmp/bin-unrun/cargo" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
+  shift 2
+  kept=()
+  unrun=()
+  for f in "$@"; do
+    case "$f" in
+      */tests/unrun.rs) unrun+=("$f") ;;
+      *) kept+=("$f") ;;
+    esac
+  done
+  "$BUG_RED_STUB_CARGO" xtask bug-filter ${kept[@]+"${kept[@]}"}
+  for f in ${unrun[@]+"${unrun[@]}"}; do
+    printf 'unrun\t%s\n' "$f"
+  done
+  exit 0
+fi
+exec "$BUG_RED_STUB_CARGO" "$@"
+WRAPPER
+chmod +x "$tmp/bin-unrun/cargo"
+export BUG_RED_STUB_CARGO="$tmp/bin/cargo"
+journey_msg="the red commit's only touched tests are journey tests, which pull-request CI does not run until #3899 step 6"
+
+# A red commit whose only test file is in a `test = false` target passes
+# and reports the journey sentinel, not the docs one; nextest never runs.
+repo_j="$tmp/repo-journey"
+new_repo "$repo_j"
+mkdir -p "$repo_j/crates/a/tests" "$repo_j/crates/a/src"
+printf '// journey\n' >"$repo_j/crates/a/tests/unrun.rs"
+git -C "$repo_j" add crates/a/tests/unrun.rs
+git -C "$repo_j" commit -q -m red
+printf '// fix\n' >"$repo_j/crates/a/src/fix.rs"
+git -C "$repo_j" add crates/a/src/fix.rs
+git -C "$repo_j" commit -q -m fix
+base_j=$(git -C "$repo_j" rev-parse HEAD~2)
+cd "$repo_j"
+head_j=$(git rev-parse HEAD)
+export BUG_RED_NEXTEST_STATUS=2
+rc=0
+PATH="$tmp/bin-unrun:$PATH" "$bug_red" "$base_j" "$head_j" >"$tmp/out-journey.txt" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$tmp/out-journey.txt" >&2; fail "journey-only case exited $rc, want 0"; }
+grep -Fq "$journey_msg" "$tmp/out-journey.txt" || { cat "$tmp/out-journey.txt" >&2; fail "journey-only case misses the journey message"; }
+if grep -Fq "only docs" "$tmp/out-journey.txt"; then
+  cat "$tmp/out-journey.txt" >&2
+  fail "journey-only case says the pull request changes only docs"
+fi
+: >"$tmp/github-output.txt"
+GITHUB_OUTPUT="$tmp/github-output.txt" PATH="$tmp/bin-unrun:$PATH" "$bug_red" --report "$base_j" "$head_j" >"$tmp/out-journey-report.txt" 2>&1 || {
+  cat "$tmp/out-journey-report.txt" >&2
+  fail "journey-only report mode failed"
+}
+unset BUG_RED_NEXTEST_STATUS
+grep -Fxq 'status=journey' "$tmp/github-output.txt" || {
+  cat "$tmp/github-output.txt" >&2
+  fail "journey-only report did not record its result"
+}
+cd "$top"
+
+# A red commit that also holds a normal test still runs that test, and it
+# still has to fail: the journey test only drops out of the filter.
+repo_m="$tmp/repo-mixed"
+new_repo "$repo_m"
+mkdir -p "$repo_m/crates/a/tests" "$repo_m/crates/a/src"
+printf '// journey\n' >"$repo_m/crates/a/tests/unrun.rs"
+printf '// red\n' >"$repo_m/crates/a/tests/red.rs"
+git -C "$repo_m" add crates/a/tests/unrun.rs crates/a/tests/red.rs
+git -C "$repo_m" commit -q -m red
+printf '// fix\n' >"$repo_m/crates/a/src/fix.rs"
+git -C "$repo_m" add crates/a/src/fix.rs
+git -C "$repo_m" commit -q -m fix
+base_m=$(git -C "$repo_m" rev-parse HEAD~2)
+cd "$repo_m"
+head_m=$(git rev-parse HEAD)
+for nextest_status in 100 0 4; do
+  export BUG_RED_NEXTEST_STATUS="$nextest_status"
+  rc=0
+  PATH="$tmp/bin-unrun:$PATH" "$bug_red" "$base_m" "$head_m" >"$tmp/out-mixed.txt" 2>&1 || rc=$?
+  unset BUG_RED_NEXTEST_STATUS
+  want=1
+  [ "$nextest_status" -eq 100 ] && want=0
+  [ "$rc" -eq "$want" ] || { cat "$tmp/out-mixed.txt" >&2; fail "mixed plan with nextest $nextest_status exited $rc, want $want"; }
+  grep -Fq "running crates/a/tests/red.rs at" "$tmp/out-mixed.txt" || { cat "$tmp/out-mixed.txt" >&2; fail "mixed plan does not run the normal test alone"; }
+  if grep -Fq "$journey_msg" "$tmp/out-mixed.txt"; then
+    cat "$tmp/out-mixed.txt" >&2
+    fail "mixed plan with nextest $nextest_status says the plan is journey-only"
+  fi
+done
+cd "$top"
+
+# The collector passes on two journey legs and names why; it fails when the
+# legs disagree, whatever the other leg reports.
+rc=0
+"$bug_red" --collect journey journey >"$tmp/out-collect-journey.txt" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$tmp/out-collect-journey.txt" >&2; fail "journey on both legs exited $rc, want 0"; }
+grep -Fq "$journey_msg" "$tmp/out-collect-journey.txt" || { cat "$tmp/out-collect-journey.txt" >&2; fail "journey on both legs misses the journey message"; }
+for pair in "journey:100" "100:journey" "journey:0" "journey:4" "journey:docs" "docs:journey" "journey:"; do
+  rc=0
+  "$bug_red" --collect "${pair%%:*}" "${pair#*:}" >"$tmp/out-collect-journey-mixed.txt" 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || { cat "$tmp/out-collect-journey-mixed.txt" >&2; fail "legs ($pair) exited $rc, want 1"; }
+  grep -Fq "disagrees between legs" "$tmp/out-collect-journey-mixed.txt" || { cat "$tmp/out-collect-journey-mixed.txt" >&2; fail "legs ($pair) miss the disagreement message"; }
+done
+
 # A one-commit branch with no HEAD argument reports the one-commit
 # message: the default HEAD resolves to a SHA, so the guard fires.
 repo3="$tmp/repo3"
