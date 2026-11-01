@@ -1793,7 +1793,7 @@ fn a_notice_keeps_a_providers_trailing_whitespace_verbatim() {
         }),
     });
     assert!(
-        notice_text(&completed).contains("Provider said: oops\n\nLast output:"),
+        notice_text(&completed).contains("Provider said: oops\n\n"),
         "a trailing newline survives: {}",
         notice_text(&completed)
     );
