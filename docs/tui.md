@@ -1441,8 +1441,10 @@ attaches later never sees them.
 The reopened session closes the cut-short turn's card with "▣ cut short: Fiber
 stopped at 14:18", at the time of the last line written. A call that started
 and never completed reads "? may have run; not run again" in its ledger row. A
-↺ resumed band follows. The jobs the new process marked `orphaned` are one line
-naming them all; clicking it shows each job's message.
+↺ resumed band follows. The jobs the new process marked `orphaned`, which no keeper
+accounted for, are one line naming them all; clicking it shows each job's
+message. A job the keeper finished while the session was gone gets its usual
+completion row.
 
 ### Naming the session
 
@@ -2325,7 +2327,7 @@ list: "↑↓ move · Enter delete · Esc close".
   Delete opens nothing, and Enter does nothing and leaves the question
   open. If the session left while the question showed, Enter sends nothing
   and closes it.
-- **Stopping every session** is `/close all`, on home or over a session. It asks in an overlay: the title "Close all", "2 sessions, 1 working, 0 open elsewhere" dim (live top-level sessions on this hub, how many of them are working, how many are open elsewhere, counted as in the quit prompt), then two choices, "Enter" to close all and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter sends each live top-level session `close` with `now` and leaves the terminal on home; Esc closes the question. With no live session it opens nothing and says "No sessions to close."; with the link down it opens nothing and keeps the draft. `/quit` straight after it exits without asking once those sessions have left, since none is working. Quit's own behaviour does not change.
+- **Stopping every session** is `/close all`, on home or over a session. It asks in an overlay: the title "Close all", "2 sessions, 1 working, 0 open elsewhere, 1 keeper" dim (live top-level sessions on this hub, how many of them are working, how many are open elsewhere, counted as in the quit prompt, and the keepers of sessions that are gone, `docs/tools.md`, "The keeper"), then two choices, "Enter" to close all and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter sends each live top-level session `close` with `now` and each of those keepers its stop, as `fiber stop` does (`docs/invocation.md`), and leaves the terminal on home; Esc closes the question. With no live session and no keeper it opens nothing and says "No sessions to close."; with the link down it opens nothing and keeps the draft. `/quit` straight after it exits without asking once those sessions have left, since none is working. Quit's own behaviour does not change.
 
 ### Getting the person's attention
 

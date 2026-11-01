@@ -558,6 +558,7 @@ impl DelegateMessage {
             | ErrorCode::InvalidArguments
             | ErrorCode::InvalidRequest
             | ErrorCode::IoFailed
+            | ErrorCode::KeeperTimeout
             | ErrorCode::LogCorrupt
             | ErrorCode::LoginUrl
             | ErrorCode::Malformed
