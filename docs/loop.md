@@ -157,8 +157,8 @@ session's own log, which holds its own `usage_recorded` lines and a copy of
 each one its delegates sent it, and theirs. A parent writes a copy of each
 `usage_recorded` it receives from a delegate into its own log, naming the
 delegate in `origin_session_id`, and the fold counts one line per
-`generation_id`. A resumed parent reads the log of each delegate it marks
-`orphaned` and writes any copies it is missing.
+`generation_id`. A resumed parent reads the log of each delegate that ran while it was
+gone, or that it marks `orphaned`, and writes any copies it is missing.
 A call with `subscription` does not count, because a subscription bills
 nothing per call; its own limit ends it as `quota_exceeded`. A `cost` still
 `null` counts as zero until it settles.

@@ -14,7 +14,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-support = { path = "../support", features = ["test-hooks"] }
 fakes = { path = "../fakes" }
 
 [lints]
