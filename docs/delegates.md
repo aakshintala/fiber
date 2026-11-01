@@ -230,9 +230,8 @@ final message, any questions, usage totals and worktree state. Their keys are
   as its shutdown does (`docs/invocation.md`, "Shutdown"), so a stop reaches
   every descendant. Its keeper waits for it to exit, up to the shutdown
   bound, before sending SIGKILL.
-- A Fiber delegate is a child process of its parent session's keeper
-  (`docs/tools.md`, "The keeper"). A delegate on another harness is a child
-  process of the session that started it. A Fiber delegate runs the internal
+- Every delegate is a child process of its parent session's keeper
+  (`docs/tools.md`, "The keeper"). A Fiber delegate runs the internal
   session command ([ADR 0009](adr/0009-each-session-is-one-process.md)). Its
   parent is an ordinary client over its socket and drives it only through the
   driver commands and events, so no delegate has a path a supervisor lacks.
@@ -253,7 +252,9 @@ final message, any questions, usage totals and worktree state. Their keys are
   on and finishes its task, as it would with its parent connected. When it
   exits, the parent's keeper writes its `job_completed` in the parent's log.
   A delegate still running when the keeper's 2 hours pass is stopped as a
-  shutdown stops it (`docs/tools.md`, "The keeper").
+  shutdown stops it (`docs/tools.md`, "The keeper"). A delegate on another
+  harness carries on the same way, and the keeper records its end by the
+  rule in `docs/tools.md`, "The keeper".
 - A resumed parent connects to each delegate still running, as after a
   dropped connection. For each delegate that ended while it was gone, it
   writes the `delegate_finished` from the delegate's own log when it

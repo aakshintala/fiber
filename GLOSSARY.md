@@ -119,7 +119,7 @@ _Avoid_: background session, task, process
 
 ### Keeper
 
-The small process that runs a session's shell commands and Fiber delegates, so
+The small process that runs a session's shell commands and delegates, so
 they outlive a crash of the session. While the session is gone it writes their
 endings to the session log, and a resumed session takes them back.
 _Avoid_: daemon, supervisor
