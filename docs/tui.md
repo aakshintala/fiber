@@ -1111,7 +1111,7 @@ arrived after `sessions` was sent.
 - **A streaming reply renders in place,** formatted as it arrives. The
   conversation follows new output and pauses when the person scrolls up. The
   mouse wheel over the conversation scrolls it 3 rows a step, a starting
-  point, not a measurement; PageUp and PageDown scroll a screen. The
+  point, not a measurement; PageUp and PageDown page it ("Keys"). The
   conversation's last column is its scroll bar and never holds text:
   while the conversation has more rows than it shows, a thumb of ┃ in
   `scroll`, with no track, shows where the rows on screen sit among all of
@@ -1807,6 +1807,9 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   workspace is chosen ("Home"). On home, Esc on a focused row goes back to the session the person came from ("Home"). It returns focus to the input box from
   the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
+- **PageUp and PageDown move one screen** wherever something scrolls: the
+  conversation, every view, every picker and every list. A screen is the
+  scrolling region's own visible rows, not the terminal's height.
 - **The reviewer setup** opens with `/reviewer-setup`. Inside it Enter, Esc,
   ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
   panel's legend says. The ✕ and a press outside the panel, which is Esc,
