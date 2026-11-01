@@ -243,14 +243,13 @@ the app in batches of up to 4,096, and drawing one frame, one frame per 4,096
 lines and one per 64 lines.
 
 The live `attach_span_ms` rows come from debug runs of the resume binary.
-In the resume binary, `tui.attach_setup` measures from `run_with` entry
-through the initial unattached draw. In the resume binary, `tui.attach_wait`
-measures from that draw through the first due tail attempt. In the resume
-binary, `tui.attach_tail` measures from the first due attempt through the
-tail install it reaches, across false-returning attempts. In the resume
-binary, `tui.attach_prepare` measures from the tail install's return to
-immediately before the attached-history draw. In the resume binary,
-`tui.attach_draw` measures that draw from start through completion.
+`tui.attach_setup` measures from `run_with` entry through the initial
+unattached draw. `tui.attach_wait` measures from that draw through the first
+due tail attempt. `tui.attach_tail` measures from the first due attempt
+through the tail install it reaches, across false-returning attempts.
+`tui.attach_prepare` measures from the tail install's return to immediately
+before the attached-history draw. `tui.attach_draw` measures that draw from
+start through completion.
 
 The resume binary's `tui.attached_frame` operation measures from `run_with`
 entry through the first completed draw holding attached-session history.
