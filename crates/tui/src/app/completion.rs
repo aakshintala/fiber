@@ -420,6 +420,14 @@ impl App {
                 } else if *key == Key::Tab {
                     self.draft.set(&format!("/{chosen} "));
                 } else {
+                    let draft = self.draft.expand();
+                    super::commands::trace_enter(
+                        "panel",
+                        &draft,
+                        true,
+                        self.completion.selected,
+                        &chosen,
+                    );
                     self.draft.set(&format!("/{chosen}"));
                     return Some(self.on_enter());
                 }

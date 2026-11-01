@@ -391,7 +391,15 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     // Two extra rows for the branch's taller input box: the conversation
     // holds both turns' `you` rows only once the viewport covers the two
     // rows the box takes. The count below stays exactly two.
-    let mut run = support::pty::Run::spawn(&setup, 160, 50, &[], &TRUECOLOUR);
+    let log_path = "/var/tmp/fiber-enter-3639.log";
+    let _ = fs::remove_file(log_path);
+    let env = [
+        ("TERM", "xterm-256color"),
+        ("COLORTERM", "truecolor"),
+        ("TERM_PROGRAM", "ghostty"),
+        ("FIBER_ENTER_LOG", log_path),
+    ];
+    let mut run = support::pty::Run::spawn(&setup, 160, 48, &[], &env);
     run.ready();
     let from = run.output().len();
     run.write(b"first\r");
@@ -461,7 +469,14 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
         "one you row per turn: {}",
         shown.contents
     );
-    quit(run);
+    let log = fs::read_to_string(log_path).unwrap_or_default();
+    let you: Vec<_> = shown
+        .rows
+        .iter()
+        .filter(|row| row.contains("you") || row.contains('⋮'))
+        .cloned()
+        .collect();
+    panic!("ENTER LOG:\n{log}\nYOU ROWS:\n{}", you.join("\n"));
 }
 
 /// The `/lua-quota` gate: armed once the drawn value below proves no
