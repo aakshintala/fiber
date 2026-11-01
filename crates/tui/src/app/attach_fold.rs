@@ -81,7 +81,14 @@ impl App {
                     .rposition(|line| line.kind == "turn_started")
                     .unwrap_or(0);
             };
-            self.installed_floor = floor;
+            let complete_opening = self.opening_session().and_then(|opening| {
+                lines
+                    .iter()
+                    .find(|line| line.session_id == opening)
+                    .filter(|line| line.seq == Some(Seq(0)))
+                    .map(|line| (line.session_id.clone(), Seq(0)))
+            });
+            self.installed_floor = complete_opening.or(floor);
             (fresh, busy)
         } else {
             self.installed_floor = None;
@@ -198,8 +205,8 @@ impl App {
         };
         *self.attached_screen_mut().pages_mut() = preview.pages;
         self.attached_screen_mut().follow();
-        // `fold_preview` kept the oldest line actually folded: older lines
-        // remain for the count phase, while the preview is not folded twice.
+        // `fold_preview` records the count boundary, or seq zero when the
+        // opening segment already fit in the pre-frame history window.
         self.count = Some(tail);
         self.overlay = Overlay::Shown {
             session,
@@ -252,11 +259,10 @@ impl App {
         Self::end_read(self.count.as_mut(), notice, &mut self.notices);
     }
 
-    /// Ends the post-frame count. When the read reaches seq zero, fold
-    /// the complete held history and trim resident cards to the viewport;
-    /// the first frame's bounded preview remains untouched until then.
-    /// If the read ended before seq zero, preserve the existing partial
-    /// count behavior by carrying only the older ancestor prefix.
+    /// Ends the post-frame count. When the first window held the opening
+    /// segment from seq zero and the count reaches the root, fold the full
+    /// history after the first frame. Longer sessions keep the existing
+    /// count behavior: carry only the older ancestor prefix.
     pub(crate) fn finish_count(&mut self) {
         let Some(tail) = self.count.take() else {
             return;
@@ -271,22 +277,23 @@ impl App {
         };
         let mut grown = self.attached_screen().pages().fresh();
         grown.set_image_ids(self.images.id_allocator.clone());
-        if let Some(lines) = tail
-            .turn_lines()
-            .filter(|lines| lines.first().and_then(|line| line.seq) == Some(Seq(0)))
-        {
+        let complete_history = self
+            .installed_floor
+            .as_ref()
+            .is_some_and(|(session, seq)| session == &opening && *seq == Seq(0))
+            && tail.chain_done();
+        if let Some(lines) = tail.turn_lines().filter(|lines| {
+            complete_history && lines.first().and_then(|line| line.seq) == Some(Seq(0))
+        }) {
             // The first-frame preview folds only its visible tail. Once the
-            // count walk reaches the segment start, rebuild the complete
-            // index and retain only pages the viewport can draw.
+            // count walk reaches the root, rebuild the complete index and
+            // keep the ancestor cards resident through the count.
             grown.hold();
             for line in lines {
                 grown.apply(line);
             }
             grown.flush();
             self.attached_screen().pages().carry_opens(&mut grown);
-            let height = self.conversation_height();
-            let top = grown.index().total().saturating_sub(height);
-            grown.trim(top, height);
             *self.attached_screen_mut().pages_mut() = grown;
             self.attached_screen_mut().follow();
         } else {
