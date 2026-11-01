@@ -511,8 +511,9 @@ fn pair_client(hub: &support::Setup, client: &support::Setup, port: u16) {
     );
 }
 
-/// The `git` on this test's own `PATH`: the gate wrapper delegates to it
-/// once released, so the path is absolute and never the wrapper itself.
+/// The first `git` on this test's own `PATH`: it may itself be a wrapper,
+/// which is safe because the gate strips its own directory from `PATH`
+/// before the `exec`, so the wrapper cannot re-select the gate.
 fn real_git() -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|dir| dir.join("git"))
@@ -528,9 +529,10 @@ fn real_git() -> PathBuf {
 /// is the test's fifo rendezvous below, never the file.
 fn write_git_gate(dir: &Path, signal: &Path, fifo: &Path, real: &Path) {
     let script = format!(
-        "#!/bin/sh\ncase \" $* \" in\n*\" clone \"*)\nprintf '%s\\n' \"$*\" >> '{}'\nread -r _ < '{}'\n;;\nesac\nexec '{}' \"$@\"\n",
+        "#!/bin/sh\ncase \" $* \" in\n*\" clone \"*)\nprintf '%s\\n' \"$*\" >> '{}'\nread -r _ < '{}'\n;;\nesac\nPATH=$(printf '%s' \"$PATH\" | awk -v RS=: -v ORS=: -v d='{}' '$0 != d' | sed 's/:$//')\nexec '{}' \"$@\"\n",
         signal.display(),
         fifo.display(),
+        dir.display(),
         real.display(),
     );
     fs::write(dir.join("git"), script).unwrap();
