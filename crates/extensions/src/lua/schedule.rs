@@ -776,7 +776,7 @@ fn settle(
         }
     }
     drop(shared);
-    #[cfg(any(test, feature = "test-hooks"))]
+    #[cfg(any(test, debug_assertions))]
     if matches!(run, Run::LoginWait) {
         crate::login_wait_recorded(&start.name);
     }

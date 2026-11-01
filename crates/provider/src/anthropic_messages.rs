@@ -22,7 +22,7 @@ use contract::provider::{
 };
 use serde_json::{Map, Value, json};
 
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 pub use crate::anthropic_messages_decode::decode;
 use crate::anthropic_messages_decode::{decode_bedrock_tracked, decode_tracked};
 pub use crate::call::Call;

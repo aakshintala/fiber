@@ -1501,6 +1501,51 @@ fn plain_job_body_keeps_the_output_since_line() {
 }
 
 #[test]
+fn a_failed_job_body_draws_the_provider_line() {
+    let mut app = home(80, 24);
+    opened(&mut app);
+    start_job(&mut app, "j_2", "build the workspace");
+    app.on_line(session_line(
+        "job_completed",
+        0,
+        json!({"job_id": "j_2", "status": "failed",
+            "error": {"code": "invalid_request",
+                "message": "pa answered HTTP 400.",
+                "provider": {"name": "pa", "status": 400,
+                    "message": "content cannot be empty"}}}),
+    ));
+    open_job(&mut app, "j_2");
+    let (rows, _) = rendered(&app, 80, 24);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Provider said: content cannot be empty")),
+        "the body draws the provider line under the path line:\n{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn a_failed_job_body_without_provider_draws_no_provider_line() {
+    let mut app = home(80, 24);
+    opened(&mut app);
+    start_job(&mut app, "j_2", "build the workspace");
+    app.on_line(session_line(
+        "job_completed",
+        0,
+        json!({"job_id": "j_2", "status": "failed",
+            "error": {"code": "invalid_request",
+                "message": "pa answered HTTP 400."}}),
+    ));
+    open_job(&mut app, "j_2");
+    let (rows, _) = rendered(&app, 80, 24);
+    assert!(
+        rows.iter().all(|row| !row.contains("Provider said:")),
+        "no provider draws no provider line:\n{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
 fn a_finished_tty_job_keeps_its_slab_after_its_output_clears() {
     use crate::theme::Role;
 
