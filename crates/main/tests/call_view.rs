@@ -535,6 +535,11 @@ const WHEEL_DOWN: &[u8] = b"\x1b[<65;21;41M";
 /// turn names it once.
 const THOUGHT: &str = "Ran 1 command";
 
+/// The first filler line: it stays on screen while the conversation scrolls
+/// toward its thought row, so its downward motion proves a wheel step moved
+/// the rows even while the thought row is still above the viewport.
+const FILLER_FIRST: &str = "F0001";
+
 /// The wheel over a call's view scrolls the view, never the hidden
 /// conversation (`docs/tui.md:576`, "Swapped views"; see #3578): with the
 /// conversation scrolled up to its thought row, three wheel-downs over
@@ -565,17 +570,35 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     run.turn_finished(from);
     // Scroll the conversation up until its thought row shows: each step
     // must move the rows, so a step that would sit on the top clamp fails
-    // the wait instead of settling short. The marker itself is recorded
-    // after the call opens below.
+    // the wait instead of settling short. While the thought row is still
+    // above the viewport, the first filler row's downward motion proves the
+    // step moved the rows. The marker itself is recorded after the call
+    // opens below.
     let mut scrolled = false;
     for _ in 0..6 {
         let prev = run.screen();
         run.write(WHEEL_UP);
         let grid = run.wait_screen("the thought row scrolling into view", |next| {
-            match (find_row(&prev.rows, THOUGHT), find_row(&next.rows, THOUGHT)) {
-                (None, Some(_)) => true,
-                (Some(before), Some(after)) => after > before,
-                (Some(_), None) | (None, None) => false,
+            match (
+                find_row(&prev.rows, THOUGHT),
+                find_row(&next.rows, THOUGHT),
+                find_row(&prev.rows, FILLER_FIRST),
+                find_row(&next.rows, FILLER_FIRST),
+            ) {
+                // The thought row arrived, or it moved down on screen.
+                (None, Some(_), _, _) => true,
+                (Some(before), Some(after), _, _) if after > before => true,
+                // The thought row left the viewport: fail the wait instead
+                // of masking a focus loss behind filler motion.
+                (Some(_), None, _, _) => false,
+                // Still hidden, but the first filler row moved down, arrived
+                // from above, or left below: each proves the wheel step moved
+                // the rows toward the thought row.
+                (None, None, Some(before), Some(after)) if after > before => true,
+                (None, None, None, Some(_)) | (None, None, Some(_), None) => true,
+                // No movement on screen: fail the wait instead of settling
+                // short at the top clamp.
+                _ => false,
             }
         });
         if find_row(&grid.rows, THOUGHT).is_some() {
