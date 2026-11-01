@@ -1233,11 +1233,24 @@ fn sandbox_lines(text: &str) -> Vec<serde_json::Value> {
 /// pacing-dependent text deltas: every ordered line kind is asserted so a
 /// duplicated or missing event fails, unordered self-triggered lines are
 /// set aside by the shared helper, and pacing `job_delta` lines are
-/// ignored (`docs/testing.md`, "Event streams").
+/// ignored (`docs/testing.md`, "Event streams"). The streamed delta
+/// kinds carry chunking- and pacing-dependent counts no doc promises
+/// (`docs/tools.md`, "Progress"; `docs/events.md`, "Ephemeral"), so
+/// they are excluded the same way: the boundary events keep exact counts.
 #[cfg(target_os = "linux")]
 fn sandbox_call_counts(lines: &[serde_json::Value], expected: &[&str]) {
+    let steady: Vec<serde_json::Value> = lines
+        .iter()
+        .filter(|line| {
+            !matches!(
+                line["kind"].as_str(),
+                Some("assistant_message_delta" | "tool_call_delta")
+            )
+        })
+        .cloned()
+        .collect();
     support::assert_kinds_multiset(
-        lines,
+        &steady,
         expected,
         &[],
         Some("pacing job_delta lines carry no count under test"),
@@ -1319,8 +1332,6 @@ fn a_confined_push_reaches_the_reviewer_and_a_block_never_spawns_it() {
             "assistant_message_completed",
             "assistant_message_completed",
             "assistant_message_completed",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "assistant_message_started",
             "assistant_message_started",
             "assistant_message_started",
@@ -1337,7 +1348,6 @@ fn a_confined_push_reaches_the_reviewer_and_a_block_never_spawns_it() {
             "text_completed",
             "tool_call_completed",
             "tool_call_completed",
-            "tool_call_delta",
             "tool_call_requested",
             "tool_call_requested",
             "tool_call_started",
@@ -1426,12 +1436,6 @@ fn a_confined_worktree_delegate_commits_branches_and_recovers_a_reflog() {
             "assistant_message_completed",
             "assistant_message_completed",
             "assistant_message_completed",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "assistant_message_started",
             "assistant_message_started",
             "assistant_message_started",
@@ -1691,14 +1695,6 @@ fn delegates_inherit_a_run_override_and_refreshed_denials() {
             "assistant_message_completed",
             "assistant_message_completed",
             "assistant_message_completed",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "assistant_message_delta",
             "assistant_message_started",
             "assistant_message_started",
             "assistant_message_started",
