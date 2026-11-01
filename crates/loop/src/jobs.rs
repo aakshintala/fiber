@@ -700,7 +700,7 @@ pub(crate) fn notice_text(completed: &JobCompleted) -> String {
         .and_then(contract::shapes::ProviderFailure::provider_line)
     {
         text.push('\n');
-        text.push_str(line.trim_end());
+        text.push_str(line.strip_suffix('\n').unwrap_or(&line));
     }
     if let Some(tail) = &completed.output_tail {
         text.push_str("\nLast output:\n");

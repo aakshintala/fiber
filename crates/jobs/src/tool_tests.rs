@@ -784,15 +784,15 @@ fn a_wait_names_the_provider_line_after_the_error() {
         &CancelToken::new(),
     );
     let text = text_of(&output);
+    // `docs/errors.md`, "The shape": the model is told
+    // `Provider said: <provider.message>` after Fiber's message. No area doc
+    // promises the provider line's place against `Output:`.
     let error = text.find("pa answered HTTP 400.").expect("the error line");
     let provider = text
         .find("Provider said: content cannot be empty if is_error is true")
         .expect("the provider line");
-    let out = text.find("Output:").expect("the output line");
-    assert!(
-        error < provider && provider < out,
-        "error, provider, output: {text}"
-    );
+    assert!(error < provider, "error, provider: {text}");
+    assert!(text.contains("Output:"), "the output stays: {text}");
 }
 
 #[test]

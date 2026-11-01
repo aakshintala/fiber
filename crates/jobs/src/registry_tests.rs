@@ -410,6 +410,9 @@ fn a_wait_answer_names_the_provider_line_after_the_error() {
     let id = opened.started.job_id.0.clone();
     (opened.end.0)(failed_provider(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
+    // `docs/errors.md`, "The shape": the model is told
+    // `Provider said: <provider.message>` after Fiber's message. No area doc
+    // promises the provider line's place against `Output:`.
     let error = answer
         .text
         .find("pa answered HTTP 400.")
@@ -418,10 +421,10 @@ fn a_wait_answer_names_the_provider_line_after_the_error() {
         .text
         .find("Provider said: content cannot be empty if is_error is true")
         .expect("the provider line");
-    let output = answer.text.find("Output:").expect("the output line");
+    assert!(error < provider, "error, provider: {}", answer.text);
     assert!(
-        error < provider && provider < output,
-        "error, provider, output: {}",
+        answer.text.contains("Output:"),
+        "the output stays: {}",
         answer.text
     );
 }

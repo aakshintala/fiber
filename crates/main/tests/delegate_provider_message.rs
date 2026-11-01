@@ -25,9 +25,8 @@ use support::{KillGroup, SessionGuard, function_call, hello, stream, text_reply}
 /// The provider's own message the fake child answers 400 with.
 const PROVIDER_MESSAGE: &str = "content cannot be empty if is_error is true";
 
-/// Installs provider `name` with model `m` on `protocol` at `url`, with
-/// `extra` merged into the model's fields.
-fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str, extra: &Value) {
+/// Installs provider `name` with model `m` on `protocol` at `url`.
+fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
     let source = setup.root.path().join(format!("src-{name}"));
     let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
     manifest["providers"] = Value::Object(
@@ -36,10 +35,7 @@ fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str, ex
             .collect(),
     );
     support::write_json(&source.join("extension.json"), &manifest);
-    let mut model = json!({"id": "m", "protocol": protocol, "base_url": format!("{url}/v1"), "context_window": 100000});
-    for (key, value) in extra.as_object().unwrap() {
-        model[key] = value.clone();
-    }
+    let model = json!({"id": "m", "protocol": protocol, "base_url": format!("{url}/v1"), "context_window": 100000});
     support::write_json(
         &source.join(format!("providers/{name}.json")),
         &json!({
@@ -63,8 +59,8 @@ fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str, ex
 /// Installs the parent's `pa/m` and the child's `pb/m` on
 /// `openai-responses`, and configures the parent's model and reviewer.
 fn providers(setup: &support::Setup, parent: &ProviderServer, child: &ProviderServer) {
-    install_url(setup, "pa", &parent.url(), "openai-responses", &json!({}));
-    install_url(setup, "pb", &child.url(), "openai-responses", &json!({}));
+    install_url(setup, "pa", &parent.url(), "openai-responses");
+    install_url(setup, "pb", &child.url(), "openai-responses");
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "pa/m", "reviewer": {"model": "pa/m"}}),
@@ -185,7 +181,9 @@ fn a_delegate_failing_on_its_model_call_reports_the_providers_message() {
     let finished = run_ask(&setup, "scan the tree");
     assert_eq!(finished.code, Some(0), "stderr: {}", finished.stderr);
 
-    // The child's 400 ends its run at once: no retry, no second call.
+    // The child's 400 ends its run at once: no retry, no second call
+    // (`docs/errors.md`, "A failed model call": `invalid_request` is never
+    // retried).
     assert_eq!(
         child.requests().len(),
         1,

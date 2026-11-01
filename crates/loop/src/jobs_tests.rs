@@ -1682,12 +1682,17 @@ fn failed_provider() -> JobCompleted {
 
 #[test]
 fn a_notice_names_the_provider_line_after_the_error() {
-    assert_eq!(
-        notice_text(&failed_provider()),
-        format!(
-            "Fiber: background job {JOB} ended: failed.\nExit code 1.\npa answered HTTP 400.\nProvider said: content cannot be empty if is_error is true\nLast output:\n1 failing"
-        ),
-        "the provider line sits after the error, before the tail"
+    // `docs/errors.md`, "The shape": the model is told
+    // `Provider said: <provider.message>` after Fiber's message.
+    let text = notice_text(&failed_provider());
+    let error = text.find("pa answered HTTP 400.").expect("the error line");
+    let provider = text
+        .find("Provider said: content cannot be empty if is_error is true")
+        .expect("the provider line");
+    assert!(error < provider, "error, provider: {text}");
+    assert!(
+        text.contains("Last output:\n1 failing"),
+        "the tail stays: {text}"
     );
 }
 
@@ -1737,19 +1742,60 @@ fn a_hooked_notice_keeps_its_text_with_a_provider_present() {
 }
 
 #[test]
-fn a_notice_orders_provider_before_tail_and_warnings() {
+fn a_notice_keeps_provider_tail_and_warnings() {
+    // No area doc promises the provider line's place against the tail or
+    // the warnings, so this pins presence only (`docs/code-quality.md`,
+    // "What a reviewer checks"). The error-to-provider order is pinned in
+    // `a_notice_names_the_provider_line_after_the_error`.
     let mut completed = failed_provider();
     completed.protected_paths = Some(ProtectedPaths {
         restored: vec![".fiber".to_owned()],
         failed: Vec::new(),
     });
     let text = notice_text(&completed);
-    let provider = text.find("Provider said:").expect("the provider line");
-    let tail = text.find("Last output:").expect("the tail");
-    let warnings = text.find("Protected path").expect("the warnings");
     assert!(
-        provider < tail && tail < warnings,
-        "error, provider, tail, warnings: {text}"
+        text.contains("Provider said: content cannot be empty if is_error is true"),
+        "the provider line stays: {text}"
+    );
+    assert!(text.contains("Last output:"), "the tail stays: {text}");
+    assert!(
+        text.contains("Protected path .fiber"),
+        "the warnings stay: {text}"
+    );
+}
+
+#[test]
+fn a_notice_keeps_a_providers_trailing_whitespace_verbatim() {
+    let mut completed = failed_provider();
+    completed.error = Some(Failure {
+        code: ErrorCode::InvalidRequest,
+        message: "pa answered HTTP 400.".into(),
+        retry_after_ms: None,
+        provider: Some(ProviderFailure {
+            name: "pa".into(),
+            status: Some(400),
+            message: "oops  ".into(),
+        }),
+    });
+    assert!(
+        notice_text(&completed).contains("Provider said: oops  \n"),
+        "trailing spaces survive: {}",
+        notice_text(&completed)
+    );
+    completed.error = Some(Failure {
+        code: ErrorCode::InvalidRequest,
+        message: "pa answered HTTP 400.".into(),
+        retry_after_ms: None,
+        provider: Some(ProviderFailure {
+            name: "pa".into(),
+            status: Some(400),
+            message: "oops\n".into(),
+        }),
+    });
+    assert!(
+        notice_text(&completed).contains("Provider said: oops\n\nLast output:"),
+        "a trailing newline survives: {}",
+        notice_text(&completed)
     );
 }
 
