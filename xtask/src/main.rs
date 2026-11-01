@@ -26,6 +26,8 @@
 //!   appending the job-summary block to FILE when given
 //! - `touched-retries --base REV --list FILE`: whether any test the working tree adds or
 //!   changes passed only on retry, reading the retry list in FILE; exit 1 when one did
+//! - `stress-check --log FILE --count N --tests T`: checks the nextest stress output
+//!   has N iteration summaries, each with T executed tests, and a complete run summary
 //! - `stress-cost --start S --end E --count N --tests T --outcome O`: the stress job's
 //!   wall time and runner minutes, as the job-summary block
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
@@ -270,6 +272,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             Ok(true)
         }
         "stress-plan" => stress::plan_command(rest),
+        "stress-check" => stress::stress_check_command(rest),
         "touched-retries" => stress::touched_retries_command(rest),
         "stress-cost" => stress::cost_command(rest),
         "docs-only" => {

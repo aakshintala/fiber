@@ -199,9 +199,10 @@ The `stress` job runs on a ready pull request on Linux x86_64 beside the
 test jobs and builds from the same restored cache. The tests it runs are
 the test functions the diff adds or changes, found by
 `cargo xtask stress-plan` with the same test-file rules as the red-commit
-check, and a diff that touches no test function skips the run. The count
-is read from the linked issue's labels. The job is in `ci`'s `needs`, so
-one failure stops the merge. It writes its wall
+check, and a diff that touches no test function skips the run. A run whose
+filter matches no test, or whose iteration runs fewer tests than the plan
+names, fails the job. The count is read from the linked issue's labels. The job is in `ci`'s `needs`,
+so one failure stops the merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched
 test still gets nextest's one retry but a pass on that retry fails the
 test job (`cargo xtask touched-retries`).

@@ -578,6 +578,7 @@ jobs:
         env:
           FILTER: ${{ steps.plan.outputs.filter }}
           COUNT: ${{ steps.plan.outputs.count }}
+          TESTS: ${{ steps.plan.outputs.tests }}
           PACKAGES: ${{ steps.plan.outputs.packages }}
         run: |
           package_args=()
@@ -587,7 +588,8 @@ jobs:
             fi
           done <<<"$PACKAGES"
           run_log=/dev/shm/stress-run.log
-          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=warn; } 2>&1 | tee "$run_log"; then
+          # Fail an empty filter or stress output whose iteration/test counts differ from the plan.
+          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=fail; } 2>&1 | tee "$run_log"; then
             :
           else
             status=$?
@@ -596,6 +598,12 @@ jobs:
               echo "::error title=Runner out of disk::Stress run did not complete: the runner ran out of disk; no test result"
             fi
             exit "$status"
+          fi
+          if cargo xtask stress-check --log "$run_log" --count "$COUNT" --tests "$TESTS"; then
+            :
+          else
+            echo "::error title=Stress output mismatch::Nextest output did not match the planned iteration and test counts"
+            exit 1
           fi
       - name: Record the stress cost
         if: always()
