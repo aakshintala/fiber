@@ -479,7 +479,7 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     // The test owns the release sender: dropping it, even by a failure
     // before the release, unblocks the held fetch, so the server can
     // always shut down instead of hanging a responder.
-    let (release, release_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
     let release_at = setup.deadline;
     // The server signals each fetch it holds: the test releases only
@@ -513,6 +513,10 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
         }
     })
     .unwrap();
+    // Bound after the server, so drops on every path run in reverse
+    // declaration order: the sender drops before the server's bounded
+    // shutdown joins the holder.
+    let release = release_tx;
     let url = server.url();
     install_test_provider(&setup, &url);
     // The loader fetches only configured credential labels.
@@ -530,37 +534,37 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     run.ready();
     // The box starts a session and the turn answers at once; the
     // session start's fetch takes longer and stays in flight.
+    let from = run.output().len();
     run.write(b"hi\r");
     run.wait_screen("the answered turn", |grid| grid.contents.contains("Hello."));
-    // The fetch-less quota snapshot is a one-shot read of the caches
-    // (`docs/invocation.md`, `quota`): nothing re-asks when a flight
-    // lands after it, so one focus-in can miss a session-start fetch
-    // still in flight. Re-ask on every pass until the drawn value proves
-    // `finish_quota` stored it: the store clears the flight under the
-    // same lock (`crates/extensions/src/lua_provider/quota.rs`,
+    // The view's `fetch: true` query joins the session start's flight
+    // or starts its own, and answers only once a fetch ends
+    // (`switch/quota.rs`, `answer_fetch` over `force_start_quota`
+    // and `wait_quota`), so the drawn value proves `finish_quota`
+    // stored it: the store clears the flight under the same lock
+    // (`crates/extensions/src/lua_provider/quota.rs`,
     // `finish_quota`), so a drawn value means no flight is in flight.
-    // Each focus-in sends a fetch-less query (`docs/tui.md`, "The
-    // panel"; `docs/tools.md`, "Fetching") without starting a fetch on
-    // a fresh cache, so re-asking starts no new `/lua-quota` request
-    // and only the view's fetch can reach the gate below. The wait is
-    // the drawn value itself (`docs/testing.md`, "Waits and timeouts"),
+    // The view draws the cached rows under `/quota · fetching` until
+    // that answer lands (`tui/src/quota_view.rs`, `frame`), so the
+    // wait also requires the fetching mark gone. The wait is the
+    // drawn value itself (`docs/testing.md`, "Waits and timeouts"),
     // not the session-log `http_request` record, which the fetch
-    // thread writes when the body ends
-    // (`crates/extensions/src/host.rs`, `execute`), synchronously
-    // before quota parsing and the store.
-    loop {
-        run.write(b"\x1b[I");
-        if run.screen().contents.contains("58%") {
-            break;
-        }
-        assert!(
-            !setup.deadline.left().is_zero(),
-            "waited until the deadline for the fetched quota value to draw after focus-in",
-        );
-        std::thread::yield_now();
-    }
+    // thread writes when the body ends, synchronously before quota
+    // parsing and the store.
+    // The turn must end before typing: sent earlier, `/quota`
+    // would steer the turn instead of opening the view.
+    run.turn_finished(from);
+    run.write(b"/quota\r");
     run.wait_screen("the fetched quota value", |grid| {
-        grid.contents.contains("58%")
+        grid.contents.contains("Quota")
+            && grid.contents.contains("/quota")
+            && grid.contents.contains("Esc returns")
+            && grid.contents.contains("58%")
+            && !grid.contents.contains("fetching")
+    });
+    run.write(b"\x1b[27u");
+    run.wait_screen("the conversation after the quota view", |grid| {
+        grid.contents.contains("Hello.")
     });
     // The drawn value means this session's loader checked every provider
     // as well (`docs/tools.md`, "Fetching": without `fetch` the command
