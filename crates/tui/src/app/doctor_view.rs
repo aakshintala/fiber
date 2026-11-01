@@ -56,6 +56,7 @@ impl Doctor {
     /// the shared renderer, and a click on one stays.
     pub(crate) fn frame(&self) -> Frame {
         Frame {
+            joins: Vec::new(),
             title: "Doctor".to_owned(),
             command: "/doctor".to_owned(),
             rows: self

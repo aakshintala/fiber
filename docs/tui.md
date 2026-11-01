@@ -917,16 +917,16 @@ install still running.
   `", "`, and `watcher`. With none registered, it says `No hooks`.
 - **The MCP view,** `/mcp`: one row per configured server: its name, where it
   is declared (`global`, `project` or this repository), its state and its
-  tool count. The state is `connecting` for a server never started this
+  tool count. The state is `not started` for a server never started this
   session, `ready` for a running one, `failed` with the hub's
   `mcp_server_failed` sentence, or `needs-login`. A failed row is in
-  `error`, a needs-login row in `attention`, a connecting row dim, a ready
+  `error`, a needs-login row in `attention`, a not-started row dim, a ready
   row in the text colour. Enter on a failed server reconnects that one
   server; Enter on one that needs a login runs the login `fiber mcp login`
   runs (`docs/mcp.md`, "What Fiber does with MCP"): it opens the browser
   and waits for the loopback callback, and the row shows the wait with the
   login URL cut to fit, then success or the failure reason. Enter on a ready
-  or connecting row does nothing. A repository's server nobody approved
+  or not-started row does nothing. A repository's server nobody approved
   shows `not approved`, and Enter says to run `fiber approve` in the repository;
   the view never approves it. Rows sort by server name. The last row is
   "Per-tool on/off switches stay in `/tools`.", dim. On a remote terminal
@@ -1138,6 +1138,25 @@ arrived after `sessions` was sent.
   lines; Enter on a focused row does the same. Enter again on the opened
   call, or a click on its "… N more lines (Enter to view)", opens the whole
   call in a swapped view ("Swapped views").
+- **An outer call with inner calls is one ledger row.** When an extension
+  runs a tool inside its own call, each inner call nests under the outer
+  (`docs/events.md`, "`ran_by`"). The ledger shows one row for the outer,
+  then one row per inner call, each two columns further in per level, with
+  the same glyph, kind, target and result it would draw on its own. Calls
+  nest at any depth: an inner call with calls of its own nests those under
+  it the same way. An inner call whose outer names no call of the turn
+  draws top-level, in push order.
+- **The summary counts inner calls by kind, at every depth.** An outer
+  call with inner calls never counts as a kind of its own: with codemode
+  the summary reads what the inner calls did ("Read 1 file, edited 1
+  file +3 −1, ran 1 command"), never "called 1 tool" for the script
+  itself. Edits inner calls make get the same file-change highlight and
+  `+N −N` totals.
+- **Opening an outer shows its arguments first, then its inner rows.**
+  For codemode the arguments are the script in its `source` argument,
+  drawn as dim text, at most 20 lines; then one indented row per inner
+  call. Each inner row opens inline under its row and in the swapped
+  view, as any call does.
 - **While an opened call's row, or an open ledger's group line, is above the
   conversation's top row and any of its content is on screen, that row stays
   pinned to the conversation's top row.** Scrolling into the opened output
@@ -2078,7 +2097,7 @@ because the second Ctrl+C always quits ("Input and focus"). Either entry gives
 a `notice` and keeps the defaults.
 
 `/keys` opens the rebinding screen: every action with its keys, id and
-description, the unbound ones included. Selecting an action, pressing Enter
+description, the unbound ones included. Each column wraps inside its own width, as in the key map, so every key stays readable. Every display line of a wrapped action takes a mouse target, and a click on any line selects the action; the focused action keeps the bar on every wrapped display line with › on the first, the /keys exception to the Swapped-views gutter-only rule. Selecting an action, pressing Enter
 and then a key binds it, so only a key the terminal actually delivers can be
 bound; an action with variants takes one key for each variant, in order. A key
 already bound to another action shows inline, with a choice to swap or cancel.
@@ -3042,6 +3061,7 @@ five-file cut does, and the replacement inherits the cap.
 | `context` | `tokens`, `window` and `trigger_at` |
 | `spend` | `cost` with `tokens` (`input`, `output`, `cache_read`, `cache_write`) and `subscription_cost`; when the session reports none, the attached spend falls back to `cost` alone; absent when there is no spend at all |
 | `budget` | The spend budget; absent when unset |
+| `cache_expires` | When the session's prompt cache expires, as `ts`; absent when unset |
 | `speed` | The last reply's output speed in tokens per second; absent before the first timed reply |
 | `turns` | How many turns the session ran |
 | `tools_down` | The tools that are down |

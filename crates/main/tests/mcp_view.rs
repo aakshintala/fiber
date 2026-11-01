@@ -377,7 +377,7 @@ fn percent_decode(text: &str) -> String {
 
 /// Whether `line` is the remote server's first start failing as
 /// not-logged-in: the signal the login test's first `mcp_servers` query
-/// waits for, so it never reads the `connecting` row of a start still in
+/// waits for, so it never reads the `not-started` row of a start still in
 /// flight (`docs/mcp.md`, "Servers, their state and the per-server
 /// commands"). It names the server and the reason, so no other server's
 /// failure releases the wait early.
@@ -431,7 +431,7 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
     // The session settles every server before it records their startup
     // failures together (`loop::mcp_servers_started`), so once both
     // `mcp_server_failed` lines are observed the `up` row is ready too,
-    // never the `connecting` of a start still in flight: an initial
+    // never the `not-started` of a start still in flight: an initial
     // ready emits no event of its own (`crates/mcp/src/slot.rs` records
     // `Ready` only on restart), and the failures are written only after
     // every start reported. A `full` subscribe replays the log, so either
@@ -548,7 +548,7 @@ fn login_against_a_fake_authorization_server_makes_the_server_ready() {
     // replays the log, so the failure may already sit in the startup
     // lines the startup wait read past: only when it does not, wait for
     // its live line. Either way the failure is recorded before the first
-    // query, so the row reads `needs-login`, never the `connecting` of a
+    // query, so the row reads `needs-login`, never the `not-started` of a
     // start still in flight.
     if !driver.startup.iter().any(remote_not_logged_in) {
         until(
@@ -764,6 +764,12 @@ fn reconnect_of_an_unapproved_repository_server_gives_the_approve_advice() {
     let db = Driver::row(&rows, "db");
     assert_eq!(db["layer"], "repository", "{db:?}");
     assert_eq!(db["approved"], false, "{db:?}");
+    // The server is declared but nothing has called it, so it never
+    // started and records no failure: it reads `not-started` with no
+    // tool count (`docs/mcp.md`, "Servers, their state and the
+    // per-server commands").
+    assert_eq!(db["state"], "not-started", "{db:?}");
+    assert!(db.get("tools").is_none(), "{db:?}");
 
     let rejected = driver.command("c_reconnect", "mcp_reconnect", json!({"server": "db"}));
     assert_eq!(rejected["kind"], "command_rejected", "{rejected:?}");

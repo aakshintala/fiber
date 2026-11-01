@@ -8,8 +8,9 @@ use crate::bindings::BINDINGS;
 use crate::keys::Key;
 use crate::keyset::Keyset;
 use crate::keyset::edit::Refused;
+use crate::rows::Join;
 use crate::stroke::{Code, Mods, Stroke};
-use crate::swapped::{Frame, Ink, List, Spot, rows_height};
+use crate::swapped::{Frame, GUTTER, Ink, List, Spot, rows_height};
 
 /// The browse footer: the screen's fixed controls.
 const BROWSE_FOOTER: &str = "↑↓ move · Enter rebind · r reset · Delete unbind · Esc close";
@@ -140,26 +141,41 @@ enum Mode {
     },
 }
 
-/// The rebinding screen: the swapped list's selection, what it waits for,
-/// and the message line below the rows.
+/// The rebinding screen: the selected action and the first shown
+/// display line, what it waits for, and the message line below the
+/// rows. Selection moves by action, never by display line: each
+/// action wraps inside its own columns and takes as many lines as
+/// its tallest column (`docs/tui.md`, "Bindings"). The mouse wheel
+/// is the exception: it moves the scroll by display line, three
+/// lines a step, and may rest it inside a wrapped action.
 #[derive(Debug, Default)]
 pub(crate) struct KeysScreen {
-    list: List,
+    /// The selected action's index in the table.
+    selected: usize,
+    /// The first shown display line in the table.
+    top: usize,
     mode: Mode,
     message: Option<String>,
 }
 
 impl KeysScreen {
     /// Handles one stroke over `keys`: the fixed controls in every mode.
-    /// `height` is the view's rows, for paging.
-    pub(crate) fn press(&mut self, stroke: &Stroke, keys: &Keyset, height: usize) -> Outcome {
+    /// `width` is the draw width in columns, `height` the view's rows,
+    /// for paging.
+    pub(crate) fn press(
+        &mut self,
+        stroke: &Stroke,
+        keys: &Keyset,
+        width: usize,
+        height: usize,
+    ) -> Outcome {
         if *stroke == ctrl_c() {
             return Outcome::Pass;
         }
         self.message = None;
-        let shown = rows_height(&self.frame(keys, height), height);
+        let shown = rows_height(&self.frame(keys, width, height), height);
         match std::mem::replace(&mut self.mode, Mode::Browse) {
-            Mode::Browse => self.browse(stroke, keys, shown),
+            Mode::Browse => self.browse(stroke, keys, width, shown),
             Mode::Capture { at, mut got } => {
                 if *stroke == esc() {
                     self.mode = Mode::Browse;
@@ -220,13 +236,13 @@ impl KeysScreen {
     }
 
     /// Handles one stroke while browsing.
-    fn browse(&mut self, stroke: &Stroke, keys: &Keyset, shown: usize) -> Outcome {
+    fn browse(&mut self, stroke: &Stroke, keys: &Keyset, width: usize, shown: usize) -> Outcome {
         self.mode = Mode::Browse;
         if let Some(key) = nav(stroke) {
-            self.list.key(&key, BINDINGS.len(), shown);
+            self.move_by(&key, keys, width, shown);
             return Outcome::Nothing;
         }
-        let selected = self.list.selected().min(BINDINGS.len().saturating_sub(1));
+        let selected = self.selected.min(BINDINGS.len().saturating_sub(1));
         let Some(binding) = BINDINGS.get(selected) else {
             return Outcome::Nothing;
         };
@@ -265,6 +281,87 @@ impl KeysScreen {
         Outcome::Nothing
     }
 
+    /// Moves the selection by `key`: up and down by one action, PageUp
+    /// and PageDown by the whole actions fitting from the top less one,
+    /// at least one, clamped at both ends of the table.
+    fn move_by(&mut self, key: &Key, keys: &Keyset, width: usize, shown: usize) {
+        let total = BINDINGS.len();
+        if total == 0 {
+            return;
+        }
+        let grown = heights(keys, width);
+        let total_lines: usize = grown.iter().sum();
+        // Pages count from the action holding the stored display line:
+        // a wheel may rest the top inside a wrapped action, and only
+        // an action index enters the fitting count.
+        let top_action = action_at(self.top.min(total_lines.saturating_sub(1)), &grown);
+        match key {
+            Key::Up => self.selected = self.selected.saturating_sub(1),
+            Key::Down => self.selected = self.selected.saturating_add(1),
+            Key::PageUp => {
+                let page = fits_from(top_action, &grown, shown)
+                    .saturating_sub(1)
+                    .max(1);
+                self.selected = self.selected.saturating_sub(page);
+            }
+            Key::PageDown => {
+                let page = fits_from(top_action, &grown, shown)
+                    .saturating_sub(1)
+                    .max(1);
+                self.selected = self.selected.saturating_add(page);
+            }
+            Key::Char(_)
+            | Key::Backspace
+            | Key::Enter
+            | Key::Esc
+            | Key::CtrlC
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR
+            | Key::CtrlV
+            | Key::CtrlL
+            | Key::CtrlF
+            | Key::End
+            | Key::AltA
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_)
+            | Key::Tab
+            | Key::BackTab
+            | Key::F1 => return,
+        }
+        self.settle(&grown, shown);
+    }
+
+    /// Keeps the selected action whole on screen: the scroll
+    /// reanchors through the action holding the stored display line,
+    /// then moves down until the selection sits in the window fitting
+    /// whole from it, and the stored top becomes that action's first
+    /// display line. An action taller than the window shows its top
+    /// lines, with the selection held.
+    fn settle(&mut self, grown: &[usize], shown: usize) {
+        let total = BINDINGS.len();
+        if total == 0 {
+            return;
+        }
+        self.selected = self.selected.min(total - 1);
+        let total_lines: usize = grown.iter().sum();
+        let first =
+            action_at(self.top.min(total_lines.saturating_sub(1)), grown).min(self.selected);
+        // The search runs over a finite range, so a flipped comparison
+        // below lands on the wrong top instead of spinning past the end.
+        let top = (first..=self.selected)
+            .find(|&top| {
+                let fits = fits_from(top, grown, shown).max(1);
+                self.selected < top.saturating_add(fits)
+            })
+            .unwrap_or(self.selected);
+        self.top = grown.iter().take(top).sum();
+    }
+
     /// Applies captured keys through [`Keyset::set`]: a clash prompts for
     /// the action holding them, each prompt naming one action until none
     /// is left.
@@ -301,28 +398,74 @@ impl KeysScreen {
         }
     }
 
-    /// Shifts the list three rows for a wheel step while browsing,
-    /// clearing the transient message as a stroke does; in Capture or
-    /// Clash the wheel is swallowed, never a captured key. `height` is
-    /// the view's rows.
-    pub(crate) fn wheel(&mut self, up: bool, keys: &Keyset, height: usize) -> Outcome {
+    /// Shifts the window three display lines for a wheel step while
+    /// browsing, clearing the transient message as a stroke does; in
+    /// Capture or Clash the wheel is swallowed, never a captured key.
+    /// The scroll is a display-line offset over the legal window
+    /// range, so a step into a wrapped action rests inside it instead
+    /// of snapping to its start, moving one to three lines off an
+    /// end and holding at one. The selection stays while any of its
+    /// lines shows, else moves to the action at the nearer window
+    /// edge. A zero-height view changes nothing, not even the
+    /// message. `width` is the draw width in columns, `height` the
+    /// view's rows.
+    pub(crate) fn wheel(
+        &mut self,
+        up: bool,
+        keys: &Keyset,
+        width: usize,
+        height: usize,
+    ) -> Outcome {
         if !matches!(self.mode, Mode::Browse) {
             return Outcome::Nothing;
         }
+        let shown = rows_height(&self.frame(keys, width, height), height);
+        if shown == 0 {
+            return Outcome::Nothing;
+        }
         self.message = None;
-        let shown = rows_height(&self.frame(keys, height), height);
-        self.list.wheel(up, BINDINGS.len(), shown, 3);
+        let grown = heights(keys, width);
+        let total = BINDINGS.len();
+        if total == 0 {
+            return Outcome::Nothing;
+        }
+        let total_lines: usize = grown.iter().sum();
+        let end = total_lines.saturating_sub(shown);
+        let next = if up {
+            self.top.min(end).saturating_sub(3)
+        } else {
+            self.top.min(end).saturating_add(3).min(end)
+        };
+        self.top = next;
+        let selected = self.selected;
+        let start: usize = grown.iter().take(selected).sum();
+        let height = grown.get(selected).copied().unwrap_or(0);
+        if start.saturating_add(height) <= next {
+            self.selected = action_at(next, &grown);
+        } else if start >= next.saturating_add(shown) {
+            self.selected = action_at(next.saturating_add(shown).saturating_sub(1), &grown);
+        }
         Outcome::Nothing
     }
 
-    /// Handles a click: the ✕ closes in every mode, a row selects while
-    /// browsing. `height` is the view's rows.
-    pub(crate) fn click(&mut self, spot: Spot, height: usize) -> Outcome {
+    /// Handles a click: the ✕ closes in every mode, a display line
+    /// selects its action while browsing. `width` is the draw width in
+    /// columns, `height` the view's rows.
+    pub(crate) fn click(
+        &mut self,
+        spot: Spot,
+        keys: &Keyset,
+        width: usize,
+        height: usize,
+    ) -> Outcome {
         match spot {
             Spot::Close => Outcome::Close,
-            Spot::Row(at) => {
+            Spot::Row(line) => {
                 if matches!(self.mode, Mode::Browse) {
-                    self.list.select(at, BINDINGS.len(), height);
+                    let grown = heights(keys, width);
+                    let shown = rows_height(&self.frame(keys, width, height), height);
+                    self.selected = action_at(line, &grown).min(BINDINGS.len().saturating_sub(1));
+                    self.settle(&grown, shown);
                 }
                 Outcome::Nothing
             }
@@ -338,46 +481,66 @@ impl KeysScreen {
         self.message = Some(format!("Not saved: {message}"));
     }
 
-    /// The frame at `height`: the title, one row per action, the message
-    /// or the clash line below them, and the footer naming the mode's
-    /// keys.
-    pub(crate) fn frame(&self, keys: &Keyset, _height: usize) -> Frame {
-        let labels: Vec<String> = BINDINGS
-            .iter()
-            .map(|binding| keys.labels(binding.id))
-            .collect();
-        let wide = labels
-            .iter()
-            .map(|label| crate::format::width(label))
-            .max()
-            .unwrap_or(0);
-        let rows = BINDINGS
-            .iter()
-            .zip(labels)
-            .map(|(binding, label)| {
-                let fill = wide.saturating_sub(crate::format::width(&label));
-                vec![
-                    (format!("{label}{}", " ".repeat(fill)), None, Ink::Plain),
-                    (format!(" {} ", binding.id), None, Ink::Muted),
-                    (binding.description.to_owned(), None, Ink::Plain),
-                ]
-            })
-            .collect();
+    /// The frame at `height`: every action wrapped inside its own
+    /// columns, one display line per wrapped row, with how each line
+    /// joins the one before, the message or the clash line below them,
+    /// and the footer naming the mode's keys. `width` is the draw width
+    /// in columns; the selection stays action-indexed while the scroll
+    /// is a display-line offset, and the frame carries both as display
+    /// lines.
+    pub(crate) fn frame(&self, keys: &Keyset, width: usize, height: usize) -> Frame {
+        let (label, id, description) = columns(keys, width);
+        let grown = heights(keys, width);
+        let mut rows = Vec::new();
+        let mut joins = Vec::new();
+        for binding in BINDINGS {
+            let keys = column_joined(&keys.labels(binding.id), label);
+            let ids = column_joined(binding.id, id);
+            let descriptions = column_joined(binding.description, description);
+            let tall = keys.len().max(ids.len()).max(descriptions.len());
+            for line in 0..tall {
+                let key = keys
+                    .get(line)
+                    .map(|(text, _)| text.clone())
+                    .unwrap_or_else(|| " ".repeat(label.max(1)));
+                let id = ids
+                    .get(line)
+                    .map(|(text, _)| text.clone())
+                    .unwrap_or_else(|| " ".repeat(id.max(1)));
+                let description = descriptions
+                    .get(line)
+                    .map(|(text, _)| text.clone())
+                    .unwrap_or_else(|| " ".repeat(description.max(1)));
+                rows.push(vec![
+                    (key, None, Ink::Plain),
+                    (format!(" {id} "), None, Ink::Muted),
+                    (description, None, Ink::Plain),
+                ]);
+                joins.push(join_at(
+                    line,
+                    [keys.as_slice(), ids.as_slice(), descriptions.as_slice()],
+                ));
+            }
+        }
         let mut below = Vec::new();
         if let Some(message) = &self.message {
             below.push(message.clone());
         } else if let Mode::Clash { other, stroke, .. } = &self.mode {
             below.push(clash_line(other, stroke));
         }
-        Frame {
+        let mut frame = Frame {
             title: "Keys".to_owned(),
             command: "/keys".to_owned(),
             rows,
-            list: self.list,
+            joins,
+            list: List::gutter(),
             below,
             field: None,
             footer: self.footer(),
-        }
+        };
+        let shown = rows_height(&frame, height);
+        frame.list = place(self.selected, self.top, &grown, shown);
+        frame
     }
 
     /// The footer naming the mode's keys.
@@ -398,6 +561,144 @@ impl KeysScreen {
             Mode::Clash { .. } => SWAP_FOOTER.to_owned(),
         }
     }
+}
+
+/// The keys, id and description widths sharing `width`: the natural
+/// widths while they fit in the room past the gutter and the two
+/// separators, else the id keeps its widest capped at half the room
+/// and the keys and description share the rest in proportion, one
+/// column each at least, the spare column to the keys.
+pub(crate) fn columns(keys: &Keyset, width: usize) -> (usize, usize, usize) {
+    let mut wide = (1usize, 1usize, 1usize);
+    for binding in BINDINGS {
+        wide.0 = wide.0.max(crate::format::width(&keys.labels(binding.id)));
+        wide.1 = wide.1.max(crate::format::width(binding.id));
+        wide.2 = wide.2.max(crate::format::width(binding.description));
+    }
+    let room = width.saturating_sub(GUTTER).saturating_sub(2);
+    if wide.0 + wide.1 + wide.2 <= room {
+        return wide;
+    }
+    let id = wide.1.min(room / 2).max(1);
+    let rest = room.saturating_sub(id);
+    let total = wide.0.saturating_add(wide.2).max(1);
+    let share = |wide: usize| wide.saturating_mul(rest) / total;
+    let (mut label, description) = (share(wide.0).max(1), share(wide.2).max(1));
+    // The floored shares leave at most one column unused, so one step
+    // fills it: the keys take it while the shares leave room.
+    // No narrower-than-widest guard: in the share branch rest tops out at
+    // 124 (room <= 144 or the natural widths return early, and id takes at
+    // least room - 124), so share(34) floors to 33 at most, one below the
+    // widest label text (34) — the guard would never fire. The natural
+    // widths are pinned by natural_key_widths_are_34_20_91.
+    if label + description < rest {
+        label = label.saturating_add(1);
+    }
+    (label, id, description)
+}
+
+/// How many display lines each action takes at `width`: every column
+/// wraps inside its own width and the row takes its tallest column.
+pub(crate) fn heights(keys: &Keyset, width: usize) -> Vec<usize> {
+    let (label, id, description) = columns(keys, width);
+    BINDINGS
+        .iter()
+        .map(|binding| {
+            crate::format::wrap(&keys.labels(binding.id), label)
+                .len()
+                .max(crate::format::wrap(binding.id, id).len())
+                .max(crate::format::wrap(binding.description, description).len())
+                .max(1)
+        })
+        .collect()
+}
+
+/// How many whole actions fit from `top` in `shown` display lines.
+fn fits_from(top: usize, grown: &[usize], shown: usize) -> usize {
+    let mut room: usize = shown;
+    let mut count: usize = 0;
+    for height in grown.iter().skip(top) {
+        if *height > room {
+            break;
+        }
+        room = room.saturating_sub(*height);
+        count = count.saturating_add(1);
+    }
+    count
+}
+
+/// The action holding display line `line`: continuations belong to
+/// their action, lines past the end to the last one.
+fn action_at(line: usize, grown: &[usize]) -> usize {
+    let mut start: usize = 0;
+    for (at, height) in grown.iter().enumerate() {
+        if line < start.saturating_add(*height) {
+            return at;
+        }
+        start = start.saturating_add(*height);
+    }
+    grown.len().saturating_sub(1)
+}
+
+/// The frame's list for the selected action and the display-line
+/// top: the stored top clamps to the current window range first, then
+/// the window reveals the selected action's first line when the whole
+/// action falls outside it, moving the smallest distance that shows
+/// that line. The selected action's first line and the top land
+/// independently, so a wheel step can rest the window inside a
+/// wrapped action while the selection stays on its first line.
+fn place(selected: usize, top_line: usize, grown: &[usize], shown: usize) -> List {
+    let total: usize = grown.iter().sum();
+    let end = total.saturating_sub(shown);
+    let mut top = top_line.min(end);
+    let at = selected.min(grown.len().saturating_sub(1));
+    let selected_line: usize = grown.iter().take(at).sum();
+    if shown > 0 {
+        let last = selected_line
+            .saturating_add(grown.get(at).copied().unwrap_or(0))
+            .saturating_sub(1);
+        if last < top {
+            top = selected_line;
+        } else if selected_line >= top.saturating_add(shown) {
+            top = selected_line.saturating_add(1).saturating_sub(shown);
+        }
+    }
+    let mut list = List::gutter();
+    list.set_line_window(selected_line, top);
+    list
+}
+
+/// One column's wrapped display lines, each padded to the column's
+/// width, with how each line joins the one before.
+fn column_joined(text: &str, wide: usize) -> Vec<(String, Join)> {
+    let wide = wide.max(1);
+    crate::format::wrap_joined(text, wide)
+        .into_iter()
+        .map(|(line, join)| {
+            (
+                format!(
+                    "{line}{}",
+                    " ".repeat(wide.saturating_sub(crate::format::width(&line)))
+                ),
+                join,
+            )
+        })
+        .collect()
+}
+
+/// How display line `line` of one action joins the line before: the
+/// first line breaks, a continuation wraps with the space where any
+/// column dropped one, else wraps inside its word.
+fn join_at(line: usize, columns: [&[(String, Join)]; 3]) -> Join {
+    if line == 0 {
+        return Join::Break;
+    }
+    for column in columns {
+        if let Some(Join::WrapSpace) = column.get(line).map(|(_, join)| join) {
+            return Join::WrapSpace;
+        }
+    }
+    Join::Wrap
 }
 
 /// The clash prompt's line: the captured key's label and the action

@@ -723,7 +723,7 @@ fn servers_refresh(
                             Some(count()),
                         ),
                         None => (
-                            contract::events::McpServerState::Connecting,
+                            contract::events::McpServerState::NotStarted,
                             String::new(),
                             None,
                         ),

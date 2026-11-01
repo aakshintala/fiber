@@ -348,7 +348,7 @@ fn a_ready_after_a_failure_clears_the_failure() {
     assert_eq!(rows[0].name, "db");
     assert_eq!(
         rows[0].state,
-        contract::events::McpServerState::Connecting,
+        contract::events::McpServerState::NotStarted,
         "{rows:?}"
     );
     servers.stop();
@@ -359,7 +359,7 @@ fn a_settled_failure_reads_needs_login_before_its_line_is_written() {
     // The pre-commit gap: the startup settles every server before the
     // door's commit writes their failure lines, and the door serves
     // queries from before that commit, so a query in the gap reads the
-    // settled row, never the `connecting` of a start still in flight.
+    // settled row, never the `not-started` of a start still in flight.
     // The seed carries the settled failure the commit is about to
     // write (`docs/mcp.md`, "Servers, their state and the per-server
     // commands").
@@ -481,7 +481,7 @@ fn a_ready_line_clears_the_seed() {
     assert_eq!(rows[0].name, "remote");
     assert_eq!(
         rows[0].state,
-        contract::events::McpServerState::Connecting,
+        contract::events::McpServerState::NotStarted,
         "{rows:?}"
     );
 }
@@ -511,7 +511,7 @@ fn an_old_ready_does_not_clear_the_seed() {
     // A resume inherits the old session's ready, then this startup
     // settles the same server as not-logged-in: the seed supersedes
     // the history, so the row reads `needs-login`, never the
-    // `connecting` an old ready folded over the seed would leave. A
+    // `not-started` an old ready folded over the seed would leave. A
     // mutant that folds the whole log over the seed fails here.
     let seed = seed_of(contract::events::ServerFailure::NotLoggedIn);
     let ready = contract::events::Event::McpServerReady(contract::events::McpServerReady {
@@ -531,7 +531,7 @@ fn an_old_ready_does_not_clear_the_seed() {
 fn a_logged_failure_without_a_seed_reads_failed() {
     // A mid-session death lands in the log with no seed entry: the fold
     // still records its row, so the server reads `failed`, never the
-    // `connecting` of a start with nothing settled. A mutant that drops
+    // `not-started` of a start with nothing settled. A mutant that drops
     // the failure arm of the fold fails here.
     let failed = contract::events::Event::McpServerFailed(settled_failure(
         contract::events::ServerFailure::StartFailed,

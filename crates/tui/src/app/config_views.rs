@@ -916,6 +916,7 @@ impl App {
             // `/logout` draws its own overlay, as `/login` does.
             Open::Logout(_) => return None,
             Open::Unavailable(title, command) => Frame {
+                joins: Vec::new(),
                 title: (*title).to_owned(),
                 command: (*command).to_owned(),
                 rows: Vec::new(),

@@ -1,28 +1,29 @@
 ---
 source: crates/tui/src/app/overlay_tests.rs
+assertion_line: 4234
 expression: text
 ---
  Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
-Enter                                                                message dur
-Shift+Enter  Imported                                            ✕
-Esc                                                                 on top; inte
-Ctrl+C       Copied · 240                                           then quit
-⌥0           MCP servers
-Ctrl+N       server0
-⌥1 ⌥2 ⌥3 ⌥4  server1                                                of rail card
-Delete, Bac  server2                                                d exited, or
-↑            server3                                                rompt from t
-←            server4                                                ty input box
-Ctrl+R       server5                                                ts
-⌥← ⌥→, Ctrl  server6
-⌥Backspace,  server7
-Ctrl+U       server8                                                e start of t
-Ctrl+A Ctrl  server9                                                e line
-Ctrl+G       server10                                                a pasted to
-Ctrl+V       server11
-Ctrl+O       server12                                               ledgers
-Shift+Tab    server13                                               t box into t
-↓ ↑, j k                                                             next or pre
-Enter        Imported items apply on the next /reload · Esc closes  m
-y                                                                   m
+› Enter                                                              message
+             Imported                                            ✕
+  Shift+Ent
+  Ctrl+J     Copied · 240
+  Esc        MCP servers                                            upt the turn
+             server0
+  Ctrl+C     server1
+  ⌥0         server2
+  Ctrl+N     server3
+  ⌥1 ⌥2 ⌥3   server4                                                l card N
+  ⌥6 ⌥7 ⌥8   server5
+  Delete,    server6                                                or a live
+  Backspace  server7                                                he session
+             server8
+  ↑          server9                                                m the
+             server10                                               reen
+  ←          server11                                               ut box into
+             server12
+  Ctrl+R     server13
+  ⌥← ⌥→, Ct
+  Ctrl+→, ⌥  Imported items apply on the next /reload · Esc closes
+  ⌥Backspac
 ↑↓ move · E▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
