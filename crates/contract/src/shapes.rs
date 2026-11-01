@@ -37,6 +37,18 @@ pub struct ProviderFailure {
     pub message: String,
 }
 
+impl ProviderFailure {
+    /// The provider's own message as its own labelled line: `None` when
+    /// the message holds no words, so no renderer names the provider
+    /// without saying anything.
+    pub fn provider_line(&self) -> Option<String> {
+        if self.message.trim().is_empty() {
+            return None;
+        }
+        Some(format!("Provider said: {}\n", self.message))
+    }
+}
+
 /// `process`: how a process ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Process {
