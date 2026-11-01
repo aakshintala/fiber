@@ -638,11 +638,6 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
         }
         found.expect("the conversation never scrolled its more row into view")
     };
-    // Re-anchor the scroll marker on the call's header: the reveal moved
-    // the thought row off the top, and the header is stable across the
-    // open, so it proves the view's wheel left the conversation alone.
-    let top_y = find_row(&grid.rows, "✓ shell").expect("the opened call's header row");
-    let top_marker = grid.rows[usize::from(top_y)].clone();
     // Dismiss the reviewer notice first: while it is up, the click on the
     // more row below misses, so the view never opens.
     let notice_row = find_row(&grid.rows, "no_model").expect("the reviewer notice");
@@ -652,6 +647,13 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     let grid = run.wait_screen("the dismissed notice", |grid| {
         grid.rows.iter().all(|row| !row.contains("no_model"))
     });
+    // Re-anchor the scroll marker on the call's header after the
+    // dismissal: dropping the notice relayouts the conversation by a
+    // row, so a baseline recorded before it compares two chrome
+    // heights. The header is stable from here across the open, so it
+    // proves the view's wheel left the conversation alone.
+    let top_y = find_row(&grid.rows, "✓ shell").expect("the opened call's header row");
+    let top_marker = grid.rows[usize::from(top_y)].clone();
     let row = find_row(&grid.rows, "more lines").expect("the more row");
     let text = row_text(&grid, row);
     let x = text.find("more lines").unwrap_or(20) as u16 + 1;
