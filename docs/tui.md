@@ -707,6 +707,12 @@ row, logged-out row or not-installed row matches, the picker shows one dim line,
 "No models match", and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
 Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 
+On a screen too short for every row, the list scrolls in the rows left
+between the count row and the footer, and it always shows at least one
+model with its provider's heading: the session's model when the picker
+opens, the focused model after ↓ or a click. Where even that does not fit,
+the list keeps it and the footer goes first.
+
 After the model sections and their left-out count rows, the choosing picker
 lists each installed provider with provider data but no credential, one row
 per provider in provider-name order. It never lists the scripted provider.
