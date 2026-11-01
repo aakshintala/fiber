@@ -675,22 +675,18 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     let marker = "── end of the model's view ──";
     run.write(b"\x1b[5~");
     run.write(b"\x1b[5~");
-    let grid = run.wait_screen(
-        "the paged-up view settled on the held head segment",
-        |grid| grid.rows.iter().any(|row| row.contains(marker)),
+    // The view parks two body rows above the end marker. In this fixture,
+    // the held head segment ends with output rows 036 and 037, so its
+    // re-anchored window starts at 036. Keep that geometry pinned: deriving
+    // the expected number from this same grid would accept a wrong anchor.
+    let settled = 36;
+    run.wait_screen(
+        "the paged-up view re-anchored on output 036 with its end marker",
+        |grid| {
+            first_output_number(grid) == Some(settled)
+                && grid.rows.iter().any(|row| row.contains(marker))
+        },
     );
-    // The head segment ends at the end marker: the nearest numbered row
-    // above it is the segment's last row, so one less is the settled
-    // first output number the wheel math counts from.
-    let marker_y = find_row(&grid.rows, marker).expect("the end marker in the settled view");
-    let mut settled = None;
-    for row in grid.rows[..usize::from(marker_y)].iter().rev() {
-        if let Ok(above) = row.trim_start().get(..3).unwrap_or("").parse::<u16>() {
-            settled = above.checked_sub(1);
-            break;
-        }
-    }
-    let settled = settled.expect("the settled first output number");
     // The marker row breaks the output-number/top-row one-to-one. Aim
     // the wheel at the view's fixed interior, not a grid-derived row;
     // page replies cannot change which surface owns this coordinate.
