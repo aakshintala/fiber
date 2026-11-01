@@ -21,9 +21,8 @@ python3 -I - "$1" <<'PYEOF'
 import sys
 import xml.etree.ElementTree as ET
 
-# A sanity cap, far above any real panic: this script no longer decides
-# what fits in a GitHub body, the filer in .github/workflows/ci.yml owns
-# that limit. A cut here means the output was pathological.
+# The filer in .github/workflows/ci.yml owns the GitHub body limit; this
+# cap only marks pathological output.
 LIMIT = 1000000
 
 path = sys.argv[1]

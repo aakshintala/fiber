@@ -1576,6 +1576,7 @@ jobs:
               printf '%s' "$body"
               return 0
             fi
+            # shellcheck disable=SC2016 # backticks are literal markdown in the issue body.
             fenced=$(printf '%s\n```\n%s\n```' "$body" "$detail")
             if [ "${#fenced}" -le "$BODY_LIMIT" ]; then
               printf '%s' "$fenced"
@@ -1593,10 +1594,12 @@ jobs:
             n=1
             while [ -n "$rest" ]; do
               piece=${rest:0:$piece_len}
+              # shellcheck disable=SC2016 # backticks are literal markdown in the follow-up body.
               printf '```\n%s\n```' "$piece" >"$overflow_dir/$(printf '%03d' "$n")"
               rest=${rest:$piece_len}
               n=$((n + 1))
             done
+            # shellcheck disable=SC2016 # backticks are literal markdown in the issue body.
             printf '%s\n```\n%s\n```\n%s' "$body" "$shown" "$pointer_line"
           }
           # Posts flake_body's overflow, if any, as follow-up comments on

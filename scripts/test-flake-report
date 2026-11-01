@@ -1422,42 +1422,7 @@ grep -Fq 'flake_followups "$number"' "$report_dir/report.sh" || fail "a new or o
 # shellcheck disable=SC2016 # $action_issue is literal text the step holds, matched by -F.
 grep -Fq 'flake_followups "$action_issue"' "$report_dir/report.sh" || fail "a reopened issue posts no follow-ups"
 bash -n "$report_dir/report.sh" || fail "the report step does not parse"
-cat >"$report_dir/bin/gh" <<'REPORT_GH_EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-state="${REPORT_STATE_DIR:?}"
-if [ "${1:-}" = api ]; then
-  if [ -n "${OPEN_ISSUE_JSON:-}" ]; then
-    printf '%s\n' "$OPEN_ISSUE_JSON"
-  else
-    printf '[]\n'
-  fi
-  exit 0
-fi
-n=$(cat "$state/next")
-echo "$((n + 1))" >"$state/next"
-[ "${1:-}" = issue ] || { echo "stub gh: unexpected call: $*" >&2; exit 1; }
-shift
-op=$1
-shift
-target=""
-body=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --body) body=$2; shift 2 ;;
-    --title | --label | --add-label) shift 2 ;;
-    *) target=$1; shift ;;
-  esac
-done
-case "$op" in
-  create) printf 'https://github.com/x/y/issues/7\n' ;;
-  comment | reopen | edit) ;;
-  *) echo "stub gh: unexpected issue op: $op" >&2; exit 1 ;;
-esac
-printf '%s' "$target" >"$state/target-$(printf '%03d' "$n").txt"
-printf '%s' "$body" >"$state/body-$(printf '%03d' "$n").txt"
-REPORT_GH_EOF
-chmod +x "$report_dir/bin/gh"
+ln -s "$toplevel/scripts/test-flake-report-gh" "$report_dir/bin/gh"
 ln -s "$real_jq" "$report_dir/bin/jq"
 # run_report DIR: runs the report step with DIR/classes.jsonl and
 # DIR/decisions.jsonl, leaving numbered bodies in DIR/state. A push run:

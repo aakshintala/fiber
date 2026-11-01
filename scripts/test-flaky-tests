@@ -6,9 +6,8 @@
 # two characters `\n`, no line carries a second tab, only the first
 # flakyFailure child's text prints, and text past the sanity cap is cut
 # with a suffix saying how many characters were dropped (exact at 999999,
-# 1000000 and 1000001 characters); a panic longer than the old
-# 6000-character cut prints whole; empty and
-# missing input print nothing and exit 0; malformed XML exits 1.
+# 1000000 and 1000001 characters); a 7000-character panic prints whole;
+# empty and missing input print nothing and exit 0; malformed XML exits 1.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
