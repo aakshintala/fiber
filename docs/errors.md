@@ -43,6 +43,7 @@ A failed model call adds two optional fields:
   `status` is absent. Before it is stored, every credential value and every
   header value the credential, `credential()` or `sign()` supplied is replaced
   with `[redacted]`. Fiber's `message` then names the provider and the function, such as "codex's credential() failed. Run `fiber login codex`." or, for a provider `fiber login` cannot fix, "bedrock's credential() failed.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
+- A delegate that ends on a failed model call carries that call's `provider` on its `job_completed.error`. What the model is told about the job adds the line `Provider said: <provider.message>` after Fiber's message (`docs/delegates.md`).
 
 A hub `command_rejected` for `delete` with `code: session_held` also carries
 `held`: the ids of every session in the set another process holds, in the order
