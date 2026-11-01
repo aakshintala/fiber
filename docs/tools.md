@@ -1006,17 +1006,17 @@ Settled by
 
 A keeper is the process that runs a session's jobs, so they outlive a crash
 of the session. The tree stays a tree: the session, then its keeper, then
-its jobs and Fiber delegates. No hub is involved, so a headless run needs no
+its jobs and delegates. No hub is involved, so a headless run needs no
 hub.
 
 - **One keeper per session, started with its first command.** Any shell
   command can become a job ("Moving to the background") and moving never
   restarts it, so the keeper starts each of the session's shell commands
-  and Fiber delegates, and starts when the session first runs one. A session
+  and delegates, and starts when the session first runs one. A session
   that runs neither has no keeper. The keeper is the internal `fiber`
   command, started in a session of its own, so a signal to the session's
   process group does not reach it. It is the parent of every command's
-  process group and of every Fiber delegate, and it reaps them. It lives
+  process group and of every delegate, and it reaps them. It lives
   until its session shuts down or, after a crash, by the rules below.
 - **A command that is not yet a job ends with the crash.** When the session
   dies, the keeper stops each command still running as a tool call, as a
@@ -1027,11 +1027,14 @@ hub.
   (`docs/sandbox.md`, "Protected paths"). It restores nothing: after a crash,
   the first confined call that finds no active holder restores and reports,
   as after a dead session.
-- **The keeper is tiny.** It loads no provider, extension, MCP server or
-  model code. It runs processes, holds their pipes and terminals, writes
-  each job's output file, enforces each job's deadline and output cap, and
-  appends to the session log. Its memory has its own budget in
-  `docs/performance.md`.
+- **The keeper is tiny.** It loads no provider, MCP server or model code,
+  and no extension but a harness's. It runs processes, holds their pipes and
+  terminals, writes each job's output file, enforces each job's deadline and
+  output cap, and appends to the session log. A harness written in Lua is
+  loaded when the session starts its first delegate on that harness, and the
+  keeper calls only its `line` (`docs/delegates.md`, "Harness extensions"),
+  at about 120 to 150 KiB (`docs/extensions.md`, "Process extensions"). Its
+  memory has its own budget in `docs/performance.md`.
 - **While the session lives, the session decides.** The session asks its
   keeper to start, stop or write to a job, and the keeper reports each exit.
   The session writes every event, as it does without a keeper. The session
@@ -1042,8 +1045,8 @@ hub.
   shutdown, the keeper takes the session's `session.lock` and binds
   `run/<session_id>`, as any lock holder does (`docs/state.md`, "What each
   part holds"). While it holds the lock it appends to the session's log: a `job_completed`
-  for each job that ends, and for a Fiber delegate the `job_completed` its
-  exit gives. It writes no `output_tail`, `notice` or `changed_by`, because it
+  for each job that ends, for a Fiber delegate the `job_completed` its
+  exit gives, and for a delegate on another harness the rule below. It writes no `output_tail`, `notice` or `changed_by`, because it
   runs no hooks. It writes no file of its own, so the log stays the only
   state of record (`docs/events.md`, "The rule everything else follows
   from").
@@ -1075,10 +1078,18 @@ hub.
 - **A keeper that dies leaves its jobs unaccounted for.** If the keeper itself dies before
   a job's `job_completed` is written, the resumed session writes that job
   `orphaned` and touches no process.
-- **A delegate on another harness is not kept.** It stays a child of its
-  session, because reading its stream needs the harness's extension
-  ("Harness extensions", `docs/delegates.md`), which the keeper does not load.
-  A crash leaves it as `docs/invocation.md`, "Shutdown", says.
+- **A delegate on another harness is kept.** The keeper holds its pipes and
+  writes each line it prints to its output file, as for any job. While the
+  session lives, the session reads the lines as they arrive. After a crash,
+  a harness written in Lua has each line handed to its `line` in the keeper:
+  the keeper closes the program's input after the final answer, as the
+  session does, and writes the run's `usage_recorded` and its
+  `job_completed`. A harness that is a process extension is not loaded: the
+  keeper closes the program's input at the crash and writes its
+  `job_completed` from the exit, and the resumed session runs `line` over the
+  output file and writes the `usage_recorded`. Messages sent to the delegate
+  while its parent is gone wait for the parent, which stands in for it
+  (`docs/delegates.md`, "Delegates on another harness").
 
 ## Asking the person
 
