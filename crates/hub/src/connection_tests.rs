@@ -10,14 +10,14 @@
 )]
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -33,6 +33,30 @@ const WALL: u64 = 1_700_000_000_000;
 
 /// One named deadline per receive: the client never waits past it.
 const DEADLINE: Duration = Duration::from_secs(10);
+
+/// The overall bound on a drain to EOF: several reads' worth, so a loaded
+/// runner never trips it, yet a writer that never shuts down still fails.
+const DRAIN_BOUND: Duration = Duration::from_secs(60);
+
+/// Read to EOF, riding out the socket's per-read timeout (`WouldBlock`) and
+/// signals (`Interrupted`) until `DRAIN_BOUND` passes overall.
+fn drain_to_eof(mut read: impl Read) -> io::Result<Vec<u8>> {
+    let end = Instant::now() + DRAIN_BOUND;
+    let mut all = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        match read.read(&mut chunk) {
+            Ok(0) => return Ok(all),
+            Ok(n) => all.extend_from_slice(&chunk[..n]),
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {
+                if Instant::now() >= end {
+                    return Err(e);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
 
 struct Temp {
     dir: PathBuf,
@@ -681,8 +705,7 @@ fn a_written_but_undrained_answer_waits_out_the_bound() {
         Some("c_1")
     );
     // EOF after the answer: the writer shut its side down.
-    let mut rest = String::new();
-    read.read_to_string(&mut rest).unwrap();
+    let rest = drain_to_eof(&mut read).unwrap();
     assert!(rest.is_empty());
 }
 
@@ -739,8 +762,7 @@ fn an_unwritten_answer_with_a_drained_web_still_waits() {
     );
     // Drain the filler past the answer to EOF: the freed room unblocks
     // the writer, and the shutdown ends the read.
-    let mut all = Vec::new();
-    BufReader::new(peer).read_to_end(&mut all).unwrap();
+    let all = drain_to_eof(BufReader::new(peer)).unwrap();
     Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the wait ends after the drain");
     let text = String::from_utf8(all).unwrap();
     // The filler carries no newline, so the answer is not the last
