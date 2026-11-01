@@ -231,6 +231,7 @@ impl Rules {
             self.list.blur()
         };
         Frame {
+            joins: Vec::new(),
             title: "Rules".to_owned(),
             command: "/rules".to_owned(),
             rows: self

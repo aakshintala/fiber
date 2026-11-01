@@ -396,6 +396,7 @@ impl Tools {
             self.list
         };
         Frame {
+            joins: Vec::new(),
             title: "Tools".to_owned(),
             command: "/tools".to_owned(),
             rows,
