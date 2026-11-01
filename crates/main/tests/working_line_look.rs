@@ -193,12 +193,13 @@ fn working(grid: &Grid) -> Option<Working> {
     }
 }
 
-/// The last row holding the input box's stripe: the session box is the
-/// only striped surface left, the queue having none.
+/// The input row: the stripe's row holding the prompt. The stripe now
+/// runs down the slab past the rule and the status row, so the last
+/// striped row alone would land on the status row.
 fn input_row(grid: &Grid) -> Option<u16> {
     (0..grid.rows.len())
         .rev()
-        .find(|y| grid.rows[*y].contains('▌'))
+        .find(|y| grid.rows[*y].contains("▌ ›"))
         .map(at)
 }
 

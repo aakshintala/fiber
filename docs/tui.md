@@ -1124,7 +1124,11 @@ arrived after `sessions` was sent.
 ### Tool groups and the ledger
 
 - **A group is everything between two pieces of assistant text,** thinking
-  included. Collapsed, it is one line: what was done by kind ("Read 34 files,
+  included. A labelled rule inside the card also ends the group: a steering
+  message, the "you answered" rule, or a non-driver message. These land only
+  at a step boundary, so every call before the rule is in the group above it,
+  and the calls after it start a new group below it. The asking call and its
+  count stay in the group above its answers. Collapsed, it is one line: what was done by kind ("Read 34 files,
   searched 84 patterns, edited 24 files +175 −83, ran 9 commands"), how many
   times the model thought, and how long it took. While it runs, the line shows
   the calls in flight. A call the model is still emitting shows its raw
@@ -1255,8 +1259,8 @@ ledger, and when one of its calls asks the person.
 
 ### Thinking
 
-Thinking belongs to the group it starts, since a group runs from one reply to
-the next. The summary line counts it ("thought once") and, while it streams,
+Thinking belongs to the group it starts, since a group runs from one reply, or
+labelled rule, to the next. The summary line counts it ("thought once") and, while it streams,
 ends with "Thinking: <latest heading>". Thinking with no tool call before the
 next reply is one dim italic line, "+ Thought: <first heading> · 22s", or
 "Thinking: <latest heading>" while it streams, and clicking it shows the
@@ -2869,6 +2873,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `working_line` | The working line |
 | `steering_queue` | The queued steering messages |
 | `input_box` | The input box |
+| `input_status` | The input box status row |
 | `status_rows` | The input box's status line |
 | `view:<name>` | A swapped view, built in or one an extension adds |
 | `overlay:<name>` | An overlay an extension adds, drawn over the conversation |

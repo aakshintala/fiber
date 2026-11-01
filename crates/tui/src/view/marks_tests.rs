@@ -210,8 +210,8 @@ fn no_color_keeps_selection_and_matches_distinct() {
         }
     });
     assert!(crate::surface::boxed(), "the box switch is set");
-    let mut app = replied(40, 12, "alpha beta needle one needle two gamma");
-    let text = super::super::text(&draw(&app, 40, 12).0);
+    let mut app = replied(40, 14, "alpha beta needle one needle two gamma");
+    let text = super::super::text(&draw(&app, 40, 14).0);
     let row = u16::try_from(
         text.lines()
             .position(|row| row.contains("alpha"))
@@ -225,11 +225,11 @@ fn no_color_keeps_selection_and_matches_distinct() {
     )
     .expect("a column");
     assert!(matches!(
-        select(&mut app, 40, 12, (col, row), (col + 4, row)),
+        select(&mut app, 40, 14, (col, row), (col + 4, row)),
         Effect::Copy(_)
     ));
     search(&mut app, "needle");
-    let (mut buf, _) = draw(&app, 40, 12);
+    let (mut buf, _) = draw(&app, 40, 14);
     // The cells each mark carries, by its role marker before the paint.
     let at = |style: ratatui::style::Style| {
         let marked = style.bg.unwrap_or_default();

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/offer_tests.rs
-assertion_line: 137
 expression: "draw(&app, 40, 24).0"
 ---
  Offer  repository code      Esc returns
@@ -22,8 +21,8 @@ ce view without dropping any spaces
 
 
 
-
-
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ ›
+▌──────────────────────────────────────
+▌auto                ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
