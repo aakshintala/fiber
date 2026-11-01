@@ -1051,7 +1051,7 @@ hub.
   hours of the crash, the keeper stops every job and delegate still running,
   as a shutdown does, writes each one's `job_completed` as `failed` with code
   `keeper_timeout`, and exits. It exits sooner once its last job ends, and
-  never holds a job past that bound. `fiber stop --all` and `/close all` stop
+  never holds a job past that bound. `fiber stop` and `/close all` stop
   it sooner, the same way (`docs/invocation.md`; `docs/tui.md`).
 - **A resume takes the log back.** A resuming process finds the lock held
   and connects to `run/<session_id>`. The keeper answers with the session's
