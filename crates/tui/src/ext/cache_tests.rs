@@ -935,7 +935,6 @@ fn session_card<'a>(
             trigger_at: Some(400000),
         }),
         spend,
-        cache_expires: None,
         budget: Some(20.0),
         cache_expires: None,
         speed: Some(64),

@@ -139,9 +139,6 @@ pub struct SessionCard<'a> {
     pub thinking_now: bool,
     /// The latest request's context; none until a window and a fill.
     pub context: Option<SessionContext>,
-    /// When the prompt cache expires, as `ts`; none before the first
-    /// request.
-    pub cache_expires: Option<u64>,
     /// The spend: the status spend whole, or the attached fallback.
     pub spend: Option<Spend<'a>>,
     /// The latest preamble's budget, in US dollars; none when unset.
