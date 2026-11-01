@@ -1507,6 +1507,11 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 })
                 .expect("an action name below the first binding");
             let lands = at_row - 3;
+            assert!(
+                !pre.rows[lands].contains(&third),
+                "the wait would pass before the wheel moved: {:?}",
+                pre.rows
+            );
             run.write(&wheel_down(at));
             let post =
                 run.wait_screen("the wheeled keys", |grid| grid.rows[lands].contains(&third));
