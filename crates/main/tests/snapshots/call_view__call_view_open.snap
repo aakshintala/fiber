@@ -5,21 +5,21 @@ expression: "snapshot_text(&setup, &grid, &[])"
 ---
   Shell  awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf("%03d %220s", i, "x"); print "TA" "IL" }'            Esc returns
  ── the model's view resumes ──                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- 464                                                                                                                             [workspace]/w auto
- 465
- 466                                                                                                                             scripted/s.json
- 467                                                                                                                             ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
- 468                                                                                                                             handoff at 400.0k            —
- 469                                                                                                                             then a summary, fresh context
- 470                                                                                                                             tokens in / out          0 / 0
- 471                                                                                                                             cache hits                   —
- 472                                                                                                                             cost                   unknown
- 473                                                                                                                             cost on subscription     $0.00
- 474                                                                                                                             speed, last reply            —
- 475                                                                                                                             turns                        1
- 476                                                                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
- 477
- 478
+ 464                                                                                                                             Session status            auto
+ 465                                                                                                                             [workspace]/w
+ 466
+ 467                                                                                                                             scripted/s.json
+ 468                                                                                                                             ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
+ 469                                                                                                                             handoff at 400.0k            —
+ 470                                                                                                                             then a summary, fresh context
+ 471                                                                                                                             tokens in / out          0 / 0
+ 472                                                                                                                             cache hits                   —
+ 473                                                                                                                             cache resets in            59m
+ 474                                                                                                                             cost                   unknown
+ 475                                                                                                                             cost on subscription     $0.00
+ 476                                                                                                                             speed, last reply            —
+ 477                                                                                                                             turns                        1
+ 478                                                                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  479
  480
  481
