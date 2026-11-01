@@ -24,6 +24,11 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use super::reviewer_eval::{
+    Allowlist, FoldedFile, ForeignInput, MAX_SAMPLED, SampleOpts, ScrubCtx, Source, SourceKind,
+    drop_kind, emit_line, foreign_to_label_input, parse_claude_file, parse_line, parse_pi_file,
+    reviewed_items, sample, scan_line,
+};
 use contract::events::{
     AskStep, DecidedBy, Event, HandoffCompleted, Outcome, ReviewedCall, ReviewerUse,
     ToolCallRequested, ToolCallStarted,
@@ -83,7 +88,7 @@ pub(crate) fn parse_args(args: impl Iterator<Item = String>) -> Result<ReviewArg
             notes,
             keep_all,
         }),
-        None => Err("usage: review [--notes FILE] [--keep-all] <session directory>".to_owned()),
+        None => Err("usage: review [--notes FILE] [--keep-all] [--sample N] [--scrub [--as-home PATH --owner-name NAME --owner-email EMAIL] | --import-claude PATH | --import-pi PATH | --scan FILE] [<session directory>]".to_owned()),
     }
 }
 
@@ -1134,4 +1139,396 @@ fn describe(envelope: &contract::Envelope, position: usize) -> String {
         Some(seq) => format!("seq {}", seq.0),
         None => format!("line {}", position + 1),
     }
+}
+
+/// What sampling one session directory keeps: its label-input lines and
+/// the loud per-line drops.
+#[derive(Debug)]
+pub(crate) struct SampleReport {
+    /// One JSON label-input line per replayable call, in request order.
+    pub lines: Vec<String>,
+    /// One `DROP <class> id=<id>` per dropped raw entry.
+    pub dropped: Vec<String>,
+    /// One `DROP tool=<tool> count=<n>` per unsupported native tool.
+    pub unsupported: Vec<String>,
+}
+
+/// The final-set scan over the committed file: the clean lines and the
+/// loud per-line drops.
+#[derive(Debug)]
+pub(crate) struct ScanReport {
+    /// The committed lines with no matching class, in file order.
+    pub clean: Vec<String>,
+    /// One `SCAN-DROP <class> id=<id>` per dropped line.
+    pub dropped: Vec<String>,
+}
+
+/// Runs the `--scan FILE` final-set scan: the same closed matcher list
+/// byte-for-byte over every committed line as committed, including seeded
+/// lines and substituted placeholders. Clean lines go to the output, which
+/// is the committed file; each matching call is dropped from that output
+/// and loudly reported as `SCAN-DROP <class> id=<id>`.
+pub(crate) fn run_scan(
+    path: &Path,
+    output: impl Write + Send + 'static,
+    errors: impl Write + Send + 'static,
+) -> Result<ScanReport, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("review: cannot read {}: {error}", path.display()))?;
+    let mut report = ScanReport {
+        clean: Vec::new(),
+        dropped: Vec::new(),
+    };
+    let mut out = output;
+    let mut err = errors;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let id = parse_line(line)
+            .map(|entry| entry.id)
+            .map_err(|problem| format!("review: {}: {problem}", path.display()))?;
+        match scan_line(line) {
+            None => {
+                writeln!(out, "{line}")
+                    .map_err(|error| format!("review: cannot write its output: {error}"))?;
+                report.clean.push(line.to_owned());
+            }
+            Some(class) => {
+                let dropped = format!("SCAN-DROP {class} id={id}");
+                writeln!(err, "{dropped}")
+                    .map_err(|error| format!("review: cannot write its output: {error}"))?;
+                report.dropped.push(dropped);
+            }
+        }
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    err.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(report)
+}
+
+/// Reads one importer path: a native session file, or every `.jsonl` file
+/// in a native session directory in file-name order, never a hash-map
+/// iteration.
+fn read_importer_files(path: &Path) -> Result<Vec<(String, String)>, String> {
+    if path.is_dir() {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(path)
+            .map_err(|error| format!("review: cannot read {}: {error}", path.display()))?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "jsonl")
+            })
+            .collect();
+        files.sort();
+        files
+            .iter()
+            .map(|file| {
+                let text = std::fs::read_to_string(file)
+                    .map_err(|error| format!("review: cannot read {}: {error}", file.display()))?;
+                let session = file
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                Ok((session, text))
+            })
+            .collect()
+    } else {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| format!("review: cannot read {}: {error}", path.display()))?;
+        let session = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok(vec![(session, text)])
+    }
+}
+
+/// Whether `path` exists for a write target at import time: present when
+/// the target stats, absent on `NotFound`, and unstatable otherwise, as
+/// the write tool's own reversibility reads it.
+fn exists_at_import(path: &Path) -> Option<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Some(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    }
+}
+
+/// The scrub context the flags name: explicit values only, never the
+/// environment. Any non-empty value scrubs, with or without `--scrub`.
+fn scrub_ctx(opts: &SampleOpts) -> ScrubCtx {
+    ScrubCtx {
+        home: opts.home.clone().unwrap_or_default(),
+        owner_name: opts.owner_name.clone().unwrap_or_default(),
+        owner_email: opts.owner_email.clone().unwrap_or_default(),
+    }
+}
+
+/// The raw workspaces of one history chain's segments, oldest first.
+fn segment_workspaces(dir: &Path) -> Result<Vec<String>, String> {
+    let segments = log::history(dir)
+        .map_err(|error| format!("review: cannot read session {}: {error}", dir.display()))?;
+    let mut workspaces = Vec::new();
+    for segment in &segments {
+        let lines = segment.lines(0).map_err(|error| {
+            format!(
+                "review: cannot read session {}: {error}",
+                segment.dir.display()
+            )
+        })?;
+        let Some(first) = lines.into_iter().next() else {
+            return Err(format!(
+                "review: {} holds no session: the log is empty",
+                segment.dir.display()
+            ));
+        };
+        let event = Event::from_envelope(&first).map_err(|error| {
+            format!(
+                "review: {} holds no session: its session_started does not parse: {error}",
+                segment.dir.display()
+            )
+        })?;
+        if let Some(Event::SessionStarted(started)) = event {
+            workspaces.push(started.workspace);
+        } else {
+            return Err(format!(
+                "review: {} holds no session: the log does not begin with session_started",
+                segment.dir.display()
+            ));
+        }
+    }
+    Ok(workspaces)
+}
+
+/// What one emission fold reads: the session, the index, and the running
+/// snapshots.
+struct EmitCtx<'a> {
+    /// The session directory, naming diagnostics.
+    dir: &'a Path,
+    /// The session's directory name, stored as the entry source.
+    session: &'a str,
+    /// The source workspace label.
+    workspace: &'a str,
+    /// The scrub context.
+    ctx: &'a ScrubCtx,
+    /// Every declaration and decision attribution.
+    index: &'a CallIndex,
+    /// The source fold: what the reviewer is shown, line by line.
+    reviewed: &'a [Reviewed],
+    /// The added folders in first-event order as of the current cut.
+    added_folders: &'a [String],
+}
+
+/// Emits one session directory's label-input lines: one line per replayable
+/// call carrying the full `reviewed[]` snapshot plus tool, arguments,
+/// declared effects, workspace, added folders and source. A reviewed call
+/// without its start or its denial carrying its declared effects is
+/// unreplayable and excluded, while the denial-carries-effects case stays
+/// replayable through `started_from` and is kept. Drop checks run on the
+/// raw entry before placeholder substitution.
+fn emit_sampled(
+    dir: &Path,
+    ctx: &ScrubCtx,
+    lines: &mut Vec<String>,
+    dropped: &mut Vec<String>,
+) -> Result<(), String> {
+    let (workspace, chain) = load_chain(dir)?;
+    let index = Driver::index_chain(&chain)?;
+    let session = dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut reviewed: Vec<Reviewed> = Vec::new();
+    let mut added_folders: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut summary = false;
+    for (position, item) in chain.iter().enumerate() {
+        let envelope = &item.envelope;
+        let event = Event::from_envelope(envelope).map_err(|error| {
+            format!(
+                "review: {} {}: a {} payload that does not parse: {error}",
+                item.dir.display(),
+                describe(envelope, position),
+                envelope.kind,
+            )
+        })?;
+        let Some(event) = event else {
+            continue;
+        };
+        if r#loop::summary_skips(&mut summary, &event) {
+            continue;
+        }
+        if let Event::DirectoryAdded(added) = &event {
+            added_folders.push(added.path.clone());
+        }
+        render_reviewed(
+            &mut reviewed,
+            &event,
+            envelope.action_id.as_ref(),
+            envelope.seq,
+        );
+        if let Event::ToolCallRequested(call) = event
+            && call.ran_by.is_none()
+            && call.provider_item.is_none()
+            && let Some(action) = envelope.action_id.clone()
+            && seen.insert(action.0.clone())
+        {
+            let emit = EmitCtx {
+                dir,
+                session: &session,
+                workspace: &workspace,
+                ctx,
+                index: &index,
+                reviewed: &reviewed,
+                added_folders: &added_folders,
+            };
+            emit_sampled_call(&emit, envelope, &action, &call, lines, dropped)?;
+        }
+    }
+    Ok(())
+}
+
+/// Emits one requested call's label-input line, or nothing when the call
+/// is not a review request or is unreplayable.
+fn emit_sampled_call(
+    emit: &EmitCtx<'_>,
+    envelope: &contract::Envelope,
+    id: &ActionId,
+    call: &ToolCallRequested,
+    lines: &mut Vec<String>,
+    dropped: &mut Vec<String>,
+) -> Result<(), String> {
+    let judged = emit.index.review.contains(&id.0);
+    if emit.index.nonreview.contains(&id.0) && !judged {
+        return Ok(());
+    }
+    let Some(indexed) = emit.index.calls.get(&id.0) else {
+        return Ok(());
+    };
+    let Some(started) = indexed.started.clone() else {
+        return Ok(());
+    };
+    let arguments = match started.arguments.clone() {
+        Some(rewritten) => Value::Object(rewritten),
+        None => match call.arguments.clone() {
+            Value::Object(arguments) => Value::Object(arguments),
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Array(_) => Value::Object(Map::new()),
+        },
+    };
+    let paths = started.declared.paths.clone().unwrap_or_default();
+    if let Some(kind) = drop_kind(&arguments, &paths) {
+        dropped.push(format!("DROP {} id={}", kind.name(), id.0));
+        return Ok(());
+    }
+    let snapshot = reviewed_items(emit.reviewed);
+    let entry = foreign_to_label_input(ForeignInput {
+        id: &id.0,
+        tool: &call.name,
+        arguments: &arguments,
+        declared: &started.declared,
+        hosts: None,
+        reviewed: snapshot,
+        workspace: emit.workspace,
+        added_folders: emit.added_folders,
+        source: Source {
+            kind: SourceKind::Sampled,
+            session: emit.session.to_owned(),
+            seq: envelope.seq.map(|seq| seq.0),
+        },
+        ctx: emit.ctx,
+    });
+    let line = emit_line(&entry).map_err(|error| {
+        format!(
+            "review: {}: cannot print call {}: {error}",
+            emit.dir.display(),
+            id.0
+        )
+    })?;
+    lines.push(line);
+    Ok(())
+}
+
+/// Runs the label-input emission: the session directory's sampled lines
+/// plus the importer mode over native session files, capped to the first
+/// entries in emission order. Every history segment's workspace passes the
+/// closed allowlist before anything is emitted.
+pub(crate) fn run_sampled(
+    dir: Option<&Path>,
+    opts: &SampleOpts,
+    output: impl Write + Send + 'static,
+) -> Result<SampleReport, String> {
+    let ctx = scrub_ctx(opts);
+    let mut entries: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut unsupported: Vec<String> = Vec::new();
+    let mut out = output;
+    if let Some(dir) = dir {
+        for workspace in segment_workspaces(dir)? {
+            Allowlist::check_chain(std::slice::from_ref(&workspace))?;
+        }
+        emit_sampled(dir, &ctx, &mut entries, &mut dropped)?;
+    }
+    for path in &opts.import_claude {
+        let path = Path::new(path);
+        for (session, text) in read_importer_files(path)? {
+            let name = path.display().to_string();
+            let folded = parse_claude_file(&text, &name, &session, &ctx, &exists_at_import)
+                .map_err(|problem| format!("review: {problem}"))?;
+            Allowlist::check_chain(std::slice::from_ref(&folded.workspace_raw))?;
+            push_foreign(&folded, &mut entries, &mut dropped, &mut unsupported)?;
+        }
+    }
+    for path in &opts.import_pi {
+        let path = Path::new(path);
+        for (session, text) in read_importer_files(path)? {
+            let name = path.display().to_string();
+            let folded = parse_pi_file(&text, &name, &session, &ctx, &exists_at_import)
+                .map_err(|problem| format!("review: {problem}"))?;
+            Allowlist::check_chain(std::slice::from_ref(&folded.workspace_raw))?;
+            push_foreign(&folded, &mut entries, &mut dropped, &mut unsupported)?;
+        }
+    }
+    let keep = opts.sample.unwrap_or(MAX_SAMPLED).min(MAX_SAMPLED);
+    let mut entries = sample(entries);
+    entries.truncate(keep);
+    for line in &entries {
+        writeln!(out, "{line}")
+            .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    }
+    out.flush()
+        .map_err(|error| format!("review: cannot write its output: {error}"))?;
+    Ok(SampleReport {
+        lines: entries,
+        dropped,
+        unsupported,
+    })
+}
+
+/// Pushes one folded native file's entries, dropping entries the closed
+/// classes match and counting unsupported tools.
+fn push_foreign(
+    folded: &FoldedFile,
+    entries: &mut Vec<String>,
+    dropped: &mut Vec<String>,
+    unsupported: &mut Vec<String>,
+) -> Result<(), String> {
+    for (tool, count) in &folded.dropped {
+        unsupported.push(format!("DROP tool={tool} count={count}"));
+    }
+    for entry in &folded.entries {
+        let paths = entry.declared.paths.clone().unwrap_or_default();
+        if let Some(kind) = drop_kind(&entry.arguments, &paths) {
+            dropped.push(format!("DROP {} id={}", kind.name(), entry.id));
+            continue;
+        }
+        entries.push(emit_line(entry)?);
+    }
+    Ok(())
 }
