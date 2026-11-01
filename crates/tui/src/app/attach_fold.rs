@@ -32,27 +32,57 @@ impl App {
     /// candidate; only the newest candidate is installed. It runs only
     /// while the tail is reading; the post-frame count phase never
     /// rebuilds the displayed preview.
-    fn fold_preview(&mut self) {
+    fn fold_preview(&mut self, bounded: bool) {
         let lines = if let Overlay::Reading(tail) = &self.overlay {
             tail.turn_lines()
         } else {
             return;
         };
-        let mut fresh = self.attached_screen().pages().fresh();
-        fresh.set_image_ids(self.images.id_allocator.clone());
-        let mut busy = None;
-        if let Some(lines) = lines {
-            // The candidate is not drawn until installation, so its
-            // open-page recount waits for the batch's end and counts once.
-            fresh.hold();
-            for line in lines {
-                let applied = fresh.apply(line);
-                if applied.busy.is_some() {
-                    busy = applied.busy;
+        let (fresh, busy) = if let Some(lines) = lines {
+            let height = self.conversation_height();
+            let own_session = bounded
+                && lines.first().is_some_and(|first| {
+                    lines.iter().all(|line| line.session_id == first.session_id)
+                });
+            // Whole turns fold from their start; older own-session turns
+            // are added only when the newest turns do not fill the view.
+            let mut start = if own_session {
+                lines
+                    .iter()
+                    .rposition(|line| line.kind == "turn_started")
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            loop {
+                let mut fresh = self.attached_screen().pages().fresh();
+                fresh.set_image_ids(self.images.id_allocator.clone());
+                let mut busy = None;
+                // The candidate is not drawn until installation, so its
+                // open-page recount waits for the batch's end and counts once.
+                fresh.hold();
+                for line in lines.get(start..).unwrap_or(&[]) {
+                    let applied = fresh.apply(line);
+                    if applied.busy.is_some() {
+                        busy = applied.busy;
+                    }
                 }
+                fresh.flush();
+                if !own_session || fresh.index().total() >= height || start == 0 {
+                    break (fresh, busy);
+                }
+                start = lines
+                    .get(..start)
+                    .unwrap_or(&[])
+                    .iter()
+                    .rposition(|line| line.kind == "turn_started")
+                    .unwrap_or(0);
             }
-            fresh.flush();
-        }
+        } else {
+            let mut fresh = self.attached_screen().pages().fresh();
+            fresh.set_image_ids(self.images.id_allocator.clone());
+            (fresh, None)
+        };
         self.preview = Some(overlay::Preview { pages: fresh, busy });
     }
 
@@ -65,7 +95,7 @@ impl App {
     /// the filled run plus each seam crossing.
     pub(crate) fn tail_next(&mut self) -> Option<Value> {
         if self.preview.is_none() {
-            self.fold_preview();
+            self.fold_preview(true);
         }
         let Overlay::Reading(tail) = &self.overlay else {
             return None;
@@ -110,7 +140,7 @@ impl App {
                 return;
             }
         }
-        self.fold_preview();
+        self.fold_preview(true);
     }
 
     /// Ends one tail read over its cursor: failed with the notice,
@@ -134,6 +164,10 @@ impl App {
             None
         };
         Self::end_read(tail, notice, &mut self.notices);
+        if notice.is_some() {
+            self.preview = None;
+            self.fold_preview(false);
+        }
     }
 
     /// Installs the newest candidate built while reading the open's
@@ -145,7 +179,7 @@ impl App {
     /// preview.
     pub(crate) fn install_tail(&mut self) {
         if self.preview.is_none() {
-            self.fold_preview();
+            self.fold_preview(true);
         }
         let Overlay::Reading(tail) = std::mem::replace(&mut self.overlay, Overlay::None) else {
             return;
