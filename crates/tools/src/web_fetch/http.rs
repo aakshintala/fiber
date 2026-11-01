@@ -251,6 +251,47 @@ pub(super) struct Observe {
     pub(super) clock: Arc<dyn Clock>,
     #[cfg(test)]
     pub(super) headers_received: Option<std::sync::mpsc::Sender<()>>,
+    /// Reports each body read's running total to the test waiting on it.
+    /// `None` outside tests, like `headers_received`.
+    #[cfg(test)]
+    pub(super) body_progress: Option<std::sync::mpsc::Sender<u64>>,
+}
+
+/// Counts the bytes read through the body and reports each read's running
+/// total to the test's progress signal. Test setup only, like
+/// `headers_received`: a dropped receiver never fails the fetch, and the
+/// byte count the `web_fetch` line logs is unchanged.
+#[cfg(test)]
+struct Progress<R> {
+    counted: Counted<R>,
+    signal: Option<std::sync::mpsc::Sender<u64>>,
+}
+
+#[cfg(test)]
+impl<R> Progress<R> {
+    fn new(counted: Counted<R>, signal: Option<std::sync::mpsc::Sender<u64>>) -> Self {
+        Self { counted, signal }
+    }
+
+    fn consumed(&self) -> u64 {
+        self.counted.consumed()
+    }
+}
+
+#[cfg(test)]
+impl<R: Read> Read for Progress<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.counted.read(buf)?;
+        if let Some(signal) = &self.signal {
+            match signal.send(self.counted.consumed()) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::SendError(_)) => {
+                    // The test may stop listening; its signal must not fail the fetch.
+                }
+            }
+        }
+        Ok(read)
+    }
 }
 
 impl Hop {
@@ -320,7 +361,17 @@ impl Hop {
         };
         let status = head.status;
         let mut reader = response.into_body().into_reader();
-        let mut body = Counted::new(&mut reader);
+        let counted = Counted::new(&mut reader);
+        #[cfg(test)]
+        let mut body = Progress::new(
+            counted,
+            request
+                .observe
+                .as_ref()
+                .and_then(|observe| observe.body_progress.clone()),
+        );
+        #[cfg(not(test))]
+        let mut body = counted;
         let result = read(head, &mut body);
         if let (Some(observe), Some(start), Some(headers)) =
             (request.observe.as_ref(), start, headers)
