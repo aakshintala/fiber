@@ -29,7 +29,7 @@ use crate::swapped::{Frame, List, Spot};
 use crate::tools_view::Tools;
 
 /// What a view says when the terminal was given no seam.
-const UNAVAILABLE: &str = "Not available in this terminal.";
+pub(in crate::app) const UNAVAILABLE: &str = "Not available in this terminal.";
 
 /// A configuration view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

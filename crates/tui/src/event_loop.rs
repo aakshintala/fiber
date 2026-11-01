@@ -1749,7 +1749,15 @@ impl<B: Backend> Loop<B> {
             // closing nothing first, so live sessions keep their
             // resume lines.
             if let editor::Outcome::Done(done) = result {
-                self.app.config_file_closed(done);
+                if line.is_some() {
+                    // A Changed files row or diff: the view reads the
+                    // file's diff and figures again, and the loop sends
+                    // both request lines.
+                    let lines = self.app.changed_file_closed(&path, done);
+                    self.send_inner(&lines);
+                } else {
+                    self.app.config_file_closed(done);
+                }
             }
         }
         code

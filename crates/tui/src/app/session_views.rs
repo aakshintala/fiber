@@ -3,6 +3,8 @@
 //! These views fold the stream the terminal already reads and fetch a file's
 //! diff only when the person chooses it.
 
+use std::path::PathBuf;
+
 use super::call_view::CallView;
 use super::{App, Effect};
 use crate::changed_files_view::{self, Diff};
@@ -282,6 +284,11 @@ impl App {
             return Some(Effect::None);
         }
         if let Some(Open::Files(list)) = self.session_views.open.as_ref() {
+            if *key == Key::CtrlG {
+                // Ctrl+G opens the chosen file in the editor at its first
+                // change, through the same path as every other view.
+                return Some(self.open_in_editor());
+            }
             if self.session_views.diff.is_some() {
                 self.session_views.diff_list.key(key, rows, height);
             } else if *key == Key::Enter {
@@ -634,6 +641,72 @@ impl App {
         }
     }
 
+    /// Whether the Changed files list or diff is open.
+    pub(in crate::app) fn changed_files_open(&self) -> bool {
+        matches!(self.session_views.open, Some(Open::Files(_)))
+    }
+
+    /// The Changed files file Ctrl+G opens, with its first line: the
+    /// selected row at line 1 from the list, the shown file at its first
+    /// hunk's new-side start from the diff, or line 1 with no hunk. None
+    /// with no Files view open, no selected row, or no local workspace: a
+    /// remote terminal's files live on the hub, past no hub operation.
+    pub(in crate::app) fn changed_file_for_editor(&self) -> Option<(PathBuf, u64)> {
+        let Some(Open::Files(list)) = self.session_views.open.as_ref() else {
+            return None;
+        };
+        let root = self.workspace_root()?;
+        match self.session_views.diff.as_ref() {
+            Some((path, Diff::Lines { lines, .. })) => {
+                Some((root.join(path), changed_files_view::first_hunk_line(lines)))
+            }
+            Some((path, _)) => Some((root.join(path), 1)),
+            None => {
+                let displayed = self.displayed_figures();
+                let (path, _, _) = changed_files_view::ranked(&displayed.figures)
+                    .get(list.selected())
+                    .copied()?;
+                Some((root.join(path), 1))
+            }
+        }
+    }
+
+    /// The Changed files editor returned: the view reads the file's diff
+    /// again, so its hunk shows the edit, and re-reads the numstat
+    /// figures, so its row's counts show it. Returns both request lines
+    /// to send, the diff line then the figures line. An error is the
+    /// notice, and the re-read still runs while the view is open; with
+    /// the view closed, or a path outside the workspace, nothing is sent.
+    pub(crate) fn changed_file_closed(
+        &mut self,
+        path: &std::path::Path,
+        result: Result<(), String>,
+    ) -> Vec<String> {
+        if let Err(message) = result {
+            self.push_notice("io_failed", message);
+        }
+        if !self.changed_files_open() {
+            return Vec::new();
+        }
+        let Some(root) = self.workspace_root().map(|root| root.to_path_buf()) else {
+            return Vec::new();
+        };
+        let Ok(relative) = path.strip_prefix(&root) else {
+            return Vec::new();
+        };
+        let Some(path) = relative.to_str() else {
+            return Vec::new();
+        };
+        let mut lines = Vec::new();
+        if let Effect::Send(mut diff) = self.send_diff_request(path) {
+            lines.append(&mut diff);
+        }
+        if let Effect::Send(mut figures) = self.send_figures_request() {
+            lines.append(&mut figures);
+        }
+        lines
+    }
+
     /// Starts the selected file's diff request, or leaves an empty list when
     /// `rank` no longer names a file in the displayed figures ordering.
     fn session_view_file_rank(&mut self, rank: usize) -> Effect {
@@ -645,9 +718,17 @@ impl App {
             return Effect::None;
         };
         let path = path.to_owned();
+        self.send_diff_request(&path)
+    }
+
+    /// Starts the diff request for `path`: the answering line fills the
+    /// shown diff, a rejection its message, and while disconnected the
+    /// diff reads that the terminal is not connected.
+    fn send_diff_request(&mut self, path: &str) -> Effect {
         if !self.connected() {
             self.session_views.request = None;
-            self.session_views.diff = Some((path, Diff::Failed("Not connected.".to_owned())));
+            self.session_views.diff =
+                Some((path.to_owned(), Diff::Failed("Not connected.".to_owned())));
             return Effect::None;
         }
         let Some(session) = self.session().cloned() else {
@@ -657,12 +738,12 @@ impl App {
         let line = shell::command(
             &id,
             &session,
-            &changed_files_view::diff_command(&path),
+            &changed_files_view::diff_command(path),
             false,
         )
         .to_string();
-        self.session_views.request = Some((id, path.clone()));
-        self.session_views.diff = Some((path, Diff::Reading));
+        self.session_views.request = Some((id, path.to_owned()));
+        self.session_views.diff = Some((path.to_owned(), Diff::Reading));
         self.session_views.diff_list = List::default();
         Effect::Send(vec![line])
     }

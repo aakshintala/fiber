@@ -1620,6 +1620,109 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
     crate::term::restore();
 }
 
+/// A clean file-editor return with no line rereads the open config view:
+/// the no-line close stays on the config path. The instant editor needs
+/// the terminal setup the handover suspends, as above. Each test runs in
+/// its own process.
+#[test]
+fn a_clean_file_editor_return_without_a_line_rereads_the_config_view() {
+    let pair = open();
+    // The watcher drains what the terminal is sent, so no write blocks.
+    let _frames = watch(&pair.main, Vec::new());
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.var = Box::new(|name| (name == "EDITOR").then(|| ":".to_owned()));
+    lp.app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]));
+    lp.app
+        .set_configure(Some(seam.clone() as std::sync::Arc<dyn crate::Configure>));
+    let now = contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref());
+    for ch in "/settings".chars() {
+        lp.app.on_key(crate::keys::Key::Char(ch), now);
+    }
+    lp.app.on_key(crate::keys::Key::Enter, now);
+    assert!(lp.app.config_view_open());
+    let before = seam.reads().len();
+    assert_eq!(
+        lp.open_file(crate::editor::OpenFile {
+            path: PathBuf::from("/w/settings.json"),
+            line: None,
+        }),
+        None
+    );
+    assert_eq!(lp.app.notices.newest(), None);
+    assert_eq!(seam.reads().len(), before + 1);
+    crate::term::restore();
+}
+
+/// A Changed-files editor return while offline marks the diff not
+/// connected: the line close re-sends the diff request, whose offline
+/// fold is the notice text, while the figures request sends nothing.
+#[test]
+fn a_changed_file_return_while_offline_marks_the_diff_not_connected() {
+    let pair = open();
+    // The watcher drains what the terminal is sent, so no write blocks.
+    let _frames = watch(&pair.main, Vec::new());
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.var = Box::new(|name| (name == "EDITOR").then(|| ":".to_owned()));
+    lp.app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        panel_cards: vec!["changed_files".to_owned()],
+        ..Default::default()
+    });
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    lp.app.on_line(crate::app::testkit::session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "tool_call_completed",
+        serde_json::json!({"status": "completed", "content": [],
+            "changes": [{"path": "src/file-0.rs", "added": 1, "removed": 0}]}),
+        Some("a_1"),
+    ));
+    assert_eq!(
+        lp.app
+            .open_session_view(crate::app::SessionView::ChangedFiles),
+        crate::app::Effect::None
+    );
+    assert!(lp.app.session_view_open());
+    assert_eq!(
+        lp.open_file(crate::editor::OpenFile {
+            path: PathBuf::from("/w/src/file-0.rs"),
+            line: Some(1),
+        }),
+        None
+    );
+    assert_eq!(lp.app.notices.newest(), None);
+    let frame = lp.app.session_view_screen(0).expect("changed-files frame");
+    let text: String = frame
+        .rows
+        .iter()
+        .flat_map(|row| row.iter().map(|cell| cell.0.as_str()))
+        .collect();
+    assert!(text.contains("Not connected."), "{text:?}");
+    crate::term::restore();
+}
+
 #[test]
 fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);

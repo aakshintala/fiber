@@ -15,7 +15,9 @@ use contract::{ActionId, Envelope, SCHEMA_VERSION, SessionId};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::{Diff, answer, diff_command, frame, numstat_command, ranked, resolve_figures};
+use super::{
+    Diff, answer, diff_command, first_hunk_line, frame, numstat_command, ranked, resolve_figures,
+};
 use crate::app::{App, Effect, SessionView};
 use crate::keys::Key;
 use crate::link::Line;
@@ -719,4 +721,46 @@ fn resolve_figures_matches_git_s_relative_paths_against_absolute_card_paths() {
     let displayed = resolve_figures(&card, Some("7\t1\ta.rs\n"), &lines, Some(dir.path()));
     assert_eq!(displayed.figures.get(absolute.as_str()), Some(&(7, 1)));
     assert!(displayed.untracked.is_empty());
+}
+
+#[test]
+fn first_hunk_line_reads_the_first_hunks_new_side_start() {
+    let lines = [
+        "diff --git a/f.txt b/f.txt",
+        "@@ -1,3 +10,4 @@ fn",
+        " old",
+        "@@ -8,2 +20,3 @@ fn",
+        " old",
+    ]
+    .map(str::to_owned);
+    assert_eq!(first_hunk_line(&lines), 10);
+}
+
+#[test]
+fn first_hunk_line_clamps_a_zero_start_to_one() {
+    for (header, want) in [
+        ("@@ -1,1 +0,0 @@", 1),
+        ("@@ -1 +1 @@", 1),
+        ("@@ -1,3 +2,4 @@", 2),
+    ] {
+        assert_eq!(first_hunk_line(&[header.to_owned()]), want, "{header}");
+    }
+}
+
+#[test]
+fn first_hunk_line_skips_unparsable_headers() {
+    let lines = ["@@ nope", "@@ -1,3 +x @@", "@@ -4,2 +7 @@"].map(str::to_owned);
+    assert_eq!(first_hunk_line(&lines), 7);
+}
+
+#[test]
+fn first_hunk_line_is_one_without_a_header() {
+    let empty: Vec<String> = Vec::new();
+    for lines in [
+        empty,
+        vec!["diff line".to_owned()],
+        vec!["Binary files a/f.txt and b/f.txt differ".to_owned()],
+    ] {
+        assert_eq!(first_hunk_line(&lines), 1);
+    }
 }
