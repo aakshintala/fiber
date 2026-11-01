@@ -1,0 +1,61 @@
+ Stress test iteration 1/30 (00:00:00 elapsed so far, 30 iterations remaining)
+ Stress test [   0.019s] iteration 1/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 2/30 (00:00:00 elapsed so far, 29 iterations remaining)
+ Stress test [   0.018s] iteration 2/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 3/30 (00:00:00 elapsed so far, 28 iterations remaining)
+ Stress test [   0.018s] iteration 3/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 4/30 (00:00:00 elapsed so far, 27 iterations remaining)
+ Stress test [   0.019s] iteration 4/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 5/30 (00:00:00 elapsed so far, 26 iterations remaining)
+ Stress test [   0.018s] iteration 5/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 6/30 (00:00:00 elapsed so far, 25 iterations remaining)
+ Stress test [   0.017s] iteration 6/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 7/30 (00:00:00 elapsed so far, 24 iterations remaining)
+ Stress test [   0.018s] iteration 7/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 8/30 (00:00:00 elapsed so far, 23 iterations remaining)
+ Stress test [   0.017s] iteration 8/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 9/30 (00:00:00 elapsed so far, 22 iterations remaining)
+ Stress test [   0.018s] iteration 9/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 10/30 (00:00:00 elapsed so far, 21 iterations remaining)
+ Stress test [   0.017s] iteration 10/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 11/30 (00:00:00 elapsed so far, 20 iterations remaining)
+ Stress test [   0.020s] iteration 11/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 12/30 (00:00:00 elapsed so far, 19 iterations remaining)
+ Stress test [   0.017s] iteration 12/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 13/30 (00:00:00 elapsed so far, 18 iterations remaining)
+ Stress test [   0.017s] iteration 13/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 14/30 (00:00:00 elapsed so far, 17 iterations remaining)
+ Stress test [   0.019s] iteration 14/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 15/30 (00:00:00 elapsed so far, 16 iterations remaining)
+ Stress test [   0.018s] iteration 15/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 16/30 (00:00:00 elapsed so far, 15 iterations remaining)
+ Stress test [   0.017s] iteration 16/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 17/30 (00:00:00 elapsed so far, 14 iterations remaining)
+ Stress test [   0.017s] iteration 17/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 18/30 (00:00:00 elapsed so far, 13 iterations remaining)
+ Stress test [   0.017s] iteration 18/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 19/30 (00:00:00 elapsed so far, 12 iterations remaining)
+ Stress test [   0.018s] iteration 19/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 20/30 (00:00:00 elapsed so far, 11 iterations remaining)
+ Stress test [   0.018s] iteration 20/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 21/30 (00:00:00 elapsed so far, 10 iterations remaining)
+ Stress test [   0.017s] iteration 21/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 22/30 (00:00:00 elapsed so far, 9 iterations remaining)
+ Stress test [   0.017s] iteration 22/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 23/30 (00:00:00 elapsed so far, 8 iterations remaining)
+ Stress test [   0.019s] iteration 23/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 24/30 (00:00:00 elapsed so far, 7 iterations remaining)
+ Stress test [   0.017s] iteration 24/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 25/30 (00:00:00 elapsed so far, 6 iterations remaining)
+ Stress test [   0.018s] iteration 25/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 26/30 (00:00:00 elapsed so far, 5 iterations remaining)
+ Stress test [   0.018s] iteration 26/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 27/30 (00:00:00 elapsed so far, 4 iterations remaining)
+ Stress test [   0.016s] iteration 27/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 28/30 (00:00:00 elapsed so far, 3 iterations remaining)
+ Stress test [   0.017s] iteration 28/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 29/30 (00:00:00 elapsed so far, 2 iterations remaining)
+ Stress test [   0.018s] iteration 29/30: 8 tests run: 8 passed, 1136 skipped
+ Stress test iteration 30/30 (00:00:00 elapsed so far, 1 iteration remaining)
+ Stress test [   0.016s] iteration 30/30: 8 tests run: 8 passed, 1136 skipped
+     Summary [   0.531s] 30/30 stress run iterations: 30 passed
