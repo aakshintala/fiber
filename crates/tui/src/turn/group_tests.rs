@@ -118,6 +118,390 @@ fn doc_group() -> Group {
     }
 }
 
+/// An inner call points at its outer call, so the summary can skip
+/// the outer.
+fn inner(mut call: Call, outer: &str) -> Call {
+    call.outer_action_id = Some(contract::ActionId(outer.to_owned()));
+    call
+}
+
+/// An outer with inner calls counts as no kind of its own: the
+/// summary reads what the inners did, and a failed inner edit keeps
+/// its kind and its totals (`docs/tui.md:1136-1141`).
+#[test]
+fn kinds_skips_outers_with_inners() {
+    let outer = Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "codemode".to_owned(),
+        arguments: json!({"source": "print('hi')"}),
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    let failed_edit = with_headline(
+        Call {
+            status: Some(CallStatus::Failed),
+            ..edit_call(5, "g.rs", 5, 2)
+        },
+        "nonzero_exit: exit 101",
+    );
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                outer,
+                inner(read_call(2, "f.rs"), "a_1"),
+                inner(edit_call(3, "e.rs", 3, 1), "a_1"),
+                inner(shell_call(4, "cargo test", Some(0), 7, "ok"), "a_1"),
+                inner(failed_edit, "a_1"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let (rows, _) = summary_row(&group, false, 60);
+    // Count per `docs/tui.md:1136-1141`: the summary counts inner calls by
+    // kind; an outer with inners never counts as a kind of its own.
+    assert_eq!(rows.len(), 1);
+    // The whole line, so an outer counted as a kind of its own fails
+    // the test: no trailing "called 1 tool".
+    let text = rows[0].0.to_string();
+    let left = "● Read 1 file, edited 2 files +8 −3, ran 1 command";
+    let right = "0s ▸";
+    let filler = " ".repeat(60 - crate::format::width(left) - crate::format::width(right));
+    assert_eq!(text, format!("{left}{filler}{right}"));
+}
+
+/// A completed `codemode` outer with the script `source`.
+fn outer_call(id: usize, action: &str, source: &str) -> Call {
+    Call {
+        id,
+        action: action.to_owned(),
+        name: "codemode".to_owned(),
+        arguments: json!({"source": source}),
+        status: Some(CallStatus::Completed),
+        result: Some(Box::new(CallResult {
+            content: "done".to_owned(),
+            ..CallResult::default()
+        })),
+        timing: Timing::Started(0),
+        ..Call::default()
+    }
+}
+
+/// An opened outer draws its arguments first, then one row per inner
+/// per level, each two columns further in with the same glyph, kind,
+/// target and result it would draw on its own (`docs/tui.md:1130-1132`,
+/// `docs/tui.md:1142-1144`).
+#[test]
+fn nested_ledger_rows_draw_inners_indented() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 1_000,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(outer_call(1, "a_1", "line1\nline2")),
+                inner(
+                    Call {
+                        lines: 12,
+                        ..read_call(2, "f.rs")
+                    },
+                    "a_1",
+                ),
+                inner(edit_call(3, "e.rs", 3, 1), "a_1"),
+                inner(shell_call(4, "cargo test", Some(0), 7, "ok"), "a_1"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    // Count and order per `docs/tui.md:1130-1132` (one row per inner, two
+    // columns further in per level) and `docs/tui.md:1142-1144` (arguments
+    // first, then the inner rows).
+    assert_eq!(rows.len(), 6);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
+    assert_eq!(text[1], "        line1");
+    assert_eq!(text[2], "        line2");
+    assert!(text[3].starts_with("        ✓ read"), "{}", text[3]);
+    assert!(text[3].contains("f.rs"), "{}", text[3]);
+    assert!(text[3].ends_with("12 lines"), "{}", text[3]);
+    assert!(text[4].starts_with("        ✓ edit"), "{}", text[4]);
+    assert!(text[4].contains("e.rs"), "{}", text[4]);
+    assert!(text[4].ends_with("+3 −1"), "{}", text[4]);
+    assert!(text[5].starts_with("        ✓ shell"), "{}", text[5]);
+    assert!(text[5].contains("cargo test"), "{}", text[5]);
+    assert!(text[5].ends_with("exit 0 · 7 lines"), "{}", text[5]);
+    // The ledger rows fill the width, as before; the arguments block
+    // draws short dim lines like any opened detail.
+    for row in [&rows[0], &rows[3], &rows[4], &rows[5]] {
+        assert_eq!(cells(row), 76, "{row:?}");
+    }
+}
+
+/// An inner whose outer names no call of the section draws top-level,
+/// in push order, as a command-anchored inner does; an inner arriving
+/// before its outer still nests under it (`docs/tui.md:1130-1135`).
+#[test]
+fn nested_ledger_rows_keep_orphans_and_command_inners_on_top() {
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        first: 0,
+        last: 1_000,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                Call {
+                    lines: 1,
+                    ..read_call(0, "lone.rs")
+                },
+                with_open(outer_call(1, "a_1", "s")),
+                inner(
+                    Call {
+                        lines: 2,
+                        ..read_call(2, "in.rs")
+                    },
+                    "a_1",
+                ),
+                // No call is named `a_9`: the orphan stays top-level.
+                inner(
+                    Call {
+                        lines: 3,
+                        ..read_call(3, "orf.rs")
+                    },
+                    "a_9",
+                ),
+                // A `command_id`-anchored inner stores none, so it draws
+                // top-level like any lone call.
+                shell_call(4, "top", Some(0), 1, "x"),
+                // Arriving before its outer still lands under it.
+                inner(
+                    Call {
+                        lines: 4,
+                        ..read_call(6, "late.rs")
+                    },
+                    "a_7",
+                ),
+                with_open(outer_call(7, "a_7", "late")),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    // Count and order per `docs/tui.md:1130-1135`: inners nest under their
+    // outer; an inner whose outer names no call of the turn draws
+    // top-level, in push order.
+    assert_eq!(rows.len(), 9);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[0].starts_with("    1 ✓ read"), "{}", text[0]);
+    assert!(text[1].starts_with("      ✓ other"), "{}", text[1]);
+    assert_eq!(text[2], "        s");
+    assert!(text[3].starts_with("        ✓ read"), "{}", text[3]);
+    assert!(text[3].contains("in.rs"), "{}", text[3]);
+    assert!(text[4].starts_with("      ✓ read"), "{}", text[4]);
+    assert!(text[4].contains("orf.rs"), "{}", text[4]);
+    assert!(text[5].starts_with("      ✓ shell"), "{}", text[5]);
+    assert!(text[6].starts_with("      ✓ other"), "{}", text[6]);
+    assert_eq!(text[7], "        late");
+    assert!(text[8].starts_with("        ✓ read"), "{}", text[8]);
+    assert!(text[8].contains("late.rs"), "{}", text[8]);
+}
+
+/// Failed, denied, cancelled and running inners keep their glyphs
+/// (`docs/tui.md:1131-1132`: each inner keeps the glyph it would draw
+/// on its own).
+#[test]
+fn nested_ledger_rows_keep_inner_status_glyphs() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 1_000,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(outer_call(1, "a_1", "s")),
+                inner(failed_call(2), "a_1"),
+                inner(denied_call(3), "a_1"),
+                inner(cancelled_call(4), "a_1"),
+                inner(running_call(5, "read", json!({"path": "r.rs"})), "a_1"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    // Count and order per `docs/tui.md:1131-1132`: each inner keeps the
+    // glyph, kind, target and result it would draw on its own.
+    assert_eq!(rows.len(), 6);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[2].starts_with("        ✗ shell"), "{}", text[2]);
+    assert!(text[2].contains("nonzero_exit: exit 101"), "{}", text[2]);
+    assert!(text[3].starts_with("        ✗ other"), "{}", text[3]);
+    assert!(text[3].contains("denied"), "{}", text[3]);
+    assert!(text[4].starts_with("        ⊘ other"), "{}", text[4]);
+    assert!(text[4].contains("cancelled"), "{}", text[4]);
+    assert!(text[5].starts_with("        ○ read"), "{}", text[5]);
+    assert!(text[5].contains("running"), "{}", text[5]);
+}
+
+/// A chain nests at every level: C under B under A, B counting as an
+/// inner, and the summary counting C by kind alone
+/// (`docs/tui.md:1132-1134`, `docs/tui.md:1136-1138`).
+#[test]
+fn nested_two_level_chain_groups_and_counts() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 0,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(outer_call(1, "a_1", "outer")),
+                with_open(inner(shell_call(2, "cargo test", Some(0), 4, "ok"), "a_1")),
+                with_open(inner(
+                    with_content(
+                        Call {
+                            lines: 5,
+                            ..read_call(3, "deep.rs")
+                        },
+                        "deep text",
+                    ),
+                    "a_2",
+                )),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    // Count and order per `docs/tui.md:1132-1134`: calls nest at any depth,
+    // one row per inner per level.
+    assert_eq!(rows.len(), 8);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
+    assert_eq!(text[1], "        outer");
+    assert!(text[2].starts_with("        ✓ shell"), "{}", text[2]);
+    assert_eq!(text[3], "        {");
+    assert!(
+        text[4].contains("\"command\": \"cargo test\""),
+        "{}",
+        text[4]
+    );
+    assert_eq!(text[5], "        }");
+    assert!(text[6].starts_with("          ✓ read"), "{}", text[6]);
+    assert!(text[6].contains("deep.rs"), "{}", text[6]);
+    assert!(text[6].ends_with("5 lines"), "{}", text[6]);
+    assert_eq!(text[7], "        deep text");
+    // Count per `docs/tui.md:1136-1138`: the summary counts inner calls by
+    // kind at every depth; the middle of the chain counts as an inner.
+    let (summary, _) = summary_row(&group, false, 60);
+    let line = summary[0].0.to_string();
+    let left = "● Read 1 file";
+    // The group is open, so the toggle reads open.
+    let right = "0s ▾";
+    let filler = " ".repeat(60 - crate::format::width(left) - crate::format::width(right));
+    assert_eq!(line, format!("{left}{filler}{right}"));
+}
+
+/// Contradictory anchors draw every call once: each names the other
+/// as its outer, so neither is a root, and the second pass draws them
+/// top-level instead of nesting forever. The fallback keeps the
+/// `docs/tui.md:1130-1135` shape (one row per call, in push order); the
+/// cycle guard itself is implementation detail the doc does not promise.
+#[test]
+fn nested_ledger_rows_draw_anchor_cycles_once() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 0,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(inner(outer_call(1, "a_1", "aa"), "a_2")),
+                with_open(inner(outer_call(2, "a_2", "bb"), "a_1")),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    // Both calls are outers-with-inners, so the summary is empty and
+    // `rows` draws nothing: read the ledger directly.
+    let mut out = crate::rows::Rows::default();
+    group.ledger(76, &crate::image::Layout::default(), &mut out);
+    let (rows, _) = out.into_parts();
+    let rows: Vec<ratatui::text::Line<'_>> = rows.into_iter().map(|(line, _)| line).collect();
+    // Count and order per `docs/tui.md:1130-1135`: one row per call drawn
+    // top-level in push order when no root holds.
+    assert_eq!(rows.len(), 4);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert!(text[0].starts_with("    1 ✓ other"), "{}", text[0]);
+    assert_eq!(text[1], "        aa");
+    assert!(text[2].starts_with("        ✓ other"), "{}", text[2]);
+    assert_eq!(text[3], "        bb");
+}
+
+/// An opened outer draws at most twenty argument lines; the inner
+/// rows always follow (`docs/tui.md:1142-1144`).
+#[test]
+fn nested_ledger_rows_cap_the_arguments_block() {
+    let script = |n: u64| {
+        (1..=n)
+            .map(|n| format!("L{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let group_with = |lines: u64| Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 0,
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                with_open(outer_call(1, "a_1", &script(lines))),
+                inner(
+                    Call {
+                        lines: 1,
+                        ..read_call(2, "f.rs")
+                    },
+                    "a_1",
+                ),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group_with(20), 76);
+    // Count and order per `docs/tui.md:1142-1144`: at most 20 argument
+    // lines, then one indented row per inner call.
+    assert_eq!(rows.len(), 22);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert_eq!(text[20], "        L20");
+    assert!(text[21].starts_with("        ✓ read"), "{}", text[21]);
+    let rows = ledger_rows(&group_with(21), 76);
+    // Same `docs/tui.md:1142-1144` cap: the twenty-first line is cut and
+    // the inner row still follows.
+    assert_eq!(rows.len(), 22);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert_eq!(text[20], "        L20");
+    assert!(
+        !text.iter().any(|row| row.contains("L21")),
+        "the twenty-first line is cut"
+    );
+    assert!(text[21].starts_with("        ✓ read"), "{}", text[21]);
+}
+
 fn summary_row(
     group: &Group,
     running: bool,
@@ -1843,6 +2227,54 @@ fn answered_ask_call(id: usize) -> Call {
     call.id = id;
     call.action = format!("a_{id}");
     call
+}
+
+/// `call_requested` stores `ran_by`'s outer call on the pushed call,
+/// so the ledger nests it under that call; a command anchor or no
+/// `ran_by` stores none.
+#[test]
+fn outer_action_id_stored_from_ran_by() {
+    use contract::events::{Anchor, RanBy, ToolCallRequested};
+
+    use super::super::{Fold, Turn};
+    fn requested_with(ran_by: Option<RanBy>) -> Call {
+        let mut fold = Fold::default();
+        let mut turn = Turn::new(Vec::new(), 0);
+        turn.call_requested(
+            "a_9",
+            ToolCallRequested {
+                name: "read".to_owned(),
+                arguments: json!({"path": "a.rs"}),
+                provider_id: None,
+                repair: None,
+                ran_by,
+                provider_item: None,
+            },
+            0,
+            &mut fold,
+        );
+        turn.groups()
+            .flat_map(|group| group.sections.iter())
+            .flat_map(|section| section.calls.iter())
+            .find(|call| call.action == "a_9")
+            .cloned()
+            .expect("the requested call stays in its turn")
+    }
+    let outer = requested_with(Some(RanBy {
+        extension: "ext".to_owned(),
+        anchor: Anchor::OuterCall(contract::ActionId("a_1".to_owned())),
+    }));
+    assert_eq!(
+        outer.outer_action_id,
+        Some(contract::ActionId("a_1".to_owned()))
+    );
+    let command = requested_with(Some(RanBy {
+        extension: "ext".to_owned(),
+        anchor: Anchor::Command(contract::CommandId("c_1".to_owned())),
+    }));
+    assert_eq!(command.outer_action_id, None);
+    let absent = requested_with(None);
+    assert_eq!(absent.outer_action_id, None);
 }
 
 /// A renderer that fills nothing draws exactly the built-in rows, at
