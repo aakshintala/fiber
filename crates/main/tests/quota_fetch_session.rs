@@ -353,6 +353,17 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
     hub.lock().unwrap().take().unwrap().kill_and_wait();
 }
 
+/// The conversation's person rows, ignoring the scroll-gutter marks: a
+/// settled row can draw wrapped (`⋮ you … ⋮`, like journeys' wrapped
+/// card rows) while still being the turn's `you` row (`docs/tui.md`,
+/// "Turns").
+fn you_rows(contents: &str) -> usize {
+    contents
+        .lines()
+        .filter(|line| line.trim_start_matches([' ', '⋮']).starts_with("you "))
+        .count()
+}
+
 #[test]
 fn quota_notice_is_a_fiber_card_entry_in_pty() {
     let setup = Setup::new();
@@ -431,28 +442,21 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     // frame with one row would fail the count below on the first
     // attempt (`touched-retries` fails a pass on retry). Waiting for
     // both rows makes the returned frame satisfy the assert by
-    // construction.
+    // construction. The count ignores scroll gutters: macos draws the
+    // first row wrapped (`⋮ you … ⋮`) while it is still the turn's row.
     let shown = run.wait_screen("the second turn's Fiber quota notice", |grid| {
         grid.contents.contains("Fiber")
             && grid.contents.contains("used 90%")
             && grid.contents.contains("second")
-            && grid
-                .contents
-                .lines()
-                .filter(|line| line.trim_start().starts_with("you "))
-                .count()
-                == 2
+            && you_rows(&grid.contents) == 2
     });
     assert!(shown.contents.contains("you"), "{}", shown.contents);
     assert!(shown.contents.contains("Fiber"), "{}", shown.contents);
     // Only the person's prompt floats above its card: one `you` row per
-    // turn (`docs/tui.md`, "Turns").
+    // turn (`docs/tui.md`, "Turns"). The count ignores scroll gutters,
+    // like the wait above.
     assert_eq!(
-        shown
-            .contents
-            .lines()
-            .filter(|line| line.trim_start().starts_with("you "))
-            .count(),
+        you_rows(&shown.contents),
         2,
         "one you row per turn: {}",
         shown.contents
