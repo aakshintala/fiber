@@ -1,28 +1,29 @@
 ---
 source: crates/tui/src/app/overlay_tests.rs
+assertion_line: 4238
 expression: text
 ---
  Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
-Enter                                                                message dur
-Shift+Enter  Imported                                            ✕
-Esc                                                                 on top; inte
-Ctrl+C       Copied · 240                                           then quit
-⌥0           MCP▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-Ctrl+N       ser
-⌥1 ⌥2 ⌥3 ⌥4  ser  Quit                                       ✕      of rail card
-Delete, Bac  ser                                                    d exited, or
-↑            ser  1 session working                                 rompt from t
-←            ser                                                    ty input box
-Ctrl+R       ser  › Enter  leave them running                       ts
-⌥← ⌥→, Ctrl  ser    c      close all
-⌥Backspace,  ser    Esc    stay
-Ctrl+U       ser                                                    e start of t
-Ctrl+A Ctrl  ser  click a choice · they keep running meanwhile      e line
-Ctrl+G       ser                                                     a pasted to
-Ctrl+V       ser▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-Ctrl+O       server12                                               ledgers
-Shift+Tab    server13                                               t box into t
-↓ ↑, j k                                                             next or pre
-Enter        Imported items apply on the next /reload · Esc closes  m
-y                                                                   m
+› Enter                                                              message
+             Imported                                            ✕
+  Shift+Ent
+  Ctrl+J     Copied · 240
+  Esc        MCP▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    upt the turn
+             ser
+  Ctrl+C     ser  Quit                                       ✕
+  ⌥0         ser
+  Ctrl+N     ser  1 session working
+  ⌥1 ⌥2 ⌥3   ser                                                    l card N
+  ⌥6 ⌥7 ⌥8   ser  › Enter  leave them running
+  Delete,    ser    c      close all                                or a live
+  Backspace  ser    Esc    stay                                     he session
+             ser
+  ↑          ser  click a choice · they keep running meanwhile      m the
+             ser                                                    reen
+  ←          ser▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    ut box into
+             server12
+  Ctrl+R     server13
+  ⌥← ⌥→, Ct
+  Ctrl+→, ⌥  Imported items apply on the next /reload · Esc closes
+  ⌥Backspac
 ↑↓ move · E▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

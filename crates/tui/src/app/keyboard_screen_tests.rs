@@ -125,6 +125,12 @@ fn down(app: &mut App, n: usize) {
     }
 }
 
+/// The first display line of action `at` at the test width: the screen
+/// wraps at the 80-wide column, so every frame index is a line.
+fn first_line(app: &App, at: usize) -> usize {
+    crate::rebind::heights(app.keys(), 80).iter().take(at).sum()
+}
+
 #[test]
 fn slash_keys_opens_the_screen_with_the_draft_cleared() {
     for attached in [false, true] {
@@ -466,10 +472,9 @@ fn wheel(col: u16, row: u16, down: bool) -> crate::keys::Mouse {
     }
 }
 
-/// The wheel over the `/keys` screen shifts its Browse window three
-/// rows, never the conversation under it (`docs/tui.md`, "Swapped
-/// views"; see #3578). Three Downs put the selection mid-window, so
-/// the window moves under it.
+/// The wheel over the `/keys` screen moves three display lines a step,
+/// never the conversation under it (`docs/tui.md:589`). Three Downs move
+/// the selection three actions down, and the wheel steps the window under it.
 #[test]
 fn wheel_over_keys_steps_browse_not_the_conversation() {
     let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
@@ -484,19 +489,29 @@ fn wheel_over_keys_steps_browse_not_the_conversation() {
         tap(&mut app, "Down");
     }
     let frame = app.keys_frame(24).expect("the screen is open");
-    assert_eq!(frame.list.selected(), 3);
+    assert_eq!(frame.list.selected(), first_line(&app, 3));
     let shown_top = frame.list.top();
+    // The first two actions each wrap to two display lines at this
+    // width, so three display lines from the top land on display line
+    // 3, inside the second action, where the window rests
+    // (`docs/tui.md`, "Bindings").
+    let grown = crate::rebind::heights(app.keys(), 80);
+    assert!(
+        grown[0] > 1 && grown[1] > 1,
+        "wrapped actions sit in view: {grown:?}"
+    );
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
     let frame = app.keys_frame(24).expect("the screen is open");
     assert_eq!(
         frame.list.top(),
-        shown_top + 3,
-        "one wheel step shifts the visible rows three"
+        3,
+        "one wheel step moves three display lines, not three actions: {grown:?}"
     );
+    assert_eq!(shown_top, first_line(&app, 0));
     assert_eq!(
         frame.list.selected(),
-        3,
+        first_line(&app, 3),
         "a selection still on screen stays where it was"
     );
 }
@@ -564,39 +579,53 @@ fn wheel_over_a_notice_over_keys_moves_neither_list_nor_conversation() {
         "the overlay swallows the wheel before the hidden list"
     );
     assert_eq!(app.top(), top, "the wheel left the conversation");
-    // Above the slab the list shows: the wheel shifts its window.
+    // Above the slab the list shows: the wheel shifts its window three
+    // display lines from the fresh top, resting inside the second
+    // action (`docs/tui.md`, "Bindings").
     let frame = app.keys_frame(24).expect("the screen is open");
     assert_eq!(frame.list.selected(), before);
+    assert_eq!(frame.list.top(), first_line(&app, 0));
+    let grown = crate::rebind::heights(app.keys(), 80);
+    assert!(
+        grown[0] > 1 && grown[1] > 1,
+        "wrapped actions sit in view: {grown:?}"
+    );
     app.on_wheel(&wheel(slab.x, slab.y.saturating_sub(1), true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
     assert_eq!(
         app.keys_frame(24).expect("the screen is open").list.top(),
-        frame.list.top() + 3,
+        3,
         "outside the slab the wheel reaches the list"
     );
 }
 
-/// The wrapper shifts the Browse window three rows per call, keeping
-/// the selection while it shows: down from the top row clamps the
-/// selection to the new top, and back up keeps it.
+/// The wrapper shifts the Browse window three display lines per call,
+/// keeping the selection while it shows: down from the top rests
+/// inside the second action, moving the selection to the action at
+/// the first visible line, and back up keeps it.
 #[test]
-fn keys_screen_wheel_shifts_browse_three_rows() {
+fn keys_screen_wheel_shifts_browse_three_display_lines() {
     let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
     app.open_keys();
+    let grown = crate::rebind::heights(app.keys(), 80);
+    assert!(
+        grown[0] > 1 && grown[1] > 1,
+        "wrapped actions sit in view: {grown:?}"
+    );
     assert_eq!(app.keys_screen_wheel(false), Effect::None);
     let frame = app.keys_frame(24).expect("the screen is open");
     assert_eq!(frame.list.top(), 3);
     assert_eq!(
         frame.list.selected(),
-        3,
-        "the selection clamps to the new top row"
+        first_line(&app, 1),
+        "the selection moves to the action at the first visible line"
     );
     assert_eq!(app.keys_screen_wheel(true), Effect::None);
     let frame = app.keys_frame(24).expect("the screen is open");
-    assert_eq!(frame.list.top(), 0);
+    assert_eq!(frame.list.top(), first_line(&app, 0));
     assert_eq!(
         frame.list.selected(),
-        3,
+        first_line(&app, 1),
         "a selection still on screen stays where it was"
     );
 }
@@ -616,4 +645,51 @@ fn keys_screen_wheel_through_an_open_notice_scrolls() {
         3,
         "the wrapper leaves the notice swallow to the router"
     );
+}
+
+/// The frame is there while the screen is open, with the keys
+/// content, and gone once it closes: no frame, no rows, and one row
+/// per display line with its join while open.
+#[test]
+fn keys_frame_is_some_with_the_keys_content_while_open() {
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    assert!(app.keys_frame(24).is_none());
+    app.open_keys();
+    let frame = app.keys_frame(24).expect("the screen is open");
+    assert_eq!(frame.title, "Keys");
+    assert_eq!(frame.command, "/keys");
+    assert!(!frame.rows.is_empty());
+    assert_eq!(frame.rows.len(), frame.joins.len());
+    assert!(app.keys_screen_open());
+}
+
+/// The draw width mirrors the area the frame draws in: the screen's
+/// on home, the attached conversation column's otherwise, so the
+/// frame wraps at the width it draws. A zero or one width would wrap
+/// every row into a line per character.
+#[test]
+fn keys_width_mirrors_the_area_the_frame_draws() {
+    let mut app = home(None);
+    app.open_keys();
+    assert_eq!(app.keys_width(), 80);
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    app.open_keys();
+    assert_eq!(app.keys_width(), usize::from(app.column_width()));
+}
+
+/// A click selects its row's action while browsing, and the cross
+/// closes the screen: the wrapper answers both with no effect of its
+/// own.
+#[test]
+fn keys_screen_click_selects_a_row_and_closes_on_the_cross() {
+    use crate::swapped::Spot;
+    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    app.open_keys();
+    let at = first_line(&app, 5);
+    assert_eq!(app.keys_screen_click(Spot::Row(at)), Effect::None);
+    assert!(app.keys_screen_open());
+    let frame = app.keys_frame(24).expect("the screen is open");
+    assert_eq!(frame.list.selected(), at);
+    assert_eq!(app.keys_screen_click(Spot::Close), Effect::None);
+    assert!(!app.keys_screen_open());
 }
