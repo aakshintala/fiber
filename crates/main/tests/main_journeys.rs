@@ -454,56 +454,14 @@ fn journey_version(bin: &Path) -> String {
         .to_owned()
 }
 
-/// Whether the year is a leap year: every fourth year except centuries,
-/// except every fourth century.
-fn is_nightly_leap_year(year: u32) -> bool {
-    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
-}
-
-/// The month's length in days: February follows the leap rule, the rest
-/// are fixed. A month outside 1-12 fails naming the version it came from:
-/// only the validated nightly date reaches here.
-fn days_in_nightly_month(version: &str, year: u32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_nightly_leap_year(year) => 29,
-        2 => 28,
-        _ => panic!("{version} holds no month: {month}"),
-    }
-}
-
-/// The calendar day after the given one: the month turns on its last day
-/// and the year turns on December's, so a nightly running on either edge
-/// still feeds strictly newer nightlies.
-fn next_nightly_day(version: &str, year: u32, month: u32, day: u32) -> (u32, u32, u32) {
-    if day < days_in_nightly_month(version, year, month) {
-        (year, month, day + 1)
-    } else if month < 12 {
-        (year, month + 1, 1)
-    } else {
-        (year + 1, 1, 1)
-    }
-}
-
-/// The nightly date `days` days after the running nightly's `YYYYMMDD`
-/// date: read digit by digit out of the shape `nightly_parts` accepted,
-/// moved forward one calendar day at a time (never a digit increment, so
-/// month and year ends roll over), printed back in shape.
-fn shift_nightly_date(version: &str, date: &str, days: u32) -> String {
-    let number = |part: &str| {
-        part.parse::<u32>()
-            .unwrap_or_else(|_| panic!("{version} holds no nightly date: {date}"))
-    };
-    let (mut year, mut month, mut day) = (
-        number(&date[0..4]),
-        number(&date[4..6]),
-        number(&date[6..8]),
-    );
-    for _ in 0..days {
-        (year, month, day) = next_nightly_day(version, year, month, day);
-    }
-    format!("{year:04}{month:02}{day:02}")
+/// The nightly date `days` after the running nightly's `YYYYMMDD` date:
+/// the date orders as a zero-padded number (`resolve::version_key`
+/// compares two nightlies on one base by this string), so counting the
+/// digits forward stays strictly newer. No path checks it is a real
+/// calendar date (`resolve::nightly_parts` takes any 8 ASCII digits), so
+/// month and year ends need no rollover.
+fn shift_nightly_date(date: &str, days: u32) -> String {
+    format!("{:08}", date.parse::<u32>().unwrap() + days)
 }
 
 /// The two nightlies the stub feed serves for this run: the running
@@ -522,134 +480,12 @@ fn journey_nightlies() -> JourneyNightlies {
             };
         }
     };
-    let floor = shift_nightly_date(&version, &date, 1);
-    let next = shift_nightly_date(&version, &date, 2);
+    let floor = shift_nightly_date(&date, 1);
+    let next = shift_nightly_date(&date, 2);
     JourneyNightlies {
         floor: format!("{}.{}.{}-nightly.{floor}", base[0], base[1], base[2]),
         next: format!("{}.{}.{}-nightly.{next}", base[0], base[1], base[2]),
     }
-}
-
-/// Mid-month the day steps forward: below every edge, nothing turns.
-#[test]
-fn nightly_next_day_steps_mid_month() {
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20240115", 2024, 1, 15),
-        (2024, 1, 16)
-    );
-}
-
-/// A 31-day month turns the month on its last day, not before.
-#[test]
-fn nightly_next_day_turns_a_31_day_month() {
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20240130", 2024, 1, 30),
-        (2024, 1, 31)
-    );
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20240131", 2024, 1, 31),
-        (2024, 2, 1)
-    );
-}
-
-/// A 30-day month turns a day earlier: April's last day is the 30th.
-#[test]
-fn nightly_next_day_turns_a_30_day_month() {
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20240429", 2024, 4, 29),
-        (2024, 4, 30)
-    );
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20240430", 2024, 4, 30),
-        (2024, 5, 1)
-    );
-}
-
-/// February in a common year turns on the 28th: the day before steps.
-#[test]
-fn nightly_next_day_turns_a_common_february() {
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20230227", 2023, 2, 27),
-        (2023, 2, 28)
-    );
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20230228", 2023, 2, 28),
-        (2023, 3, 1)
-    );
-}
-
-/// February in a leap year holds the 29th: both sides of it step.
-#[test]
-fn nightly_next_day_holds_a_leap_february() {
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20240228", 2024, 2, 28),
-        (2024, 2, 29)
-    );
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20240229", 2024, 2, 29),
-        (2024, 3, 1)
-    );
-}
-
-/// Centuries follow the fourth-century exception: 2000 holds the 29th
-/// while 2100 turns on the 28th.
-#[test]
-fn nightly_next_day_follows_the_century_exception() {
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20000228", 2000, 2, 28),
-        (2000, 2, 29)
-    );
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.21000228", 2100, 2, 28),
-        (2100, 3, 1)
-    );
-}
-
-/// December turns the year on its last day, not before; November still
-/// turns the month.
-#[test]
-fn nightly_next_day_turns_the_year() {
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20241230", 2024, 12, 30),
-        (2024, 12, 31)
-    );
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20241231", 2024, 12, 31),
-        (2025, 1, 1)
-    );
-    assert_eq!(
-        next_nightly_day("0.0.1-nightly.20241130", 2024, 11, 30),
-        (2024, 12, 1)
-    );
-}
-
-/// The shift counts forward day by day across month and year ends and
-/// prints back in shape, never by incrementing the date's digits.
-#[test]
-fn nightly_shift_rolls_month_and_year_ends() {
-    assert_eq!(
-        shift_nightly_date("0.0.1-nightly.20240131", "20240131", 1),
-        "20240201"
-    );
-    assert_eq!(
-        shift_nightly_date("0.0.1-nightly.20240131", "20240131", 2),
-        "20240202"
-    );
-    assert_eq!(
-        shift_nightly_date("0.0.1-nightly.20241231", "20241231", 1),
-        "20250101"
-    );
-    assert_eq!(
-        shift_nightly_date("0.0.1-nightly.20240228", "20240228", 1),
-        "20240229"
-    );
-}
-
-/// A month outside 1-12 fails naming the version it came from.
-#[test]
-#[should_panic(expected = "holds no month")]
-fn nightly_next_day_rejects_a_month_outside_the_year() {
-    let _ = next_nightly_day("0.0.1-nightly.20241301", 2024, 13, 1);
 }
 
 /// The bytes the stub binary archive holds: the staged `fiber` binary.
