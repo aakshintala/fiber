@@ -179,22 +179,6 @@ fn text_area(area: Rect) -> Rect {
     }
 }
 
-/// The last `cells` cells of `text`, never splitting a wide glyph, so
-/// a working directory cut from the left keeps whole cells.
-fn tail_cells(text: &str, cells: usize) -> String {
-    let mut taken = 0;
-    let mut out = Vec::new();
-    for ch in text.chars().rev() {
-        let wide = format::width(&ch.to_string());
-        if taken + wide > cells {
-            break;
-        }
-        taken += wide;
-        out.push(ch);
-    }
-    out.into_iter().rev().collect()
-}
-
 /// The row's left side in `room` columns: the working directory, then
 /// the permission mode in `attention`, joined by a dim `  │  `. Too
 /// wide, the working directory is cut from the left to keep its tail
@@ -231,14 +215,14 @@ fn status_left(workspace: &str, room: usize) -> StatusRow {
     let shed = wide - room;
     let ws_w: usize = format::width(workspace);
     if !workspace.is_empty() && shed < ws_w {
-        let tail = tail_cells(workspace, ws_w - shed - 1);
+        let tail = crate::text::cut_left(workspace, ws_w - shed);
         let mut cut = Joined {
             spans: Vec::new(),
             spots: Vec::new(),
         };
         push_segment(
             &mut cut,
-            Segment::spotted(vec![Span::raw(format!("…{tail}"))], Spot::Status),
+            Segment::spotted(vec![Span::raw(tail)], Spot::Status),
         );
         push_segment(
             &mut cut,

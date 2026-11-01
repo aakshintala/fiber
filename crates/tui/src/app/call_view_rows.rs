@@ -173,10 +173,6 @@ fn markers(input: &RowsInput<'_>) -> Vec<((u64, usize), bool)> {
         .collect()
 }
 
-/// The anchor for the `kept` edge: the first logical line start at
-/// or past it that a held page draws, or the end of the final held
-/// fragment when the file ends with no later start. `None` while the
-/// edge's pages are still missing or paged out.
 /// The row to park the window on when the page at `offset` completes a
 /// kept edge: two rows above the end marker its arrival anchors, so the
 /// head segment's last rows show above the marker. `None` when no end
@@ -206,6 +202,10 @@ pub(in crate::app) fn edge_anchor_row(
         .map(|marker_at| marker_at.saturating_sub(2))
 }
 
+/// The anchor for the `kept` edge: the first logical line start at
+/// or past it that a held page draws, or the end of the final held
+/// fragment when the file ends with no later start. `None` while the
+/// edge's pages are still missing or paged out.
 fn marker_for(input: &RowsInput<'_>, edge: u64) -> Option<(u64, usize)> {
     let mut first = true;
     let mut ends_newline = true;
@@ -592,8 +592,15 @@ mod tests {
         let kept = Some(vec![[0, 100000]]);
         let input = rows_input(&kept, 500, &pages, &segs);
         assert_eq!(edge_anchor_row(&input, &rows, 0), None);
+        // The end-of-file fallback marker sits in the rows: the complete
+        // file would anchor it at line 3, so a looser guard seats there.
         let kept = Some(vec![[0, 500]]);
         let input = rows_input(&kept, 500, &pages, &segs);
+        let rows = vec![row(Source::Marker {
+            offset: 0,
+            index: 3,
+            resume: false,
+        })];
         assert_eq!(edge_anchor_row(&input, &rows, 0), None);
         // A kept start alone is a resume edge, never an end anchor.
         let kept = Some(vec![[500, 200000]]);
