@@ -71,11 +71,11 @@ fn needs_login(name: &str) -> McpServerRow {
     )
 }
 
-fn connecting(name: &str) -> McpServerRow {
+fn not_started(name: &str) -> McpServerRow {
     row(
         name,
         McpServerLayer::Repository,
-        McpServerState::Connecting,
+        McpServerState::NotStarted,
         "",
         None,
         true,
@@ -153,7 +153,7 @@ fn rows_show_name_layer_state_and_count() {
 
 #[test]
 fn rows_sort_by_name_with_the_note_last() {
-    let (_fake, mcp) = opened(&[ready("zeta"), ready("alpha"), connecting("mid")]);
+    let (_fake, mcp) = opened(&[ready("zeta"), ready("alpha"), not_started("mid")]);
     let texts = texts(&mcp);
     assert_eq!(texts.len(), 4);
     assert!(texts[0].contains("alpha"));
@@ -165,7 +165,7 @@ fn rows_sort_by_name_with_the_note_last() {
 #[test]
 fn states_keep_their_colours_and_the_note_is_dim() {
     let (_fake, mcp) = opened(&[
-        connecting("new"),
+        not_started("new"),
         ready("up"),
         failed("down"),
         needs_login("remote"),
@@ -184,9 +184,9 @@ fn states_keep_their_colours_and_the_note_is_dim() {
 }
 
 #[test]
-fn connecting_has_no_count_and_one_tool_sings_singular() {
+fn not_started_has_no_count_and_one_tool_sings_singular() {
     let (_fake, mcp) = opened(&[
-        connecting("new"),
+        not_started("new"),
         row(
             "solo",
             McpServerLayer::Global,
@@ -198,7 +198,7 @@ fn connecting_has_no_count_and_one_tool_sings_singular() {
         ),
     ]);
     let texts = texts(&mcp);
-    assert!(texts[0].contains("connecting") && !texts[0].contains("tool"));
+    assert!(texts[0].contains("not started") && !texts[0].contains("tool"));
     assert!(texts[1].contains("ready · 1 tool"));
 }
 
@@ -238,8 +238,8 @@ fn enter_logs_in_a_server_that_needs_it() {
 }
 
 #[test]
-fn enter_is_silent_on_ready_connecting_and_the_note() {
-    let (fake, mut mcp) = opened(&[connecting("new"), ready("up")]);
+fn enter_is_silent_on_ready_not_started_and_the_note() {
+    let (fake, mut mcp) = opened(&[not_started("new"), ready("up")]);
     let context = context(&fake);
     assert!(matches!(mcp.key(&Key::Enter, &context), Act::Stay));
     assert!(mcp.frame(None).below.is_empty());
@@ -277,14 +277,14 @@ fn unapproved_rows_show_as_such() {
     let (_fake, mcp) = opened(&[row(
         "repo",
         McpServerLayer::Repository,
-        McpServerState::Connecting,
+        McpServerState::NotStarted,
         "",
         None,
         false,
         None,
     )]);
     // The skipped server never started, but its row names the reason:
-    // not its connecting state.
+    // not its not-started state.
     assert_eq!(
         texts(&mcp)[..1],
         [format!(

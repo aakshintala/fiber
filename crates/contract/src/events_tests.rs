@@ -1817,6 +1817,10 @@ fn result_of(payload: Value) -> CommandResult {
     accepted.result.expect("a result")
 }
 
+/// The `mcp_servers` result rows follow `docs/events.md`,
+/// "`command_accepted`": one row per configured server, with no order
+/// promised, so the rows compare without ordering (`docs/testing.md`,
+/// "Event streams").
 #[test]
 fn an_mcp_servers_result_reads_its_rows_and_omits_absent_keys() {
     let result = result_of(json!({"command_id": "c_1", "result": {"servers": [
@@ -1826,47 +1830,68 @@ fn an_mcp_servers_result_reads_its_rows_and_omits_absent_keys() {
          "auth_url": "http://127.0.0.1:9/cb?code=a"},
         {"name": "up", "layer": "global", "state": "ready",
          "reason": "", "tools": 1, "approved": true},
-        {"name": "new", "layer": "project", "state": "connecting",
+        {"name": "new", "layer": "project", "state": "not-started",
          "reason": "", "approved": true}]} }));
-    assert_eq!(
-        result,
-        CommandResult::McpServers {
-            servers: vec![
-                McpServerRow {
-                    name: "linear".into(),
-                    layer: McpServerLayer::Repository,
-                    state: McpServerState::NeedsLogin,
-                    reason: "connection refused Run `fiber mcp login linear` to log in.".into(),
-                    tools: Some(3),
-                    approved: false,
-                    auth_url: Some("http://127.0.0.1:9/cb?code=a".into()),
-                },
-                McpServerRow {
-                    name: "up".into(),
-                    layer: McpServerLayer::Global,
-                    state: McpServerState::Ready,
-                    reason: String::new(),
-                    tools: Some(1),
-                    approved: true,
-                    auth_url: None,
-                },
-                McpServerRow {
-                    name: "new".into(),
-                    layer: McpServerLayer::Project,
-                    state: McpServerState::Connecting,
-                    reason: String::new(),
-                    tools: None,
-                    approved: true,
-                    auth_url: None,
-                },
-            ]
-        }
-    );
+    let CommandResult::McpServers { servers } = &result else {
+        panic!("not mcp_servers: {result:?}");
+    };
+    let mut servers = servers.clone();
+    servers.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut expected = vec![
+        McpServerRow {
+            name: "linear".into(),
+            layer: McpServerLayer::Repository,
+            state: McpServerState::NeedsLogin,
+            reason: "connection refused Run `fiber mcp login linear` to log in.".into(),
+            tools: Some(3),
+            approved: false,
+            auth_url: Some("http://127.0.0.1:9/cb?code=a".into()),
+        },
+        McpServerRow {
+            name: "up".into(),
+            layer: McpServerLayer::Global,
+            state: McpServerState::Ready,
+            reason: String::new(),
+            tools: Some(1),
+            approved: true,
+            auth_url: None,
+        },
+        McpServerRow {
+            name: "new".into(),
+            layer: McpServerLayer::Project,
+            state: McpServerState::NotStarted,
+            reason: String::new(),
+            tools: None,
+            approved: true,
+            auth_url: None,
+        },
+    ];
+    expected.sort_by(|left, right| left.name.cmp(&right.name));
+    assert_eq!(servers, expected);
+    let shuffled = result_of(json!({"command_id": "c_1", "result": {"servers": [
+        {"name": "new", "layer": "project", "state": "not-started",
+         "reason": "", "approved": true},
+        {"name": "linear", "layer": "repository", "state": "needs-login",
+         "reason": "connection refused Run `fiber mcp login linear` to log in.",
+         "tools": 3, "approved": false,
+         "auth_url": "http://127.0.0.1:9/cb?code=a"},
+        {"name": "up", "layer": "global", "state": "ready",
+         "reason": "", "tools": 1, "approved": true}]}}));
+    let CommandResult::McpServers { servers } = &shuffled else {
+        panic!("not mcp_servers: {shuffled:?}");
+    };
+    let mut servers = servers.clone();
+    servers.sort_by(|left, right| left.name.cmp(&right.name));
+    assert_eq!(servers, expected);
     let written = serde_json::to_value(&result).unwrap();
     let rows = written["servers"].as_array().unwrap();
-    assert!(rows[1].get("auth_url").is_none(), "{written}");
-    assert!(rows[2].get("tools").is_none(), "{written}");
-    assert!(rows[2].get("auth_url").is_none(), "{written}");
+    let by_name: BTreeMap<&str, &Value> = rows
+        .iter()
+        .map(|row| (row["name"].as_str().unwrap(), row))
+        .collect();
+    assert!(by_name["up"].get("auth_url").is_none(), "{written}");
+    assert!(by_name["new"].get("tools").is_none(), "{written}");
+    assert!(by_name["new"].get("auth_url").is_none(), "{written}");
     assert_eq!(
         result_of(json!({"command_id": "c_1", "result": {"servers": []}})),
         CommandResult::McpServers { servers: vec![] }
