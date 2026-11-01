@@ -20,7 +20,7 @@
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
-//!   as tab-separated lines
+//!   and the `unrun` ones in `test = false` targets, as tab-separated lines
 //! - `stress-plan --base REV [--labels L] [--summary FILE]`: the test functions the
 //!   working tree adds or changes against the merge base with REV, as tab-separated lines,
 //!   appending the job-summary block to FILE when given
@@ -268,6 +268,9 @@ fn run(args: &[String]) -> Result<bool, String> {
             println!("filter\t{filter}");
             for package in packages {
                 println!("package\t{package}");
+            }
+            for path in select::unrun_test_files(rest, &members) {
+                println!("unrun\t{path}");
             }
             Ok(true)
         }

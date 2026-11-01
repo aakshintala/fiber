@@ -240,6 +240,9 @@ pub(super) fn scope_of(
         // Only a file directly in `tests/` is a binary; a file in a
         // subdirectory of `tests/` is a module the binaries include,
         // so it adds no term of its own.
+        // A `[[test]]` target with `test = false` is not part of a plain
+        // nextest run, so its file selects nothing.
+        ["tests", _] if member.unrun_tests.iter().any(|t| t == path) => None,
         ["tests", binary] => {
             let binary = binary.strip_suffix(".rs").unwrap_or(binary);
             Some((
@@ -297,9 +300,20 @@ pub(super) fn test_prefix(
     })
 }
 
-/// The test files among `files` that a plain nextest run never builds.
-pub(crate) fn unrun_test_files(_files: &[String], _members: &Members) -> Vec<String> {
-    Vec::new()
+/// The test files among `files` that a plain nextest run never builds:
+/// those of a `[[test]]` target declaring `test = false`. `test_filter`
+/// leaves them out; `bug-filter` names them so the red-commit check can
+/// tell a plan emptied by them from one with no test file at all.
+pub(crate) fn unrun_test_files(files: &[String], members: &Members) -> Vec<String> {
+    files
+        .iter()
+        .filter(|p| {
+            owner(p, members)
+                .and_then(|name| members.get(name))
+                .is_some_and(|member| member.unrun_tests.contains(p))
+        })
+        .cloned()
+        .collect()
 }
 
 /// The nextest filter selecting every test in the test files among
