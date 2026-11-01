@@ -24,6 +24,7 @@ fn push_stays_reviewed_with_wrappers_options_and_quoted_text() {
         "git --git-dir=/repo/.git push",
         "git --git-dir /repo/.git push origin",
         "git --work-tree /repo push",
+        "git -q push origin",
         "git -C /repo -c a=b --no-pager push",
         "git push 'unterminated",
         "git -- push",

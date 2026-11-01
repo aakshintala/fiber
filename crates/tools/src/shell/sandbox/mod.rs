@@ -524,7 +524,8 @@ pub fn prepare(
     // no subpath, no /dev prefix, no other device. macOS already ships the
     // same literal grant in its Seatbelt profile.
     let null_fd = open_nofollow(Path::new("/dev/null"))?;
-    let null_access = landlock::AccessFs::ReadFile | landlock::AccessFs::WriteFile;
+    let null_access = landlock::BitFlags::from_flag(landlock::AccessFs::ReadFile)
+        .union_c(landlock::BitFlags::from_flag(landlock::AccessFs::WriteFile));
     rules.push(landlock::PathBeneath::new(null_fd, null_access));
     // Deny every configured path and every resolved target, skipping no
     // entry that leads to any of them.
