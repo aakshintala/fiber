@@ -161,23 +161,11 @@ credential a session uses"). A new session takes its label from
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. Removing its last label switches it off unless another source still supplies credential presence; the extension and model cache remain installed. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `import <claude-code \| codex>` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
-| `stop [--hub <name>]` | Shuts down every running session, then the hub. It waits for the sockets to close, then prints what it stopped. With nothing running it prints `Nothing running.`. With `--hub`, it stops the sessions and the hub process: a login service on that machine may start the hub again, and the output does not say so. |
+| `stop [--hub <name>]` | Shuts down every running session and keeper on this machine, then the hub. It needs no hub: it finds sessions and keepers by their sockets under `run/` (`docs/state.md`, "What each part holds"). Each session gets `close` with `now`; each keeper gets a stop that ends every job and delegate as a shutdown does, then exits (`docs/tools.md`, "The keeper"). The opening exchange on a session's or keeper's socket and the stop message are frozen across versions, so any newer Fiber stops any older session or keeper, straight after a breaking update. It never signals a recorded process id. It waits for the sockets to close, then prints what it stopped. With nothing running it prints `Nothing running.`. With `--hub`, it stops the sessions and the hub process: a login service on that machine may start the hub again, and the output does not say so. |
 | `feedback [<prompt>] [-] [--session <id>]` | Writes a feedback report with the description, version, platform, `fiber doctor` output and diagnostics, and prints the issue link. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |
 | `version` | Prints the version. |
-
-`fiber stop --all [--yes]` stops every session and keeper on this machine,
-then the hub, and prints what it stopped. It needs no hub: it finds sessions
-and keepers by their sockets under `run/` (`docs/state.md`, "What each part
-holds"). Each session gets `close` with `now`; each keeper gets a stop that
-ends every job and delegate as a shutdown does, then exits (`docs/tools.md`,
-"The keeper"). In a terminal it asks first, counting as `/close all` does:
-sessions, how many are working, and keepers. `--yes` skips the question.
-Without a terminal and without `--yes` it is a usage error naming `--yes`. The
-opening exchange on a session's or keeper's socket and the stop message are
-frozen across versions, so any newer Fiber stops any older session or keeper,
-straight after a breaking update. It never signals a recorded process id.
 
 `doctor` prints the version, the default model and the provider it needs, each
 installed provider with one line per credential label and where its key comes
@@ -1248,7 +1236,7 @@ answers each command it read exactly once. `Exited`: its log ends in
 | `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
-| `stop` | `sessions` (boolean, optional) | Ends the hub as SIGTERM does. With `sessions` true, first shuts down every running session the hub knows of in `run/`, each through its own shutdown (`close` with `now`), bounded, then exits. Any authenticated connection may send it. |
+| `stop` | `sessions` (boolean, optional) | Ends the hub as SIGTERM does. With `sessions` true, first shuts down every running session and keeper the hub finds in `run/`, each session through its own shutdown (`close` with `now`) and each keeper by its stop (`docs/tools.md`, "The keeper"), bounded, then exits. Any authenticated connection may send it. |
 | `placeholder_env` | `names` (array of strings) | Answers with the hub's captured values for the named placeholders, absent names omitted, so the list and the session agree (`docs/model-routing.md`, "Model discovery"). |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |

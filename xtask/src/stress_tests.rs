@@ -206,6 +206,37 @@ fn a_retry_list_head_matches_despite_detail_text() {
 }
 
 #[test]
+fn stress_plan_emits_one_test_line_per_distinct_test() {
+    let touched = [
+        TestRef {
+            package: "main".to_owned(),
+            binary: None,
+            name: "hub_start::tests::starts".to_owned(),
+            unit: false,
+        },
+        TestRef {
+            package: "main".to_owned(),
+            binary: None,
+            name: "hub_start::tests::offers".to_owned(),
+            unit: false,
+        },
+        TestRef {
+            package: "main".to_owned(),
+            binary: None,
+            name: "hub_start::tests::offers".to_owned(),
+            unit: true,
+        },
+    ];
+    assert_eq!(
+        plan_test_lines(&touched),
+        vec![
+            "test\tmain hub_start::tests::offers",
+            "test\tmain hub_start::tests::starts",
+        ]
+    );
+}
+
+#[test]
 fn a_summary_with_no_tests_names_the_empty_selection() {
     assert_eq!(
         plan_summary(30, &[]),
@@ -232,5 +263,156 @@ fn a_summary_with_two_tests_uses_the_plural() {
             ]
         ),
         "### Stress job: 2 tests, 30 runs each\n```\nloop::turns resumes_after_pause\nlog writer::tests::flushes_on_drop\n```\n"
+    );
+}
+
+const CI_STRESS_OUTPUT_RAW: &str = include_str!("stress_tests/nextest-ci-30.raw");
+const CI_STRESS_OUTPUT_STRIPPED: &str = include_str!("stress_tests/nextest-ci-30.txt");
+
+#[test]
+fn the_ci_30_iteration_stress_output_passes_raw_and_ansi_stripped() {
+    assert!(CI_STRESS_OUTPUT_RAW.contains('\u{1b}'));
+    assert_eq!(check_stress_output(CI_STRESS_OUTPUT_RAW, 30, 8), Ok(()));
+    assert_eq!(
+        check_stress_output(CI_STRESS_OUTPUT_STRIPPED, 30, 8),
+        Ok(())
+    );
+}
+
+#[test]
+fn zero_iteration_summaries_fail_even_when_the_run_summary_passes() {
+    let summary = CI_STRESS_OUTPUT_STRIPPED
+        .lines()
+        .find(|line| line.contains("stress run iterations:"))
+        .unwrap();
+    assert_eq!(
+        check_stress_output(summary, 30, 8),
+        Err("expected 30 iteration summaries, found 0".to_owned())
+    );
+}
+
+#[test]
+fn a_short_iteration_count_fails() {
+    let short = CI_STRESS_OUTPUT_STRIPPED
+        .lines()
+        .filter(|line| !line.contains("iteration 30/30:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        check_stress_output(&short, 30, 8),
+        Err("expected 30 iteration summaries, found 29".to_owned())
+    );
+}
+
+#[test]
+fn an_iteration_that_runs_fewer_tests_than_planned_fails() {
+    let fewer = CI_STRESS_OUTPUT_STRIPPED.replacen("8 tests run:", "7 tests run:", 1);
+    assert_eq!(
+        check_stress_output(&fewer, 30, 8),
+        Err("iteration 1/30 ran 7 tests; plan names 8".to_owned())
+    );
+}
+
+#[test]
+fn an_iteration_that_runs_more_tests_than_planned_fails() {
+    let more = CI_STRESS_OUTPUT_STRIPPED.replacen("8 tests run:", "9 tests run:", 1);
+    assert_eq!(
+        check_stress_output(&more, 30, 8),
+        Err("iteration 1/30 ran 9 tests; plan names 8".to_owned())
+    );
+}
+
+#[test]
+fn an_iteration_with_a_different_planned_total_fails() {
+    let wrong_total = CI_STRESS_OUTPUT_STRIPPED.replacen("iteration 1/30:", "iteration 1/29:", 1);
+    assert_eq!(
+        check_stress_output(&wrong_total, 30, 8),
+        Err("iteration 1/29 does not match the planned count 30".to_owned())
+    );
+}
+
+#[test]
+fn a_missing_run_summary_fails() {
+    let without_summary = CI_STRESS_OUTPUT_STRIPPED
+        .lines()
+        .filter(|line| !line.contains("stress run iterations:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        check_stress_output(&without_summary, 30, 8),
+        Err("expected one stress run summary, found 0".to_owned())
+    );
+}
+
+#[test]
+fn run_summary_counts_must_all_match_the_plan() {
+    for (summary, expected) in [
+        (
+            "29/30 stress run iterations: 30 passed",
+            "stress run summary says 29/30 iterations and 30 passed; expected 30/30 and 30 passed",
+        ),
+        (
+            "30/29 stress run iterations: 30 passed",
+            "stress run summary says 30/29 iterations and 30 passed; expected 30/30 and 30 passed",
+        ),
+        (
+            "30/30 stress run iterations: 29 passed",
+            "stress run summary says 30/30 iterations and 29 passed; expected 30/30 and 30 passed",
+        ),
+    ] {
+        let log =
+            CI_STRESS_OUTPUT_STRIPPED.replace("30/30 stress run iterations: 30 passed", summary);
+        assert_eq!(check_stress_output(&log, 30, 8), Err(expected.to_owned()));
+    }
+}
+
+#[test]
+fn a_failed_or_duplicate_run_summary_fails() {
+    let failed = CI_STRESS_OUTPUT_STRIPPED.replace(
+        "30/30 stress run iterations: 30 passed",
+        "30/30 stress run iterations: 30 failed",
+    );
+    assert_eq!(
+        check_stress_output(&failed, 30, 8),
+        Err("expected one stress run summary, found 0".to_owned())
+    );
+
+    let summary = CI_STRESS_OUTPUT_STRIPPED
+        .lines()
+        .find(|line| line.contains("stress run iterations:"))
+        .unwrap();
+    let duplicate = format!("{CI_STRESS_OUTPUT_STRIPPED}{summary}\n");
+    assert_eq!(
+        check_stress_output(&duplicate, 30, 8),
+        Err("expected one stress run summary, found 2".to_owned())
+    );
+}
+
+#[test]
+fn a_singular_iteration_run_is_counted() {
+    let output = " Stress test [   0.001s] iteration 1/1: 1 test run: 1 passed\n     Summary [   0.001s] 1/1 stress run iterations: 1 passed\n";
+    assert_eq!(check_stress_output(output, 1, 1), Ok(()));
+}
+
+#[test]
+fn stress_check_command_returns_its_parser_result() {
+    let temp = fakes::TempDir::new("xtask-stress-check");
+    temp.write("valid.log", CI_STRESS_OUTPUT_STRIPPED);
+    temp.write("invalid.log", "not nextest output");
+
+    let args = |path: &str| {
+        vec![
+            "--log".to_owned(),
+            temp.path().join(path).to_string_lossy().into_owned(),
+            "--count".to_owned(),
+            "30".to_owned(),
+            "--tests".to_owned(),
+            "8".to_owned(),
+        ]
+    };
+    assert_eq!(stress_check_command(&args("valid.log")), Ok(true));
+    assert_eq!(
+        stress_check_command(&args("invalid.log")),
+        Err("stress output: expected 30 iteration summaries, found 0".to_owned())
     );
 }
