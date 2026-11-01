@@ -106,7 +106,7 @@ pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigEr
 // The failure-injection seam lives in `support` behind `debug_assertions`;
 // these names re-expose it so every existing test `use` line compiles
 // unedited.
-#[cfg(any(test, debug_assertions))]
+#[cfg(test)]
 pub(crate) use support::atomic::{
     Stage, before_rename, fail_at, fail_nth, reset_write_count, write_count,
 };
