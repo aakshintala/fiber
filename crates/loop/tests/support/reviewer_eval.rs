@@ -880,7 +880,9 @@ pub(crate) fn split_argv(
     Ok((rest, opts))
 }
 
-/// What one pinned native line carries.
+/// What one pinned native line carries, in block order: an assistant line
+/// mixing pending text with its calls folds exactly as the live renderer
+/// would, dropping the text the call breaks.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum NativeLine {
     /// The person's message text.
@@ -900,6 +902,67 @@ pub(crate) enum NativeLine {
     Compaction,
     /// A line carrying no conversation.
     Skip,
+}
+
+/// Maps one native Claude tool spelling to the fiber tool and its judged
+/// arguments: `Bash` runs a shell command, `Read` reads `file_path`,
+/// `Edit` replaces `old_string` with `new_string`, and `Write` writes
+/// `content`. Lowercase names pass through with their arguments untouched.
+/// Anything else passes through under its native name, so the declared
+/// table drops it with a count instead of failing the file.
+fn map_native_call(name: &str, input: &Value) -> (String, Value) {
+    let object = input.as_object();
+    if name == "Bash"
+        && let Some(object) = object
+        && let Some(command) = object.get("command").and_then(Value::as_str)
+    {
+        let mut mapped = serde_json::Map::new();
+        mapped.insert("command".to_owned(), Value::String(command.to_owned()));
+        return ("shell".to_owned(), Value::Object(mapped));
+    }
+    if name == "Read"
+        && let Some(object) = object
+        && let Some(path) = object.get("file_path").and_then(Value::as_str)
+    {
+        let mut mapped = serde_json::Map::new();
+        mapped.insert("path".to_owned(), Value::String(path.to_owned()));
+        for key in ["offset", "limit"] {
+            if let Some(value) = object.get(key) {
+                mapped.insert(key.to_owned(), value.clone());
+            }
+        }
+        return ("read".to_owned(), Value::Object(mapped));
+    }
+    if name == "Edit"
+        && let Some(object) = object
+        && let Some(path) = object.get("file_path").and_then(Value::as_str)
+        && let Some(old_text) = object.get("old_string").and_then(Value::as_str)
+        && let Some(new_text) = object.get("new_string").and_then(Value::as_str)
+    {
+        return (
+            "edit".to_owned(),
+            serde_json::json!({
+                "path": path,
+                "edits": [{"old_text": old_text, "new_text": new_text}],
+            }),
+        );
+    }
+    if name == "Write"
+        && let Some(object) = object
+        && let Some(path) = object.get("file_path").and_then(Value::as_str)
+        && let Some(content) = object.get("content")
+    {
+        return (
+            "write".to_owned(),
+            serde_json::json!({"path": path, "content": content}),
+        );
+    }
+    (
+        name.to_owned(),
+        object
+            .map(|object| Value::Object(object.clone()))
+            .unwrap_or(Value::Null),
+    )
 }
 
 /// One string field of a JSON object.
@@ -949,18 +1012,25 @@ fn has_result_block(content: &Value) -> bool {
     }
 }
 
-/// Classifies one parsed Claude Code project JSONL value.
-fn classify_claude(value: &Value) -> Result<NativeLine, String> {
+/// Classifies one parsed Claude Code project JSONL value into its line
+/// items in block order. Reasoning blocks are skipped: they shape no
+/// prompt the reviewer is shown. An `api-request-blob` line is the
+/// transport's mirror of the same turns the person and agent lines carry,
+/// so it skips instead of doubling every entry.
+fn classify_claude(value: &Value) -> Result<Vec<NativeLine>, String> {
     let kind = str_field(value, "type").unwrap_or_default();
+    if kind == "api-request-blob" {
+        return Ok(vec![NativeLine::Skip]);
+    }
     if kind == "user" {
         let message = value.get("message");
         let content = message.and_then(|message| message.get("content"));
         match content {
-            None | Some(Value::Null) => Ok(NativeLine::Skip),
-            Some(content) if has_result_block(content) => Ok(NativeLine::Result),
+            None | Some(Value::Null) => Ok(vec![NativeLine::Skip]),
+            Some(content) if has_result_block(content) => Ok(vec![NativeLine::Result]),
             Some(content) => match content_text(content) {
-                Some(text) if !text.trim().is_empty() => Ok(NativeLine::Person(text)),
-                Some(_) => Ok(NativeLine::Skip),
+                Some(text) if !text.trim().is_empty() => Ok(vec![NativeLine::Person(text)]),
+                Some(_) => Ok(vec![NativeLine::Skip]),
                 None => Err(
                     "review: a user line carries content the importer does not cover".to_owned(),
                 ),
@@ -971,10 +1041,10 @@ fn classify_claude(value: &Value) -> Result<NativeLine, String> {
             .get("message")
             .and_then(|message| message.get("content"));
         match content {
-            None | Some(Value::Null) => Ok(NativeLine::Skip),
+            None | Some(Value::Null) => Ok(vec![NativeLine::Skip]),
             Some(Value::Array(blocks)) => {
+                let mut items = Vec::new();
                 let mut texts = Vec::new();
-                let mut call = None;
                 for block in blocks {
                     match str_field(block, "type").unwrap_or_default() {
                         "text" => {
@@ -983,106 +1053,145 @@ fn classify_claude(value: &Value) -> Result<NativeLine, String> {
                             }
                         }
                         "tool_use" => {
-                            if call.is_none() {
-                                let tool = str_field(block, "name").unwrap_or_default();
-                                let arguments = block.get("input").cloned().unwrap_or(Value::Null);
-                                if tool.is_empty() || !arguments.is_object() {
-                                    return Err(
-                                        "review: a tool_use block names no tool call".to_owned()
-                                    );
-                                }
-                                call = Some((tool.to_owned(), arguments));
+                            let name = str_field(block, "name").unwrap_or_default();
+                            let input = block.get("input").cloned().unwrap_or(Value::Null);
+                            let (tool, arguments) = map_native_call(name, &input);
+                            let text = texts.join("\n");
+                            if !text.trim().is_empty() {
+                                items.push(NativeLine::AssistantText(text));
+                                texts.clear();
                             }
+                            items.push(NativeLine::Call { tool, arguments });
                         }
-                        "tool_result" | "tool_use_result" => {}
+                        "thinking" | "tool_result" | "tool_use_result" => {}
                         _ => {
                             return Err("review: an assistant line carries content the importer does not cover".to_owned());
                         }
                     }
                 }
-                if let Some((tool, arguments)) = call {
-                    if !texts.join("").trim().is_empty() {
-                        return Err("review: an assistant line mixes text with its call".to_owned());
-                    }
-                    Ok(NativeLine::Call { tool, arguments })
-                } else {
-                    let text = texts.join("\n");
-                    if text.trim().is_empty() {
-                        Ok(NativeLine::Skip)
-                    } else {
-                        Ok(NativeLine::AssistantText(text))
-                    }
+                let text = texts.join("\n");
+                if !text.trim().is_empty() {
+                    items.push(NativeLine::AssistantText(text));
                 }
+                if items.is_empty() {
+                    items.push(NativeLine::Skip);
+                }
+                Ok(items)
             }
             Some(Value::String(text)) if !text.trim().is_empty() => {
-                Ok(NativeLine::AssistantText(text.clone()))
+                Ok(vec![NativeLine::AssistantText(text.clone())])
             }
-            Some(_) => Ok(NativeLine::Skip),
+            Some(_) => Ok(vec![NativeLine::Skip]),
         }
     } else if kind == "summary" {
-        Ok(NativeLine::Compaction)
+        Ok(vec![NativeLine::Compaction])
     } else if value.get("message").is_some() {
         Err("review: a line carries conversation the importer does not cover".to_owned())
     } else {
-        Ok(NativeLine::Skip)
+        Ok(vec![NativeLine::Skip])
     }
 }
 
-/// Parses one native Claude Code project JSONL line.
-pub(crate) fn parse_claude_line(line: &str) -> Result<NativeLine, String> {
+/// Parses one native Claude Code project JSONL line into its line items.
+pub(crate) fn parse_claude_line(line: &str) -> Result<Vec<NativeLine>, String> {
     let value: Value =
         serde_json::from_str(line).map_err(|error| format!("review: bad native line: {error}"))?;
     classify_claude(&value)
 }
 
 /// Classifies one parsed pi session JSONL value.
-fn classify_pi(value: &Value) -> Result<NativeLine, String> {
+fn classify_pi(value: &Value) -> Result<Vec<NativeLine>, String> {
     let kind = str_field(value, "type").unwrap_or_default();
-    if kind == "message" {
-        let role = str_field(value, "role").unwrap_or_default();
-        let content = value.get("content");
-        match (role, content) {
-            ("user", Some(content)) if has_result_block(content) => Ok(NativeLine::Result),
-            ("user", Some(content)) => match content_text(content) {
-                Some(text) if !text.trim().is_empty() => Ok(NativeLine::Person(text)),
-                Some(_) => Ok(NativeLine::Skip),
+    if kind == "compaction" {
+        return Ok(vec![NativeLine::Compaction]);
+    }
+    if kind != "message" {
+        if value.get("message").is_some() {
+            return Err(
+                "review: a line carries conversation the importer does not cover".to_owned(),
+            );
+        }
+        return Ok(vec![NativeLine::Skip]);
+    }
+    let envelope = value.get("message").unwrap_or(&Value::Null);
+    let role = str_field(envelope, "role").unwrap_or_default();
+    let content = envelope.get("content");
+    if role == "system" {
+        return Ok(vec![NativeLine::Skip]);
+    }
+    if role == "toolResult" {
+        return Ok(vec![NativeLine::Result]);
+    }
+    if role == "user" {
+        return match content {
+            None | Some(Value::Null) => Ok(vec![NativeLine::Skip]),
+            Some(content) if has_result_block(content) => Ok(vec![NativeLine::Result]),
+            Some(content) => match content_text(content) {
+                Some(text) if !text.trim().is_empty() => Ok(vec![NativeLine::Person(text)]),
+                Some(_) => Ok(vec![NativeLine::Skip]),
                 None => Err(
                     "review: a user line carries content the importer does not cover".to_owned(),
                 ),
             },
-            ("assistant", Some(content)) => match content_text(content) {
-                Some(text) if !text.trim().is_empty() => Ok(NativeLine::AssistantText(text)),
-                Some(_) => Ok(NativeLine::Skip),
-                None => Err(
-                    "review: an assistant line carries content the importer does not cover"
-                        .to_owned(),
-                ),
-            },
-            _ => Err("review: a message line names no role or content".to_owned()),
-        }
-    } else if kind == "toolcall" {
-        let tool = str_field(value, "name").unwrap_or_default();
-        let arguments = value.get("arguments").cloned().unwrap_or(Value::Null);
-        if tool.is_empty() || !arguments.is_object() {
-            return Err("review: a toolcall line names no tool call".to_owned());
-        }
-        Ok(NativeLine::Call {
-            tool: tool.to_owned(),
-            arguments,
-        })
-    } else if kind == "toolresult" {
-        Ok(NativeLine::Result)
-    } else if kind == "compaction" {
-        Ok(NativeLine::Compaction)
-    } else if value.get("message").is_some() || value.get("content").is_some() {
-        Err("review: a line carries conversation the importer does not cover".to_owned())
-    } else {
-        Ok(NativeLine::Skip)
+        };
     }
+    if role == "assistant" {
+        return match content {
+            None | Some(Value::Null) => Ok(vec![NativeLine::Skip]),
+            Some(Value::Array(blocks)) => {
+                let mut items = Vec::new();
+                let mut texts = Vec::new();
+                for block in blocks {
+                    match str_field(block, "type").unwrap_or_default() {
+                        "text" => {
+                            if let Some(text) = str_field(block, "text") {
+                                texts.push(text.to_owned());
+                            }
+                        }
+                        "toolCall" => {
+                            let name = str_field(block, "name").unwrap_or_default();
+                            let arguments = block.get("arguments").cloned().unwrap_or(Value::Null);
+                            if name.is_empty() || !arguments.is_object() {
+                                return Err(
+                                    "review: a toolCall block names no tool call".to_owned()
+                                );
+                            }
+                            let text = texts.join("\n");
+                            if !text.trim().is_empty() {
+                                items.push(NativeLine::AssistantText(text));
+                                texts.clear();
+                            }
+                            items.push(NativeLine::Call {
+                                tool: name.to_owned(),
+                                arguments,
+                            });
+                        }
+                        "thinking" => {}
+                        _ => {
+                            return Err("review: an assistant line carries content the importer does not cover".to_owned());
+                        }
+                    }
+                }
+                let text = texts.join("\n");
+                if !text.trim().is_empty() {
+                    items.push(NativeLine::AssistantText(text));
+                }
+                if items.is_empty() {
+                    items.push(NativeLine::Skip);
+                }
+                Ok(items)
+            }
+            Some(Value::String(text)) if !text.trim().is_empty() => {
+                Ok(vec![NativeLine::AssistantText(text.clone())])
+            }
+            Some(_) => Ok(vec![NativeLine::Skip]),
+        };
+    }
+    Err("review: a message line names no role the importer covers".to_owned())
 }
 
-/// Parses one native pi session JSONL line.
-pub(crate) fn parse_pi_line(line: &str) -> Result<NativeLine, String> {
+/// Parses one native pi session JSONL line into its line items.
+pub(crate) fn parse_pi_line(line: &str) -> Result<Vec<NativeLine>, String> {
     let value: Value =
         serde_json::from_str(line).map_err(|error| format!("review: bad native line: {error}"))?;
     classify_pi(&value)
@@ -1637,7 +1746,7 @@ fn fold_native_file(
     content: &str,
     file: &str,
     session: &str,
-    classify: &dyn Fn(&Value) -> Result<NativeLine, String>,
+    classify: &dyn Fn(&Value) -> Result<Vec<NativeLine>, String>,
     ctx: &ScrubCtx,
     exists: &dyn Fn(&Path) -> Option<bool>,
 ) -> Result<FoldedFile, String> {
@@ -1672,51 +1781,54 @@ fn fold_native_file(
                 }
             }
         }
-        let line = classify(value).map_err(|problem| format!("review: {file}:{seq}: {problem}"))?;
-        match line {
-            NativeLine::Person(text) => fold.person(*seq, &text, ctx),
-            NativeLine::AssistantText(text) => {
-                if !text.trim().is_empty() {
-                    fold.pending.push((*seq, text));
-                }
-            }
-            NativeLine::Call { tool, arguments } => {
-                let id = format!("{session}-{seq:04}");
-                let snapshot = fold.call(*seq, &id, &tool, &arguments);
-                match declared_for(&tool, &arguments, &workspace, exists, ctx) {
-                    Ok((declared, hosts)) => {
-                        folded.entries.push(foreign_to_label_input(ForeignInput {
-                            id: &id,
-                            tool: &tool,
-                            arguments: &arguments,
-                            declared: &declared,
-                            hosts,
-                            reviewed: snapshot,
-                            workspace: &workspace,
-                            added_folders: &fold.added_folders,
-                            source: Source {
-                                kind: SourceKind::Sampled,
-                                session: session.to_owned(),
-                                seq: Some(*seq),
-                            },
-                            ctx,
-                        }));
+        let items =
+            classify(value).map_err(|problem| format!("review: {file}:{seq}: {problem}"))?;
+        for line in items {
+            match line {
+                NativeLine::Person(text) => fold.person(*seq, &text, ctx),
+                NativeLine::AssistantText(text) => {
+                    if !text.trim().is_empty() {
+                        fold.pending.push((*seq, text));
                     }
-                    Err(unsupported) => {
-                        let at = folded
-                            .dropped
-                            .iter()
-                            .position(|(name, _)| *name == unsupported.tool);
-                        match at {
-                            Some(at) => folded.dropped[at].1 += 1,
-                            None => folded.dropped.push((unsupported.tool, 1)),
+                }
+                NativeLine::Call { tool, arguments } => {
+                    let id = format!("{session}-{seq:04}");
+                    let snapshot = fold.call(*seq, &id, &tool, &arguments);
+                    match declared_for(&tool, &arguments, &workspace, exists, ctx) {
+                        Ok((declared, hosts)) => {
+                            folded.entries.push(foreign_to_label_input(ForeignInput {
+                                id: &id,
+                                tool: &tool,
+                                arguments: &arguments,
+                                declared: &declared,
+                                hosts,
+                                reviewed: snapshot,
+                                workspace: &workspace,
+                                added_folders: &fold.added_folders,
+                                source: Source {
+                                    kind: SourceKind::Sampled,
+                                    session: session.to_owned(),
+                                    seq: Some(*seq),
+                                },
+                                ctx,
+                            }));
+                        }
+                        Err(unsupported) => {
+                            let at = folded
+                                .dropped
+                                .iter()
+                                .position(|(name, _)| *name == unsupported.tool);
+                            match at {
+                                Some(at) => folded.dropped[at].1 += 1,
+                                None => folded.dropped.push((unsupported.tool, 1)),
+                            }
                         }
                     }
                 }
+                NativeLine::Result => {}
+                NativeLine::Compaction => fold.compact(),
+                NativeLine::Skip => {}
             }
-            NativeLine::Result => {}
-            NativeLine::Compaction => fold.compact(),
-            NativeLine::Skip => {}
         }
     }
     folded.workspace_raw = workspace.clone();

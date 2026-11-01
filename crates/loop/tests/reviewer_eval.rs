@@ -506,36 +506,84 @@ fn claude_lines_map_person_text_call_result_and_compaction() {
         r#"{"type":"user","uuid":"u1","cwd":"/w","message":{"content":"never push"}}"#,
     )
     .unwrap();
-    assert!(matches!(person, NativeLine::Person(ref text) if text == "never push"));
+    assert!(matches!(person.as_slice(), [NativeLine::Person(text)] if text == "never push"));
     let blocks = parse_claude_line(
         r#"{"type":"user","uuid":"u2","message":{"content":[{"type":"text","text":"hi"}]}}"#,
     )
     .unwrap();
-    assert!(matches!(blocks, NativeLine::Person(ref text) if text == "hi"));
+    assert!(matches!(blocks.as_slice(), [NativeLine::Person(text)] if text == "hi"));
     let sidechain = parse_claude_line(
         r#"{"type":"user","isSidechain":true,"message":{"content":"subagent here"}}"#,
     )
     .unwrap();
-    assert!(matches!(sidechain, NativeLine::Person(_)));
+    assert!(matches!(sidechain.as_slice(), [NativeLine::Person(_)]));
     let text = parse_claude_line(
         r#"{"type":"assistant","message":{"content":[{"type":"text","text":"looking"}]}}"#,
     )
     .unwrap();
-    assert!(matches!(text, NativeLine::AssistantText(ref t) if t == "looking"));
+    assert!(matches!(text.as_slice(), [NativeLine::AssistantText(t)] if t == "looking"));
     let call = parse_claude_line(
         r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"read","input":{"path":"a"}}]}}"#,
     )
     .unwrap();
-    assert!(matches!(call, NativeLine::Call { ref tool, .. } if tool == "read"));
+    assert!(matches!(call.as_slice(), [NativeLine::Call { tool, .. }] if tool == "read"));
     let result = parse_claude_line(
         r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
     )
     .unwrap();
-    assert!(matches!(result, NativeLine::Result));
+    assert!(matches!(result.as_slice(), [NativeLine::Result]));
     let compaction = parse_claude_line(r#"{"type":"summary","summary":"so far"}"#).unwrap();
-    assert!(matches!(compaction, NativeLine::Compaction));
+    assert!(matches!(compaction.as_slice(), [NativeLine::Compaction]));
     let queued = parse_claude_line(r#"{"type":"queue-operation","op":"x"}"#).unwrap();
-    assert!(matches!(queued, NativeLine::Skip));
+    assert!(matches!(queued.as_slice(), [NativeLine::Skip]));
+    let blob =
+        parse_claude_line(r#"{"type":"api-request-blob","message":{"content":"x"}}"#).unwrap();
+    assert!(matches!(blob.as_slice(), [NativeLine::Skip]));
+}
+
+#[test]
+fn claude_lines_skip_thinking_and_map_native_spellings() {
+    let thinking = parse_claude_line(
+        r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"looking"}]}}"#,
+    )
+    .unwrap();
+    assert!(matches!(thinking.as_slice(), [NativeLine::AssistantText(t)] if t == "looking"));
+    let bash = parse_claude_line(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls","description":"list"}}]}}"#,
+    )
+    .unwrap();
+    assert!(
+        matches!(&bash.as_slice(), [NativeLine::Call { tool, arguments }] if tool == "shell" && arguments == &json!({"command": "ls"}))
+    );
+    let read = parse_claude_line(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a","offset":1}}]}}"#,
+    )
+    .unwrap();
+    assert!(
+        matches!(&read.as_slice(), [NativeLine::Call { tool, arguments }] if tool == "read" && arguments == &json!({"path": "a", "offset": 1}))
+    );
+    let edit = parse_claude_line(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"a","old_string":"x","new_string":"y"}}]}}"#,
+    )
+    .unwrap();
+    assert!(
+        matches!(&edit.as_slice(), [NativeLine::Call { tool, arguments }] if tool == "edit" && arguments == &json!({"path": "a", "edits": [{"old_text": "x", "new_text": "y"}]}))
+    );
+    let write = parse_claude_line(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"a","content":"x"}}]}}"#,
+    )
+    .unwrap();
+    assert!(
+        matches!(&write.as_slice(), [NativeLine::Call { tool, arguments }] if tool == "write" && arguments == &json!({"path": "a", "content": "x"}))
+    );
+    let mixed = parse_claude_line(
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"plan"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        &mixed.as_slice(),
+        [NativeLine::AssistantText(_), NativeLine::Call { .. }]
+    ));
 }
 
 #[test]
@@ -547,42 +595,57 @@ fn claude_unclassifiable_conversational_lines_error() {
         )
         .is_err()
     );
+    let search = parse_claude_line(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"ToolSearch","input":{}}]}}"#,
+    )
+    .unwrap();
+    assert!(matches!(&search.as_slice(), [NativeLine::Call { tool, .. }] if tool == "ToolSearch"));
 }
 
 #[test]
 fn pi_lines_map_message_toolcall_result_and_compaction() {
     let person = parse_pi_line(
-        r#"{"type":"message","role":"user","content":[{"type":"text","text":"go"}]}"#,
+        r#"{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"go"}]}}"#,
     )
     .unwrap();
-    assert!(matches!(person, NativeLine::Person(ref text) if text == "go"));
+    assert!(matches!(person.as_slice(), [NativeLine::Person(text)] if text == "go"));
     let text = parse_pi_line(
-        r#"{"type":"message","role":"assistant","content":[{"type":"text","text":"on it"}]}"#,
+        r#"{"type":"message","id":"m2","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"on it"}]}}"#,
     )
     .unwrap();
-    assert!(matches!(text, NativeLine::AssistantText(ref t) if t == "on it"));
+    assert!(matches!(text.as_slice(), [NativeLine::AssistantText(t)] if t == "on it"));
     let call = parse_pi_line(
-        r#"{"type":"toolcall","id":"c1","name":"shell","arguments":{"command":"ls"}}"#,
+        r#"{"type":"message","id":"m3","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"shell","arguments":{"command":"ls"}}]}}"#,
     )
     .unwrap();
-    assert!(matches!(call, NativeLine::Call { ref tool, .. } if tool == "shell"));
-    let result = parse_pi_line(r#"{"type":"toolresult","id":"c1","content":"ok"}"#).unwrap();
-    assert!(matches!(result, NativeLine::Result));
+    assert!(matches!(call.as_slice(), [NativeLine::Call { tool, .. }] if tool == "shell"));
+    let result = parse_pi_line(
+        r#"{"type":"message","id":"m4","message":{"role":"toolResult","toolCallId":"c1","content":[]}}"#,
+    )
+    .unwrap();
+    assert!(matches!(result.as_slice(), [NativeLine::Result]));
+    let system = parse_pi_line(
+        r#"{"type":"message","id":"m5","message":{"role":"system","content":"prompt"}}"#,
+    )
+    .unwrap();
+    assert!(matches!(system.as_slice(), [NativeLine::Skip]));
+    let session = parse_pi_line(r#"{"type":"session","cwd":"/w"}"#).unwrap();
+    assert!(matches!(session.as_slice(), [NativeLine::Skip]));
     let compaction = parse_pi_line(r#"{"type":"compaction","summary":"so far"}"#).unwrap();
-    assert!(matches!(compaction, NativeLine::Compaction));
-    let heartbeat = parse_pi_line(r#"{"type":"heartbeat","at":1}"#).unwrap();
-    assert!(matches!(heartbeat, NativeLine::Skip));
-    assert!(parse_pi_line(r#"{"type":"message","role":"assistant"}"#).is_err());
+    assert!(matches!(compaction.as_slice(), [NativeLine::Compaction]));
+    let custom = parse_pi_line(r#"{"type":"custom","customType":"pi-stamp"}"#).unwrap();
+    assert!(matches!(custom.as_slice(), [NativeLine::Skip]));
+    assert!(parse_pi_line(r#"{"type":"message","id":"m6"}"#).is_err());
 }
 
 #[test]
 fn foreign_entries_carry_person_calls_and_answered_replies() {
     let content = [
-        r#"{"type":"message","role":"user","cwd":"/test/home/work","content":[{"type":"text","text":"never push"}]}"#,
-        r#"{"type":"message","role":"assistant","content":[{"type":"text","text":"proposal: run ls"}]}"#,
-        r#"{"type":"toolcall","id":"c1","name":"shell","arguments":{"command":"ls"}}"#,
-        r#"{"type":"toolresult","id":"c1","content":"ok"}"#,
-        r#"{"type":"message","role":"user","content":[{"type":"text","text":"yes"}]}"#,
+        r#"{"type":"message","id":"m1","cwd":"/test/home/work","message":{"role":"user","content":[{"type":"text","text":"never push"}]}}"#,
+        r#"{"type":"message","id":"m2","message":{"role":"assistant","content":[{"type":"text","text":"proposal: run ls"}]}}"#,
+        r#"{"type":"message","id":"m3","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"shell","arguments":{"command":"ls"}}]}}"#,
+        r#"{"type":"message","id":"m4","message":{"role":"toolResult","toolCallId":"c1","content":[]}}"#,
+        r#"{"type":"message","id":"m5","message":{"role":"user","content":[{"type":"text","text":"yes"}]}}"#,
     ]
     .join("\n");
     let entries = parse_pi_file(&content, "p.jsonl", "pi", &ctx(), &|_| None)
@@ -604,10 +667,10 @@ fn foreign_entries_carry_person_calls_and_answered_replies() {
 #[test]
 fn foreign_pending_reply_answers_the_next_person() {
     let content = [
-        r#"{"type":"message","role":"user","content":[{"type":"text","text":"never push"}]}"#,
-        r#"{"type":"message","role":"assistant","content":[{"type":"text","text":"proposal: run ls"}]}"#,
-        r#"{"type":"message","role":"user","content":[{"type":"text","text":"yes"}]}"#,
-        r#"{"type":"toolcall","id":"c1","name":"shell","arguments":{"command":"ls"}}"#,
+        r#"{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"never push"}]}}"#,
+        r#"{"type":"message","id":"m2","message":{"role":"assistant","content":[{"type":"text","text":"proposal: run ls"}]}}"#,
+        r#"{"type":"message","id":"m3","message":{"role":"user","content":[{"type":"text","text":"yes"}]}}"#,
+        r#"{"type":"message","id":"m4","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"shell","arguments":{"command":"ls"}}]}}"#,
     ]
     .join("\n");
     let entries = parse_pi_file(&content, "p.jsonl", "pi", &ctx(), &|_| None)
@@ -625,10 +688,10 @@ fn foreign_pending_reply_answers_the_next_person() {
 #[test]
 fn foreign_fold_carries_the_full_prefix_and_drops_pending_on_calls() {
     let content = [
-        r#"{"type":"message","role":"assistant","content":[{"type":"text","text":"stale"}]}"#,
-        r#"{"type":"toolcall","id":"c1","name":"shell","arguments":{"command":"echo hi"}}"#,
-        r#"{"type":"message","role":"user","content":[{"type":"text","text":"go"}]}"#,
-        r#"{"type":"toolcall","id":"c2","name":"shell","arguments":{"command":"echo yo"}}"#,
+        r#"{"type":"message","id":"m1","message":{"role":"assistant","content":[{"type":"text","text":"stale"}]}}"#,
+        r#"{"type":"message","id":"m2","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"shell","arguments":{"command":"echo hi"}}]}}"#,
+        r#"{"type":"message","id":"m3","message":{"role":"user","content":[{"type":"text","text":"go"}]}}"#,
+        r#"{"type":"message","id":"m4","message":{"role":"assistant","content":[{"type":"toolCall","id":"c2","name":"shell","arguments":{"command":"echo yo"}}]}}"#,
     ]
     .join("\n");
     let entries = parse_pi_file(&content, "p.jsonl", "pi", &ctx(), &|_| None)
@@ -652,11 +715,11 @@ fn foreign_fold_carries_the_full_prefix_and_drops_pending_on_calls() {
 #[test]
 fn foreign_compaction_keeps_person_messages_with_answered_replies() {
     let content = [
-        r#"{"type":"message","role":"user","content":[{"type":"text","text":"keep me"}]}"#,
-        r#"{"type":"message","role":"assistant","content":[{"type":"text","text":"reply"}]}"#,
-        r#"{"type":"toolcall","id":"c1","name":"shell","arguments":{"command":"echo hi"}}"#,
+        r#"{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"keep me"}]}}"#,
+        r#"{"type":"message","id":"m2","message":{"role":"assistant","content":[{"type":"text","text":"reply"}]}}"#,
+        r#"{"type":"message","id":"m3","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"shell","arguments":{"command":"echo hi"}}]}}"#,
         r#"{"type":"compaction","summary":"compacted"}"#,
-        r#"{"type":"toolcall","id":"c2","name":"shell","arguments":{"command":"echo yo"}}"#,
+        r#"{"type":"message","id":"m4","message":{"role":"assistant","content":[{"type":"toolCall","id":"c2","name":"shell","arguments":{"command":"echo yo"}}]}}"#,
     ]
     .join("\n");
     let entries = parse_pi_file(&content, "p.jsonl", "pi", &ctx(), &|_| None)
@@ -680,7 +743,7 @@ fn foreign_compaction_keeps_person_messages_with_answered_replies() {
 
 #[test]
 fn foreign_files_error_naming_file_and_line() {
-    let content = "{\"type\":\"message\",\"role\":\"user\"}\n";
+    let content = "{\"type\":\"message\",\"id\":\"m1\"}\n";
     let problem = parse_pi_file(content, "p.jsonl", "pi", &ctx(), &|_| None).unwrap_err();
     assert!(problem.contains("p.jsonl:1"), "{problem}");
     let problem = parse_claude_file(
@@ -697,8 +760,8 @@ fn foreign_files_error_naming_file_and_line() {
 #[test]
 fn foreign_entries_scrub_values_and_use_synthetic_ids() {
     let content = [
-        "{\"type\":\"message\",\"role\":\"user\",\"cwd\":\"/test/home/work\",\"content\":[{\"type\":\"text\",\"text\":\"by Test Owner\"}]}",
-        "{\"type\":\"toolcall\",\"id\":\"c1\",\"name\":\"read\",\"arguments\":{\"path\":\"/test/home/work/a\"}}",
+        "{\"type\":\"message\",\"id\":\"m1\",\"cwd\":\"/test/home/work\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"by Test Owner\"}]}}",
+        "{\"type\":\"message\",\"id\":\"m2\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"c1\",\"name\":\"read\",\"arguments\":{\"path\":\"/test/home/work/a\"}}]}}",
     ]
     .join("\n");
     let entries = parse_pi_file(&content, "p.jsonl", "pi", &ctx(), &|_| None)
@@ -731,8 +794,8 @@ fn foreign_entries_scrub_values_and_use_synthetic_ids() {
 #[test]
 fn foreign_added_folders_keep_first_event_order_scrubbed() {
     let content = [
-        "{\"type\":\"message\",\"role\":\"user\",\"cwd\":\"/w\",\"added_folders\":[\"/test/home/b\",\"/test/home/a\"],\"content\":[{\"type\":\"text\",\"text\":\"go\"}]}",
-        "{\"type\":\"toolcall\",\"id\":\"c1\",\"name\":\"shell\",\"arguments\":{\"command\":\"echo hi\"}}",
+        "{\"type\":\"message\",\"id\":\"m1\",\"cwd\":\"/w\",\"added_folders\":[\"/test/home/b\",\"/test/home/a\"],\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"go\"}]}}",
+        "{\"type\":\"message\",\"id\":\"m2\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"c1\",\"name\":\"shell\",\"arguments\":{\"command\":\"echo hi\"}}]}}",
     ]
     .join("\n");
     let entries = parse_pi_file(&content, "p.jsonl", "pi", &ctx(), &|_| None)
@@ -971,13 +1034,25 @@ fn unused_sample_opts_default_is_quiet() {
 }
 
 #[test]
+fn foreign_fold_drops_native_spellings_outside_the_table() {
+    let content = [
+        r#"{"type":"user","uuid":"u1","message":{"content":"go"}}"#,
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"ToolSearch","input":{"pattern":"x"}}]}}"#,
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]}}"#,
+    ]
+    .join("\n");
+    let folded = parse_claude_file(&content, "c.jsonl", "cl", &ctx(), &|_| None).unwrap();
+    assert_eq!(folded.entries.len(), 1);
+    assert_eq!(folded.entries[0].tool, "shell");
+    assert_eq!(folded.dropped, vec![("ToolSearch".to_owned(), 1)]);
+}
+
+#[test]
 fn foreign_fold_drops_unsupported_calls_with_the_count() {
     let content = [
-        r#"{"type":"message","role":"user","content":[{"type":"text","text":"go"}]}"#,
-        r#"{"type":"toolcall","id":"c1","name":"mcp-tool","arguments":{"x":1}}"#,
-        r#"{"type":"toolcall","id":"c2","name":"other-tool","arguments":{}}"#,
-        r#"{"type":"toolcall","id":"c3","name":"mcp-tool","arguments":{"x":2}}"#,
-        r#"{"type":"toolcall","id":"c4","name":"shell","arguments":{"command":"echo hi"}}"#,
+        r#"{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"go"}]}}"#,
+        r#"{"type":"message","id":"m2","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"mcp-tool","arguments":{"x":1}},{"type":"toolCall","id":"c2","name":"other-tool","arguments":{}}]}}"#,
+        r#"{"type":"message","id":"m3","message":{"role":"assistant","content":[{"type":"toolCall","id":"c3","name":"mcp-tool","arguments":{"x":2}},{"type":"toolCall","id":"c4","name":"shell","arguments":{"command":"echo hi"}}]}}"#,
     ]
     .join("\n");
     let folded = parse_pi_file(&content, "p.jsonl", "pi", &ctx(), &|_| None).unwrap();
@@ -1520,7 +1595,7 @@ fn built_binary_imports_native_session_files() {
     let native = dir.path().join("session.jsonl");
     fs::write(
         &native,
-        "{\"type\":\"message\",\"role\":\"user\",\"cwd\":\"/home/owner/work/fiber\",\"content\":[{\"type\":\"text\",\"text\":\"never push\"}]}\n{\"type\":\"toolcall\",\"id\":\"c1\",\"name\":\"shell\",\"arguments\":{\"command\":\"echo hi\"}}\n",
+        "{\"type\":\"message\",\"id\":\"m1\",\"cwd\":\"/home/owner/work/fiber\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"never push\"}]}}\n{\"type\":\"message\",\"id\":\"m2\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"c1\",\"name\":\"shell\",\"arguments\":{\"command\":\"echo hi\"}}]}}\n",
     )
     .unwrap();
     let output = run_review(&["--import-pi", native.to_str().unwrap()]);
@@ -1599,7 +1674,7 @@ fn scan_drops_matches_and_keeps_clean_lines() {
 
 #[test]
 fn importer_rejects_a_native_file_outside_the_allowlist() {
-    let content = "{\"type\":\"message\",\"role\":\"user\",\"cwd\":\"/home/u/mycroft\",\"content\":[{\"type\":\"text\",\"text\":\"go\"}]}\n{\"type\":\"toolcall\",\"id\":\"c1\",\"name\":\"shell\",\"arguments\":{\"command\":\"echo hi\"}}\n";
+    let content = "{\"type\":\"message\",\"id\":\"m1\",\"cwd\":\"/home/u/mycroft\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"go\"}]}}\n{\"type\":\"message\",\"id\":\"m2\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"c1\",\"name\":\"shell\",\"arguments\":{\"command\":\"echo hi\"}}]}}\n";
     let dir = fakes::TempDir::new("fiber-eval-outside");
     let native = dir.path().join("session.jsonl");
     fs::write(&native, content).unwrap();
