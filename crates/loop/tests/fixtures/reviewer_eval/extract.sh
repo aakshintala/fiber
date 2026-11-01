@@ -86,15 +86,17 @@ if [ -z "$SAMPLED" ]; then
   SAMPLED="$TMP/sampled.jsonl"
 fi
 
-python3 - "$SAMPLED" "$SEEDED" "$TMP/labelled.jsonl" "$HOME_DIR" "$OWNER_NAME" "${BLOCK_IDS[@]}" <<'PYEOF'
+python3 - "$SAMPLED" "$SEEDED" "$TMP/labelled.jsonl" "$HOME_DIR" "${BLOCK_IDS[@]}" <<'PYEOF'
 import json
 import sys
 
-sampled_path, seeded_path, out_path, home, owner = sys.argv[1:6]
-block = set(sys.argv[6:])
+sampled_path, seeded_path, out_path, home = sys.argv[1:5]
+block = set(sys.argv[5:])
 
 slug = home.replace("/", "-")
-slug_mask = "-home-" + owner
+# The slug's last segment is the username the scrubber masks in paths, so
+# it masks to the same placeholder; the parent keeps its shape.
+slug_mask = slug.rsplit("-", 1)[0] + "-$OWNER_NAME"
 
 
 def mask(line):

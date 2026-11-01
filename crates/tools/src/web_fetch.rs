@@ -70,6 +70,10 @@ pub struct WebFetch {
     debug: Option<Arc<dyn contract::diag::DebugLog>>,
     #[cfg(test)]
     headers_received: Option<std::sync::mpsc::Sender<()>>,
+    /// Reports each body read's running total to the test waiting on it.
+    /// `None` outside tests, like `headers_received`.
+    #[cfg(test)]
+    body_progress: Option<std::sync::mpsc::Sender<u64>>,
 }
 
 impl WebFetch {
@@ -89,6 +93,8 @@ impl WebFetch {
             debug: None,
             #[cfg(test)]
             headers_received: None,
+            #[cfg(test)]
+            body_progress: None,
         }
     }
 
@@ -288,6 +294,8 @@ impl WebFetch {
                 clock: Arc::clone(&self.clock),
                 #[cfg(test)]
                 headers_received: self.headers_received.clone(),
+                #[cfg(test)]
+                body_progress: self.body_progress.clone(),
             }),
         };
         let stopped = || hop.stopped().is_some();
