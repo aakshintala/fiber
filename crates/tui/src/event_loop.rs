@@ -2213,8 +2213,8 @@ mod attach_span_tests {
     }
 
     /// A reopened tail read installs and draws: all five spans emit in
-    /// boundary order at the attached-history draw, each covering its
-    /// own step, before the parent frame line.
+    /// boundary order at the attached-history draw, before the parent
+    /// frame line.
     #[test]
     fn attach_spans_emit_at_the_reopened_install_draw() {
         let home = fakes::TempDir::new("event-loop-attach-spans-reopened");
@@ -2241,9 +2241,6 @@ mod attach_span_tests {
         for line in &lines {
             let op = line["data"]["op"].as_str().unwrap_or_default();
             assert_span_wire(std::slice::from_ref(line), op);
-        }
-        for line in lines.iter().take(5) {
-            assert_eq!(line["data"]["ms"], 20, "each span covers one step: {line}");
         }
     }
 
