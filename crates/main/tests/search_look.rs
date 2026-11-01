@@ -1072,7 +1072,7 @@ fn panel_card_item_at(grid: &Grid, card: &str, description: &str) -> Option<(u16
 
 #[test]
 fn the_item_views_top_row_closes_them() {
-    let (setup, _hold, command) = running_setup();
+    let (setup, hold, command) = running_setup();
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
@@ -1121,6 +1121,43 @@ fn the_item_views_top_row_closes_them() {
         run.wait_screen(
             "the conversation after clicking the item's top row",
             |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
+        );
+    }
+    // Tear down in the open: kill the run, unlink the FIFO, then close
+    // the release (EOF lets every blocked `head` read and exit) and
+    // re-kill the hold pattern until no holder matches. Dropping the
+    // last writer before a head opens the FIFO strands it there forever
+    // (`docs/testing.md`, "Waits and timeouts"), and the drop's one-shot
+    // watchdog kill only reaps what has exec'd by then. Unlinking first
+    // closes the delayed-start window the ticket names: a head that
+    // starts after the unlink fails its open with ENOENT and exits
+    // within milliseconds, which the temp-dir detector's bounded wait
+    // absorbs, so cleanup may stop at the first zero. The re-kill still
+    // reaps openers caught mid-syscall across the unlink. If cleanup
+    // cannot complete, it panics naming the stragglers; the temp-dir
+    // detector is skipped while unwinding.
+    let pattern = hold.path().display().to_string();
+    drop(run);
+    fs::remove_file(hold.path()).unwrap();
+    drop(hold);
+    let deadline = setup.deadline.cleanup_phase();
+    let mut clean = false;
+    while !deadline.left().is_zero() {
+        if fakes::kill_matching(pattern.as_str()).is_err() {
+            break;
+        }
+        if fakes::matching_exits(
+            pattern.as_str(),
+            fakes::Deadline::after(std::time::Duration::from_millis(100)),
+        ) {
+            clean = true;
+            break;
+        }
+    }
+    if !clean {
+        let stragglers = fakes::matching(pattern.as_str()).unwrap_or_default();
+        panic!(
+            "3875 cleanup: the hold pattern never stayed clear (stragglers: {stragglers:?}); the temp-dir detector is skipped while unwinding"
         );
     }
 }
