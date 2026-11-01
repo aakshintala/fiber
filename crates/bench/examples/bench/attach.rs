@@ -345,14 +345,103 @@ fn pass_entry(label: &str, log_bytes: u64, pass_ms: f64) -> (&'static str, Value
 /// gated: the judge reads its own metric ids.
 pub(crate) const SPAN_METRIC: &str = "attach_span_ms";
 
+/// The parent operation the five live attach spans partition: the
+/// first draw holding attached-session history.
+pub(crate) const ATTACHED_FRAME_OP: &str = "tui.attached_frame";
+
+/// The five live attach spans in boundary order: setup, wait, tail,
+/// prepare and draw.
+pub(crate) const ATTACH_SPAN_OPS: [&str; 5] = [
+    "tui.attach_setup",
+    "tui.attach_wait",
+    "tui.attach_tail",
+    "tui.attach_prepare",
+    "tui.attach_draw",
+];
+
+/// The derived remainder row's synthetic operation identity, under the
+/// span metric: a same-sample accounting row, not a sixth timed span.
+pub(crate) const REMAINDER_OP: &str = "tui.attached_frame_remainder";
+
+/// One sample's remainder row: that sample's parent value minus its
+/// five live child values, on the span metric with the sample's
+/// fixture. A sample missing the parent or any child keeps no row,
+/// never a zero: missing stays missing. A duplicated live operation,
+/// a live operation without a whole `ms`, a child sum past `u64::MAX`
+/// or children outweighing their parent fails as a malformed
+/// measurement, never wrapping or panicking. Comparator
+/// `attach_stage_ms` rows and unrelated span operations never enter
+/// the sum.
+pub(crate) fn attach_remainder(
+    label: &str,
+    log_bytes: u64,
+    sample: u32,
+    spans: &[(&'static str, Value)],
+) -> Result<Option<(&'static str, Value)>, String> {
+    let malformed = |detail: String| format!("malformed measurement in sample {sample}: {detail}");
+    let mut parent: Option<u64> = None;
+    let mut children: [Option<u64>; 5] = [None; 5];
+    for (metric, row) in spans {
+        if *metric != SPAN_METRIC {
+            continue;
+        }
+        let Some(op) = row.get("op").and_then(Value::as_str) else {
+            continue;
+        };
+        if op == ATTACHED_FRAME_OP {
+            let ms = row
+                .get("ms")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| malformed(format!("{op} holds no whole milliseconds: {row}")))?;
+            if parent.replace(ms).is_some() {
+                return Err(malformed(format!("{op} is recorded twice")));
+            }
+            continue;
+        }
+        let Some(index) = ATTACH_SPAN_OPS.iter().position(|child| *child == op) else {
+            // An unrelated span operation never enters the sum.
+            continue;
+        };
+        let ms = row
+            .get("ms")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| malformed(format!("{op} holds no whole milliseconds: {row}")))?;
+        let child = children
+            .get_mut(index)
+            .ok_or_else(|| malformed(format!("{op} is not a tracked attach span")))?;
+        if child.replace(ms).is_some() {
+            return Err(malformed(format!("{op} is recorded twice")));
+        }
+    }
+    let (Some(parent), [Some(a), Some(b), Some(c), Some(d), Some(e)]) = (parent, children) else {
+        return Ok(None);
+    };
+    let sum = [a, b, c, d, e].into_iter().try_fold(0u64, |sum, ms| {
+        sum.checked_add(ms)
+            .ok_or_else(|| malformed("the five children overflow".to_owned()))
+    })?;
+    let ms = parent.checked_sub(sum).ok_or_else(|| {
+        malformed(format!(
+            "the five children outweigh their parent: {sum} over {parent}"
+        ))
+    })?;
+    Ok(Some((
+        SPAN_METRIC,
+        json!({"fixture": label, "log_bytes": log_bytes, "sample": sample,
+            "op": REMAINDER_OP, "ms": ms}),
+    )))
+}
+
 /// One sample's attach-span rows from the TUI log of `pid`, the process
 /// this sample spawned: one [`SPAN_METRIC`] row per `op_timing` line,
 /// carrying the fixture, the sample number, the operation and its whole
-/// milliseconds. A home without that log (every non-debug home) holds
-/// no rows, leaving the timed rows unchanged. A log that cannot be read,
-/// a line that is not JSON, or an `op_timing` line with no string
-/// `data.op` or whole `data.ms` fails the span result instead of
-/// disappearing into it; other codes and blank lines are not spans.
+/// milliseconds, then that sample's [`REMAINDER_OP`] row when its parent
+/// and five live spans all arrived. A home without that log (every
+/// non-debug home) holds no rows, leaving the timed rows unchanged. A
+/// log that cannot be read, a line that is not JSON, or an `op_timing`
+/// line with no string `data.op` or whole `data.ms` fails the span
+/// result instead of disappearing into it; other codes and blank lines
+/// are not spans.
 pub(crate) fn span_samples(
     home: &std::path::Path,
     pid: u32,
@@ -392,6 +481,12 @@ pub(crate) fn span_samples(
             SPAN_METRIC,
             json!({"fixture": label, "log_bytes": log_bytes, "sample": sample, "op": op, "ms": ms}),
         ));
+    }
+    // The sample's own remainder row, when its parent and five live
+    // spans all arrived: same-sample attribution, never medians from
+    // separate sets.
+    if let Some(remainder) = attach_remainder(label, log_bytes, sample, &out)? {
+        out.push(remainder);
     }
     Ok(out)
 }

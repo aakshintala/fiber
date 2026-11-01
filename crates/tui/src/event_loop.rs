@@ -111,9 +111,12 @@ pub(crate) fn run_with(
     // The first render's span opens at entry: at `info` this is one level
     // check with no clock read. Every pre-draw return below discards it,
     // so a line there never times setup work as a frame that never drew.
-    let timing = crate::timing::Timing::new(diag);
+    // The attach setup span opens beside it, and every return that
+    // discards the attached frame discards the attach spans with it.
+    let mut timing = crate::timing::Timing::new(diag);
     let first_render = timing.first_render();
     let attached_frame = timing.attached_frame();
+    timing.start_attach_setup();
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
@@ -125,6 +128,7 @@ pub(crate) fn run_with(
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     };
     catch_interrupts();
@@ -135,16 +139,19 @@ pub(crate) fn run_with(
     let Ok((width, height)) = term::setup(&tty, hover) else {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     };
     let Ok(out) = tty.try_clone() else {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     };
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     };
     // `App::new` maps an empty launch directory to no workspace, so a
@@ -273,10 +280,15 @@ pub(crate) fn run_with(
     if screen.draw(&mut app, None).is_err() {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     }
     // The frame drew: its line stands, whatever the loop meets after.
+    // The setup span ends here and the wait span opens: the initial
+    // unattached draw is complete.
     drop(first_render);
+    timing.stop_attach_setup();
+    timing.start_attach_wait();
     // Startup pushes (config reads, session restores) gain births and
     // wakes before the first arm, so they fade like every other event.
     app.sweep_notices(clock.now());
@@ -301,6 +313,7 @@ pub(crate) fn run_with(
         Ok(reader) => reader,
         Err(error) => {
             crate::timing::discard(attached_frame);
+            timing.discard_attach_spans();
             return Err(error.into());
         }
     };
@@ -349,6 +362,7 @@ pub(crate) fn run_with(
             .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)
     {
         crate::timing::discard(terminal.attached_frame.take());
+        terminal.timing.discard_attach_spans();
         return Err(error.into());
     }
     terminal.tick.arm(terminal.app.take_wake());
@@ -358,6 +372,7 @@ pub(crate) fn run_with(
     }
     let code = terminal.run(&rx);
     crate::timing::discard(terminal.attached_frame.take());
+    terminal.timing.discard_attach_spans();
     terminal.tick.stop();
     // The writer goes before the hub hangs up and the guard drops: Stop
     // sends its mandatory abort delete at the next chunk boundary, then
@@ -1064,12 +1079,20 @@ impl<B: Backend> Loop<B> {
         // already past the fade expires before arming and never draws
         // twice.
         self.app.sweep_notices(self.clock.now());
+        // The attached-history draw ends the prepare span and opens the
+        // draw span immediately before it; any other frame draws outside
+        // both.
+        if attached_history {
+            self.timing.stop_attach_prepare();
+            self.timing.start_attach_draw();
+        }
         let lock = Arc::clone(&self.tty_lock);
         let draw_failed = {
             let _guard = lock.loop_write();
             self.screen.draw(&mut self.app, self.pointer.at).is_err()
         };
         if draw_failed {
+            self.timing.discard_attach_spans();
             return Some(1);
         }
         // The attached-session history has landed in the drawn frame:
@@ -1077,6 +1100,10 @@ impl<B: Backend> Loop<B> {
         // draw. A frame before that install leaves the guard open;
         // run_with discards it if no such frame arrives.
         if attached_history {
+            // The completed draw ends the draw span and writes all five
+            // retained spans, before the parent frame line.
+            self.timing.stop_attach_draw();
+            self.timing.emit_attach_spans();
             drop(self.attached_frame.take());
         }
         // After the first post-handover draw, the writer restarts its
@@ -1538,6 +1565,11 @@ impl<B: Backend> Loop<B> {
         let Some(session) = self.app.tail_due() else {
             return false;
         };
+        // The first due attempt ends the wait span and opens the tail
+        // span; a later attempt keeps the first attempt's guard, so any
+        // lost-attempt interval between stays inside the span.
+        self.timing.stop_attach_wait();
+        self.timing.start_attach_tail();
         // A new open never installs or counts the old run.
         self.app.clear_tail_read();
         if !self.hub.has_stream() {
@@ -1572,6 +1604,11 @@ impl<B: Backend> Loop<B> {
         let install = self.timing.tail_install();
         self.app.install_tail();
         drop(install);
+        // The install the attempt reached ends the tail span and opens
+        // the prepare span: reopened and rejected-history installs count,
+        // as the read completed through them.
+        self.timing.stop_attach_tail();
+        self.timing.start_attach_prepare();
         true
     }
 
@@ -1913,3 +1950,364 @@ mod reconnect_tests;
 #[cfg(test)]
 #[path = "remote_run_tests.rs"]
 mod remote_run_tests;
+
+/// The attach spans' event-loop wiring (`docs/state.md`, "Diagnostic
+/// logs"): the due tail attempt ends the wait and opens the tail, the
+/// install that attempt reaches ends the tail and opens the prepare,
+/// and the attached-history draw ends the prepare, covers the draw and
+/// writes all five. A false attempt retains its spans without writing,
+/// and a parent discard writes none. The timers read the diagnostic
+/// writer's stepping clock, so each span's milliseconds pin its exact
+/// boundary sequence with no sleep.
+#[cfg(test)]
+mod attach_span_tests {
+    use std::io::BufRead;
+    use std::os::unix::net::UnixStream;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::time::{Duration, Instant, SystemTime};
+
+    use contract::SessionId;
+    use contract::clock::Clock;
+    use fakes::clock::FakeClock;
+    use ratatui::backend::TestBackend;
+
+    use super::Input;
+    use super::tests::{DEADLINE, new_loop};
+    use crate::link::Line;
+
+    /// The session every attach test opens.
+    const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+    const ATTACH_TIMINGS: [&str; 6] = [
+        "tui.attach_setup",
+        "tui.attach_wait",
+        "tui.attach_tail",
+        "tui.attach_prepare",
+        "tui.attach_draw",
+        "tui.attached_frame",
+    ];
+
+    /// A clock stepping 20 ms on every monotonic read, so each stamped
+    /// boundary lands on its own instant with no sleep.
+    struct StepClock {
+        base: Instant,
+        reads: AtomicU64,
+    }
+
+    impl StepClock {
+        fn stepped() -> Arc<Self> {
+            Arc::new(Self {
+                base: FakeClock::new().now(),
+                reads: AtomicU64::new(0),
+            })
+        }
+    }
+
+    impl Clock for StepClock {
+        fn now(&self) -> Instant {
+            let read = self.reads.fetch_add(1, Ordering::SeqCst);
+            self.base + Duration::from_millis(20) * u32::try_from(read).unwrap_or(u32::MAX)
+        }
+
+        fn wall(&self) -> SystemTime {
+            SystemTime::UNIX_EPOCH
+        }
+
+        fn sleep(&self, _d: Duration) {}
+
+        fn wait_until(&self, _until: Option<Instant>, _wait: &mut dyn FnMut(Option<Duration>)) {}
+
+        fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+    }
+
+    /// A debug writer in `home` on the stepping clock.
+    fn debug_diag(home: &std::path::Path) -> Arc<log::diag::Diag> {
+        let clock: Arc<dyn Clock> = StepClock::stepped();
+        Arc::new(log::diag::Diag::new(
+            home,
+            log::diag::Process::Tui,
+            log::diag::Level::Debug,
+            clock,
+        ))
+    }
+
+    /// Every `op_timing` line in the process's diagnostic file, in file
+    /// order; none when nothing was ever emitted there.
+    fn op_lines(home: &std::path::Path) -> Vec<serde_json::Value> {
+        let path = home
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id()));
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        text.lines()
+            .map(|line| {
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("a line parses: {err}"))
+            })
+            .collect()
+    }
+
+    /// Only the five spans and their parent, excluding other terminal
+    /// timings that share the diagnostic file.
+    fn attach_op_lines(home: &std::path::Path) -> Vec<serde_json::Value> {
+        op_lines(home)
+            .into_iter()
+            .filter(|line| {
+                ATTACH_TIMINGS.contains(&line["data"]["op"].as_str().unwrap_or_default())
+            })
+            .collect()
+    }
+
+    /// The wire promise on every attach span: exactly the keys `op` and
+    /// `ms` with an unsigned whole `ms`, on the terminal's debug line.
+    #[track_caller]
+    fn assert_span_wire(lines: &[serde_json::Value], op: &str) {
+        assert_eq!(lines.len(), 1, "one {op} line: {lines:?}");
+        let line = &lines[0];
+        assert_eq!(line["code"], "op_timing", "{line}");
+        assert_eq!(line["level"], "debug", "{line}");
+        assert_eq!(line["process"], "tui", "{line}");
+        assert!(line.get("session_id").is_none(), "{line}");
+        assert_eq!(line["message"], "An operation ended.", "{line}");
+        let data = line["data"].as_object().expect("data is an object");
+        let mut keys: Vec<&str> = data.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["ms", "op"], "{line}");
+        assert!(line["data"]["ms"].as_u64().is_some(), "{line}");
+        assert_eq!(line["data"]["op"], op, "{line}");
+    }
+
+    /// An app launched to resume the session, on home: the order every
+    /// home test already builds.
+    fn launch_app() -> crate::app::App {
+        let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+        app.set_home(crate::home::Launch {
+            location: crate::LaunchLocation::Local {
+                workspace: std::path::PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git: false,
+            },
+            hover: true,
+            version: "0.0.1".to_owned(),
+            model: None,
+            thinking: None,
+            logo_glyph: "⌇".to_owned(),
+            keys: crate::KeysSetup::default(),
+            rail_share: 15.0,
+            panel_share: 21.0,
+            panel_cards: Vec::new(),
+            open_at: crate::OpenAt::Session(SessionId(SESSION.to_owned()), None),
+            ..Default::default()
+        });
+        app.set_size(60, 12);
+        app
+    }
+
+    /// Drives `app` through its summary acceptance to the due tail read:
+    /// the `hub_hello` gates the summary subscribe, and its acceptance
+    /// queues the commands line and leaves the open due.
+    fn drive_due(app: &mut crate::app::App) {
+        let lines = app.on_line_inner(crate::app::testkit::hello());
+        let summary = lines
+            .iter()
+            .find_map(|line| {
+                let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+                if parsed["command"] != "subscribe" {
+                    return None;
+                }
+                parsed["id"].as_str().map(str::to_owned)
+            })
+            .unwrap_or_else(|| panic!("a summary subscribe among {lines:?}"));
+        let accepted = contract::Envelope {
+            kind: "command_accepted".to_owned(),
+            session_id: SessionId(SESSION.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: serde_json::json!({"command_id": summary})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        };
+        let sent = app.on_line_inner(Line::Session(accepted));
+        assert_eq!(sent.len(), 1, "the acceptance queues one line: {sent:?}");
+        let commands: serde_json::Value = serde_json::from_str(&sent[0])
+            .unwrap_or_else(|err| panic!("the queued line parses: {err}"));
+        assert_eq!(commands["command"], "commands", "{commands}");
+        assert_eq!(
+            app.opening_session(),
+            Some(SessionId(SESSION.to_owned())),
+            "the open is due"
+        );
+    }
+
+    /// A hub `stream_reopened` answer, which abandons the waited read
+    /// without failing it.
+    fn reopened() -> Input {
+        Input::Hub(Line::Hub(contract::HubLine {
+            kind: "stream_reopened".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::json!({"session_id": SESSION})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        }))
+    }
+
+    /// A loop on the stepping diagnostic writer, with the `run_with`
+    /// prefix simulated: setup stamped at entry, wait running after the
+    /// initial draw.
+    fn attach_loop(home: &fakes::TempDir, app: crate::app::App) -> super::Loop<TestBackend> {
+        let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+        lp.app = app;
+        lp.timing = crate::timing::Timing::new(debug_diag(home.path()));
+        lp.timing.start_attach_setup();
+        lp.timing.stop_attach_setup();
+        lp.timing.start_attach_wait();
+        lp.attached_frame = lp.timing.attached_frame();
+        lp
+    }
+
+    /// Without a due tail the frame draws outside every span, and the
+    /// teardown discard writes none: a home launch leaves no span line.
+    #[test]
+    fn attach_spans_write_nothing_without_a_due_tail() {
+        let home = fakes::TempDir::new("event-loop-attach-spans-home");
+        let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+        lp.timing = crate::timing::Timing::new(debug_diag(home.path()));
+        lp.timing.start_attach_setup();
+        lp.timing.stop_attach_setup();
+        lp.timing.start_attach_wait();
+        lp.attached_frame = lp.timing.attached_frame();
+        let (_tx, rx) = mpsc::channel();
+        assert_eq!(lp.frame_inner(&rx), None);
+        assert!(attach_op_lines(home.path()).is_empty());
+        lp.timing.discard_attach_spans();
+        crate::timing::discard(lp.attached_frame.take());
+        assert!(attach_op_lines(home.path()).is_empty());
+    }
+
+    /// A due attempt with no stream returns false: the five spans stay
+    /// retained, and the teardown discard writes none of them.
+    #[test]
+    fn attach_spans_stay_held_through_a_streamless_due_attempt() {
+        let home = fakes::TempDir::new("event-loop-attach-spans-no-stream");
+        let mut app = launch_app();
+        drive_due(&mut app);
+        let mut lp = attach_loop(&home, app);
+        let (_tx, rx) = mpsc::channel();
+        assert!(!lp.open_tail(&rx), "no stream returns false");
+        assert!(
+            attach_op_lines(home.path()).is_empty(),
+            "no attach span emits before its draw"
+        );
+        lp.timing.discard_attach_spans();
+        crate::timing::discard(lp.attached_frame.take());
+        assert!(
+            attach_op_lines(home.path()).is_empty(),
+            "the discard writes no attach timing"
+        );
+    }
+
+    /// A reopened tail read installs and draws: all five spans emit in
+    /// boundary order at the attached-history draw, before the parent
+    /// frame line.
+    #[test]
+    fn attach_spans_emit_at_the_reopened_install_draw() {
+        let home = fakes::TempDir::new("event-loop-attach-spans-reopened");
+        let mut app = launch_app();
+        drive_due(&mut app);
+        let mut lp = attach_loop(&home, app);
+        let (stream, _peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+        lp.hub.store(stream);
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..3 {
+            tx.send(reopened())
+                .unwrap_or_else(|err| panic!("queue the reopening: {err}"));
+        }
+        // Buffered answers stay queued; any read past them fails fast
+        // as lost instead of hanging the frame.
+        drop(tx);
+        assert_eq!(lp.frame_inner(&rx), None);
+        let lines = attach_op_lines(home.path());
+        let ops: Vec<&str> = lines
+            .iter()
+            .map(|line| line["data"]["op"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(ops, ATTACH_TIMINGS, "{lines:?}");
+        for line in &lines {
+            let op = line["data"]["op"].as_str().unwrap_or_default();
+            assert_span_wire(std::slice::from_ref(line), op);
+        }
+    }
+
+    /// A rejected history answer ends the read with its message yet
+    /// still installs: the frame's attempt draws and emits all five
+    /// spans. The worker parks in its history wait (the socket read is
+    /// the signal), the test answers the waited command, and the socket
+    /// deadline bounds a missing command.
+    #[test]
+    fn attach_spans_emit_at_a_rejected_history_install() {
+        let home = fakes::TempDir::new("event-loop-attach-spans-rejected");
+        let mut app = launch_app();
+        drive_due(&mut app);
+        let mut lp = attach_loop(&home, app);
+        let (stream, peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+        lp.hub.store(stream);
+        peer.set_read_timeout(Some(DEADLINE))
+            .unwrap_or_else(|err| panic!("arm the socket deadline: {err}"));
+        let (tx, rx) = mpsc::channel();
+        // The history wait reads the channel from the worker: the mutex
+        // shares the receiver across the scope's threads.
+        let rx = std::sync::Mutex::new(rx);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                let held = rx
+                    .lock()
+                    .unwrap_or_else(|err| panic!("take the channel: {err}"));
+                lp.frame_inner(&held)
+            });
+            let mut command = String::new();
+            std::io::BufReader::new(&peer)
+                .read_line(&mut command)
+                .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history command: {err}"));
+            let history: serde_json::Value = serde_json::from_str(&command)
+                .unwrap_or_else(|err| panic!("a command parses: {err}"));
+            assert_eq!(history["command"], "history", "{history}");
+            let id = history["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("an id: {history}"));
+            tx.send(Input::Hub(Line::Session(contract::Envelope {
+                kind: "command_rejected".to_owned(),
+                session_id: SessionId(SESSION.to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: None,
+                payload: serde_json::json!({"command_id": id, "message": "gone"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            })))
+            .unwrap_or_else(|err| panic!("answer the waited command: {err}"));
+            // The frame's later count read sees the closed channel and
+            // returns as lost, after the attached-history draw emitted.
+            drop(tx);
+            assert_eq!(worker.join().unwrap(), None, "the rejected history draws");
+        });
+        let lines = attach_op_lines(home.path());
+        let ops: Vec<&str> = lines
+            .iter()
+            .map(|line| line["data"]["op"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(ops, ATTACH_TIMINGS, "{lines:?}");
+        for line in &lines {
+            let op = line["data"]["op"].as_str().unwrap_or_default();
+            assert_span_wire(std::slice::from_ref(line), op);
+        }
+    }
+}

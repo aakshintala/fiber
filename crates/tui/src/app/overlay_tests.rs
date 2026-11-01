@@ -212,6 +212,136 @@ fn folded(lines: &[Line]) -> crate::window::Pages {
     pages
 }
 
+fn folded_at_app_width(app: &App, lines: &[Line]) -> crate::window::Pages {
+    let mut pages = app.attached_screen().pages().fresh();
+    for line in lines {
+        if let Line::Session(envelope) = line {
+            pages.apply(envelope);
+        }
+    }
+    pages
+}
+
+fn page_rows(pages: &crate::window::Pages) -> Vec<String> {
+    pages
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect()
+}
+
+/// The preview adds the preceding whole turn when the newest turn alone
+/// does not fill the screen (`docs/tui.md:2714-2717`).
+#[test]
+fn a_bounded_preview_backfills_before_the_screen_fills() {
+    let mut probe = reading();
+    probe.set_size(80, 40);
+    let height = probe.conversation_height();
+    let (all, pair, pair_floor, expected_total, full_total) = (1..=128)
+        .find_map(|middle_texts| {
+            let mut seq = 10u64;
+            let older = roomy_turn(&mut seq, "a_old", "older reply", 1);
+            let pair_floor = seq;
+            let middle = roomy_turn(&mut seq, "a_middle", "middle reply", middle_texts);
+            let newest = roomy_turn(&mut seq, "a_newest", "newest reply", 1);
+            let newest_total = folded_at_app_width(&probe, &newest).index().total();
+            let mut pair = middle.clone();
+            pair.extend(newest.clone());
+            let mut all = older;
+            all.extend(middle);
+            all.extend(newest);
+            let pair_total = folded_at_app_width(&probe, &pair).index().total();
+            let full_total = folded_at_app_width(&probe, &all).index().total();
+            (newest_total < height && pair_total >= height && pair_total < full_total)
+                .then_some((all, pair, pair_floor, pair_total, full_total))
+        })
+        .unwrap_or_else(|| panic!("turns that straddle the conversation height"));
+    let full_lines = all;
+    let all = envelopes(&full_lines);
+    let first = doors(&all, &serde_json::json!({}));
+    assert_eq!(first.len(), all.len(), "the first answer holds the history");
+
+    let mut app = reading();
+    app.set_size(80, 40);
+    assert!(app.tail_next().is_some(), "the tail read starts");
+    app.tail_lines(first);
+    let preview = app
+        .preview
+        .as_ref()
+        .unwrap_or_else(|| panic!("the first answer folds a preview"));
+    assert_eq!(preview.pages.index().total(), expected_total);
+    assert!(expected_total < full_total);
+    assert_eq!(
+        page_rows(&preview.pages),
+        page_rows(&folded_at_app_width(&probe, &pair)),
+        "the preview contains exactly the newest whole turns"
+    );
+    assert_eq!(
+        app.installed_floor,
+        Some((id(SESSION), contract::Seq(pair_floor))),
+        "the preview starts at the oldest whole turn it drew"
+    );
+}
+
+/// A prompt that fills the screen keeps its turn-start sequence as the
+/// preview floor (`docs/tui.md:2714-2717`).
+#[test]
+fn a_bounded_preview_keeps_the_filling_turn_start_as_its_floor() {
+    let mut probe = reading();
+    probe.set_size(80, 40);
+    let height = probe.conversation_height();
+    let (all, newest, newest_seq, expected_total, full_total) = (1..=512)
+        .find_map(|repetitions| {
+            let mut seq = 10u64;
+            let older = roomy_turn(&mut seq, "a_old", "older reply", 1);
+            let newest_seq = seq;
+            let prompt = "long prompt ".repeat(repetitions);
+            let newest = vec![line(
+                "turn_started",
+                newest_seq,
+                None,
+                json!({"input": [{"type": "message", "source": "driver",
+                    "content": [{"type": "text", "text": prompt}]}]}),
+            )];
+            let newest_total = folded_at_app_width(&probe, &newest).index().total();
+            let mut all = older;
+            all.extend(newest.clone());
+            let full_total = folded_at_app_width(&probe, &all).index().total();
+            (newest_total >= height && newest_total < full_total).then_some((
+                all,
+                newest,
+                newest_seq,
+                newest_total,
+                full_total,
+            ))
+        })
+        .unwrap_or_else(|| panic!("a prompt that fills the conversation height"));
+    let all = envelopes(&all);
+    let first = doors(&all, &json!({}));
+    assert_eq!(first.len(), all.len(), "the first answer holds the history");
+
+    let mut app = reading();
+    app.set_size(80, 40);
+    assert!(app.tail_next().is_some(), "the tail read starts");
+    app.tail_lines(first);
+    let preview = app
+        .preview
+        .as_ref()
+        .unwrap_or_else(|| panic!("the first answer folds a preview"));
+    assert_eq!(preview.pages.index().total(), expected_total);
+    assert!(expected_total < full_total);
+    assert_eq!(
+        page_rows(&preview.pages),
+        page_rows(&folded_at_app_width(&probe, &newest)),
+        "the preview contains exactly the newest turn"
+    );
+    assert_eq!(
+        app.installed_floor,
+        Some((id(SESSION), contract::Seq(newest_seq))),
+        "the floor is the turn-start line, not a later event"
+    );
+}
+
 /// Opens [`SESSION`] from home through the raise, whose acceptance ends
 /// the pass at `last`: the overlay folds the second `Pages`.
 fn opening(last: u64) -> App {

@@ -5814,3 +5814,205 @@ fn a_later_frame_deadline_leaves_the_wait_deadline_first() {
     assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
     assert!(!lp.hub.has_stream(), "the expired wait hangs up");
 }
+
+/// A due tail attempt without a stream discards its retained attach spans.
+#[test]
+fn attach_spans_are_discarded_when_the_due_tail_has_no_stream() {
+    let home = fakes::TempDir::new("event-loop-attach-spans-no-stream");
+    let session = "s_aaaaaaaaaaaaaaaa";
+    let mut app = super::super::App::new(std::path::PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: true,
+        version: "0.0.1".to_owned(),
+        open_at: crate::OpenAt::Session(contract::SessionId(session.to_owned()), None),
+        ..Default::default()
+    });
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    };
+    let sent = app.on_line_inner(Line::Hub(hello));
+    let summary = sent
+        .iter()
+        .find_map(|line| {
+            let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+            (parsed["command"] == "subscribe")
+                .then(|| parsed["id"].as_str().map(str::to_owned))
+                .flatten()
+        })
+        .unwrap_or_else(|| panic!("a summary subscribe among {sent:?}"));
+    let accepted = contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"command_id": summary})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    };
+    app.on_line_inner(Line::Session(accepted));
+
+    let (mut lp, _) =
+        super::super::tests::new_loop(ratatui::backend::TestBackend::new(60, 12), None);
+    lp.app = app;
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let diag = Arc::new(log::diag::Diag::new(
+        home.path(),
+        log::diag::Process::Tui,
+        log::diag::Level::Debug,
+        clock,
+    ));
+    lp.timing = crate::timing::Timing::new(diag);
+    lp.timing.start_attach_setup();
+    lp.timing.stop_attach_setup();
+    lp.timing.start_attach_wait();
+    lp.attached_frame = lp.timing.attached_frame();
+
+    let (_tx, rx) = mpsc::channel();
+    assert!(
+        !lp.open_tail(&rx),
+        "a due tail without a stream returns false"
+    );
+    let log = home
+        .path()
+        .join("logs")
+        .join(format!("tui-{}.log", std::process::id()));
+    assert!(
+        !log.exists(),
+        "the false attempt does not emit partial spans"
+    );
+    lp.timing.discard_attach_spans();
+    crate::timing::discard(lp.attached_frame.take());
+    assert!(
+        !log.exists(),
+        "discarding the parent writes no attach spans"
+    );
+}
+
+/// A reopened tail install emits all child spans before the parent frame.
+#[test]
+fn attach_spans_are_emitted_at_a_reopened_install_draw() {
+    let home = fakes::TempDir::new("event-loop-attach-spans-reopened");
+    let session = "s_aaaaaaaaaaaaaaaa";
+    let mut app = super::super::App::new(std::path::PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: true,
+        version: "0.0.1".to_owned(),
+        open_at: crate::OpenAt::Session(contract::SessionId(session.to_owned()), None),
+        ..Default::default()
+    });
+    let sent = app.on_line_inner(crate::app::testkit::hello());
+    let summary = sent
+        .iter()
+        .find_map(|line| {
+            let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+            (parsed["command"] == "subscribe")
+                .then(|| parsed["id"].as_str().map(str::to_owned))
+                .flatten()
+        })
+        .unwrap_or_else(|| panic!("a summary subscribe among {sent:?}"));
+    let accepted = contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"command_id": summary})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    };
+    app.on_line_inner(Line::Session(accepted));
+
+    let (mut lp, _) =
+        super::super::tests::new_loop(ratatui::backend::TestBackend::new(60, 12), None);
+    lp.app = app;
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let diag = Arc::new(log::diag::Diag::new(
+        home.path(),
+        log::diag::Process::Tui,
+        log::diag::Level::Debug,
+        clock,
+    ));
+    lp.timing = crate::timing::Timing::new(diag);
+    lp.timing.start_attach_setup();
+    lp.timing.stop_attach_setup();
+    lp.timing.start_attach_wait();
+    lp.attached_frame = lp.timing.attached_frame();
+    let (stream, _peer) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    lp.hub.store(stream);
+    let (tx, rx) = mpsc::channel();
+    for _ in 0..3 {
+        tx.send(Input::Hub(Line::Hub(contract::HubLine {
+            kind: "stream_reopened".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: json!({"session_id": session})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        })))
+        .unwrap_or_else(|err| panic!("queue the reopening: {err}"));
+    }
+    drop(tx);
+    assert_eq!(lp.frame_inner(&rx), None, "the reopened install draws");
+
+    let path = home
+        .path()
+        .join("logs")
+        .join(format!("tui-{}.log", std::process::id()));
+    let text = std::fs::read_to_string(path).unwrap_or_else(|err| panic!("read timings: {err}"));
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("parse timing: {err}")))
+        .filter(|line: &serde_json::Value| {
+            line["data"]["op"]
+                .as_str()
+                .is_some_and(|op| op.starts_with("tui.attach_") || op == "tui.attached_frame")
+        })
+        .collect();
+    let ops: Vec<&str> = lines
+        .iter()
+        .map(|line| line["data"]["op"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        ops,
+        [
+            "tui.attach_setup",
+            "tui.attach_wait",
+            "tui.attach_tail",
+            "tui.attach_prepare",
+            "tui.attach_draw",
+            "tui.attached_frame",
+        ],
+        "the child spans precede their parent: {lines:?}"
+    );
+    for line in &lines {
+        let data = line["data"].as_object().expect("timing data is an object");
+        assert_eq!(data.len(), 2, "only op and ms: {line}");
+        assert!(
+            data.get("ms").and_then(serde_json::Value::as_u64).is_some(),
+            "{line}"
+        );
+    }
+}
