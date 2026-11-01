@@ -15,6 +15,7 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use contract::clock::Clock;
@@ -41,12 +42,175 @@ fn port_taken(log: &str, port: u16) -> bool {
     log.contains(&format!("127.0.0.1:{port}: "))
 }
 
+/// Chars one new capture section may add to a give-up report: the flake
+/// report stays under its cap while the head keeps its entry bounds.
+const CAPTURE_CHARS: usize = 1500;
+
+/// Cuts `text` to [`CAPTURE_CHARS`] chars, marking the cut with `...`, so
+/// a long capture never pushes the report's head out.
+fn truncate_section(text: &str) -> String {
+    if text.chars().count() <= CAPTURE_CHARS {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(CAPTURE_CHARS).collect();
+    cut.push_str("...");
+    cut
+}
+
+/// Clones the hub's stderr snapshot, yielding what the drain thread
+/// captured even when it poisoned the lock: the dump never replaces the
+/// timeout panic with its own.
+fn snapshot_text(stderr: &Arc<Mutex<String>>) -> String {
+    stderr
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+}
+
+/// The hub child's captured stderr, or the marker for nothing captured
+/// yet: a hub still running when the wait gave up may simply not have
+/// flushed, while an exited hub's pipes drained at EOF. Absence reads as
+/// its own marker, never as empty output.
+fn stderr_section(snapshot: &str, status: Option<ExitStatus>) -> String {
+    if snapshot.is_empty() {
+        return match status {
+            None => format!(
+                "hub stderr (live snapshot, last {LOG_TAIL} lines):\n(still running: no stderr captured yet)"
+            ),
+            Some(_) => {
+                format!("hub stderr (live snapshot, last {LOG_TAIL} lines):\n(no stderr captured)")
+            }
+        };
+    }
+    let lines: Vec<&str> = snapshot.lines().collect();
+    let tail = lines[lines.len().saturating_sub(LOG_TAIL)..].join("\n");
+    format!(
+        "hub stderr (live snapshot, last {LOG_TAIL} lines):\n{}",
+        truncate_section(&tail)
+    )
+}
+
+/// The home's resolved state and log directories: paths only, never file
+/// contents, so no secret or token can ride along.
+fn dirs_section(home: &Path) -> String {
+    format!(
+        "state dir {}, log dir {}",
+        home.join("run").display(),
+        home.join("logs").display()
+    )
+}
+
+/// Per-thread park state for `pid` from `/proc/<pid>/task`: each thread's
+/// `wchan` and `stack`, which hold kernel symbols only. Every read error
+/// becomes text, never a panic: a missing task directory means the pid is
+/// gone, and a thread vanishing mid-read names itself. An exited but
+/// unreaped hub keeps its thread listed with a `0` wchan, so the zombie
+/// reads from `/proc/<pid>/stat` instead: only a stat read observes it,
+/// since `try_wait` itself reaps.
+#[cfg(target_os = "linux")]
+fn hub_threads(pid: u32) -> String {
+    let mut tids: Vec<u32> = Vec::new();
+    match fs::read_dir(format!("/proc/{pid}/task")) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                if let Ok(tid) = entry.file_name().to_string_lossy().parse::<u32>() {
+                    tids.push(tid);
+                }
+            }
+        }
+        Err(error) => return format!("hub threads for pid {pid}:\n(pid gone: {error})"),
+    }
+    tids.sort_unstable();
+    let zombie = fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .is_some_and(|stat| {
+            stat.rsplit_once(')')
+                .is_some_and(|(_, tail)| tail.split_whitespace().next() == Some("Z"))
+        });
+    if zombie {
+        return format!(
+            "hub threads for pid {pid}:\n(no live threads: zombie, exited but unreaped)"
+        );
+    }
+    let mut section = format!("hub threads for pid {pid}:");
+    for tid in tids {
+        let wchan = match fs::read_to_string(format!("/proc/{pid}/task/{tid}/wchan")) {
+            Ok(wchan) => wchan.trim().to_owned(),
+            Err(error) => format!("unreadable ({error})"),
+        };
+        let stack = match fs::read_to_string(format!("/proc/{pid}/task/{tid}/stack")) {
+            Ok(stack) => stack,
+            Err(error) => format!("(stack unreadable: {error})"),
+        };
+        section.push_str(&format!("\ntask {tid} wchan {wchan}\n{stack}"));
+    }
+    truncate_section(&section)
+}
+
+/// The hub's park state from `sample` on `pid`, bounded under
+/// [`MUST_SUCCEED_WITHIN`](fakes::MUST_SUCCEED_WITHIN) through
+/// [`fakes::wait_output`](fakes::wait_output), which kills the sample
+/// child's own process group and reaps it on every path. A missed deadline
+/// or output error prints as text and never replaces the timeout panic.
+#[cfg(target_os = "macos")]
+fn hub_threads(pid: u32) -> String {
+    use std::os::unix::process::CommandExt as _;
+    use std::process::Stdio;
+    let mut command = Command::new("sample");
+    command
+        .arg(format!("{pid}"))
+        .arg("1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return format!("hub sample for pid {pid}:\n(sample not started: {error})");
+        }
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fakes::wait_output(child, "sample the hub")
+    }));
+    match outcome {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let lines: Vec<&str> = text.lines().collect();
+            let tail = lines[lines.len().saturating_sub(LOG_TAIL)..].join("\n");
+            if tail.trim().is_empty() {
+                format!("hub sample for pid {pid}:\n(sample printed nothing)")
+            } else {
+                format!("hub sample for pid {pid}:\n{}", truncate_section(&tail))
+            }
+        }
+        Err(payload) => format!(
+            "hub sample for pid {pid}:\n(sample failed: {})",
+            hello_panic_text(&payload).unwrap_or_else(|| "a non-string panic".to_owned())
+        ),
+    }
+}
+
+/// Thread capture where neither `/proc` nor `sample` applies: absence
+/// reads as its own marker, never as empty output.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn hub_threads(pid: u32) -> String {
+    format!("hub threads for pid {pid}:\n(thread capture unsupported on this platform)")
+}
+
+/// Thread section for a hub that already exited and was reaped before any
+/// capture could read it: absence reads as its own marker, never as empty
+/// output.
+const EXITED_THREADS: &str = "(the hub had exited before thread capture: no live thread state)";
+
 /// What a hub that did not say hello left behind: its exit `status`
 /// (`None` for a hub still running when the wait gave up) and the state
 /// of `hub.log`. A missing file reports distinctly from an empty one: the
 /// sightings share an alive hub with no lines, and only the distinction
-/// keeps that observation provable.
-fn report(setup: &Setup, status: Option<ExitStatus>) -> String {
+/// keeps that observation provable. The hub child's captured `stderr`, the
+/// resolved directories, and the live `threads` capture follow, each
+/// truncated, so the report's head is never pushed out.
+fn report(setup: &Setup, status: Option<ExitStatus>, stderr: &str, threads: &str) -> String {
     let path = setup.home().join("logs").join("hub.log");
     let (detail, tail) = match fs::read(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -67,18 +231,32 @@ fn report(setup: &Setup, status: Option<ExitStatus>) -> String {
         Some(status) => format!("exited ({status})"),
         None => "was still running".to_owned(),
     };
-    format!("{state}; {detail}; hub.log tail (last {LOG_TAIL} lines):\n{tail}")
+    format!(
+        "{state}; {detail}; hub.log tail (last {LOG_TAIL} lines):\n{tail}\n{}\n{}\n{threads}",
+        stderr_section(stderr, status),
+        dirs_section(&setup.home())
+    )
 }
 
-/// Stops waiting on `process`: snapshots its status, reaps it (killing a
-/// hub still running), and panics with `why` and the report.
-fn give_up(setup: &Setup, mut process: HubProc, why: &str) -> ! {
+/// Stops waiting on `process`: captures the hub's live thread state by
+/// its spawn-known pid first, snapshots its status, reaps it (killing a
+/// hub still running), and panics with `why` and the report. The capture
+/// reads the live pid before any wait on the child; a zombie, a vanished
+/// pid, or a failed read prints its marker as text. Kill-and-reap still
+/// precedes the panic exactly as before, and the stderr snapshot is cloned
+/// only after the reap, so the drain thread has seen EOF.
+fn give_up(setup: &Setup, mut process: HubProc, stderr: &Arc<Mutex<String>>, why: &str) -> ! {
+    let pid = process.child.id();
+    let threads = hub_threads(pid);
     let status = process.child.try_wait().unwrap();
     match status {
         Some(_) => drop(process.wait()),
         None => drop(process.kill_and_wait()),
     }
-    panic!("{why}: the hub {}", report(setup, status));
+    panic!(
+        "{why}: the hub {}",
+        report(setup, status, &snapshot_text(stderr), &threads)
+    );
 }
 
 /// The hello durations attempted before a failure. Consecutive equal
@@ -178,6 +356,7 @@ fn is_hello_timeout(text: &str) -> bool {
 pub(crate) fn hello_slice(
     setup: &Setup,
     process: HubProc,
+    stderr: &Arc<Mutex<String>>,
     wait: Deadline,
     bound: Duration,
     entry: &str,
@@ -210,6 +389,7 @@ pub(crate) fn hello_slice(
                 give_up(
                     setup,
                     process,
+                    stderr,
                     &format!(
                         "{text} ({})",
                         hello_account(entry, setup.deadline.left(), wait.left(), attempts),
@@ -228,6 +408,7 @@ pub(crate) fn hello_slice(
 fn await_hello(
     setup: &Setup,
     mut process: HubProc,
+    stderr: &Arc<Mutex<String>>,
     helper_left: Duration,
 ) -> Result<(doors::hub::Hub, HubProc), (ExitStatus, String)> {
     let entry_left = setup.deadline.left();
@@ -250,6 +431,7 @@ fn await_hello(
             give_up(
                 setup,
                 process,
+                stderr,
                 &format!(
                     "waited for the installed hub's hello ({})",
                     hello_account(&entry, failing_left, failing_left, &attempts),
@@ -257,7 +439,15 @@ fn await_hello(
             );
         };
         attempts.push(bound);
-        let (slice, back) = hello_slice(setup, process, setup.deadline, bound, &entry, &attempts);
+        let (slice, back) = hello_slice(
+            setup,
+            process,
+            stderr,
+            setup.deadline,
+            bound,
+            &entry,
+            &attempts,
+        );
         process = back;
         let error = match slice {
             Ok(hub) => return Ok((hub, process)),
@@ -281,6 +471,7 @@ fn await_hello(
             give_up(
                 setup,
                 process,
+                stderr,
                 &format!(
                     "the installed hub's hello failed with {error} ({})",
                     hello_account(
@@ -319,8 +510,8 @@ pub(crate) fn serve_installed(
         let port = ports();
         let logged = setup.hub_log().len();
         let mut command = serve(port);
-        let process = HubProc::spawn_command(setup.deadline, &mut command);
-        match await_hello(setup, process, helper_left) {
+        let (process, stderr) = HubProc::spawn_command_captured(setup.deadline, &mut command);
+        match await_hello(setup, process, &stderr, helper_left) {
             Ok((hub, process)) => return Served { port, hub, process },
             Err((status, account)) => {
                 let log = setup.hub_log();
@@ -332,7 +523,7 @@ pub(crate) fn serve_installed(
                 panic!(
                     "the installed hub's hello on 127.0.0.1:{port}, attempt {attempt} of {attempts} with helper root left {helper_left:?} and failing root left {:?} ({account}): the hub {}",
                     setup.deadline.left(),
-                    report(setup, Some(status))
+                    report(setup, Some(status), &snapshot_text(&stderr), EXITED_THREADS)
                 );
             }
         }
@@ -344,7 +535,9 @@ mod tests {
     use std::fs;
     use std::io::Write;
     use std::os::unix::net::UnixListener;
-    use std::process::Command;
+    use std::os::unix::process::CommandExt as _;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
@@ -354,10 +547,10 @@ mod tests {
     use support::clock::Sleep;
 
     use super::{
-        MUST_SUCCEED_WITHIN, connect_attempt, hello_bound, is_hello_timeout, report,
-        serve_installed, slices_shown,
+        CAPTURE_CHARS, MUST_SUCCEED_WITHIN, connect_attempt, give_up, hello_bound, hub_threads,
+        is_hello_timeout, report, serve_installed, slices_shown, truncate_section,
     };
-    use crate::support::{Deadline, Setup};
+    use crate::support::{Deadline, HubProc, Setup};
 
     #[test]
     fn slices_shown_collapses_runs_and_keeps_singles() {
@@ -529,7 +722,7 @@ mod tests {
     #[test]
     fn report_distinguishes_missing_from_unreadable_hub_log() {
         let setup = Setup::new();
-        let missing = report(&setup, None);
+        let missing = report(&setup, None, "", "");
         assert!(
             missing.contains("hub.log missing"),
             "a fresh home holds no hub.log: {missing}"
@@ -539,7 +732,7 @@ mod tests {
             "absence is not an error: {missing}"
         );
         fs::create_dir_all(setup.home().join("logs").join("hub.log")).unwrap();
-        let unreadable = report(&setup, None);
+        let unreadable = report(&setup, None, "", "");
         assert!(
             unreadable.contains("hub.log unreadable"),
             "a directory at the log path is not missing: {unreadable}"
@@ -594,5 +787,216 @@ mod tests {
         assert!(!is_hello_timeout(
             "waited a while for the installed hub's hello"
         ));
+    }
+
+    #[test]
+    fn truncate_section_marks_only_a_cut() {
+        let below: String = "x".repeat(CAPTURE_CHARS - 1);
+        assert_eq!(truncate_section(&below), below);
+        let at: String = "y".repeat(CAPTURE_CHARS);
+        assert_eq!(truncate_section(&at), at);
+        let above: String = "z".repeat(CAPTURE_CHARS + 1);
+        assert_eq!(
+            truncate_section(&above),
+            format!("{}...", "z".repeat(CAPTURE_CHARS))
+        );
+        let wide: String = "é".repeat(CAPTURE_CHARS + 1);
+        let cut = truncate_section(&wide);
+        assert_eq!(cut.chars().count(), CAPTURE_CHARS + 3);
+        assert!(cut.ends_with("..."), "a cut ends in its mark");
+    }
+
+    /// Spawns a stub child in its own process group that parks opening
+    /// `fifo` for write: the open blocks until a reader arrives, and no
+    /// reader arrives during the probe, so the child stays hung regardless
+    /// of thread scheduling.
+    fn spawn_fifo_stub(deadline: Deadline, fifo: &Path) -> HubProc {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("exec > \"$1\"")
+            .arg("fifo-stub")
+            .arg(fifo)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        HubProc::spawn_command(deadline, &mut command)
+    }
+
+    /// Reads the `give_up` panic's text: only the enriched panic can follow
+    /// it, so its text also proves the live child was reaped.
+    fn give_up_text(
+        setup: &Setup,
+        process: HubProc,
+        stderr: &Arc<Mutex<String>>,
+        why: &str,
+    ) -> String {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            give_up(setup, process, stderr, why);
+        }));
+        outcome
+            .err()
+            .and_then(|payload| payload.downcast::<String>().ok().map(|boxed| *boxed))
+            .expect("give_up panics")
+    }
+
+    /// The enriched give-up names every capture section: the caller's entry
+    /// line, the live child's state, the hub.log state, the stderr
+    /// snapshot, the resolved directories, and the live thread state of the
+    /// FIFO-hung stub. The probe drives no hello_slice bound: the ticket's
+    /// subject is the capture report, so it tests the reporter, not the
+    /// scheduling that reaches it. The kill in `give_up` reaps the stub
+    /// before the panic, and the home's TempDir removes the FIFO, so a
+    /// failing probe never wedges later tests.
+    #[test]
+    fn give_up_reports_stderr_dirs_and_thread_state() {
+        let setup = Setup::new();
+        let fifo = setup.home().join("stub.fifo");
+        fakes::fifo(&fifo);
+        let process = spawn_fifo_stub(setup.deadline, &fifo);
+        let pid = process.child.id();
+        let stderr = Arc::new(Mutex::new(
+            "hub stderr line 1\nhub stderr line 2\n".to_owned(),
+        ));
+        let message = give_up_text(
+            &setup,
+            process,
+            &stderr,
+            "waited for the installed hub's hello (test)",
+        );
+        assert!(
+            message.contains("waited for the installed hub's hello (test)"),
+            "the panic keeps the caller's entry line: {message}"
+        );
+        assert!(
+            message.contains("was still running"),
+            "the panic names the live child's state: {message}"
+        );
+        assert!(
+            message.contains("hub.log missing"),
+            "a fresh home holds no hub.log: {message}"
+        );
+        assert!(
+            message.contains("hub stderr (live snapshot, last 20 lines):"),
+            "the panic carries the stderr section: {message}"
+        );
+        assert!(
+            message.contains("hub stderr line 2"),
+            "the panic carries the snapshot's tail: {message}"
+        );
+        assert!(
+            message.contains(&format!("state dir {}", setup.home().join("run").display())),
+            "the panic names the resolved state directory: {message}"
+        );
+        assert!(
+            message.contains(&format!("log dir {}", setup.home().join("logs").display())),
+            "the panic names the resolved log directory: {message}"
+        );
+        assert!(
+            message.contains(&format!("pid {pid}")),
+            "the panic names the captured pid: {message}"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            message.contains("wchan"),
+            "the panic names the stub's park state: {message}"
+        );
+        fs::remove_file(&fifo).unwrap_or(());
+    }
+
+    /// An empty snapshot on a running hub reports that nothing was captured
+    /// yet, never as a clean drain; an empty hub.log reports distinctly
+    /// from a missing one.
+    #[test]
+    fn give_up_marks_empty_stderr_and_empty_log() {
+        let setup = Setup::new();
+        fs::create_dir_all(setup.home().join("logs")).unwrap();
+        fs::write(setup.home().join("logs").join("hub.log"), "").unwrap();
+        let fifo = setup.home().join("stub.fifo");
+        fakes::fifo(&fifo);
+        let process = spawn_fifo_stub(setup.deadline, &fifo);
+        let stderr = Arc::new(Mutex::new(String::new()));
+        let message = give_up_text(
+            &setup,
+            process,
+            &stderr,
+            "waited for the installed hub's hello (test)",
+        );
+        assert!(
+            message.contains("(still running: no stderr captured yet)"),
+            "an empty snapshot on a running hub is not a clean drain: {message}"
+        );
+        assert!(
+            message.contains("hub.log empty (0 bytes)"),
+            "an empty hub.log reports distinctly from a missing one: {message}"
+        );
+        fs::remove_file(&fifo).unwrap_or(());
+    }
+
+    /// A pid with no task directory reads as its own marker, never as
+    /// empty output and never as a panic.
+    #[test]
+    fn hub_threads_names_a_gone_pid() {
+        let pid = u32::MAX;
+        let threads = hub_threads(pid);
+        assert!(
+            threads.contains(&format!("pid {pid}")),
+            "the capture names the pid it read: {threads}"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            threads.contains("pid gone"),
+            "a vanished pid prints its marker as text: {threads}"
+        );
+    }
+
+    /// An exited but unreaped child has no live threads: the capture names
+    /// the zombie as text, and the give-up still reports the exit with an
+    /// empty snapshot as nothing captured, never as a clean drain.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hub_threads_names_a_zombie_as_text() {
+        let setup = Setup::new();
+        let mut command = Command::new("true");
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let process = HubProc::spawn_command(setup.deadline, &mut command);
+        let pid = process.child.id();
+        // The stub's `Z` state in `/proc/<pid>/stat` proves it exited
+        // without reaping it: `try_wait` itself reaps, so only a stat read
+        // observes the zombie.
+        let wait = Deadline::after(MUST_SUCCEED_WITHIN).start_wait();
+        loop {
+            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            let zombie = stat
+                .rsplit_once(')')
+                .is_some_and(|(_, tail)| tail.split_whitespace().next() == Some("Z"));
+            if zombie {
+                break;
+            }
+            if wait.left().is_zero() {
+                panic!("the true stub exits at once, but the wait expired");
+            }
+            thread::yield_now();
+        }
+        let threads = hub_threads(pid);
+        assert!(
+            threads.contains("no live threads"),
+            "an exited unreaped child names its zombie state: {threads}"
+        );
+        let stderr = Arc::new(Mutex::new(String::new()));
+        let message = give_up_text(&setup, process, &stderr, "waited (test)");
+        assert!(
+            message.contains("exited"),
+            "the panic names the hub's exit: {message}"
+        );
+        assert!(
+            message.contains("(no stderr captured)"),
+            "an empty snapshot on an exited hub is not a clean drain: {message}"
+        );
     }
 }

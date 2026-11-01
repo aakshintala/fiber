@@ -698,6 +698,47 @@ impl HubProc {
         }
     }
 
+    /// Spawns the `hub serve` command `serve` like
+    /// [`spawn_command`](Self::spawn_command), keeping its piped stderr: a
+    /// drain thread appends every chunk to the returned snapshot as it
+    /// arrives, plus the first read error as its own trailing marker, and
+    /// exits at EOF with no join. The snapshot rides beside `HubProc`, so
+    /// no struct field is added and every existing construction and
+    /// destructure stays unchanged.
+    pub(crate) fn spawn_command_captured(
+        deadline: Deadline,
+        serve: &mut Command,
+    ) -> (Self, Arc<Mutex<String>>) {
+        let mut child = serve.spawn().unwrap();
+        let group = child.id();
+        let _ = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let snapshot = Arc::new(Mutex::new(String::new()));
+        if let Some(mut pipe) = stderr_pipe {
+            let copy = Arc::clone(&snapshot);
+            thread::spawn(move || {
+                let (_, error) = drain_stderr_to_snapshot_reported(&mut pipe, &copy);
+                if let Some(error) = error {
+                    let marker = format!("hub stderr drain error: {error}\n");
+                    match copy.lock() {
+                        Ok(mut guard) => guard.push_str(&marker),
+                        Err(poisoned) => poisoned.into_inner().push_str(&marker),
+                    }
+                }
+            });
+        }
+        let watchdog = Watchdog::group(group);
+        (
+            Self {
+                child,
+                watchdog,
+                group,
+                deadline,
+            },
+            snapshot,
+        )
+    }
+
     #[track_caller]
     pub(crate) fn kill(&self, signal: &'static str) {
         fakes::kill_group(self.group, signal).unwrap();
@@ -899,18 +940,16 @@ pub(crate) fn closed_message(what: &str, got: &[Value], stderr: &str, log_tail: 
     )
 }
 
-/// Reads `pipe` to its end, appending every chunk to `snapshot` as it
-/// arrives while returning the full text: the timeout dump sees stderr
-/// written before the timeout, and the caller still gets the whole stream
-/// once at EOF. A multibyte character split across two reads is kept whole:
-/// trailing bytes that do not yet decode wait for the next read, so neither
-/// the text nor the snapshot ever holds a replacement character for one.
-/// An unreadable or empty stream snapshots as empty.
-pub(crate) fn drain_stderr_to_snapshot(
+/// Reads `pipe` to its end like [`drain_stderr_to_snapshot`], also
+/// returning the first read error's text: the hub-hello capture prints it
+/// as its own section, while existing callers keep the wrapper that drops
+/// it. The text and the snapshot hold exactly what the wrapper would.
+pub(crate) fn drain_stderr_to_snapshot_reported(
     pipe: &mut impl io::Read,
     snapshot: &Arc<Mutex<String>>,
-) -> String {
+) -> (String, Option<String>) {
     let mut text = String::new();
+    let mut first_error: Option<String> = None;
     let mut chunk = [0_u8; 4096];
     let mut pending: Vec<u8> = Vec::new();
     loop {
@@ -925,7 +964,12 @@ pub(crate) fn drain_stderr_to_snapshot(
                     Err(poisoned) => poisoned.into_inner().push_str(&piece),
                 }
             }
-            Err(_) => break,
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error.to_string());
+                }
+                break;
+            }
         }
     }
     if !pending.is_empty() {
@@ -936,7 +980,21 @@ pub(crate) fn drain_stderr_to_snapshot(
             Err(poisoned) => poisoned.into_inner().push_str(&piece),
         }
     }
-    text
+    (text, first_error)
+}
+
+/// Reads `pipe` to its end, appending every chunk to `snapshot` as it
+/// arrives while returning the full text: the timeout dump sees stderr
+/// written before the timeout, and the caller still gets the whole stream
+/// once at EOF. A multibyte character split across two reads is kept whole:
+/// trailing bytes that do not yet decode wait for the next read, so neither
+/// the text nor the snapshot ever holds a replacement character for one.
+/// An unreadable or empty stream snapshots as empty.
+pub(crate) fn drain_stderr_to_snapshot(
+    pipe: &mut impl io::Read,
+    snapshot: &Arc<Mutex<String>>,
+) -> String {
+    drain_stderr_to_snapshot_reported(pipe, snapshot).0
 }
 
 /// Moves every complete character out of `pending`, leaving only trailing
@@ -2376,6 +2434,52 @@ fn stderr_drain_keeps_a_character_split_across_reads() {
         "{}",
         snapshot.lock().unwrap()
     );
+}
+
+/// A reader that yields `rest` once, then fails every read after.
+struct FailAfter<'a> {
+    rest: Option<&'a [u8]>,
+}
+
+impl io::Read for FailAfter<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.rest.take() {
+            Some(chunk) => {
+                let take = chunk.len().min(buf.len());
+                buf[..take].copy_from_slice(&chunk[..take]);
+                if take < chunk.len() {
+                    self.rest = Some(&chunk[take..]);
+                }
+                Ok(take)
+            }
+            None => Err(io::Error::new(io::ErrorKind::BrokenPipe, "stub read error")),
+        }
+    }
+}
+
+#[test]
+fn stderr_drain_sibling_preserves_the_first_read_error() {
+    // The sibling keeps the text and the snapshot exactly as the wrapper
+    // would, and carries the first read error beside them.
+    let snapshot = Arc::new(Mutex::new(String::new()));
+    let mut pipe = FailAfter {
+        rest: Some(b"half\n"),
+    };
+    let (text, error) = drain_stderr_to_snapshot_reported(&mut pipe, &snapshot);
+    assert_eq!(text, "half\n");
+    assert_eq!(*snapshot.lock().unwrap(), "half\n");
+    assert!(
+        error.is_some_and(|error| error.contains("stub read error")),
+        "the sibling names the first read error"
+    );
+    // The wrapper drops the error but keeps the text and the snapshot, so
+    // every existing caller reads exactly what it read before.
+    let blank = Arc::new(Mutex::new(String::new()));
+    let mut again = FailAfter {
+        rest: Some(b"half\n"),
+    };
+    assert_eq!(drain_stderr_to_snapshot(&mut again, &blank), "half\n");
+    assert_eq!(*blank.lock().unwrap(), "half\n");
 }
 
 #[test]

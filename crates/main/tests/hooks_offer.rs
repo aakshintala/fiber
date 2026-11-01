@@ -799,10 +799,12 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
     let wait = support::Deadline::after(Duration::ZERO);
     let entry = "hello wait entered with helper root left 0ns (test)";
     let slices = [Duration::from_secs(10)];
+    let stderr = Arc::new(Mutex::new(String::new()));
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hub_start::hello_slice(
             &setup,
             spawn_live(),
+            &stderr,
             wait,
             Duration::from_secs(2),
             entry,
@@ -847,6 +849,7 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
         hub_start::hello_slice(
             &setup,
             spawn_live(),
+            &stderr,
             wait,
             Duration::from_secs(2),
             entry,
