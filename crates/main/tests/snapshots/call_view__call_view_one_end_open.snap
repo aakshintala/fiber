@@ -1,5 +1,6 @@
 ---
 source: crates/main/tests/call_view.rs
+assertion_line: 743
 expression: "snapshot_text(&setup, &grid, std::slice::from_ref(&url))"
 ---
   Other  [session]                                                                               Esc returns
@@ -48,6 +49,6 @@ expression: "snapshot_text(&setup, &grid, std::slice::from_ref(&url))"
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
  ▌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [workspace]/w  │  auto                                  scripted/s.json  │  ctx ▆▆▆▆▆▆▆▆ — · —
+ [workspace]/w  │  auto scripted/s.json  │  ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 cursor=hidden

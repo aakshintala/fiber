@@ -1,5 +1,6 @@
 ---
 source: crates/main/tests/call_view.rs
+assertion_line: 248
 expression: "snapshot_text(&setup, &grid, &[])"
 ---
   Shell  awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf("%03d %220s", i, "x"); print "TA" "IL" }'            Esc returns
@@ -48,6 +49,6 @@ expression: "snapshot_text(&setup, &grid, &[])"
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
  ▌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [workspace]/w  │  auto                                  scripted/s.json  │  ctx ▆▆▆▆▆▆▆▆ — · —
+ [workspace]/w  │  auto scripted/s.json  │  ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 cursor=hidden

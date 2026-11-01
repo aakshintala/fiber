@@ -313,6 +313,19 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
                     }
                 }
             }
+            // The status row's model pad varies by runner like the title
+            // pad: the fixture path sets the row's gap, so fold it to one
+            // space, keeping the joiners, the model and the ctx segment
+            // exact. Only the box status row carries auto beside ctx.
+            if row.contains("[workspace]/w") && row.contains("ctx") && row.contains('▆') {
+                if let Some(mode) = row.find("auto") {
+                    let after = mode + "auto".len();
+                    let pad = row[after..].bytes().take_while(|b| *b == b' ').count();
+                    if pad > 1 && row[after + pad..].starts_with(|c: char| !c.is_whitespace()) {
+                        row = format!("{} {}", &row[..after], &row[after + pad..]);
+                    }
+                }
+            }
             if let Some(speed) = row.find("speed, last reply") {
                 row = format!("{}speed, last reply            —", &row[..speed]);
             }
