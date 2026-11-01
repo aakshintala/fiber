@@ -274,15 +274,14 @@ fn attach_gates(budget: &str, rows: &[Vec<String>]) -> Result<AttachGates, Strin
     })
 }
 
-/// The tolerance (%) an attach fixture is judged against its comparable
-/// base by when the row's tolerance cell is `—` and that base median is
-/// already over the 50 ms ceiling: same-runner variance alone never fails
-/// the fixture, only a head past 10 % over the base does.
+/// The tolerance (%) standing in for an attach row's `—` tolerance cell.
+/// With a comparable base, a median over the ceiling fails only when it is
+/// also more than this far over the base median.
 const ATTACH_BASE_TOLERANCE_PCT: f64 = 10.0;
 
-/// The class ceiling and tolerance for `class` from attach `gates`: the
-/// ceiling the absolute bound checks, and the tolerance the relative leg
-/// needs (`None` disables it).
+/// The class ceiling and tolerance for `class` from attach `gates`.
+/// `None` is a `—` cell: the first-frame row treats that as 10 % over the
+/// base, and the fold row does not read the tolerance.
 fn attach_limit(gates: &AttachGates, class: SpeedClass) -> (Option<f64>, Option<f64>) {
     match class {
         SpeedClass::Fast => (gates.fast_ceiling, gates.fast_tolerance),
@@ -443,10 +442,13 @@ pub(super) enum Check {
     /// without a comparable base stays advisory with its reason.
     Timing(&'static str),
     /// Milliseconds per run with each run's log size, judged per fixture
-    /// against the row's flat class ceiling on the fast and slow classes:
-    /// a median over the ceiling fails even with a slower same-job base.
-    /// Middle never gates. A `—` tolerance disables only the
-    /// base-relative leg, never the absolute bound. A malformed metric
+    /// on eligible fast and slow models. With a comparable base, a fixture
+    /// fails when its median is over the flat ceiling and more than the
+    /// row's tolerance over that base, or more than 10 % over it while the
+    /// tolerance cell is `—`. A numeric tolerance also fails a median over
+    /// its base by that tolerance below the ceiling. With no usable base,
+    /// only the ceiling fails the fixture, and the comment names every
+    /// median over the ceiling. Middle never gates. A malformed metric
     /// fails even on an advisory model.
     FirstFrame { pin: &'static str, id: &'static str },
     /// Milliseconds per run with each run's log size, advisory reference
@@ -1351,58 +1353,69 @@ pub(super) fn judge(
                                     "; {fixture}: {median:.1} ms ({} ceiling {ceiling:.1} ms, absolute bound)",
                                     class_name(class)
                                 ));
-                                // A comparable base already over the ceiling
-                                // waives the flat bound: the fixture fails
-                                // only past its tolerance-adjusted base, with
-                                // 10 % standing in for `—`. Any other usable
-                                // base keeps the relative leg below the
-                                // ceiling, and `—` disables it there.
-                                let base_leg = match (base_median, tolerance) {
-                                    (Some(base_median), tolerance) if base_median > ceiling => {
-                                        Some((base_median, tolerance.unwrap_or(ATTACH_BASE_TOLERANCE_PCT)))
-                                    }
-                                    (Some(base_median), Some(tolerance)) => {
-                                        Some((base_median, tolerance))
-                                    }
-                                    _ => None,
-                                };
-                                if let Some((base_median, tolerance)) = base_leg {
-                                    line.head.push_str(&format!("; {fixture}: +{tolerance}% over base {base_median:.1} ms"));
-                                }
-                                // Either leg fails, at most once per fixture:
-                                // a waived absolute breach is named in the
-                                // row while the row passes.
-                                if let Some((base_median, tolerance)) = base_leg
-                                    && base_median > ceiling
-                                {
-                                    match timing_fails(median, base_median, 0.0, tolerance) {
-                                        Ok(true) => failures.push(format!(
-                                            "{OVER}median {median:.1} ms of {id} {fixture} is over base {base_median:.1} ms by more than {tolerance}% (relative bound)"
-                                        )),
-                                        Ok(false) => {
-                                            if median > ceiling {
-                                                line.head.push_str(&format!(
-                                                    "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling (absolute bound breached, within +{tolerance}% over base {base_median:.1} ms)",
-                                                    class_name(class)
-                                                ));
+                                // Strictly over the ceiling: a median exactly
+                                // at it passes. The comment names every
+                                // median past it, whether the fixture fails.
+                                let over_ceiling = median > ceiling;
+                                match base_median {
+                                    Some(base_median) => {
+                                        let tolerance_pct =
+                                            tolerance.unwrap_or(ATTACH_BASE_TOLERANCE_PCT);
+                                        line.head.push_str(&format!(
+                                            "; {fixture}: +{tolerance_pct}% over base {base_median:.1} ms"
+                                        ));
+                                        match timing_fails(median, base_median, 0.0, tolerance_pct)
+                                        {
+                                            Ok(over_base) => {
+                                                // A `—` cell fails only when
+                                                // both legs hold. A numeric
+                                                // tolerance also fails the
+                                                // relative leg below the
+                                                // ceiling, so that leg alone
+                                                // is enough.
+                                                if over_base
+                                                    && (tolerance.is_some() || over_ceiling)
+                                                {
+                                                    failures.push(format!(
+                                                        "{OVER}median {median:.1} ms of {id} {fixture} is over base {base_median:.1} ms by more than {tolerance_pct}% (relative bound)"
+                                                    ));
+                                                }
+                                                if over_ceiling {
+                                                    let within = if over_base {
+                                                        String::new()
+                                                    } else {
+                                                        format!(
+                                                            " (absolute bound breached, within +{tolerance_pct}% over base {base_median:.1} ms)"
+                                                        )
+                                                    };
+                                                    line.head.push_str(&format!(
+                                                        "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling{within}",
+                                                        class_name(class)
+                                                    ));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                failures.push(format!("{id} {fixture}: {e}"));
+                                                if over_ceiling {
+                                                    line.head.push_str(&format!(
+                                                        "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling",
+                                                        class_name(class)
+                                                    ));
+                                                }
                                             }
                                         }
-                                        Err(e) => failures.push(format!("{id} {fixture}: {e}")),
                                     }
-                                } else if median > ceiling {
-                                    failures.push(format!(
-                                        "{OVER}median {median:.1} ms of {id} {fixture} is over {ceiling:.1} ms {} ceiling (absolute bound)",
-                                        class_name(class)
-                                    ));
-                                } else if let Some((base_median, tolerance)) = base_leg {
-                                    // Samples are nonnegative: a zero floor checks only
-                                    // the relative leg, independently of the flat ceiling.
-                                    match timing_fails(median, base_median, 0.0, tolerance) {
-                                        Ok(true) => failures.push(format!(
-                                            "{OVER}median {median:.1} ms of {id} {fixture} is over base {base_median:.1} ms by more than {tolerance}% (relative bound)"
-                                        )),
-                                        Ok(false) => {},
-                                        Err(e) => failures.push(format!("{id} {fixture}: {e}")),
+                                    None => {
+                                        if over_ceiling {
+                                            failures.push(format!(
+                                                "{OVER}median {median:.1} ms of {id} {fixture} is over {ceiling:.1} ms {} ceiling (absolute bound)",
+                                                class_name(class)
+                                            ));
+                                            line.head.push_str(&format!(
+                                                "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling",
+                                                class_name(class)
+                                            ));
+                                        }
                                     }
                                 }
                             }
