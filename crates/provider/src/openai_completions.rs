@@ -10,7 +10,7 @@ use std::io::BufRead;
 
 use contract::ProviderCallId;
 use contract::diag::PrefixHashes;
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 use contract::events::CacheLifetime;
 use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
@@ -229,7 +229,7 @@ fn tool_choice(choice: &str) -> Value {
 /// returns the reply once `[DONE]` arrives. A cache write is counted under
 /// `5m`, whatever the request's cache lifetime. A stream that fails keeps
 /// nothing it streamed, finished tool calls included.
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 pub fn decode(
     stream: impl BufRead,
     _lifetime: &CacheLifetime,

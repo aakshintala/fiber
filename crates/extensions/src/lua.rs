@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 use crate::oauth::{Browser, LoginSlot, SystemBrowser};
 use crate::{CredentialPair, Error, host, lua_provider::LoginMethod};
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(any(test, debug_assertions))]
 pub use setup::observe_load;
 
 /// Each Lua extension's default memory cap (`docs/extensions.md`, "Loading,
