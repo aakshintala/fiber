@@ -614,33 +614,29 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     // its collapsed to its expanded mark, and the expansion lands below
     // it, so the thought row is still on screen above the opened call.
     let (_grid, gutter) = open_ledger(&mut run);
-    open_call(&mut run, gutter, "shell", "awk", "exit 0");
-    let grid = run.screen();
-    find_row(&grid.rows, THOUGHT).expect("the thought row above the opened call");
+    let opened = open_call(&mut run, gutter, "shell", "awk", "exit 0");
+    find_row(&opened.rows, THOUGHT).expect("the thought row above the opened call");
     // Reveal the more row of the opened call: the taller input box leaves
     // no scroll position showing both the thought row and the more row,
     // so scroll the conversation down until the more row shows. Each step
     // must move the rows, so a step that would sit on the bottom clamp
-    // fails the wait instead of settling short.
+    // fails the wait instead of settling short. The loop threads the last
+    // settled grid through instead of snapshotting a fresh one per step.
     let grid = {
-        let mut shown = run.screen();
-        let mut revealed = false;
+        let mut prev = opened;
+        let mut found = None;
         for _ in 0..6 {
-            let prev = run.screen();
             run.write(WHEEL_DOWN);
-            shown = run.wait_screen("the more row scrolling into view", |next| {
+            let next = run.wait_screen("the more row scrolling into view", |next| {
                 prev.rows != next.rows
             });
-            if shown.rows.iter().any(|row| row.contains("more lines")) {
-                revealed = true;
+            if next.rows.iter().any(|row| row.contains("more lines")) {
+                found = Some(next);
                 break;
             }
+            prev = next;
         }
-        assert!(
-            revealed,
-            "the conversation never scrolled its more row into view"
-        );
-        shown
+        found.expect("the conversation never scrolled its more row into view")
     };
     // Re-anchor the scroll marker on the call's header: the reveal moved
     // the thought row off the top, and the header is stable across the
