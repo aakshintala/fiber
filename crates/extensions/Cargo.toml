@@ -23,11 +23,7 @@ rustix.workspace = true
 support = { path = "../support" }
 ureq.workspace = true
 
-[features]
-test-hooks = []
-
 [dev-dependencies]
-extensions = { path = ".", features = ["test-hooks"] }
 fakes = { path = "../fakes" }
 
 [lints]

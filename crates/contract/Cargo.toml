@@ -11,11 +11,6 @@ support = { path = "../support" }
 serde_json.workspace = true
 thiserror.workspace = true
 
-[features]
-# The queue's acquisition gate for the loop's race tests, which link
-# `contract` without `cfg(test)` (`docs/testing.md`, "Waits and timeouts").
-test-gates = []
-
 [dev-dependencies]
 # The race test's bounded receives (`docs/testing.md`, "Waits and timeouts").
 fakes = { path = "../fakes" }

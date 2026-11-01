@@ -16,11 +16,7 @@ thiserror.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 
-[features]
-test-hooks = []
-
 [dev-dependencies]
-support = { path = ".", features = ["test-hooks"] }
 fakes = { path = "../fakes" }
 
 [lints]
