@@ -917,16 +917,16 @@ install still running.
   `", "`, and `watcher`. With none registered, it says `No hooks`.
 - **The MCP view,** `/mcp`: one row per configured server: its name, where it
   is declared (`global`, `project` or this repository), its state and its
-  tool count. The state is `connecting` for a server never started this
+  tool count. The state is `not started` for a server never started this
   session, `ready` for a running one, `failed` with the hub's
   `mcp_server_failed` sentence, or `needs-login`. A failed row is in
-  `error`, a needs-login row in `attention`, a connecting row dim, a ready
+  `error`, a needs-login row in `attention`, a not-started row dim, a ready
   row in the text colour. Enter on a failed server reconnects that one
   server; Enter on one that needs a login runs the login `fiber mcp login`
   runs (`docs/mcp.md`, "What Fiber does with MCP"): it opens the browser
   and waits for the loopback callback, and the row shows the wait with the
   login URL cut to fit, then success or the failure reason. Enter on a ready
-  or connecting row does nothing. A repository's server nobody approved
+  or not-started row does nothing. A repository's server nobody approved
   shows `not approved`, and Enter says to run `fiber approve` in the repository;
   the view never approves it. Rows sort by server name. The last row is
   "Per-tool on/off switches stay in `/tools`.", dim. On a remote terminal
