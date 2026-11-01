@@ -1466,14 +1466,19 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 "the header heads the table: {:?}",
                 pre.rows
             );
-            let third = pre.rows[usize::from(first) + 2]
-                .split_whitespace()
-                .next()
-                .expect("a key on the third settings row")
-                .to_owned();
+            // The header is a list row, so a step of three carries off the
+            // first two keys. Take the next row that holds a key and wait
+            // on the row that step moves it to.
+            let (lands, key) = (usize::from(first)..pre.rows.len())
+                .find_map(|row| {
+                    let word = pre.rows[row].split_whitespace().find(|word| *word != "›")?;
+                    let lands = row.checked_sub(3)?;
+                    (lands >= usize::from(first) - 1).then_some((lands, word.to_owned()))
+                })
+                .expect("a settings key");
             run.write(&wheel_down(at));
             let post = run.wait_screen("the wheeled settings", |grid| {
-                grid.rows[usize::from(first) - 1].contains(&third)
+                grid.rows[lands].contains(&key)
             });
             assert!(
                 !post.rows[usize::from(first) - 1].contains("budget.usd"),
@@ -1491,30 +1496,56 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             );
             // The keys screen: one row per binding.
             run.write(b"/keys\r");
+            let mut probe: Option<(u16, usize, String)> = None;
             let pre = run.wait_screen("the open keys", |grid| {
-                shows(grid, "Keys") && shows(grid, "Send a prompt")
+                let Some(first) = find_grid_row(&grid.rows, "Send a prompt") else {
+                    return false;
+                };
+                let Some((at_row, action)) =
+                    (usize::from(first)..grid.rows.len()).find_map(|row| {
+                        grid.rows[row]
+                            .split_whitespace()
+                            .find(|word| word.contains('_'))
+                            .map(|word| (row, word.to_owned()))
+                    })
+                else {
+                    return false;
+                };
+                let stays = at_row >= usize::from(first) + 3;
+                if stays && grid.rows[at_row - 3].contains(&action) {
+                    return false;
+                }
+                if !shows(grid, "Keys") {
+                    return false;
+                }
+                probe = Some((first, at_row, action));
+                true
             });
-            let first = find_grid_row(&pre.rows, "Send a prompt").expect("the first binding row");
-            // One step moves three rows. A wrapped binding's alias row
-            // carries no action name, so take the first action name at or
-            // below the third row and wait for it where the step puts it.
-            let (at_row, third) = (usize::from(first) + 3..pre.rows.len())
-                .find_map(|row| {
-                    pre.rows[row]
-                        .split_whitespace()
-                        .find(|word| word.contains('_'))
-                        .map(|word| (row, word.to_owned()))
+            // settled: "the open keys" checked the binding row, the action
+            // word, and, when the step keeps it, that the landing row does
+            // not already hold that word.
+            let (first, at_row, action) = probe.expect("an action name on a binding row");
+            // Rebind::wheel adds 3 to the display-line top, so an action
+            // fewer than three rows below the first leaves the list.
+            let post = if at_row < usize::from(first) + 3 {
+                run.write(&wheel_down(at));
+                run.wait_screen("the wheeled keys", |grid| {
+                    grid.rows.iter().all(|row| !row.contains(&action))
                 })
-                .expect("an action name below the first binding");
-            let lands = at_row - 3;
-            assert!(
-                !pre.rows[lands].contains(&third),
-                "the wait would pass before the wheel moved: {:?}",
-                pre.rows
-            );
-            run.write(&wheel_down(at));
-            let post =
-                run.wait_screen("the wheeled keys", |grid| grid.rows[lands].contains(&third));
+            } else {
+                let lands = at_row - 3;
+                // settled: "the open keys" checked this row does not already
+                // hold the action word.
+                assert!(
+                    !pre.rows[lands].contains(&action),
+                    "the wait would pass before the wheel moved: {:?}",
+                    pre.rows
+                );
+                run.write(&wheel_down(at));
+                run.wait_screen("the wheeled keys", |grid| {
+                    grid.rows[lands].contains(&action)
+                })
+            };
             assert!(
                 !post.rows[usize::from(first)].contains("Send a prompt"),
                 "the first binding scrolled out: {:?}",
