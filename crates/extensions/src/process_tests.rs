@@ -5077,7 +5077,7 @@ fn restart_owner(
 }
 
 /// Dispatches `hook` on its own thread: the caller owns the wait, and
-/// the test pumps the peer's lines.
+/// the test pumps the peer's lines. The timeout lands on the owner's clock.
 fn dispatch_hook(
     owner: &Harness,
     hook: super::runtime::FunctionRef,
@@ -5456,7 +5456,15 @@ fn finish_acknowledges_the_final_delivery_before_the_exit_allowance() {
         let registry = support::lock(&owner.registry);
         registry.hook_runs()[&("turn_end".to_owned(), 0)].clone()
     };
-    let first = dispatch_hook(&owner, hook, Duration::from_millis(100), None);
+    // The proving jump the live dispatch must outlast: its hook deadline is
+    // minted on this same clock (`process/requests.rs`), so the timeout spans it.
+    const PROVING_ADVANCE: Duration = Duration::from_secs(120);
+    let first = dispatch_hook(
+        &owner,
+        hook,
+        PROVING_ADVANCE + Duration::from_secs(60),
+        None,
+    );
     let seen = read_json_file(&log_path, "the final reply");
     assert_eq!(seen, json!({"replied": true}));
     // The reply is sent but unpumped: the final delivery is outstanding.
@@ -5481,7 +5489,7 @@ fn finish_acknowledges_the_final_delivery_before_the_exit_allowance() {
         clippy::disallowed_methods,
         reason = "no code under test waits on the exit allowance until the reply (ruling 6179406086)"
     )]
-    owner.clock.advance(Duration::from_secs(120));
+    owner.clock.advance(PROVING_ADVANCE);
     assert!(
         !owner.extension.transport().exited(),
         "no TERM before the answer"
