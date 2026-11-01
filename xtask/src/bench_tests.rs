@@ -4649,11 +4649,15 @@ fn attach_fails_only_when_over_50_and_over_the_base() {
     // docs/performance.md:326-330,334-335: a fixture fails only when its
     // median is over 50 ms and more than 10 % over the comparable base.
     // Within 10 % passes and is named. Under 50 ms passes. Each
-    // over-ceiling fixture produces one named failure. Targets
-    // `over_base && (tolerance.is_some() || over_ceiling)`: `&&` replaced
-    // by `||` or by `over_base` fails the under-50 head; `&&` replaced by
-    // the right side, or by `over_ceiling`, fails the within-10 % head;
-    // `median > ceiling` replaced by `>=` fails the exactly-50 head.
+    // over-ceiling fixture produces one named failure. The within note is
+    // attached only by `over_ceiling && !over_base`. Replacing that `&&`
+    // with `||` still names the within-tolerance breach, so the case that
+    // is over the ceiling and over its base must show the breach without
+    // the note. Targets `over_base && (tolerance.is_some() ||
+    // over_ceiling)`: `&&` replaced by `||` fails the under-50 head that
+    // is over its base; `||` replaced by `&&` drops the relative failure
+    // on the over-ceiling, over-base head; `median > ceiling` replaced by
+    // `>=` fails the exactly-50 head.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         let (h, b) = attach_pair(&[50.1; 5], &[50.1; 5], &[48.0; 5], &[48.0; 5], cpu);
         let out = judge(&h, Some(&b), Event::PullRequest);
@@ -4693,7 +4697,13 @@ fn attach_fails_only_when_over_50_and_over_the_base() {
         assert!(line.ends_with("| fail |"), "{cpu}: {line}");
         for fixture in ["1 MiB", "10 MiB"] {
             assert!(
-                line.contains(&format!("{fixture}: 55.0 ms over 50.0 ms")),
+                line.contains(&format!("{fixture}: 55.0 ms over 50.0 ms {class} ceiling")),
+                "{cpu}: {line}"
+            );
+            assert!(
+                !line.contains(&format!(
+                    "{fixture}: 55.0 ms over 50.0 ms {class} ceiling (absolute bound breached, within +10% over base 40.0 ms)"
+                )),
                 "{cpu}: {line}"
             );
         }
@@ -4736,6 +4746,28 @@ fn attach_fails_only_when_over_50_and_over_the_base() {
         );
         let line = row(&out.comment, "Terminal to its first frame, attaching");
         assert!(line.ends_with("| pass |"), "{cpu}: {line}");
+        assert!(!line.contains("over 50.0 ms"), "{cpu}: {line}");
+        // Under the ceiling and within 10 % of the base: the row passes
+        // and names the median, with no within note.
+        let (h, b) = attach_pair(&[40.0; 5], &[40.0; 5], &[40.0; 5], &[40.0; 5], cpu);
+        let out = judge(&h, Some(&b), Event::PullRequest);
+        assert_eq!(
+            out.failures,
+            Vec::<String>::new(),
+            "{cpu}: {:?}",
+            out.failures
+        );
+        let line = row(&out.comment, "Terminal to its first frame, attaching");
+        assert!(line.ends_with("| pass |"), "{cpu}: {line}");
+        for fixture in ["1 MiB", "10 MiB"] {
+            assert!(
+                line.contains(&format!(
+                    "{fixture}: 40.0 ms ({class} ceiling 50.0 ms, absolute bound); {fixture}: +10% over base 40.0 ms"
+                )),
+                "{cpu}: {line}"
+            );
+        }
+        assert!(!line.contains("absolute bound breached"), "{cpu}: {line}");
         assert!(!line.contains("over 50.0 ms"), "{cpu}: {line}");
     }
 }
