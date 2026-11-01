@@ -181,8 +181,7 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   never `content` or `details`, except that it drops `details.matches` when a
   hook rewrote the output (Shell, "Result and output"). A tool's prose cannot
   steer control flow.
-- A `failed` status is sent to the provider as that protocol's error flag on
-  the tool result.
+- A `failed` status is sent to the provider as that protocol's error flag on the tool result. A `failed` result whose content holds no text is sent with its `error.message` as the text, so the provider never receives an empty error result. The log keeps `content` as the tool wrote it.
 
 ## What a result proves
 
