@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use contract::clock::{Clock, Wake};
 use contract::events::{DelegateFinished, DelegateStarted, JobCompleted, Outcome};
 use contract::jobs::{End, JobRecord, Opening, Stop, Taken};
-use contract::shapes::{ContentPart, Effect, Failure, Process, Usage};
+use contract::shapes::{ContentPart, Effect, Failure, Process, ProviderFailure, Usage};
 use contract::tool::{Cancel, Output, Tool};
 use contract::{ErrorCode, JobId, SessionId};
 use fakes::Deadline;
@@ -750,6 +750,49 @@ fn final_text_adds_a_newline_only_when_the_piece_has_none() {
             path.display()
         )
     );
+}
+
+#[test]
+fn a_wait_names_the_provider_line_after_the_error() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let opened = open(&registry, "npm test", idle_stop());
+    let id = opened.started.job_id.0.clone();
+    (opened.end.0)(JobCompleted {
+        job_id: JobId(id.clone()),
+        status: Outcome::Failed,
+        error: Some(Failure {
+            code: ErrorCode::InvalidRequest,
+            message: "pa answered HTTP 400.".into(),
+            retry_after_ms: None,
+            provider: Some(ProviderFailure {
+                name: "pa".into(),
+                status: Some(400),
+                message: "content cannot be empty if is_error is true".into(),
+            }),
+        }),
+        process: None,
+        output_tail: None,
+
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    });
+    let output = run(
+        &tool,
+        json!({"action": "wait", "job_id": id, "timeout_ms": 0}),
+        &CancelToken::new(),
+    );
+    let text = text_of(&output);
+    // `docs/errors.md`, "The shape": the model is told
+    // `Provider said: <provider.message>` after Fiber's message. No area doc
+    // promises the provider line's place against `Output:`.
+    let error = text.find("pa answered HTTP 400.").expect("the error line");
+    let provider = text
+        .find("Provider said: content cannot be empty if is_error is true")
+        .expect("the provider line");
+    assert!(error < provider, "error, provider: {text}");
+    assert!(text.contains("Output:"), "the output stays: {text}");
 }
 
 #[test]

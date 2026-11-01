@@ -819,6 +819,16 @@ fn final_text(
             text.push('\n');
         }
     }
+    // A failed model call keeps the provider's own words on their own
+    // labelled line, directly after Fiber's message.
+    if let Some(line) = completed
+        .error
+        .as_ref()
+        .and_then(|error| error.provider.as_ref())
+        .and_then(contract::shapes::ProviderFailure::provider_line)
+    {
+        text.push_str(&line);
+    }
     if let Some(finished) = finished {
         // A delegate's final message rides its `wait` answer, as it rides
         // its wake.

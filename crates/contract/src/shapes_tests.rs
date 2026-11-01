@@ -56,6 +56,50 @@ fn protected_warning_lines_name_each_path_once() {
 }
 
 #[test]
+fn provider_line_names_the_providers_own_message() {
+    let failure = ProviderFailure {
+        name: "pa".to_owned(),
+        status: Some(400),
+        message: "content cannot be empty if is_error is true".to_owned(),
+    };
+    assert_eq!(
+        failure.provider_line(),
+        Some("Provider said: content cannot be empty if is_error is true\n".to_owned()),
+        "the line carries the message verbatim with its label"
+    );
+}
+
+#[test]
+fn provider_line_renders_without_a_status() {
+    let failure = ProviderFailure {
+        name: "codex".to_owned(),
+        status: None,
+        message: "its credential() failed: login expired".to_owned(),
+    };
+    assert_eq!(
+        failure.provider_line(),
+        Some("Provider said: its credential() failed: login expired\n".to_owned()),
+        "a missing status still renders the message alone"
+    );
+}
+
+#[test]
+fn provider_line_skips_an_empty_or_whitespace_message() {
+    for message in ["", "   ", "\n\t "] {
+        let failure = ProviderFailure {
+            name: "pa".to_owned(),
+            status: Some(400),
+            message: message.to_owned(),
+        };
+        assert_eq!(
+            failure.provider_line(),
+            None,
+            "no words means no line for {message:?}"
+        );
+    }
+}
+
+#[test]
 fn default_usage_is_zero_counts_with_a_known_zero_cost() {
     // Field by field: a derived `Default` would leave `cost` as
     // `None`, an unknown cost, instead of a known `0`.
