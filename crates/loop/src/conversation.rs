@@ -856,7 +856,15 @@ fn result_of(action: &ActionId, completed: &ToolCallCompleted) -> Input {
     }
     Input::ToolResult {
         action_id: action.clone(),
-        text: text(&completed.content),
+        text: if completed.status == CallStatus::Failed && text(&completed.content).is_empty() {
+            completed
+                .error
+                .as_ref()
+                .map(|error| error.message.clone())
+                .unwrap_or_default()
+        } else {
+            text(&completed.content)
+        },
         is_error: completed.status == CallStatus::Failed,
         images: images(&completed.content),
         pdfs: pdfs(&completed.content),
