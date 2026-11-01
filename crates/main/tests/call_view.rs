@@ -669,11 +669,11 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     });
     // Page up until the window re-anchors to the held head segment: the
     // ups page past the held tail window, so the tail pages drop and the
-    // last output rows settle at 036 and 037 above the end marker. The
-    // marker appears only once its edge pages are held, so it signals
-    // the refetch that fills this segment has landed. Each step must
-    // move the rows, so a step that would sit on the top clamp fails the
-    // wait instead of settling short.
+    // end marker lands with the head segment's last output rows above
+    // it. The marker appears only once its edge pages are held, so it
+    // signals the refetch that fills this segment has landed. Each step
+    // must move the rows, so a step that would sit on the top clamp
+    // fails the wait instead of settling short.
     let marker = "── end of the model's view ──";
     let grid = {
         let mut prev = grid;
@@ -681,9 +681,7 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
         for _ in 0..MAX_PAGE_UPS {
             run.write(b"\x1b[5~");
             let next = run.wait_screen("the settled paged-up view", |next| prev.rows != next.rows);
-            if first_output_number(&next) == Some(36)
-                && next.rows.iter().any(|row| row.contains(marker))
-            {
+            if next.rows.iter().any(|row| row.contains(marker)) {
                 found = Some(next);
                 break;
             }
@@ -691,7 +689,18 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
         }
         found.expect("the paged-up view settled on the held head segment")
     };
-    let settled = first_output_number(&grid).expect("the settled first output number");
+    // The head segment ends at the end marker: the nearest numbered row
+    // above it is the segment's last row, so one less is the settled
+    // first output number the wheel math counts from.
+    let marker_y = find_row(&grid.rows, marker).expect("the end marker in the settled view");
+    let mut settled = None;
+    for row in grid.rows[..usize::from(marker_y)].iter().rev() {
+        if let Ok(above) = row.trim_start().get(..3).unwrap_or("").parse::<u16>() {
+            settled = above.checked_sub(1);
+            break;
+        }
+    }
+    let settled = settled.expect("the settled first output number");
     // The marker row breaks the output-number/top-row one-to-one. Aim
     // the wheel at the view's fixed interior, not a grid-derived row;
     // page replies cannot change which surface owns this coordinate.
