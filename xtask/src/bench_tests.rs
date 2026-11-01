@@ -4541,9 +4541,9 @@ fn both_attach_fixtures_gate_the_absolute_bound() {
 
 #[test]
 fn attach_base_over_50_waives_the_absolute_bound_within_tolerance() {
-    // docs/performance.md:326-332: over 50 ms and exactly 10 % over a
+    // docs/performance.md:326-332,334-335: over 50 ms and exactly 10 % over a
     // comparable base passes, and the report names each median. Just over
-    // 10 % fails once per fixture. `—` counts as 10 %.
+    // 10 % produces one named failure per fixture. `—` counts as 10 %.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         // Exactly 10 % over base passes the strict comparison on both
         // fixtures while naming each breach.
@@ -4603,10 +4603,10 @@ fn attach_base_over_50_waives_the_absolute_bound_within_tolerance() {
 
 #[test]
 fn attach_absolute_bound_holds_without_a_usable_base() {
-    // docs/performance.md:330-332,338-339: with no base, a failed base, a
-    // missing or malformed base metric, or a different base CPU, the 50 ms
-    // bound holds on its own. Each over-ceiling fixture fails once, and the
-    // report names the median.
+    // docs/performance.md:330-332,334-335,338-339: with no base, a failed
+    // base, a missing or malformed base metric, or a different base CPU, the
+    // 50 ms bound holds on its own. Each over-ceiling fixture produces one
+    // named failure, and the report names the median.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         let (_, slower) = attach_pair(&[50.1; 5], &[50.1; 5], &[60.0; 5], &[60.0; 5], cpu);
         let missing = without_metric(&slower, "terminal_attach_ms");
@@ -4646,9 +4646,10 @@ fn attach_absolute_bound_holds_without_a_usable_base() {
 
 #[test]
 fn attach_fails_only_when_over_50_and_over_the_base() {
-    // docs/performance.md:326-330: a fixture fails only when its median is
-    // over 50 ms and more than 10 % over the comparable base. Within 10 %
-    // passes and is named. Under 50 ms passes. Targets
+    // docs/performance.md:326-330,334-335: a fixture fails only when its
+    // median is over 50 ms and more than 10 % over the comparable base.
+    // Within 10 % passes and is named. Under 50 ms passes. Each
+    // over-ceiling fixture produces one named failure. Targets
     // `over_base && (tolerance.is_some() || over_ceiling)`: `&&` replaced
     // by `||` or by `over_base` fails the under-50 head; `&&` replaced by
     // the right side, or by `over_ceiling`, fails the within-10 % head;
@@ -4741,11 +4742,11 @@ fn attach_fails_only_when_over_50_and_over_the_base() {
 
 #[test]
 fn attach_numeric_tolerance_applies_below_and_above_the_ceiling() {
-    // docs/performance.md:326-330,336-339: a numeric tolerance is the
-    // margin on either side of 50 ms. Head 52 ms over base 45 ms at 25 %
-    // (bound 56.25 ms) passes and is named; 57 ms fails once. Head 50.1 ms
-    // over base 50.0 ms at 10 % passes. Targets using 10 % where the cell
-    // names 25 %: 52 ms would then fail.
+    // docs/performance.md:326-330,334-335,336-339: a numeric tolerance is
+    // the margin on either side of 50 ms. Head 52 ms over base 45 ms at 25 %
+    // (bound 56.25 ms) passes and is named; 57 ms produces one named failure
+    // per fixture. Head 50.1 ms over base 50.0 ms at 10 % passes. Targets
+    // using 10 % where the cell names 25 %: 52 ms would then fail.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         let doc = doc_with(
             "| 50 ms | 50 ms | 50 ms | — | — |",
@@ -4822,10 +4823,10 @@ fn attach_head_at_50_with_no_base_passes() {
 
 #[test]
 fn attach_numeric_tolerance_over_50_base_judges_the_relative_leg() {
-    // docs/performance.md:326-330,336-339: with a numeric tolerance, the
-    // boundary is the tolerance-adjusted base. Base 60 ms at 25 % puts it
-    // at exactly 75 ms: the boundary passes while naming the breach, just
-    // above fails; each over-ceiling fixture fails once.
+    // docs/performance.md:326-330,334-335,336-339: with a numeric tolerance,
+    // the boundary is the tolerance-adjusted base. Base 60 ms at 25 % puts
+    // it at exactly 75 ms: the boundary passes while naming the breach, and
+    // just above produces one named failure per over-ceiling fixture.
     for cpu in [FAST_MODEL, SLOW_MODEL] {
         let doc = doc_with(
             "| 50 ms | 50 ms | 50 ms | — | — |",

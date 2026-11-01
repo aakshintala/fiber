@@ -1357,6 +1357,7 @@ pub(super) fn judge(
                                 // at it passes. The comment names every
                                 // median past it, whether the fixture fails.
                                 let over_ceiling = median > ceiling;
+                                let mut within = String::new();
                                 match base_median {
                                     Some(base_median) => {
                                         let tolerance_pct =
@@ -1380,28 +1381,14 @@ pub(super) fn judge(
                                                         "{OVER}median {median:.1} ms of {id} {fixture} is over base {base_median:.1} ms by more than {tolerance_pct}% (relative bound)"
                                                     ));
                                                 }
-                                                if over_ceiling {
-                                                    let within = if over_base {
-                                                        String::new()
-                                                    } else {
-                                                        format!(
-                                                            " (absolute bound breached, within +{tolerance_pct}% over base {base_median:.1} ms)"
-                                                        )
-                                                    };
-                                                    line.head.push_str(&format!(
-                                                        "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling{within}",
-                                                        class_name(class)
-                                                    ));
+                                                if over_ceiling && !over_base {
+                                                    within = format!(
+                                                        " (absolute bound breached, within +{tolerance_pct}% over base {base_median:.1} ms)"
+                                                    );
                                                 }
                                             }
                                             Err(e) => {
                                                 failures.push(format!("{id} {fixture}: {e}"));
-                                                if over_ceiling {
-                                                    line.head.push_str(&format!(
-                                                        "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling",
-                                                        class_name(class)
-                                                    ));
-                                                }
                                             }
                                         }
                                     }
@@ -1411,12 +1398,14 @@ pub(super) fn judge(
                                                 "{OVER}median {median:.1} ms of {id} {fixture} is over {ceiling:.1} ms {} ceiling (absolute bound)",
                                                 class_name(class)
                                             ));
-                                            line.head.push_str(&format!(
-                                                "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling",
-                                                class_name(class)
-                                            ));
                                         }
                                     }
+                                }
+                                if over_ceiling {
+                                    line.head.push_str(&format!(
+                                        "; {fixture}: {median:.1} ms over {ceiling:.1} ms {} ceiling{within}",
+                                        class_name(class)
+                                    ));
                                 }
                             }
                             // Missing comparisons remain advisory only when the
