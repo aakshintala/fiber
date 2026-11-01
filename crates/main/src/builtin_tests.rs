@@ -49,6 +49,12 @@ pub(super) fn delegates() -> crate::delegates::Delegates {
             catalogue: Arc::from(""),
             credential: Arc::new(|_| Ok(None)),
         },
+        Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        })),
     )
 }
 

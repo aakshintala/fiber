@@ -1157,6 +1157,12 @@ fn delegates() -> crate::delegates::Delegates {
             catalogue: std::sync::Arc::from(""),
             credential: std::sync::Arc::new(|_| Ok(None)),
         },
+        std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        })),
     )
 }
 
