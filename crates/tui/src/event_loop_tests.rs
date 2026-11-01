@@ -1587,8 +1587,13 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-file-editor-signal".to_owned())
-        .spawn(move || match done.send(lp.open_file(&file)) {
-            Ok(()) | Err(_) => {}
+        .spawn(move || {
+            match done.send(lp.open_file(crate::editor::OpenFile {
+                path: file,
+                line: None,
+            })) {
+                Ok(()) | Err(_) => {}
+            }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let live = ready.wait(fakes::Deadline::after(DEADLINE));

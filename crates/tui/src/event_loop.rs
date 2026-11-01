@@ -762,7 +762,7 @@ impl<B: Backend> Loop<B> {
                     }
                 }
                 Effect::OpenFile(file) => {
-                    if let Some(code) = self.open_file(&file) {
+                    if let Some(code) = self.open_file(file) {
                         return Some(code);
                     }
                 }
@@ -1714,12 +1714,14 @@ impl<B: Backend> Loop<B> {
         code
     }
 
-    /// Ctrl+G on a configuration view: opens `file` in the editor
-    /// `$VISUAL` or `$EDITOR` names, with the terminal handed over, and
-    /// tells the app it returned. `Some(1)` when the terminal cannot be
-    /// taken back. A shutdown signal while the editor runs quits with 128
-    /// plus its number instead, with no resume, as above.
-    fn open_file(&mut self, file: &std::path::Path) -> Option<i32> {
+    /// Ctrl+G on a configuration view's file or a Changed files row or
+    /// diff: opens `file` in the editor `$VISUAL` or `$EDITOR` names, at
+    /// its first changed line when one is given, with the terminal handed
+    /// over, and tells the app it returned. `Some(1)` when the terminal
+    /// cannot be taken back. A shutdown signal while the editor runs
+    /// quits with 128 plus its number instead, with no resume, as above.
+    fn open_file(&mut self, file: editor::OpenFile) -> Option<i32> {
+        let editor::OpenFile { path, line } = file;
         let Some(command) = editor::command(&self.var) else {
             self.app
                 .config_file_closed(Err(editor::NO_EDITOR_FILE.to_owned()));
@@ -1733,7 +1735,7 @@ impl<B: Backend> Loop<B> {
         let mut result = editor::Outcome::Done(Err(String::new()));
         let clock = Arc::clone(&self.clock);
         let code = self.hand_over(|| {
-            result = editor::open(&command, file, &clock);
+            result = editor::open(&command, &path, line, &clock);
             // As in [`Loop::open_editor`]: a shutdown stop converts to
             // the quit code in this handover.
             match result {
