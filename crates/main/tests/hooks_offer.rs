@@ -22,8 +22,9 @@ mod support;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,8 +32,7 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::pty::Run;
 use support::{
-    CapturedStderr, HubProc, SessionGuard, connect_hub, is_status, run_to_exit, session_dir,
-    write_json,
+    HubProc, SessionGuard, connect_hub, is_status, run_to_exit, session_dir, write_json,
 };
 
 /// The pty size the journeys draw on.
@@ -794,19 +794,35 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
 #[test]
 fn hello_slice_timeout_reports_bounds_and_hub_state() {
     let setup = support::Setup::new();
+    // A test-controlled live child: it parks opening the test-held FIFO
+    // for write, which blocks until a reader arrives, and no reader
+    // arrives during the probe, so it stays alive across the zero-bound
+    // slice exactly as the sleep did. Its own process group makes the
+    // give-up's kill effective, so the reap and the drain's EOF follow in
+    // milliseconds instead of riding a natural exit.
+    let fifo = setup.home().join("live.fifo");
+    fakes::fifo(&fifo);
     let spawn_live = || {
-        let mut command = Command::new("sleep");
-        command.arg("30");
-        support::HubProc::spawn_command(setup.deadline, &mut command)
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("exec > \"$1\"")
+            .arg("live-stub")
+            .arg(&fifo)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        support::HubProc::spawn_command_captured(setup.deadline, &mut command)
     };
     let wait = support::Deadline::after(Duration::ZERO);
     let entry = "hello wait entered with helper root left 0ns (test)";
     let slices = [Duration::from_secs(10)];
-    let capture = CapturedStderr::drained_text(String::new());
+    let (process, capture) = spawn_live();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hub_start::hello_slice(
             &setup,
-            spawn_live(),
+            process,
             &capture,
             wait,
             Duration::from_secs(2),
@@ -848,10 +864,11 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
     );
     fs::create_dir_all(setup.home().join("logs")).unwrap();
     fs::write(setup.home().join("logs").join("hub.log"), "").unwrap();
+    let (process, capture) = spawn_live();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hub_start::hello_slice(
             &setup,
-            spawn_live(),
+            process,
             &capture,
             wait,
             Duration::from_secs(2),
