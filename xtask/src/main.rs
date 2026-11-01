@@ -807,11 +807,18 @@ fn workspace_members() -> Result<Members, String> {
             let library = array(package, "targets")
                 .iter()
                 .any(|t| array(t, "kind").iter().any(|k| k.as_str() == Some("lib")));
+            let unrun_tests = array(package, "targets")
+                .iter()
+                .filter(|t| array(t, "kind").iter().any(|k| k.as_str() == Some("test")))
+                .filter(|t| t.get("test").and_then(Value::as_bool) == Some(false))
+                .map(|t| relative(Path::new(text(t, "src_path")), &root))
+                .collect();
             let member = Member {
                 dir: dir_of(package),
                 version: text(package, "version").to_owned(),
                 deps,
                 library,
+                unrun_tests,
             };
             (text(package, "name").to_owned(), member)
         })

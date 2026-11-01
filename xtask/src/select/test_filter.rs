@@ -297,6 +297,11 @@ pub(super) fn test_prefix(
     })
 }
 
+/// The test files among `files` that a plain nextest run never builds.
+pub(crate) fn unrun_test_files(_files: &[String], _members: &Members) -> Vec<String> {
+    Vec::new()
+}
+
 /// The nextest filter selecting every test in the test files among
 /// `files`, and the packages that own them. `sources` is every Rust file
 /// in the workspace: a `src/` test file a top-level `#[path]`
