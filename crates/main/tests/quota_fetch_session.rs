@@ -426,10 +426,22 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     // second prompt below starts a new turn instead of steering the
     // first.
     run.write(b"second\r");
+    // The wait also requires the settled row count: the notice can
+    // paint while the first turn's `you` row is still settling, and a
+    // frame with one row would fail the count below on the first
+    // attempt (`touched-retries` fails a pass on retry). Waiting for
+    // both rows makes the returned frame satisfy the assert by
+    // construction.
     let shown = run.wait_screen("the second turn's Fiber quota notice", |grid| {
         grid.contents.contains("Fiber")
             && grid.contents.contains("used 90%")
             && grid.contents.contains("second")
+            && grid
+                .contents
+                .lines()
+                .filter(|line| line.trim_start().starts_with("you "))
+                .count()
+                == 2
     });
     assert!(shown.contents.contains("you"), "{}", shown.contents);
     assert!(shown.contents.contains("Fiber"), "{}", shown.contents);
