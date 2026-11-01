@@ -393,11 +393,13 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     );
     // Leaving the screen proves only that the last rows are gone, not
     // that the top page was fetched: the notice below needs the fetch,
-    // so the scroll continues, bounded as before, until the hub-side
-    // `seen` shows the poisoned top-page request or the notice draws.
-    // A stall here names the missing fetch within batches instead of
-    // timing out on the notice below.
-    let mut top_batches = 0;
+    // so the scroll continues on the same batch budget until the hub-side
+    // `seen` shows the poisoned top-page request. A stall here names the
+    // missing fetch within batches instead of timing out on the notice
+    // below. No grid is read here: the hub records the request before it
+    // answers, and the notice draws only after the answer, so a drawn
+    // notice implies `requested` already holds; the screen wait below
+    // remains the settled-frame notice check.
     loop {
         let requested = seen.lock().unwrap().iter().any(|command| {
             command.starts_with("history from=Some(0) ") && !command.contains("to=None")
@@ -405,31 +407,21 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         if requested {
             break;
         }
-        if driver
-            .shared
-            .lock()
-            .unwrap()
-            .grid()
-            .contents
-            .contains(NOTICE)
-        {
-            break;
-        }
         assert!(
-            top_batches < 200,
-            "the top page was never requested after {top_batches} batches of 5: hub saw {:?}",
+            batches < 200,
+            "the top page was never requested after {batches} batches of 5: hub saw {:?}",
             seen.lock().unwrap(),
         );
         let from = driver.output().len();
         for _ in 0..5 {
             driver.write(b"\x1b[5~");
         }
-        top_batches += 1;
+        batches += 1;
         driver.wait_bytes(
             from,
             FRAME_END,
             &format!(
-                "a frame for top-page batch {top_batches}; hub saw {:?}",
+                "a frame for top-page batch {batches}; hub saw {:?}",
                 seen.lock().unwrap()
             ),
         );
