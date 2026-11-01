@@ -12,7 +12,7 @@ use contract::clock::Clock as _;
 use contract::events::{JobCompleted, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opening, Stop};
-use contract::shapes::{Failure, Process};
+use contract::shapes::{Failure, Process, ProviderFailure};
 use contract::{ErrorCode, JobId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -377,6 +377,79 @@ fn the_completion_is_claimed_once() {
     ));
     assert!(second.text.contains("cancelled"), "{}", second.text);
     assert!(settled(&second).is_empty());
+}
+
+/// A failed model call's completion ending with `provider`.
+fn failed_provider(id: &str) -> JobCompleted {
+    JobCompleted {
+        job_id: JobId(id.into()),
+        status: Outcome::Failed,
+        error: Some(Failure {
+            code: ErrorCode::InvalidRequest,
+            message: "pa answered HTTP 400.".into(),
+            retry_after_ms: None,
+            provider: Some(ProviderFailure {
+                name: "pa".into(),
+                status: Some(400),
+                message: "content cannot be empty if is_error is true".into(),
+            }),
+        }),
+        process: None,
+        output_tail: None,
+
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    }
+}
+
+#[test]
+fn a_wait_answer_names_the_provider_line_after_the_error() {
+    let (_dir, registry) = world();
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    (opened.end.0)(failed_provider(&id));
+    let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
+    let error = answer
+        .text
+        .find("pa answered HTTP 400.")
+        .expect("the error line");
+    let provider = answer
+        .text
+        .find("Provider said: content cannot be empty if is_error is true")
+        .expect("the provider line");
+    let output = answer.text.find("Output:").expect("the output line");
+    assert!(
+        error < provider && provider < output,
+        "error, provider, output: {}",
+        answer.text
+    );
+}
+
+#[test]
+fn a_wait_answer_without_provider_renders_as_now() {
+    let (_dir, registry) = world();
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    let mut completed = failed_provider(&id);
+    completed.error = Some(Failure {
+        code: ErrorCode::InvalidRequest,
+        message: "pa answered HTTP 400.".into(),
+        retry_after_ms: None,
+        provider: None,
+    });
+    (opened.end.0)(completed);
+    let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
+    assert!(
+        !answer.text.contains("Provider said:"),
+        "no provider means no provider line: {}",
+        answer.text
+    );
+    assert!(
+        answer.text.contains("pa answered HTTP 400."),
+        "the error line stays: {}",
+        answer.text
+    );
 }
 
 #[test]
