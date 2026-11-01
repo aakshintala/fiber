@@ -384,22 +384,44 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     run.wait_screen("the first answered turn", |grid| {
         grid.contents.contains("Hello.")
     });
-    // The fake signals when its quota response is ready, so the one
-    // focus-in below runs after the fetch it started: the named screen
-    // wait then draws the fetched share, with no wall-clock read or
-    // sleep of its own.
+    // The fake signals when the first turn's fetch reaches it, so the
+    // waits below run after the fetch started: the signal fires when
+    // the request arrives, before the response is built and before
+    // `finish_quota` stores it.
     setup.deadline.recv_or_fail(
         &quota_rx,
-        "the fake quota response for the fetch turn one starts",
+        "the fake receiving the first turn's quota request",
     );
-    run.write(b"\x1b[I");
-    run.wait_screen("the fetched 10% remaining quota share", |grid| {
-        grid.contents.contains("10%")
-    });
-    // The reply draws while the first turn is still running, so the
-    // second prompt waits for its completed card: sent earlier, it
-    // would steer the first turn instead of starting the second.
+    // The turn must end before typing: sent earlier, `/quota`
+    // would steer the first turn instead of opening the view.
     run.turn_finished(from);
+    // The view's `fetch: true` query either joins that flight or
+    // starts its own, and answers only once a fetch ends
+    // (`switch/quota.rs`, `answer_fetch` over `force_start_quota`
+    // and `wait_quota`), so the drawn value proves `finish_quota`
+    // stored it; the answer folds into the panel card too
+    // (`tui/src/app/panel/quota.rs`, `panel_quota`). The view draws
+    // the cached rows under `/quota · fetching` until that answer
+    // lands (`tui/src/quota_view.rs`, `frame`), so the wait also
+    // requires the fetching mark gone. `Quota` plus `10%` alone
+    // could match the panel card before the view opens, so the wait
+    // names the view's own top row (`/quota` and `Esc returns`):
+    // only the open view's fetched value passes.
+    run.write(b"/quota\r");
+    run.wait_screen("the fetched quota value", |grid| {
+        grid.contents.contains("Quota")
+            && grid.contents.contains("/quota")
+            && grid.contents.contains("Esc returns")
+            && grid.contents.contains("10%")
+            && !grid.contents.contains("fetching")
+    });
+    run.write(b"\x1b[27u");
+    run.wait_screen("the conversation after the quota view", |grid| {
+        grid.contents.contains("Hello.")
+    });
+    // The first turn's card completed before the view opened, so the
+    // second prompt below starts a new turn instead of steering the
+    // first.
     run.write(b"second\r");
     let shown = run.wait_screen("the second turn's Fiber quota notice", |grid| {
         grid.contents.contains("Fiber")
