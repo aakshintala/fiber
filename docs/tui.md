@@ -860,7 +860,13 @@ install still running.
   added. Until that answers, the rows show the Changed files card's figures,
   which sum Fiber's own edits (`docs/tools.md`, "write" and "edit"). Under
   the chosen file, its hunks in the diff format an opened edit uses ("Tool
-  groups and the ledger").
+  groups and the ledger"). On a local terminal, Ctrl+G opens the chosen file
+  in `$VISUAL` or `$EDITOR` with `+N`, where N is the first line of its first
+  hunk, or 1 when there is no hunk. The editor gets the whole screen, as
+  Ctrl+G on the draft does. On return, the view reads the file's diff and
+  numstat again. Its footer says "Ctrl+G edits", dim. On a remote terminal,
+  Ctrl+G opens nothing and shows "Not available in this terminal."; the
+  footer omits the Ctrl+G hint.
 - **The release notes,** `/release-notes`: the running binary's
   changelog section for its own version (`docs/releasing.md`, "The
   changelog"), embedded in the binary at build time, so the view asks

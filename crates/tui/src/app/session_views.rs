@@ -566,11 +566,15 @@ impl App {
                 } else {
                     *list
                 };
+                let remote = self.home.as_ref().is_some_and(|home| {
+                    matches!(&home.launch.location, crate::LaunchLocation::Remote { .. })
+                });
                 Some(changed_files_view::frame(
                     self.panel_state.changes(),
                     Some(&self.displayed_figures()),
                     chosen,
                     list,
+                    remote,
                 ))
             }
             Open::ReleaseNotes(list) => {
