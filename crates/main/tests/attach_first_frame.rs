@@ -32,6 +32,96 @@ const THUMB: &str = "┃";
 const LAST: &str = "streamed text, a few words at a time; ";
 /// The first turn's prompt: no earlier row may show before the thumb.
 const FIRST: &str = "the session log holds every durable line";
+/// The seeded model id (`seed` writes it into `config.json`): the box
+/// row's model segment, absent before the session status lands.
+const MODEL: &str = "scripted/s.json";
+
+/// Splits `part` at its first run of two spaces: the mode or model
+/// before the gap from what follows it. Byte-safe: the split lands on
+/// ASCII spaces.
+fn split_gap(part: &str) -> (&str, &str) {
+    let at = part
+        .find("  ")
+        .unwrap_or_else(|| panic!("a gap in {part:?}"));
+    (part[..at].trim(), part[at..].trim())
+}
+
+/// The box status row with its two data-dependent segments factored
+/// out: the workspace path (a fresh tmp dir per run, absent before the
+/// session status lands) and the model. The mode and ctx segments keep
+/// their text exactly, rebuilt with the row's own joiner; any other
+/// shape is a real change and panics instead of passing silently.
+fn steady_status_row(row: &str, workspace: &str) -> String {
+    const JOINER: &str = "  │  ";
+    let parts: Vec<&str> = row.split(JOINER).collect();
+    let (mode, ctx) = match parts.as_slice() {
+        // No joiners: the mode alone on the left, the ctx segment on
+        // the right, split by the gap between the sides.
+        [single] => {
+            let (mode, ctx) = split_gap(single.trim());
+            if !ctx.starts_with("ctx") {
+                panic!("the ctx segment in {row:?}");
+            }
+            (mode, ctx)
+        }
+        // One joiner: either the workspace beside the mode, or the
+        // model beside the ctx segment.
+        [first, second] if first.trim_start() == workspace => {
+            let (mode, ctx) = split_gap(second);
+            if !ctx.starts_with("ctx") {
+                panic!("the ctx segment in {row:?}");
+            }
+            (mode, ctx)
+        }
+        [first, second] => {
+            let (mode, model) = split_gap(first.trim_start());
+            if model != MODEL {
+                panic!("the model segment in {row:?}");
+            }
+            if !second.trim_start().starts_with("ctx") {
+                panic!("the ctx segment in {row:?}");
+            }
+            (mode, second.trim())
+        }
+        // Both segments present: the workspace, then the mode and the
+        // model sharing the middle, then the ctx segment.
+        [first, middle, last] => {
+            if first.trim_start() != workspace {
+                panic!("the workspace segment in {row:?}");
+            }
+            let mut middle = middle.split_whitespace();
+            let mode = middle.next().unwrap_or_else(|| panic!("a mode in {row:?}"));
+            if middle.next_back() != Some(MODEL) {
+                panic!("the model segment in {row:?}");
+            }
+            if middle.next().is_some() {
+                panic!("only a mode and a model in {row:?}");
+            }
+            if !last.trim_start().starts_with("ctx") {
+                panic!("the ctx segment in {row:?}");
+            }
+            (mode, last.trim())
+        }
+        _ => panic!("the box status row's two sides in {row:?}"),
+    };
+    if mode.is_empty() || ctx.is_empty() {
+        panic!("a mode and a ctx segment in {row:?}");
+    }
+    // The figures after the bar (a size and share, or dashes) arrive a
+    // frame late, so the key drops them the way the workspace and model
+    // are dropped above. The bar stays exact, and the doc-fixed slot
+    // width (17 cells in rule, known or not) stays in their place, so a
+    // reflow fails instead of passing.
+    let mut head = ctx.split_whitespace();
+    let head = format!(
+        "{} {}",
+        head.next()
+            .unwrap_or_else(|| panic!("a ctx bar in {row:?}")),
+        head.next()
+            .unwrap_or_else(|| panic!("a ctx bar in {row:?}")),
+    );
+    format!("{mode}{JOINER}{head} 17")
+}
 /// The scripted reply to the live prompt.
 const REPLY: &str = "the scripted reply";
 /// A synchronized frame ends here; splitting on it yields whole frames.
@@ -245,39 +335,51 @@ fn the_first_frame_shows_the_last_rows_and_no_frame_shows_others_before_the_bar(
             })
             .collect::<Vec<_>>()
     };
+    // The session status lands after the first frame, so the box row's
+    // workspace and model segments vary frame to frame; `seed` fixes
+    // both values for the run. Canonicalize the same way `seed` does.
+    let workspace = fs::canonicalize(setup.workspace())
+        .unwrap_or_else(|err| panic!("a canonical workspace: {err}"))
+        .to_string_lossy()
+        .into_owned();
     // The pass lands the fold under the preview, and the transient
     // `resumed` aside drops out, shifting every row above the composer
     // by one. What must not move is the running turn's tail, so the
     // comparison anchors at its cut-short card and skips the aside row.
-    // The box chrome re-lays out while the fold lands, so the comparison
-    // holds conversation rows only, from the anchor through the box top
-    // edge, right-trimmed and in order; the chrome itself stays out,
-    // not normalized.
     let tail = |rows: &[String]| {
         let cleaned = clean(rows);
         let from = cleaned
             .iter()
             .position(|row| row.contains("cut short"))
             .unwrap_or_else(|| panic!("a frame holding the cut-short card"));
-        let tail: Vec<String> = cleaned[from..]
+        let mut tail: Vec<String> = cleaned[from..]
             .iter()
             .filter(|row| !row.contains("resumed"))
             .cloned()
             .collect();
-        let end = tail
-            .iter()
-            .position(|row| {
-                // The edge takes the scroll bar's left margin once the
-                // bar lands, so the check trims both sides; the row
-                // itself stays out of the key either way.
-                let edge = row.trim();
-                !edge.is_empty() && edge.chars().all(|cell| cell == '▀')
-            })
-            .unwrap_or_else(|| panic!("a box top edge under the tail"));
-        tail[..end]
-            .iter()
-            .map(|row| row.trim_end().to_string())
-            .collect::<Vec<_>>()
+        // The status row sits second to last, above the box's bottom
+        // edge: factor its two data-dependent segments out, keeping the
+        // mode and the ctx bar and width exact. Anything else there fails
+        // here.
+        let at = tail
+            .len()
+            .checked_sub(2)
+            .unwrap_or_else(|| panic!("a box under the tail"));
+        if !tail[at].contains("ctx") {
+            panic!("the status row above the box edge: {:?}", tail[at]);
+        }
+        let row = std::mem::take(&mut tail[at]);
+        tail[at] = steady_status_row(&row, &workspace);
+        // The box top edge takes the scroll bar's left margin once the
+        // bar lands, so the key drops the margin the way the status row
+        // drops its figures; the edge must still be an unbroken rule of
+        // its own glyph, so a moved or redrawn edge fails here.
+        let edge = tail[1].trim();
+        if edge.is_empty() || !edge.chars().all(|cell| cell == '▀') {
+            panic!("the box top edge in {:?}", tail[1]);
+        }
+        tail[1] = String::from("box edge");
+        tail
     };
     let first = tail(&screens[first_last]);
     for (at, rows) in screens
