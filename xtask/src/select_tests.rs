@@ -6,6 +6,7 @@ pub(super) fn members() -> Members {
         version: "0.0.0".to_owned(),
         deps: deps.iter().map(|d| (*d).to_owned()).collect(),
         library: true,
+        unrun_tests: Vec::new(),
     };
     BTreeMap::from([
         ("contract".to_owned(), member("crates/contract", &[])),
@@ -20,6 +21,16 @@ pub(super) fn members() -> Members {
         ("main".to_owned(), member("crates/main", &[])),
         ("bench".to_owned(), member("crates/bench", &[])),
     ])
+}
+
+/// `members()` where `main` declares `tests/main_journeys.rs` with
+/// `test = false`, as `crates/main/Cargo.toml` does.
+pub(super) fn members_with_unrun_test() -> Members {
+    let mut members = members();
+    if let Some(main) = members.get_mut("main") {
+        main.unrun_tests = vec!["crates/main/tests/main_journeys.rs".to_owned()];
+    }
+    members
 }
 
 pub(super) fn strings(items: &[&str]) -> Vec<String> {
@@ -263,6 +274,7 @@ fn dependents_follow_a_chain_of_any_length() {
         version: "0.0.0".to_owned(),
         deps: vec![dep.to_owned()],
         library: true,
+        unrun_tests: Vec::new(),
     };
     members.insert("tui".to_owned(), chained("loop"));
     members.insert("zed".to_owned(), chained("tui"));
@@ -583,6 +595,7 @@ pub(super) fn members_with_tools() -> Members {
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
+            unrun_tests: Vec::new(),
         },
     );
     members.insert(
@@ -592,6 +605,7 @@ pub(super) fn members_with_tools() -> Members {
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
+            unrun_tests: Vec::new(),
         },
     );
     members.insert(
@@ -601,6 +615,7 @@ pub(super) fn members_with_tools() -> Members {
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
+            unrun_tests: Vec::new(),
         },
     );
     members.insert(
@@ -610,6 +625,7 @@ pub(super) fn members_with_tools() -> Members {
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
+            unrun_tests: Vec::new(),
         },
     );
     members.insert(
@@ -619,6 +635,7 @@ pub(super) fn members_with_tools() -> Members {
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
+            unrun_tests: Vec::new(),
         },
     );
     members.insert(
@@ -628,6 +645,7 @@ pub(super) fn members_with_tools() -> Members {
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
+            unrun_tests: Vec::new(),
         },
     );
     members
@@ -643,6 +661,7 @@ pub(super) fn package_members() -> Members {
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
             library: true,
+            unrun_tests: Vec::new(),
         },
     );
     members

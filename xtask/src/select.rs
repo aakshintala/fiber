@@ -18,7 +18,7 @@ use plan::BINARY_TESTS;
 pub(crate) use plan::{base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict};
 pub(crate) use runtime_read::runtime_read_mismatches;
 pub(crate) use runtime_read::string_literal;
-pub(crate) use test_filter::{is_test_file, test_filter};
+pub(crate) use test_filter::{is_test_file, test_filter, unrun_test_files};
 
 /// A workspace member: its directory relative to the workspace root, its
 /// version, and the members it depends on.
@@ -28,6 +28,12 @@ pub(crate) struct Member {
     pub(crate) version: String,
     pub(crate) deps: Vec<String>,
     pub(crate) library: bool,
+    /// The integration-test files, relative to the workspace root, whose
+    /// `[[test]]` target declares `test = false`: only an explicit
+    /// `--test <name>` builds or runs them, so a plain nextest filter
+    /// matches nothing in them (`docs/ci.md`, "On every pull request that
+    /// changes code").
+    pub(crate) unrun_tests: Vec<String>,
 }
 
 pub(crate) type Members = BTreeMap<String, Member>;
