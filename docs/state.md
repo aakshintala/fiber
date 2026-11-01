@@ -617,7 +617,7 @@ A write that fails before its rename leaves the old file; one that fails after
 it, while syncing the directory, returns an error with the new file already in
 place, because every reader already sees it.
 
-One writer per session via `session.lock` is `docs/events.md`.
+One writer at a time per session, via `session.lock`, is `docs/events.md`.
 
 ## Upgrades and versioning
 

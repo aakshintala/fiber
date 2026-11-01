@@ -167,6 +167,18 @@ credential a session uses"). A new session takes its label from
 | `help [<command>]` | Prints the menu, or a command's help. |
 | `version` | Prints the version. |
 
+`fiber stop --all [--yes]` stops every session and keeper on this machine,
+then the hub, and prints what it stopped. It needs no hub: it finds sessions
+and keepers by their sockets under `run/` (`docs/state.md`, "What each part
+holds"). Each session gets `close` with `now`; each keeper gets a stop that
+ends every job and delegate as a shutdown does, then exits (`docs/tools.md`,
+"The keeper"). In a terminal it asks first, counting as `/close all` does:
+sessions, how many are working, and keepers. `--yes` skips the question.
+Without a terminal and without `--yes` it is a usage error naming `--yes`. The
+opening exchange on a session's or keeper's socket and the stop message are
+frozen across versions, so any newer Fiber stops any older session or keeper,
+straight after a breaking update. It never signals a recorded process id.
+
 `doctor` prints the version, the default model and the provider it needs, each
 installed provider with one line per credential label and where its key comes
 from, the selected label marked, the permission mode, the
@@ -845,12 +857,13 @@ rationale and the rejected layouts are
   (`docs/mcp.md`, `docs/extensions.md`).
 - **No session has a pipe driver.** Every driver is a client over the
   session's socket. `fiber ask`'s stdout is a watcher.
-- **A Fiber delegate is a child process of its parent.** The parent is an
-  ordinary client over the delegate's socket. It also holds a pipe to the
-  delegate's stdin that it never writes to: end of file on it means the parent
-  is gone, and the delegate shuts down ("Shutdown"). A dropped socket
+- **A Fiber delegate is a child process of its parent's keeper.** The parent
+  is an ordinary client over the delegate's socket. The keeper holds a pipe to
+  the delegate's stdin that it never writes to: end of file on it means the
+  keeper is gone, and the delegate shuts down ("Shutdown"). A dropped socket
   connection is only a client leaving; the parent reconnects. Delegates on
-  other harnesses are child processes too (`docs/delegates.md`).
+  other harnesses are child processes of the session (`docs/delegates.md`;
+  `docs/tools.md`, "The keeper").
 - **An image child is a short-lived process, one per image or PDF.** The session
   starts it by running `fiber` again with an internal command, not a door,
   so the child always matches its parent's version. The session process
@@ -880,14 +893,19 @@ rationale and the rejected layouts are
   through the hub. The process holding the session's lock owns the socket: it
   removes any old one before binding, and nothing else ever removes one.
 - **Resuming a session that is still running attaches to it.** A session log
-  has one writer (`docs/events.md`), so a resume never opens a second one. A
+  has one writer at a time (`docs/events.md`), so a resume never opens a
+  second one. Resuming a session whose keeper holds its lock takes the
+  handover (`docs/tools.md`, "The keeper"). A
   `full` connection folds the log by `seq` first, then streams.
 - **A client attaches across versions only when it can read the stream.** A
-  session keeps the binary it started with through `fiber update`. A client
+  session, and its keeper (`docs/tools.md`, "The keeper"), keep the binary
+  they started with through `fiber update`. A client
   reads the session's `schema_version` from `fiber_started`; an additive
   difference is fine (`docs/events.md`, "Versioning"), and on a breaking one
   the client says which version the session runs and declines with
-  `session_held`, so the person can close it or let it exit.
+  `session_held`, so the person can close it or let it exit. A resume that
+  finds the session's keeper at a version it cannot read declines the same
+  way, naming the keeper's version, and works once the keeper exits.
 
 The socket is the only path into a running session. The terminal, a parent
 session, a GUI and a phone through the hub are the same kind of client, as map
@@ -993,27 +1011,30 @@ At 4.9 s, every group still alive gets SIGKILL, one diagnostic line with code `t
 nothing more: the loop may be stuck holding the log, so no other thread
 writes to it. The log ends as a process that died leaves it, with no
 `fiber_exited`, and a resume reads it as it reads any such log: a call left
-open has an unknown outcome and is never re-run, and a job left open
-completes `orphaned` (`docs/events.md`, "Resume"). A child started in the
-instant before the bound fires may outlive Fiber.
+open has an unknown outcome and is never re-run, and a job left open is
+the keeper's, as after a crash. A child started in the instant before the
+bound fires may outlive Fiber.
 
 **What a crash leaves.** A crash, a SIGKILL, or a supervisor that gives up
-before the bound stops nothing. A command whose output goes to the pipe
-Fiber held dies at its next write; everything else keeps running, and a job
-writes to a file, so every job survives (macOS arm64,
-`research/shutdown/crash-cleanup.md`). Fiber does not go looking for them: a
-resumed session marks each `orphaned` and "does not touch any process"
-(`docs/events.md`). Linux's `PR_SET_PDEATHSIG` reaches only the shell Fiber
-starts, not what the shell starts, and a recorded process group and start
-time cannot prove a group is still the one recorded, so neither is used. The
-gap is stated rather than half closed.
+before the bound leaves the session's keeper running (`docs/tools.md`, "The
+keeper"). The keeper stops each command that was still a tool call, keeps
+every job and Fiber delegate running, and writes each one's end into the
+session's log. A resumed session takes the log back from the keeper and gets
+every job's real result. Fiber never signals a process by a recorded process
+group or start time, because neither can prove the process is still the one
+recorded: it reaches its jobs only through the keeper.
 
-A Fiber delegate whose parent died sees end of file on its lifeline and
-shuts down within the bound, so it writes its own `fiber_exited` and its log
-is complete. Its parent's log still marks the job `orphaned` on resume,
-because the parent cannot know. The resumed parent reads that delegate's log
-and writes any `usage_recorded` lines it is missing (`docs/loop.md`,
-"Spending budget").
+A Fiber delegate whose parent died carries on and finishes its task, and its
+own log is complete. The resumed parent reads that delegate's log, writes its
+`delegate_finished` if the keeper wrote its end, and writes any
+`usage_recorded` lines it is missing (`docs/loop.md`, "Spending budget").
+
+A delegate on another harness is a child of its session, not of the keeper.
+A command whose output goes to a pipe its dead session held dies at its next
+write, and anything else keeps running unwatched (macOS arm64,
+`research/shutdown/crash-cleanup.md`); its job completes `orphaned` on
+resume (`docs/events.md`, "Resume"). If the keeper itself dies, its jobs are
+left the same way.
 
 **The terminal and the hub.** Closing the terminal closes its connections,
 and each session follows "Lifecycle". Stopping the hub ends its relays, and

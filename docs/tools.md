@@ -975,9 +975,9 @@ The kinds are `docs/events.md`.
   group still holds the output pipe open past the bound, the job ends
   `failed` with code `indeterminate`, never `completed`. A stopped job ends
   `cancelled`.
-- Jobs live and die with the Fiber process. Nothing reattaches to a job after
-  a restart. A shutdown stops every job (`docs/invocation.md`, "Shutdown"); a
-  crash stops none, and the jobs keep running unwatched.
+- Jobs run under the session's keeper ("The keeper"), so they outlive a crash
+  of their session and a resumed session gets their real results. A shutdown
+  stops every job (`docs/invocation.md`, "Shutdown").
 - When a session is about to end with jobs still running — a non-interactive
   run whose model has given its final answer, `close` without `now`, or a delegate
   finishing its task — Fiber wakes the model once with a notice listing the running jobs, telling it to stop the ones it
@@ -998,6 +998,87 @@ The kinds are `docs/events.md`.
 - There is no cap on running jobs, except that a session runs at most 10
   delegates at once (`docs/delegates.md`, "Limits"). Parked threads are
   measured in `docs/architecture.md` ("The threads").
+
+### The keeper
+
+Settled by
+[Background jobs and delegates survive a session crash](https://github.com/aakshintala/fiber/issues/3878).
+
+A keeper is the process that runs a session's jobs, so they outlive a crash
+of the session. The tree stays a tree: the session, then its keeper, then
+its jobs and Fiber delegates. No hub is involved, so a headless run needs no
+hub.
+
+- **One keeper per session, started with its first command.** Any shell
+  command can become a job ("Moving to the background") and moving never
+  restarts it, so the keeper starts each of the session's shell commands
+  and Fiber delegates, and starts when the session first runs one. A session
+  that runs neither has no keeper. The keeper is the internal `fiber`
+  command, started in a session of its own, so a signal to the session's
+  process group does not reach it. It is the parent of every command's
+  process group and of every Fiber delegate, and it reaps them. It lives
+  until its session shuts down or, after a crash, by the rules below.
+- **A command that is not yet a job ends with the crash.** When the session
+  dies, the keeper stops each command still running as a tool call, as a
+  shutdown does. The log already reads that call's outcome as unknown
+  (`docs/events.md`, "Resume").
+- **A confined job keeps its baseline fixed.** The keeper holds the active
+  lock for each confined command it runs, from its start to its end
+  (`docs/sandbox.md`, "Protected paths"). It restores nothing: after a crash,
+  the first confined call that finds no active holder restores and reports,
+  as after a dead session.
+- **The keeper is tiny.** It loads no provider, extension, MCP server or
+  model code. It runs processes, holds their pipes and terminals, writes
+  each job's output file, enforces each job's deadline and output cap, and
+  appends to the session log. Its memory has its own budget in
+  `docs/performance.md`.
+- **While the session lives, the session decides.** The session asks its
+  keeper to start, stop or write to a job, and the keeper reports each exit.
+  The session writes every event, as it does without a keeper. The session
+  holds the keeper's stdin open as its lifeline, as a parent does a Fiber
+  delegate's (`docs/delegates.md`, "Lifetime"). End of file on it means the
+  session is gone.
+- **A crash hands the log to the keeper.** When its session dies without a
+  shutdown, the keeper takes the session's `session.lock` and binds
+  `run/<session_id>`, as any lock holder does (`docs/state.md`, "What each
+  part holds"). While it holds the lock it appends to the session's log: a `job_completed`
+  for each job that ends, and for a Fiber delegate the `job_completed` its
+  exit gives. It writes no `output_tail`, `notice` or `changed_by`, because it
+  runs no hooks. It writes no file of its own, so the log stays the only
+  state of record (`docs/events.md`, "The rule everything else follows
+  from").
+- **The keeper waits 2 hours.** If no session takes the log back within 2
+  hours of the crash, the keeper stops every job and delegate still running,
+  as a shutdown does, writes each one's `job_completed` as `failed` with code
+  `keeper_timeout`, and exits. It exits sooner once its last job ends, and
+  never holds a job past that bound. `fiber stop --all` and `/close all` stop
+  it sooner, the same way (`docs/invocation.md`; `docs/tui.md`).
+- **A resume takes the log back.** A resuming process finds the lock held
+  and connects to `run/<session_id>`. The keeper answers with the session's
+  id, which is the proof of identity: Fiber never signals a recorded process
+  id. The keeper finishes the line it is writing, unlinks the socket,
+  releases the lock and acknowledges. The resumed session takes the lock,
+  binds its socket, and keeps the connection to the keeper open as its
+  lifeline. The jobs still running are its jobs again, with no `orphaned`.
+- **A keeper keeps its binary through `fiber update`,** as a session does
+  (`docs/invocation.md`, "Processes"). A resume whose build cannot read the
+  keeper's `schema_version` declines with `session_held` and names the
+  keeper's version. The keeper has written every result it holds, so a
+  resume after it exits loses nothing.
+- **What the keeper wrote reaches the model with the next turn.** A resume
+  starts no turn of its own (`docs/events.md`, "Resume"). Before the next
+  turn's first step, the session runs the `after_tool` hooks on each
+  completion the keeper wrote and on its output file, as at a live job's end,
+  and the turn's `turn_started` input carries one `message` item with
+  `source` `fiber` holding those notices, with `changed_by` when a hook
+  changed one.
+- **A keeper that dies leaves its jobs unaccounted for.** If the keeper itself dies before
+  a job's `job_completed` is written, the resumed session writes that job
+  `orphaned` and touches no process.
+- **A delegate on another harness is not kept.** It stays a child of its
+  session, because reading its stream needs the harness's extension
+  ("Harness extensions", `docs/delegates.md`), which the keeper does not load.
+  A crash leaves it as `docs/invocation.md`, "Shutdown", says.
 
 ## Asking the person
 
