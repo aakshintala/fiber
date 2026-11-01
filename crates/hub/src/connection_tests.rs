@@ -34,17 +34,14 @@ const WALL: u64 = 1_700_000_000_000;
 /// One named deadline per receive: the client never waits past it.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// The overall bound on a drain to EOF: four rides of `DEADLINE`, ample for a
-/// loaded runner. No more, because nextest's per-test timeout must stay at
-/// least twice the longest single deadline plus the run time, and the kill in
-/// `.config/nextest.toml` is 120 s: 2 x 40 + 10 = 90 s (`docs/testing.md`,
-/// "Waits and timeouts").
-const DRAIN_BOUND: Duration = Duration::from_secs(40);
-
 /// Read to EOF, riding out the socket's per-read timeout (`WouldBlock`) and
-/// signals (`Interrupted`) until `DRAIN_BOUND` passes overall.
+/// signals (`Interrupted`) for 40 s overall: four rides of `DEADLINE`, ample
+/// for a loaded runner. No more, because nextest's per-test timeout must stay
+/// at least twice the longest single deadline plus the run time, and the kill
+/// in `.config/nextest.toml` is 120 s: 2 x 40 + 10 = 90 s (`docs/testing.md`,
+/// "Waits and timeouts").
 fn drain_to_eof(mut read: impl Read) -> io::Result<Vec<u8>> {
-    let bound = Deadline::after(DRAIN_BOUND);
+    let bound = Deadline::after(Duration::from_secs(40));
     let mut all = Vec::new();
     let mut chunk = [0_u8; 8192];
     loop {
