@@ -301,41 +301,44 @@ fn upgrade_reply_uses_the_idle_bound() {
 
 #[test]
 fn an_idle_websocket_keeps_its_read_open_after_the_upgrade() {
-    let outer = Deadline::after(OUTER_WITHIN); // ruling: #3729
-    fakes::within("idle websocket read", outer, || {
-        let (release, hold) = mpsc::channel::<()>();
-        let (endpoint, done) = server(move |mut peer| {
-            upgrade(&mut peer);
-            match hold.recv() {
-                Ok(()) | Err(_) => {}
-            }
-            peer.write_all(&server_frame(1, b"after release")).unwrap();
-        });
-        let mut via = Via {
-            limits: crate::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
-                .unwrap(),
-            ..direct()
-        };
-        let exit = exits(&mut via);
-        let stream = connect_with(&endpoint, &via).unwrap();
-        let (line, lines) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut text = String::new();
-            let result = BufReader::new(stream).read_line(&mut text);
-            line.send((result, text)).unwrap();
-        });
-        assert!(matches!(
-            fakes::Deadline::after(Duration::from_millis(400)).recv(&lines),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ));
-        release.send(()).unwrap();
-        let deadline = fakes::Deadline::after(OUTER_WITHIN); // ruling: #3729
-        let (result, text) = deadline.recv_or_fail(&lines, "line after held idle interval");
-        assert_eq!(result.unwrap(), 14);
-        assert_eq!(text, "after release\n");
-        both(&exit);
-        deadline.recv_or_fail(&done, "held frame sent");
-    });
+    fakes::within(
+        "idle websocket read",
+        Deadline::after(OUTER_WITHIN), // ruling: #3729
+        || {
+            let (release, hold) = mpsc::channel::<()>();
+            let (endpoint, done) = server(move |mut peer| {
+                upgrade(&mut peer);
+                match hold.recv() {
+                    Ok(()) | Err(_) => {}
+                }
+                peer.write_all(&server_frame(1, b"after release")).unwrap();
+            });
+            let mut via = Via {
+                limits: crate::Limits::new(Duration::from_secs(15), Duration::from_millis(100))
+                    .unwrap(),
+                ..direct()
+            };
+            let exit = exits(&mut via);
+            let stream = connect_with(&endpoint, &via).unwrap();
+            let (line, lines) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let result = BufReader::new(stream).read_line(&mut text);
+                line.send((result, text)).unwrap();
+            });
+            assert!(matches!(
+                fakes::Deadline::after(Duration::from_millis(400)).recv(&lines),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ));
+            release.send(()).unwrap();
+            let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
+            let (result, text) = deadline.recv_or_fail(&lines, "line after held idle interval");
+            assert_eq!(result.unwrap(), 14);
+            assert_eq!(text, "after release\n");
+            both(&exit);
+            deadline.recv_or_fail(&done, "held frame sent");
+        },
+    );
 }
 
 #[test]
