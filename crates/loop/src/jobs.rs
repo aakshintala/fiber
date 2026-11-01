@@ -691,6 +691,17 @@ pub(crate) fn notice_text(completed: &JobCompleted) -> String {
         text.push('\n');
         text.push_str(error.message.trim_end());
     }
+    // A failed model call keeps the provider's own words on their own
+    // labelled line, directly after Fiber's message.
+    if let Some(line) = completed
+        .error
+        .as_ref()
+        .and_then(|error| error.provider.as_ref())
+        .and_then(contract::shapes::ProviderFailure::provider_line)
+    {
+        text.push('\n');
+        text.push_str(line.trim_end());
+    }
     if let Some(tail) = &completed.output_tail {
         text.push_str("\nLast output:\n");
         text.push_str(tail.trim_end());
