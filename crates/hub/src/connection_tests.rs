@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -44,7 +44,7 @@ const DRAIN_BOUND: Duration = Duration::from_secs(40);
 /// Read to EOF, riding out the socket's per-read timeout (`WouldBlock`) and
 /// signals (`Interrupted`) until `DRAIN_BOUND` passes overall.
 fn drain_to_eof(mut read: impl Read) -> io::Result<Vec<u8>> {
-    let end = Instant::now() + DRAIN_BOUND;
+    let bound = Deadline::after(DRAIN_BOUND);
     let mut all = Vec::new();
     let mut chunk = [0_u8; 8192];
     loop {
@@ -52,7 +52,7 @@ fn drain_to_eof(mut read: impl Read) -> io::Result<Vec<u8>> {
             Ok(0) => return Ok(all),
             Ok(n) => all.extend_from_slice(&chunk[..n]),
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {
-                if Instant::now() >= end {
+                if bound.left().is_zero() {
                     return Err(e);
                 }
             }
