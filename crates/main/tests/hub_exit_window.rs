@@ -1027,8 +1027,9 @@ fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
 fn a_finish_without_a_close_leaves_no_session_running() {
     // The session runs idle with the ask run's exit already in its log: a
     // fresh subscribe replays that exit while the session lives, so an exit
-    // on the stream does not mean the session is gone. Cleanup still needs
-    // to close the live session before the hub goes away.
+    // on the stream does not mean the session is gone. No close is sent by
+    // the probe; `finish` must close the live session before the hub goes
+    // away.
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
@@ -1038,19 +1039,19 @@ fn a_finish_without_a_close_leaves_no_session_running() {
     until(&first, "c_after's acknowledgement", |line| {
         is_answer(line, "c_after")
     });
-    // The fresh subscribe replays the ask run's exit before this close is
-    // answered. The following wait can therefore finish while the close is
-    // still in flight; `finish` must keep the hub alive until teardown is
-    // confirmed.
+    let running = world.session_pids();
+    assert!(!running.is_empty(), "the resumed session is still running");
     let probe = world.client();
     subscribe(&probe, "c_probe_sub", &id);
-    probe.send(&close(&id));
-    let replayed = until(&probe, "the replayed exit", |line| {
-        line["kind"] == "fiber_exited"
-    });
-    assert!(
-        answers(&replayed, "c_close").is_empty(),
-        "the replayed exit precedes the close acknowledgement: {replayed:?}"
+    until(
+        &probe,
+        "the replayed exit while the session is live",
+        |line| line["kind"] == "fiber_exited" && world.session_pids() == running,
+    );
+    assert_eq!(
+        world.session_pids(),
+        running,
+        "the replayed exit does not mean the live session is gone"
     );
     drop(probe);
     drop(first);
