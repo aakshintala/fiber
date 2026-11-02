@@ -569,11 +569,13 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - Any other call with no `timeout_ms` gets 600,000 (10 minutes). A
   foreground command's timeout stays with it after the command moves to the
   background.
-- `timeout_ms` is at least 1. A call with 0 ends `failed` with code
-  `invalid_arguments` and never starts. The message says to leave
-  `timeout_ms` out of a background call that should run until stopped.
-- The tool's description states both rules: a background call with no
-  `timeout_ms` has none, and `timeout_ms` is at least 1.
+- `timeout_ms` is at least 1: the schema says `"minimum": 1`. A call with
+  0 fails the loop's schema check (`docs/loop.md`), ends `failed` with code
+  `invalid_arguments`, and never starts.
+- The tool's description and the `timeout_ms` description state both
+  rules: a background call with no `timeout_ms` has none, so a background
+  call that should run until stopped leaves it out; and `timeout_ms` is at
+  least 1.
 - This is where a hang is bounded: "Background jobs" has no cap on waiting.
   A background command with no timeout is bounded by `jobs stop`, by the
   model when a session about to end lists it, and by shutdown.
