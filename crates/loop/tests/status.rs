@@ -17,20 +17,28 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::Duration;
 
 use contract::Envelope;
 use contract::JobId;
-use contract::events::{JobCompleted, Outcome};
+use contract::events::{CacheLifetime, Event, JobCompleted, Outcome, Progress, TextDelta};
 use contract::inbox::{Ack, Claim, Delivery, JobNotice};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
-use contract::provider::Provider;
+use contract::provider::{
+    CallError, Delta, ModelCall, ModelRequest, Provider, Reply, ToolDefinition,
+};
 use contract::tool::Tool;
 use fakes::Deadline;
-use fakes::Scripted;
+use fakes::clock::FakeClock;
+use fakes::{Scripted, ScriptedProvider};
 use log::Watcher;
 use r#loop::{Loop, Model};
+use serde_json::{Value, json};
 
-use support::{DEADLINE, MODEL, Session, TestTool, delivery, ignore, tool_call_reply};
+use support::{
+    DEADLINE, Gate, MODEL, Script, Session, TestTool, calls_reply, delivery, ignore,
+    tool_call_reply,
+};
 
 /// The `session_status` lines from now on, up to and including the first one
 /// `until` accepts, with one [`DEADLINE`]. Takes the watcher and returns it
@@ -476,4 +484,228 @@ fn a_resumed_session_writes_one_status_for_its_history() {
             Err(e) => panic!("the resumed watcher failed: {e}"),
         }
     }
+}
+
+/// A provider that advances the fake clock between the reply's fragments,
+/// so the fold stamps each `assistant_message_delta` at a different `ts`:
+/// 5 seconds after the first, then 11 more.
+struct GapDeltas {
+    inner: Arc<ScriptedProvider>,
+    clock: Arc<FakeClock>,
+}
+
+impl Provider for GapDeltas {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<serde_json::Map<String, Value>> {
+        self.inner.wire_tools(tools)
+    }
+
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        Box::new(GapCall {
+            inner: self.inner.call(request),
+            clock: Arc::clone(&self.clock),
+        })
+    }
+}
+
+struct GapCall {
+    inner: Box<dyn ModelCall>,
+    clock: Arc<FakeClock>,
+}
+
+impl ModelCall for GapCall {
+    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let mut seen = 0;
+        self.inner.run(&mut |delta| {
+            seen += 1;
+            if seen == 2 || seen == 3 {
+                support::assert_no_parked(&self.clock);
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "no code under test waits on the clock (ruling 6179406086)"
+                )]
+                self.clock
+                    .advance(Duration::from_secs(if seen == 2 { 5 } else { 11 }));
+            }
+            sink(delta);
+        })
+    }
+
+    fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
+#[test]
+fn output_at_moves_only_each_ten_seconds_of_a_streaming_reply() {
+    let script = vec![Scripted {
+        deltas: vec![
+            Delta::Text(TextDelta { text: "a".into() }),
+            Delta::Text(TextDelta { text: "b".into() }),
+            Delta::Text(TextDelta { text: "c".into() }),
+        ],
+        end: Ok(fakes::reply("abc")),
+    }];
+    let mut session = Session::wrapped(script, CacheLifetime::OneHour, |scripted, clock| {
+        Arc::new(GapDeltas {
+            inner: scripted,
+            clock,
+        }) as Arc<dyn Provider>
+    });
+    let watcher = session.log.watch();
+    session.inbox.send(delivery("go")).unwrap();
+    let finished = run(session.looped.take().unwrap());
+    let (_watcher, seen) = statuses_until(watcher, idle_named("go"));
+    // The second fragment, 5 seconds on, writes no new status; the third,
+    // 16 seconds on, does.
+    let mut ats: Vec<u64> = seen
+        .iter()
+        .filter_map(|line| line.payload.get("output_at").and_then(Value::as_u64))
+        .collect();
+    ats.dedup();
+    assert_eq!(ats.len(), 2, "one status per 10-second step, got {ats:?}");
+    assert_eq!(ats[1] - ats[0], 16_000);
+    // The first output is stamped with the streaming state's start.
+    let streaming = seen
+        .iter()
+        .find(|line| line.payload["state"] == "streaming")
+        .expect("a streaming status");
+    assert_eq!(streaming.payload["since"].as_u64(), Some(ats[0]));
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&finished)
+        .expect("close ended the loop")
+        .unwrap();
+}
+
+#[test]
+fn tool_output_at_stops_at_the_running_calls_last_output() {
+    let gate = Arc::new(Gate::default());
+    let mut weather = TestTool::reads("weather", "sunny");
+    weather.script = vec![
+        Script::Emit(Box::new(Event::ToolCallDelta(Progress {
+            text: Some("half".into()),
+            details: None,
+        }))),
+        Script::Wait(Arc::clone(&gate)),
+    ];
+    let mut session = Session::with_tools(
+        vec![tool_call_reply("", &["weather"]), Scripted::text("Done.")],
+        None,
+        vec![Arc::new(weather) as Arc<dyn Tool>],
+    );
+    let watcher = session.log.watch();
+    session.inbox.send(delivery("go")).unwrap();
+    let finished = run(session.looped.take().unwrap());
+    // The tool writes once, then goes silent at its gate: the gate opens
+    // once the delta is on the log.
+    let gate_opened = Arc::clone(&gate);
+    let (_watcher, lines) = support::read_until(watcher, "the turn's idle status", move |line| {
+        if line.kind == "tool_call_delta" {
+            gate_opened.open();
+        }
+        line.kind == "session_status"
+            && line.payload["state"] == "idle"
+            && line.payload["name"] == "go"
+    });
+    let deltas: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_delta")
+        .collect();
+    assert_eq!(deltas.len(), 1, "the tool wrote once, then went silent");
+    let at = deltas[0].ts;
+    let statuses: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "session_status")
+        .collect();
+    let tools: Vec<&&Envelope> = statuses
+        .iter()
+        .filter(|line| line.payload["state"] == "tool")
+        .collect();
+    assert!(!tools.is_empty(), "a status while the tool ran");
+    // Absent before the first output, then the last output's `ts` for the
+    // rest of the call: silence writes no new value.
+    let mut saw_output = false;
+    for status in &tools {
+        match status.payload.get("tool_output_at").and_then(Value::as_u64) {
+            None => {}
+            Some(value) => {
+                assert_eq!(value, at);
+                saw_output = true;
+            }
+        }
+    }
+    assert!(saw_output, "a tool status carries the last output's ts");
+    // The call ending clears it: the idle close carries none.
+    let last = statuses.last().expect("an idle status");
+    assert_eq!(last.payload["state"], "idle");
+    assert!(!last.payload.contains_key("tool_output_at"));
+    gate.check("the tool's silence gate");
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&finished)
+        .expect("close ended the loop")
+        .unwrap();
+}
+
+#[test]
+fn repeats_counts_three_same_calls_and_resets_on_new_arguments() {
+    let paris = json!({"city": "Paris"});
+    let weather = Arc::new(TestTool::reads("weather", "sunny"));
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply(
+                "",
+                &[
+                    ("weather", paris.clone()),
+                    ("weather", paris.clone()),
+                    ("weather", paris),
+                ],
+            ),
+            Scripted::text("Done one."),
+            calls_reply("", &[("weather", json!({"city": "Lyon"}))]),
+            Scripted::text("Done two."),
+        ],
+        None,
+        vec![weather as Arc<dyn Tool>],
+    );
+    let watcher = session.log.watch();
+    session.inbox.send(delivery("go")).unwrap();
+    let finished = run(session.looped.take().unwrap());
+    let (watcher, first) = statuses_until(watcher, |line| {
+        line.payload["calls"] == 3 && line.payload["state"] == "idle"
+    });
+    let last = first.last().expect("statuses for the first turn");
+    assert_eq!(last.payload.get("repeats").and_then(Value::as_u64), Some(3));
+    assert!(
+        first
+            .iter()
+            .any(|line| line.payload.get("repeats").and_then(Value::as_u64) == Some(2)),
+        "the run built through 2"
+    );
+    session.inbox.send(delivery("again")).unwrap();
+    let (_watcher, second) = statuses_until(watcher, |line| {
+        line.payload["calls"] == 4 && line.payload["state"] == "idle"
+    });
+    // New arguments reset the run: the field is absent from the call's
+    // status on.
+    let reset = second
+        .iter()
+        .find(|line| line.payload["calls"] == 4)
+        .expect("the fourth call's status");
+    assert!(
+        !reset.payload.contains_key("repeats"),
+        "changed arguments reset the run"
+    );
+    assert!(
+        !second
+            .last()
+            .expect("statuses for the second turn")
+            .payload
+            .contains_key("repeats")
+    );
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&finished)
+        .expect("close ended the loop")
+        .unwrap();
 }

@@ -1065,11 +1065,11 @@ fn a_retry_notice_is_retrying_until_the_next_message_or_step() {
 }
 
 #[test]
-fn an_ephemeral_delta_and_an_unknown_or_unreadable_line_change_nothing() {
+fn the_four_delta_kinds_reach_the_fold_but_nothing_else_does() {
     let mut w = world();
     w.start();
     w.prompt("go");
-    let before = w.status();
+    // An output delta is folded now: the first output writes at once.
     let delta = envelope(
         "assistant_message_delta",
         5000,
@@ -1078,7 +1078,8 @@ fn an_ephemeral_delta_and_an_unknown_or_unreadable_line_change_nothing() {
         None,
         &json!({"text": "hi"}),
     );
-    assert!(!w.fold.observe(&delta));
+    assert!(w.fold.observe(&delta));
+    assert_eq!(w.status().output_at, Some(5000));
     let unknown = envelope(
         "from_the_future",
         5001,
@@ -1097,7 +1098,279 @@ fn an_ephemeral_delta_and_an_unknown_or_unreadable_line_change_nothing() {
         &json!({"input": "no"}),
     );
     assert!(!w.fold.observe(&unreadable));
-    assert_eq!(w.status(), before);
+    assert_eq!(w.status().output_at, Some(5000));
+}
+
+/// Folds one ephemeral line stamped `ts`, as the log would stamp it; true
+/// when the status changed.
+fn delta_at(w: &mut World, kind: &str, ts: u64, payload: &Value) -> bool {
+    w.ts = ts;
+    let line = envelope(kind, ts, None, Some("a1"), None, payload);
+    w.fold.observe(&line)
+}
+
+#[test]
+fn output_at_writes_first_then_only_each_ten_seconds() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    assert_eq!(w.status().output_at, None);
+    let since = w.status().since;
+    // The first output writes immediately.
+    assert!(delta_at(
+        &mut w,
+        "assistant_message_delta",
+        2000,
+        &json!({"text": "he"})
+    ));
+    assert_eq!(w.status().output_at, Some(2000));
+    // Inside 10 seconds of the value last written: folded, no new status.
+    assert!(!delta_at(
+        &mut w,
+        "assistant_message_delta",
+        2000 + 9_999,
+        &json!({"text": "llo"})
+    ));
+    assert_eq!(w.status().output_at, Some(2000));
+    // Exactly 10 seconds on from the value last written: a new status.
+    // Reasoning counts as output too.
+    assert!(delta_at(
+        &mut w,
+        "reasoning_delta",
+        2000 + 10_000,
+        &json!({"text": "hmm"})
+    ));
+    assert_eq!(w.status().output_at, Some(12_000));
+    // The gate runs from the value last written, not the latest candidate:
+    // tool arguments count as output, 5 seconds on is too soon.
+    assert!(!delta_at(
+        &mut w,
+        "tool_call_arguments_delta",
+        12_000 + 5_000,
+        &json!({"index": 0, "text": "{}"})
+    ));
+    assert_eq!(w.status().output_at, Some(12_000));
+    assert!(delta_at(
+        &mut w,
+        "tool_call_arguments_delta",
+        12_000 + 10_000,
+        &json!({"index": 0, "text": "{}"})
+    ));
+    assert_eq!(w.status().output_at, Some(22_000));
+    // The state key never moved, so `since` did not restart.
+    assert_eq!(w.status().since, since);
+}
+
+#[test]
+fn tool_output_at_writes_first_then_only_each_ten_seconds() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    w.call("a1", "shell");
+    // Started but silent: absent before the first output.
+    assert_eq!(w.status().tool_output_at, None);
+    let base = w.ts;
+    assert!(delta_at(
+        &mut w,
+        "tool_call_delta",
+        base + 1,
+        &json!({"text": "out"})
+    ));
+    assert_eq!(w.status().tool_output_at, Some(base + 1));
+    assert!(!delta_at(
+        &mut w,
+        "tool_call_delta",
+        base + 5_000,
+        &json!({"text": "more"})
+    ));
+    assert_eq!(w.status().tool_output_at, Some(base + 1));
+    assert!(delta_at(
+        &mut w,
+        "tool_call_delta",
+        base + 1 + 10_000,
+        &json!({"text": "more"})
+    ));
+    assert_eq!(w.status().tool_output_at, Some(base + 10_001));
+}
+
+#[test]
+fn tool_output_at_clears_once_no_call_is_running() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    w.call("a1", "read");
+    w.call("a2", "shell");
+    w.ts += 1;
+    let line = envelope(
+        "tool_call_delta",
+        w.ts,
+        None,
+        Some("a2"),
+        None,
+        &json!({"text": "out"}),
+    );
+    assert!(w.fold.observe(&line));
+    let at = w.status().tool_output_at;
+    assert_eq!(at, Some(w.ts));
+    // One call done, one still running: the last output stands.
+    w.done("a2");
+    assert_eq!(w.status().tool_output_at, at);
+    // No call running: cleared, and the state left `tool` too.
+    w.done("a1");
+    assert_eq!(w.status().tool_output_at, None);
+    assert_eq!(w.status().state, SessionState::Streaming);
+}
+
+#[test]
+fn output_at_clears_on_a_new_request_and_at_turn_boundaries() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    let base = w.ts;
+    assert!(delta_at(
+        &mut w,
+        "assistant_message_delta",
+        base + 1,
+        &json!({"text": "hi"})
+    ));
+    assert_eq!(w.status().output_at, Some(base + 1));
+    // A new model call is a new request: cleared even mid-turn, and the
+    // retry's own first output writes immediately.
+    w.feed("assistant_message_started", Some("a2"), &json!({}));
+    assert_eq!(w.status().output_at, None);
+    w.feed(
+        "retry_scheduled",
+        None,
+        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1, "last_attempt": 4}),
+    );
+    assert_eq!(w.status().state, SessionState::Retrying);
+    assert!(delta_at(
+        &mut w,
+        "assistant_message_delta",
+        base + 2,
+        &json!({"text": "again"})
+    ));
+    assert_eq!(w.status().output_at, Some(base + 2));
+    // The turn ending clears it; outside a live request it is absent.
+    w.finish();
+    assert_eq!(w.status().output_at, None);
+    assert_eq!(w.status().state, SessionState::Idle);
+    // The next turn starts with none.
+    w.prompt("again");
+    assert_eq!(w.status().output_at, None);
+}
+
+#[test]
+fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    let paris = json!({"name": "read", "arguments": {"city": "Paris"}});
+    w.feed("tool_call_requested", Some("a1"), &paris);
+    assert_eq!(w.status().repeats, None);
+    w.feed("tool_call_requested", Some("a2"), &paris);
+    assert_eq!(w.status().repeats, Some(2));
+    w.feed("tool_call_requested", Some("a3"), &paris);
+    assert_eq!(w.status().repeats, Some(3));
+    // A different name resets the run.
+    w.feed(
+        "tool_call_requested",
+        Some("a4"),
+        &json!({"name": "shell", "arguments": {"city": "Paris"}}),
+    );
+    assert_eq!(w.status().repeats, None);
+    w.feed(
+        "tool_call_requested",
+        Some("a5"),
+        &json!({"name": "shell", "arguments": {"city": "Paris"}}),
+    );
+    assert_eq!(w.status().repeats, Some(2));
+    // The same name with different arguments resets it too.
+    w.feed(
+        "tool_call_requested",
+        Some("a6"),
+        &json!({"name": "shell", "arguments": {"city": "Lyon"}}),
+    );
+    assert_eq!(w.status().repeats, None);
+    // The repaired form is ignored: the same as-sent arguments count.
+    w.feed(
+        "tool_call_requested",
+        Some("a7"),
+        &json!({"name": "shell", "arguments": {"days": "2"},
+            "repaired": {"days": 2}, "repairs": [{"path": "/days", "fix": "string_to_number"}]}),
+    );
+    assert_eq!(w.status().repeats, None);
+    w.feed(
+        "tool_call_requested",
+        Some("a8"),
+        &json!({"name": "shell", "arguments": {"days": "2"}}),
+    );
+    assert_eq!(w.status().repeats, Some(2));
+    // An inner call counts like any other: the fold tracks no `ran_by`.
+    w.feed(
+        "tool_call_requested",
+        Some("a9"),
+        &json!({"name": "shell", "arguments": {"days": "2"},
+            "ran_by": {"extension": "x", "outer_action_id": "a0"}}),
+    );
+    assert_eq!(w.status().repeats, Some(3));
+}
+
+#[test]
+fn repeats_compares_arguments_structurally_and_survives_turns() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    // A whitespace-only JSON difference parses equal: the same call.
+    w.feed(
+        "tool_call_requested",
+        Some("a1"),
+        &json!({"name": "read", "arguments": "{\"city\":\"Paris\"}"}),
+    );
+    assert_eq!(w.status().repeats, None);
+    w.feed(
+        "tool_call_requested",
+        Some("a2"),
+        &json!({"name": "read", "arguments": "{\"city\": \"Paris\"}"}),
+    );
+    assert_eq!(w.status().repeats, Some(2));
+    // A non-JSON string compares by bytes: an identical one counts, a
+    // trailing space does not.
+    w.feed(
+        "tool_call_requested",
+        Some("a3"),
+        &json!({"name": "read", "arguments": "not json"}),
+    );
+    assert_eq!(w.status().repeats, None);
+    w.feed(
+        "tool_call_requested",
+        Some("a4"),
+        &json!({"name": "read", "arguments": "not json"}),
+    );
+    assert_eq!(w.status().repeats, Some(2));
+    w.feed(
+        "tool_call_requested",
+        Some("a5"),
+        &json!({"name": "read", "arguments": "not json "}),
+    );
+    assert_eq!(w.status().repeats, None);
+    w.feed(
+        "tool_call_requested",
+        Some("a6"),
+        &json!({"name": "read", "arguments": "not json "}),
+    );
+    assert_eq!(w.status().repeats, Some(2));
+    // The run persists across the turn boundary: no differing call reset it.
+    w.finish();
+    assert_eq!(w.status().repeats, Some(2));
+    w.prompt("again");
+    assert_eq!(w.status().repeats, Some(2));
+    w.feed(
+        "tool_call_requested",
+        Some("a7"),
+        &json!({"name": "read", "arguments": "not json "}),
+    );
+    assert_eq!(w.status().repeats, Some(3));
 }
 
 #[test]
@@ -1392,7 +1665,7 @@ fn a_held_clients_count_of_one_emits_a_status_line() {
 }
 
 #[test]
-fn the_count_is_read_from_live_on_at_each_durable_line_and_not_on_a_delta() {
+fn the_count_is_read_from_live_on_a_line_but_not_on_a_delta() {
     let mut w = world();
     *w.count.lock().unwrap() = 3;
     w.start();
@@ -1413,7 +1686,9 @@ fn the_count_is_read_from_live_on_at_each_durable_line_and_not_on_a_delta() {
         None,
         &json!({"text": "hi"}),
     );
-    assert!(!w.fold.observe(&delta));
+    // The delta is folded, but the count is not re-read for it.
+    assert!(w.fold.observe(&delta));
+    assert_eq!(w.status().output_at, Some(5000));
     assert_eq!(*w.reads.lock().unwrap(), reads);
 }
 
@@ -1692,17 +1967,22 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
     assert_eq!(last.payload["spend"]["tokens"]["input"], 10);
 }
 
-/// An ephemeral line is a delta and changes nothing, except a retry notice,
-/// which is what `retrying` is read from.
+/// An ephemeral retry notice is what `retrying` is read from, and an
+/// output delta is what `output_at` is read from. Any other ephemeral line
+/// changes nothing.
 #[test]
-fn an_ephemeral_retry_notice_is_read_and_another_ephemeral_line_is_not() {
+fn an_ephemeral_retry_notice_and_an_output_delta_are_read() {
     let mut w = world();
     w.start();
     w.prompt("go");
     let ephemeral = |kind: &str, payload: &Value| envelope(kind, 99, None, None, None, payload);
     let delta = ephemeral("assistant_message_delta", &json!({"text": "hi"}));
-    assert!(!w.fold.observe(&delta));
+    assert!(w.fold.observe(&delta));
     assert_eq!(w.status().state, SessionState::Streaming);
+    assert_eq!(w.status().output_at, Some(99));
+    let held = ephemeral("job_delta", &json!({"job_id": "j1"}));
+    assert!(!w.fold.observe(&held));
+    assert_eq!(w.status().output_at, Some(99));
     let retry = ephemeral(
         "retry_scheduled",
         &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1000, "last_attempt": 4}),
