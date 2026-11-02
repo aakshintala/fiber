@@ -519,7 +519,7 @@ impl Shell {
             program,
             &command,
             &parsed.workdir,
-            Duration::from_millis(parsed.timeout_ms),
+            parsed.timeout_ms.map(Duration::from_millis),
             self.clock.as_ref(),
             cancel,
             emit,
@@ -581,8 +581,9 @@ struct Args {
 struct Parsed {
     command: String,
     workdir: PathBuf,
-    /// The command's timeout: `timeout_ms`, or a monitor's deadline.
-    timeout_ms: u64,
+    /// The command's timeout: `timeout_ms`, or a monitor's deadline. `None`
+    /// is a background call with no `timeout_ms`, which has no timeout.
+    timeout_ms: Option<u64>,
     mode: Mode,
     /// Whether the call leaves the OS sandbox: only a literal
     /// `unconfined: true` sets it. Omitted, null and false follow the
@@ -630,30 +631,37 @@ impl Mode {
 
 /// How long a command may run, and whether it is a monitor's deadline,
 /// which a timeout names as such (`docs/tools.md`, "Background jobs").
+/// `None` is a background call with no `timeout_ms`, which has no timeout:
+/// the drive never stops it, so the stop lines below never run for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limit {
-    /// Milliseconds.
-    pub(crate) ms: u64,
+    /// Milliseconds, or no timeout for a background call with none given.
+    pub(crate) ms: Option<u64>,
     /// The limit is a monitor's `timeout_ms`.
     pub(crate) monitor: bool,
 }
 
 impl Limit {
-    /// What a stop at this limit says.
+    /// What a stop at this limit says. A stop needs a deadline, so a
+    /// background call with no timeout never reaches here.
     pub(crate) fn line(self) -> String {
+        let ms = self.ms.expect("a stop needs a deadline");
         if self.monitor {
-            deadline_line(self.ms)
+            deadline_line(ms)
         } else {
-            timeout_line(self.ms)
+            timeout_line(ms)
         }
     }
 
     /// The case a stop at this limit is: the same text as [`Limit::line`].
+    /// A stop needs a deadline, so a background call with no timeout never
+    /// reaches here.
     pub(crate) fn stopped(self) -> ShellError {
+        let ms = self.ms.expect("a stop needs a deadline");
         if self.monitor {
-            ShellError::DeadlinePassed { ms: self.ms }
+            ShellError::DeadlinePassed { ms }
         } else {
-            ShellError::TimedOut { ms: self.ms }
+            ShellError::TimedOut { ms }
         }
     }
 }
@@ -678,6 +686,9 @@ fn parse(
         (false, false, true) => Mode::Background,
         (false, false, false) => Mode::Foreground,
     };
+    if given_timeout == Some(0) {
+        return Err(ShellError::TimeoutTooSmall);
+    }
     let timeout_ms = if mode == Mode::Monitor {
         let timeout = given_timeout.unwrap_or(DEFAULT_DEADLINE_MS);
         if timeout > max_timeout_ms {
@@ -685,9 +696,12 @@ fn parse(
                 max_ms: max_timeout_ms,
             });
         }
-        timeout
+        Some(timeout)
+    } else if mode.in_background() {
+        // A background call with no `timeout_ms` has no timeout.
+        given_timeout
     } else {
-        given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS)
+        Some(given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS))
     };
     Ok(Parsed {
         command,

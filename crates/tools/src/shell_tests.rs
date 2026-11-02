@@ -60,7 +60,7 @@ fn nullable_optional_arguments_parse_as_absent() {
     assert_eq!(parsed.command, "ls");
     assert_eq!(parsed.mode, Mode::Foreground);
     assert_eq!(parsed.workdir, dir.path());
-    assert_eq!(parsed.timeout_ms, 600_000);
+    assert_eq!(parsed.timeout_ms, Some(600_000));
     assert!(!parsed.unconfined);
     let tool = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     assert!(tool.effects(&arguments).is_ok());
@@ -105,19 +105,15 @@ fn nullable_optional_arguments_parse_as_absent() {
              A monitor's maximum is 1800000, or 600000 in a non-interactive run."
     ));
     for (overrides, mode, timeout) in [
-        (json!({"monitor": true}), Mode::Monitor, 300_000),
+        (json!({"monitor": true}), Mode::Monitor, Some(300_000)),
         (
             json!({"tty": true}),
             Mode::Terminal {
                 run_in_background: false,
             },
-            600_000,
+            Some(600_000),
         ),
-        (
-            json!({"run_in_background": true}),
-            Mode::Background,
-            600_000,
-        ),
+        (json!({"run_in_background": true}), Mode::Background, None),
     ] {
         let mut args = arguments.clone();
         args.extend(overrides.as_object().unwrap().clone());
@@ -142,21 +138,25 @@ fn nullable_optional_arguments_parse_as_absent() {
         refused(json!({"monitor": true, "timeout_ms": 600_001})),
         Some(ShellError::DeadlineTooLong { .. })
     ));
-    // An ordinary command has no maximum: null, zero and past the monitor
-    // cap all parse.
-    for timeout in [Value::Null, json!(0), json!(1_000), json!(10_000_000)] {
+    // An ordinary command has no maximum: null and past the monitor cap
+    // parse; zero is rejected.
+    for timeout in [Value::Null, json!(1), json!(1_000), json!(10_000_000)] {
         let mut args = arguments.clone();
         args.extend(json!({"timeout_ms": timeout}).as_object().unwrap().clone());
         let parsed = parse(&args, dir.path(), 600_000).unwrap();
         assert_eq!(parsed.mode, Mode::Foreground);
-        assert_eq!(parsed.timeout_ms, timeout.as_u64().unwrap_or(600_000));
+        assert_eq!(parsed.timeout_ms, Some(timeout.as_u64().unwrap_or(600_000)));
     }
-    // A monitor takes `timeout_ms` or the 5-minute default, up to the cap.
+    assert!(matches!(
+        refused(json!({"timeout_ms": 0})),
+        Some(ShellError::TimeoutTooSmall)
+    ));
+    // A monitor takes `timeout_ms` or the 5-minute default, up to the cap;
+    // zero is rejected.
     for (given, limit) in [
-        (Value::Null, 300_000),
-        (json!(0), 0),
-        (json!(1_000), 1_000),
-        (json!(600_000), 600_000),
+        (Value::Null, Some(300_000)),
+        (json!(1_000), Some(1_000)),
+        (json!(600_000), Some(600_000)),
     ] {
         let mut args = arguments.clone();
         args.extend(
@@ -169,6 +169,10 @@ fn nullable_optional_arguments_parse_as_absent() {
         assert_eq!(parsed.mode, Mode::Monitor);
         assert_eq!(parsed.timeout_ms, limit);
     }
+    assert!(matches!(
+        refused(json!({"monitor": true, "timeout_ms": 0})),
+        Some(ShellError::TimeoutTooSmall)
+    ));
     // `unconfined` defaults off: only a literal true leaves the sandbox.
     for (given, expected) in [
         (Value::Null, false),
@@ -562,10 +566,11 @@ fn a_bare_wait_never_starts() {
     let marker = dir.path().join("marker");
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     let command = format!("sleep 30; touch {}", marker.display());
-    // A zero timeout, so a command that wrongly starts stops at once and the
-    // assertions below fail, where it would otherwise run for 30 seconds.
+    // A one-millisecond timeout, so a command that wrongly starts stops at
+    // once and the assertions below fail, where it would otherwise run for
+    // 30 seconds.
     let mut arguments = args(&command);
-    arguments.insert("timeout_ms".into(), json!(0));
+    arguments.insert("timeout_ms".into(), json!(1));
     let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(text(&output).contains("run_in_background"));
@@ -681,7 +686,7 @@ fn shell_details_describe_the_command_and_reaped_status() {
     for (raw, stop, indeterminate, command, expected) in cases {
         let output = super::assemble(
             super::Limit {
-                ms: 1,
+                ms: Some(1),
                 monitor: false,
             },
             Finished {
@@ -702,7 +707,7 @@ fn shell_details_describe_the_command_and_reaped_status() {
     let output = from_spawn(
         Err(std::io::Error::other("missing")),
         super::Limit {
-            ms: 1,
+            ms: Some(1),
             monitor: false,
         },
         "c",
@@ -733,7 +738,7 @@ fn a_spawn_failure_is_tool_error_with_no_process() {
     let output = from_spawn(
         Err(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")),
         super::Limit {
-            ms: 1,
+            ms: Some(1),
             monitor: false,
         },
         "c",
@@ -757,7 +762,7 @@ fn execute_fails_when_the_program_does_not_exist() {
         Path::new("/no/such/fiber-shell"),
         "true",
         dir.path(),
-        Duration::from_secs(1),
+        Some(Duration::from_secs(1)),
         FakeClock::new().as_ref(),
         &CancelToken::new(),
         &Recorder::default(),
@@ -947,9 +952,9 @@ fn a_bare_wait_is_refused_for_a_monitor() {
     let marker = dir.path().join("marker");
     let jobs = fakes::jobs::FakeJobs::new(dir.path());
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
-    // A zero limit, so a command that wrongly starts stops at once.
+    // A one-millisecond limit, so a command that wrongly starts stops at once.
     let mut arguments = monitor_args(&format!("sleep 30; touch {}", marker.display()));
-    arguments.insert("timeout_ms".into(), json!(0));
+    arguments.insert("timeout_ms".into(), json!(1));
     let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(text(&output).contains("jobs wait"), "{}", text(&output));
@@ -1046,7 +1051,7 @@ fn assemble_of_a_spilled_output_has_no_text_and_names_the_file() {
     let status = Command::new("true").status().unwrap();
     let output = super::assemble(
         super::Limit {
-            ms: 1,
+            ms: Some(1),
             monitor: false,
         },
         Finished {
@@ -1085,7 +1090,7 @@ fn assemble_of_a_failed_spilled_output_keeps_its_error_and_process() {
     let status = Command::new("sh").args(["-c", "exit 3"]).status().unwrap();
     let output = super::assemble(
         super::Limit {
-            ms: 1,
+            ms: Some(1),
             monitor: false,
         },
         Finished {
@@ -1127,7 +1132,7 @@ fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
         flooded: false,
     };
     let limit = super::Limit {
-        ms: 1,
+        ms: Some(1),
         monitor: false,
     };
     let line = "It could not move to the background: the jobs are full.";
@@ -1451,4 +1456,88 @@ fn an_unknown_command_still_offers_its_subject_and_prefix() {
     let query = effects(&shell, "acme-cli query --json");
     assert_eq!(query.subject.as_deref(), Some("acme-cli query --json"));
     assert_eq!(query.prefix.as_deref(), Some("acme-cli query"));
+}
+
+#[test]
+fn background_without_timeout_has_none_while_foreground_keeps_default() {
+    let dir = fakes::TempDir::new("fiber-shell-bg-none");
+    let base = fakes::tool_args(json!({"command": "sleep 30"}));
+    let with = |overrides: Value| {
+        let mut arguments = base.clone();
+        arguments.extend(overrides.as_object().unwrap().clone());
+        parse(&arguments, dir.path(), 600_000).unwrap()
+    };
+    // A background call with no `timeout_ms` has none.
+    assert_eq!(with(json!({"run_in_background": true})).timeout_ms, None);
+    // A terminal with `run_in_background` is a background call too.
+    assert_eq!(
+        with(json!({"tty": true, "run_in_background": true})).timeout_ms,
+        None
+    );
+    // A foreground call with no `timeout_ms` keeps the 600,000 default.
+    assert_eq!(with(json!({})).timeout_ms, Some(600_000));
+    // A `tty` without `run_in_background` keeps the default.
+    assert_eq!(with(json!({"tty": true})).timeout_ms, Some(600_000));
+    // A monitor keeps its 300,000 default.
+    assert_eq!(with(json!({"monitor": true})).timeout_ms, Some(300_000));
+    // An explicit timeout is kept on every mode.
+    assert_eq!(
+        with(json!({"run_in_background": true, "timeout_ms": 5_000})).timeout_ms,
+        Some(5_000)
+    );
+    assert_eq!(with(json!({"timeout_ms": 5_000})).timeout_ms, Some(5_000));
+    assert_eq!(
+        with(json!({"monitor": true, "timeout_ms": 5_000})).timeout_ms,
+        Some(5_000)
+    );
+}
+
+#[test]
+fn zero_timeout_is_rejected_with_hint_and_starts_nothing() {
+    let dir = fakes::TempDir::new("fiber-shell-zero-hint");
+    let marker = dir.path().join("marker");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    for overrides in [
+        json!({"timeout_ms": 0}),
+        json!({"run_in_background": true, "timeout_ms": 0}),
+        json!({"tty": true, "timeout_ms": 0}),
+        json!({"monitor": true, "timeout_ms": 0}),
+    ] {
+        let mut arguments = args(&format!("touch {}", marker.display()));
+        arguments.extend(overrides.as_object().unwrap().clone());
+        let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+        assert_eq!(
+            code(&output),
+            Some(ErrorCode::InvalidArguments),
+            "{overrides}"
+        );
+        assert!(
+            text(&output).contains("at least 1"),
+            "{overrides}: {}",
+            text(&output)
+        );
+        assert!(
+            text(&output).contains("Leave `timeout_ms` out"),
+            "{overrides}: {}",
+            text(&output)
+        );
+        assert!(output.process.is_none(), "{overrides}");
+        assert!(!marker.exists(), "{overrides}");
+    }
+}
+
+#[test]
+fn one_ms_is_accepted_on_every_mode() {
+    let dir = fakes::TempDir::new("fiber-shell-one-ms");
+    for overrides in [
+        json!({"timeout_ms": 1}),
+        json!({"run_in_background": true, "timeout_ms": 1}),
+        json!({"tty": true, "timeout_ms": 1}),
+        json!({"monitor": true, "timeout_ms": 1}),
+    ] {
+        let mut arguments = args("exit 0");
+        arguments.extend(overrides.as_object().unwrap().clone());
+        let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+        assert_eq!(parsed.timeout_ms, Some(1), "{overrides}");
+    }
 }

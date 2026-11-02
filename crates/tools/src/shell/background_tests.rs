@@ -103,7 +103,7 @@ fn a_job_completion_keeps_changed_path_reports_and_omits_empty_ones() {
                 false,
             ),
             Limit {
-                ms: 60_000,
+                ms: Some(60_000),
                 monitor: false,
             },
             report,
@@ -259,7 +259,7 @@ fn hand_off_with_saved(
         clock,
         "true",
         Limit {
-            ms: 5_000,
+            ms: Some(5_000),
             monitor: false,
         },
         false,
@@ -484,7 +484,15 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
     let id = JobId("j_1".into());
 
     let end = |finished: Finished, ms| {
-        to_completed(id.clone(), &path, finished, Limit { ms, monitor: false })
+        to_completed(
+            id.clone(),
+            &path,
+            finished,
+            Limit {
+                ms: Some(ms),
+                monitor: false,
+            },
+        )
     };
 
     let unreaped = end(finished(None, None, false, false, false), 1);
@@ -660,7 +668,7 @@ fn a_capped_job_ends_failed_with_output_cap_whatever_else_ended_it() {
             &path,
             finished,
             Limit {
-                ms: 5_000,
+                ms: Some(5_000),
                 monitor: false,
             },
         )
@@ -701,7 +709,7 @@ fn a_flooded_monitor_ends_flooded_unless_the_cap_fired() {
     std::fs::write(&path, "partial\n").unwrap();
     let id = JobId("j_1".into());
     let deadline = Limit {
-        ms: 5_000,
+        ms: Some(5_000),
         monitor: true,
     };
     let flooded = |mut finished: Finished| {
@@ -738,7 +746,7 @@ fn a_monitor_at_its_deadline_says_it_expired() {
         &path,
         finished(None, Some(StopKind::Timeout), false, true, false),
         Limit {
-            ms: 5_000,
+            ms: Some(5_000),
             monitor: true,
         },
     );
@@ -756,7 +764,7 @@ fn a_monitor_at_its_deadline_says_it_expired() {
         &path,
         finished(None, Some(StopKind::Timeout), true, true, false),
         Limit {
-            ms: 5_000,
+            ms: Some(5_000),
             monitor: true,
         },
     );

@@ -320,8 +320,10 @@ fn hand_off(
         drop(timing(Op::JobsStart, None, Some(started)));
     }
     if let Some(sink) = sink {
+        // A monitor always has a deadline, so its receipt names it.
+        let deadline = limit.ms.expect("a monitor has a deadline");
         return with_spill_line(
-            monitor_receipt(&opened.started, &opened.path, &errors, &sink, limit.ms),
+            monitor_receipt(&opened.started, &opened.path, &errors, &sink, deadline),
             spill_line,
         );
     }

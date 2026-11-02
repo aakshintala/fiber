@@ -577,15 +577,20 @@ fn with_no_timeout_the_run_parks_at_ten_minutes() {
 }
 
 #[test]
-fn a_zero_timeout_stops_at_once() {
+fn a_zero_timeout_is_rejected_with_hint_and_starts_nothing() {
     let dir = fakes::TempDir::new("fiber-shell-zero");
     let shell = Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()));
     let mut arguments = args("echo hi");
     arguments.insert("timeout_ms".into(), json!(0));
     let output = run_on(&shell, arguments, &Arc::new(Recorder::default()));
-    assert_eq!(code(&output), Some(ErrorCode::Timeout));
-    assert!(output.process.as_ref().unwrap().timed_out);
-    assert!(text(&output).contains("Timed out after 0 ms and stopped."));
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(text(&output).contains("at least 1"), "{}", text(&output));
+    assert!(
+        text(&output).contains("Leave `timeout_ms` out"),
+        "{}",
+        text(&output)
+    );
+    assert!(output.process.is_none());
 }
 
 #[test]
@@ -1598,19 +1603,19 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
         0,
         "the call's cancel still reaches the moved job"
     );
-    let timeout_at = running.start + Duration::from_millis(600_000);
+    // A background call with no `timeout_ms` has none: the job parks with
+    // no deadline.
     assert!(
-        running.clock.await_parked(
-            timeout_at,
-            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        ),
-        "the job did not park"
+        running
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the job did not park with no deadline"
     );
     cancel.cancel();
-    // Marked after the cancel, then woken: a later park at the timeout ran a
-    // whole pass after the turn cancel and did not stop.
+    // Marked after the cancel, then woken: a later park with no deadline
+    // ran a whole pass after the turn cancel and did not stop.
     let mark = running.clock.advance_when_parked(
-        Some(timeout_at),
+        None,
         None,
         Duration::ZERO,
         &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -1618,7 +1623,7 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     assert!(
         running.clock.await_parked_since(
             &mark,
-            Some(timeout_at),
+            None,
             fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the job did not wait again after the turn cancel"
@@ -1629,10 +1634,22 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     );
     assert!(group_alive(pgid));
     assert!(
-        running.clock.parked().contains(&Some(timeout_at)),
-        "the turn cancel left the timeout park: {:?}",
+        running.clock.parked().contains(&None),
+        "the turn cancel left the unbounded park: {:?}",
         running.clock.parked()
     );
+    // Past the foreground default the job is still running.
+    running.clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_millis(600_001),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert!(
+        jobs.ended(fakes::Deadline::after(Duration::ZERO)).is_none(),
+        "the job ended at the foreground default"
+    );
+    assert!(group_alive(pgid));
     jobs.stop(&job.job_id);
     let ended = jobs
         .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
@@ -1704,11 +1721,12 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    // The background call had no `timeout_ms`, so the resumed foreground
+    // run parks with no deadline too.
     assert!(
-        running.clock.await_parked(
-            running.start + Duration::from_millis(600_000),
-            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        ),
+        running
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the command did not stay in the foreground"
     );
     assert!(
@@ -2168,11 +2186,11 @@ fn a_tty_command_is_still_a_bare_wait() {
     let jobs = FakeJobs::new(dir.path());
     let shell =
         Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone()));
-    // Only `run_in_background` skips the refusal. A zero timeout, so a
+    // Only `run_in_background` skips the refusal. A one-millisecond timeout, so a
     // command that wrongly starts stops at once.
     let mut arguments = args(&format!("sleep 30; touch {}", quote(&marker)));
     arguments.insert("tty".into(), json!(true));
-    arguments.insert("timeout_ms".into(), json!(0));
+    arguments.insert("timeout_ms".into(), json!(1));
     let output = run_on(&shell, arguments, &Arc::new(Recorder::default()));
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(text(&output).contains("jobs wait"), "{}", text(&output));
@@ -2394,7 +2412,7 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
 }
 
 #[test]
-fn a_monitor_with_a_zero_deadline_times_out_in_the_foreground() {
+fn a_monitor_with_a_zero_deadline_is_rejected_with_hint() {
     let dir = fakes::TempDir::new("fiber-shell-monitor-zero");
     let jobs = FakeJobs::new(dir.path());
     let shell =
@@ -2403,15 +2421,14 @@ fn a_monitor_with_a_zero_deadline_times_out_in_the_foreground() {
     arguments.insert("monitor".into(), json!(true));
     arguments.insert("timeout_ms".into(), json!(0));
     let output = run_on(&shell, arguments, &Arc::new(Recorder::default()));
-    assert_eq!(code(&output), Some(ErrorCode::Timeout));
-    assert!(output.process.as_ref().unwrap().timed_out);
-    let line = "The monitor's deadline of 0 ms passed; start it again if you still need it.";
-    assert_eq!(output.error.as_ref().unwrap().message, line);
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(text(&output).contains("at least 1"), "{}", text(&output));
     assert!(
-        text(&output).ends_with(&format!("{line}\n")),
+        text(&output).contains("Leave `timeout_ms` out"),
         "{}",
         text(&output)
     );
+    assert!(output.process.is_none());
     assert!(jobs.started().is_empty());
     assert!(jobs.lines().lines().is_empty());
 }
@@ -4301,4 +4318,55 @@ fn call(shell: &Shell, command: &str) -> contract::tool::Output {
             )
         },
     )
+}
+
+#[test]
+fn background_without_timeout_runs_until_stopped() {
+    let dir = fakes::TempDir::new("fiber-shell-bg-no-timeout");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "a", "b"),
+        None,
+        true,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&running.output)
+        .expect("the receipt");
+    assert!(output.error.is_none(), "{}", text(&output));
+    // The job parks with no deadline: it waits unbounded, not at 600,000 ms.
+    assert!(
+        running
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the background job did not park with no deadline"
+    );
+    assert!(group_alive(pgid));
+    // Past the foreground default the job is still running.
+    running.clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_millis(600_001),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert!(group_alive(pgid), "stopped at the foreground default");
+    assert!(
+        jobs.ended(fakes::Deadline::after(Duration::ZERO)).is_none(),
+        "the job ended at the foreground default"
+    );
+    let job = started(&output);
+    jobs.stop(&job.job_id);
+    let ended = jobs
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+        .expect("the stop to end the job");
+    assert_eq!(ended.status, Outcome::Cancelled);
+    assert!(ended.error.is_none());
+    assert!(!group_alive(pgid));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
