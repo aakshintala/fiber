@@ -216,13 +216,14 @@ fn workspace_relative(root: &Path, path: &Path) -> Option<String> {
     } else {
         std::env::current_dir().ok()?.join(root)
     };
+    // Dep-info and current_dir can reach the same workspace through different symlink paths.
+    let root = fs::canonicalize(&root).unwrap_or_else(|_| normalize(&root));
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         root.join(path)
     };
-    let absolute = normalize(&absolute);
-    let root = normalize(&root);
+    let absolute = fs::canonicalize(&absolute).unwrap_or_else(|_| normalize(&absolute));
     absolute
         .strip_prefix(root)
         .ok()

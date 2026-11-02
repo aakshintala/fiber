@@ -52,6 +52,43 @@ fn a_compiled_test_file_with_no_selected_tests_names_its_path() {
 }
 
 #[test]
+fn empty_test_file_error_compares_the_path_with_each_unrun_file() {
+    let normal = "crates/log/src/utility_tests.rs";
+    let unrun = "crates/log/tests/main_journeys.rs";
+    for (path, expected) in [
+        (
+            normal,
+            Some(format!("{normal}: changed test file selected no tests")),
+        ),
+        (unrun, None),
+    ] {
+        let members = std::collections::BTreeMap::from([(
+            "log".to_owned(),
+            Member {
+                dir: "crates/log".to_owned(),
+                version: "0.0.0".to_owned(),
+                deps: Vec::new(),
+                library: true,
+                unrun_tests: vec![unrun.to_owned()],
+            },
+        )]);
+        let files = vec![path.to_owned()];
+        let index = TestIndex::from_fixtures(vec![(
+            path.to_owned(),
+            TestBinary {
+                tests: vec![unit_test()],
+            },
+        )]);
+
+        assert_eq!(
+            empty_test_file_error(&files, &[], &members, &index),
+            expected,
+            "path {path}"
+        );
+    }
+}
+
+#[test]
 fn an_empty_selection_in_one_test_file_fails_even_when_another_file_selects_tests() {
     let missing = "crates/log/src/utility_tests.rs".to_owned();
     let selected_path = "crates/log/tests/works.rs".to_owned();

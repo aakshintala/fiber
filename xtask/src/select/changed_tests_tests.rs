@@ -1278,6 +1278,58 @@ fn tests_in_files_names_every_test_and_skips_a_missing_file() {
 }
 
 #[test]
+fn tests_in_files_only_keeps_compiler_tests_with_a_source_function_match() {
+    let path = "crates/log/src/selected_tests.rs";
+    let sources = vec![file("log", path, "#[test] fn selected() {}\n")];
+    let index = TestIndex::from_fixtures(vec![(
+        path.to_owned(),
+        TestBinary {
+            tests: vec![
+                refer("log", None, true, "selected"),
+                refer("log", None, true, "compiled_but_not_in_source"),
+            ],
+        },
+    )]);
+
+    assert_eq!(
+        super::tests_in_files(&[path.to_owned()], &members(), &sources, &index)
+            .expect("tests in file"),
+        vec![refer("log", None, true, "selected")]
+    );
+}
+
+#[test]
+fn tests_in_files_compares_the_path_with_each_unrun_test_path() {
+    let normal = "crates/main/tests/normal.rs";
+    let unrun = "crates/main/tests/main_journeys.rs";
+    let files = vec![normal.to_owned(), unrun.to_owned()];
+    let sources = vec![
+        file("main", normal, "#[test] fn ordinary() {}\n"),
+        file("main", unrun, "#[test] fn journey() {}\n"),
+    ];
+    let index = TestIndex::from_fixtures(vec![
+        (
+            normal.to_owned(),
+            TestBinary {
+                tests: vec![refer("main", None, true, "ordinary")],
+            },
+        ),
+        (
+            unrun.to_owned(),
+            TestBinary {
+                tests: vec![refer("main", None, true, "journey")],
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        super::tests_in_files(&files, &members_with_unrun_test(), &sources, &index)
+            .expect("tests in files"),
+        vec![refer("main", None, true, "ordinary")]
+    );
+}
+
+#[test]
 fn a_planned_line_round_trips() {
     let unit = refer("tools", None, true, "shell::sandbox::tests::macos_one");
     assert_eq!(

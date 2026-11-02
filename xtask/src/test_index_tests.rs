@@ -387,6 +387,45 @@ fn compiler_index_covers_the_reported_layouts() {
 }
 
 #[test]
+fn each_missing_suite_field_is_rejected_independently() {
+    let temp = fakes::TempDir::new("xtask-index-missing-field");
+    for missing in ["package-name", "binary-id", "kind", "binary-path"] {
+        let mut suite = json!({
+            "package-name": "log",
+            "binary-id": "log::unit",
+            "kind": "lib",
+            "binary-path": temp.path().join("target/debug/deps/unit").display().to_string(),
+        });
+        suite.as_object_mut().expect("suite object").remove(missing);
+        let listed = json!({"rust-suites": {"unit": suite}}).to_string();
+        assert_eq!(
+            TestIndex::from_list(temp.path(), &listed)
+                .expect_err("missing suite field")
+                .as_str(),
+            "nextest list: suite is missing package-name, binary-id, kind or binary-path",
+            "missing {missing}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_relative_resolves_a_source_through_a_symlink_alias() {
+    let temp = fakes::TempDir::new("xtask-index-path-alias");
+    let root = temp.path().join("workspace");
+    let source = root.join("crates/log/tests/platform.rs");
+    std::fs::create_dir_all(source.parent().expect("source directory")).expect("create source dir");
+    std::fs::write(&source, "#[test] fn platform() {}\n").expect("write source");
+    let alias = temp.path().join("workspace-alias");
+    std::os::unix::fs::symlink(&root, &alias).expect("create workspace alias");
+
+    assert_eq!(
+        super::workspace_relative(&root, &alias.join("crates/log/tests/platform.rs")),
+        Some("crates/log/tests/platform.rs".to_owned())
+    );
+}
+
+#[test]
 fn a_suite_without_testcases_still_indexes_its_dep_info_sources() {
     let temp = fakes::TempDir::new("xtask-index-empty-suite");
     let suite = Suite {
