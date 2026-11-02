@@ -148,7 +148,7 @@ fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>) {
         std::io::Write::write_all(&mut writer, format!("{answer}\n").as_bytes()).unwrap();
         if open_last {
             // After the state it announces
-            // (docs/code-quality.md:257-261).
+            // (`docs/code-quality.md`, "What a reviewer checks").
             let _result = hub.done.send(());
         }
     }
@@ -244,6 +244,46 @@ impl Driver {
 /// How many rows hold `needle`.
 fn occurrences(grid: &Grid, needle: &str) -> usize {
     grid.rows.iter().filter(|row| row.contains(needle)).count()
+}
+
+/// The failure-path decider for the next sighting of #3883: polls the
+/// loop's exit channel once and scans the raw output for the notice
+/// bytes, so the panic names which surviving cause the state implies.
+/// It runs only after the notice wait has already failed, so a green run
+/// never calls it; the wait's needle and deadline are unchanged.
+fn notice_wait_report<T: std::fmt::Debug>(
+    seen: &Arc<Mutex<Vec<String>>>,
+    finished: &mpsc::Receiver<T>,
+    raw: &[u8],
+) -> String {
+    let seen = seen.lock().unwrap();
+    let poisoned = seen.iter().any(|command| {
+        command.starts_with("history from=Some(0) ") && !command.contains("to=None")
+    });
+    let base = format!("poisoned page requested: {poisoned}; hub saw: {seen:?}");
+    let drew = raw
+        .windows(NOTICE.len())
+        .any(|window| window == NOTICE.as_bytes());
+    match finished.try_recv() {
+        Ok(code) => format!(
+            "{base}; the loop had exited with {code:?}: the event loop exited \
+             before the notice could draw (H4, early-exit path)"
+        ),
+        Err(mpsc::TryRecvError::Empty) if drew => format!(
+            "{base}; the loop is still running and the notice bytes are in the \
+             raw output: the notice drew and a later frame skipped it \
+             (H2, a snapshot gap skipped the notice's 10 s life)"
+        ),
+        Err(mpsc::TryRecvError::Empty) => format!(
+            "{base}; the loop is still running and no notice bytes are in the \
+             raw output: the notice never drew, so the loop thread stalled \
+             (H4, check CI stderr)"
+        ),
+        Err(mpsc::TryRecvError::Disconnected) => format!(
+            "{base}; the loop's exit channel disconnected: the loop thread died \
+             without sending its exit code (H4, check CI stderr)"
+        ),
+    }
 }
 
 #[test]
@@ -426,7 +466,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     driver.wait_screen(
         "the load-failure notice",
         |grid| grid.contents.contains(NOTICE),
-        seen_report,
+        || notice_wait_report(&seen, &finished, &driver.output()),
     );
     // Back down past it: the last rows draw again, beside the one
     // notice, and a frame drew for the scroll.
@@ -445,7 +485,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         "a frame drew after the scroll past the page that cannot load",
     );
     // One notice per code, shown once per terminal run
-    // (docs/tui.md:1376-1379): every scroll past the failed page fails
+    // (`docs/tui.md`, "Notices"): every scroll past the failed page fails
     // it again with the same code and text, so exactly one grouped row
     // shows.
     assert_eq!(
