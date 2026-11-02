@@ -4,4 +4,3 @@ crates/tui/src/app/config_views/credential.rs	fiber-3743	grant	2026-11-02T19:08:
 crates/tui/src/lib.rs	fiber-3743	grant	2026-11-02T19:08:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/3743-config-views-seam-required	
 crates/tui/src/configure_fake.rs	fiber-3743	grant	2026-11-02T19:08:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/3743-config-views-seam-required	
 fiber-4014-plan.md	fiber-4014	plan	2026-11-02T20:41:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
-crates/main/tests/link_look.rs,crates/tui/src/app/links.rs,crates/tui/src/app_focus.rs	fiber-3855	plan	2026-11-02T21:24:59Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
