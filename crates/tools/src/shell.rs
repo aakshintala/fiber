@@ -263,9 +263,11 @@ impl Tool for Shell {
             name: "shell".to_owned(),
             description: "Runs a command in a new process session. `command` is the command. \
                  `workdir` defaults to the workspace; a relative path is resolved against it. \
-                 `timeout_ms` defaults to 600000, or to 300000 for a monitor. A monitor's maximum is 1800000, \
-                 or 600000 in a non-interactive run. Standard output and standard error are one stream, \
-                 except in a monitor, whose standard error goes to its own file."
+                 A background call with no `timeout_ms` has no timeout: it runs until it exits, \
+                 until `jobs stop`, or until the session shuts down. Any other call with no \
+                 `timeout_ms` defaults to 600000, or to 300000 for a monitor. `timeout_ms` is at least 1. \
+                 A monitor's maximum is 1800000, or 600000 in a non-interactive run. Standard output \
+                 and standard error are one stream, except in a monitor, whose standard error goes to its own file."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -280,8 +282,8 @@ impl Tool for Shell {
                     },
                     "timeout_ms": {
                         "type": ["integer", "null"],
-                        "minimum": 0,
-                        "description": "How long the command may run, in milliseconds. The default is 600000; for a monitor, the default is 300000 and the maximum is 1800000 (600000 in a non-interactive run)."
+                        "minimum": 1,
+                        "description": "How long the command may run, in milliseconds. A background call with no `timeout_ms` has no timeout. The default is 600000; for a monitor, the default is 300000 and the maximum is 1800000 (600000 in a non-interactive run). `timeout_ms` is at least 1: leave it out of a background call that should run until stopped."
                     },
                     "run_in_background": {
                         "type": ["boolean", "null"],
@@ -472,10 +474,12 @@ impl Shell {
             (Some(_), Mode::Terminal { .. }) => command::MovePolicy::Terminal,
             (Some(_), Mode::Monitor) => command::MovePolicy::Monitor,
         };
-        let limit = Limit {
-            ms: parsed.timeout_ms,
+        // `None` only for an `in_background()` call with no `timeout_ms`,
+        // which has no timeout.
+        let limit: Option<Limit> = parsed.timeout_ms.map(|ms| Limit {
+            ms,
             monitor: parsed.mode == Mode::Monitor,
-        };
+        });
         let spill = self.artifacts.clone().map(|dir| spill::Config {
             dir,
             bound: self.bound,
@@ -519,7 +523,7 @@ impl Shell {
             program,
             &command,
             &parsed.workdir,
-            Duration::from_millis(parsed.timeout_ms),
+            parsed.timeout_ms.map(Duration::from_millis),
             self.clock.as_ref(),
             cancel,
             emit,
@@ -581,8 +585,9 @@ struct Args {
 struct Parsed {
     command: String,
     workdir: PathBuf,
-    /// The command's timeout: `timeout_ms`, or a monitor's deadline.
-    timeout_ms: u64,
+    /// The command's timeout: `timeout_ms`, or a monitor's deadline. `None`
+    /// is a background call with no `timeout_ms`, which has no timeout.
+    timeout_ms: Option<u64>,
     mode: Mode,
     /// Whether the call leaves the OS sandbox: only a literal
     /// `unconfined: true` sets it. Omitted, null and false follow the
@@ -630,6 +635,9 @@ impl Mode {
 
 /// How long a command may run, and whether it is a monitor's deadline,
 /// which a timeout names as such (`docs/tools.md`, "Background jobs").
+/// `None` in place of a limit is a background call with no `timeout_ms`,
+/// which has no timeout: the drive never stops it, so a stop always has a
+/// limit in hand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limit {
     /// Milliseconds.
@@ -678,6 +686,9 @@ fn parse(
         (false, false, true) => Mode::Background,
         (false, false, false) => Mode::Foreground,
     };
+    if given_timeout == Some(0) {
+        return Err(ShellError::TimeoutTooSmall);
+    }
     let timeout_ms = if mode == Mode::Monitor {
         let timeout = given_timeout.unwrap_or(DEFAULT_DEADLINE_MS);
         if timeout > max_timeout_ms {
@@ -685,9 +696,12 @@ fn parse(
                 max_ms: max_timeout_ms,
             });
         }
-        timeout
+        Some(timeout)
+    } else if mode.in_background() {
+        // A background call with no `timeout_ms` has no timeout.
+        given_timeout
     } else {
-        given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS)
+        Some(given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS))
     };
     Ok(Parsed {
         command,
@@ -792,7 +806,7 @@ fn is_read_only(effects: &Effects) -> bool {
 /// end-of-call protected-path report into the foreground result.
 pub(crate) fn from_spawn_reported(
     result: Result<Finished, std::io::Error>,
-    limit: Limit,
+    limit: Option<Limit>,
     command: &str,
     report: Option<ProtectedReport>,
 ) -> Output {
@@ -802,7 +816,11 @@ pub(crate) fn from_spawn_reported(
     }
 }
 
-fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit, command: &str) -> Output {
+fn from_spawn(
+    result: Result<Finished, std::io::Error>,
+    limit: Option<Limit>,
+    command: &str,
+) -> Output {
     match result {
         Ok(finished) => assemble(limit, finished, None, Some(command)),
         Err(source) => {
@@ -844,7 +862,7 @@ fn details(command: &str, process: Option<&Process>) -> Value {
 /// structured report lands in `details`, and the contract field rides for
 /// the completion. Absent when no confined transaction ran.
 pub(crate) fn assemble_reported(
-    limit: Limit,
+    limit: Option<Limit>,
     finished: Finished,
     extra: Option<&str>,
     command: Option<&str>,
@@ -878,7 +896,7 @@ pub(crate) fn assemble_reported(
 /// alike. A spilled output carries no text parts: the loop takes its text
 /// from the spill alone.
 pub(crate) fn assemble(
-    limit: Limit,
+    limit: Option<Limit>,
     finished: Finished,
     extra: Option<&str>,
     command: Option<&str>,
@@ -888,7 +906,7 @@ pub(crate) fn assemble(
     output
 }
 
-fn assemble_output(limit: Limit, finished: Finished, extra: Option<&str>) -> Output {
+fn assemble_output(limit: Option<Limit>, finished: Finished, extra: Option<&str>) -> Output {
     let timed_out = finished.stop == Some(StopKind::Timeout);
     if finished.indeterminate {
         let process = process_of(&finished, timed_out);
@@ -901,7 +919,11 @@ fn assemble_output(limit: Limit, finished: Finished, extra: Option<&str>) -> Out
             false,
         );
     }
-    if finished.stop == Some(StopKind::Timeout) {
+    // A stop only happens where its deadline fired, so the stop path has
+    // a `Limit` in hand; without one there is no timeout to report.
+    if finished.stop == Some(StopKind::Timeout)
+        && let Some(limit) = limit
+    {
         let line = limit.line();
         let error = Some(Failure::from(&ToolError::from(limit.stopped())));
         let process = process_of(&finished, true);

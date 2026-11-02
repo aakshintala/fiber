@@ -3527,3 +3527,218 @@ fn known_host_fetch(different_host: bool) {
         assert_eq!(site.requests()[0].path, "/doc?q=1");
     }
 }
+
+#[test]
+fn background_without_timeout_is_stopped_not_timed_out() {
+    let setup = Setup::new_with_started_deadline();
+    let command = "sleep 600";
+    let server = ProviderServer::start_responding(|request: &fakes::Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains("Started in the background") {
+            return stream(&[function_call(
+                "call_bg",
+                "shell",
+                &json!({"command": "sleep 600", "run_in_background": true}),
+            )]);
+        }
+        if text.contains("call_stop") {
+            return hello();
+        }
+        let marker = "Job j_";
+        let Some(start) = text.find(marker) else {
+            return hello();
+        };
+        let rest = &text[start + 4..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_hexdigit() || c == 'j' || c == '_'))
+            .unwrap_or(rest.len());
+        let job = rest[..end].to_owned();
+        stream(&[function_call(
+            "call_stop",
+            "jobs",
+            &json!({"action": "stop", "job_id": job}),
+        )])
+    })
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": command})
+        ),
+    )
+    .unwrap();
+
+    let run = setup.run(&["ask", "start a background sleep then stop it"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // A reply that is text alone: one step, then the turn's end.
+    let reply = [
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    // The stop needs no permission decision, so the second call has no
+    // `permission_resolved`; stopping ends the job in the same step, so
+    // there is no `jobs_pending_notified` turn.
+    let expected = [
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "job_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "job_completed",
+            "tool_call_completed",
+            "step_started",
+        ][..],
+        &reply,
+        &["fiber_exited"],
+    ]
+    .concat();
+    // `job_delta` is ephemeral, and where it lands depends on when the
+    // job writes, so the comparison leaves it out.
+    let kinds: Vec<&str> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "job_delta")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, expected);
+    let done = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .unwrap_or_else(|| panic!("no job_completed in {:?}", run.kinds()));
+    assert_eq!(done["payload"]["status"], "cancelled", "{done}");
+    let body = serde_json::to_string(&run.lines).unwrap();
+    assert!(!body.contains("Timed out after"), "{body}");
+    assert!(!body.contains("\"timeout\""), "{body}");
+    let stopped = run
+        .lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_completed"
+                && line["payload"].get("content").is_some_and(|content| {
+                    content.as_array().is_some_and(|parts| {
+                        parts.iter().any(|part| {
+                            part["text"]
+                                .as_str()
+                                .is_some_and(|text| text.contains("cancelled"))
+                        })
+                    })
+                })
+        })
+        .unwrap_or_else(|| panic!("no stop report in {:?}", run.kinds()));
+    assert_eq!(stopped["payload"]["status"], "completed", "{stopped}");
+}
+
+#[test]
+fn zero_timeout_is_rejected_and_starts_nothing() {
+    let setup = Setup::new_with_started_deadline();
+    let marker = setup.workspace().join("marker");
+    let command = format!("touch {}", marker.display());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_zero",
+            "shell",
+            &json!({"command": command, "timeout_ms": 0}),
+        )]),
+        hello(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "touch"})
+        ),
+    )
+    .unwrap();
+
+    let run = setup.run(&["ask", "touch the marker with no time"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // A reply that is text alone: one step, then the turn's end.
+    let reply = [
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    // The schema check fails the call before permission and before it
+    // starts, so there is neither `permission_resolved` nor
+    // `tool_call_started`.
+    let expected = [
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "step_started",
+        ][..],
+        &reply,
+        &["fiber_exited"],
+    ]
+    .concat();
+    let kinds: Vec<&str> = run
+        .lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, expected);
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap_or_else(|| panic!("no tool_call_completed in {:?}", run.kinds()));
+    assert_eq!(completed["payload"]["status"], "failed", "{completed}");
+    assert_eq!(
+        completed["payload"]["error"]["code"], "invalid_arguments",
+        "{completed}"
+    );
+    // The loop's schema check rejects the 0 before the tool runs, so the
+    // model sees the loop's generic minimum line; the hint to leave
+    // `timeout_ms` out reaches it through the tool and property
+    // descriptions, and direct tool callers get the tool's hinted message
+    // (`zero_timeout_is_rejected_with_hint_and_starts_nothing`).
+    let message = completed["payload"]["error"]["message"].as_str().unwrap();
+    assert!(message.contains("must be at least 1"), "{message}");
+    assert!(!marker.exists(), "a rejected call started its command");
+    assert!(
+        run.lines.iter().all(|line| line["kind"] != "job_started"),
+        "a rejected call started a job"
+    );
+}

@@ -935,6 +935,16 @@ fn a_deadline_past_the_session_longest_names_the_longest_twice() {
 }
 
 #[test]
+fn a_zero_timeout_names_the_minimum_and_the_background_hint() {
+    let error = ShellError::TimeoutTooSmall;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`timeout_ms` must be at least 1. Leave `timeout_ms` out of a background call that should run until stopped."
+    );
+}
+
+#[test]
 fn a_command_that_cannot_start_or_be_reaped_is_a_tool_error() {
     let error = ShellError::NotStarted {
         source: io::Error::other("no such file"),
