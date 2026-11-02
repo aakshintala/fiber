@@ -1728,6 +1728,138 @@ impl Drop for ResetNarrow {
 }
 
 #[test]
+fn planned_lines_reject_each_invalid_field_independently() {
+    // docs/ci.md: a malformed plan must not silently select a different test.
+    for line in [
+        "planned\t\t\ttrue\tsome_test",
+        "planned\ttools\t\ttrue\t",
+        "planned\ttools\t\ttrue\tsome_test\textra",
+        "planned\ttools\t\tmaybe\tsome_test",
+    ] {
+        let result = parse_planned(line);
+        assert_eq!(result, Err(format!("planned line 1: {line}")));
+    }
+}
+
+#[test]
+fn runner_plans_distinguish_unit_and_shared_integration_tests() {
+    // docs/ci.md: only the tests the selected kind compiles remain in the plan.
+    for kind in ["lib", "bin", "test"] {
+        let json = serde_json::json!({"rust-suites": {"tools": {
+            "package-name": "tools", "binary-id": "tools", "kind": kind,
+            "testcases": {"same": {"filter-match": {"status": "matches"}}}
+        }}})
+        .to_string();
+        for unit in [true, false] {
+            let test = refer("tools", None, unit, "same");
+            let plan = narrow_plan("package(tools)", &planned_line(&test), &json).unwrap();
+            assert_eq!(plan.run, unit == (kind != "test"), "{kind}, unit={unit}");
+            assert_eq!(plan.dropped.is_empty(), plan.run);
+        }
+    }
+}
+
+#[test]
+fn excluding_a_shared_integration_test_keeps_the_unit_test_of_that_name() {
+    let planned = [
+        planned_line(&refer("tools", None, true, "same")),
+        planned_line(&refer("tools", None, false, "same")),
+    ]
+    .join("\n");
+    let json = r#"{"rust-suites":{"tools":{"package-name":"tools","binary-id":"tools","kind":"lib","testcases":{"same":{"filter-match":{"status":"matches"}}}}}}"#;
+    let plan = narrow_plan("package(tools)", &planned, json).unwrap();
+    assert!(plan.run);
+    assert_eq!(plan.dropped, ["tools same"]);
+    assert_eq!(
+        plan.filter,
+        "(package(tools)) & not (package(tools) & kind(test) & test(=same))"
+    );
+}
+
+const RUNNER_PROBE: &str = "XTASK_COMPILED_PLAN_PROBE";
+
+#[test]
+fn narrowing_uses_the_runner_list_only_when_requested() {
+    use std::os::unix::{fs::PermissionsExt as _, process::CommandExt as _};
+    use std::process::{Command, Stdio};
+
+    let temp = fakes::TempDir::new("xtask-compiled-plan");
+    // Direct execution is the subject: stress_runner_list must resolve cargo
+    // through this child's PATH, not invoke the real build tool recursively.
+    temp.write("cargo", r#"#!/bin/sh
+printf '%s\n' "$@" >> "$XTASK_COMPILED_PLAN_PROBE/args"
+printf '%s\n' '{"rust-suites":{"log":{"package-name":"log","binary-id":"log","kind":"lib","testcases":{"span::tests::second":{"filter-match":{"status":"matches"}}}}}}'
+"#);
+    std::fs::set_permissions(
+        temp.path().join("cargo"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "select::changed_tests::tests::compiled_plan_probe",
+            "--nocapture",
+        ])
+        .env(RUNNER_PROBE, temp.path())
+        .env("PATH", temp.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let output = fakes::finished(
+        "compiled plan probe",
+        child,
+        &[],
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("args")).unwrap(),
+        "nextest\nlist\n--message-format\njson\n--color\nnever\n--no-pager\n--profile\nstress\n-p\nlog@0.0.0\n-E\n(package(log) & test(=span::tests::first)) | (package(log) & test(=span::tests::second))\n"
+    );
+}
+
+#[test]
+fn compiled_plan_probe() {
+    let Some(root) = std::env::var_os(RUNNER_PROBE) else {
+        return;
+    };
+    let _reset = ResetNarrow;
+    let mut workspace = members();
+    workspace.insert(FIBER_PACKAGE.to_owned(), workspace["log"].clone());
+    let diff =
+        span_diff("@@ -5,1 +5,1 @@\n-#[test]\n+#[test]\n@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
+    let first = refer("log", None, true, "span::tests::first");
+    let second = refer("log", None, true, "span::tests::second");
+    // docs/ci.md: stress narrows to compiled tests; touched-retries uses the
+    // source selection without compiling again. Exercise both transitions.
+    narrow_to_compiled_tests(false);
+    assert_eq!(
+        changed_tests(&diff, &workspace, &span_sources()).unwrap(),
+        [first.clone(), second.clone()]
+    );
+    assert!(!std::path::Path::new(&root).join("args").exists());
+    narrow_to_compiled_tests(true);
+    assert_eq!(
+        changed_tests(&diff, &workspace, &span_sources()).unwrap(),
+        [second.clone()]
+    );
+    narrow_to_compiled_tests(false);
+    assert_eq!(
+        changed_tests(&diff, &workspace, &span_sources()).unwrap(),
+        [first, second]
+    );
+}
+
+#[test]
 fn the_program_test_fixture_keeps_the_source_plan() {
     let _reset = ResetNarrow;
     narrow_to_compiled_tests(true);
