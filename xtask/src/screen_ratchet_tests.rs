@@ -20,7 +20,7 @@ fn file(path: &str, source: &str) -> RustFile {
 fn maxima(entries: &[(&str, usize)]) -> BTreeMap<String, usize> {
     entries
         .iter()
-        .map(|(path, maximum)| ((*path).to_owned(), (*maximum)))
+        .map(|(path, maximum)| ((*path).to_owned(), *maximum))
         .collect()
 }
 
@@ -329,7 +329,7 @@ fn the_maxima_table_parses_paths_and_counts() {
             parse_maxima(input),
             Ok(expected
                 .iter()
-                .map(|(path, maximum)| ((*path).to_owned(), (*maximum)))
+                .map(|(path, maximum)| ((*path).to_owned(), *maximum))
                 .collect()),
             "input: {input:?}"
         );
