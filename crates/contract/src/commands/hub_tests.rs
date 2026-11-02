@@ -87,13 +87,21 @@ fn every_hub_sample_reads_and_writes_back_unchanged() {
     }
 }
 
+/// Hub commands the doc names that the enum does not build yet; the build
+/// ticket (#3782) removes the entry.
+const NOT_BUILT: [&str; 1] = ["archive"];
+
 #[test]
 fn the_hub_samples_cover_every_hub_command_in_the_doc() {
     let named: BTreeSet<String> = samples()
         .iter()
         .map(|s| s["command"].as_str().unwrap().to_owned())
         .collect();
-    let doc: BTreeSet<String> = doc_hub_commands().into_iter().map(str::to_owned).collect();
+    let doc: BTreeSet<String> = doc_hub_commands()
+        .into_iter()
+        .filter(|name| !NOT_BUILT.contains(name))
+        .map(str::to_owned)
+        .collect();
     assert_eq!(named, doc);
 }
 

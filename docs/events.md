@@ -447,6 +447,13 @@ session").
 | `name` | string or null | yes | the name; `null` when the person cleared theirs |
 | `by` | string | yes | `person`, from the `name` command, which pins the name, or `model`, from `name_session`; a closed set |
 
+#### `archived`
+
+Durable. The payload is `{}`. The hub appends it to an exited session's log
+while it holds the session's lock, with the next `seq`, when a client archives
+the session (`docs/invocation.md`, "Archiving"). The session is archived while
+this line comes after its last `fiber_started`; resuming it unarchives it.
+
 #### `directory_added`
 
 Durable. Written when the session accepts an `add_directory` driver command (`docs/invocation.md`, "Driver commands") for a folder outside the current boundary, and by a delegate at spawn for each of its parent's added folders that its folded history does not already hold (`docs/delegates.md`, "Forks"). An `add_directory` command for a folder already inside the workspace or an added folder is accepted with no event written.

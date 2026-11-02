@@ -113,8 +113,9 @@ groups, then the flags and examples.
 | `ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
 | `resume [<id>] [--credential <label>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
 | `continue [--hub <name>]` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With `--hub`, it asks for `active: true` and opens the entry with the greatest (`active`, `id`) among entries whose `active` is not `null` across every project, since a client has no launch directory there; with no eligible entry it is the same usage error as an empty hub. With none, it is a usage error naming `fiber`. |
-| `sessions [--all] [--json]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. |
+| `sessions [--all] [--archived] [--json]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. Archived sessions are left out; `--archived` lists only them ("Archiving"). |
 | `sessions search [--all] [--json] <text>` | Searches the logs of past and running sessions for the text, as the `session_search` tool does (`docs/tools.md`, "Searching past sessions"). `--all` searches every project. |
+| `sessions archive [--hub <name>] <id>` | Archives an exited session, asking nothing ("Archiving"). |
 | `sessions delete [--hub <name>] [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
 | `sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
@@ -122,7 +123,7 @@ groups, then the flags and examples.
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
-outside one it is every project. With `--hub`, `continue`, `sessions delete`
+outside one it is every project. With `--hub`, `continue`, `sessions archive`, `sessions delete`
 and `sessions prune` never read this machine's directory or logs: their scope
 is every project on that hub. `sessions --all` lists every project.
 
@@ -1220,9 +1221,10 @@ answers each command it read exactly once. `Exited`: its log ends in
 | `pair` | `code` (string) | On the port, instead of `authenticate`: exchanges a pairing code for a device token, returned in the acknowledgement. |
 | `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`docs/events.md`) when one ends. Crashed sessions not yet dismissed come first: each one's last `session_status`, then its `session_left`. When 1,024 feed lines are queued for a connection that has not read them, the hub closes the connection; the client reconnects and sends `feed` again, which resyncs it. |
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
-| `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`), and `total`, the number of rows the pages list for `project` (every project when absent), whatever `before` and the page hold. `project` is the project's key, the name of its `projects/<key>/` directory. |
-| `sessions` | `project` (string, optional), `active` (boolean, optional) | Answers once with the latest `session_status` of every running top-level session and the `recent.jsonl` row of every exited one, newest first, delegates skipped, each session once. With `active` true, each entry carries `active`: the `ts` of the session log's last line, its opening `ts` when the last line has none, or `null` when neither can be read. Without it, no session log is opened. `project` keeps only that project's sessions, as for `recent`. A hub that has just started answers once it has read `run/` and each session it found there has sent its `session_status` or closed; a session that stays silent holds it for at most one rescan past the read. A session started since the hub last read `run/` can be missing, as it is from the feed. |
+| `recent` | `before` (string, optional), `project` (string, optional), `archived` (boolean, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`), and archived sessions, or with `archived` true only archived ones ("Archiving"), and `total`, the number of rows the pages list for `project` (every project when absent), whatever `before` and the page hold. `project` is the project's key, the name of its `projects/<key>/` directory. |
+| `sessions` | `project` (string, optional), `active` (boolean, optional) | Answers once with the latest `session_status` of every running top-level session and the `recent.jsonl` row of every exited one, newest first, delegates skipped, each session once. With `active` true, each entry carries `active`: the `ts` of the session log's last line, its opening `ts` when the last line has none, or `null` when neither can be read. Without it, no session log is opened. `project` keeps only that project's sessions, as for `recent`, and `archived` (boolean, optional) chooses archived sessions as it does there. A hub that has just started answers once it has read `run/` and each session it found there has sent its `session_status` or closed; a session that stays silent holds it for at most one rescan past the read. A session started since the hub last read `run/` can be missing, as it is from the feed. |
 | `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `continues` (string, optional), `content` (optional), `supervised` (boolean, optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. With `supervised` true, the session is driven by a program, a supervisor outside Fiber, and `session_started` records it: it follows the delegate rules (`docs/permissions.md`, "Supervised sessions") and stays top-level, in the feed. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `continues` naming a session id, the session runs in that session's worktree instead of a new one, and the workspace must be that worktree's path ("Isolation"). An unknown session, a missing log, or a removed worktree refuses `session_not_found`; `continues` with `worktree` true, a named session with no worktree, and a workspace that is not the worktree refuse `invalid_arguments`. With `content`, the hub sends it as the session's first prompt after answering: once the session has accepted a `full` `subscribe` for the new session from the connection that sent `start`, at once when that connection closes first, or 1 second after the answer when neither has happened. A client that subscribes `full` when it reads the answer is connected when the session takes the prompt, so it can answer the repository's offer (`docs/extensions.md`, "Code a repository ships"); for a connection that never subscribes `full`, such as a script's, the session takes the prompt after the bound, and it decides with nobody to answer unless another `full` client is connected by then. A `content` that does not fit `prompt`'s `args` is rejected `invalid_arguments` before any session starts. A rejection of the first prompt after the answer is logged, not answered: the hub writes the session id, the `start` command id and the code to `logs/hub.log`, and no client is told. |
+| `archive` | `session` (string) | Archives an exited session ("Archiving"). Refused `session_held` while another process holds the session's lock. An archived session is accepted and nothing is written. |
 | `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional), `dry_run` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. With `dry_run`, it answers `sessions`, the ids it would remove, and `held`, those of them that another process holds right now, and deletes nothing. A real delete refused `session_held` also carries `held`, the busy ids in check order. On a rejection, this field appears only on that delete refusal. Its `message` stays ``Session `<id>` is held by another process.``, with `<id>` replaced by the first held id. If a later lock probe fails, the refusal is `io_failed` and nothing is deleted. |
 | `prune` | `older_than` (string, optional), `cascade` (boolean, optional), `force` (boolean, optional), `dry_run` (boolean, optional), `expect` (object, optional) | Prunes the hub's own machine across every project ("Deleting and pruning"). A `prune` dry run answers `lines`, the lines prune would print, `would_free`, the space it would free, and `items`, the sessions (`{id, cascade}`), worktree paths, pinned content hashes and diagnostic paths it would remove; a confirmed run answers `freed`, the space freed, `total`, and `failures`, one entry per item that failed after execution began. The client sends the dry run's `items` back as `expect`, and the hub rejects the prune `stale_request` when what it would remove differs, deleting nothing. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
@@ -1519,6 +1521,34 @@ and worktree reads alike, carries the scrubbed environment as well:
 `GIT_COMMON_DIR` and `GIT_INDEX_FILE` removed, so a redirected environment
 cannot move the prune to another repository. A supervisor that wants its own tree still makes it
 and passes the path.
+
+## Archiving
+
+Archiving takes an exited session off home's exited rows and the rail and
+keeps everything on disk. `fiber sessions archive <id>`, the ✕ or Backspace on
+an exited row of the terminal's session list, and `/archive` archive one
+session (`docs/tui.md`, "The session list"):
+
+- **It goes through the hub**, as delete does, and starts a hub when none is
+  running. The hub takes the session's lock, appends `archived` to its log
+  (`docs/events.md`), and appends the session's `recent.jsonl` row again
+  with `archived` true (`docs/state.md`). A session whose lock another process
+  holds, a running one included, is refused `session_held`. Nothing else
+  changes: sessions that point at it, its artifacts and a kept worktree stay
+  as they are.
+- **Opening it undoes it.** A session is archived while its log's last
+  `archived` line comes after its last `fiber_started`, so resuming it, from
+  any client, unarchives it; its exit appends a row without `archived`. So
+  nothing asks first.
+- **Lists leave it out.** `recent`, `sessions` and `fiber sessions` skip
+  archived sessions unless asked for them with `archived`, or `--archived`
+  on the command line. Delete and prune treat an archived session as any
+  exited one.
+- **The terminal's `/archive` stops first.** It closes the session on screen
+  and waits for exit evidence as `/delete` does, with the delegates that shut
+  down with it, then sends `archive` for that one session. A stop the hub
+  refuses archives nothing.
+- **With `--hub`, the id resolves on that hub,** as for `sessions delete`.
 
 ## Deleting and pruning
 
