@@ -1466,6 +1466,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `read_file` | `data` (string), the file's bytes in standard base64, and `mime_type` (string), its media type from the file name's extension, `application/octet-stream` when Fiber does not know it, over the hub (`docs/invocation.md`, "A session's files") |
 | `configure` | the operation's result from `docs/invocation.md`, "What the hub speaks"; absent for `set_reviewer`, `switch_tool` and `switch_skill` |
 | `read_config` | `text` (string), the configuration file's UTF-8 text, and `version` (string), its content version, over the hub (`docs/invocation.md`, "What the hub speaks") |
+| `read_workspace_file` | `text` (string), the workspace file's UTF-8 text, and `version` (string), its content version, over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `search_files` | `rows` (array of at most 50 strings) or `error` (string), the file panel's result on the hub's machine (`docs/invocation.md`, "What the hub speaks") |
 | `device_login` | `url` and `code` (strings), the provider's device-code step on the hub (`docs/invocation.md`, "What the hub speaks") |
 | `device_login_result` | `path` (string), the stored credential relative to the hub's Fiber home (`docs/invocation.md`, "What the hub speaks") |
