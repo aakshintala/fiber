@@ -225,7 +225,10 @@ request that has a call without one. A call with no `tool_call_completed`,
 which only a crash can leave (`docs/events.md`, "Resume"), is sent with a
 fixed result: that it never ran when the log shows no `tool_call_started`, or
 that its outcome is unknown when it does. Fiber never runs such a call
-again; the model may make it again (`docs/events.md`, "Resume").
+again; the model may make it again (`docs/events.md`, "Resume"). The
+unknown-outcome result tells the model to check for the call's effects in
+the workspace, in git and in any outside service it reaches before making
+it again.
 
 The reasoning state a provider returns with a reply, such as Anthropic's
 signed thinking blocks, OpenAI's encrypted reasoning and Gemini's thought

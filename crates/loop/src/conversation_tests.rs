@@ -2574,7 +2574,10 @@ mod from_log {
         assert_eq!(conversation.len(), 3);
         let (id, text, is_error) = result_of(&conversation[2]);
         assert_eq!(id.0, "a_1");
-        assert_eq!(text, "Its outcome is unknown: it may have run.");
+        assert_eq!(
+            text,
+            "Its outcome is unknown: it may have run. Check for its effects in the workspace, in git and in any outside service it reaches before making it again."
+        );
         assert!(is_error);
     }
 
@@ -2610,7 +2613,10 @@ mod from_log {
         assert!(!is_error);
         let (id, text, is_error) = result_of(&conversation[4]);
         assert_eq!(id.0, "a_2");
-        assert_eq!(text, "Its outcome is unknown: it may have run.");
+        assert_eq!(
+            text,
+            "Its outcome is unknown: it may have run. Check for its effects in the workspace, in git and in any outside service it reaches before making it again."
+        );
         assert!(is_error);
     }
 
@@ -2666,7 +2672,10 @@ mod from_log {
         assert!(matches!(&conversation[3], Input::Assistant { .. }));
         let (id, text, is_error) = result_of(&conversation[4]);
         assert_eq!(id.0, "a_1");
-        assert_eq!(text, "Its outcome is unknown: it may have run.");
+        assert_eq!(
+            text,
+            "Its outcome is unknown: it may have run. Check for its effects in the workspace, in git and in any outside service it reaches before making it again."
+        );
         assert!(is_error);
     }
 
