@@ -330,16 +330,23 @@ Before asking the owner, the orchestrator confirms on the exact head:
 - the pull request body starts with `Break-glass:`, then names the blocked
   pull requests and the defect that stops its own `CI`.
 
-The owner merges in the browser, on the pull request page, with "Merge
-without waiting for requirements to be met", as a squash merge.
+The `main` ruleset keeps no bypass actors. To break glass, the owner, in the
+browser:
+
+1. adds the repository-admin role to the `main` ruleset's bypass list, in
+   pull-request mode, so a direct push to `main` is still refused;
+2. merges on the pull request page with "Merge without waiting for
+   requirements to be met", as a squash merge;
+3. removes the bypass at once, leaving the list empty.
+
 `CI` still runs on the merge commit. If it fails on a job the diff touched,
 as classified by `ci-triage`, the merge is reverted at once in a new pull
 request, and nobody fixes it forward. A failure on a job the diff did not
 touch is handled like any other failure on `main`.
 
-The bypass is the repository-admin role on the `main` ruleset, in
-pull-request mode, so a direct push to `main` is still refused. Agents run
-`gh` as a separate machine account with the Write role, and no admin login
-is kept on the machines agents run on. An `--admin` merge by an agent fails
-on GitHub's side, whatever harness runs it. The
-nightly report lists every merge whose head had no green `CI`.
+While the bypass list is empty, an `--admin` merge fails on GitHub's side,
+whoever runs it. Agents run `gh` with the owner's admin login, so nothing on
+GitHub stops one from editing the ruleset: agents never change a ruleset,
+branch protection or repository setting, and never ask a peer to. The
+nightly report lists every merge whose head had no green `CI`, and flags the
+`main` ruleset whenever its bypass list is not empty.
