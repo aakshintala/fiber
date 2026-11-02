@@ -1834,7 +1834,9 @@ fn compiled_plan_probe() {
     };
     let _reset = ResetNarrow;
     let mut workspace = members();
-    workspace.insert(FIBER_PACKAGE.to_owned(), workspace["log"].clone());
+    let mut marker = workspace["log"].clone();
+    marker.dir = "xtask".to_owned();
+    workspace.insert(FIBER_PACKAGE.to_owned(), marker);
     let diff =
         span_diff("@@ -5,1 +5,1 @@\n-#[test]\n+#[test]\n@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
     let first = refer("log", None, true, "span::tests::first");
