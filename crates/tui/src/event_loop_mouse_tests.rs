@@ -1183,11 +1183,15 @@ fn a_click_on_a_failed_logins_line_opens_the_login_view() {
     ]);
     let line = row_of(&lp, "✗ The key was refused.");
     assert_eq!(hit_at(&lp, 0, line), Some(TargetId::Line(Target::Login)));
-    // With no seam the view says it is not available.
+    // The seam is always installed, so the click opens the real Login
+    // view: its footer names what Enter does.
     feed(&mut lp, vec![click(0, line)]);
     let shown = shown(&lp);
     assert!(shown.contains("Log in"), "{shown}");
-    assert!(shown.contains("Not available in this terminal."), "{shown}");
+    assert!(
+        shown.contains("↑↓ move · Enter log in · Esc close"),
+        "{shown}"
+    );
 }
 
 #[test]

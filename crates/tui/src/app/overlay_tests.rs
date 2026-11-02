@@ -3982,11 +3982,16 @@ fn wheel_inside_the_approval_rectangle_is_swallowed_outside_scrolls_the_offer() 
 /// The surfaces on top: two open in either order give the same keys,
 /// Esc, wheel and drawn top frame (`docs/tui.md`, "Keys", "Overlays").
 mod stacked {
+    use std::sync::Arc;
+
     use super::{id, rendered, turn};
+    use crate::Configure;
     use crate::app::top::tests::{
         ON_HOME, ON_SESSION, SESSION, home_app, open, session_app, stacked,
     };
     use crate::app::{App, Effect, Surface};
+    use crate::configure::{Shown, WriteScope};
+    use crate::configure_fake::{Fake, row};
     use crate::keys::{Key, Mouse, MouseKind};
     use crate::stroke::Stroke;
     use contract::clock::Clock;
@@ -4354,6 +4359,25 @@ mod stacked {
         app
     }
 
+    /// A seam over two rows, so the Settings a test opens lists
+    /// something.
+    fn fake() -> Fake {
+        Fake::new(vec![
+            row(
+                "handoff.tokens",
+                Shown::Value("400000".to_owned()),
+                "default",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "tui.theme",
+                Shown::Unset,
+                "default",
+                WriteScope::Any { repo: false },
+            ),
+        ])
+    }
+
     #[test]
     fn a_home_question_or_picker_takes_the_wheel_over_the_list() {
         let mut app = short_home();
@@ -4534,9 +4558,10 @@ mod stacked {
     #[test]
     fn keymap_over_a_swapped_view_swallows_the_view_region_only() {
         let mut app = panel_session();
+        app.set_configure(Arc::new(fake()) as Arc<dyn Configure>);
         app.on_wheel(&wheel(30, 5, false));
         assert!(app.top().is_some(), "setup scrolled the conversation up");
-        // No seam: Settings opens as Unavailable, still a swapped view
+        // The seam opens real Settings, still a swapped view
         // over the conversation area.
         app.open_config_view(crate::app::ConfigView::Settings);
         assert!(app.config_view_open(), "the view opened");
@@ -4580,10 +4605,11 @@ mod stacked {
     #[test]
     fn keymap_over_a_home_config_view_swallows_the_list_region() {
         let mut app = short_home();
+        app.set_configure(Arc::new(fake()) as Arc<dyn Configure>);
         app.on_wheel(&wheel(2, 5, true));
         let scrolled = app.home_list_scroll();
         assert!(scrolled > 0, "setup scrolled the home list down");
-        // No seam: Settings opens as Unavailable, still a swapped view
+        // The seam opens real Settings, still a swapped view
         // over the whole screen.
         app.open_config_view(crate::app::ConfigView::Settings);
         assert!(app.config_view_open(), "the view opened");

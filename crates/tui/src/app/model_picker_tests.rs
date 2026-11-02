@@ -3148,8 +3148,16 @@ fn a_failed_scope_write_is_a_notice_and_keeps_the_list() {
 }
 
 #[test]
-fn saving_without_a_seam_says_nothing_changed() {
+fn saving_without_a_workspace_says_nothing_changed() {
+    // No local workspace and no remote to fall back on: `write_global`
+    // returns `None`, so the save changes nothing and says so. The app
+    // stays attached so Enter dispatches the slash command instead of
+    // opening the workspace picker.
     let mut app = attached();
+    app.set_home(Launch::default());
+    app.set_configure(
+        Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
+    );
     app.on_line(hello());
     app.on_models(Ok(three()));
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
