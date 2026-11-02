@@ -1,6 +1,7 @@
 use super::*;
 use crate::rules::RustFile;
 use crate::select::tests::{members, members_with_unrun_test};
+use crate::test_index::{TestBinary, TestIndex};
 
 fn file(krate: &str, path: &str, source: &str) -> RustFile {
     RustFile {
@@ -14,11 +15,64 @@ fn file(krate: &str, path: &str, source: &str) -> RustFile {
     }
 }
 
+/// Build a compiler-list stand-in for the line-span tests. Its names come
+/// from the source functions, not from the file's path layout.
+fn fixture_index(members: &Members, sources: &[RustFile]) -> TestIndex {
+    let mut entries = Vec::new();
+    for source in sources {
+        let Some(package) = owner(&source.path, members) else {
+            continue;
+        };
+        let Some(member) = members.get(package) else {
+            continue;
+        };
+        let rel = source.path.get(member.dir.len() + 1..).unwrap_or_default();
+        if member.unrun_tests.contains(&source.path) {
+            continue;
+        }
+        let functions = test_fns(&source.source).unwrap_or_default();
+        if functions.is_empty() && !rel.starts_with("tests/") {
+            continue;
+        }
+        let tests = functions
+            .into_iter()
+            .map(|function| TestRef {
+                package: package.to_owned(),
+                binary: None,
+                name: function.name,
+                unit: true,
+            })
+            .collect();
+        entries.push((source.path.clone(), TestBinary { tests }));
+    }
+    TestIndex::from_fixtures(entries)
+}
+
 /// The tests the diff selects, failing with the error instead of passing.
 fn selected(diff: &str, sources: &[RustFile]) -> Vec<TestRef> {
-    let result = changed_tests(diff, &members(), sources);
+    let members = members();
+    let index = fixture_index(&members, sources);
+    let result = super::changed_tests(diff, &members, sources, &index);
     assert!(result.is_ok(), "{result:?}");
     result.unwrap_or_default()
+}
+
+fn changed_tests(
+    diff: &str,
+    members: &Members,
+    sources: &[RustFile],
+) -> Result<Vec<TestRef>, String> {
+    let index = fixture_index(members, sources);
+    super::changed_tests(diff, members, sources, &index)
+}
+
+fn tests_in_files(
+    files: &[String],
+    members: &Members,
+    sources: &[RustFile],
+) -> Result<Vec<TestRef>, String> {
+    let index = fixture_index(members, sources);
+    super::tests_in_files(files, members, sources, &index)
 }
 
 fn refer(package: &str, binary: Option<&str>, unit: bool, name: &str) -> TestRef {
@@ -79,7 +133,7 @@ fn a_hunk_on_the_first_attribute_line_selects() {
     let diff = span_diff("@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }
 
@@ -88,7 +142,7 @@ fn a_hunk_on_the_closing_brace_line_selects() {
     let diff = span_diff("@@ -20,1 +20,1 @@\n-}\n+}\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }
 
@@ -104,8 +158,8 @@ fn a_hunk_ending_at_the_span_start_selects() {
     // Selection order is not a documented contract, so compare as a set.
     let got = selected(&diff, &span_sources());
     assert_eq!(got.len(), 2);
-    assert!(got.contains(&refer("log", None, true, "span::tests::first")));
-    assert!(got.contains(&refer("log", None, true, "span::tests::second")));
+    assert!(got.contains(&refer("log", None, true, "first")));
+    assert!(got.contains(&refer("log", None, true, "second")));
 }
 
 #[test]
@@ -113,7 +167,7 @@ fn a_hunk_starting_at_the_span_end_selects() {
     let diff = span_diff("@@ -20,1 +20,6 @@\n-}\n+}\n+a\n+b\n+c\n+d\n+e\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }
 
@@ -122,7 +176,7 @@ fn a_hunk_header_may_carry_a_section_heading() {
     let diff = span_diff("@@ -10,1 +10,1 @@ fn second\n-/// old\n+/// new\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }
 
@@ -131,7 +185,7 @@ fn a_zero_count_gap_before_the_span_start_selects() {
     let diff = span_diff("@@ -9,1 +9,0 @@\n-gone\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }
 
@@ -146,12 +200,12 @@ fn a_zero_count_gap_inside_the_span_selects() {
     let diff = span_diff("@@ -10,1 +10,0 @@\n-gone\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
     let diff = span_diff("@@ -19,1 +19,0 @@\n-gone\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }
 
@@ -168,7 +222,7 @@ fn a_hunk_on_a_doc_comment_above_the_test_selects() {
     let diff = span_diff("@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }
 
@@ -195,7 +249,7 @@ fn a_test_after_inner_attributes_is_selected_only_by_its_own_span() {
     let diff = span_diff("@@ -5,1 +5,1 @@\n-#[test]\n+#[test]\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::first")]
+        vec![refer("log", None, true, "first")]
     );
 }
 
@@ -213,7 +267,7 @@ fn kept() {}
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "kept::tests::kept")]
+        vec![refer("log", None, true, "kept")]
     );
 }
 
@@ -229,7 +283,7 @@ fn a_hunk_with_an_omitted_new_count_holds_one_line() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "omitted::tests::same")]
+        vec![refer("log", None, true, "same")]
     );
 }
 
@@ -243,7 +297,7 @@ fn a_hunk_end_is_start_plus_count_minus_one() {
     );
     assert_eq!(
         selected(&wide, &sources),
-        vec![refer("log", None, true, "end::tests::sixth")]
+        vec![refer("log", None, true, "sixth")]
     );
     let narrow = diff_file(
         "crates/log/src/end_tests.rs",
@@ -264,7 +318,7 @@ fn a_hunk_body_is_consumed_by_its_counts() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "quoted::tests::quoted")]
+        vec![refer("log", None, true, "quoted")]
     );
 }
 
@@ -278,7 +332,7 @@ fn a_missing_trailing_newline_is_not_a_hunk_line() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "newline::tests::bare")]
+        vec![refer("log", None, true, "bare")]
     );
 }
 
@@ -308,8 +362,8 @@ fn two_files_in_one_diff_each_select() {
     // Selection order is not a documented contract, so compare as a set.
     let got = selected(&diff, &[one, two]);
     assert_eq!(got.len(), 2);
-    assert!(got.contains(&refer("log", None, true, "one::tests::one")));
-    assert!(got.contains(&refer("log", None, true, "two::tests::two")));
+    assert!(got.contains(&refer("log", None, true, "one")));
+    assert!(got.contains(&refer("log", None, true, "two")));
 }
 
 #[test]
@@ -410,14 +464,14 @@ fn only_test_attributes_select() {
     assert_eq!(
         names,
         vec![
-            "detect::tests::async_mt",
-            "detect::tests::async_plain",
-            "detect::tests::generic",
-            "detect::tests::nested::deep::deeper",
-            "detect::tests::nested::inner",
-            "detect::tests::plain",
-            "detect::tests::stacked",
-            "detect::tests::type",
+            "async_mt",
+            "async_plain",
+            "generic",
+            "nested::deep::deeper",
+            "nested::inner",
+            "plain",
+            "stacked",
+            "type",
         ]
     );
 }
@@ -428,7 +482,7 @@ fn a_test_attribute_stack_starts_at_its_first_attribute() {
     let diff = detect_diff(24);
     assert_eq!(
         selected(&diff, &detect_sources()),
-        vec![refer("log", None, true, "detect::tests::stacked")]
+        vec![refer("log", None, true, "stacked")]
     );
     let before = detect_diff(23);
     assert_eq!(selected(&before, &detect_sources()), vec![]);
@@ -449,479 +503,8 @@ fn untouched() {}
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "two::tests::touched")]
+        vec![refer("log", None, true, "touched")]
     );
-}
-
-#[test]
-fn a_unit_test_file_names_its_module_path() {
-    let sources = vec![file(
-        "log",
-        "crates/log/src/writer_tests.rs",
-        "#[test]\nfn flushes_on_drop() {}\n",
-    )];
-    let diff = diff_file(
-        "crates/log/src/writer_tests.rs",
-        "@@ -2,1 +2,1 @@\n-fn flushes_on_drop() {}\n+fn flushes_on_drop() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("log", None, true, "writer::tests::flushes_on_drop")]
-    );
-}
-
-#[test]
-fn a_tests_binary_names_the_bare_function() {
-    let sources = vec![file(
-        "loop",
-        "crates/loop/tests/turns.rs",
-        "#[test]\nfn resumes_after_pause() {}\n",
-    )];
-    let diff = diff_file(
-        "crates/loop/tests/turns.rs",
-        "@@ -2,1 +2,1 @@\n-fn resumes_after_pause() {}\n+fn resumes_after_pause() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer(
-            "loop",
-            Some("loop::turns"),
-            false,
-            "resumes_after_pause"
-        )]
-    );
-}
-
-#[test]
-fn a_shared_tests_subdirectory_without_a_root_file_names_no_binary() {
-    let sources = vec![file(
-        "loop",
-        "crates/loop/tests/support/mod.rs",
-        "#[test]\nfn helper() {}\n",
-    )];
-    let diff = diff_file(
-        "crates/loop/tests/support/mod.rs",
-        "@@ -2,1 +2,1 @@\n-fn helper() {}\n+fn helper() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("loop", None, false, "support::helper")]
-    );
-}
-
-#[test]
-fn a_shared_tests_subdirectory_with_a_root_file_names_that_binary() {
-    let sources = vec![
-        file("loop", "crates/loop/tests/support.rs", ""),
-        file(
-            "loop",
-            "crates/loop/tests/support/mod.rs",
-            "#[test]\nfn helper() {}\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/loop/tests/support/mod.rs",
-        "@@ -2,1 +2,1 @@\n-fn helper() {}\n+fn helper() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("loop", Some("loop::support"), false, "helper")]
-    );
-}
-
-#[test]
-fn a_tests_subdirectory_with_a_root_file_prefixes_below_the_directory() {
-    let sources = vec![
-        file("main", "crates/main/tests/completion.rs", ""),
-        file(
-            "main",
-            "crates/main/tests/completion/bash.rs",
-            "#[test]\nfn completes() {}\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/main/tests/completion/bash.rs",
-        "@@ -2,1 +2,1 @@\n-fn completes() {}\n+fn completes() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer(
-            "main",
-            Some("main::completion"),
-            false,
-            "bash::completes"
-        )]
-    );
-}
-
-#[test]
-fn an_example_test_file_names_its_example_binary() {
-    let sources = vec![file(
-        "bench",
-        "crates/bench/examples/bench/run_tests.rs",
-        "#[test]\nfn runs() {}\n",
-    )];
-    let diff = diff_file(
-        "crates/bench/examples/bench/run_tests.rs",
-        "@@ -2,1 +2,1 @@\n-fn runs() {}\n+fn runs() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer(
-            "bench",
-            Some("bench::example/bench"),
-            false,
-            "run::tests::runs"
-        )]
-    );
-}
-
-#[test]
-fn a_path_declared_test_file_maps_to_its_declaring_module() {
-    let sources = vec![
-        file(
-            "main",
-            "crates/main/src/settings.rs",
-            "#[cfg(test)]\n#[path = \"idle_tests.rs\"]\nmod idle_tests;\n",
-        ),
-        file(
-            "main",
-            "crates/main/src/idle_tests.rs",
-            "#[test]\nfn idle() {}\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/main/src/idle_tests.rs",
-        "@@ -2,1 +2,1 @@\n-fn idle() {}\n+fn idle() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("main", None, true, "settings::idle_tests::idle")]
-    );
-}
-
-#[test]
-fn a_unit_test_without_a_tests_segment_selects_with_the_unit_filter() {
-    // A `*_tests` file a `#[path]` declaration names from a plain module
-    // (as `crates/tui/src/app/commands.rs` names `aliases_tests.rs` from
-    // `mod aliases`): its tests compile into the package's unit tests, so
-    // the filter is the package term even though the module path holds no
-    // `tests::` segment.
-    let sources = vec![
-        file(
-            "log",
-            "crates/log/src/writer.rs",
-            "#[path = \"writer_alias_tests.rs\"]\nmod writer_alias;\n",
-        ),
-        file(
-            "log",
-            "crates/log/src/writer_alias_tests.rs",
-            "#[test]\nfn flushes() {}\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/log/src/writer_alias_tests.rs",
-        "@@ -2,1 +2,1 @@\n-fn flushes() {}\n+fn flushes() {}\n",
-    );
-    let touched = selected(&diff, &sources);
-    assert_eq!(
-        touched,
-        vec![refer("log", None, true, "writer::writer_alias::flushes")]
-    );
-    assert_eq!(
-        filter(&touched),
-        "(package(log) & test(=writer::writer_alias::flushes))"
-    );
-}
-
-#[test]
-fn a_shared_support_test_selects_with_the_kind_filter() {
-    // A module under `tests/<dir>/` with no root file compiles into the
-    // integration binaries, so its term keeps `kind(test)`.
-    let sources = vec![file(
-        "loop",
-        "crates/loop/tests/support/mod.rs",
-        "#[test]\nfn helper() {}\n",
-    )];
-    let diff = diff_file(
-        "crates/loop/tests/support/mod.rs",
-        "@@ -2,1 +2,1 @@\n-fn helper() {}\n+fn helper() {}\n",
-    );
-    let touched = selected(&diff, &sources);
-    assert_eq!(touched, vec![refer("loop", None, false, "support::helper")]);
-    assert_eq!(
-        filter(&touched),
-        "(package(loop) & kind(test) & test(=support::helper))"
-    );
-}
-
-#[test]
-fn a_non_test_file_with_a_touched_test_selects_nothing() {
-    let sources = vec![file(
-        "log",
-        "crates/log/src/writer.rs",
-        "#[test]\nfn hidden() {}\n",
-    )];
-    let diff = diff_file(
-        "crates/log/src/writer.rs",
-        "@@ -2,1 +2,1 @@\n-fn hidden() {}\n+fn hidden() {}\n",
-    );
-    assert_eq!(selected(&diff, &sources), vec![]);
-}
-
-#[test]
-fn filter_joins_one_term_per_touched_test() {
-    // `docs/ci.md` promises which tests run but not the order of the
-    // terms, so the terms compare as a set.
-    let tests = vec![
-        refer("loop", Some("loop::turns"), false, "resumes_after_pause"),
-        refer("log", None, true, "writer::tests::flushes_on_drop"),
-    ];
-    let joined = filter(&tests);
-    let mut terms: Vec<&str> = joined.split(" | ").collect();
-    terms.sort_unstable();
-    assert_eq!(
-        terms,
-        vec![
-            "(binary_id(loop::turns) & test(=resumes_after_pause))",
-            "(package(log) & test(=writer::tests::flushes_on_drop))",
-        ]
-    );
-}
-
-#[test]
-fn filter_marks_a_shared_support_test_with_its_kind() {
-    let sources = vec![
-        file(
-            "main",
-            "crates/main/tests/support/hub_start.rs",
-            "mod tests {\n    #[test]\n    fn offers() {}\n}\n",
-        ),
-        file(
-            "main",
-            "crates/main/tests/hub_list.rs",
-            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\n",
-        ),
-        file(
-            "main",
-            "crates/main/tests/hooks_offer.rs",
-            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\n",
-        ),
-        file(
-            "main",
-            "crates/main/tests/other.rs",
-            "#[path = \"support/hub_start.rs\"]\nmod start;\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/main/tests/support/hub_start.rs",
-        "@@ -3,1 +3,1 @@\n-    fn offers() {}\n+    fn offers() {}\n",
-    );
-    assert_eq!(
-        filter(&selected(&diff, &sources)),
-        "(package(main) & kind(test) & test(=hub_start::tests::offers)) | (package(main) & kind(test) & test(=start::tests::offers))"
-    );
-}
-
-#[test]
-fn a_declared_support_module_dedups_across_binaries() {
-    let sources = vec![
-        file(
-            "main",
-            "crates/main/tests/support/hub_start.rs",
-            "mod tests {\n    #[test]\n    fn offers() {}\n}\n",
-        ),
-        file(
-            "main",
-            "crates/main/tests/hub_list.rs",
-            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\n",
-        ),
-        file(
-            "main",
-            "crates/main/tests/hooks_offer.rs",
-            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/main/tests/support/hub_start.rs",
-        "@@ -3,1 +3,1 @@\n-    fn offers() {}\n+    fn offers() {}\n",
-    );
-    let members = members();
-    let by_target = index_path_decls(&sources);
-    let scope = file_scope(
-        "crates/main/tests/support/hub_start.rs",
-        &members,
-        &by_target,
-        &sources,
-    );
-    assert_eq!(
-        scope.map(|scope| scope.prefixes),
-        Some(vec!["hub_start::".to_owned()])
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("main", None, false, "hub_start::tests::offers")]
-    );
-}
-
-#[test]
-fn a_support_module_declared_by_a_support_module_chains() {
-    let sources = vec![
-        file(
-            "loop",
-            "crates/loop/tests/driver.rs",
-            "#[path = \"support/mod.rs\"]\nmod harness;\n",
-        ),
-        file(
-            "loop",
-            "crates/loop/tests/support/mod.rs",
-            "#[path = \"review.rs\"]\nmod review;\n",
-        ),
-        file(
-            "loop",
-            "crates/loop/tests/support/review.rs",
-            "#[test]\nfn helper() {}\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/loop/tests/support/review.rs",
-        "@@ -2,1 +2,1 @@\n-fn helper() {}\n+fn helper() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("loop", None, false, "harness::review::helper")]
-    );
-}
-
-#[test]
-fn a_declaration_cycle_falls_back_to_layout() {
-    let sources = vec![
-        file(
-            "loop",
-            "crates/loop/tests/driver.rs",
-            "#[path = \"support/a.rs\"]\nmod x;\n",
-        ),
-        file(
-            "loop",
-            "crates/loop/tests/support/a.rs",
-            "#[path = \"b.rs\"]\nmod b;\n#[test]\nfn cycle() {}\n",
-        ),
-        file(
-            "loop",
-            "crates/loop/tests/support/b.rs",
-            "#[path = \"a.rs\"]\nmod a;\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/loop/tests/support/a.rs",
-        "@@ -4,1 +4,1 @@\n-fn cycle() {}\n+fn cycle() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("loop", None, false, "support::a::cycle")]
-    );
-}
-
-#[test]
-fn a_declarer_outside_tests_is_ignored() {
-    let sources = vec![
-        file(
-            "loop",
-            "crates/loop/src/lib.rs",
-            "#[path = \"../tests/support/a.rs\"]\nmod a;\n",
-        ),
-        file(
-            "loop",
-            "crates/loop/tests/support/a.rs",
-            "#[test]\nfn helper() {}\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/loop/tests/support/a.rs",
-        "@@ -2,1 +2,1 @@\n-fn helper() {}\n+fn helper() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("loop", None, false, "support::a::helper")]
-    );
-}
-
-#[test]
-fn a_declarer_in_another_package_is_ignored() {
-    let foreign = file(
-        "main",
-        "crates/main/tests/ask.rs",
-        "#[path = \"../../loop/tests/support/probes.rs\"]\nmod probes;\n",
-    );
-    let support = file(
-        "loop",
-        "crates/loop/tests/support/probes.rs",
-        "#[test]\nfn probes() {}\n",
-    );
-    let diff = diff_file(
-        "crates/loop/tests/support/probes.rs",
-        "@@ -2,1 +2,1 @@\n-fn probes() {}\n+fn probes() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &[foreign.clone(), support.clone()]),
-        vec![refer("loop", None, false, "support::probes::probes")]
-    );
-
-    let same_package = file(
-        "loop",
-        "crates/loop/tests/live.rs",
-        "#[path = \"support/probes.rs\"]\nmod probes;\n",
-    );
-    assert_eq!(
-        selected(&diff, &[foreign, support, same_package]),
-        vec![refer("loop", None, false, "probes::probes")]
-    );
-}
-
-#[test]
-fn a_raw_identifier_module_is_named_without_r_hash() {
-    let sources = vec![
-        file(
-            "main",
-            "crates/main/tests/driver.rs",
-            "#[path = \"support/raw.rs\"]\nmod r#type;\n",
-        ),
-        file(
-            "main",
-            "crates/main/tests/support/raw.rs",
-            "mod tests {\n    #[test]\n    fn runs() {}\n}\n",
-        ),
-    ];
-    let diff = diff_file(
-        "crates/main/tests/support/raw.rs",
-        "@@ -3,1 +3,1 @@\n-    fn runs() {}\n+    fn runs() {}\n",
-    );
-    assert_eq!(
-        selected(&diff, &sources),
-        vec![refer("main", None, false, "type::tests::runs")]
-    );
-}
-
-#[test]
-fn filter_deduplicates_a_test_two_hunks_touch() {
-    let sources = vec![file(
-        "log",
-        "crates/log/src/again_tests.rs",
-        "#[test]\nfn again() {}\n",
-    )];
-    let diff = diff_file(
-        "crates/log/src/again_tests.rs",
-        "@@ -1,1 +1,1 @@\n-#[test]\n+#[test]\n@@ -2,1 +2,1 @@\n-fn again() {}\n+fn again() {}\n",
-    );
-    assert_eq!(
-        filter(&selected(&diff, &sources)),
-        "(package(log) & test(=again::tests::again))"
-    );
-}
-
-#[test]
-fn an_empty_selection_filters_to_nothing() {
-    assert_eq!(filter(&[]), "");
 }
 
 #[test]
@@ -966,11 +549,10 @@ fn an_unparsable_test_file_is_an_error_naming_the_path() {
         "crates/log/src/broken_tests.rs",
         "fn broken( {\n",
     )];
-    let diff = diff_file(
-        "crates/log/src/broken_tests.rs",
-        "@@ -1,1 +1,1 @@\n-fn broken( {\n+fn broken( {\n",
-    );
-    match changed_tests(&diff, &members(), &sources) {
+    let path = "crates/log/src/broken_tests.rs";
+    let diff = diff_file(path, "@@ -1,1 +1,1 @@\n-fn broken( {\n+fn broken( {\n");
+    let index = TestIndex::from_fixtures(vec![(path.to_owned(), TestBinary { tests: Vec::new() })]);
+    match super::changed_tests(&diff, &members(), &sources, &index) {
         Err(error) => assert!(error.contains("crates/log/src/broken_tests.rs"), "{error}"),
         Ok(tests) => panic!("expected an error naming the path, got {tests:?}"),
     }
@@ -1010,7 +592,7 @@ fn a_two_level_test_path_selects() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "nested_attr::tests::deep")]
+        vec![refer("log", None, true, "deep")]
     );
 }
 
@@ -1030,7 +612,7 @@ fn a_stray_semicolon_does_not_eat_the_next_attribute() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "semi::tests::real")]
+        vec![refer("log", None, true, "real")]
     );
 }
 
@@ -1067,7 +649,7 @@ fn an_inner_attribute_keeps_a_pending_test_stack() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "inner::tests::kept")]
+        vec![refer("log", None, true, "kept")]
     );
 }
 
@@ -1105,7 +687,7 @@ fn a_function_declaration_stops_at_its_semicolon() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "decl::tests::real")]
+        vec![refer("log", None, true, "real")]
     );
 }
 
@@ -1125,7 +707,7 @@ fn an_unsafe_qualifier_keeps_the_stack() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "unsafe::tests::guarded")]
+        vec![refer("log", None, true, "guarded")]
     );
 }
 
@@ -1146,7 +728,7 @@ fn an_extern_string_keeps_the_stack() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "linked::tests::linked")]
+        vec![refer("log", None, true, "linked")]
     );
 }
 
@@ -1165,7 +747,7 @@ fn a_const_qualifier_keeps_the_stack() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "const::tests::evaluated")]
+        vec![refer("log", None, true, "evaluated")]
     );
 }
 
@@ -1185,7 +767,7 @@ fn a_pub_restriction_keeps_the_stack() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "scoped::tests::scoped")]
+        vec![refer("log", None, true, "scoped")]
     );
 }
 
@@ -1211,7 +793,7 @@ fn a_non_qualifier_word_clears_the_stack() {
         );
         assert_eq!(
             selected(&diff, &sources),
-            vec![refer("log", None, true, "qual::tests::kept")],
+            vec![refer("log", None, true, "kept")],
             "word {word}"
         );
     }
@@ -1257,7 +839,7 @@ fn a_context_line_counts_and_selects() {
     );
     assert_eq!(
         selected(&spaced, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
     let gappy = vec![file(
         "log",
@@ -1267,7 +849,7 @@ fn a_context_line_counts_and_selects() {
     let blank = diff_file("crates/log/src/gappy_tests.rs", "@@ -3,1 +3,1 @@\n\n");
     assert_eq!(
         selected(&blank, &gappy),
-        vec![refer("log", None, true, "gappy::tests::gappy")]
+        vec![refer("log", None, true, "gappy")]
     );
 }
 
@@ -1278,7 +860,7 @@ fn a_context_line_on_the_spans_last_line_selects() {
     let diff = diff_file("crates/log/src/span_tests.rs", "@@ -20,1 +20,1 @@\n }\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }
 
@@ -1429,7 +1011,7 @@ fn a_test_path_with_a_trailing_argument_list_selects() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, true, "args::tests::with_args")]
+        vec![refer("log", None, true, "with_args")]
     );
 }
 
@@ -1495,12 +1077,7 @@ fn a_test_false_target_leaves_a_sibling_binary_selected() {
     let result = changed_tests(&diff, &members_with_unrun_test(), &sources);
     assert_eq!(
         result,
-        Ok(vec![refer(
-            "main",
-            Some("main::journeys"),
-            false,
-            "walks_a_journey"
-        )])
+        Ok(vec![refer("main", None, true, "walks_a_journey")])
     );
 }
 
@@ -1510,12 +1087,7 @@ fn the_same_test_is_selected_when_no_target_declares_test_false() {
     let diff = diff_file("crates/main/tests/main_journeys.rs", JOURNEY_HUNK);
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer(
-            "main",
-            Some("main::main_journeys"),
-            false,
-            "walks_a_journey"
-        )]
+        vec![refer("main", None, true, "walks_a_journey")]
     );
 }
 
@@ -1694,8 +1266,8 @@ fn tests_in_files_names_every_test_and_skips_a_missing_file() {
     assert_eq!(
         tests_in_files(&files, &members(), &sources).expect("tests"),
         vec![
-            refer("log", None, true, "span::tests::first"),
-            refer("log", None, true, "span::tests::second"),
+            refer("log", None, true, "first"),
+            refer("log", None, true, "second"),
         ]
     );
     let missing = vec!["crates/log/src/missing_tests.rs".to_owned()];
@@ -1719,157 +1291,11 @@ fn a_planned_line_round_trips() {
     );
 }
 
-struct ResetNarrow;
-
-impl Drop for ResetNarrow {
-    fn drop(&mut self) {
-        narrow_to_compiled_tests(false);
-    }
-}
-
-#[test]
-fn planned_lines_reject_each_invalid_field_independently() {
-    // docs/ci.md: a malformed plan must not silently select a different test.
-    for line in [
-        "planned\t\t\ttrue\tsome_test",
-        "planned\ttools\t\ttrue\t",
-        "planned\ttools\t\ttrue\tsome_test\textra",
-        "planned\ttools\t\tmaybe\tsome_test",
-    ] {
-        let result = parse_planned(line);
-        assert_eq!(result, Err(format!("planned line 1: {line}")));
-    }
-}
-
-#[test]
-fn runner_plans_distinguish_unit_and_shared_integration_tests() {
-    // docs/ci.md: only the tests the selected kind compiles remain in the plan.
-    for kind in ["lib", "bin", "test"] {
-        let json = serde_json::json!({"rust-suites": {"tools": {
-            "package-name": "tools", "binary-id": "tools", "kind": kind,
-            "testcases": {"same": {"filter-match": {"status": "matches"}}}
-        }}})
-        .to_string();
-        for unit in [true, false] {
-            let test = refer("tools", None, unit, "same");
-            let plan = narrow_plan("package(tools)", &planned_line(&test), &json).unwrap();
-            assert_eq!(plan.run, unit == (kind != "test"), "{kind}, unit={unit}");
-            assert_eq!(plan.dropped.is_empty(), plan.run);
-        }
-    }
-}
-
-#[test]
-fn excluding_a_shared_integration_test_keeps_the_unit_test_of_that_name() {
-    let planned = [
-        planned_line(&refer("tools", None, true, "same")),
-        planned_line(&refer("tools", None, false, "same")),
-    ]
-    .join("\n");
-    let json = r#"{"rust-suites":{"tools":{"package-name":"tools","binary-id":"tools","kind":"lib","testcases":{"same":{"filter-match":{"status":"matches"}}}}}}"#;
-    let plan = narrow_plan("package(tools)", &planned, json).unwrap();
-    assert!(plan.run);
-    assert_eq!(plan.dropped, ["tools same"]);
-    assert_eq!(
-        plan.filter,
-        "(package(tools)) & not (package(tools) & kind(test) & test(=same))"
-    );
-}
-
-const RUNNER_PROBE: &str = "XTASK_COMPILED_PLAN_PROBE";
-
-#[test]
-fn narrowing_uses_the_runner_list_only_when_requested() {
-    use std::os::unix::{fs::PermissionsExt as _, process::CommandExt as _};
-    use std::process::{Command, Stdio};
-
-    let temp = fakes::TempDir::new("xtask-compiled-plan");
-    // Direct execution is the subject: stress_runner_list must resolve cargo
-    // through this child's PATH, not invoke the real build tool recursively.
-    temp.write("cargo", r#"#!/bin/sh
-printf '%s\n' "$@" >> "$XTASK_COMPILED_PLAN_PROBE/args"
-printf '%s\n' '{"rust-suites":{"log":{"package-name":"log","binary-id":"log","kind":"lib","testcases":{"span::tests::second":{"filter-match":{"status":"matches"}}}}}}'
-"#);
-    std::fs::set_permissions(
-        temp.path().join("cargo"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "select::changed_tests::tests::compiled_plan_probe",
-            "--nocapture",
-        ])
-        .env(RUNNER_PROBE, temp.path())
-        .env("PATH", temp.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let output = fakes::finished(
-        "compiled plan probe",
-        child,
-        &[],
-        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-    );
-    assert!(
-        output.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        std::fs::read_to_string(temp.path().join("args")).unwrap(),
-        "nextest\nlist\n--message-format\njson\n--color\nnever\n--no-pager\n--profile\nstress\n-p\nlog@0.0.0\n-E\n(package(log) & test(=span::tests::first)) | (package(log) & test(=span::tests::second))\n"
-    );
-}
-
-#[test]
-fn compiled_plan_probe() {
-    let Some(root) = std::env::var_os(RUNNER_PROBE) else {
-        return;
-    };
-    let _reset = ResetNarrow;
-    let mut workspace = members();
-    let mut marker = workspace["log"].clone();
-    marker.dir = "xtask".to_owned();
-    workspace.insert(FIBER_PACKAGE.to_owned(), marker);
-    let diff =
-        span_diff("@@ -5,1 +5,1 @@\n-#[test]\n+#[test]\n@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
-    let first = refer("log", None, true, "span::tests::first");
-    let second = refer("log", None, true, "span::tests::second");
-    // docs/ci.md: stress narrows to compiled tests; touched-retries uses the
-    // source selection without compiling again. Exercise both transitions.
-    narrow_to_compiled_tests(false);
-    assert_eq!(
-        changed_tests(&diff, &workspace, &span_sources()).unwrap(),
-        [first.clone(), second.clone()]
-    );
-    assert!(!std::path::Path::new(&root).join("args").exists());
-    narrow_to_compiled_tests(true);
-    assert_eq!(
-        changed_tests(&diff, &workspace, &span_sources())
-            .unwrap()
-            .as_slice(),
-        std::slice::from_ref(&second)
-    );
-    narrow_to_compiled_tests(false);
-    assert_eq!(
-        changed_tests(&diff, &workspace, &span_sources()).unwrap(),
-        [first, second]
-    );
-}
-
 #[test]
 fn the_program_test_fixture_keeps_the_source_plan() {
-    let _reset = ResetNarrow;
-    narrow_to_compiled_tests(true);
     let diff = span_diff("@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, true, "span::tests::second")]
+        vec![refer("log", None, true, "second")]
     );
 }

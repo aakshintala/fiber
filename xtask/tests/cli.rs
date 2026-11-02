@@ -59,6 +59,75 @@ fn xtask(dir: &TempDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i3
     (code.unwrap(), text)
 }
 
+/// A `cargo nextest list` fixture and binary dep-info for the test sources
+/// used by the stress-plan integration cases.
+fn fake_nextest(dir: &TempDir) -> (String, String) {
+    let root = dir.path();
+    let deps = root.join("target/debug/deps");
+    std::fs::create_dir_all(&deps).unwrap();
+    let a_binary = deps.join("a-t");
+    let b_binary = deps.join("b");
+    let a_source = root.join("crates/a/tests/t.rs");
+    let b_source = root.join("crates/b/src/fold_tests.rs");
+    std::fs::write(
+        format!("{}.d", a_binary.display()),
+        format!("{}: {}\n", a_binary.display(), a_source.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        format!("{}.d", b_binary.display()),
+        format!("{}: {}\n", b_binary.display(), b_source.display()),
+    )
+    .unwrap();
+    let listed = serde_json::json!({
+        "rust-suites": {
+            "a::t": {
+                "package-name": "a",
+                "binary-id": "a::t",
+                "kind": "test",
+                "binary-path": a_binary.display().to_string(),
+                "testcases": {
+                    "new_test": {"filter-match": {"status": "matches"}}
+                }
+            },
+            "b": {
+                "package-name": "b",
+                "binary-id": "b",
+                "kind": "lib",
+                "binary-path": b_binary.display().to_string(),
+                "testcases": {
+                    "fold::tests::first": {"filter-match": {"status": "matches"}},
+                    "fold::tests::second": {"filter-match": {"status": "matches"}}
+                }
+            }
+        }
+    });
+    dir.write("nextest.json", &listed.to_string());
+
+    let bin = root.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fakes::script(
+        &bin,
+        "cargo",
+        "#!/bin/sh\nif [ \"$1\" = nextest ] && [ \"$2\" = list ]; then\n  cat \"$NEXTTEST_JSON\"\nelse\n  PATH=\"${PATH#*:}\"\n  export PATH\n  exec cargo \"$@\"\nfi\n",
+    );
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let json = root.join("nextest.json").display().to_string();
+    (path, json)
+}
+
+fn xtask_with_nextest(dir: &TempDir, args: &[&str], home: &str, stdin: &str) -> (i32, String) {
+    let (path, json) = fake_nextest(dir);
+    let mut env = home_env(home);
+    env.push(("PATH", &path));
+    env.push(("NEXTTEST_JSON", &json));
+    xtask(dir, args, &env, stdin)
+}
+
 fn git(dir: &TempDir, args: &[&str]) {
     // This wrapper's shape differs from `common::git` (no output, the shared
     // must-succeed bound), so it keeps its body and shares only the wait.
@@ -298,8 +367,12 @@ fn home_env(home: &str) -> Vec<(&str, &str)> {
 fn stress_branch() -> TempDir {
     let dir = workspace();
     dir.write(
+        "crates/b/src/lib.rs",
+        "#[cfg(test)] #[path = \"fold_tests.rs\"] mod fold;\n",
+    );
+    dir.write(
         "crates/b/src/fold_tests.rs",
-        "#[test]\nfn first() {}\n\n#[test]\nfn second() {}\n",
+        "mod tests {\n    #[test]\n    fn first() {}\n\n    #[test]\n    fn second() {}\n}\n",
     );
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "two tests"]);
@@ -307,7 +380,7 @@ fn stress_branch() -> TempDir {
     dir.write("crates/a/tests/t.rs", "#[test]\nfn new_test() {}\n");
     dir.write(
         "crates/b/src/fold_tests.rs",
-        "#[test]\nfn first() {}\n\n#[test]\nfn second() {\n    let _ = 1;\n}\n",
+        "mod tests {\n    #[test]\n    fn first() {}\n\n    #[test]\n    fn second() {\n        let _ = 1;\n    }\n}\n",
     );
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "touch two tests"]);
@@ -318,12 +391,7 @@ fn stress_branch() -> TempDir {
 fn stress_plan_prints_the_touched_tests() {
     let dir = stress_branch();
     let home = home(&dir);
-    let (code, out) = xtask(
-        &dir,
-        &["stress-plan", "--base", "main"],
-        &home_env(&home),
-        "",
-    );
+    let (code, out) = xtask_with_nextest(&dir, &["stress-plan", "--base", "main"], &home, "");
     assert_eq!(code, 0);
     // `docs/ci.md` promises which tests run but not the order of the
     // selection lines, so every line but the run/count head compares as a
@@ -360,10 +428,10 @@ fn stress_plan_prints_the_touched_tests() {
             "test\tb fold::tests::second".to_owned(),
         ]
     );
-    let (code, out) = xtask(
+    let (code, out) = xtask_with_nextest(
         &dir,
         &["stress-plan", "--base", "main", "--labels", "test-only"],
-        &home_env(&home),
+        &home,
         "",
     );
     assert_eq!(code, 0);
@@ -371,30 +439,32 @@ fn stress_plan_prints_the_touched_tests() {
 }
 
 #[test]
-fn stress_plan_reports_no_run_when_no_test_function_changes() {
+fn stress_plan_errors_when_a_changed_test_file_selects_no_tests() {
     let dir = workspace();
     dir.write(
+        "crates/b/src/lib.rs",
+        "#[cfg(test)] #[path = \"fold_tests.rs\"] mod fold;\n",
+    );
+    dir.write(
         "crates/b/src/fold_tests.rs",
-        "#[test]\nfn first() {}\n\n#[test]\nfn second() {}\n",
+        "mod tests {\n    #[test]\n    fn first() {}\n\n    #[test]\n    fn second() {}\n}\n",
     );
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "two tests"]);
     git(&dir, &["switch", "-qc", "pr"]);
     dir.write(
         "crates/b/src/fold_tests.rs",
-        "#[test]\nfn first() {}\n\n#[test]\nfn second() {}\n\nfn helper() {}\n",
+        "mod tests {\n    #[test]\n    fn first() {}\n\n    #[test]\n    fn second() {}\n}\nfn helper() {}\n",
     );
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "helper only"]);
     let home = home(&dir);
-    let (code, out) = xtask(
-        &dir,
-        &["stress-plan", "--base", "main"],
-        &home_env(&home),
-        "",
+    let (code, out) = xtask_with_nextest(&dir, &["stress-plan", "--base", "main"], &home, "");
+    assert_eq!(code, 2);
+    assert_eq!(
+        out,
+        "xtask: crates/b/src/fold_tests.rs: changed test file selected no tests\n"
     );
-    assert_eq!(code, 0);
-    assert_eq!(out, "run\tfalse\ncount\t30\nfilter\t\n");
 }
 
 #[test]
@@ -404,10 +474,10 @@ fn stress_plan_appends_its_summary() {
     dir.write("summary.md", "before\n");
     let summary = dir.path().join("summary.md");
     let summary = summary.to_str().unwrap();
-    let (code, out) = xtask(
+    let (code, out) = xtask_with_nextest(
         &dir,
         &["stress-plan", "--base", "main", "--summary", summary],
-        &home_env(&home),
+        &home,
         "",
     );
     assert_eq!(code, 0, "{out}");
@@ -475,10 +545,10 @@ fn touched_retries_fails_on_a_touched_test() {
     );
     let list = dir.path().join("flaky.txt");
     let list = list.to_str().unwrap();
-    let (code, out) = xtask(
+    let (code, out) = xtask_with_nextest(
         &dir,
         &["touched-retries", "--base", "main", "--list", list],
-        &home_env(&home),
+        &home,
         "",
     );
     assert_eq!(code, 1);
@@ -499,10 +569,10 @@ fn touched_retries_passes_on_an_untouched_test() {
     );
     let list = dir.path().join("flaky.txt");
     let list = list.to_str().unwrap();
-    let (code, out) = xtask(
+    let (code, out) = xtask_with_nextest(
         &dir,
         &["touched-retries", "--base", "main", "--list", list],
-        &home_env(&home),
+        &home,
         "",
     );
     assert_eq!(code, 0);
@@ -515,10 +585,10 @@ fn touched_retries_with_a_missing_list_is_an_error() {
     let home = home(&dir);
     let missing = dir.path().join("missing.txt");
     let missing = missing.to_str().unwrap();
-    let (code, out) = xtask(
+    let (code, out) = xtask_with_nextest(
         &dir,
         &["touched-retries", "--base", "main", "--list", missing],
-        &home_env(&home),
+        &home,
         "",
     );
     assert_eq!(code, 2);
@@ -863,18 +933,31 @@ fn ticket_fails_when_the_label_lookup_fails() {
 #[test]
 fn bug_filter_prints_the_filter_and_packages() {
     let dir = workspace();
+    dir.write(
+        "crates/b/src/lib.rs",
+        "#[cfg(test)] #[path = \"fold_tests.rs\"] mod fold;\n",
+    );
+    dir.write(
+        "crates/b/src/fold_tests.rs",
+        "mod tests {\n    #[test]\n    fn first() {}\n\n    #[test]\n    fn second() {}\n}\n",
+    );
+    dir.write("crates/a/tests/t.rs", "#[test]\nfn new_test() {}\n");
+    let home = home(&dir);
     let args = [
         "bug-filter",
         "crates/b/src/lib.rs",
         "crates/b/src/fold_tests.rs",
         "crates/a/tests/t.rs",
     ];
-    let (code, out) = xtask(&dir, &args, &[], "");
-    assert_eq!(code, 0);
+    let (code, out) = xtask_with_nextest(&dir, &args, &home, "");
+    assert_eq!(code, 0, "{out}");
     assert_eq!(
         out,
-        "filter\t(package(b) & test(/^fold::tests::/)) | binary_id(a::t)\n\
-         package\ta\npackage\tb\n"
+        "filter\t(package(b) & test(=fold::tests::first)) | (package(b) & test(=fold::tests::second)) | (binary_id(a::t) & test(=new_test))\n\
+         package\ta\npackage\tb\n\
+         planned\tb\t\ttrue\tfold::tests::first\n\
+         planned\tb\t\ttrue\tfold::tests::second\n\
+         planned\ta\ta::t\tfalse\tnew_test\n"
     );
 }
 

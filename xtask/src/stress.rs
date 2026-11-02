@@ -1,6 +1,7 @@
 //! The stress job's helpers (`docs/ci.md`, "On every pull request that changes code").
 
-use crate::select::{Members, TestRef, changed_tests, filter, spec};
+use crate::select::{Members, TestRef, filter, spec};
+use crate::test_index::TestIndex;
 
 /// Runs of one selected test in the stress job, unless the pull request fixes a flaky test.
 pub(crate) const STRESS_COUNT: u32 = 30;
@@ -232,7 +233,27 @@ fn merge_base(base: &str) -> Result<String, String> {
 /// The workspace members with the test functions the working tree adds
 /// or changes against `base`, found with the same selector as the stress
 /// job.
-fn touched_against(base: &str) -> Result<(Members, Vec<TestRef>), String> {
+fn empty_test_file_error(
+    files: &[String],
+    selected: &[(String, Vec<TestRef>)],
+    members: &Members,
+    index: &TestIndex,
+) -> Option<String> {
+    files.iter().find_map(|path| {
+        let package = crate::select::owner(path, members)?;
+        let member = members.get(package)?;
+        let selected_tests = selected
+            .iter()
+            .find(|(selected_path, _)| selected_path == path)
+            .is_some_and(|(_, tests)| !tests.is_empty());
+        (!member.unrun_tests.iter().any(|unrun| unrun == path)
+            && !index.binaries_for(path).is_empty()
+            && !selected_tests)
+            .then(|| format!("{path}: changed test file selected no tests"))
+    })
+}
+
+fn touched_against(base: &str, profile: &str) -> Result<(Members, Vec<TestRef>), String> {
     let members = crate::workspace_members()?;
     let merge_base = merge_base(base)?;
     let diff = crate::output(
@@ -245,8 +266,27 @@ fn touched_against(base: &str) -> Result<(Members, Vec<TestRef>), String> {
             merge_base.as_str(),
         ],
     )?;
+    let paths = crate::git_lines(&["diff", "--name-only", "--no-renames", merge_base.as_str()])?;
     let sources = crate::rust_files(&members)?;
-    let touched = changed_tests(&diff, &members, &sources)?;
+    let test_files = crate::select::test_files(&paths, &members, &sources)?;
+    let index = TestIndex::build(
+        std::path::Path::new("."),
+        &test_files,
+        &members,
+        Some(profile),
+    )?;
+    let selected = crate::select::changed_tests_by_file(&diff, &members, &sources, &index)?;
+    if let Some(error) = empty_test_file_error(&test_files, &selected, &members, &index) {
+        return Err(error);
+    }
+    let mut touched = Vec::new();
+    for (_, tests) in selected {
+        for test in tests {
+            if !touched.contains(&test) {
+                touched.push(test);
+            }
+        }
+    }
     Ok((members, touched))
 }
 
@@ -254,7 +294,7 @@ pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     let base = crate::flag(args, "--base")?;
     let labels = crate::optional(args, "--labels").unwrap_or_default();
     let summary = crate::optional(args, "--summary");
-    let (members, touched) = touched_against(&base)?;
+    let (members, touched) = touched_against(&base, "stress")?;
     let count = stress_count(&labels);
     println!("run\t{}", if touched.is_empty() { "false" } else { "true" });
     println!("count\t{count}");
@@ -287,7 +327,7 @@ pub(crate) fn touched_retries_command(args: &[String]) -> Result<bool, String> {
     let base = crate::flag(args, "--base")?;
     let list_path = crate::flag(args, "--list")?;
     let list = std::fs::read_to_string(&list_path).map_err(|e| format!("{list_path}: {e}"))?;
-    let (_, touched) = touched_against(&base)?;
+    let (_, touched) = touched_against(&base, "ci")?;
     let failures = touched_retries(&list, &touched);
     if failures.is_empty() {
         println!("touched-retries: ok");

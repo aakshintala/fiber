@@ -1,5 +1,6 @@
 use super::*;
-use crate::select::TestRef;
+use crate::select::{Member, TestRef};
+use crate::test_index::{TestBinary, TestIndex};
 
 fn binary_test() -> TestRef {
     TestRef {
@@ -17,6 +18,72 @@ fn unit_test() -> TestRef {
         name: "writer::tests::flushes_on_drop".to_owned(),
         unit: true,
     }
+}
+
+#[test]
+fn a_compiled_test_file_with_no_selected_tests_names_its_path() {
+    let path = "crates/log/src/utility_tests.rs".to_owned();
+    let members = std::collections::BTreeMap::from([(
+        "log".to_owned(),
+        Member {
+            dir: "crates/log".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+            unrun_tests: Vec::new(),
+        },
+    )]);
+    let index = TestIndex::from_fixtures(vec![(path.clone(), TestBinary { tests: Vec::new() })]);
+    let selected = vec![(path.clone(), Vec::new())];
+
+    assert_eq!(
+        empty_test_file_error(std::slice::from_ref(&path), &selected, &members, &index),
+        Some(format!("{path}: changed test file selected no tests"))
+    );
+    assert_eq!(
+        empty_test_file_error(
+            std::slice::from_ref(&path),
+            &selected,
+            &members,
+            &TestIndex::default()
+        ),
+        None
+    );
+}
+
+#[test]
+fn an_empty_selection_in_one_test_file_fails_even_when_another_file_selects_tests() {
+    let missing = "crates/log/src/utility_tests.rs".to_owned();
+    let selected_path = "crates/log/tests/works.rs".to_owned();
+    let files = [missing.clone(), selected_path.clone()];
+    let members = std::collections::BTreeMap::from([(
+        "log".to_owned(),
+        Member {
+            dir: "crates/log".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+            unrun_tests: Vec::new(),
+        },
+    )]);
+    let index = TestIndex::from_fixtures(vec![
+        (missing.clone(), TestBinary { tests: Vec::new() }),
+        (
+            selected_path.clone(),
+            TestBinary {
+                tests: vec![unit_test()],
+            },
+        ),
+    ]);
+    let selected = vec![
+        (missing.clone(), Vec::new()),
+        (selected_path, vec![unit_test()]),
+    ];
+
+    assert_eq!(
+        empty_test_file_error(&files, &selected, &members, &index),
+        Some(format!("{missing}: changed test file selected no tests"))
+    );
 }
 
 #[test]
