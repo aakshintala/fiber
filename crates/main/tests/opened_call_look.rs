@@ -66,7 +66,20 @@ fn started(setup: &Setup) -> (Run, usize) {
     (run, from)
 }
 
-/// Answers any approval, then waits for the reply `done`.
+/// A completed frame's end: synchronized output's close marker.
+const FRAME_END: &[u8] = b"\x1b[?2026l";
+
+/// Waits until a frame has ended at or after `from`, then until `done`.
+/// The close marker is the signal the frame exists
+/// (`docs/testing/screens.md`, "Screens"). `done` is false of the grid
+/// from before the input, so that grid is not the match.
+fn frame_after(run: &mut Run, from: usize, what: &str, done: impl FnMut(&Grid) -> bool) -> Grid {
+    run.wait_bytes(from, FRAME_END, what);
+    run.wait_screen(what, done)
+}
+
+/// Answers any approval, then waits for the reply `done`. Enter is read
+/// on the frame after the key, not on the approval frame that asked for it.
 fn finish(run: &mut Run, done: &str) {
     loop {
         let grid = run.wait_screen("approval or done", |grid| {
@@ -75,7 +88,9 @@ fn finish(run: &mut Run, done: &str) {
         if grid.contents.contains(done) {
             return;
         }
+        let from = run.output().len();
         run.write(b"\r");
+        run.wait_bytes(from, FRAME_END, "the frame after the approval");
     }
 }
 
@@ -158,26 +173,66 @@ fn ledger_row(grid: &Grid, gutter: u16, kind: &str, target: &str) -> u16 {
 /// the open ledger.
 const REASONING: &str = "**Doing**";
 
+/// Whether the open ledger's thought row is on `grid`.
+fn ledger_open(grid: &Grid) -> bool {
+    grid.rows.iter().any(|row| row.contains("+ Thought: Doing"))
+}
+
+/// Whether the group's summary is drawn closed: the row names the thought
+/// and carries the closed toggle. The two have to share a row, so a
+/// working-line toggle does not count.
+fn ledger_closed(grid: &Grid) -> bool {
+    grid.rows
+        .iter()
+        .any(|row| row.contains("thought once") && row.contains('▸'))
+}
+
+/// Whether `bytes` draw the open ledger's thought row.
+fn thought_drawn(bytes: &[u8]) -> bool {
+    bytes
+        .windows(b"+ Thought: Doing".len())
+        .any(|window| window == b"+ Thought: Doing")
+}
+
 /// Opens the ledger and returns the grid with its gutter, derived from
-/// the group row.
+/// the group row. The turn's close is on screen first. Ctrl+O sent while
+/// the turn's last frame is still in flight does not draw the thought
+/// row; the bytes after that key say whether it did. When they did not,
+/// the next Ctrl+O opens the ledger and the thought row is read from the
+/// frame after that key. A ledger the settled turn already shows stays
+/// open: another Ctrl+O would close it.
 fn open_ledger(run: &mut Run) -> (Grid, u16) {
-    run.write(b"\x0f");
-    let grid = run.wait_screen("the open ledger", |grid| {
-        grid.rows.iter().any(|row| row.contains("+ Thought: Doing"))
+    let grid = run.wait_screen("the settled turn", |grid| {
+        grid.contents.contains("completed") && (ledger_open(grid) || ledger_closed(grid))
     });
+    let grid = if ledger_open(&grid) {
+        grid
+    } else {
+        let from = run.output().len();
+        run.write(b"\x0f");
+        run.wait_bytes(from, FRAME_END, "the frame after Ctrl+O");
+        let output = run.output();
+        if thought_drawn(&output[from..]) {
+            run.wait_screen("the open ledger", ledger_open)
+        } else {
+            let from = run.output().len();
+            run.write(b"\x0f");
+            frame_after(run, from, "the open ledger", ledger_open)
+        }
+    };
     let y = find_row(&grid.rows, "thought ").expect("the group row");
     let (left, _right) = card_edges(&grid, y, 2);
     (grid, left + 1)
 }
 
-/// Clicks the ledger row (`kind`, `target`) and waits for `marker`.
+/// Clicks the ledger row (`kind`, `target`) and waits for `marker` on a
+/// frame drawn after the click.
 fn open_call(run: &mut Run, gutter: u16, kind: &str, target: &str, marker: &str) -> Grid {
-    let grid = run.wait_screen("the open ledger", |grid| {
-        grid.rows.iter().any(|row| row.contains("+ Thought: Doing"))
-    });
+    let grid = run.wait_screen("the open ledger", ledger_open);
     let row = ledger_row(&grid, gutter, kind, target);
+    let from = run.output().len();
     click(run, gutter + 10, row);
-    run.wait_screen("the opened call", |grid| {
+    frame_after(run, from, "the opened call", |grid| {
         grid.rows.iter().any(|row| row.contains(marker))
     })
 }
@@ -636,16 +691,21 @@ fn the_changed_files_view_draws_a_gutter_and_reverse_video_words() {
     let (mut run, from) = started(&setup);
     finish(&mut run, "Done.");
     run.turn_finished(from);
-    // The panel's Changed files card names the edited file; its row
-    // opens the diff straight away.
+    // The click waits until the turn's close and the usage figures share
+    // the grid with the file row: that is the last panel data.
     let grid = run.wait_screen("the changed files card", |grid| {
-        grid.rows.iter().any(|row| row.contains("Changed files"))
+        grid.contents.contains("completed")
+            && grid.contents.contains("tokens in / out")
+            && grid.contents.contains("0 / 0")
+            && grid.rows.iter().any(|row| row.contains("Changed files"))
+            && grid.rows.iter().any(|row| row.contains("f.txt +1"))
     });
     let y = find_row(&grid.rows, "f.txt +1").expect("the file row");
     let row = row_text(&grid, y);
     let at = row.find("f.txt").expect("the file row");
+    let from = run.output().len();
     click(&mut run, at as u16 + 2, y);
-    let grid = run.wait_screen("the file diff", |grid| {
+    let grid = frame_after(&mut run, from, "the file diff", |grid| {
         grid.rows.iter().any(|row| row.contains("+call bar(a);"))
     });
     // No diff headers draw.
@@ -710,12 +770,86 @@ fn the_more_row_is_dim_and_clicking_it_opens_the_whole_call() {
     let more = find_row(&grid.rows, "… 5 more lines (Enter to view)").expect("the more row");
     assert_dim(&grid, more, gutter + 8, right - 1, "the more row");
     // The more row opens the whole call, without the inline line cap.
+    // The opened lines are read from a frame after the click.
+    let from = run.output().len();
     click(&mut run, gutter + 10, more);
-    let grid = run.wait_screen("the call view opens", |grid| {
+    let grid = frame_after(&mut run, from, "the call view opens", |grid| {
         grid.rows.iter().any(|row| row.contains("A0025"))
     });
     assert!(grid.rows.iter().any(|row| row.contains("Read  a.txt")));
     assert!(!grid.rows.iter().any(|row| row.contains("… 5 more lines")));
+    run.write(b"\x03\x03\r");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// The shell blocks on `hold` until `release` gets a line. The test keeps
+/// the write end open so the open does not discard the line.
+fn held_shell(setup: &Setup) -> (String, fs::File) {
+    let hold = setup.workspace().join("hold");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&hold)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let release = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&hold)
+        .unwrap();
+    (
+        format!("read line < '{}'; echo out; exit 1", hold.display()),
+        release,
+    )
+}
+
+/// The ledger is opened while the shell is held, so the completion frame
+/// already shows the thought row. `open_ledger` leaves that row in place,
+/// on the shell that was held.
+#[test]
+fn open_ledger_leaves_a_ledger_an_earlier_frame_already_showed() {
+    let setup = Setup::new();
+    let (command, mut release) = held_shell(&setup);
+    script(
+        &setup,
+        json!([
+            {"reasoning": REASONING, "tool_calls": [
+                {"name": "shell", "arguments": {"command": command}},
+            ]},
+            {"text": ["Done."]},
+        ]),
+    );
+    config(&setup);
+    allow_shell(&setup);
+    let (mut run, from) = started(&setup);
+    // Asking draws the ledger with the open mark, so a closed toggle is
+    // not what shows the group. One Ctrl+O then leaves `group.open` set.
+    run.wait_screen("the held shell's group", |grid| {
+        grid.rows.iter().any(|row| row.contains("thought once"))
+    });
+    let toggled = run.output().len();
+    run.write(b"\x0f");
+    frame_after(
+        &mut run,
+        toggled,
+        "the ledger opened while the shell is held",
+        ledger_open,
+    );
+    std::io::Write::write_all(&mut release, b"go\n").unwrap();
+    finish(&mut run, "Done.");
+    run.turn_finished(from);
+    let (grid, gutter) = open_ledger(&mut run);
+    assert!(
+        ledger_open(&grid),
+        "the thought row is on the helper's grid"
+    );
+    let call = ledger_row(&grid, gutter, "shell", "read line");
+    assert!(
+        row_text(&grid, call).contains("Exit code 1."),
+        "the open ledger is the held shell"
+    );
     run.write(b"\x03\x03\r");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
