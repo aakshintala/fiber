@@ -309,6 +309,7 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         ),
     )
     .unwrap();
+    // Keeps its own hold: the screen pins this call's subject, which a pid-scoped or absolute command would lose or overflow (#3844).
     let guard = Watchdog::matching("head -n 1 hold");
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
