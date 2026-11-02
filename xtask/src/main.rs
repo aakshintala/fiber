@@ -20,10 +20,15 @@
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
-//!   and the `unrun` ones in `test = false` targets, as tab-separated lines
+//!   the `unrun` ones in `test = false` targets, and a `planned` line per test
+//!   function in those files, as tab-separated lines
+//! - `narrow-plan --list FILE --filter EXPR`: reads `planned` lines on stdin and the
+//!   `cargo nextest list --message-format json` in FILE, drops tests the list did
+//!   not match, and prints `dropped`, `run` and `filter` lines
 //! - `stress-plan --base REV [--labels L] [--summary FILE]`: the test functions the
-//!   working tree adds or changes against the merge base with REV, as tab-separated lines,
-//!   appending the job-summary block to FILE when given
+//!   working tree adds or changes against the merge base with REV that this runner
+//!   compiles, as tab-separated lines, naming each dropped test, appending the
+//!   job-summary block to FILE when given
 //! - `touched-retries --base REV --list FILE`: whether any test the working tree adds or
 //!   changes passed only on retry, reading the retry list in FILE; exit 1 when one did
 //! - `stress-check --log FILE --count N --tests T`: checks the nextest stress output
@@ -264,7 +269,8 @@ fn run(args: &[String]) -> Result<bool, String> {
         }
         "bug-filter" => {
             let members = workspace_members()?;
-            let (filter, packages) = select::test_filter(rest, &members, &rust_files(&members)?);
+            let sources = rust_files(&members)?;
+            let (filter, packages) = select::test_filter(rest, &members, &sources);
             println!("filter\t{filter}");
             for package in packages {
                 println!("package\t{package}");
@@ -272,9 +278,33 @@ fn run(args: &[String]) -> Result<bool, String> {
             for path in select::unrun_test_files(rest, &members) {
                 println!("unrun\t{path}");
             }
+            for test in select::tests_in_files(rest, &members, &sources)? {
+                println!("{}", select::planned_line(&test));
+            }
             Ok(true)
         }
-        "stress-plan" => stress::plan_command(rest),
+        "narrow-plan" => {
+            let list_path = flag(rest, "--list")?;
+            let expression = flag(rest, "--filter")?;
+            let json = read(&list_path)?;
+            let mut body = String::new();
+            std::io::stdin()
+                .read_to_string(&mut body)
+                .map_err(|error| format!("stdin: {error}"))?;
+            let plan = select::narrow_plan(&expression, &body, &json)?;
+            for line in &plan.dropped {
+                println!("dropped\t{line}");
+            }
+            println!("run\t{}", if plan.run { "true" } else { "false" });
+            println!("filter\t{}", plan.filter);
+            Ok(true)
+        }
+        "stress-plan" => {
+            // Only this command asks the selector to list. `touched-retries`
+            // reads the same selector and must not compile the suite again.
+            select::narrow_to_compiled_tests(true);
+            stress::plan_command(rest)
+        }
         "stress-check" => stress::stress_check_command(rest),
         "touched-retries" => stress::touched_retries_command(rest),
         "stress-cost" => stress::cost_command(rest),

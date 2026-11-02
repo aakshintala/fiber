@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn the_fiber_workspace_lists_tests_for_the_stress_job() {
+    let members = workspace_members().expect("cargo metadata");
+    assert!(
+        members.contains_key("xtask"),
+        "the stress planner lists only when the workspace has this package"
+    );
+}
+
+#[test]
 fn only_a_test_target_declaring_test_false_is_unrun() {
     let packages = vec![serde_json::json!({
         "name": "main",
