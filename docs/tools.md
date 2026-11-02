@@ -392,7 +392,8 @@ path's directory, ending in `/`.
   path, in the completion's reserved `details.file_seen`
   (`docs/events.md`, `tool_call_completed`); a resume, a fork and a rewind
   rebuild what was seen from the log, up to the point the context continues
-  from. Nothing is re-hashed at startup, so a file changed while Fiber was
+  from. An `after_tool` hook is not given `file_seen` and cannot replace it.
+  Nothing is re-hashed at startup, so a file changed while Fiber was
   down still meets the stored hash and is refused with the message that it
   changed since it was read. A log written before the field existed rebuilds
   nothing, as when the record started empty.

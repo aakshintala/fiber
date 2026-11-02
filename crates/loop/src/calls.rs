@@ -178,15 +178,35 @@ fn file_seen_of(details: &Option<Value>) -> Option<Value> {
     details.as_ref()?.get("file_seen").cloned()
 }
 
+/// The `details` an `after_tool` hook is shown: the tool's own details
+/// without the reserved `file_seen` record (`docs/tools.md`, "Stale files").
+/// An object left empty by the removal is no `details`
+/// (`docs/extensions.md`, "after_tool").
+fn without_seen(details: Option<Value>) -> Option<Value> {
+    match details {
+        Some(Value::Object(mut object)) => {
+            object.remove("file_seen");
+            if object.is_empty() {
+                None
+            } else {
+                Some(Value::Object(object))
+            }
+        }
+        other => other,
+    }
+}
+
 /// Merges the tool's reserved `file_seen` record into the shaped details,
-/// keeping every field an `after_tool` hook returned. The tool's own record
-/// wins over a hook's: a hook replaces display data, never what the call
-/// saw. A hook may return any `details` value (`docs/extensions.md`,
-/// "after_tool"), but the history fold reads only the reserved
-/// `details.file_seen` object (`docs/events.md`, `tool_call_completed`), so
-/// a non-object replacement is preserved under `value` beside the record:
-/// `details` stays an object carrying `file_seen`, a shape `details: any
-/// JSON` already allows, and no hook data is lost.
+/// after hooks that never saw it ran (`docs/tools.md`, "Stale files"). An
+/// `after_tool` hook is not given `file_seen` and cannot replace it: the
+/// tool's own record wins over a hook's, as a hook replaces display data,
+/// never what the call saw. A hook may return any `details` value
+/// (`docs/extensions.md`, "after_tool"), but the history fold reads only
+/// the reserved `details.file_seen` object (`docs/events.md`,
+/// `tool_call_completed`), so a non-object replacement is preserved under
+/// `value` beside the record: `details` stays an object carrying
+/// `file_seen`, a shape `details: any JSON` already allows, and no hook
+/// data is lost.
 fn with_seen(details: Option<Value>, seen: Value) -> Option<Value> {
     match details {
         Some(Value::Object(mut object)) => {
@@ -1434,10 +1454,17 @@ impl Loop {
             rewritten = None;
         }
         // The reserved `file_seen` the file tools log beside their own
-        // details (`docs/tools.md`, "Stale files"): an `after_tool` hook
-        // that replaces `details` must not drop what the call saw, or the
-        // history fold loses the model's context.
+        // details (`docs/tools.md`, "Stale files"): an `after_tool` hook is
+        // not given `file_seen` and cannot replace it, so the hook sees the
+        // details without the record while the logged completion keeps what
+        // the call saw. A hook that replaces `details` must not drop what
+        // the call saw, or the history fold loses the model's context;
+        // every `Ran.details` reader past the hook input (the unchanged and
+        // no-hook paths, the replacement fallback) carries the stripped
+        // details, and the merge below restores the record for a completed
+        // call, exactly as logged before.
         let seen = file_seen_of(&details);
+        let details = without_seen(details);
         let ran = super::hooks::Ran {
             tool,
             arguments,

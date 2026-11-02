@@ -2994,14 +2994,38 @@ fn a_hook_details_replacement_keeps_the_reserved_file_seen() {
             ..text("wrote /w/a.txt")
         }),
         script("probe", json!({})),
-        Some(hooks),
+        Some(Arc::clone(&hooks)),
         Arc::new(TurnCancel::default()),
     );
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].details, Some(json!({"diff": "@@ x"})));
     let completed = ran.completed();
     assert_eq!(completed.payload["status"], "completed");
     assert_eq!(
         completed.payload["details"],
         json!({"redacted": true, "file_seen": {"path": "/w/a.txt", "hash": 7}})
+    );
+}
+
+#[test]
+fn a_hook_sees_no_details_when_the_tools_details_hold_only_file_seen() {
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let ran = run(
+        fixed(Output {
+            details: Some(json!({"file_seen": {"path": "/w/a.txt", "hash": 7}})),
+            ..text("wrote /w/a.txt")
+        }),
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].details.is_none());
+    assert_eq!(
+        ran.completed().payload["details"],
+        json!({"file_seen": {"path": "/w/a.txt", "hash": 7}})
     );
 }
 
