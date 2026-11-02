@@ -253,6 +253,12 @@ fn user(text: &str) -> Input {
     }
 }
 
+fn resent_block(name: &str, path: &str, content: &str) -> Input {
+    user(&format!(
+        "Skills reloaded from the previous context:\n{name} — {path}\n\n{content}"
+    ))
+}
+
 /// A session whose `skill` tool reads `session.workspace`, with alpha and
 /// beta on disk.
 fn start(script: Vec<Scripted>, during: Vec<Delivery>, skill: &Arc<Skill>) -> Session {
@@ -374,10 +380,13 @@ fn loaded_skills_are_sent_again_once_each_in_first_load_order_after_the_note() {
     assert_eq!(requests.len(), 3);
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 5);
-    assert_eq!(next[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
-    assert_eq!(next[3], user(&format!("{}\n\n{}", sent[0].1, sent[0].2)));
-    assert_eq!(next[4], user(&format!("{}\n\n{}", sent[1].1, sent[1].2)));
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    assert_eq!(next[3], resent_block(&sent[0].0, &sent[0].1, &sent[0].2));
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    assert_eq!(next[4], resent_block(&sent[1].0, &sent[1].1, &sent[1].2));
     assert_eq!(requests[2].previous_end, None);
     // The new opening lists both skills.
     let openings = of_kind(&lines, "opening_message");
@@ -434,9 +443,10 @@ fn a_body_edited_since_the_load_is_sent_as_it_is_at_the_handoff() {
     assert_eq!(sent[0].2, "Alpha revised.");
     let requests = session.requests();
     let next = &requests[2].conversation;
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         *next.last().unwrap(),
-        user(&format!("{}\n\n{}", sent[0].1, sent[0].2))
+        resent_block(&sent[0].0, &sent[0].1, &sent[0].2)
     );
 }
 
@@ -472,7 +482,8 @@ fn a_context_with_no_loaded_skills_sends_nothing_extra() {
     let requests = session.requests();
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
-    assert_eq!(next[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
 }
 
@@ -832,10 +843,17 @@ fn the_session_start_context_stays_between_the_opening_and_the_input() {
     let live = session.requests()[2].conversation.clone();
     assert_eq!(live.len(), 6);
     assert_eq!(live[1], user("hook context"));
-    assert_eq!(live[2], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    assert_eq!(live[2], user("The person's new message:\nhi"));
     assert_eq!(live[3], user("The note."));
-    assert!(matches!(&live[4], Input::User { text, .. } if text.contains("Alpha body")));
-    assert!(matches!(&live[5], Input::User { text, .. } if text.contains("Beta body")));
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    assert!(
+        matches!(&live[4], Input::User { text, .. } if text.starts_with("Skills reloaded from the previous context:\nalpha — ") && text.ends_with("\n\nAlpha body."))
+    );
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    assert!(
+        matches!(&live[5], Input::User { text, .. } if text.starts_with("Skills reloaded from the previous context:\nbeta — ") && text.ends_with("\n\nBeta body."))
+    );
     // The resume renders the identical bytes, then the new input.
     hooks.answer(start_empty());
     session.resume(Vec::new());

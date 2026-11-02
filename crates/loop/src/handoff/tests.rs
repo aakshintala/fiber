@@ -219,10 +219,74 @@ fn a_restart_is_the_carried_input_then_the_note() {
         note: vec![ActionId("a_note".into())],
     }));
     let restarted = carry.restart(&done);
-    assert_eq!(restarted, [user("one"), user("two"), user("first\nsecond")]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in new-message blocks (item 5: "verbatim, in a block labelled as the person's new message"), then the note (item 6).
+    assert_eq!(
+        restarted,
+        [
+            user("The person's new message:\none"),
+            user("The person's new message:\ntwo"),
+            user("first\nsecond")
+        ]
+    );
+    // No doc promises the source input's exact contents; what matters is the
+    // label lands on the copy, so the source stays free of it for ordinary
+    // rendering.
+    assert!(
+        carry.input.iter().all(
+            |input| !matches!(input, Input::User { text, .. } if text.contains("The person's new message:"))
+        ),
+        "{carry:?}"
+    );
     // A new context: not nudged, and the window's texts are spent.
     assert!(!carry.nudged);
     assert!(carry.texts.is_empty());
+}
+
+#[test]
+fn a_restart_labels_a_copy_and_preserves_current_input_media() {
+    let image = contract::provider::ImageRef {
+        path: "images/in.png".into(),
+        mime_type: "image/png".into(),
+        width: 8,
+        height: 6,
+    };
+    let original = Input::User {
+        text: "look".into(),
+        images: vec![image.clone()],
+    };
+    let mut carry = Carry {
+        input: vec![original.clone()],
+        ..Carry::default()
+    };
+
+    let restarted = carry.restart(&completed(Some(Note::Hook {
+        note_text: "note".into(),
+        extension: "ext".into(),
+    })));
+
+    assert_eq!(
+        restarted,
+        [
+            Input::User {
+                text: "The person's new message:\nlook".into(),
+                images: vec![image],
+            },
+            user("note")
+        ]
+    );
+    // No doc promises the source input's exact contents; what matters is the
+    // label lands on the copy: the source text stays unlabelled and its
+    // media stays attached.
+    let [Input::User { text, images }] = &carry.input[..] else {
+        panic!("restart must leave the source input in place");
+    };
+    assert_eq!(text.as_str(), "look");
+    assert!(
+        images
+            .iter()
+            .any(|image| image.path.as_str() == "images/in.png"),
+        "{carry:?}"
+    );
 }
 
 #[test]
@@ -649,13 +713,18 @@ fn a_resend_appends_each_skill_after_the_note_in_event_order() {
         ]),
         None,
     );
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         conversation,
         [
             user("ask"),
             user("the note"),
-            user("/w/alpha/SKILL.md\n\nAlpha body."),
-            user("/w/beta/SKILL.md\n\nBeta body."),
+            user(
+                "Skills reloaded from the previous context:\nalpha — /w/alpha/SKILL.md\n\nAlpha body."
+            ),
+            user(
+                "Skills reloaded from the previous context:\nbeta — /w/beta/SKILL.md\n\nBeta body."
+            ),
         ]
     );
     // The render records the loads but never touches the turn's input.
@@ -708,8 +777,18 @@ fn a_full_handoff_renders_the_opening_then_the_context_then_the_skills() {
     );
     assert_eq!(conversation.len(), 7);
     assert!(matches!(&conversation[1], Input::User { text, .. } if text == "hook context"));
-    assert_eq!(conversation[5], user("/w/alpha/SKILL.md\n\nAlpha body."));
-    assert_eq!(conversation[6], user("/w/beta/SKILL.md\n\nBeta body."));
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    assert_eq!(
+        conversation[5],
+        user(
+            "Skills reloaded from the previous context:\nalpha — /w/alpha/SKILL.md\n\nAlpha body."
+        )
+    );
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    assert_eq!(
+        conversation[6],
+        user("Skills reloaded from the previous context:\nbeta — /w/beta/SKILL.md\n\nBeta body.")
+    );
     assert!(matches!(&conversation[0], Input::User { text, .. } if text.contains("2023-11-14")));
 }
 

@@ -150,6 +150,15 @@ fn col_of(row: &str, ch: char) -> Option<u16> {
     None
 }
 
+/// The cells before `needle`'s first occurrence in `row`: its column,
+/// since every glyph on screen is one cell.
+fn cells_before(row: &str, needle: &str) -> u16 {
+    let at = row
+        .find(needle)
+        .unwrap_or_else(|| panic!("no {needle:?} in {row:?}"));
+    u16::try_from(row[..at].chars().count()).unwrap_or(u16::MAX)
+}
+
 /// Whether the cell is blank.
 fn is_blank(grid: &Grid, x: u16, y: u16) -> bool {
     grid.cell(x, y).symbol.as_str() == " "
@@ -275,16 +284,6 @@ fn assert_fill(grid: &Grid, y: u16, x: u16, what: &str) {
     }
 }
 
-/// Every content cell from `start` to `end` on row `y` is dim: the
-/// span covers the chrome alone, never the panel beside it.
-fn assert_dim_span(grid: &Grid, y: u16, start: u16, end: u16, what: &str) {
-    for x in start..end {
-        if !is_blank(grid, x, y) {
-            assert!(grid.cell(x, y).dim, "{what} cell {x}");
-        }
-    }
-}
-
 /// Quits an idle run with an empty draft, as look.rs does.
 fn quit(mut run: Run) {
     run.write(b"\x03\x03\r");
@@ -345,26 +344,62 @@ fn the_working_line_glimmers_and_the_queue_selects() {
         grid.rows.iter().any(|row| row.contains("↳ first"))
             && grid.rows.iter().any(|row| row.contains("↳ second"))
     });
-    let heading = find_row(&grid.rows, "Steering, joins the turn").expect("the heading");
-    assert_dim_span(
-        &grid,
-        at(heading),
-        0,
-        2 + width("• Steering, joins the turn at the next step"),
-        "heading",
+    // The card: the title bold in attention with the dim count
+    // right-aligned, each entry's mark in attention with full-colour
+    // text and a dim ✕ at the text's right edge, and the key hint with
+    // bold keys (docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first).
+    // The card spans the conversation column, so every column is read
+    // off the grid: the panel takes the screen's right side here.
+    let title = find_row(&grid.rows, "Steering").expect("the title");
+    let stripe = col_of(&grid.rows[title], '▌').expect("the stripe");
+    let figure = "2 queued · joins at the next step"; // docs/tui.md:1299-1300: N queued.
+    assert!(
+        // docs/tui.md:1299-1300: N queued.
+        grid.rows[title].contains(figure),
+        "the count on {}",
+        grid.rows[title]
     );
+    for x in stripe + 2..stripe + 2 + width("Steering") {
+        assert_eq!(grid.cell(x, at(title)).fg, ATTENTION, "title {x}");
+        assert!(grid.cell(x, at(title)).bold, "title {x}");
+    }
+    let start = cells_before(&grid.rows[title], figure);
+    for x in start..start + width(figure) {
+        assert!(grid.cell(x, at(title)).dim, "count {x}");
+    }
+    let hint = find_row(&grid.rows, "click a row to edit").expect("the hint");
+    assert!(
+        grid.rows[hint].contains("⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop"),
+        "the hint on {}",
+        grid.rows[hint]
+    );
+    for y in title..=hint {
+        assert_eq!(grid.cell(stripe, at(y)).symbol.as_str(), "▌", "stripe {y}");
+        assert_eq!(grid.cell(stripe, at(y)).fg, ATTENTION, "stripe {y}");
+    }
     for needle in ["↳ first", "↳ second"] {
         let y = find_row(&grid.rows, needle).expect(needle);
         assert!(grid.rows[y].contains('✕'), "{needle}");
-        assert_dim_span(&grid, at(y), 0, 2 + width(needle) + 3, needle);
+        let mark = col_of(&grid.rows[y], '↳').expect("the mark");
+        assert_eq!(grid.cell(mark, at(y)).symbol.as_str(), "↳", "{needle}");
+        for x in [mark, mark + 1] {
+            assert_eq!(grid.cell(x, at(y)).fg, ATTENTION, "{needle} mark {x}");
+        }
+        let text = grid.cell(mark + 2, at(y));
+        assert_eq!(text.fg, Colour::Default, "{needle} text");
+        assert!(!text.dim, "{needle} text");
+        let cross = cells_before(&grid.rows[y], "✕");
+        assert!(grid.cell(cross, at(y)).dim, "{needle} cross");
     }
-    let footer = find_row(&grid.rows, "click a row to edit").expect("the footer");
-    assert_dim_span(
-        &grid,
-        at(footer),
-        0,
-        2 + width("⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop"),
-        "footer",
+    for key in ["⌥↑", "⌥↓", "⌥X"] {
+        let col = cells_before(&grid.rows[hint], key);
+        assert!(grid.cell(col, at(hint)).bold, "hint {key}");
+        assert!(grid.cell(col + 1, at(hint)).bold, "hint {key}");
+    }
+    assert!(
+        grid.cell(cells_before(&grid.rows[hint], "edit"), at(hint))
+            .dim,
+        "hint label"
     );
 
     // Reopening the approval and answering it starts the held command:

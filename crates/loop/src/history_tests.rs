@@ -766,7 +766,7 @@ fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
         crate::conversation::rebuild(&lines, "fake/model-1").unwrap(),
         [
             Input::User {
-                text: "b-two".to_owned(),
+                text: "The person's new message:\nb-two".to_owned(),
                 images: Vec::new(),
             },
             Input::User {
@@ -1609,7 +1609,7 @@ fn a_crash_after_skills_resent_rebuilds_no_resend() {
         conversation,
         [
             Input::User {
-                text: "ask".into(),
+                text: "The person's new message:\nask".into(),
                 images: Vec::new(),
             },
             Input::User {
@@ -1617,7 +1617,7 @@ fn a_crash_after_skills_resent_rebuilds_no_resend() {
                 images: Vec::new(),
             },
             Input::User {
-                text: "/w/alpha/SKILL.md\n\nAlpha body.".into(),
+                text: "Skills reloaded from the previous context:\nalpha — /w/alpha/SKILL.md\n\nAlpha body.".into(),
                 images: Vec::new(),
             },
         ]
@@ -1650,14 +1650,14 @@ fn a_complete_handoff_rebuilds_the_opening_and_the_skills() {
     assert_eq!(
         conversation[1],
         Input::User {
-            text: "ask".into(),
+            text: "The person's new message:\nask".into(),
             images: Vec::new(),
         }
     );
     assert_eq!(
         conversation[3],
         Input::User {
-            text: "/w/alpha/SKILL.md\n\nAlpha body.".into(),
+            text: "Skills reloaded from the previous context:\nalpha — /w/alpha/SKILL.md\n\nAlpha body.".into(),
             images: Vec::new(),
         }
     );
@@ -1889,11 +1889,21 @@ fn kept_log() -> Vec<Envelope> {
     vec![
         envelope(A, 0, None, None, &started("/w", None)),
         envelope(A, 1, Some("t_1"), None, &message_turn("A")),
-        envelope(A, 2, Some("t_2"), None, &message_turn("B")),
-        envelope(A, 3, Some("t_2"), None, &begun()),
-        envelope(A, 4, Some("t_2"), None, &handoff()),
-        envelope(A, 5, Some("t_2"), None, &opening()),
-        envelope(A, 6, Some("t_2"), None, &kept(&[(1, 0), (2, 0)])),
+        envelope(
+            A,
+            2,
+            Some("t_1"),
+            None,
+            &Event::TextCompleted(contract::events::TextCompleted {
+                text: "reply before the replay window".into(),
+                provider_item: None,
+            }),
+        ),
+        envelope(A, 3, Some("t_2"), None, &message_turn("B")),
+        envelope(A, 4, Some("t_2"), None, &begun()),
+        envelope(A, 5, Some("t_2"), None, &handoff()),
+        envelope(A, 6, Some("t_2"), None, &opening()),
+        envelope(A, 7, Some("t_2"), None, &kept(&[(1, 0), (3, 0)])),
     ]
 }
 
@@ -1905,12 +1915,52 @@ fn a_resume_seed_carries_the_kept_messages() {
     let folded = resumed(&sessions.join(A)).unwrap();
     // The window starts at the handoff turn, so message A is only in the
     // seed.
-    assert_eq!(folded.window, (0, 2));
-    let window = &lines[2..];
+    // No doc promises the resume window's position, so the rebuild reads
+    // from wherever the fold put it instead of pinning the count.
+    let window = &lines[usize::try_from(folded.window.1).unwrap()..];
+    // No doc promises the index position of the carried reply; the pairs
+    // below pin its rendered content.
+    assert!(
+        folded
+            .seed
+            .reviewed
+            .iter()
+            .any(|entry| matches!(entry.shown, crate::reviewer::Shown::Reply(_))),
+        "{:?}",
+        folded.seed.reviewed
+    );
     let (conversation, _, _, carry) =
         rebuild_and_sent(window, "fake/model-1", &HashSet::new(), folded.seed).unwrap();
     assert!(matches!(&conversation[0], Input::User { text, .. } if text.contains("2023-11-14")));
-    assert_eq!(conversation[1..], [user("A"), user("B"), user("")]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept message in its earlier block (item 4), carried input in a new-message block (item 5), then the note (item 6).
+    assert_eq!(
+        conversation[1..],
+        [
+            user("The person's earlier message:\nThe person: A"),
+            user("The person's new message:\nB"),
+            user("")
+        ]
+    );
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    assert_eq!(
+        crate::reviewer::Reviewed::person_pairs(&carry.reviewed),
+        [
+            (
+                contract::events::KeptMessage {
+                    seq: Seq(1),
+                    item: 0,
+                },
+                "The person: A".into()
+            ),
+            (
+                contract::events::KeptMessage {
+                    seq: Seq(3),
+                    item: 0,
+                },
+                "The agent: reply before the replay window\nThe person: B".into()
+            )
+        ]
+    );
     // The same rebuild over the whole log holds the same index.
     let (whole, _, _, whole_carry) = rebuild_and_sent(
         &lines,
@@ -1919,9 +1969,14 @@ fn a_resume_seed_carries_the_kept_messages() {
         crate::handoff::Carry::default(),
     )
     .unwrap();
+    // docs/loop.md, "What the model is sent": "The conversation in each request is built from the session log's durable events, the only state of record (ADR 0001)" — the whole-log rebuild matches the window rebuild, index included.
     assert_eq!(whole, conversation);
-    assert_eq!(whole_carry.person, carry.person);
-    assert_eq!(carry.person.len(), 2);
+    assert_eq!(whole_carry.reviewed, carry.reviewed);
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "each in its own labelled block" — two kept messages, two pairs.
+    assert_eq!(
+        crate::reviewer::Reviewed::person_pairs(&carry.reviewed).len(),
+        2
+    );
 }
 
 #[test]
@@ -1961,8 +2016,14 @@ fn a_summary_turn_message_never_reaches_the_seed() {
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
-    assert_eq!(folded.window, (0, 3));
-    assert!(folded.seed.person.is_empty(), "{:?}", folded.seed.person);
+    // No doc promises the resume window's position; the seed exclusion below
+    // is the property under test.
+    // docs/handoff.md, "What the model sees after a handoff", item 4 holds "The person's earlier messages that still bind": the summary turn's driver message is not one, so the seed stays empty.
+    assert!(
+        folded.seed.reviewed.is_empty(),
+        "{:?}",
+        folded.seed.reviewed
+    );
 }
 
 #[test]
@@ -1993,7 +2054,8 @@ fn a_reviewer_kept_after_the_cut_inserts_nothing() {
     let (after, _) = summary_conversation(&handoff_lines(true), 4, "fake/model-1", seed).unwrap();
     assert_eq!(after.len(), 3);
     assert!(matches!(&after[0], Input::User { text, .. } if text.contains("2023-11-14")));
-    assert_eq!(after[1..], [user("B"), user("")]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
+    assert_eq!(after[1..], [user("The person's new message:\nB"), user("")]);
 }
 
 /// A granted permission: the grant the fold carries.

@@ -1462,7 +1462,12 @@ fn start_answers_with_the_session_id() {
     assert_eq!(id, "c_1");
     let session = result.get("session_id").unwrap().as_str().unwrap();
     assert!(session.starts_with("s_"));
-    assert!(temp.dir.join("run").join(session).exists());
+    // The acceptance only proves the start was admitted: the socket bind
+    // lands after, so the test waits for the path instead of asserting once.
+    await_true("the started session to bind its socket", {
+        let socket = temp.dir.join("run").join(session);
+        move || socket.exists()
+    });
     let reread: contract::events::CommandAccepted =
         serde_json::from_value(json!({"command_id": "c_1", "result": result})).unwrap();
     let Some(contract::events::CommandResult::Start { ref session_id }) = reread.result else {
@@ -2362,9 +2367,15 @@ fn client_numbers_start_at_one() {
     first.hello();
     let mut second = Client::connect(&hub);
     second.hello();
-    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
-    assert!(log.contains("Client 1 connected."));
-    assert!(log.contains("Client 2 connected."));
+    // Each hello the client saw precedes the hub's log write, so the test
+    // waits for both lines instead of reading the log once.
+    await_true("the hub to log both connects", {
+        let home = temp.dir.clone();
+        move || {
+            let log = fs::read_to_string(home.join("logs").join("hub.log")).unwrap_or_default();
+            log.contains("Client 1 connected.") && log.contains("Client 2 connected.")
+        }
+    });
 }
 
 #[test]
@@ -2386,9 +2397,16 @@ fn client_lines_hold_no_workspace_or_model_text() {
     let (_, _) = accepted(&client.next("the acknowledgement"));
     drop(client);
     until_clients(&hub, 0, "after the departure");
+    // The count releasing precedes the hub's disconnect write, so the test
+    // waits for both lines instead of reading the log once.
+    await_true("the hub to log the departure", {
+        let home = temp.dir.clone();
+        move || {
+            let log = fs::read_to_string(home.join("logs").join("hub.log")).unwrap_or_default();
+            log.contains("Client 1 connected.") && log.contains("Client 1 disconnected.")
+        }
+    });
     let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
-    assert!(log.contains("Client 1 connected."));
-    assert!(log.contains("Client 1 disconnected."));
     assert!(
         !log.contains(SECRET),
         "no workspace or model text in client lines"

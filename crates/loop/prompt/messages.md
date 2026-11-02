@@ -180,6 +180,23 @@ Fiber: these background jobs are still running. Each one's end is reported when 
 
 {jobs}
 
+## handoff-earlier
+
+The person's earlier message:
+{message}
+
+## handoff-new
+
+The person's new message:
+{message}
+
+## handoff-skill
+
+Skills reloaded from the previous context:
+{name} — {path}
+
+{content}
+
 ## moved-result
 
 Fiber: this result was moved out of your context. Its full text is at {path}.
