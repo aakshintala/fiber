@@ -181,7 +181,8 @@ fn steer_splits_tool_group() {
     let rows: Vec<&str> = shown.lines().collect();
     let groups: Vec<usize> = rows
         .iter()
-        .positions(|row| row.starts_with(" ● "))
+        .enumerate()
+        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
         .collect();
     assert_eq!(groups.len(), 2, "{shown}");
     let steer = rows
@@ -191,8 +192,7 @@ fn steer_splits_tool_group() {
     assert!(groups[0] < steer && steer < groups[1], "{shown}");
     assert!(rows[groups[0]].contains("Read 2 files"), "{shown}");
     assert!(
-        rows[groups[1]].contains("Read 2 files")
-            && rows[groups[1]].contains("thought once"),
+        rows[groups[1]].contains("Read 2 files") && rows[groups[1]].contains("thought once"),
         "{shown}"
     );
     insta::assert_snapshot!("steer_splits_tool_group", shown);
@@ -250,11 +250,14 @@ fn answers_split_tool_group() {
             json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
         ));
     }
-    let shown = screen(&app);
+    // Sixteen rows: the two answer rows need room above the second
+    // group line (`docs/testing/screens.md`).
+    let shown = sized(&mut app, WIDTH, 16);
     let rows: Vec<&str> = shown.lines().collect();
     let groups: Vec<usize> = rows
         .iter()
-        .positions(|row| row.starts_with(" ● "))
+        .enumerate()
+        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
         .collect();
     assert_eq!(groups.len(), 2, "{shown}");
     let rule = rows
@@ -319,7 +322,8 @@ fn non_driver_message_splits_tool_group() {
     let rows: Vec<&str> = shown.lines().collect();
     let groups: Vec<usize> = rows
         .iter()
-        .positions(|row| row.starts_with(" ● "))
+        .enumerate()
+        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
         .collect();
     assert_eq!(groups.len(), 2, "{shown}");
     let message = rows
