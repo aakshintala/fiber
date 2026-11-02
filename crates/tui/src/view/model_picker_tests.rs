@@ -1721,7 +1721,7 @@ fn compact_model_rows_keep_the_whole_row_for_both_focus_states() {
 
 #[test]
 fn the_wheel_uses_the_short_window_only_below_two_rows() {
-    // The wheel shares the displayed-row movement contract (`docs/tui.md:576`).
+    // The wheel shares the displayed-row movement contract (`docs/tui.md:589`).
     let mut view = choosing_current("acme/m2");
     let m2 = view.sections[0].models[1].at;
     let display = display_rows(&view, false);
