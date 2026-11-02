@@ -3572,6 +3572,59 @@ fn background_without_timeout_is_stopped_not_timed_out() {
 
     let run = setup.run(&["ask", "start a background sleep then stop it"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // A reply that is text alone: one step, then the turn's end.
+    let reply = [
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    // The stop needs no permission decision, so the second call has no
+    // `permission_resolved`; stopping ends the job in the same step, so
+    // there is no `jobs_pending_notified` turn.
+    let expected = [
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "job_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "job_completed",
+            "tool_call_completed",
+            "step_started",
+        ][..],
+        &reply,
+        &["fiber_exited"],
+    ]
+    .concat();
+    // `job_delta` is ephemeral, and where it lands depends on when the
+    // job writes, so the comparison leaves it out.
+    let kinds: Vec<&str> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "job_delta")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, expected);
     let done = run
         .lines
         .iter()
@@ -3627,6 +3680,45 @@ fn zero_timeout_is_rejected_and_starts_nothing() {
 
     let run = setup.run(&["ask", "touch the marker with no time"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // A reply that is text alone: one step, then the turn's end.
+    let reply = [
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    // The schema check fails the call before permission and before it
+    // starts, so there is neither `permission_resolved` nor
+    // `tool_call_started`.
+    let expected = [
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "step_started",
+        ][..],
+        &reply,
+        &["fiber_exited"],
+    ]
+    .concat();
+    let kinds: Vec<&str> = run
+        .lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, expected);
     let completed = run
         .lines
         .iter()
