@@ -487,7 +487,7 @@ fn the_rule_escapes_newlines_and_quotes() {
 }
 
 #[test]
-fn the_rule_sits_where_the_answer_landed_and_the_group_stays_open() {
+fn the_rule_splits_the_group_below_the_answer() {
     let mut app = app();
     feed(&mut app, asking());
     feed(
@@ -514,9 +514,9 @@ fn the_rule_sits_where_the_answer_landed_and_the_group_stays_open() {
     let rule = texts
         .iter()
         .position(|text| text.trim_start().starts_with("you answered"));
-    assert!(read.is_some() && read < rule, "{texts:#?}");
+    assert!(rule.is_some() && rule < read, "{texts:#?}");
     let groups = texts.iter().filter(|text| text.starts_with(" ● ")).count();
-    assert_eq!(groups, 1, "{texts:#?}");
+    assert_eq!(groups, 2, "{texts:#?}");
 }
 
 /// Durable lines `lines`, numbered from 1.
