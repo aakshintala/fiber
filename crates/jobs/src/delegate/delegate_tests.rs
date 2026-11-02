@@ -78,6 +78,21 @@ fn arguments(model: &str) -> serde_json::Map<String, serde_json::Value> {
 const CATALOGUE: &str = "Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m";
 
 #[test]
+fn sandbox_snapshot_failure_creates_no_worktree_or_child() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.wiring.sandbox = Arc::new(|| Err("sandbox.deny_read".into()));
+    let mut args = arguments("fiber:fake/m");
+    args.insert("isolation".into(), serde_json::json!("worktree"));
+    let output = spawned.run(&args, &fakes::CancelToken::new(), &Recorder::default());
+    let error = output.error.expect("the snapshot fails closed");
+    assert_eq!(error.code, contract::ErrorCode::ToolError);
+    assert!(error.message.contains("sandbox.deny_read"), "{error:?}");
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+    assert!(output.jobs.is_empty());
+}
+
+#[test]
 fn isolation_and_workspace_are_validated_before_model_or_credentials() {
     let rig = rig();
     let mut spawned = tool(&rig);
@@ -382,6 +397,13 @@ fn a_role_starts_its_resolved_reference_and_records_it() {
 fn a_spawn_reads_its_inherited_roots_at_launch() {
     let rig = rig();
     let mut spawned = tool(&rig);
+    spawned.wiring.sandbox = Arc::new(|| {
+        Ok(vec![
+            "sandbox.enabled=true".into(),
+            "sandbox.allow_write=[\"/grant\"]".into(),
+            "sandbox.deny_read=[\"/secret\"]".into(),
+        ])
+    });
     // Read at launch, not at wiring: the roots below are added after
     // the tool was built, and the start still captures them. A spawn
     // folds the parent's current tail.
@@ -408,6 +430,14 @@ fn a_spawn_reads_its_inherited_roots_at_launch() {
         .recv(&rig.launched)
         .expect("the launcher ran");
     assert_eq!(launched.added, [PathBuf::from("/late")]);
+    assert_eq!(
+        launched.sandbox,
+        [
+            "sandbox.enabled=true",
+            "sandbox.allow_write=[\"/grant\"]",
+            "sandbox.deny_read=[\"/secret\"]"
+        ]
+    );
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }

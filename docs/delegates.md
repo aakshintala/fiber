@@ -293,11 +293,22 @@ path is `invalid_arguments` and a git failure is `io_failed`.
   worktree record or run boundary fails closed with `tool_error`. A message to
   a live delegate steers it without checking workspace or repository existence.
 - `worktree` outside a git repository fails with `invalid_arguments`.
-- A delegate never inherits its parent's sandbox setting. When the
-  delegate's own sandbox is on, its model-issued shell calls use the same
-  project baseline as the parent's worktrees: every worktree of one
-  repository shares one baseline, so a change one worktree's call made to
-  the shared paths is restored and reported the same way
+- Each Fiber delegate inherits the parent's effective sandbox settings at
+  launch. Fresh spawns, forks and resumes take a new snapshot, including
+  settings changed during the session. Delegate tool calls stay reviewed
+  ("Permissions").
+- A confined delegate can commit and create local branches in its worktree.
+  Git grants cover its git directory and the shared `objects/`, `refs/`
+  and `logs/` subdirectories, even outside the delegate workspace. All of
+  `refs/` is writable so a mistaken branch move is recoverable from the
+  reflog. These grants give no socket access for pushes; `git push` stays
+  reviewed (`docs/permissions.md`, "The destructive-command guard").
+- On Linux, delegates use the same project baseline as the parent's
+  worktrees. Fiber records and restores shared config and hooks, worktree
+  `.git` pointers, git directory `commondir` files and workspace-local
+  `.fiber/`, reporting changes after each call. The supervisor restores
+  outside confinement; restoration is not a write grant. On macOS, the
+  policy denies writes to those paths while granting the same Git data
   (`docs/sandbox.md`, "Protected paths").
 
 ## Forks

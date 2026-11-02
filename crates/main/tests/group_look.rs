@@ -20,6 +20,7 @@ mod support;
 use std::fs;
 
 use serde_json::json;
+use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
 use support::{Setup, TRUECOLOUR, write_json};
 
@@ -163,18 +164,18 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     let lines = (1..=25).map(|n| format!("A{n:04}\n")).collect::<String>();
     fs::write(workspace.join("a.txt"), &lines).unwrap();
     fs::write(workspace.join("b.txt"), "B0001\nB0002\nB0003\n").unwrap();
-    // The held shell call: the marker keeps it running until the test
-    // has read the running rows.
-    let hold = workspace.join("hold");
-    fs::write(&hold, "").unwrap();
+    // The held shell call: the holder blocks on the FIFO until the
+    // test writes the release line, so it runs exactly as long as the
+    // test reads the running rows.
     let command = format!(
-        "i=0; while [ -e '{}' ] && [ $i -lt 2400 ]; do sleep 0.05; i=$((i+1)); done # {}",
-        hold.display(),
+        "head -n 1 '{}' # {}",
+        setup.workspace().join("hold").display(),
         // Longer than the 160-column row on any runner's temp path, so the
         // ledger must cut it.
         "x".repeat(120)
     );
     script(&setup, &command);
+    let mut hold = Hold::park(&setup, &command);
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
@@ -333,7 +334,7 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     }
     // The running shell: ○ and "running" in attention, its long command
     // cut with "…" so the result keeps its columns.
-    let shell = check_row(&grid, "shell", "i=0;", "running", "○");
+    let shell = check_row(&grid, "shell", "head -n 1", "running", "○");
     assert_eq!(grid.cell(gutter + 6, shell).fg, ATTENTION);
     let row = row_text(&grid, shell);
     assert!(row.contains('…'), "the long command is cut: {row:?}");
@@ -342,13 +343,14 @@ fn the_group_line_and_the_ledger_match_the_doc() {
         assert_eq!(grid.cell(x, shell).fg, ATTENTION, "running ({x}, {shell})");
     }
 
-    // Removing the marker lets the shell finish; the click target below
-    // is located on a screen taken after the turn completes, so the row
-    // cannot be stale.
+    // Writing the release line lets the shell finish; the click target
+    // below is located on a screen taken after the turn completes, so
+    // the row cannot be stale.
     let from = run.output().len();
-    fs::remove_file(&hold).unwrap();
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
     run.wait_screen("the done reply", |grid| grid.contents.contains("Done."));
     run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
 
     // A click on the a.txt read row shows its output indented eight
     // columns with the line-number gutter: 20 lines, then

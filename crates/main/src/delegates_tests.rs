@@ -24,6 +24,103 @@ use crate::switch::quota::{LabelQuota, QuotaView};
 use extensions::{Quota, QuotaEntry, Window, WindowUse};
 use fakes::Deadline;
 
+fn sandbox_handle(enabled: bool) -> crate::settings::SandboxHandle {
+    Arc::new(Mutex::new(tools::SandboxSettings {
+        enabled,
+        allow_write: vec!["/grant with spaces".into()],
+        deny_read: vec!["/secret".into()],
+        fiber_home: "/fiber".into(),
+    }))
+}
+
+#[test]
+fn sandbox_snapshot_reads_the_live_settings_and_disabled_omits_paths() {
+    let handle = sandbox_handle(true);
+    let reader = super::sandbox_snapshot_reader(&handle);
+    assert_eq!(
+        reader().unwrap(),
+        [
+            "sandbox.enabled=true",
+            "sandbox.allow_write=[\"/grant with spaces\"]",
+            "sandbox.deny_read=[\"/secret\"]"
+        ]
+    );
+    handle.lock().unwrap().deny_read = vec!["/late-secret".into()];
+    assert_eq!(
+        reader().unwrap(),
+        [
+            "sandbox.enabled=true",
+            "sandbox.allow_write=[\"/grant with spaces\"]",
+            "sandbox.deny_read=[\"/late-secret\"]"
+        ]
+    );
+    handle.lock().unwrap().enabled = false;
+    assert_eq!(reader().unwrap(), ["sandbox.enabled=false"]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_snapshot_rejects_each_non_utf8_path_only_when_enabled() {
+    use std::os::unix::ffi::OsStringExt as _;
+    for key in ["sandbox.allow_write", "sandbox.deny_read"] {
+        let handle = sandbox_handle(true);
+        let path = std::ffi::OsString::from_vec(vec![b'/', 0xff]);
+        match key {
+            "sandbox.allow_write" => handle.lock().unwrap().allow_write = vec![path.into()],
+            "sandbox.deny_read" => handle.lock().unwrap().deny_read = vec![path.into()],
+            _ => unreachable!(),
+        }
+        let reader = super::sandbox_snapshot_reader(&handle);
+        assert_eq!(reader(), Err(key.into()));
+        handle.lock().unwrap().enabled = false;
+        assert_eq!(reader().unwrap(), ["sandbox.enabled=false"]);
+    }
+}
+
+#[test]
+fn sandbox_overrides_follow_the_credential_for_spawn_fork_and_resume() {
+    let mut spawn = launched();
+    spawn.start = jobs::Start::Fresh(jobs::Fresh::Spawn {
+        model: "fake/m".into(),
+        credential: Some("personal".into()),
+    });
+    let fork = jobs::Launched {
+        start: jobs::Start::Fresh(jobs::Fresh::Fork {
+            from: jobs::Forking {
+                point: contract::shapes::Point {
+                    project: None,
+                    session_id: SessionId("s_parent".into()),
+                    seq: contract::Seq(1),
+                },
+                model: "fiber:fake/m".into(),
+            },
+        }),
+        ..launched()
+    };
+    for mut launch in [spawn, fork, resumed()] {
+        launch.sandbox = super::sandbox_snapshot_reader(&sandbox_handle(true))().unwrap();
+        let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
+            .get_args()
+            .map(|arg| arg.to_str().unwrap().to_owned())
+            .collect();
+        let overrides: Vec<_> = argv
+            .windows(2)
+            .filter(|pair| pair[0] == "-c")
+            .map(|pair| pair[1].as_str())
+            .collect();
+        let mut expected = Vec::new();
+        if matches!(launch.start, jobs::Start::Fresh(jobs::Fresh::Spawn { .. })) {
+            expected.push("providers.fake.credential=\"personal\"");
+        }
+        expected.extend([
+            "sandbox.enabled=true",
+            "sandbox.allow_write=[\"/grant with spaces\"]",
+            "sandbox.deny_read=[\"/secret\"]",
+        ]);
+        assert_eq!(overrides, expected);
+    }
+}
+
 /// Installs a provider `fake` with a leveled model `m` and a plain model
 /// `plain` (unless `install` is false), writes `{"roles": <roles>}` to
 /// the test home's configuration, and returns the loaded registry with
@@ -344,6 +441,7 @@ fn launched() -> jobs::Launched {
         prompt: "scan the tree".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
         added: Vec::new(),
+        sandbox: Vec::new(),
         start: jobs::Start::Fresh(jobs::Fresh::Spawn {
             model: "fake/m:high".to_owned(),
             credential: None,
@@ -540,6 +638,7 @@ fn delegates_for(root: &fakes::TempDir, id: &str) -> super::Delegates {
             catalogue: Arc::from("unused"),
             credential: Arc::new(|_| Ok(None)),
         },
+        sandbox_handle(false),
     )
 }
 
@@ -694,6 +793,7 @@ fn tool_depth() -> u32 {
             catalogue: Arc::from("unused"),
             credential: Arc::new(|_| Ok(None)),
         },
+        sandbox_handle(false),
     )
     .tool()
     .wiring
@@ -836,6 +936,7 @@ fn resumed() -> jobs::Launched {
         prompt: "- also check Y".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
         added: Vec::new(),
+        sandbox: Vec::new(),
         start: jobs::Start::Resume,
     }
 }
@@ -1416,6 +1517,7 @@ fn message_rig() -> (super::Delegates, Arc<jobs::Registry>) {
             catalogue: Arc::from("unused"),
             credential: Arc::new(|_| Ok(None)),
         },
+        sandbox_handle(false),
     );
     (delegates, jobs)
 }
@@ -1850,6 +1952,7 @@ fn models_rig(catalogue: &str) -> super::Delegates {
             catalogue: Arc::from(catalogue.to_owned()),
             credential: Arc::new(|_| Ok(None)),
         },
+        sandbox_handle(false),
     )
 }
 
@@ -2000,6 +2103,7 @@ fn service_rig(depth: u32) -> ServiceRig {
             catalogue: Arc::from("Roles:\ndeep: fake/m:high"),
             credential: Arc::new(|_| Ok(None)),
         },
+        sandbox_handle(false),
     );
     delegates.launch = launch;
     delegates.depth = depth;

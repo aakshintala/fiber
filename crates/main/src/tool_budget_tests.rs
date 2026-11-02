@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes: `builtin()`'s definitions, `mcp_resources` and `tool_search`,
 /// with no headroom.
-const BUDGET: usize = 15815;
+const BUDGET: usize = 16145;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
@@ -345,11 +345,11 @@ fn a_definition_pushed_over_the_budget_fails_the_check() {
     }
 }
 
+// The per-definition sizes measure identical on macOS and Linux (no platform gap), so this ceiling binds everywhere.
 #[allow(
     clippy::print_stderr,
     reason = "prints the size-budget report on every run (docs/tools.md, \"Size budget in CI\")"
 )]
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn the_built_in_definitions_fit_their_budget() {
     let hosted = measure(&builtin_definitions());

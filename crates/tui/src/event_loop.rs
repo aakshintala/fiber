@@ -111,9 +111,12 @@ pub(crate) fn run_with(
     // The first render's span opens at entry: at `info` this is one level
     // check with no clock read. Every pre-draw return below discards it,
     // so a line there never times setup work as a frame that never drew.
-    let timing = crate::timing::Timing::new(diag);
+    // The attach setup span opens beside it, and every return that
+    // discards the attached frame discards the attach spans with it.
+    let mut timing = crate::timing::Timing::new(diag);
     let first_render = timing.first_render();
     let attached_frame = timing.attached_frame();
+    timing.start_attach_setup();
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
     let signals = Signals::new([SIGWINCH]).ok();
@@ -125,6 +128,7 @@ pub(crate) fn run_with(
     let Ok(term_signals) = Signals::new([SIGTERM, SIGHUP]) else {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     };
     catch_interrupts();
@@ -135,16 +139,19 @@ pub(crate) fn run_with(
     let Ok((width, height)) = term::setup(&tty, hover) else {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     };
     let Ok(out) = tty.try_clone() else {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     };
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     };
     // `App::new` maps an empty launch directory to no workspace, so a
@@ -273,10 +280,15 @@ pub(crate) fn run_with(
     if screen.draw(&mut app, None).is_err() {
         crate::timing::discard(first_render);
         crate::timing::discard(attached_frame);
+        timing.discard_attach_spans();
         return Ok(1);
     }
     // The frame drew: its line stands, whatever the loop meets after.
+    // The setup span ends here and the wait span opens: the initial
+    // unattached draw is complete.
     drop(first_render);
+    timing.stop_attach_setup();
+    timing.start_attach_wait();
     // Startup pushes (config reads, session restores) gain births and
     // wakes before the first arm, so they fade like every other event.
     app.sweep_notices(clock.now());
@@ -301,6 +313,7 @@ pub(crate) fn run_with(
         Ok(reader) => reader,
         Err(error) => {
             crate::timing::discard(attached_frame);
+            timing.discard_attach_spans();
             return Err(error.into());
         }
     };
@@ -349,6 +362,7 @@ pub(crate) fn run_with(
             .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)
     {
         crate::timing::discard(terminal.attached_frame.take());
+        terminal.timing.discard_attach_spans();
         return Err(error.into());
     }
     terminal.tick.arm(terminal.app.take_wake());
@@ -358,6 +372,7 @@ pub(crate) fn run_with(
     }
     let code = terminal.run(&rx);
     crate::timing::discard(terminal.attached_frame.take());
+    terminal.timing.discard_attach_spans();
     terminal.tick.stop();
     // The writer goes before the hub hangs up and the guard drops: Stop
     // sends its mandatory abort delete at the next chunk boundary, then
@@ -1064,12 +1079,20 @@ impl<B: Backend> Loop<B> {
         // already past the fade expires before arming and never draws
         // twice.
         self.app.sweep_notices(self.clock.now());
+        // The attached-history draw ends the prepare span and opens the
+        // draw span immediately before it; any other frame draws outside
+        // both.
+        if attached_history {
+            self.timing.stop_attach_prepare();
+            self.timing.start_attach_draw();
+        }
         let lock = Arc::clone(&self.tty_lock);
         let draw_failed = {
             let _guard = lock.loop_write();
             self.screen.draw(&mut self.app, self.pointer.at).is_err()
         };
         if draw_failed {
+            self.timing.discard_attach_spans();
             return Some(1);
         }
         // The attached-session history has landed in the drawn frame:
@@ -1077,6 +1100,10 @@ impl<B: Backend> Loop<B> {
         // draw. A frame before that install leaves the guard open;
         // run_with discards it if no such frame arrives.
         if attached_history {
+            // The completed draw ends the draw span and writes all five
+            // retained spans, before the parent frame line.
+            self.timing.stop_attach_draw();
+            self.timing.emit_attach_spans();
             drop(self.attached_frame.take());
         }
         // After the first post-handover draw, the writer restarts its
@@ -1538,6 +1565,11 @@ impl<B: Backend> Loop<B> {
         let Some(session) = self.app.tail_due() else {
             return false;
         };
+        // The first due attempt ends the wait span and opens the tail
+        // span; a later attempt keeps the first attempt's guard, so any
+        // lost-attempt interval between stays inside the span.
+        self.timing.stop_attach_wait();
+        self.timing.start_attach_tail();
         // A new open never installs or counts the old run.
         self.app.clear_tail_read();
         if !self.hub.has_stream() {
@@ -1572,6 +1604,11 @@ impl<B: Backend> Loop<B> {
         let install = self.timing.tail_install();
         self.app.install_tail();
         drop(install);
+        // The install the attempt reached ends the tail span and opens
+        // the prepare span: reopened and rejected-history installs count,
+        // as the read completed through them.
+        self.timing.stop_attach_tail();
+        self.timing.start_attach_prepare();
         true
     }
 

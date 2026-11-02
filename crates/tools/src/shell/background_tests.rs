@@ -102,10 +102,10 @@ fn a_job_completion_keeps_changed_path_reports_and_omits_empty_ones() {
                 false,
                 false,
             ),
-            Limit {
+            Some(Limit {
                 ms: 60_000,
                 monitor: false,
-            },
+            }),
             report,
         );
         assert_eq!(end.status, Outcome::Completed);
@@ -258,10 +258,10 @@ fn hand_off_with_saved(
         jobs,
         clock,
         "true",
-        Limit {
+        Some(Limit {
             ms: 5_000,
             monitor: false,
-        },
+        }),
         false,
         &CancelToken::new(),
         &Recorder::default(),
@@ -484,7 +484,12 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
     let id = JobId("j_1".into());
 
     let end = |finished: Finished, ms| {
-        to_completed(id.clone(), &path, finished, Limit { ms, monitor: false })
+        to_completed(
+            id.clone(),
+            &path,
+            finished,
+            Some(Limit { ms, monitor: false }),
+        )
     };
 
     let unreaped = end(finished(None, None, false, false, false), 1);
@@ -659,10 +664,10 @@ fn a_capped_job_ends_failed_with_output_cap_whatever_else_ended_it() {
             id.clone(),
             &path,
             finished,
-            Limit {
+            Some(Limit {
                 ms: 5_000,
                 monitor: false,
-            },
+            }),
         )
     };
     let cases = [
@@ -706,7 +711,7 @@ fn a_flooded_monitor_ends_flooded_unless_the_cap_fired() {
     };
     let flooded = |mut finished: Finished| {
         finished.flooded = true;
-        to_completed(id.clone(), &path, finished, deadline)
+        to_completed(id.clone(), &path, finished, Some(deadline))
     };
     for case in [
         finished(None, Some(StopKind::Cancel), false, true, false),
@@ -737,10 +742,10 @@ fn a_monitor_at_its_deadline_says_it_expired() {
         JobId("j_1".into()),
         &path,
         finished(None, Some(StopKind::Timeout), false, true, false),
-        Limit {
+        Some(Limit {
             ms: 5_000,
             monitor: true,
-        },
+        }),
     );
     assert_eq!(end.status, Outcome::Failed);
     assert!(end.process.unwrap().timed_out);
@@ -755,10 +760,10 @@ fn a_monitor_at_its_deadline_says_it_expired() {
         JobId("j_1".into()),
         &path,
         finished(None, Some(StopKind::Timeout), true, true, false),
-        Limit {
+        Some(Limit {
             ms: 5_000,
             monitor: true,
-        },
+        }),
     );
     assert_eq!(held.error.unwrap().code, ErrorCode::Indeterminate);
 }

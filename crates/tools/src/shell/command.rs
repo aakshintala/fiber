@@ -123,7 +123,7 @@ pub(crate) fn execute(
     program: &Path,
     command: &str,
     workdir: &Path,
-    timeout: Duration,
+    timeout: Option<Duration>,
     clock: &dyn Clock,
     cancel: &dyn Cancel,
     emit: &dyn Emit,
@@ -281,7 +281,7 @@ fn finish_spawned(
     child: std::process::Child,
     listing: support::group::Listing,
     streams: SpawnStreams,
-    timeout: Duration,
+    timeout: Option<Duration>,
     clock: &dyn Clock,
     cancel: &dyn Cancel,
     emit: &dyn Emit,
@@ -357,7 +357,7 @@ fn finish_spawned(
         sent_signal: false,
         seen_empty: false,
         stream_carry: Vec::new(),
-        timeout_at: start.checked_add(timeout),
+        timeout_at: timeout.and_then(|timeout| start.checked_add(timeout)),
         move_at: match policy {
             MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
             MovePolicy::Stay
@@ -444,7 +444,7 @@ fn execute_inner(
     program: &Path,
     command: &str,
     workdir: &Path,
-    timeout: Duration,
+    timeout: Option<Duration>,
     clock: &dyn Clock,
     cancel: &dyn Cancel,
     emit: &dyn Emit,
@@ -480,7 +480,7 @@ fn execute_inner(
                     cause: unavailable.to_string(),
                 }));
             }
-            Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
+            Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace, None) {
                 Ok(prepared) => {
                     return execute_confined(
                         program,
@@ -528,7 +528,11 @@ fn execute_inner(
                     cause: unavailable.to_string(),
                 }));
             }
-            Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
+            Ok(()) => match super::sandbox::prepare(
+                sandbox_settings,
+                sandbox_workspace,
+                guard.as_ref().map(|guard| guard.dir.baseline.as_path()),
+            ) {
                 Ok(prepared) => Some(prepared),
                 Err(cause) => {
                     return Err(std::io::Error::other(SandboxApply {
@@ -633,7 +637,7 @@ pub(crate) fn execute_confined(
     program: &Path,
     command: &str,
     workdir: &Path,
-    timeout: Duration,
+    timeout: Option<Duration>,
     clock: &dyn Clock,
     cancel: &dyn Cancel,
     emit: &dyn Emit,

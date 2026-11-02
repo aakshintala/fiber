@@ -54,6 +54,18 @@ fn run(setup: &Setup, package: &Path, temp_root: &Path, args: &[&str]) -> Output
     support::run_to_exit(setup.deadline, "fiber extension test", command)
 }
 
+fn assert_only_owner_marker(temp_root: &Path) {
+    let names: Vec<String> = fs::read_dir(temp_root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        vec![".fiber-owner-pid".to_owned()],
+        "case homes are removed; only the owner marker remains"
+    );
+}
+
 #[test]
 fn test_runs_cases_without_a_path_and_isolates_every_home() {
     let setup = Setup::new();
@@ -75,11 +87,7 @@ fn test_runs_cases_without_a_path_and_isolates_every_home() {
         fs::read_to_string(setup.home().join("owner.marker")).unwrap(),
         "leave this home alone"
     );
-    assert!(
-        fs::read_dir(temp_root.path()).unwrap().next().is_none(),
-        "case homes remain in {}",
-        temp_root.path().display()
-    );
+    assert_only_owner_marker(temp_root.path());
 
     fs::write(
         package.join("tests/c.json"),
@@ -103,11 +111,7 @@ fn test_runs_cases_without_a_path_and_isolates_every_home() {
         fs::read_to_string(setup.home().join("owner.marker")).unwrap(),
         "leave this home alone"
     );
-    assert!(
-        fs::read_dir(temp_root.path()).unwrap().next().is_none(),
-        "case homes remain in {}",
-        temp_root.path().display()
-    );
+    assert_only_owner_marker(temp_root.path());
 }
 
 #[test]
@@ -137,9 +141,5 @@ fn session_cases_pass_with_a_long_tmpdir() {
         "ok a\nok b\nok c\n3 passed, 0 failed\n"
     );
     assert!(passed.stderr.is_empty());
-    assert!(
-        fs::read_dir(temp_root.path()).unwrap().next().is_none(),
-        "case homes remain in {}",
-        temp_root.path().display()
-    );
+    assert_only_owner_marker(temp_root.path());
 }

@@ -1086,3 +1086,28 @@ fn refused_connect_writes_only_first_render() {
     // docs/state.md:430-432 promises the entry-to-first-draw operation.
     assert_terminal_wire(&lines, "tui.first_render");
 }
+
+/// The attach-draw operation keeps the explicit stop boundary until it emits.
+#[test]
+fn attach_draw_emits_the_stamped_end_after_later_clock_reads() {
+    let home = fakes::TempDir::new("tui-timing-attach-draw-stamped-end");
+    let stepped = Arc::new(StepClock::step());
+    let clock: Arc<dyn Clock> = stepped.clone();
+    let mut timing = crate::timing::Timing::new(debug_diag(home.path(), clock));
+
+    timing.start_attach_draw();
+    timing.stop_attach_draw();
+    let later = stepped.now();
+    assert!(later > stepped.base, "the clock moved past the stamped end");
+    timing.emit_attach_spans();
+
+    let draw: Vec<Value> = op_lines(home.path())
+        .into_iter()
+        .filter(|line| line["data"]["op"] == "tui.attach_draw")
+        .collect();
+    assert_terminal_wire(&draw, "tui.attach_draw");
+    assert_eq!(
+        draw[0]["data"]["ms"], 20,
+        "the line uses stop_attach_draw's end, not its later drop"
+    );
+}

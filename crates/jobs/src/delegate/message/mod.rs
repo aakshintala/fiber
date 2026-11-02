@@ -63,6 +63,8 @@ pub(crate) struct SteerGate {
 /// Steers a running delegate, or resumes a finished one. The fields are
 /// wired by `main`; `bound` is both the stop bound and the closing wait.
 pub struct DelegateMessage {
+    /// Reads the parent's effective sandbox settings for each resumed run.
+    pub sandbox: super::SandboxSnapshot,
     /// This session's depth in the delegate tree.
     pub depth: u32,
     /// The session's jobs.

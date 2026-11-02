@@ -32,7 +32,7 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   call is judged in"). Any tool may set it; it only makes the call stricter.
   Today only the shell sets it, for its built-in destructive-command guard:
   `rm -r` and `rm -rf`, `git reset --hard`, `git clean`, `git checkout --`
-  and `git restore`, matched best effort by command text in any component of
+  `git restore` and `git push`, matched best effort by command text in any component of
   a multi-part command, whether or not the command parses
   (`docs/permissions.md`, "The destructive-command guard").
   A shell call that ran inside the OS sandbox on Linux or macOS carries
@@ -560,12 +560,25 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 ### Timeout
 
 - `timeout_ms` is the one thing that kills a command for running long.
-  When the model gives none it is 600,000 (10 minutes). There is no
-  maximum. It counts from when the command started.
-- It applies to every command, run in the foreground or as a job, and
-  stays with a command after the command moves to the background. For a
-  monitor it is the deadline under "Background jobs". This is
-  where a hang is bounded: "Background jobs" has no cap on waiting.
+  It counts from when the command started. There is no maximum, except a
+  monitor's. For a monitor it is the deadline under "Background jobs", with
+  that section's default and maximum.
+- A call with `run_in_background` true and no `timeout_ms` has no timeout.
+  It runs until it exits, until `jobs stop`, or until the session shuts
+  down.
+- Any other call with no `timeout_ms` gets 600,000 (10 minutes). A
+  foreground command's timeout stays with it after the command moves to the
+  background.
+- `timeout_ms` is at least 1: the schema says `"minimum": 1`. A call with
+  0 fails the loop's schema check (`docs/loop.md`), ends `failed` with code
+  `invalid_arguments`, and never starts.
+- The tool's description and the `timeout_ms` description state both
+  rules: a background call with no `timeout_ms` has none, so a background
+  call that should run until stopped leaves it out; and `timeout_ms` is at
+  least 1.
+- This is where a hang is bounded: "Background jobs" has no cap on waiting.
+  A background command with no timeout is bounded by `jobs stop`, by the
+  model when a session about to end lists it, and by shutdown.
 - A command that times out ends `failed` with code `timeout` and
   `process.timed_out` true.
 - The unit is milliseconds.
@@ -988,7 +1001,8 @@ The kinds are `docs/events.md`.
   unattended with jobs running gets the jobs check instead
   (`docs/invocation.md`, "Lifecycle").
   There is no cap on this wait: a hang is bounded at the command that hangs
-  (the shell tool's timeout, "Timeout") and by the caller's SIGTERM
+  (the shell tool's timeout when it has one, "Timeout"), by the model, which
+  the notice tells to stop what it does not need, and by the caller's SIGTERM
   (`docs/invocation.md`, "Shutdown"),
   because a cap on the waiter cannot tell a hang from long healthy work such
   as a CI watch.

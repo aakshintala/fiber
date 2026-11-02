@@ -207,6 +207,10 @@ The orchestrator waits on `CI` with `gh-ci`. A failed check is fixed in a new
 commit. A failed run is never re-run until it passes; the one exception is
 CI's own retry of a binary-level test (`docs/testing.md`, "Flaky tests").
 
+A pull request or readiness report that calls a failing check pre-existing
+names the base commit and a CI run on that commit where the same check fails.
+Without both, the failure belongs to the pull request.
+
 ## Review
 
 Every pull request gets one review, after the gate passes. The reviewer is
@@ -232,6 +236,14 @@ change behaviour, such as a key that would start doing something, the test
 lists the entry as not built instead. The build ticket adds the behaviour and
 removes the not-built entry. These test edits still count as a docs-only pull
 request.
+
+A doc pull request that states behaviour the binary does not yet have names
+its build ticket in the pull request body, as `Build ticket: #N`. When no
+ticket exists, the pull request files one. The build ticket's acceptance
+lists each such doc line with the test that proves it, at the level
+`docs/testing.md` names for that behaviour. The Spec review of the build
+pull request checks every listed line has its test. A line left without one
+keeps the build ticket open.
 
 The review is posted on the pull request as a comment. Each finding is
 either fixed, and the fix's diff reviewed again, or answered in a reply that

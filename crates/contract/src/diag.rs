@@ -313,6 +313,20 @@ pub enum Op {
     /// Installing the open's pre-frame preview candidate, without
     /// another fold.
     TuiTailInstall,
+    /// The attach's setup, from `run_with` entry through the initial
+    /// unattached draw.
+    TuiAttachSetup,
+    /// The attach's wait, from the initial draw through the first due
+    /// tail read.
+    TuiAttachWait,
+    /// The attach's tail read, from the first due attempt through the
+    /// install it reaches, across false-returning attempts between.
+    TuiAttachTail,
+    /// The attach's draw preparation, from the installed tail return
+    /// through immediately before the attached-history draw.
+    TuiAttachPrepare,
+    /// The attached-history draw, through its completion.
+    TuiAttachDraw,
     /// One session-log write attempt.
     LogAppend,
     /// One session-log sync, when the durability policy syncs.
@@ -380,6 +394,11 @@ impl Op {
             Self::TuiTailWait => "tui.tail_wait",
             Self::TuiPreviewFold => "tui.preview_fold",
             Self::TuiTailInstall => "tui.tail_install",
+            Self::TuiAttachSetup => "tui.attach_setup",
+            Self::TuiAttachWait => "tui.attach_wait",
+            Self::TuiAttachTail => "tui.attach_tail",
+            Self::TuiAttachPrepare => "tui.attach_prepare",
+            Self::TuiAttachDraw => "tui.attach_draw",
             Self::LogAppend => "log.append",
             Self::LogFsync => "log.fsync",
             Self::ToolPermission => "tool.permission",
