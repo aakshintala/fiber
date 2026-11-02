@@ -49,6 +49,7 @@ use support::*;
 
 /// Whether any grid row holds `needle`.
 fn shows(screen: &Grid, needle: &str) -> bool {
+    // settled: called only inside wait_screen predicates.
     screen.rows.iter().any(|row| row.contains(needle))
 }
 
@@ -226,6 +227,7 @@ fn reap(world: World, workspace: &str, guard: SessionGuard) {
 /// in full.
 fn recents_row(screen: &Grid) -> bool {
     let Some(at) = screen
+        // settled: called only inside a wait_screen predicate.
         .rows
         .iter()
         .position(|row| row.contains("── recents ──"))
@@ -233,6 +235,7 @@ fn recents_row(screen: &Grid) -> bool {
         return false;
     };
     screen
+        // settled: called only inside a wait_screen predicate.
         .rows
         .get(at + 1)
         .is_some_and(|row| row.contains('/') && !row.contains("──"))
@@ -240,10 +243,12 @@ fn recents_row(screen: &Grid) -> bool {
 
 /// The first row containing `needle`, or a panic naming it.
 fn row_with(grid: &Grid, needle: &str) -> u16 {
+    // settled: called only on grids a wait_screen returned.
     grid.rows
         .iter()
         .position(|row| row.contains(needle))
         .map(|y| y as u16)
+        // settled: the grid a wait_screen returned.
         .unwrap_or_else(|| panic!("{needle:?} in\n{}", grid.contents))
 }
 
