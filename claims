@@ -7,3 +7,14 @@ crates/main/tests/link_look.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7
 crates/tui/src/app/links.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app_focus.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker_tests.rs	fiber-4018	plan	2026-11-02T21:36:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+docs/testing/fakes.md	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/fakes/src/hold.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/fakes/src/hold_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/fakes/src/lib.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/fakes/src/jobs_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/main/tests/support/hold.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/main/tests/support/hold_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/extensions/src/lua/schedule_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/loop/src/tool_timing_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/jobs/src/delegate/run_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
+crates/main/tests/login.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
