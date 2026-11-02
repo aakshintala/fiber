@@ -937,8 +937,7 @@ fn cascading_delete_waits_for_live_parent_exit_not_delegate_feed_row() {
     }));
     assert!(
         exited.is_ok(),
-        "parent exit missing; screen: {}; hub: {}; parent log: {}",
-        run.screen().contents,
+        "parent exit missing; hub: {}; parent log: {}",
         setup.hub_log(),
         fs::read_to_string(session_dir(&setup, &parent).join("events.jsonl")).unwrap_or_default()
     );

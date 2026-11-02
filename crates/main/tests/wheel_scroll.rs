@@ -146,6 +146,13 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     let opened = run.wait_screen("the read's more row", |grid| {
         grid.contents
             .contains("\u{2026} 280 more lines (Enter to view)")
+            && grid.rows.iter().any(|row| row.contains("L0020"))
+            && grid.rows.first().is_some_and(|row| {
+                row.find('T')
+                    .and_then(|at| row.get(at + 1..at + 5))
+                    .and_then(|digits| digits.parse::<usize>().ok())
+                    .is_some_and(|first| first >= 90)
+            })
     });
     assert!(
         opened.rows.iter().any(|row| row.contains("L0020")),
@@ -174,8 +181,7 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     }
     // The top row's reply item, then 30 wheel-ups in one write: 3 rows
     // a step (`docs/tui.md`, "Turns").
-    let top = run.screen();
-    let first = output_line(&top.rows[0]);
+    let first = output_line(&opened.rows[0]);
     assert!(first >= 90, "top row holds T{first:04}, too few rows above");
     let target = format!("T{:04}", first - 90);
     let offset = run.output().len();

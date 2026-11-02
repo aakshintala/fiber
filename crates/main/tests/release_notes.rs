@@ -81,13 +81,14 @@ fn release_notes_show_the_stub_view_with_the_url_and_make_no_request() {
     run.wait_bytes(0, support::pty::MOTION, "mouse motion enabled");
     let baseline = proxy.connects().len();
     run.write(b"/release-notes\r");
-    run.wait_screen("the no-notes view", |grid| {
+    let no_notes = run.wait_screen("the no-notes view", |grid| {
         grid.contents.contains("No notes for this version")
+            && !rows_with(grid, contract::releases::RELEASES).is_empty()
     });
     // The stub shows the releases page (`docs/tui.md`, "Swapped views",
     // "The release notes"): presence, not a count.
     assert!(
-        !rows_with(&run.screen(), contract::releases::RELEASES).is_empty(),
+        !rows_with(&no_notes, contract::releases::RELEASES).is_empty(),
         "the releases url draws"
     );
     // Esc returns to home; reopening shows the view again.
@@ -124,12 +125,13 @@ fn release_notes_show_the_stub_view_with_the_url_and_make_no_request() {
         grid.contents.contains("No notes for this version")
     });
     run.resize(100, 28);
-    run.wait_screen("the view after resize", |grid| {
+    let resized = run.wait_screen("the view after resize", |grid| {
         grid.contents.contains("No notes for this version")
+            && !rows_with(grid, contract::releases::RELEASES).is_empty()
     });
     // Presence again after the resize: no count pinned.
     assert!(
-        !rows_with(&run.screen(), contract::releases::RELEASES).is_empty(),
+        !rows_with(&resized, contract::releases::RELEASES).is_empty(),
         "the url survives resize"
     );
     quit(run);
