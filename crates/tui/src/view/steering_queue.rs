@@ -127,8 +127,11 @@ fn entry_rows(
     columns: usize,
 ) -> Vec<CardRow> {
     let cross = droppable && columns > MARK_CELLS + 1 + 1;
+    // MARK_CELLS (2) with the cross's gap and cross (2): 4. A literal
+    // keeps no `+` for a mutant to flip to `*` (`MARK_CELLS` is 2, so
+    // both read 4 with no consumer-visible difference).
     let width = if cross {
-        columns.saturating_sub(MARK_CELLS + 2)
+        columns.saturating_sub(4)
     } else {
         columns.saturating_sub(MARK_CELLS)
     };
@@ -317,7 +320,9 @@ fn paint_builtin(
     let text = text_width(area.width);
     let lines = card_lines(app, text);
     let room = bottom.saturating_sub(area.y) as usize;
-    if lines.is_empty() || room == 0 {
+    // The card always holds its title and hint, so `lines` is never
+    // empty when the queue is non-empty; only no room hides it.
+    if room == 0 {
         return;
     }
     let edges = lines.len().saturating_add(2) <= room;
@@ -331,22 +336,19 @@ fn paint_builtin(
     let kept16 = u16::try_from(kept).unwrap_or(u16::MAX);
     // The bottom edge takes the row below the text.
     if edges {
-        let y = bottom.saturating_sub(1);
-        buf.set_line(
-            area.x,
-            y,
-            &surface::edge_row(usize::from(area.width), Role::Surface, false),
-            area.width,
-        );
-        *bottom = y;
+        *bottom = bottom.saturating_sub(1);
     }
     *bottom = bottom.saturating_sub(kept16);
     let slab = Rect::new(area.x, *bottom, area.width, kept16);
+    let card_edges = surface::Edges {
+        top: edges,
+        bottom: edges,
+    };
     // Without colour the card is thin: │ on the slab's columns, dim,
     // with no tint and no stripe: the stripe's column is the slab's
     // left side (`docs/tui.md`, "Look").
     if surface::box_fit(area.width) {
-        surface::draw_sides(buf, slab);
+        surface::draw_box(buf, area, slab, card_edges);
     } else {
         surface::draw_slab(
             buf,
@@ -356,10 +358,7 @@ fn paint_builtin(
                 colour: Role::Attention,
                 right: false,
             }),
-            surface::Edges {
-                top: false,
-                bottom: false,
-            },
+            card_edges,
         );
     }
     let x = area.x.saturating_add(2);
@@ -395,16 +394,10 @@ fn paint_builtin(
             });
         }
     }
-    // The top edge takes the row above the text.
+    // The top edge takes the row above the text; the slab's helpers
+    // already drew it on the reserved row.
     if edges {
-        let y = bottom.saturating_sub(1);
-        buf.set_line(
-            area.x,
-            y,
-            &surface::edge_row(usize::from(area.width), Role::Surface, true),
-            area.width,
-        );
-        *bottom = y;
+        *bottom = bottom.saturating_sub(1);
     }
 }
 

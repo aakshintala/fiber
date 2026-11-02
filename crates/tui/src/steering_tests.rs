@@ -61,7 +61,7 @@ fn up_selects_the_newest_then_older_and_stops_at_the_oldest() {
     // At the oldest, Up keeps the row and its edit.
     steering.up(&mut draft);
     assert_eq!(draft.expand(), "one!");
-    assert_eq!(steering.lines(), ["▸ one", "↳ two", "↳ three"]);
+    assert_eq!(steering.lines(), ["▸ one", "↳ two", "↳ three"]); // docs/tui.md:3048: oldest-first.
 }
 
 #[test]
@@ -90,12 +90,12 @@ fn fibers_own_message_shows_but_cannot_be_selected() {
         &queue(&[("first", Some("c_1")), ("from fiber", None)]),
         &mut draft,
     );
-    assert_eq!(steering.lines(), ["↳ first", "↳ from fiber"]);
+    assert_eq!(steering.lines(), ["↳ first", "↳ from fiber"]); // docs/tui.md:3048: oldest-first.
     steering.up(&mut draft);
     assert_eq!(draft.expand(), "first");
     assert!(!steering.select(1, &mut draft));
     assert_eq!(draft.expand(), "first");
-    assert_eq!(steering.lines(), ["▸ first", "↳ from fiber"]);
+    assert_eq!(steering.lines(), ["▸ first", "↳ from fiber"]); // docs/tui.md:3048: oldest-first.
     // Down from the only selectable row clears, skipping Fiber's.
     steering.down(&mut draft);
     assert!(!steering.is_selected());
@@ -115,12 +115,12 @@ fn a_row_leaving_the_queue_clears_the_selection_and_restores() {
         &mut draft,
     );
     assert!(steering.is_selected());
-    assert_eq!(steering.lines(), ["▸ three", "↳ one"]);
+    assert_eq!(steering.lines(), ["▸ three", "↳ one"]); // docs/tui.md:3048: oldest-first.
     steering.fold(&queue(&[("one", Some("c_1"))]), &mut draft);
     assert!(!steering.is_selected());
     assert_eq!(draft.expand(), "mine");
     steering.fold(&queue(&[]), &mut draft);
-    assert!(steering.lines().is_empty());
+    assert!(steering.lines().is_empty()); // docs/tui.md:3050: empty queue draws nothing.
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn rows_keep_the_full_text_on_one_line() {
     );
     // The view wraps the row; the model keeps its full text flattened
     // to one line whatever the width.
-    assert_eq!(steering.lines(), ["↳ a long message over lines"]);
+    assert_eq!(steering.lines(), ["↳ a long message over lines"]); // docs/tui.md:3048: oldest-first.
 }
 
 #[test]

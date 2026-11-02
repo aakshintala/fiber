@@ -982,9 +982,9 @@ fn a_click_on_a_steering_row_selects_it_into_the_draft() {
     ]);
     // The queue's entries sit on rows 3 and 4, newest lowest, on the
     // card between its edges: striped, with the title above and the key
-    // hint below (`docs/tui.md`, "Steering").
-    assert_eq!(row_of(&lp, "▌ ↳ use the parser"), 3);
-    assert_eq!(row_of(&lp, "▌ ↳ and test it"), 4);
+    // hint below (docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first).
+    assert_eq!(row_of(&lp, "▌ ↳ use the parser"), 3); // docs/tui.md:3048: oldest-first; docs/tui.md:1296-1306.
+    assert_eq!(row_of(&lp, "▌ ↳ and test it"), 4); // docs/tui.md:3048: oldest-first; docs/tui.md:1296-1306.
     // The card's bottom edge row is no target.
     feed(&mut lp, vec![click(40, 6)]);
     assert_eq!(lp.app.input().expand(), "mine");
@@ -1299,10 +1299,10 @@ fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
     );
     // Rows 2 to 4 on the card, oldest on top: each droppable row's ✕
     // sits at its text's right edge, and Fiber's own row has none
-    // (`docs/tui.md`, "Steering").
+    // (docs/tui.md:1301-1302: dim ✕; docs/tui.md:3048: oldest-first).
     let rows: Vec<String> = shown(&lp).lines().map(str::to_owned).collect();
-    assert!(rows[2].ends_with('✕') && rows[3].ends_with('✕'), "{rows:?}");
-    assert!(!rows[4].contains('✕'), "{rows:?}");
+    assert!(rows[2].ends_with('✕') && rows[3].ends_with('✕'), "{rows:?}"); // docs/tui.md:1301-1302: dim ✕; docs/tui.md:3048.
+    assert!(!rows[4].contains('✕'), "{rows:?}"); // docs/tui.md:3048: droppable; docs/tui.md:1301-1302.
     // Fiber's own row is a steering target with no ✕ on it.
     assert!(matches!(
         hit_at(&lp, 59, 4),

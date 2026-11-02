@@ -264,6 +264,7 @@ fn wide_and_combining_marks_draw_whole() {
 
 #[test]
 fn steering_card_with_title_entries_and_hint() {
+    // docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first; docs/tui.md:444-447: panel.
     insta::assert_snapshot!(
         "steering_card_with_title_entries_and_hint",
         screen(&queued(60, 12), 60, 12)
@@ -274,7 +275,7 @@ fn steering_card_with_title_entries_and_hint() {
 fn the_card_draws_title_entries_and_hint() {
     let shown = screen(&queued(80, 12), 80, 12);
     // The title with its figure, each entry with its mark, and the key
-    // hint: the undroppable row draws no ✕.
+    // hint: the undroppable row draws no ✕ (docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first; docs/tui.md:444-447: panel).
     for line in [
         "Steering",
         "2 queued · joins at the next step",
@@ -282,7 +283,7 @@ fn the_card_draws_title_entries_and_hint() {
         "↳ and test it",
         "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
     ] {
-        assert!(shown.contains(line), "{line}\n{shown}");
+        assert!(shown.contains(line), "{line}\n{shown}"); // docs/tui.md:1296-1306: card; docs/tui.md:3048.
     }
     let crossed = queue_row(&shown, "use the parser");
     assert!(crossed.trim_end().ends_with('✕'), "{crossed:?}");
@@ -295,7 +296,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
     let app = three_wrapping(80, 24);
     let shown = screen(&app, 80, 24);
     // The title row, three entries with the long one's continuation
-    // aligned under its text, and the key hint.
+    // aligned under its text, and the key hint (docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first; docs/tui.md:444-447: panel).
     for line in [
         "Steering",
         "3 queued · joins at the next step",
@@ -305,7 +306,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
         "one row per step",
         "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
     ] {
-        assert!(shown.contains(line), "{line}\n{shown}");
+        assert!(shown.contains(line), "{line}\n{shown}"); // docs/tui.md:1296-1306: card with count; docs/tui.md:3048: oldest-first.
     }
     // The long entry wraps: its continuation starts under its text,
     // past the stripe, the gap and the mark's two columns, with no
@@ -318,6 +319,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
     let cont = rows.get(first + 1).expect("its continuation");
     assert!(cont.starts_with("▌   "), "{cont:?}");
     assert!(!cont.contains('↳') && !cont.contains('▸'), "{cont:?}");
+    // docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first; docs/tui.md:444-447: panel.
     insta::assert_snapshot!(
         "three_entries_wrap_with_continuations_under_the_text",
         shown
@@ -560,6 +562,24 @@ fn a_droppable_rows_cross_sits_at_the_texts_right_edge() {
 }
 
 #[test]
+fn the_cross_needs_more_than_four_columns() {
+    // The `✕` draws only while it, its gap, the mark and one text cell
+    // fit: at four text columns the droppable entry keeps its text with
+    // no `✕`; at five it draws the `✕` (`docs/tui.md:1301-1302`,
+    // "Steering"). `MARK_CELLS` is 2, so the threshold is 4.
+    let narrow = super::entry_rows(false, true, "a", 0, 4);
+    assert_eq!(narrow.len(), 1, "one row for one cell");
+    assert!(!narrow[0].cross, "no cross at four columns");
+    let wide = super::entry_rows(false, true, "a", 0, 5);
+    assert_eq!(wide.len(), 1, "one row for one cell");
+    assert!(wide[0].cross, "a cross at five columns");
+    // A non-droppable entry never draws a cross, even where one fits.
+    let plain = super::entry_rows(false, false, "a", 0, 5);
+    assert_eq!(plain.len(), 1, "one row for one cell");
+    assert!(!plain[0].cross, "no cross when not droppable");
+}
+
+#[test]
 fn below_rows_counts_the_cards_title_entry_hint_and_edges() {
     // One queued message takes five rows below the conversation: the
     // title, its entry and the hint, with an edge row above and below;
@@ -579,7 +599,7 @@ fn below_rows_counts_the_cards_title_entry_hint_and_edges() {
             {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
         ]}),
     ));
-    assert_eq!(app.below_rows(), bare + 5);
+    assert_eq!(app.below_rows(), bare + 5); // docs/tui.md:1296-1306: title, entry, hint with edges; docs/tui.md:444-447: panel card.
 }
 
 #[test]
@@ -1132,8 +1152,8 @@ fn an_empty_replacement_hides_the_whole_card() {
     let fake = std::rc::Rc::new(RecordingRenderer::lines(&[], None));
     app.install_renderer(fake);
     // No rows reserved and none drawn, and no target left behind: the
-    // whole card hides. docs/tui.md:2885-2887.
-    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:2886: no lines hides the card.
+    // whole card hides. docs/tui.md:3042-3044.
+    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:3042-3044: no lines hides the card.
     let (shown, targets, _) = draw_queue(&app, 80, 24);
     assert!(!shown.contains("Steering"), "{shown}");
     assert!(!shown.contains("use the parser"), "{shown}");
@@ -1148,8 +1168,8 @@ fn an_empty_replacement_hides_the_whole_card() {
     // reserves six rows more, the title, two entries and the hint with
     // an edge row above and below.
     let plain = queued(80, 24);
-    // docs/tui.md:2885-2887: the card's six rows hide together.
-    assert_eq!(app.below_rows() + 6, plain.below_rows()); // docs/tui.md:2886.
+    // docs/tui.md:3042-3044: the card's six rows hide together.
+    assert_eq!(app.below_rows() + 6, plain.below_rows()); // docs/tui.md:3042-3044: six rows hide; docs/tui.md:1296-1306: card; docs/tui.md:444-447: panel.
     // With no rows at all and no renderer, the builtin reserves nothing
     // either: the whole card hides with the rows.
     let mut drained = queued(80, 24);
