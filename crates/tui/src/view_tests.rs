@@ -267,8 +267,7 @@ fn answers_split_tool_group() {
     assert!(groups[0] < rule && rule < groups[1], "{shown}");
     assert!(rows[groups[0]].contains("Asked 2 questions"), "{shown}");
     assert!(
-        rows[groups[1]].contains("Read 2 files")
-            && !rows[groups[1]].contains("Asked"),
+        rows[groups[1]].contains("Read 2 files") && !rows[groups[1]].contains("Asked"),
         "{shown}"
     );
     insta::assert_snapshot!("answers_split_tool_group", shown);
