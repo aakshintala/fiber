@@ -108,6 +108,18 @@ pub(crate) enum MessageSource {
     Extension(String),
 }
 
+impl Entry {
+    /// Whether the entry ends the tool group above it: a steering
+    /// message, the person's answers, or a non-driver message
+    /// (`docs/tui.md`, "Tool groups and the ledger").
+    fn ends_tool_group_above(&self) -> bool {
+        matches!(
+            self,
+            Entry::Steer(_) | Entry::Answers(_) | Entry::Message(_)
+        )
+    }
+}
+
 /// A non-driver message, retaining sender identity for current-name lookup.
 #[derive(Debug, Clone)]
 pub(crate) struct Message {
@@ -216,10 +228,18 @@ impl Turn {
         self.ended = Some((Ending::Done(done), ts));
     }
 
-    /// A steering message, in place; it does not end a group.
+    /// Pushes `entry`, ending the open group when the entry is a
+    /// group-ending rule; the next call or thought opens a new group.
+    fn push_entry(&mut self, entry: Entry) {
+        if entry.ends_tool_group_above() {
+            self.open_group = None;
+        }
+        self.entries.push(entry);
+    }
+
+    /// A steering message, in place; it ends the group above it.
     pub(crate) fn steer(&mut self, text: String, images: Vec<crate::image::Part>, ts: u64) {
-        self.entries
-            .push(Entry::Steer(steer::Steered::with_images(text, images, ts)));
+        self.push_entry(Entry::Steer(steer::Steered::with_images(text, images, ts)));
     }
 
     /// `step_started`.
@@ -743,7 +763,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
                 } else if let Some(message) =
                     message_of(&envelope.session_id, &applied.sender, &applied.content, ts)
                 {
-                    turn.entries.push(Entry::Message(message));
+                    turn.push_entry(Entry::Message(message));
                 }
                 true
             })

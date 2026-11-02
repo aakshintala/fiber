@@ -333,7 +333,7 @@ fn resolved(turns: &mut [Turn], line: &InteractionResolved, ts: u64) -> bool {
             }
         }
         if let Some(rule) = rule {
-            turn.entries.push(Entry::Answers(rule));
+            turn.push_entry(Entry::Answers(rule));
         }
     }
     changed
