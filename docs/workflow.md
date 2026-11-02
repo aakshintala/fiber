@@ -305,3 +305,32 @@ done; marking it ready starts CI's full run (`docs/ci.md`). When `CI` is
 green, the full run passed on the exact head, and every review finding is
 resolved, the orchestrator squash-merges the pull request, deletes its
 branch and checks the ticket closed.
+
+### Break-glass merge
+
+When the `CI` check itself is broken and that blocks other pull requests, the
+owner can merge the fix without a green `CI`. Only the owner breaks glass.
+Agents never do, and never ask a peer to.
+
+A pull request is eligible only when both hold:
+
+- its diff stays inside `xtask/`, `.github/`, `scripts/` and `docs/ci.md`;
+- `CI` failing or hanging on it is the reason one or more other open pull
+  requests cannot merge.
+
+Before asking the owner, the orchestrator confirms on the exact head:
+
+- `scripts/check` passes locally;
+- the review loop is done, with every finding resolved;
+- the pull request body starts with `Break-glass:`, then names the blocked
+  pull requests and why `CI` can't pass in time.
+
+The owner merges with `gh pr merge <n> --admin --squash --delete-branch`.
+`CI` still runs on `main` after the merge. If it fails, the merge is reverted
+at once in a new pull request. Nobody fixes it forward.
+
+The bypass is the repository-admin role on the `main` ruleset, in
+pull-request mode, so a direct push to `main` is still refused. Agents run
+`gh` as the owner's account, so a deny rule in each agent harness's settings
+blocks `--admin` merges. The nightly report lists every merge whose head had
+no green `CI`.
