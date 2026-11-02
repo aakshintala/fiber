@@ -99,12 +99,51 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
     );
     assert!(!draft.jobs["test"]);
     assert!(draft.jobs["test_linux"]);
-    for job in ["lint", "test_linux", "mutants", "bug_red", "release"] {
+    for job in ["lint", "test_linux", "mutants", "bug_red"] {
         assert_eq!(draft.jobs[job], ready.jobs[job], "{job}");
     }
+    assert!(!draft.jobs["release"]);
     assert!(!draft.jobs["stress"]);
     assert!(ready.jobs["stress"]);
     assert_eq!(draft.shards, ready.shards);
+}
+
+#[test]
+fn only_a_ready_pull_request_runs_the_release_job_for_each_input_that_selects_it() {
+    let inputs = [
+        ("binary package", strings(&["main"]), vec![]),
+        (
+            "benchmark path",
+            strings(&["log"]),
+            strings(&["crates/bench/src/lib.rs"]),
+        ),
+        (
+            "release-size path",
+            strings(&["log"]),
+            strings(&["scripts/release-size"]),
+        ),
+    ];
+
+    for (input, packages, release_paths) in inputs {
+        for draft in [true, false] {
+            let plan = plan(
+                "crates",
+                &packages,
+                "pull_request",
+                draft,
+                false,
+                false,
+                0,
+                &release_paths,
+            );
+            assert_eq!(plan.jobs["release"], !draft, "{input}, draft {draft}");
+            assert!(plan.jobs["lint"], "{input}, draft {draft}");
+            assert!(plan.jobs["test_linux"], "{input}, draft {draft}");
+        }
+    }
+
+    let push = plan("crates", &[], "push", false, false, false, 0, &[]);
+    assert!(push.jobs["release"]);
 }
 
 #[test]
