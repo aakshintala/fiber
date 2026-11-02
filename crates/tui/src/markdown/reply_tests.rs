@@ -449,6 +449,39 @@ fn markdown_ascii_cell_widths_match_the_text_width_helper() {
 }
 
 #[test]
+fn plain_word_counts_match_the_markdown_renderer_at_every_width() {
+    for text in [
+        "a",
+        "ab cd",
+        "a bbbbbbb ccccc d",
+        "one two three four",
+        "12345 a",
+    ] {
+        for width in 0..=24 {
+            let reply = Reply::new(text.to_owned(), 1);
+            let rendered = reply.rendered(width);
+            let counted = reply.counted(width);
+            assert_eq!(counted.rows, rendered.lines.len(), "{text:?} at {width}");
+            assert!(counted.targets.is_empty(), "{text:?} at {width}");
+            assert!(!counted.over_width, "{text:?} at {width}");
+        }
+    }
+    for first in 1..=6 {
+        for second in 1..=6 {
+            let text = format!("{} {}", "a".repeat(first), "b".repeat(second));
+            for width in 0..=12 {
+                let reply = Reply::new(text.clone(), 1);
+                assert_eq!(
+                    reply.counted(width).rows,
+                    reply.rendered(width).lines.len(),
+                    "{text:?} at {width}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn count_only_matches_each_markdown_row_kind_and_copy_target() {
     let samples = [
         "plain paragraph with a very long word abcdefghijklmnopqrstuvwxyz\nnext line",
