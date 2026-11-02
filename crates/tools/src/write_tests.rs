@@ -638,3 +638,84 @@ fn a_write_inside_a_protected_path_advances_the_baseline() {
         "the end restores to the approved write"
     );
 }
+
+#[test]
+fn a_successful_replace_logs_the_stored_hash_and_resolved_path() {
+    let dir = TempDir::new("fiber-write-seen-replace");
+    fs::write(dir.path().join("a.txt"), "old\n").unwrap();
+    let files = Files::new(dir.path().to_path_buf());
+    files.read().run(
+        &fakes::tool_args(json!({"path": "a.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    let output = files.write().run(
+        &fakes::tool_args(json!({"path": "a.txt", "content": "new\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
+    let path = resolved(dir.path(), "a.txt");
+    let hash = crate::files::hash_bytes("new\n".as_bytes());
+    assert_eq!(
+        output.details,
+        Some(json!({"file_seen": {"path": path_text(&path), "hash": hash}}))
+    );
+}
+
+#[test]
+fn a_successful_create_logs_the_stored_hash_and_resolved_path() {
+    let dir = TempDir::new("fiber-write-seen-create");
+    let files = Files::new(dir.path().to_path_buf());
+    let output = files.write().run(
+        &fakes::tool_args(json!({"path": "sub/a.txt", "content": "x\ny\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
+    let path = resolved(dir.path(), "sub").join("a.txt");
+    let hash = crate::files::hash_bytes("x\ny\n".as_bytes());
+    assert_eq!(
+        output.details,
+        Some(json!({"file_seen": {"path": path_text(&path), "hash": hash}}))
+    );
+}
+
+#[test]
+fn a_seeded_hash_permits_a_replace_but_changed_bytes_fail_changed() {
+    use std::collections::BTreeMap;
+    let dir = TempDir::new("fiber-write-seeded");
+    fs::write(dir.path().join("a.txt"), "v1\n").unwrap();
+    let path = resolved(dir.path(), "a.txt");
+    let hash = crate::files::hash_bytes("v1\n".as_bytes());
+    let seen = BTreeMap::from([(path, hash)]);
+    let files = Files::new(dir.path().to_path_buf()).with_seen(seen);
+    let output = files.write().run(
+        &fakes::tool_args(json!({"path": "a.txt", "content": "v2\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
+    assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"v2\n");
+    // The file changed outside the session after the seeding hash was
+    // taken: the same seeded record now refuses with the changed message.
+    fs::write(dir.path().join("b.txt"), "v1\n").unwrap();
+    let b = resolved(dir.path(), "b.txt");
+    let files = Files::new(dir.path().to_path_buf()).with_seen(BTreeMap::from([(
+        b,
+        crate::files::hash_bytes("v1\n".as_bytes()),
+    )]));
+    fs::write(dir.path().join("b.txt"), "outside\n").unwrap();
+    let output = files.write().run(
+        &fakes::tool_args(json!({"path": "b.txt", "content": "v2\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code(&output), Some(ErrorCode::StaleFile));
+    assert!(
+        fakes::text_of(&output).contains("changed since it was read"),
+        "{}",
+        fakes::text_of(&output)
+    );
+    assert_eq!(fs::read(dir.path().join("b.txt")).unwrap(), b"outside\n");
+}

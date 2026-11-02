@@ -814,12 +814,15 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
     let entry = "hello wait entered with helper root left 0ns (test)";
     let slices = [Duration::from_secs(10)];
     let (process, capture) = spawn_live();
+    // The root stays live so the worker has room for a hello attempt and
+    // parks in the hub's bind poll; the zero outer wait then always wins
+    // instead of sometimes losing to an instant no-room error.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        hub_start::hello_slice(
+        hub_start::hello_slice_with_budgets(
             &setup,
             process,
             &capture,
-            wait,
+            (wait, setup.deadline),
             Duration::from_secs(2),
             entry,
             &slices,

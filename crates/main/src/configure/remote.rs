@@ -666,6 +666,22 @@ impl hub::Machine for Seam {
             String::from_utf8(bytes.unwrap_or_default()).map_err(|error| io_failed(path, error))?;
         Ok((text, version))
     }
+    fn read_workspace_file(
+        &self,
+        workspace: &Path,
+        path: &Path,
+    ) -> Result<(String, String), Failure> {
+        hub::workspace_file::read(workspace, path)
+    }
+    fn write_workspace_file(
+        &self,
+        workspace: &Path,
+        path: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), Failure> {
+        hub::workspace_file::write(workspace, path, text, version)
+    }
     fn write_config(
         &self,
         workspace: &Path,
