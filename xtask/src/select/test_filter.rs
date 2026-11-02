@@ -1,7 +1,7 @@
 //! Which nextest filter a changed test file selects (`bug-filter`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use proc_macro2::{TokenStream, TokenTree};
 
@@ -52,14 +52,39 @@ fn path_attr(stream: TokenStream) -> Option<String> {
     None
 }
 
-/// Every top-level `#[path = "<lit>"] mod <ident>;` declaration in the
-/// Rust file at `path`, with `<lit>` resolved relative to its directory
-/// (the same join `compiled_in_mismatches` uses). Attributes may be
-/// interleaved with `#[cfg(test)]` and the like; a declaration inside an
-/// inline `mod x { ... }` block is ignored, so brace groups are never
-/// scanned. A file that does not tokenise declares nothing: its test
-/// files keep the conventional filter.
-fn path_decls(path: &str, source: &str) -> Vec<PathDecl> {
+/// The files a plain `mod <ident>;` in the file at `path` names: Rust
+/// resolves it beside the declarer when the declarer is its directory's
+/// own module (`lib.rs`, `main.rs` or `mod.rs`), and in the subdirectory
+/// named for the declarer's stem otherwise. Both the `<ident>.rs` and the
+/// `<ident>/mod.rs` forms resolve.
+fn plain_targets(path: &str, ident: &str) -> [String; 2] {
+    let declarer = Path::new(path);
+    let dir = declarer.parent().unwrap_or(Path::new(""));
+    let base: PathBuf = match declarer.file_name().and_then(|name| name.to_str()) {
+        Some("lib.rs" | "main.rs" | "mod.rs") => dir.to_path_buf(),
+        _ => dir.join(
+            declarer
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or(""),
+        ),
+    };
+    let normalise = |joined: PathBuf| joined.to_string_lossy().replace('\\', "/");
+    [
+        normalise(base.join(format!("{ident}.rs"))),
+        normalise(base.join(ident).join("mod.rs")),
+    ]
+}
+
+/// Every top-level `mod <ident>;` declaration in the Rust file at `path`:
+/// `#[path = "<lit>"]` ones with `<lit>` resolved relative to the
+/// declarer's directory (the same join `compiled_in_mismatches` uses), and
+/// plain ones with each of `plain_targets` that names a file in `exists`.
+/// Attributes may be interleaved with `#[cfg(test)]` and the like; a
+/// declaration inside an inline `mod x { ... }` block is ignored, so brace
+/// groups are never scanned. A file that does not tokenise declares
+/// nothing: its test files keep the conventional filter.
+fn path_decls(path: &str, source: &str, exists: &BTreeSet<String>) -> Vec<PathDecl> {
     let stream: TokenStream = match source.parse() {
         Ok(stream) => stream,
         Err(_) => return Vec::new(),
@@ -100,6 +125,13 @@ fn path_decls(path: &str, source: &str) -> Vec<PathDecl> {
                                     .replace('\\', "/"),
                                 (path.to_owned(), ident.to_string()),
                             ));
+                        } else {
+                            let ident = ident.to_string();
+                            for target in plain_targets(path, &ident) {
+                                if exists.contains(&target) {
+                                    decls.push((target, (path.to_owned(), ident.clone())));
+                                }
+                            }
                         }
                     }
                     None | Some(_) => {
@@ -159,9 +191,9 @@ fn conventional_module(path: &str, members: &Members) -> Option<String> {
 }
 
 /// The module path the file at `path` declares its items in: through the
-/// `#[path]` declaration naming it when exactly one does (resolved
-/// recursively, so a declared file declaring further files chains), else
-/// from its location. `None` on a declaration cycle or outside `src/`.
+/// declaration naming it when exactly one does (resolved recursively, so
+/// a declared file declaring further files chains), else from its
+/// location. `None` on a declaration cycle or outside `src/`.
 fn module_path(
     path: &str,
     members: &Members,
@@ -190,12 +222,15 @@ fn module_path(
     result
 }
 
-/// The test files' `#[path]` declarations indexed by the file they name,
-/// so the scope of a test file follows its declaring module.
+/// The test files' `mod` declarations indexed by the file they name,
+/// so the scope of a test file follows its declaring module: `#[path]`
+/// declarations by their literal, and plain ones by the file Rust
+/// resolves them to.
 pub(super) fn index_path_decls(sources: &[RustFile]) -> BTreeMap<String, Vec<DeclarerIdent>> {
+    let exists: BTreeSet<String> = sources.iter().map(|f| f.path.clone()).collect();
     let mut by_target: BTreeMap<String, Vec<DeclarerIdent>> = BTreeMap::new();
     for f in sources {
-        for (target, declarer) in path_decls(&f.path, &f.source) {
+        for (target, declarer) in path_decls(&f.path, &f.source, &exists) {
             by_target.entry(target).or_default().push(declarer);
         }
     }
@@ -271,8 +306,9 @@ pub(super) fn scope_of(
 
 /// The test-id prefix of the tests in the test file at `path`, whose
 /// directories under its binary's root are `modules` and whose name is
-/// `file`: the module a top-level `#[path]` declaration gives it, else the
-/// module its location gives it.
+/// `file`: the module the declaration naming it gives it, else the module
+/// its location gives it. A file nothing declares keeps the conventional
+/// guess.
 pub(super) fn test_prefix(
     path: &str,
     modules: &[&str],
@@ -318,8 +354,8 @@ pub(crate) fn unrun_test_files(files: &[String], members: &Members) -> Vec<Strin
 
 /// The nextest filter selecting every test in the test files among
 /// `files`, and the packages that own them. `sources` is every Rust file
-/// in the workspace: a `src/` test file a top-level `#[path]`
-/// declaration names maps to the module path that declares it.
+/// in the workspace: a `src/` test file a declaration names maps to the
+/// module path that declares it.
 pub(crate) fn test_filter(
     files: &[String],
     members: &Members,

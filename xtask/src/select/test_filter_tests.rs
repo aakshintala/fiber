@@ -221,6 +221,55 @@ fn an_inline_module_after_a_path_attribute_registers_nothing() {
 }
 
 #[test]
+fn a_plain_test_file_maps_to_its_declared_name() {
+    // No `foo.rs` exists: the stem guess (`foo::tests::`) is wrong, and
+    // the declaration (`mod foo_tests;`) says the tests sit in `foo_tests`.
+    let files = strings(&["crates/log/src/foo_tests.rs"]);
+    let sources = vec![
+        decl(
+            "log",
+            "crates/log/src/lib.rs",
+            "#[cfg(test)]\nmod foo_tests;",
+        ),
+        decl("log", "crates/log/src/foo_tests.rs", ""),
+    ];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^foo_tests::/))");
+}
+
+#[test]
+fn a_plain_test_file_inside_a_plain_module_chains_through_it() {
+    // `lib.rs` declares `mod a;` and `a.rs` declares `mod b_tests;`, so
+    // the prefix is the whole chain, not just the leaf.
+    let files = strings(&["crates/log/src/a/b_tests.rs"]);
+    let sources = vec![
+        decl("log", "crates/log/src/lib.rs", "mod a;"),
+        decl("log", "crates/log/src/a.rs", "#[cfg(test)]\nmod b_tests;"),
+        decl("log", "crates/log/src/a/b_tests.rs", ""),
+    ];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^a::b_tests::/))");
+}
+
+#[test]
+fn a_plain_test_file_inside_a_plain_mod_rs_chains_through_it() {
+    // The intermediate module lives in `a/mod.rs` rather than `a.rs`:
+    // the chain still resolves through it.
+    let files = strings(&["crates/log/src/a/b_tests.rs"]);
+    let sources = vec![
+        decl("log", "crates/log/src/lib.rs", "mod a;"),
+        decl(
+            "log",
+            "crates/log/src/a/mod.rs",
+            "#[cfg(test)]\nmod b_tests;",
+        ),
+        decl("log", "crates/log/src/a/b_tests.rs", ""),
+    ];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^a::b_tests::/))");
+}
+
+#[test]
 fn a_test_file_declared_in_lib_rs_maps_to_the_crate_root() {
     let files = strings(&["crates/log/src/foo_tests.rs"]);
     let sources = vec![decl(

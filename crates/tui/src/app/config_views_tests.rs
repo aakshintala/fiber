@@ -17,6 +17,7 @@ use super::ConfigView;
 use crate::Configure;
 use crate::configure::{Layer, Shown, WriteScope};
 use crate::configure_fake::{Fake, file, row};
+use crate::editor::OpenFile;
 use crate::home::Launch;
 use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
@@ -271,7 +272,10 @@ fn ctrl_g_returns_the_file_to_open() {
     slash_settings(&mut app);
     assert_eq!(
         app.on_key(Key::CtrlG, now()),
-        Effect::OpenFile(file(Layer::Global))
+        Effect::OpenFile(OpenFile {
+            path: file(Layer::Global),
+            line: None
+        })
     );
 }
 
@@ -1179,7 +1183,8 @@ fn remote_ctrl_g_round_trips_and_rereads_after_success_stale_or_editor_error() {
         script.push(remote_settings());
         remote_editor_case(script, move |mut app| {
             app.open_config_view(ConfigView::Settings);
-            let Effect::OpenFile(temp) = app.on_key(Key::CtrlG, now()) else {
+            let Effect::OpenFile(OpenFile { path: temp, .. }) = app.on_key(Key::CtrlG, now())
+            else {
                 panic!("remote editor copy");
             };
             assert_eq!(std::fs::read(&temp).unwrap(), b"original\r\n");
@@ -1209,10 +1214,12 @@ fn pending_editor_copy_drops_on_replacement_and_shutdown() {
         vec![remote_settings(), remote_read(), remote_read()],
         |mut app| {
             app.open_config_view(ConfigView::Settings);
-            let Effect::OpenFile(first) = app.on_key(Key::CtrlG, now()) else {
+            let Effect::OpenFile(OpenFile { path: first, .. }) = app.on_key(Key::CtrlG, now())
+            else {
                 panic!("first copy")
             };
-            let Effect::OpenFile(second) = app.on_key(Key::CtrlG, now()) else {
+            let Effect::OpenFile(OpenFile { path: second, .. }) = app.on_key(Key::CtrlG, now())
+            else {
                 panic!("second copy")
             };
             assert!(!first.parent().unwrap().exists());
@@ -1234,17 +1241,26 @@ fn failed_remote_fetch_opens_nothing_and_client_files_never_use_the_hub() {
         assert_eq!(app.notices.newest(), Some("hub read refused"));
         assert_eq!(
             app.config_act(super::Act::OpenLocal(Some("/client/keys.json".into()))),
-            Effect::OpenFile("/client/keys.json".into())
+            Effect::OpenFile(OpenFile {
+                path: "/client/keys.json".into(),
+                line: None
+            })
         );
         assert_eq!(
             app.config_act(super::Act::OpenLocal(None)),
-            Effect::OpenFile(file(Layer::Global))
+            Effect::OpenFile(OpenFile {
+                path: file(Layer::Global),
+                line: None
+            })
         );
     });
     let mut local = attached(Some(fake()));
     assert_eq!(
         local.config_act(super::Act::OpenLocal(None)),
-        Effect::OpenFile(file(Layer::Global))
+        Effect::OpenFile(OpenFile {
+            path: file(Layer::Global),
+            line: None
+        })
     );
 }
 
@@ -1264,7 +1280,8 @@ fn failed_copy_cleanup_does_not_prevent_store_or_view_reread() {
         ],
         |mut app| {
             app.open_config_view(ConfigView::Settings);
-            let Effect::OpenFile(temp) = app.on_key(Key::CtrlG, now()) else {
+            let Effect::OpenFile(OpenFile { path: temp, .. }) = app.on_key(Key::CtrlG, now())
+            else {
                 panic!("copy")
             };
             let dir = temp.parent().unwrap().to_path_buf();

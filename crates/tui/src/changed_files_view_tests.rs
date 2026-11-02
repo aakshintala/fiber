@@ -15,7 +15,9 @@ use contract::{ActionId, Envelope, SCHEMA_VERSION, SessionId};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::{Diff, answer, diff_command, frame, numstat_command, ranked, resolve_figures};
+use super::{
+    Diff, answer, diff_command, first_hunk_line, frame, numstat_command, ranked, resolve_figures,
+};
 use crate::app::{App, Effect, SessionView};
 use crate::keys::Key;
 use crate::link::Line;
@@ -132,7 +134,13 @@ fn app_with_diff() -> App {
 fn a_file_row_is_its_path_bold_then_dim_dot_added_and_removed() {
     use crate::swapped::Ink;
     use crate::theme::Role;
-    let frame = frame(&changes(&[("src/a.rs", 4, 2)]), None, None, List::default());
+    let frame = frame(
+        &changes(&[("src/a.rs", 4, 2)]),
+        None,
+        None,
+        List::default(),
+        false,
+    );
     assert_eq!(
         frame.rows[0],
         [
@@ -493,18 +501,24 @@ fn a_missing_or_non_shell_answer_cannot_be_read() {
 #[test]
 fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     let changes = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
-    let list = frame(&changes, None, None, List::default());
+    let list = frame(&changes, None, None, List::default(), false);
     assert_eq!(list.title, "Changed files");
     assert_eq!(row(&list, 0), "src/a.rs · +4 −2");
     assert_eq!(row(&list, 1), "src/b.rs · +1 −0");
     assert_eq!(list.below, ["2 files changed  +5 −2"]);
-    assert_eq!(list.footer, "↑↓ move · Enter show diff · Esc close");
+    assert_eq!(
+        list.footer,
+        "↑↓ move · Enter show diff · Ctrl+G edits · Esc close"
+    );
+    let remote_list = frame(&changes, None, None, List::default(), true);
+    assert_eq!(remote_list.footer, "↑↓ move · Enter show diff · Esc close");
 
     let reading = frame(
         &changes,
         None,
         Some(("src/a.rs", &Diff::Reading)),
         List::default(),
+        false,
     );
     assert_eq!(
         reading.title,
@@ -516,20 +530,34 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         lines: vec!["+new".to_owned()],
         cut: None,
     };
-    assert_eq!(
-        row(
-            &frame(&changes, None, Some(("src/a.rs", &diff)), List::default()),
-            0
-        ),
-        "+new"
+    let local_diff = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        false,
     );
+    assert_eq!(row(&local_diff, 0), "+new");
+    assert_eq!(
+        local_diff.footer,
+        "↑↓ scroll · Ctrl+G edits · ← files · Esc close"
+    );
+    let remote_diff = frame(
+        &changes,
+        None,
+        Some(("src/a.rs", &diff)),
+        List::default(),
+        true,
+    );
+    assert_eq!(remote_diff.footer, "↑↓ scroll · ← files · Esc close");
     assert_eq!(
         row(
             &frame(
                 &changes,
                 None,
                 Some(("src/a.rs", &Diff::Empty)),
-                List::default()
+                List::default(),
+                false
             ),
             0
         ),
@@ -538,7 +566,13 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     let failed = Diff::Failed("denied".to_owned());
     assert_eq!(
         row(
-            &frame(&changes, None, Some(("src/a.rs", &failed)), List::default()),
+            &frame(
+                &changes,
+                None,
+                Some(("src/a.rs", &failed)),
+                List::default(),
+                false,
+            ),
             0
         ),
         "denied"
@@ -548,7 +582,14 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
         cut: Some("artifacts/full.diff".to_owned()),
     };
     assert_eq!(
-        frame(&changes, None, Some(("src/a.rs", &cut)), List::default()).below,
+        frame(
+            &changes,
+            None,
+            Some(("src/a.rs", &cut)),
+            List::default(),
+            false
+        )
+        .below,
         ["Cut: the whole diff is in artifacts/full.diff"]
     );
 }
@@ -570,6 +611,7 @@ fn diff_frame_of(lines: &[&str]) -> crate::swapped::Frame {
         None,
         Some(("src/a.rs", &diff)),
         List::default(),
+        false,
     )
 }
 
@@ -657,7 +699,7 @@ fn answered_rows_show_git_figures_and_the_untracked_row_form() {
     let mut lines = BTreeMap::new();
     lines.insert("new.txt".to_owned(), 3u64);
     let resolved = resolve_figures(&card, Some("7\t1\tsrc/a.rs\n"), &lines, None);
-    let frame = frame(&card, Some(&resolved), None, List::default());
+    let frame = frame(&card, Some(&resolved), None, List::default(), false);
     assert_eq!(row(&frame, 0), "src/a.rs · +7 −1");
     assert_eq!(row(&frame, 1), "new.txt · untracked, wholly added");
     assert_eq!(
@@ -719,4 +761,46 @@ fn resolve_figures_matches_git_s_relative_paths_against_absolute_card_paths() {
     let displayed = resolve_figures(&card, Some("7\t1\ta.rs\n"), &lines, Some(dir.path()));
     assert_eq!(displayed.figures.get(absolute.as_str()), Some(&(7, 1)));
     assert!(displayed.untracked.is_empty());
+}
+
+#[test]
+fn first_hunk_line_reads_the_first_hunks_new_side_start() {
+    let lines = [
+        "diff --git a/f.txt b/f.txt",
+        "@@ -1,3 +10,4 @@ fn",
+        " old",
+        "@@ -8,2 +20,3 @@ fn",
+        " old",
+    ]
+    .map(str::to_owned);
+    assert_eq!(first_hunk_line(&lines), 10);
+}
+
+#[test]
+fn first_hunk_line_clamps_a_zero_start_to_one() {
+    for (header, want) in [
+        ("@@ -1,1 +0,0 @@", 1),
+        ("@@ -1 +1 @@", 1),
+        ("@@ -1,3 +2,4 @@", 2),
+    ] {
+        assert_eq!(first_hunk_line(&[header.to_owned()]), want, "{header}");
+    }
+}
+
+#[test]
+fn first_hunk_line_skips_unparsable_headers() {
+    let lines = ["@@ nope", "@@ -1,3 +x @@", "@@ -4,2 +7 @@"].map(str::to_owned);
+    assert_eq!(first_hunk_line(&lines), 7);
+}
+
+#[test]
+fn first_hunk_line_is_one_without_a_header() {
+    let empty: Vec<String> = Vec::new();
+    for lines in [
+        empty,
+        vec!["diff line".to_owned()],
+        vec!["Binary files a/f.txt and b/f.txt differ".to_owned()],
+    ] {
+        assert_eq!(first_hunk_line(&lines), 1);
+    }
 }

@@ -734,14 +734,31 @@ fn unending_short_lines_cannot_outlive_the_cutoff_or_cancellation() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_full_backlog_is_not_an_accepted_connection() {
+    const BACKLOG: usize = 8;
+    // Linux queues backlog + 1 connections; one more descriptor probes EAGAIN.
+    const FILL_DESCRIPTOR_CEILING: usize = BACKLOG + 2;
+
     let home = Home::new();
-    let listener = home.listener(ID);
+    fs::create_dir_all(home.run()).unwrap();
     let address = rustix::net::SocketAddrUnix::new(home.run().join(ID)).unwrap();
+    let listener = crate::hub::nonblocking_socket().unwrap();
+    rustix::net::bind(&listener, &address).unwrap();
+    // std's Linux bind uses somaxconn, which can exceed the descriptor limit.
+    rustix::net::listen(&listener, i32::try_from(BACKLOG).unwrap()).unwrap();
     let mut filled = Vec::new();
     let deadline = Deadline::after(fakes::deadline::WAIT);
     loop {
         assert!(!deadline.left().is_zero(), "backlog filled within deadline");
-        let socket = crate::hub::nonblocking_socket().unwrap();
+        assert!(
+            filled.len() < FILL_DESCRIPTOR_CEILING,
+            "backlog {BACKLOG} did not refuse a connect within the fill descriptor ceiling of {FILL_DESCRIPTOR_CEILING}"
+        );
+        let socket = crate::hub::nonblocking_socket().unwrap_or_else(|e| {
+            panic!(
+                "filling backlog {BACKLOG} after {} connects (fill descriptor ceiling {FILL_DESCRIPTOR_CEILING}): {e}",
+                filled.len()
+            )
+        });
         match rustix::net::connect(&socket, &address) {
             Ok(()) => filled.push(socket),
             Err(rustix::io::Errno::AGAIN) => break,

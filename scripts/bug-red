@@ -15,10 +15,12 @@
 # the bug. A red commit whose only test files belong to `test = false`
 # targets passes too, with a message saying so: those tests run only on push
 # until #3899 step 6, so a plain nextest filter would match none of them.
-# --report writes nextest's status class, or `docs` or `journey` for those
-# two cases, to GITHUB_OUTPUT and lets the collector decide whether this leg
-# passed. --collect accepts a test failure on either platform, but requires
-# a build on both.
+# Each leg drops the planned tests its platform does not compile and names
+# them. A plan left empty on both legs fails with the no-match status.
+# --report writes nextest's status class, or `docs` or `journey` for the
+# docs-only and journey-only cases, to GITHUB_OUTPUT and lets the collector
+# decide whether this leg passed. --collect accepts a test failure on either
+# platform, but requires a build on both.
 set -euo pipefail
 
 journey_only="the red commit's only touched tests are journey tests, which pull-request CI does not run until #3899 step 6"
@@ -136,8 +138,9 @@ if [ -z "$filter" ]; then
 fi
 
 tree=$(mktemp -d)
+list=$(mktemp)
 git worktree add --quiet --detach "$tree" "$red"
-trap 'git worktree remove --force "$tree"' EXIT
+trap 'git worktree remove --force "$tree"; rm -f "$list"' EXIT
 
 package_args=()
 while IFS=$'\t' read -r -a fields; do
@@ -151,6 +154,24 @@ while IFS=$'\t' read -r -a fields; do
     fi
   fi
 done <<<"$plan"
+
+# The red commit is what this leg compiles. Listing there, with the same
+# packages and filter, names the tests this platform built. A planned test
+# missing from that list is compiled out: say so, drop it from the filter,
+# and an empty remainder is the no-match result.
+planned=$(sed -n '/^planned\t/p' <<<"$plan")
+if [ -n "$planned" ]; then
+  (cd "$tree" && cargo nextest list --message-format json --color never --no-pager "${package_args[@]}" -E "$filter") >"$list"
+  narrowed=$(printf '%s\n' "$planned" | cargo xtask narrow-plan --list "$list" --filter "$filter")
+  sed -n 's/^dropped\t/bug-red: dropping /p' <<<"$narrowed"
+  if [ "$(sed -n 's/^run\t//p' <<<"$narrowed")" != true ]; then
+    echo "bug-red: none of the red commit's tests runs at the red commit"
+    report_status 4
+    [ "$report" = true ] || exit 1
+    exit 0
+  fi
+  filter=$(sed -n 's/^filter\t//p' <<<"$narrowed")
+fi
 
 echo "bug-red: running $filter at $red"
 status=0

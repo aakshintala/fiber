@@ -364,6 +364,20 @@ fn you_rows(contents: &str) -> usize {
         .count()
 }
 
+/// Pins the grip strip already in `you_rows`. A whitespace trim leaves
+/// a leading `⋮`, so that row would not count; `you_rows` counts it.
+#[test]
+fn you_rows_counts_the_prompt_row_that_wears_the_rail_grip() {
+    let gripped = "   ⋮   you 23:16  ⋮";
+    assert!(
+        !gripped.trim_start().starts_with("you "),
+        "whitespace trimming leaves the grip, so the row does not count"
+    );
+    assert_eq!(you_rows(gripped), 1);
+    let plain = "  you 23:16";
+    assert_eq!(you_rows(&format!("{plain}\n{gripped}\n")), 2);
+}
+
 #[test]
 fn quota_notice_is_a_fiber_card_entry_in_pty() {
     let setup = Setup::new();
@@ -406,8 +420,8 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
         &quota_rx,
         "the fake receiving the first turn's quota request",
     );
-    // The turn must end before typing: sent earlier, `/quota`
-    // would steer the first turn instead of opening the view.
+    // The completed card is recorded here. It proves the transcript
+    // and the title, not that the TUI has left the turn.
     run.turn_finished(from);
     // The view's `fetch: true` query either joins that flight or
     // starts its own, and answers only once a fetch ends
@@ -420,7 +434,12 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     // requires the fetching mark gone. `Quota` plus `10%` alone
     // could match the panel card before the view opens, so the wait
     // names the view's own top row (`/quota` and `Esc returns`):
-    // only the open view's fetched value passes.
+    // only the open view's fetched value passes. Enter is taken by
+    // the open `/` panel, which submits its focused row. For this
+    // draft that row is `quota`, so `on_enter` still sees `/quota`
+    // and returns the quota fetch. The command is a built-in: it
+    // does not read `busy`, and it sends no prompt. A screen whose
+    // panel says `turns 2` got that turn from `second`, below.
     run.write(b"/quota\r");
     run.wait_screen("the fetched quota value", |grid| {
         grid.contents.contains("Quota")
@@ -433,9 +452,10 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     run.wait_screen("the conversation after the quota view", |grid| {
         grid.contents.contains("Hello.")
     });
-    // The first turn's card completed before the view opened, so the
-    // second prompt below starts a new turn instead of steering the
-    // first.
+    // `second` is not a built-in. While the turn is idle it is a
+    // prompt, and that prompt is the second turn. Sent while `busy`
+    // is still set it is a steer instead, and the panel stays on
+    // turns 1.
     run.write(b"second\r");
     // The wait also requires the settled row count: the notice can
     // paint while the first turn's `you` row is still settling, and a

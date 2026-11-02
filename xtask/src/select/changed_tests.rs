@@ -7,6 +7,7 @@
 //! `touches` says it changes the function. Anything unreadable is an error
 //! naming the path, never an empty selection.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{Delimiter, Group, LineColumn, TokenStream, TokenTree};
@@ -486,8 +487,11 @@ struct OpenFile {
 }
 
 /// The test functions the diff adds or changes, in diff order,
-/// de-duplicated: a pure function of its inputs, which reads the working
-/// tree through `sources` and never git or the clock.
+/// de-duplicated. It reads the working tree through `sources` and never
+/// git or the clock. When the stress planner has called
+/// `narrow_to_compiled_tests` and this is Fiber's workspace, tests the
+/// runner's `cargo nextest list` does not report are removed and each
+/// removed test is printed as a `dropped` line (`docs/ci.md`).
 pub(crate) fn changed_tests(
     diff: &str,
     members: &Members,
@@ -590,7 +594,297 @@ pub(crate) fn changed_tests(
             hunk = Some((old_count, new_count, new_start));
         }
     }
+    if narrow_compiled() && members.contains_key(FIBER_PACKAGE) {
+        return retain_compiled(&out, members);
+    }
     Ok(out)
+}
+
+/// Fiber's own workspace has this package. The program tests run
+/// `stress-plan` in a fixture workspace that does not, inside a bound
+/// that cannot hold a nested `cargo nextest list`, so the list runs only
+/// for Fiber's checkout.
+const FIBER_PACKAGE: &str = "xtask";
+
+thread_local! {
+    static NARROW_COMPILED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn narrow_compiled() -> bool {
+    NARROW_COMPILED.with(Cell::get)
+}
+
+/// The stress planner asks `changed_tests` to drop tests this runner did
+/// not compile. `touched-retries` uses the same selector and does not ask:
+/// it reads a retry list the test job already produced, and a nested list
+/// there would compile the suite again.
+pub(crate) fn narrow_to_compiled_tests(enabled: bool) {
+    NARROW_COMPILED.set(enabled);
+}
+
+/// One test `cargo nextest list --message-format json` reported as
+/// matching the filter. A test the binary did not compile is absent.
+struct ListedTest {
+    package: String,
+    binary_id: String,
+    kind: String,
+    name: String,
+}
+
+/// The plan after intersecting `planned` with the runner's list: whether
+/// any test remains, the filter to run, and the label of each dropped test.
+pub(crate) struct RunnerPlan {
+    pub(crate) run: bool,
+    pub(crate) filter: String,
+    pub(crate) dropped: Vec<String>,
+}
+
+/// `cargo nextest list` JSON: the testcases whose `filter-match` status is
+/// `matches`. Anything else, including `mismatch`, is not in the plan.
+fn matching_tests(json: &str) -> Result<Vec<ListedTest>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| format!("nextest list: {error}"))?;
+    let suites = value
+        .get("rust-suites")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("nextest list: no rust-suites")?;
+    let mut listed = Vec::new();
+    for suite in suites.values() {
+        let package = text_field(suite, "package-name");
+        let binary_id = text_field(suite, "binary-id");
+        let kind = text_field(suite, "kind");
+        let Some(cases) = suite
+            .get("testcases")
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        for (name, case) in cases {
+            let status = case
+                .get("filter-match")
+                .and_then(|matched| matched.get("status"))
+                .and_then(serde_json::Value::as_str);
+            if status != Some("matches") {
+                continue;
+            }
+            listed.push(ListedTest {
+                package: package.to_owned(),
+                binary_id: binary_id.to_owned(),
+                kind: kind.to_owned(),
+                name: name.clone(),
+            });
+        }
+    }
+    Ok(listed)
+}
+
+fn text_field<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+}
+
+fn listed_has(test: &TestRef, listed: &[ListedTest]) -> bool {
+    listed.iter().any(|row| {
+        row.name == test.name
+            && row.package == test.package
+            && match &test.binary {
+                Some(binary) => row.binary_id == *binary,
+                None if test.unit => row.kind == "lib" || row.kind == "bin",
+                None => row.kind == "test",
+            }
+    })
+}
+
+/// The planned tests the list contains, and those it does not, each once,
+/// in plan order.
+fn compiled_tests(planned: &[TestRef], listed: &[ListedTest]) -> (Vec<TestRef>, Vec<TestRef>) {
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for test in planned {
+        let dest = if listed_has(test, listed) {
+            &mut kept
+        } else {
+            &mut dropped
+        };
+        if !dest.contains(test) {
+            dest.push(test.clone());
+        }
+    }
+    (kept, dropped)
+}
+
+/// The same id the stress plan's `test` line uses, then the test name.
+fn test_label(test: &TestRef) -> String {
+    let id = test.binary.as_deref().unwrap_or(&test.package);
+    format!("{id} {}", test.name)
+}
+
+/// One `planned` line `bug-filter` prints and `narrow-plan` reads back.
+pub(crate) fn planned_line(test: &TestRef) -> String {
+    let binary = test.binary.as_deref().unwrap_or("");
+    let unit = if test.unit { "true" } else { "false" };
+    format!("planned\t{}\t{binary}\t{unit}\t{}", test.package, test.name)
+}
+
+/// The `planned` lines, in order. A line that is not one is an error
+/// naming it: a dropped field would plan the wrong test.
+pub(crate) fn parse_planned(text: &str) -> Result<Vec<TestRef>, String> {
+    let mut planned = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("planned\t") else {
+            return Err(format!("planned line {}: {line}", index + 1));
+        };
+        let mut fields = rest.split('\t');
+        let package = fields.next().unwrap_or("");
+        let binary = fields.next().unwrap_or("");
+        let unit = fields.next().unwrap_or("");
+        let name = fields.next().unwrap_or("");
+        if package.is_empty()
+            || name.is_empty()
+            || fields.next().is_some()
+            || (unit != "true" && unit != "false")
+        {
+            return Err(format!("planned line {}: {line}", index + 1));
+        }
+        planned.push(TestRef {
+            package: package.to_owned(),
+            binary: if binary.is_empty() {
+                None
+            } else {
+                Some(binary.to_owned())
+            },
+            name: name.to_owned(),
+            unit: unit == "true",
+        });
+    }
+    Ok(planned)
+}
+
+fn exclusion(test: &TestRef) -> String {
+    match &test.binary {
+        Some(binary) => format!("(binary_id({binary}) & test(={}))", test.name),
+        None if test.unit => format!("(package({}) & test(={}))", test.package, test.name),
+        None => format!(
+            "(package({}) & kind(test) & test(={}))",
+            test.package, test.name
+        ),
+    }
+}
+
+/// `expression` minus each dropped test. The original filter stays, so a
+/// test the parser cannot name, such as one a macro emits, still runs;
+/// only the named tests the runner left out are excluded.
+fn without_dropped(expression: &str, dropped: &[TestRef]) -> String {
+    let mut filter = format!("({expression})");
+    for test in dropped {
+        filter.push_str(" & not ");
+        filter.push_str(&exclusion(test));
+    }
+    filter
+}
+
+/// Intersect `planned` with the runner's list. An empty remainder runs
+/// nothing. A partial remainder keeps `expression` and excludes each
+/// dropped test by name.
+pub(crate) fn narrow_plan(
+    expression: &str,
+    planned_text: &str,
+    list_json: &str,
+) -> Result<RunnerPlan, String> {
+    let planned = parse_planned(planned_text)?;
+    let listed = matching_tests(list_json)?;
+    let (kept, dropped) = compiled_tests(&planned, &listed);
+    let labels = dropped.iter().map(test_label).collect();
+    if kept.is_empty() {
+        return Ok(RunnerPlan {
+            run: false,
+            filter: String::new(),
+            dropped: labels,
+        });
+    }
+    let filter = if dropped.is_empty() {
+        expression.to_owned()
+    } else {
+        without_dropped(expression, &dropped)
+    };
+    Ok(RunnerPlan {
+        run: true,
+        filter,
+        dropped: labels,
+    })
+}
+
+/// Every test in `files`, in file order. A path with no source in
+/// `sources` adds nothing: the filter for that path still stands, and
+/// the runner list is what drops a test the platform did not compile.
+pub(crate) fn tests_in_files(
+    files: &[String],
+    members: &Members,
+    sources: &[RustFile],
+) -> Result<Vec<TestRef>, String> {
+    let by_target = index_path_decls(sources);
+    let mut out = Vec::new();
+    for path in files {
+        if !sources.iter().any(|source| source.path == *path) {
+            continue;
+        }
+        if let Some(tests) = resolve(path, members, &by_target, sources)? {
+            for (_, test) in tests {
+                if !out.contains(&test) {
+                    out.push(test);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn retain_compiled(planned: &[TestRef], members: &Members) -> Result<Vec<TestRef>, String> {
+    if planned.is_empty() {
+        return Ok(Vec::new());
+    }
+    let listed = stress_runner_list(planned, members)?;
+    let (kept, dropped) = compiled_tests(planned, &listed);
+    for test in &dropped {
+        println!("dropped\t{}", test_label(test));
+    }
+    Ok(kept)
+}
+
+/// The stress run's list: the same packages, filter and `stress` profile
+/// the job passes to `cargo nextest run`.
+fn stress_runner_list(planned: &[TestRef], members: &Members) -> Result<Vec<ListedTest>, String> {
+    let expression = filter(planned);
+    let mut packages: Vec<String> = planned
+        .iter()
+        .map(|test| super::spec(&test.package, members))
+        .collect();
+    packages.sort();
+    packages.dedup();
+    let mut args = vec![
+        "nextest".to_owned(),
+        "list".to_owned(),
+        "--message-format".to_owned(),
+        "json".to_owned(),
+        "--color".to_owned(),
+        "never".to_owned(),
+        "--no-pager".to_owned(),
+        "--profile".to_owned(),
+        "stress".to_owned(),
+    ];
+    for package in &packages {
+        args.push("-p".to_owned());
+        args.push(package.clone());
+    }
+    args.push("-E".to_owned());
+    args.push(expression);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    matching_tests(&crate::output("cargo", &refs)?)
 }
 
 /// Every touched function into the selection, once each.
