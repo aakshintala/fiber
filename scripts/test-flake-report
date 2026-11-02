@@ -1395,4 +1395,108 @@ then
   fail "the closed issues differ from the generated fixture"
 fi
 
+# The report step files the failure text whole: a panic past the GitHub
+# body limit lands across the issue and follow-up comments, while a short
+# panic keeps the classic single body byte-for-byte and no detail means no
+# fence. This block extracts the "File or comment on the flake issues"
+# step from .github/workflows/ci.yml and runs it against stubbed gh and
+# jq, the same way the collate block above runs its step.
+report_dir=$tmp/report
+mkdir -p "$report_dir/bin" "$report_dir/state"
+awk '
+  index($0, "File or comment on the flake issues") { armed = 1; next }
+  armed && !started && $0 ~ /^ *run: \|$/ { started = 1; next }
+  started {
+    if ($0 ~ /^ *$/) { print ""; next }
+    match($0, /[^ ]/)
+    if (RSTART - 1 <= 8) exit
+    print
+  }
+' .github/workflows/ci.yml >"$report_dir/report.sh"
+[ -s "$report_dir/report.sh" ] || fail "the report step was not found in .github/workflows/ci.yml"
+grep -Fq 'flake_body() {' "$report_dir/report.sh" || fail "the report step builds no body"
+# shellcheck disable=SC2016 # $PR is literal text the step holds, matched by -F.
+grep -Fq 'flake_followups "$PR"' "$report_dir/report.sh" || fail "the pull request comment posts no follow-ups"
+# shellcheck disable=SC2016 # $number is literal text the step holds, matched by -F.
+grep -Fq 'flake_followups "$number"' "$report_dir/report.sh" || fail "a new or open issue posts no follow-ups"
+# shellcheck disable=SC2016 # $action_issue is literal text the step holds, matched by -F.
+grep -Fq 'flake_followups "$action_issue"' "$report_dir/report.sh" || fail "a reopened issue posts no follow-ups"
+bash -n "$report_dir/report.sh" || fail "the report step does not parse"
+ln -s "$toplevel/scripts/test-flake-report-gh" "$report_dir/bin/gh"
+ln -s "$real_jq" "$report_dir/bin/jq"
+# run_report DIR: runs the report step with DIR/classes.jsonl and
+# DIR/decisions.jsonl, leaving numbered bodies in DIR/state. A push run:
+# no pull request, so the sentence names no issue.
+run_report() {
+  dir=$1
+  mkdir -p "$dir/state"
+  echo 0 >"$dir/state/next"
+  : >"$dir/summary"
+  env -i PATH="$report_dir/bin:$orig_path" HOME="$tmp" PR="" RUNNER_TEMP="$dir/state" \
+    GH_REPO="x/y" GH_TOKEN="test-token" RUN_URL="https://example.com/runs/1" \
+    DECIDE_RESULT=success DECIDE_FLAKES=true DECISIONS="$dir/decisions.jsonl" CLASSES="$dir/classes.jsonl" \
+    GITHUB_STEP_SUMMARY="$dir/summary" REPORT_STATE_DIR="$dir/state" "OPEN_ISSUE_JSON=${OPEN_ISSUE_JSON:-}" \
+    bash --noprofile --norc -eo pipefail "$report_dir/report.sh" || fail "$dir: the report step failed"
+}
+# fence_detail FILE: prints the fenced text of a body file, the lines
+# between its first and last ``` line.
+fence_detail() {
+  awk '/^```$/{c++; next} c==1' "$1"
+}
+# A panic past the body limit files whole through the follow-up: the
+# create body names the follow-up, stays within the limit, and its fence
+# plus the follow-up's fence hold every character.
+over_dir=$tmp/report-over
+mkdir -p "$over_dir"
+big=$(printf 'x%.0s' {1..70000})
+printf '{"action":"lookup","title":"Flaky tests: probe","name":"probe t","runner":"linux","detail":"%s","failing":"c/t.rs","base":"abc","tested":"tested abcdef"}\n' "$big" >"$over_dir/classes.jsonl"
+printf '{"title":"Flaky tests: probe","action":"file-new"}\n' >"$over_dir/decisions.jsonl"
+run_report "$over_dir"
+[ "$(cat "$over_dir/state/next")" = 2 ] || fail "want the issue plus one follow-up, got $(cat "$over_dir/state/next") bodies"
+[ "$(cat "$over_dir/state/target-001.txt")" = 7 ] || fail "the follow-up did not land on the created issue"
+over_main=$(cat "$over_dir/state/body-000.txt")
+[ "${#over_main}" -le 65536 ] || fail "the main body is ${#over_main} chars, past the limit"
+# shellcheck disable=SC2016 # the backticks are literal markdown in the issue body.
+case "$over_main" in
+  'The test `probe t` passed after a retry on linux: https://example.com/runs/1.'*) ;;
+  *) fail "the main body lost its sentence" ;;
+esac
+case "$over_main" in
+  *'... (failure text continues in the follow-up comments below)') ;;
+  *) fail "the main body names no follow-up" ;;
+esac
+[ "$(fence_detail "$over_dir/state/body-000.txt")$(fence_detail "$over_dir/state/body-001.txt")" = "$big" ] || fail "the panic did not land whole through the follow-up"
+# The same panic on an open issue comments whole: the sighting plus its
+# follow-up hold every character on the open issue.
+open_dir=$tmp/report-open
+mkdir -p "$open_dir"
+cp "$over_dir/classes.jsonl" "$open_dir/classes.jsonl"
+cp "$over_dir/decisions.jsonl" "$open_dir/decisions.jsonl"
+OPEN_ISSUE_JSON='[{"number":9,"title":"Flaky tests: probe"}]' run_report "$open_dir"
+[ "$(cat "$open_dir/state/next")" = 2 ] || fail "want the sighting plus one follow-up, got $(cat "$open_dir/state/next") bodies"
+[ "$(cat "$open_dir/state/target-000.txt")" = 9 ] || fail "the sighting did not land on the open issue"
+[ "$(cat "$open_dir/state/target-001.txt")" = 9 ] || fail "the follow-up did not land on the open issue"
+[ "$(fence_detail "$open_dir/state/body-000.txt")$(fence_detail "$open_dir/state/body-001.txt")" = "$big" ] || fail "the open-issue panic did not land whole"
+# A short panic keeps the classic single body byte-for-byte: no
+# follow-up, no new shape.
+small_dir=$tmp/report-small
+mkdir -p "$small_dir"
+printf '{"action":"lookup","title":"Flaky tests: probe","name":"probe t","runner":"linux","detail":"boom","failing":"c/t.rs","base":"abc","tested":"tested abcdef"}\n' >"$small_dir/classes.jsonl"
+printf '{"title":"Flaky tests: probe","action":"file-new"}\n' >"$small_dir/decisions.jsonl"
+run_report "$small_dir"
+[ "$(cat "$small_dir/state/next")" = 1 ] || fail "a short panic must file one body, got $(cat "$small_dir/state/next")"
+# shellcheck disable=SC2016 # the backticks are literal markdown in the issue body.
+want_small=$(printf 'The test `probe t` passed after a retry on linux: https://example.com/runs/1.\ntested abcdef\n```\nboom\n```')
+[ "$(cat "$small_dir/state/body-000.txt")" = "$want_small" ] || fail "a short panic changed shape"
+# No failure text means no fence.
+empty_dir=$tmp/report-empty
+mkdir -p "$empty_dir"
+printf '{"action":"lookup","title":"Flaky tests: probe","name":"probe t","runner":"linux","detail":"","failing":"c/t.rs","base":"abc","tested":"tested abcdef"}\n' >"$empty_dir/classes.jsonl"
+printf '{"title":"Flaky tests: probe","action":"file-new"}\n' >"$empty_dir/decisions.jsonl"
+run_report "$empty_dir"
+[ "$(cat "$empty_dir/state/next")" = 1 ] || fail "an empty detail must file one body"
+case "$(cat "$empty_dir/state/body-000.txt")" in
+  *'```'*) fail "an empty detail grew a fence" ;;
+esac
+
 echo "scripts/test-flake-report: ok"

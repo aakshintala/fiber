@@ -4,9 +4,10 @@
 # each, each the test, a TAB, then the first failed attempt's failure text,
 # with nothing else on stdout; further fixtures prove newlines print as the
 # two characters `\n`, no line carries a second tab, only the first
-# flakyFailure child's text prints, and text past 6000 characters is cut
-# with `...` appended (exact at 5999, 6000 and 6001 characters); empty and
-# missing input print nothing and exit 0; malformed XML exits 1.
+# flakyFailure child's text prints, and text past the sanity cap is cut
+# with a suffix saying how many characters were dropped (exact at 999999,
+# 1000000 and 1000001 characters); a 7000-character panic prints whole;
+# empty and missing input print nothing and exit 0; malformed XML exits 1.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -113,31 +114,39 @@ cmp -s "$tmp/tab-want.txt" "$tmp/tab-got.txt" || {
 awk -F'\t' 'NF != 2 { exit 1 }' "$tmp/tab-got.txt" || fail "a line carries a second tab"
 [ -s "$tmp/err.txt" ] && { cat "$tmp/err.txt" >&2; fail "tab run printed to stderr"; }
 
-# A detail of exactly 6000 characters prints whole; 6001 is cut to 6000
-# with `...` appended; 5999 is the longest length that needs no cut. The
-# detail here is the message alone, so its length is the message's.
-m5999=$(printf 'x%.0s' {1..5999})
-m6000=$(printf 'x%.0s' {1..6000})
-m6001=$(printf 'x%.0s' {1..6001})
+# The cap is a sanity cap now, not a body fit: a detail of exactly
+# 1000000 characters prints whole; 1000001 is cut to 1000000 with a suffix
+# saying how many characters were dropped. A panic longer than the old
+# 6000-character cut still prints whole. The detail here is the message
+# alone, so its length is the message's.
+m7000=$(printf 'x%.0s' {1..7000})
+m999999=$(printf 'x%.0s' {1..999999})
+m1000000=$(printf 'x%.0s' {1..1000000})
+m1000001=$(printf 'x%.0s' {1..1000001})
 {
   echo '<?xml version="1.0" encoding="UTF-8"?>'
   echo '<testsuites><testsuite name="s">'
-  echo "<testcase name=\"t5999\" classname=\"c\"><flakyFailure message=\"$m5999\"/></testcase>"
-  echo "<testcase name=\"t6000\" classname=\"c\"><flakyFailure message=\"$m6000\"/></testcase>"
-  echo "<testcase name=\"t6001\" classname=\"c\"><flakyFailure message=\"$m6001\"/></testcase>"
+  echo "<testcase name=\"t7000\" classname=\"c\"><flakyFailure message=\"$m7000\"/></testcase>"
+  echo "<testcase name=\"t999999\" classname=\"c\"><flakyFailure message=\"$m999999\"/></testcase>"
+  echo "<testcase name=\"t1000000\" classname=\"c\"><flakyFailure message=\"$m1000000\"/></testcase>"
+  echo "<testcase name=\"t1000001\" classname=\"c\"><flakyFailure message=\"$m1000001\"/></testcase>"
   echo '</testsuite></testsuites>'
 } >"$tmp/lengths.xml"
 scripts/flaky-tests "$tmp/lengths.xml" >"$tmp/lengths.txt" 2>"$tmp/err.txt" || fail "exit $? on the lengths fixture"
 [ -s "$tmp/err.txt" ] && { cat "$tmp/err.txt" >&2; fail "lengths run printed to stderr"; }
-d5999=$(sed -n '1p' "$tmp/lengths.txt" | cut -f2)
-d6000=$(sed -n '2p' "$tmp/lengths.txt" | cut -f2)
-d6001=$(sed -n '3p' "$tmp/lengths.txt" | cut -f2)
-[ "$d5999" = "$m5999" ] || fail "5999-char detail differs"
-[ "${#d5999}" -eq 5999 ] || fail "5999-char detail is ${#d5999} chars"
-[ "$d6000" = "$m6000" ] || fail "6000-char detail was cut"
-[ "${#d6001}" -eq 6003 ] || fail "6001-char detail is ${#d6001} chars, want 6003"
-[ "${d6001: -3}" = "..." ] || fail "6001-char detail has no ... suffix"
-[ "${d6001:0:6000}" = "$m6000" ] || fail "6001-char detail keeps no 6000-char prefix"
+d7000=$(sed -n '1p' "$tmp/lengths.txt" | cut -f2)
+d999999=$(sed -n '2p' "$tmp/lengths.txt" | cut -f2)
+d1000000=$(sed -n '3p' "$tmp/lengths.txt" | cut -f2)
+d1000001=$(sed -n '4p' "$tmp/lengths.txt" | cut -f2)
+[ "$d7000" = "$m7000" ] || fail "7000-char detail was cut"
+[ "${#d7000}" -eq 7000 ] || fail "7000-char detail is ${#d7000} chars"
+[ "$d999999" = "$m999999" ] || fail "999999-char detail differs"
+[ "${#d999999}" -eq 999999 ] || fail "999999-char detail is ${#d999999} chars"
+[ "$d1000000" = "$m1000000" ] || fail "1000000-char detail was cut"
+suffix="...[dropped 1 chars]"
+[ "${d1000001:0:1000000}" = "$m1000000" ] || fail "1000001-char detail keeps no 1000000-char prefix"
+[ "${d1000001:1000000}" = "$suffix" ] || fail "1000001-char detail suffix is ${d1000001:1000000}"
+[ "${#d1000001}" -eq $((1000000 + ${#suffix})) ] || fail "1000001-char detail is ${#d1000001} chars"
 
 # A missing file prints nothing and exits 0.
 scripts/flaky-tests "$tmp/does-not-exist" >"$tmp/got.txt" 2>"$tmp/err.txt" || fail "exit $? on a missing file"
