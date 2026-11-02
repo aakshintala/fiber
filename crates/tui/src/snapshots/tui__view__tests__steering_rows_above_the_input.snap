@@ -2,13 +2,13 @@
 source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
-                                                      ▀▀▀▀▀
-                                                 you 00:00
                                                            ┃
-  • Steering, joins the turn at the next step
-  ↳ use the parser  ✕
-  ▸ and test it  ✕
-  ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to dr
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ Steering                2 queued · joins at the next step
+▌ ↳ use the parser                                        ✕
+▌ ▸ and test it                                           ✕
+▌ ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to …
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › and test it█ message · Enter amends · ⌥X drops · Esc sto
 ▌──────────────────────────────────────────────────────────

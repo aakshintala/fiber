@@ -19,6 +19,15 @@ fn count_only_mode_is_opt_in_and_placeholders_keep_targets_and_sources() {
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[1].1, Some(Target::Copy { reply: 4, block: 2 }));
     assert_eq!(sources, [Some(contract::Seq(7)); 3]);
+
+    let mut unlinked = Rows::count_only();
+    unlinked.set_source(Some(contract::Seq(8)));
+    unlinked.push_counted(2, &[]);
+    let (rows, texts, sources) = unlinked.into_sourced_parts();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(texts.len(), 2);
+    assert!(rows.iter().all(|(_, target)| target.is_none()));
+    assert_eq!(sources, [Some(contract::Seq(8)); 2]);
 }
 
 #[test]

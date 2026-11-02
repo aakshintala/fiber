@@ -106,6 +106,25 @@ fn steered(session: &str, text: &str) -> Line {
     )
 }
 
+/// Each `(action, path)` as a `read` call that completes with "ok".
+fn reads(app: &mut App, calls: &[(&str, &str)]) {
+    use serde_json::json;
+    for &(action, path) in calls {
+        app.on_line(at(
+            "tool_call_requested",
+            Some(action),
+            0,
+            json!({"name": "read", "arguments": {"path": path}}),
+        ));
+        app.on_line(at(
+            "tool_call_completed",
+            Some(action),
+            0,
+            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        ));
+    }
+}
+
 #[test]
 fn first_frame() {
     insta::assert_snapshot!("first_frame", screen(&empty()));
@@ -129,6 +148,149 @@ fn completed_turn_with_steer() {
     app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "Hello."));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
     insta::assert_snapshot!("completed_turn_with_steer", screen(&app));
+}
+
+/// Two calls, a steering message, then two more calls with thinking:
+/// the steer rule splits the tool group in two.
+#[test]
+fn steer_splits_tool_group() {
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    reads(&mut app, &[("a_1", "src/a.rs"), ("a_2", "src/b.rs")]);
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(steered("s_aaaaaaaaaaaaaaaa", "use x"));
+    app.on_line(at("reasoning_started", Some("a_t"), 0, json!({})));
+    app.on_line(at(
+        "reasoning_completed",
+        Some("a_t"),
+        0,
+        json!({"text": "look closer"}),
+    ));
+    reads(&mut app, &[("a_3", "src/c.rs"), ("a_4", "src/d.rs")]);
+    let shown = screen(&app);
+    let rows: Vec<&str> = shown.lines().collect();
+    let groups: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
+        .collect();
+    // A labelled rule ends the tool group above it (`docs/tui.md`,
+    // "Tool groups and the ledger").
+    assert_eq!(groups.len(), 2, "{shown}");
+    let steer = rows
+        .iter()
+        .position(|row| row.trim_start().starts_with("steer"))
+        .expect("the steer rule");
+    assert!(groups[0] < steer && steer < groups[1], "{shown}");
+    assert!(rows[groups[0]].contains("Read 2 files"), "{shown}");
+    assert!(
+        rows[groups[1]].contains("Read 2 files") && rows[groups[1]].contains("thought once"),
+        "{shown}"
+    );
+    insta::assert_snapshot!("steer_splits_tool_group", shown);
+}
+
+/// An answered `ask_user` mid-turn: the asking call and its question
+/// count stay above the "you answered" rule, the later calls form a
+/// new group below it.
+#[test]
+fn answers_split_tool_group() {
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "ask_user", "arguments": {"questions": [{"header": "Base"}, {"header": "Name"}]}}),
+    ));
+    app.on_line(at(
+        "interaction_requested",
+        None,
+        0,
+        json!({"request_id": "r_4f", "kind": "form", "action_ids": ["a_1"],
+            "fields": [{"header": "Base", "question": "Which branch?"},
+                {"header": "Name", "question": "What name?"}]}),
+    ));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "interaction_resolved",
+        None,
+        0,
+        json!({"request_id": "r_4f", "by": "person",
+            "answers": [{"labels": ["dev"]}, {"skipped": true}]}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        0,
+        json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+    ));
+    reads(&mut app, &[("a_2", "src/c.rs"), ("a_3", "src/d.rs")]);
+    // Sixteen rows: the two answer rows need room above the second
+    // group line (`docs/testing/screens.md`).
+    let shown = sized(&mut app, WIDTH, 16);
+    let rows: Vec<&str> = shown.lines().collect();
+    let groups: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
+        .collect();
+    // A labelled rule ends the tool group above it (`docs/tui.md`,
+    // "Tool groups and the ledger").
+    assert_eq!(groups.len(), 2, "{shown}");
+    let rule = rows
+        .iter()
+        .position(|row| row.trim_start().starts_with("you answered"))
+        .expect("the you answered rule");
+    assert!(groups[0] < rule && rule < groups[1], "{shown}");
+    assert!(rows[groups[0]].contains("Asked 2 questions"), "{shown}");
+    assert!(
+        rows[groups[1]].contains("Read 2 files") && !rows[groups[1]].contains("Asked"),
+        "{shown}"
+    );
+    insta::assert_snapshot!("answers_split_tool_group", shown);
+}
+
+/// A non-driver message mid-turn splits the tool group like a steer does.
+#[test]
+fn non_driver_message_splits_tool_group() {
+    use serde_json::json;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    reads(&mut app, &[("a_1", "src/a.rs"), ("a_2", "src/b.rs")]);
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "steering_applied",
+        None,
+        0,
+        json!({"content": [{"type": "text", "text": "check the logs"}],
+            "source": "session", "from_session_id": "s_bbbbbbbbbbbbbbbb"}),
+    ));
+    reads(&mut app, &[("a_3", "src/c.rs"), ("a_4", "src/d.rs")]);
+    let shown = screen(&app);
+    let rows: Vec<&str> = shown.lines().collect();
+    let groups: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
+        .collect();
+    // A labelled rule ends the tool group above it (`docs/tui.md`,
+    // "Tool groups and the ledger").
+    assert_eq!(groups.len(), 2, "{shown}");
+    let message = rows
+        .iter()
+        .position(|row| row.contains("check the logs"))
+        .expect("the session message");
+    assert!(groups[0] < message && message < groups[1], "{shown}");
+    insta::assert_snapshot!("non_driver_message_splits_tool_group", shown);
 }
 
 #[test]

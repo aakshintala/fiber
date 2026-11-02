@@ -32,7 +32,6 @@ pub(crate) struct TestRef {
 /// compiles that source.
 enum FileTests {
     Functions(Vec<(TestFn, TestRef)>),
-    Whole(Vec<TestRef>),
 }
 
 /// A test function in one file: its name with inline modules, and its
@@ -291,7 +290,6 @@ fn resolve(
     let member = members
         .get(package)
         .ok_or_else(|| format!("{path}: no workspace member"))?;
-    let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
     if member.unrun_tests.contains(&path.to_owned()) {
         return Ok(None);
     }
@@ -305,16 +303,8 @@ fn resolve(
         return Ok(None);
     }
     let functions = test_fns(&source.source).map_err(|()| format!("{path}: cannot parse"))?;
-    if functions.is_empty() && !rel.starts_with("tests/") {
-        return Ok(None);
-    }
     if functions.is_empty() {
-        return Ok(Some(FileTests::Whole(
-            binaries
-                .iter()
-                .flat_map(|binary| binary.tests.iter().cloned())
-                .collect(),
-        )));
+        return Ok(None);
     }
     let mut tests = Vec::new();
     for function in functions {
@@ -751,13 +741,6 @@ fn select(hunk: &Hunk, tests: &FileTests, out: &mut Vec<TestRef>) {
         FileTests::Functions(functions) => {
             for (function, test) in functions {
                 if touches(hunk, function.start, function.end) && !out.contains(test) {
-                    out.push(test.clone());
-                }
-            }
-        }
-        FileTests::Whole(tests) => {
-            for test in tests {
-                if !out.contains(test) {
                     out.push(test.clone());
                 }
             }

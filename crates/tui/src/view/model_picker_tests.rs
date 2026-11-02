@@ -8,8 +8,9 @@ use ratatui::style::{Modifier, Style};
 use std::path::PathBuf;
 
 use super::{
-    body, display_rows, focus_window_top, id_spans, items, keep_focus_visible_top, model_fit,
-    page_step, picker_wheel_window, rows_for, window,
+    Item, body, compact_model_item, compact_model_rows, display_rows, focus_window_top,
+    footerless_fit, id_spans, items, keep_focus_visible_top, model_first_row, model_fit, page_step,
+    picker_wheel_window, rows_for, short_model_fit, window,
 };
 use crate::app::{App, Effect};
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry, Price};
@@ -35,6 +36,27 @@ fn attached(width: u16, height: u16) -> App {
     }));
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app
+}
+
+/// Sets the attached session's current model.
+fn current_model(app: &mut App, reference: &str) {
+    app.on_line(crate::link::Line::Session(contract::Envelope {
+        kind: "preamble_built".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "reason": "start", "model": reference, "context_window": 200000,
+            "trigger_at": 150000, "thinking": null, "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
 }
 
 /// Four models over two providers: `acme/m1` with two levels, roles and
@@ -134,6 +156,22 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     buf
 }
 
+/// Draws the picker overlay on a `width` by `height` area as text.
+fn picker_screen(view: &PickerView, width: u16, height: u16) -> String {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    super::draw(view, area, &mut buf, &mut Vec::new());
+    crate::view::text(&buf)
+}
+
+/// Compares every observable part of a picker body row.
+fn assert_picker_row_eq(actual: &crate::view::overlay::Row, expected: &crate::view::overlay::Row) {
+    assert_eq!(actual.spans, expected.spans);
+    assert_eq!(actual.right, expected.right);
+    assert_eq!(actual.targets, expected.targets);
+    assert_eq!(actual.barred, expected.barred);
+}
+
 /// The rows with a cell on the selection bar: the bar covers the whole
 /// row in `accent`.
 fn barred(buf: &Buffer) -> Vec<u16> {
@@ -168,6 +206,15 @@ fn choosing(width: u16, height: u16) -> App {
     app.on_models(Ok(catalogue()));
     open(&mut app);
     app
+}
+
+/// An open picker whose session model is the supplied catalogue entry.
+fn choosing_current(reference: &str) -> PickerView {
+    let mut app = attached(80, 24);
+    current_model(&mut app, reference);
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    app.model_picker_view().expect("open")
 }
 
 /// Priced, free, unpriced and tiered models with no role or level cells.
@@ -1324,14 +1371,16 @@ fn body_lines(text: &str) -> Vec<String> {
 
 #[test]
 fn a_short_overlay_keeps_the_focused_model_row() {
+    // `docs/tui.md:669-714` specifies the filter/count/provider/model order
+    // and requires the model with its provider heading to outlast the footer.
     // A Choose open and the checklist open, each with the first model
     // focused over `catalogue()`: ten rows hold the filter, the
     // buttons, the heading and the focused row, eleven add its
-    // thinking row, and nine cut the heading rather than the focused
-    // row. The checklist differs only in its count.
+    // thinking row. At nine rows the footer gives way so the heading,
+    // focused row and thinking row remain visible. The checklist differs
+    // only in its count.
     for (choose, count) in [(true, "4 models"), (false, "0 of 4 marked")] {
-        for (height, heading, thinking) in
-            [(10u16, true, false), (11, true, true), (9, false, false)]
+        for (height, heading, thinking) in [(10u16, true, false), (11, true, true), (9, true, true)]
         {
             let mut app = attached(80, height);
             app.on_models(Ok(catalogue()));
@@ -1365,6 +1414,9 @@ fn a_short_overlay_keeps_the_focused_model_row() {
                 thinking,
                 "{text}"
             );
+            if height == 9 {
+                assert!(!text.contains("Enter choose"), "footer remains: {text}");
+            }
             // The focused row sits on the bar.
             let (y, _) = find_row(&text, "m1");
             assert!(
@@ -1373,6 +1425,326 @@ fn a_short_overlay_keeps_the_focused_model_row() {
             );
         }
     }
+}
+
+#[test]
+fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() {
+    // `docs/tui.md:710-714`: the session model and provider heading stay
+    // visible on open, with the footer yielding first.
+    let mut app = attached(80, 8);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(model_fit(&view, 8), 0);
+
+    let text = picker_screen(&view, 80, 8);
+    let (model_y, model) = find_row(&text, "m1");
+    assert!(model.contains("● current"), "{model}");
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the current model: {text}"
+    );
+    assert!(!text.contains("Enter choose"), "footer remains: {text}");
+}
+
+#[test]
+fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
+    // `docs/tui.md:710-714`: after scrolling, focus stays on a model with
+    // its provider heading in the compact window.
+    let mut app = attached(120, 14);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let first = app.model_picker_view().expect("open");
+    assert!(first.focused.is_some(), "the current model has focus");
+    let _ = screen(&app, 120, 14);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelDown,
+        col: slab.x + 1,
+        row: slab.y + 1,
+    });
+
+    let view = app.model_picker_view().expect("still open");
+    // `docs/tui.md:589`: "The mouse wheel over a view moves its visible rows 3
+    // a step and never the conversation under it."
+    assert_eq!(
+        view.top,
+        3,
+        "wheel did not shift the window; conversation rows={}, slab={slab:?}",
+        app.conversation_area_height()
+    );
+    let next = view.sections[0]
+        .models
+        .iter()
+        .find(|model| model.id == "m2")
+        .expect("the next model");
+    assert_eq!(view.focused, Some(next.at));
+    let text = screen(&app, 120, 14);
+    let (model_y, model) = find_row(&text, "m2");
+    assert!(model.contains("› m2"), "{text}");
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the focused model: {text}"
+    );
+    assert!(!text.contains("m1 ● current"), "{text}");
+}
+
+#[test]
+fn a_zero_fit_down_keeps_the_focused_model_with_its_heading_before_the_footer() {
+    // `docs/tui.md:710-714`: the focused model and provider heading stay
+    // visible after Down, with the footer yielding first.
+    let mut app = attached(80, 8);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    assert_eq!(
+        app.on_key(Key::Down, fakes::clock::FakeClock::new().now()),
+        Effect::None
+    );
+
+    let view = app.model_picker_view().expect("open");
+    let text = picker_screen(&view, 80, 8);
+    let (model_y, model) = find_row(&text, "m2");
+    assert!(
+        model.contains("› m2"),
+        "the focused row is not shown: {model}"
+    );
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the focused model: {text}"
+    );
+    assert!(!text.contains("Enter choose"), "footer remains: {text}");
+}
+
+#[test]
+fn a_one_footerless_row_yields_controls_for_the_provider_heading() {
+    // `docs/tui.md:710-714`: when the ordinary list and footer cannot hold
+    // the heading and session model, both stay visible in the compact view.
+    let mut app = attached(80, 7);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(footerless_fit(&view, 7), 1);
+
+    let text = picker_screen(&view, 80, 7);
+    let (model_y, model) = find_row(&text, "m1");
+    assert!(model.contains("● current"), "{model}");
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the current model: {text}"
+    );
+    assert!(!text.contains("Type to search"), "controls remain: {text}");
+    assert!(!text.contains("Enter choose"), "footer remains: {text}");
+}
+
+#[test]
+fn compact_model_item_uses_the_scrolled_first_model_only_after_top_is_positive() {
+    let mut view = choosing_current("zeta/z1");
+    view.focused = None;
+    let m1 = view.sections[0].models[0].at;
+    let m2 = view.sections[0].models[1].at;
+    let z1 = view.sections[1].models[0].at;
+
+    // The boundary is zero: top 0 uses the session model, while positive
+    // tops use the first model row at or after the stored display-row top.
+    // Top 2 starts on m1's detail row, so m2 is the first selectable row.
+    for (top, expected, case) in [
+        (0, z1, "unscrolled falls back to the session model"),
+        (1, m1, "the first scrolled row selects m1"),
+        (2, m2, "a detail-row top advances to m2"),
+    ] {
+        view.top = top;
+        let shown = items(&view);
+        let display = display_rows(&view, false);
+        let selected = compact_model_item(&view, &shown, &display)
+            .and_then(|at| shown.get(at))
+            .map(|item| item.at());
+        assert_eq!(selected, Some(expected), "{case}");
+    }
+}
+
+#[test]
+fn short_model_fit_boundaries_keep_footer_and_window_terms_distinct() {
+    let mut view = choosing_current("zeta/z1");
+    view.focused = None;
+    let display = display_rows(&view, false);
+    let z1 = view.sections[1].models[0].at;
+    let model = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(z1))
+        .expect("z1 display row");
+    let heading = (0..model)
+        .rev()
+        .find(|at| {
+            display.rows[*at]
+                .row
+                .spans
+                .first()
+                .is_some_and(|span| display.rows[*at].focus.is_none() && span.content == "zeta")
+        })
+        .expect("zeta heading row");
+
+    // Each table row checks the complete predicate state as well as its
+    // result. The heading-only row detects either earlier `||` becoming
+    // `&&`; the exclusive-end row detects the final `||` becoming `&&`.
+    // Layout prevents isolating two terms: with fit < 2, either the model
+    // is outside the window or its heading is; and model < top implies
+    // heading < top because the heading is found in 0..model. The model
+    // comparison's <= and == mutants therefore have no observable effect.
+    let cases = [
+        (
+            "fit exactly two, nothing else needs compacting",
+            10u16,
+            heading,
+            [false, false, false, false],
+            None,
+        ),
+        (
+            "only the heading is above the window",
+            11,
+            model,
+            [false, true, false, false],
+            Some(5),
+        ),
+        (
+            "the model meets the exclusive end",
+            10,
+            heading - 1,
+            [false, false, false, true],
+            Some(4),
+        ),
+        (
+            "heading and model both precede a clamped top",
+            10,
+            display.rows.len(),
+            [false, true, true, false],
+            Some(4),
+        ),
+        (
+            "one ordinary row still fits",
+            9,
+            heading,
+            [true, false, false, true],
+            Some(3),
+        ),
+        (
+            "footerless fit is exactly two",
+            8,
+            heading,
+            [true, false, false, true],
+            Some(2),
+        ),
+    ];
+
+    for (label, height, stored_top, expected_terms, expected_fit) in cases {
+        view.top = stored_top;
+        let fit = model_fit(&view, height);
+        let selected = compact_model_item(&view, &items(&view), &display_rows(&view, false))
+            .expect("a compact model");
+        let shown = items(&view);
+        let Item::Model(flat) = &shown[selected] else {
+            panic!("the compact item is a model");
+        };
+        let rows = display_rows(&view, false);
+        let model_row = rows
+            .rows
+            .iter()
+            .position(|row| row.focus == Some(flat.row.at))
+            .expect("compact model row");
+        let heading_row = (0..model_row)
+            .rev()
+            .find(|at| {
+                rows.rows[*at].focus.is_none()
+                    && rows.rows[*at]
+                        .row
+                        .spans
+                        .first()
+                        .is_some_and(|span| span.content == flat.provider)
+            })
+            .expect("provider heading");
+        let top = keep_focus_visible_top(&view, height);
+        let visible = fit.max(usize::from(view.focused.is_some()));
+        let end = top.saturating_add(visible);
+        let terms = [
+            fit < 2,
+            heading_row < top,
+            model_row < top,
+            model_row >= end,
+        ];
+        assert_eq!(terms, expected_terms, "{label}: predicate terms");
+        assert_eq!(short_model_fit(&view, height), expected_fit, "{label}");
+    }
+}
+
+#[test]
+fn a_non_heading_row_cannot_stand_in_for_the_provider_heading() {
+    let mut view = choosing_current("acme/m2");
+    view.focused = None;
+    view.top = 2; // m1's detail row; m2 is the first model at or after it.
+
+    // `docs/tui.md:710-714`: the compact view keeps the selected model
+    // with its actual provider heading, not a preceding detail row.
+    assert_eq!(model_fit(&view, 14), 6);
+    assert_eq!(short_model_fit(&view, 14), Some(8));
+}
+
+#[test]
+fn compact_model_rows_keep_the_whole_row_for_both_focus_states() {
+    let mut view = choosing_current("acme/m1");
+    let m1 = view.sections[0].models[0].at;
+
+    for (focused, expected_bar) in [(None, false), (Some(m1), true)] {
+        view.focused = focused;
+        let rows = compact_model_rows(&view, false, 1).expect("one compact row");
+        let expected = model_first_row(&view.sections[0].models[0], expected_bar, false);
+
+        assert_eq!(rows.len(), 1);
+        assert_picker_row_eq(&rows[0], &expected);
+    }
+}
+
+#[test]
+fn the_wheel_uses_the_short_window_only_below_two_rows() {
+    // The wheel shares the displayed-row movement contract (`docs/tui.md:589`).
+    let mut view = choosing_current("acme/m2");
+    let m2 = view.sections[0].models[1].at;
+    let display = display_rows(&view, false);
+    let m2_row = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(m2))
+        .expect("m2 display row");
+    view.focused = Some(m2);
+    view.top = 1;
+    assert_eq!(model_fit(&view, 10), 2, "height 10 is the exact boundary");
+    assert_eq!(keep_focus_visible_top(&view, 10), 2);
+
+    let (top, nearest) = picker_wheel_window(&view, false, 10);
+    assert_eq!(top, 5, "a two-row fit advances from the focus-visible top");
+    assert_eq!(
+        nearest, None,
+        "the new two-row window has no selectable row"
+    );
+    assert_eq!(
+        m2_row, 3,
+        "the stored focus starts just above the new window"
+    );
 }
 
 #[test]

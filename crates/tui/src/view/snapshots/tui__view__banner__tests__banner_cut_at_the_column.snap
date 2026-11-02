@@ -2,13 +2,13 @@
 source: crates/tui/src/view/banner_tests.rs
 expression: "screen(&app, 24)"
 ---
-                       ┃
-  ⚠ connection_failed… ✕
 Connection lost · reconn
-  • Steering, joins the
-  ↳ use the parser  ✕
-  ↳ and test it  ✕
-  ⌥↑ edit · ⌥↓ next · ⌥X
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ … 2 queued · joins at
+▌ ↳ use the parser    ✕
+▌ ↳ and test it       ✕
+▌ ⌥↑ edit · ⌥↓ next · …
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
 ▌──────────────────────

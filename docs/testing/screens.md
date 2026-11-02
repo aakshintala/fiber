@@ -73,7 +73,9 @@ test took before the input that causes the bytes, never from an earlier
 match, so it does not depend on the order in which two markers arrive.
 
 A screen predicate checks every cell property its assertions read, so a
-partial redraw can't satisfy it. A test sends input only after output the
+partial redraw can't satisfy it. A needle that can be empty must `expect`,
+never default: `contains("")` is unconditionally true, so the wait would
+return on the first frame. A test sends input only after output the
 terminal already emits once it is ready for that input, such as the
 mode-enable sequences or the end of the first frame, never after a grid
 match alone. That signal is existing output: the shipped binary gets no
@@ -81,7 +83,7 @@ test-only switch (`docs/testing.md`, "Levels").
 
 A test reads the grid outside a wait only when the frame is settled: the wait just before it checked every cell property the read asserts, with no input in between, or the test has seen the last output that can change those cells and the grid shows its effect. A text-only wait, a poll, a sleep or a raw-byte marker does not settle a frame. Each such read names its signal in a `// settled:` comment.
 
-The bare screen-call ratchet counts unmarked `.screen()` call lines per file under `crates/main/tests/`, outside `crates/main/tests/support/`. A source line counts when it holds the text `.screen()`, even inside a string literal or a block comment. A line whose trimmed start begins `//` never counts. The literal text `// settled:` on the call line or the line before it exempts the line, even inside a string literal: the count is a conservative upper bound, so over-counting a `.screen()` inside a string, or exempting on marker text inside a string, never lets a real bare read slip past. A `.screen` field access without the call parens is not a call. Each file holds at most its inline maximum in `scripts/check`; a file missing from that table holds none, and each file's maximum is independent.
+The grid-read ratchet counts unmarked grid-read lines per file under `crates/main/tests/`, outside `crates/main/tests/support/`. A source line counts when it holds one of `.screen()`, `.cell(`, `.contents` or `.rows`: acquiring a grid, or reading its cells, text or rows — even inside a string literal or a block comment. A line whose trimmed start begins `//` never counts, and neither does a line inside a `wait_screen` call's span: the wait's own check settles the grid, so its predicate reads are the assertion rather than a read outside a wait. The literal text `// settled:` on the read line or the line before it exempts the line, even inside a string literal: the count is a conservative upper bound, so over-counting a read inside a string, or exempting on marker text inside a string, never lets a real unsettled read slip past. A `.screen` field access without the call parens is not a call. Each file holds at most its inline maximum in `scripts/check`; a file missing from that table holds none, and each file's maximum is independent. The rule is deliberately outside-a-wait: a predicate that derives its expected value from the grid it asserts on sits inside the wait, where a line ratchet cannot tell it from the wait's own probe, so that shape stays outside this check. The count covers the lines that read a grid, not the assertions that use one: a helper's reads count once in the file that defines it, and a helper under `crates/main/tests/support/` counts nowhere, so a comparison of grids a helper already produced, such as `assert_eq!(screens[a], screens[b])`, adds nothing to any file's count.
 
 A pointer event targets a row whose position the test has made final with a
 signal, not by matching rows drawn so far. A row that background data can

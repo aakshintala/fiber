@@ -980,17 +980,17 @@ fn a_click_on_a_steering_row_selects_it_into_the_draft() {
             None,
         ),
     ]);
-    // The queue's rows sit on rows 4 and 5, newest lowest, above the
-    // footer and the input box's edges: indented, with no stripe
-    // (`docs/tui.md`, "Steering").
-    assert_eq!(row_of(&lp, "↳ use the parser"), 4);
-    assert_eq!(row_of(&lp, "↳ and test it"), 5);
-    // The edge row below the queue is no target.
-    feed(&mut lp, vec![click(40, 7)]);
+    // The queue's entries sit on rows 3 and 4, newest lowest, on the
+    // card between its edges: striped, with the title above and the key
+    // hint below (docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first).
+    assert_eq!(row_of(&lp, "▌ ↳ use the parser"), 3); // docs/tui.md:3048: oldest-first; docs/tui.md:1296-1306.
+    assert_eq!(row_of(&lp, "▌ ↳ and test it"), 4); // docs/tui.md:3048: oldest-first; docs/tui.md:1296-1306.
+    // The card's bottom edge row is no target.
+    feed(&mut lp, vec![click(40, 6)]);
     assert_eq!(lp.app.input().expand(), "mine");
-    feed(&mut lp, vec![click(3, 4)]);
+    feed(&mut lp, vec![click(3, 3)]);
     assert_eq!(lp.app.input().expand(), "use the parser");
-    assert_eq!(row_of(&lp, "▸ use the parser"), 4);
+    assert_eq!(row_of(&lp, "▌ ▸ use the parser"), 3);
     // Esc puts the stashed draft back.
     feed(&mut lp, vec![esc()]);
     assert_eq!(lp.app.input().expand(), "mine");
@@ -1297,27 +1297,27 @@ fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
             None,
         )],
     );
-    // Rows 3 to 5 above the footer and the input box's edges, oldest on
-    // top: each droppable row's ✕ follows its text, and Fiber's own row
-    // has none (`docs/tui.md`, "Steering").
+    // Rows 2 to 4 on the card, oldest on top: each droppable row's ✕
+    // sits at its text's right edge, and Fiber's own row has none
+    // (docs/tui.md:1301-1302: dim ✕; docs/tui.md:3048: oldest-first).
     let rows: Vec<String> = shown(&lp).lines().map(str::to_owned).collect();
-    assert!(rows[3].ends_with('✕') && rows[4].ends_with('✕'), "{rows:?}");
-    assert!(!rows[5].contains('✕'), "{rows:?}");
+    assert!(rows[2].ends_with('✕') && rows[3].ends_with('✕'), "{rows:?}"); // docs/tui.md:1301-1302: dim ✕; docs/tui.md:3048.
+    assert!(!rows[4].contains('✕'), "{rows:?}"); // docs/tui.md:3048: droppable; docs/tui.md:1301-1302.
     // Fiber's own row is a steering target with no ✕ on it.
     assert!(matches!(
-        hit_at(&lp, 59, 5),
+        hit_at(&lp, 59, 4),
         Some(crate::mouse::TargetId::Steering(2))
     ));
-    // The oldest row's ✕ sits two spaces past its text: 2 for the
-    // indent, 1 for the mark, 1 for its gap, 14 for the text, 2 gap.
-    feed(&mut lp, vec![click(20, 3)]);
+    // The oldest row's ✕ sits at its text's right edge: column 58,
+    // one short of the card's right edge.
+    feed(&mut lp, vec![click(58, 2)]);
     let (_, dropped) = super::tests::command(BufReader::new(theirs), "the steer_drop");
     assert_eq!(dropped["command"], "steer_drop");
     assert_eq!(dropped["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(dropped["args"], json!({"command_id": "c_1"}));
     // The ✕ selects nothing; the row's text still selects it.
     assert_eq!(lp.app.input().expand(), "");
-    feed(&mut lp, vec![click(3, 4)]);
+    feed(&mut lp, vec![click(3, 3)]);
     assert_eq!(lp.app.input().expand(), "and test it");
 }
 
