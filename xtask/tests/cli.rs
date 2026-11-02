@@ -439,7 +439,7 @@ fn stress_plan_prints_the_touched_tests() {
 }
 
 #[test]
-fn stress_plan_errors_when_a_changed_test_file_selects_no_tests() {
+fn stress_plan_skips_a_helper_only_change_in_a_test_file() {
     let dir = workspace();
     dir.write(
         "crates/b/src/lib.rs",
@@ -460,11 +460,8 @@ fn stress_plan_errors_when_a_changed_test_file_selects_no_tests() {
     git(&dir, &["commit", "-qm", "helper only"]);
     let home = home(&dir);
     let (code, out) = xtask_with_nextest(&dir, &["stress-plan", "--base", "main"], &home, "");
-    assert_eq!(code, 2);
-    assert_eq!(
-        out,
-        "xtask: crates/b/src/fold_tests.rs: changed test file selected no tests\n"
-    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("run\tfalse\n"), "{out}");
 }
 
 #[test]
