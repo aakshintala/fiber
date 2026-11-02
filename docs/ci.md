@@ -18,16 +18,10 @@ CI is GitHub Actions on GitHub-hosted runners: `ubuntu-24.04` for Linux
 x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
-by every repository on the account. A draft pull request that selects code
-runs `lint`; one that selects tests also runs `test_linux`. A bug pull
-request that selects code also runs `bug_red` on both legs, so a bug draft
-uses one macOS job
-(`bug_red_macos`) and a non-bug draft uses none. A draft labelled `mutants`
-also runs its mutation shards. A ready pull request that selects tests uses
-one macOS job (`test`). A bug pull request with selected tests uses two:
-`test` and `bug_red_macos`. Five non-bug ready pull requests with selected
-tests can use the five macOS jobs; bug pull requests use two each and reach
-the cap sooner. The 40-job cap is the one CI reaches: from 2026-10-07 to
+by every repository on the account. A draft skips `release`, `test` and
+`stress`, so it uses no macOS job unless it is a bug pull request, which uses
+one (`bug_red_macos`). A ready pull request uses one (`test`), and a ready bug
+pull request two. The 40-job cap is the one CI reaches: from 2026-10-07 to
 2026-10-09 every job that queued for more than 15 minutes waited while 38 or
 more jobs ran, and the macOS cap held jobs back for 85 of 3,250 queued
 minutes. A change that saves jobs, such as fewer mutants shards, shortens the
@@ -130,10 +124,7 @@ A pull request runs only what its diff can affect.
   also runs `release`, so a broken harness or judge fails the pull request
   instead of waiting for the backstop. A draft that touches
   `scripts/release-size` or `crates/bench` first sees size and benchmark
-  failures when marked ready; `bench_comment` also skips on a draft. A size
-  or benchmark failure found at ready can force a second review round because
-  `docs/workflow.md`, "Merging" keeps the pull request a draft until review is
-  done.
+  failures when marked ready.
 - A diff that touches `crates/loop`, `crates/bench` or `xtask/src/bench*` also runs the "Session, memory kept after 10 busy turns" workload (`docs/performance.md`) in `release`. Any other pull request skips it, and the job summary says so. The loop holds the session's state, so a diff elsewhere rarely moves the row, and the backstop catches one that does.
 - On a pull request, the head and base binaries run only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row on both passes. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log`, `crates/worktree` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`; `sandbox setup` on `crates/tools/`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A diff touching only `docs/performance.md` selects no row, since the selector treats a docs file as selecting nothing: none of the seven timing rows is measured on either pass, and the pull request is gated by the table checks and the `main` backstop alone. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
 
@@ -143,12 +134,8 @@ The selector has its own tests.
 
 On a ready pull request, one job on each of Linux x86_64, Linux arm64 and
 macOS arm64 runs `scripts/check`, the gate CI applies (`docs/workflow.md`,
-"The gate"). A draft pull request runs `lint` and `test_linux` when its diff
-selects them. A bug pull request that selects code also runs `bug_red` on
-Linux x86_64 and macOS arm64, and a draft labelled `mutants` runs its mutant
-shards. A draft
-skips `release`, `test` and `stress`; marking it ready runs every job it
-skipped. Each job:
+"The gate"). A draft pull request skips the jobs "Runners" names; marking it
+ready runs every job it skipped. Each job:
 
 - compiles the selected crates with the debug profile, every target,
   through clippy and nextest; the whole workspace is built by the backstop
@@ -379,11 +366,12 @@ On Linux x86_64 alone:
   stops compiling unnoticed. The job's `timeout-minutes` is 10 to leave
   room for the two uncached checks alongside `scripts/check`.
 
-For pull requests, the `release` job runs only after the pull request is
-marked ready. The backstop still runs it on every push to `main` ("The
-backstop on `main`"). One more Linux x86_64 job builds the release profile
-for the target that ships, `x86_64-unknown-linux-musl`
-(`docs/releasing.md`), at the pull
+A draft never runs `release`; a ready pull request runs it when the
+selection chooses it. The backstop still runs it on every push to `main`
+("The backstop on `main`").
+
+One more Linux x86_64 job builds the release profile for the target that
+ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull
 request's head and at its base commit (`scripts/release-size`). The base
 binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both

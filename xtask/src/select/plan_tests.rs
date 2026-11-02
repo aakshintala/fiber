@@ -109,70 +109,37 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
 }
 
 #[test]
-fn a_draft_pull_request_never_runs_the_release_job() {
+fn only_a_ready_pull_request_runs_the_release_job_for_each_input_that_selects_it() {
     let inputs = [
-        ("binary package", "crates", strings(&["main"]), vec![]),
+        ("binary package", strings(&["main"]), vec![]),
         (
             "benchmark path",
-            "crates",
             strings(&["log"]),
             strings(&["crates/bench/src/lib.rs"]),
         ),
         (
             "release-size path",
-            "crates",
             strings(&["log"]),
             strings(&["scripts/release-size"]),
         ),
     ];
 
-    for (input, mode, packages, release_paths) in inputs {
-        let plan = plan(
-            mode,
-            &packages,
-            "pull_request",
-            true,
-            false,
-            false,
-            0,
-            &release_paths,
-        );
-        assert!(!plan.jobs["release"], "{input}");
-        assert!(plan.jobs["lint"], "{input}");
-        assert!(plan.jobs["test_linux"], "{input}");
-    }
-}
-
-#[test]
-fn a_ready_pull_request_keeps_the_release_job_for_every_input_that_selected_it() {
-    let inputs = [
-        ("binary package", "crates", strings(&["main"]), vec![]),
-        (
-            "benchmark path",
-            "crates",
-            strings(&["log"]),
-            strings(&["crates/bench/src/lib.rs"]),
-        ),
-        (
-            "release-size path",
-            "crates",
-            strings(&["log"]),
-            strings(&["scripts/release-size"]),
-        ),
-    ];
-
-    for (input, mode, packages, release_paths) in inputs {
-        let plan = plan(
-            mode,
-            &packages,
-            "pull_request",
-            false,
-            false,
-            false,
-            0,
-            &release_paths,
-        );
-        assert!(plan.jobs["release"], "{input}");
+    for (input, packages, release_paths) in inputs {
+        for draft in [true, false] {
+            let plan = plan(
+                "crates",
+                &packages,
+                "pull_request",
+                draft,
+                false,
+                false,
+                0,
+                &release_paths,
+            );
+            assert_eq!(plan.jobs["release"], !draft, "{input}, draft {draft}");
+            assert!(plan.jobs["lint"], "{input}, draft {draft}");
+            assert!(plan.jobs["test_linux"], "{input}, draft {draft}");
+        }
     }
 
     let push = plan("crates", &[], "push", false, false, false, 0, &[]);
