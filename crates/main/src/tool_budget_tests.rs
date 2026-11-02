@@ -345,11 +345,11 @@ fn a_definition_pushed_over_the_budget_fails_the_check() {
     }
 }
 
+// The per-definition sizes measure identical on macOS and Linux (no platform gap), so this ceiling binds everywhere.
 #[allow(
     clippy::print_stderr,
     reason = "prints the size-budget report on every run (docs/tools.md, \"Size budget in CI\")"
 )]
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn the_built_in_definitions_fit_their_budget() {
     let hosted = measure(&builtin_definitions());
