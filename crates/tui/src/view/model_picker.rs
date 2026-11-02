@@ -787,7 +787,10 @@ fn short_model_fit(view: &PickerView, height: u16) -> Option<usize> {
     let Item::Model(flat) = items.get(item)? else {
         return None;
     };
-    let model = *display.item_starts.get(item)?;
+    let model = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(flat.row.at))?;
     let heading = (0..model).rev().find(|at| {
         display.rows.get(*at).is_some_and(|row| {
             row.focus.is_none()
@@ -812,7 +815,10 @@ fn compact_model_rows(view: &PickerView, priced: bool, fit: usize) -> Option<Vec
     let Item::Model(flat) = items.get(item)? else {
         return None;
     };
-    let start = *display.item_starts.get(item)?;
+    let start = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(flat.row.at))?;
     let focused = Some(flat.row.at) == view.focused;
     if fit < 2 {
         return Some(vec![model_first_row(flat.row, focused, priced)]);
