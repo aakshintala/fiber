@@ -725,12 +725,10 @@ impl App {
             Act::OpenLocal(file) => {
                 let file = file
                     .or_else(|| self.remote().map(|remote| remote.local_global_file()))
-                    .or_else(|| Some(self.configure_seam().global_file()));
-                file.map_or(Effect::None, |file| {
-                    Effect::OpenFile(crate::editor::OpenFile {
-                        path: file,
-                        line: None,
-                    })
+                    .unwrap_or_else(|| self.configure_seam().global_file());
+                Effect::OpenFile(crate::editor::OpenFile {
+                    path: file,
+                    line: None,
                 })
             }
             Act::Open(file) => {

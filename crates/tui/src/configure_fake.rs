@@ -1079,3 +1079,30 @@ impl Configure for Fake {
         }
     }
 }
+
+/// The fake home's own contract: a per-fake scratch directory under the
+/// system temp dir, so credential files never land in the checkout.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fake_homes_are_unique_absolute_temp_directories() {
+        let first = Fake::new(Vec::new());
+        let second = Fake::new(Vec::new());
+        for home in [first.home(), second.home()] {
+            assert!(!home.as_os_str().is_empty(), "a fake home is never empty");
+            assert!(
+                home.is_absolute(),
+                "a fake home is absolute: {}",
+                home.display()
+            );
+            assert!(
+                home.starts_with(std::env::temp_dir()),
+                "a fake home sits under the temp dir: {}",
+                home.display()
+            );
+        }
+        assert_ne!(first.home(), second.home(), "each fake gets its own home");
+    }
+}
