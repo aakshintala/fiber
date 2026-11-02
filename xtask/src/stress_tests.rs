@@ -103,6 +103,11 @@ fn empty_test_file_error_skips_cfg_inner_attributes() {
 }
 
 #[test]
+fn has_cfg_inner_attr_ignores_non_cfg_attributes_with_arguments() {
+    assert_eq!(has_cfg_inner_attr("#![allow(dead_code)]"), Ok(false));
+}
+
+#[test]
 fn empty_test_file_error_skips_unrun_test_files_but_not_run_files() {
     let normal = "crates/log/src/utility_tests.rs";
     let unrun = "crates/log/tests/main_journeys.rs";
