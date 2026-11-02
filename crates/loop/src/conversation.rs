@@ -27,7 +27,7 @@ use crate::prompt::{fill, message};
 const NEVER_RAN: &str = "It never ran.";
 /// A call that started but has no result is sent with this fixed result
 /// (`docs/events.md`, "Resume").
-const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
+const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run. Check for its effects in the workspace, in git and in any outside service it reaches before making it again.";
 
 /// The conversation `lines` render, for a session whose model reference is
 /// `model`. Lines of kinds this build does not know are skipped. Only tests

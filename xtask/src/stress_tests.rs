@@ -1,5 +1,29 @@
 use super::*;
-use crate::select::TestRef;
+use crate::rules::RustFile;
+use crate::select::{Member, Members, TestRef};
+use crate::test_index::{TestBinary, TestIndex};
+
+fn member(unrun_tests: &[&str]) -> Members {
+    std::collections::BTreeMap::from([(
+        "log".to_owned(),
+        Member {
+            dir: "crates/log".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+            unrun_tests: unrun_tests.iter().map(|path| (*path).to_owned()).collect(),
+        },
+    )])
+}
+
+fn source_file(path: &str, source: &str) -> RustFile {
+    RustFile {
+        krate: "log".to_owned(),
+        path: path.to_owned(),
+        rel: path.strip_prefix("crates/log/").unwrap().to_owned(),
+        source: source.to_owned(),
+    }
+}
 
 fn binary_test() -> TestRef {
     TestRef {
@@ -17,6 +41,140 @@ fn unit_test() -> TestRef {
         name: "writer::tests::flushes_on_drop".to_owned(),
         unit: true,
     }
+}
+
+#[test]
+fn empty_test_file_error_requires_a_test_function_and_an_empty_compiled_index() {
+    let path = "crates/log/src/utility_tests.rs".to_owned();
+    let files = [path.clone()];
+    let sources = [source_file(&path, "#[test] fn catches() {}")];
+    let members = member(&[]);
+    let empty = TestIndex::from_fixtures(vec![(path.clone(), TestBinary { tests: Vec::new() })]);
+
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &members, &empty),
+        Some(format!("{path}: changed test file selected no tests"))
+    );
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &members, &TestIndex::default()),
+        None,
+        "an uncompiled file has no index entry"
+    );
+    let listed = TestIndex::from_fixtures(vec![(
+        path.clone(),
+        TestBinary {
+            tests: vec![unit_test()],
+        },
+    )]);
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &members, &listed),
+        None,
+        "a binary that lists tests is not an empty-index miss"
+    );
+}
+
+#[test]
+fn empty_test_file_error_ignores_files_without_test_functions() {
+    let path = "crates/log/src/utility_tests.rs".to_owned();
+    let files = [path.clone()];
+    let sources = [source_file(&path, "const BUDGET: u32 = 1;")];
+    let index = TestIndex::from_fixtures(vec![(path.clone(), TestBinary { tests: Vec::new() })]);
+
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &member(&[]), &index),
+        None
+    );
+}
+
+#[test]
+fn empty_test_file_error_skips_cfg_inner_attributes() {
+    let path = "crates/log/src/utility_tests.rs".to_owned();
+    let files = [path.clone()];
+    let sources = [source_file(
+        &path,
+        "#![cfg(feature = \"x\")] #[test] fn catches() {}",
+    )];
+    let index = TestIndex::from_fixtures(vec![(path.clone(), TestBinary { tests: Vec::new() })]);
+
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &member(&[]), &index),
+        None
+    );
+}
+
+#[test]
+fn has_cfg_inner_attr_ignores_non_cfg_attributes_with_arguments() {
+    assert_eq!(has_cfg_inner_attr("#![allow(dead_code)]"), Ok(false));
+}
+
+#[test]
+fn empty_test_file_error_skips_unrun_test_files_but_not_run_files() {
+    let normal = "crates/log/src/utility_tests.rs";
+    let unrun = "crates/log/tests/main_journeys.rs";
+    for (path, expected) in [
+        (
+            normal,
+            Some(format!("{normal}: changed test file selected no tests")),
+        ),
+        (unrun, None),
+    ] {
+        let files = [path.to_owned()];
+        let sources = [source_file(path, "#[test] fn catches() {}")];
+        let index =
+            TestIndex::from_fixtures(vec![(path.to_owned(), TestBinary { tests: Vec::new() })]);
+
+        assert_eq!(
+            empty_test_file_error(&files, &sources, &member(&[unrun]), &index),
+            expected,
+            "path {path}"
+        );
+    }
+}
+
+#[test]
+fn empty_test_file_error_names_the_first_file_with_an_empty_index() {
+    let first = "crates/log/src/first_tests.rs".to_owned();
+    let second = "crates/log/src/second_tests.rs".to_owned();
+    let files = [first.clone(), second.clone()];
+    let sources = [
+        source_file(&first, "#[test] fn first() {}"),
+        source_file(&second, "#[test] fn second() {}"),
+    ];
+    let index = TestIndex::from_fixtures(vec![
+        (first.clone(), TestBinary { tests: Vec::new() }),
+        (
+            second,
+            TestBinary {
+                tests: vec![unit_test()],
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &member(&[]), &index),
+        Some(format!("{first}: changed test file selected no tests"))
+    );
+}
+
+#[test]
+fn empty_test_file_error_requires_every_binary_for_a_file_to_list_no_tests() {
+    let path = "crates/log/src/utility_tests.rs".to_owned();
+    let files = [path.clone()];
+    let sources = [source_file(&path, "#[test] fn catches() {}")];
+    let index = TestIndex::from_fixtures(vec![
+        (path.clone(), TestBinary { tests: Vec::new() }),
+        (
+            path.clone(),
+            TestBinary {
+                tests: vec![unit_test()],
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &member(&[]), &index),
+        None
+    );
 }
 
 #[test]
