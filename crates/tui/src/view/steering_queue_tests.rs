@@ -1,5 +1,5 @@
-//! Tests for the steering queue's rows: their indent, their heading and
-//! footer, their ✕ and narrow widths (`docs/tui.md`, "Steering").
+//! Tests for the steering card's rows: its title, its entries, their
+//! ✕, its key hint, and narrow widths (`docs/tui.md`, "Steering").
 
 use std::path::PathBuf;
 
@@ -67,6 +67,33 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     buf
 }
 
+/// An app `width` by `height` with three queued steering rows, each
+/// droppable, the last long enough to wrap.
+fn three_wrapping(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(width, height);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_started",
+        serde_json::json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": "hi"}],
+        }]}),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
+            {"content": [{"type": "text", "text": "and test it"}], "source": "driver", "command_id": "c_2"},
+            {"content": [{"type": "text", "text": "rewrite the parser loop to take the whole queue at once instead of reading one row per step"}], "source": "driver", "command_id": "c_3"},
+        ]}),
+    ));
+    app
+}
+
 /// A renderer that draws whatever the built-in queue draws, so the
 /// test observes the built-in cross decision at the callback width.
 #[derive(Debug, Default)]
@@ -112,27 +139,30 @@ fn queue_row<'a>(shown: &'a str, text: &str) -> &'a str {
 }
 
 #[test]
-fn a_replacement_sees_the_builtin_cross_only_at_exact_fit() {
+fn a_replacement_sees_the_builtin_wrap_and_cross_at_its_width() {
     use std::rc::Rc;
-    // "use the parser" is 14 cells: with the four-cell prefix and the
-    // three-cell cross the row fits exactly at 21 columns.
+    // "use the parser" is 14 cells: with the two-cell mark and the
+    // `✕`'s gap the entry's text fits its row exactly at 21 columns,
+    // so the built-in draws the row whole with its `✕` at the text's
+    // right edge.
     let mut app = queued(21, 12);
     let fake = Rc::new(BuiltinEcho::default());
     app.install_renderer(fake.clone());
     let wide = screen(&app, 21, 12);
-    // The built-in heading, rows and footer all draw through the
+    // The built-in title, rows and hint all draw through the
     // replacement (`docs/tui.md`, "What a renderer returns").
-    assert!(wide.contains("Steering, joins"), "{wide}");
+    assert!(wide.contains("queued"), "{wide}");
     let fitted = queue_row(&wide, "use the parser");
     assert!(
-        fitted.trim_end().ends_with("use the parser  ✕"),
+        fitted.trim_end().ends_with("use the parser ✕"),
         "{fitted:?}"
     );
     let plain = queue_row(&wide, "and test it");
     assert!(!plain.contains('✕'), "{plain:?}");
-    // One column short, the built-in omits its cross. Keep the paint
-    // area at 21 so a mutant that returns the cross at callback width 20
-    // cannot hide behind paint clipping.
+    // One column short, the built-in wraps the entry, its continuation
+    // under the text, and the `✕` stays on the first row. Keep the paint
+    // area at 21 so a mutant that wraps at callback width 20 cannot hide
+    // behind paint clipping.
     let mut short_app = queued(21, 12);
     let short_fake = Rc::new(BuiltinEcho {
         builtin_width: Some(20),
@@ -140,9 +170,14 @@ fn a_replacement_sees_the_builtin_cross_only_at_exact_fit() {
     });
     short_app.install_renderer(short_fake.clone());
     let short = screen(&short_app, 21, 12);
-    assert!(short.contains("Steering, joins"), "{short}");
-    let omitted = queue_row(&short, "use the parser");
-    assert!(!omitted.contains('✕'), "{omitted:?}");
+    assert!(short.contains("queued"), "{short}");
+    let wrapped = queue_row(&short, "use the");
+    assert!(wrapped.contains("use the"), "{wrapped:?}");
+    assert!(wrapped.trim_end().ends_with('✕'), "{wrapped:?}");
+    assert!(
+        short.lines().any(|row| row.trim_end() == "  parser"),
+        "{short}"
+    );
     // Exact-fit and one-short built-in results were returned to the same
     // 21-column paint area at callback widths 21 and 20.
     assert_eq!(&*fake.widths.borrow(), &[21]);
@@ -183,9 +218,9 @@ fn wide_and_combining_marks_draw_whole() {
         .and_then(|at| u16::try_from(at).ok())
         .expect("the wide row");
     assert!(shown.contains("e\u{301}cole"), "{shown}");
-    // Dim throughout, over the rows' own spans: the wide row ends
-    // after its `✕`, the combining row after its. Blank continuations
-    // of wide glyphs carry no style.
+    // The stripe in `attention`, the mark in `attention`, the text in
+    // the text colour and the `✕` dim at the text's right edge. Blank
+    // continuations of wide glyphs carry no style.
     let buf = buffer(&app, 60, 12);
     assert_eq!(buf[(4, wide)].symbol(), "界");
     assert_eq!(buf[(6, wide)].symbol(), "界");
@@ -194,94 +229,304 @@ fn wide_and_combining_marks_draw_whole() {
         .position(|row| row.contains("e\u{301}cole"))
         .and_then(|at| u16::try_from(at).ok())
         .expect("the combining row");
-    for (y, end) in [(wide, 2 + 2 + 4 + 3), (combining, 2 + 2 + 5 + 3)] {
-        for x in 0..end {
+    for (y, text_end) in [(wide, 4 + 4), (combining, 4 + 5)] {
+        assert_eq!(buf[(0, y)].symbol(), "▌");
+        assert_eq!(
+            buf[(0, y)].style().fg,
+            Role::Attention.color().into(),
+            "the stripe"
+        );
+        for x in [2, 3] {
+            assert_eq!(
+                buf[(x, y)].style().fg,
+                Role::Attention.color().into(),
+                "the mark, cell {x}"
+            );
+        }
+        for x in 4..text_end {
             if buf[(x, y)].symbol() == " " {
                 continue;
             }
             assert_eq!(
                 buf[(x, y)].style().fg,
-                Role::Muted.color().into(),
-                "cell ({x}, {y})"
+                Role::Text.color().into(),
+                "the text, cell ({x}, {y})"
             );
         }
+        assert_eq!(buf[(58, y)].symbol(), "✕");
+        assert_eq!(
+            buf[(58, y)].style().fg,
+            Role::Muted.color().into(),
+            "the cross"
+        );
     }
 }
 
 #[test]
-fn steering_rows_indented_with_heading_and_footer() {
+fn steering_card_with_title_entries_and_hint() {
     insta::assert_snapshot!(
-        "steering_rows_indented_with_heading_and_footer",
+        "steering_card_with_title_entries_and_hint",
         screen(&queued(60, 12), 60, 12)
     );
 }
 
 #[test]
-fn the_queue_draws_heading_rows_and_footer() {
+fn the_card_draws_title_entries_and_hint() {
     let shown = screen(&queued(80, 12), 80, 12);
-    // The heading, each row indented with its ✕ after its text, and the
-    // footer: the undroppable row draws no ✕.
+    // The title with its figure, each entry with its mark, and the key
+    // hint: the undroppable row draws no ✕.
     for line in [
-        "  • Steering, joins the turn at the next step",
-        "  ↳ use the parser  ✕",
-        "  ↳ and test it",
-        "  ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
+        "Steering",
+        "2 queued · joins at the next step",
+        "↳ use the parser",
+        "↳ and test it",
+        "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
     ] {
         assert!(shown.contains(line), "{line}\n{shown}");
     }
+    let crossed = queue_row(&shown, "use the parser");
+    assert!(crossed.trim_end().ends_with('✕'), "{crossed:?}");
+    let plain = queue_row(&shown, "and test it");
+    assert!(!plain.contains('✕'), "{plain:?}");
 }
 
 #[test]
-fn the_queue_has_no_stripe() {
+fn three_entries_wrap_with_continuations_under_the_text() {
+    let app = three_wrapping(80, 24);
+    let shown = screen(&app, 80, 24);
+    // The title row, three entries with the long one's continuation
+    // aligned under its text, and the key hint.
+    for line in [
+        "Steering",
+        "3 queued · joins at the next step",
+        "↳ use the parser",
+        "↳ and test it",
+        "↳ rewrite the parser loop",
+        "one row per step",
+        "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
+    ] {
+        assert!(shown.contains(line), "{line}\n{shown}");
+    }
+    // The long entry wraps: its continuation starts under its text,
+    // past the stripe, the gap and the mark's two columns, with no
+    // mark of its own.
+    let rows: Vec<&str> = shown.lines().collect();
+    let first = rows
+        .iter()
+        .position(|row| row.contains("rewrite the parser loop"))
+        .expect("the long entry's first row");
+    let cont = rows.get(first + 1).expect("its continuation");
+    assert!(cont.starts_with("▌   "), "{cont:?}");
+    assert!(!cont.contains('↳') && !cont.contains('▸'), "{cont:?}");
+    insta::assert_snapshot!(
+        "three_entries_wrap_with_continuations_under_the_text",
+        shown
+    );
+}
+
+#[test]
+fn the_cards_title_marks_text_and_count_keep_their_styles() {
+    use ratatui::style::Modifier;
+    let app = three_wrapping(80, 24);
+    let buf = buffer(&app, 80, 24);
+    let shown = screen(&app, 80, 24);
+    // The title bold in `attention`.
+    let title = text_row(&shown, "Steering");
+    let name: String = (2..2 + 8).map(|x| buf[(x, title)].symbol()).collect();
+    assert_eq!(name, "Steering", "the title");
+    for x in 2..2 + 8 {
+        assert_eq!(
+            buf[(x, title)].style().fg,
+            Role::Attention.color().into(),
+            "the title, cell {x}"
+        );
+        assert!(
+            buf[(x, title)]
+                .style()
+                .add_modifier
+                .contains(Modifier::BOLD),
+            "the title is bold, cell {x}"
+        );
+    }
+    // The count dim, right-aligned at the text's right edge.
+    let figure = "3 queued · joins at the next step";
+    let figure_w = u16::try_from(crate::format::width(figure)).unwrap_or(u16::MAX);
+    let start = 79 - figure_w;
+    let drawn: String = (start..start + figure_w)
+        .map(|x| buf[(x, title)].symbol())
+        .collect();
+    assert_eq!(drawn, figure, "the count");
+    for x in start..start + figure_w {
+        assert_eq!(
+            buf[(x, title)].style().fg,
+            Role::Muted.color().into(),
+            "the count, cell {x}"
+        );
+        assert!(
+            !buf[(x, title)]
+                .style()
+                .add_modifier
+                .contains(Modifier::BOLD),
+            "the count is not bold, cell {x}"
+        );
+    }
+    // Every mark in `attention`, every text in the text colour and not
+    // dim, every `✕` dim at the text's right edge.
+    for needle in ["use the parser", "and test it", "rewrite the parser loop"] {
+        let y = text_row(&shown, needle);
+        assert_eq!(buf[(2, y)].symbol(), "↳", "the mark");
+        for x in [2, 3] {
+            assert_eq!(
+                buf[(x, y)].style().fg,
+                Role::Attention.color().into(),
+                "the mark, cell {x}"
+            );
+        }
+        for x in 4..4 + 8 {
+            assert_eq!(
+                buf[(x, y)].style().fg,
+                Role::Text.color().into(),
+                "the text, cell ({x}, {y})"
+            );
+            assert!(
+                !buf[(x, y)].style().add_modifier.contains(Modifier::DIM),
+                "the text is not dim, cell ({x}, {y})"
+            );
+        }
+        assert_eq!(buf[(78, y)].symbol(), "✕", "the cross");
+        assert_eq!(
+            buf[(78, y)].style().fg,
+            Role::Muted.color().into(),
+            "the cross"
+        );
+    }
+    // The long entry's continuation sits under its text in the text
+    // colour, with no mark.
+    let rows: Vec<&str> = shown.lines().collect();
+    let first = rows
+        .iter()
+        .position(|row| row.contains("rewrite the parser loop"))
+        .expect("the long entry's first row");
+    let y = u16::try_from(first + 1).expect("its continuation");
+    assert_eq!(buf[(4, y)].style().fg, Role::Text.color().into());
+    assert!(
+        !buf[(4, y)].style().add_modifier.contains(Modifier::DIM),
+        "the continuation is not dim"
+    );
+}
+
+#[test]
+fn a_selected_entry_shows_its_mark_and_bold_text() {
+    use ratatui::style::Modifier;
+    let mut app = three_wrapping(80, 24);
+    app.select_steering(2);
+    let buf = buffer(&app, 80, 24);
+    let shown = screen(&app, 80, 24);
+    // The selected entry reads "▸ " in `attention` with its text bold
+    // in the text colour.
+    let y = text_row(&shown, "rewrite the parser loop");
+    assert_eq!(buf[(2, y)].symbol(), "▸", "the mark");
+    for x in [2, 3] {
+        assert_eq!(
+            buf[(x, y)].style().fg,
+            Role::Attention.color().into(),
+            "the mark, cell {x}"
+        );
+    }
+    for x in 4..4 + 8 {
+        assert_eq!(
+            buf[(x, y)].style().fg,
+            Role::Text.color().into(),
+            "the text, cell {x}"
+        );
+        assert!(
+            buf[(x, y)].style().add_modifier.contains(Modifier::BOLD),
+            "the text is bold, cell {x}"
+        );
+    }
+}
+
+#[test]
+fn the_card_has_its_attention_stripe() {
     let app = queued(60, 12);
     let area = Rect::new(0, 0, 60, 12);
     let mut buf = Buffer::empty(area);
+    let _ = crate::view::render(&app, area, &mut buf, None);
+    let shown = screen(&app, 60, 12);
+    // Every card text row opens with the stripe in `attention`: the
+    // title, each entry and the hint. The input box keeps its own
+    // stripe below the card.
+    let title = shown
+        .lines()
+        .position(|row| row.contains("Steering"))
+        .expect("the title row");
+    let hint = shown
+        .lines()
+        .position(|row| row.contains("click a row to edit"))
+        .expect("the hint row");
+    for y in title..=hint {
+        let y = u16::try_from(y).expect("a drawn row");
+        assert_eq!(buf[(0, y)].symbol(), "▌", "row {y}");
+        assert_eq!(
+            buf[(0, y)].style().fg,
+            Role::Attention.color().into(),
+            "row {y}"
+        );
+    }
+}
+
+#[test]
+fn a_long_entry_wraps_with_its_cross_right_aligned() {
+    // "use the parser" is 14 cells: at 21 columns the entry's text
+    // fits its first row exactly, with the `✕` at the text's right
+    // edge; at 20 the text wraps under itself and the `✕` stays on the
+    // first row's right edge (`docs/tui.md`, "Steering").
+    let app = queued(21, 12);
+    let area = Rect::new(0, 0, 21, 12);
+    let mut buf = Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
-    // No steering row draws a stripe: the input box keeps its own.
-    for target in &targets {
-        if !matches!(target.id, TargetId::Steering(_)) {
-            continue;
-        }
-        for y in target.rect.top()..target.rect.bottom() {
-            for x in target.rect.left()..target.rect.right() {
-                assert_ne!(buf[(x, y)].symbol(), "▌", "a stripe drew");
-            }
-        }
-    }
+    let cross = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::DropSteering(_)))
+        .expect("a drop target");
+    // Two columns of padding on the left, one on the right: the `✕`
+    // sits on the text's last column, not the card's.
+    assert_eq!((cross.rect.x, cross.rect.width), (19, 1));
+    let row: String = (0..21)
+        .map(|x| buf[(x, cross.rect.y)].symbol().to_owned())
+        .collect();
+    assert!(row.trim_end().ends_with("↳ use the parser ✕"), "{row:?}");
+    let short = queued(20, 12);
+    let area = Rect::new(0, 0, 20, 12);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&short, area, &mut buf, None);
+    let cross = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::DropSteering(_)))
+        .expect("a drop target");
+    assert_eq!((cross.rect.x, cross.rect.width), (18, 1));
+    let row: String = (0..20)
+        .map(|x| buf[(x, cross.rect.y)].symbol().to_owned())
+        .collect();
+    assert!(row.trim_end().ends_with('✕'), "{row:?}");
+    assert!(row.contains("↳ use the"), "{row:?}");
+    // The continuation sits under the text, not under the mark.
+    let shown = screen(&short, 20, 12);
+    assert!(
+        shown.lines().any(|row| row.trim_end() == "▌   parser"),
+        "{shown}"
+    );
 }
 
 #[test]
-fn a_cross_at_the_exact_fit_draws_and_a_column_less_clips() {
-    // "use the parser" is 14 cells: at 21 columns the row with its
-    // `✕` fits exactly, and at 20 the text clips one cell short while
-    // the `✕` still draws. A wider prefix reserve would drop the `✕`
-    // in both (`docs/tui.md`, "Steering").
-    for (width, text) in [(21, "use the parser"), (20, "use the parse")] {
-        let app = queued(width, 12);
-        let area = Rect::new(0, 0, width, 12);
-        let mut buf = Buffer::empty(area);
-        let targets = crate::view::render(&app, area, &mut buf, None);
-        let cross = targets
-            .iter()
-            .find(|target| matches!(target.id, TargetId::DropSteering(_)))
-            .expect("a drop target");
-        assert_eq!((cross.rect.x, cross.rect.width), (width - 1, 1));
-        let row: String = (0..width)
-            .map(|x| buf[(x, cross.rect.y)].symbol().to_owned())
-            .collect();
-        assert!(row.trim_end().ends_with(&format!("{text}  ✕")), "{row:?}");
-    }
-}
-
-#[test]
-fn a_row_shows_its_cross_after_its_text() {
+fn a_droppable_rows_cross_sits_at_the_texts_right_edge() {
     for width in [30, 80] {
         let app = queued(width, 12);
         let area = Rect::new(0, 0, width, 12);
         let mut buf = Buffer::empty(area);
         let targets = crate::view::render(&app, area, &mut buf, None);
-        // The droppable row is the oldest: the top steering row, its ✕
-        // two spaces past its text.
+        // The droppable row is the oldest: the top steering entry, its
+        // ✕ on the text's last column.
         let drops: Vec<u16> = targets
             .iter()
             .filter(|target| matches!(target.id, TargetId::DropSteering(_)))
@@ -294,20 +539,16 @@ fn a_row_shows_its_cross_after_its_text() {
         let trimmed = row.trim_end();
         assert!(trimmed.ends_with("✕"), "width {width}: {trimmed:?}");
         assert!(
-            trimmed.ends_with("use the parser  ✕"),
+            trimmed.contains("use the parser"),
             "width {width}: {trimmed:?}"
         );
-        // The drop target sits on the ✕'s cell, not the last column.
+        // The drop target sits on the ✕'s cell: the text's last
+        // column, one short of the card's right edge.
         let cross = targets
             .iter()
             .find(|target| matches!(target.id, TargetId::DropSteering(_)))
             .expect("a drop target");
-        let before = trimmed.strip_suffix('✕').expect("the ✕");
-        assert_eq!(
-            cross.rect.x,
-            u16::try_from(crate::format::width(before)).unwrap_or(u16::MAX),
-            "width {width}"
-        );
+        assert_eq!(cross.rect.x, width - 2, "width {width}");
         assert_eq!(cross.rect.width, 1);
         assert_eq!(buf[(width.saturating_sub(1), drops[0])].symbol(), " ");
         for target in &targets {
@@ -319,10 +560,11 @@ fn a_row_shows_its_cross_after_its_text() {
 }
 
 #[test]
-fn below_rows_counts_the_queues_heading_and_footer() {
-    // One queued message takes three rows below the conversation: its
-    // row with the heading above and the footer below; none while empty.
-    // The view draws exactly these (`docs/tui.md`, "Steering").
+fn below_rows_counts_the_cards_title_entry_hint_and_edges() {
+    // One queued message takes five rows below the conversation: the
+    // title, its entry and the hint, with an edge row above and below;
+    // none while empty. The view draws exactly these
+    // (`docs/tui.md`, "Steering").
     let mut app = queued(60, 12);
     app.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",
@@ -337,7 +579,7 @@ fn below_rows_counts_the_queues_heading_and_footer() {
             {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
         ]}),
     ));
-    assert_eq!(app.below_rows(), bare + 3);
+    assert_eq!(app.below_rows(), bare + 5);
 }
 
 #[test]
@@ -363,22 +605,24 @@ fn a_wide_glyph_is_never_split() {
                 {"content": [{"type": "text", "text": "界界"}], "source": "driver"},
             ]}),
         ));
-        for row in app.steering() {
+        // The drawn rows never exceed the width: the card wraps the
+        // entry instead of splitting its wide glyph.
+        let area = Rect::new(0, 0, width, 12);
+        let mut buf = Buffer::empty(area);
+        let _ = crate::view::render(&app, area, &mut buf, None);
+        for row in crate::view::text(&buf).lines() {
             assert!(
-                crate::format::width(&row) <= usize::from(width),
+                crate::format::width(row) <= usize::from(width),
                 "width {width}: {row:?}"
             );
         }
-        let area = Rect::new(0, 0, width, 12);
-        let mut buf = Buffer::empty(area);
-        crate::view::render(&app, area, &mut buf, None);
     }
 }
 
 #[test]
 fn rows_draw_at_the_areas_top_row() {
-    // With one row of room the footer takes it: the row guard keeps
-    // the row at the area's top, and rows above it shed.
+    // With one row of room the hint takes it: the rows above it shed,
+    // and the kept row stays at the area's top.
     let app = queued(60, 12);
     let area = Rect::new(0, 0, 60, 12);
     let mut buf = Buffer::empty(area);
@@ -419,91 +663,106 @@ fn narrow_widths_clip_rows_safely() {
                 "width {width}"
             );
         }
-        // No stripe draws on a steering row at any width: the input
-        // box keeps its own.
-        for target in &targets {
-            if !matches!(target.id, TargetId::Steering(_)) {
-                continue;
-            }
-            for y in target.rect.top()..target.rect.bottom() {
-                for x in target.rect.left()..target.rect.right() {
-                    assert_ne!(buf[(x, y)].symbol(), "▌", "width {width}");
-                }
-            }
-        }
     }
 }
 
+/// The screen row holding `needle`.
+fn text_row(shown: &str, needle: &str) -> u16 {
+    shown
+        .lines()
+        .position(|row| row.contains(needle))
+        .and_then(|at| u16::try_from(at).ok())
+        .unwrap_or_else(|| panic!("no {needle:?} row\n{shown}"))
+}
+
 #[test]
-fn a_selected_row_marks_attention_with_default_text() {
+fn a_selected_row_shows_its_mark_and_bold_text() {
+    use ratatui::style::Modifier;
     let mut app = queued(60, 12);
     app.select_steering(0);
     let buf = buffer(&app, 60, 12);
-    // The selected row is the oldest steering row: the indent dim, the
-    // mark with its gap in attention, the text in the default foreground,
-    // and the ✕ dim.
-    let y = buf
-        .content
-        .chunks(60)
-        .position(|row| {
-            row.iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>()
-                .contains("use the parser")
-        })
-        .and_then(|at| u16::try_from(at).ok())
-        .expect("the selected row");
-    assert_eq!(buf[(0, y)].style().fg, Role::Muted.color().into());
-
+    let shown = screen(&app, 60, 12);
+    // The selected row is the oldest steering entry: its mark with its
+    // gap in attention, its text bold in the text colour, and its ✕ dim
+    // at the text's right edge.
+    let y = text_row(&shown, "use the parser");
     for x in [2, 3] {
         assert_eq!(
             buf[(x, y)].style().fg,
             Role::Attention.color().into(),
-            "cell {x}"
+            "the mark, cell {x}"
         );
     }
     for x in 4..4 + 14 {
-        // The text in the default foreground: no colour set.
         assert_eq!(
             buf[(x, y)].style().fg,
-            Some(ratatui::style::Color::Reset),
-            "cell {x}"
+            Role::Text.color().into(),
+            "the text, cell {x}"
+        );
+        assert!(
+            buf[(x, y)].style().add_modifier.contains(Modifier::BOLD),
+            "the text is bold, cell {x}"
+        );
+        assert!(
+            !buf[(x, y)].style().add_modifier.contains(Modifier::DIM),
+            "the text is not dim, cell {x}"
         );
     }
-    // The unselected row is dim throughout.
-    let plain = buf
-        .content
-        .chunks(60)
-        .position(|row| {
-            row.iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>()
-                .contains("and test it")
-        })
-        .and_then(|at| u16::try_from(at).ok())
-        .expect("the plain row");
-    for x in 0..2 + 2 + 11 {
+    assert_eq!(buf[(58, y)].symbol(), "✕");
+    assert_eq!(
+        buf[(58, y)].style().fg,
+        Role::Muted.color().into(),
+        "the cross"
+    );
+    // The unselected entry keeps its mark in attention and its text in
+    // the text colour, neither dim nor bold.
+    let plain = text_row(&shown, "and test it");
+    for x in [2, 3] {
         assert_eq!(
             buf[(x, plain)].style().fg,
-            Role::Muted.color().into(),
-            "cell {x}"
+            Role::Attention.color().into(),
+            "the mark, cell {x}"
         );
     }
+    for x in 4..4 + 11 {
+        assert_eq!(
+            buf[(x, plain)].style().fg,
+            Role::Text.color().into(),
+            "the text, cell {x}"
+        );
+        assert!(
+            !buf[(x, plain)]
+                .style()
+                .add_modifier
+                .contains(Modifier::BOLD),
+            "the text is not bold, cell {x}"
+        );
+        assert!(
+            !buf[(x, plain)].style().add_modifier.contains(Modifier::DIM),
+            "the text is not dim, cell {x}"
+        );
+    }
+}
+
+/// The input box's stripe row: the row holding the prompt.
+fn input_stripe_row(shown: &str) -> u16 {
+    text_row(shown, "›")
 }
 
 #[test]
 fn without_a_selection_the_stripe_stays_accent() {
     let app = queued(60, 12);
     let buf = buffer(&app, 60, 12);
+    let shown = screen(&app, 60, 12);
     // The input box's stripe cell: accent, with no editing hint on its
     // rows.
-    let stripe = buf
-        .content
-        .iter()
-        .position(|cell| cell.symbol() == "▌")
-        .expect("the stripe");
-    assert_eq!(buf.content[stripe].style().fg, Role::Accent.color().into());
-    let shown = screen(&app, 60, 12);
+    let y = input_stripe_row(&shown);
+    assert_eq!(buf[(0, y)].symbol(), "▌");
+    assert_eq!(
+        buf[(0, y)].style().fg,
+        Role::Accent.color().into(),
+        "the input box stripe"
+    );
     assert!(!shown.contains("editing a queued message"), "{shown}");
 }
 
@@ -514,18 +773,17 @@ fn while_editing_the_stripe_is_attention_with_its_hint() {
     // One step left: the caret leaves the hint's first cell free.
     app.on_edit(crate::keys::Edit::Left);
     let buf = buffer(&app, 80, 12);
-    let stripe = buf
-        .content
-        .iter()
-        .position(|cell| cell.symbol() == "▌")
-        .expect("the stripe");
+    let shown = screen(&app, 80, 12);
+    // The input box's stripe cell: attention while a message is edited.
+    let y = input_stripe_row(&shown);
+    assert_eq!(buf[(0, y)].symbol(), "▌");
     assert_eq!(
-        buf.content[stripe].style().fg,
-        Role::Attention.color().into()
+        buf[(0, y)].style().fg,
+        Role::Attention.color().into(),
+        "the input box stripe"
     );
     // The hint ends at the box's right end, dim throughout.
     let hint = "editing a queued message · Enter amends · ⌥X drops · Esc stops";
-    let shown = screen(&app, 80, 12);
     assert!(shown.contains(hint), "{shown}");
     let row = shown
         .lines()
@@ -869,13 +1127,13 @@ fn messages_carry_full_text_images_and_flags_oldest_first() {
 }
 
 #[test]
-fn an_empty_replacement_hides_heading_rows_and_footer() {
+fn an_empty_replacement_hides_the_whole_card() {
     let mut app = queued(80, 24);
     let fake = std::rc::Rc::new(RecordingRenderer::lines(&[], None));
     app.install_renderer(fake);
     // No rows reserved and none drawn, and no target left behind: the
-    // heading, the rows and the footer all hide. docs/tui.md:2885-2887.
-    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:2886: no lines hides all three.
+    // whole card hides. docs/tui.md:2885-2887.
+    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:2886: no lines hides the card.
     let (shown, targets, _) = draw_queue(&app, 80, 24);
     assert!(!shown.contains("Steering"), "{shown}");
     assert!(!shown.contains("use the parser"), "{shown}");
@@ -887,12 +1145,13 @@ fn an_empty_replacement_hides_heading_rows_and_footer() {
         "{targets:?}"
     );
     // The layout drops the hidden rows: without a renderer the same app
-    // reserves four rows more.
+    // reserves six rows more, the title, two entries and the hint with
+    // an edge row above and below.
     let plain = queued(80, 24);
-    // docs/tui.md:2885-2887: heading, rows and footer (four rows) hide together.
-    assert_eq!(app.below_rows() + 4, plain.below_rows()); // docs/tui.md:2886.
+    // docs/tui.md:2885-2887: the card's six rows hide together.
+    assert_eq!(app.below_rows() + 6, plain.below_rows()); // docs/tui.md:2886.
     // With no rows at all and no renderer, the builtin reserves nothing
-    // either: the heading and footer hide with the rows.
+    // either: the whole card hides with the rows.
     let mut drained = queued(80, 24);
     drained.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",

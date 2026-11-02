@@ -14,7 +14,6 @@ use contract::events::SteeringQueue;
 
 use super::{App, Effect, Kind, mint, session_command};
 use crate::ext::{PromptImage, QueuedImage, SteeringMessage};
-use crate::format;
 use crate::input::Draft;
 use crate::keys::Key;
 use serde_json::json;
@@ -31,28 +30,20 @@ struct Queued {
     images: Vec<QueuedImage>,
 }
 
-/// One queued message laid out for its column: the mark, the text as
-/// one line, whether the row is selected, and whether it draws its `✕`
-/// (`docs/tui.md`, "Steering").
+/// One queued message for the card: the mark, the full text, whether
+/// the row is selected, and whether it draws its `✕`. The view wraps
+/// the text and lays the card out (`docs/tui.md`, "Steering").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LaidRow {
     /// `▸` while selected, else `↳`.
     pub(crate) mark: char,
-    /// The row's text as one line, cut to fit past the indent, the mark
-    /// and the row's `✕`.
+    /// The row's full text as one line; the view wraps it.
     pub(crate) text: String,
     /// Whether the row is selected.
     pub(crate) selected: bool,
     /// Whether the row draws its `✕`: whether a `steer` sent it.
     pub(crate) droppable: bool,
 }
-
-/// The queue's two-column indent; the view draws it (`docs/tui.md`,
-/// "Steering").
-const INDENT: usize = 2;
-/// A droppable row's `✕` with its two-space gap; the view draws it
-/// after the text (`docs/tui.md`, "Steering").
-const CROSS: usize = 3;
 
 /// The queue, the selected row and the draft it stashed.
 #[derive(Debug, Default)]
@@ -248,24 +239,19 @@ impl Steering {
         self.rows.get(at).map(|row| row.text.as_str())
     }
 
-    /// One row per message at `width`, oldest first: the mark, the text
-    /// as one line cut to fit past the indent, the mark and the row's
-    /// `✕`, whether the row is selected, and whether it draws its `✕`.
-    /// `width` is the full conversation width: the view draws the indent
-    /// and the `✕` itself (`docs/tui.md`, "Steering").
-    pub(crate) fn rows(&self, width: u16) -> Vec<LaidRow> {
-        let room = usize::from(width).saturating_sub(INDENT);
+    /// One row per message, oldest first: the mark, the full text as one
+    /// line, whether the row is selected, and whether it draws its `✕`.
+    /// The view wraps the text and draws the `✕` itself
+    /// (`docs/tui.md`, "Steering").
+    pub(crate) fn rows(&self) -> Vec<LaidRow> {
         self.rows
             .iter()
             .map(|row| {
                 let selected = row.command_id.is_some() && row.command_id == self.selected;
                 let droppable = row.command_id.is_some();
-                let room = room
-                    .saturating_sub(2)
-                    .saturating_sub(if droppable { CROSS } else { 0 });
                 LaidRow {
                     mark: if selected { '▸' } else { '↳' },
-                    text: format::cut(&row.text.replace('\n', " "), room),
+                    text: row.text.replace('\n', " "),
                     selected,
                     droppable,
                 }
@@ -273,15 +259,14 @@ impl Steering {
             .collect()
     }
 
-    /// One line per row at `width`, oldest first: "↳ <text>", the selected
-    /// row "▸ <text>", each cut to the width. Tests read the queue
-    /// through this; the view lays its own rows out.
+    /// One line per row, oldest first: "↳ <text>", the selected row
+    /// "▸ <text>". Tests read the queue through this; the view lays its
+    /// own rows out.
     #[cfg(test)]
-    pub(crate) fn lines(&self, width: u16) -> Vec<String> {
-        let room = usize::from(width);
-        self.rows(width)
+    pub(crate) fn lines(&self) -> Vec<String> {
+        self.rows()
             .into_iter()
-            .map(|row| format::cut(&format!("{} {}", row.mark, row.text), room))
+            .map(|row| format!("{} {}", row.mark, row.text))
             .collect()
     }
 }
@@ -301,33 +286,24 @@ impl App {
         Effect::None
     }
 
-    /// The steering queue's rows, oldest first: each cut at the column
-    /// width, past the indent, the mark and the row's `✕` the view draws
-    /// (`docs/tui.md`, "Steering"). Tests read the queue through this;
-    /// the view lays its own rows out.
+    /// The steering queue's rows, oldest first: one line per message.
+    /// Tests read the queue through this; the view lays its own rows out
+    /// (`docs/tui.md`, "Steering").
     #[cfg(test)]
     pub(crate) fn steering(&self) -> Vec<String> {
-        self.steering.lines(self.column_width())
+        self.steering.lines()
     }
 
-    /// The steering queue's rows laid out for the view, oldest first
-    /// (`docs/tui.md`, "Steering").
+    /// The steering queue's rows for the view, oldest first: each with
+    /// its full text, which the view wraps (`docs/tui.md`, "Steering").
     pub(crate) fn steering_rows(&self) -> Vec<LaidRow> {
-        self.steering.rows(self.column_width())
+        self.steering.rows()
     }
 
     /// The steering queue's messages for its renderer input, oldest
     /// first (`docs/tui.md`, "The slots").
     pub(crate) fn steering_messages(&self) -> Vec<crate::ext::SteeringMessage<'_>> {
         self.steering.messages()
-    }
-
-    /// The steering queue's rows below the conversation: one per message
-    /// with the heading above and the footer below them; none while
-    /// empty. The view draws exactly these (`docs/tui.md`, "Steering").
-    pub(crate) fn steering_below(&self) -> usize {
-        let rows = self.steering.rows.len();
-        rows.saturating_add(if rows > 0 { 2 } else { 0 })
     }
 
     /// The selected queue row's index, oldest first; none while no row

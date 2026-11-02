@@ -812,9 +812,9 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     assert_eq!(app.conversation_height(), 6);
     app.attach(contract::SessionId(S_A.to_owned()));
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
-    // Two queued rows with the heading above and the footer below them,
-    // above the notice's row.
-    assert_eq!(app.conversation_height(), 2);
+    // Two queued entries on the card with the title above, the hint
+    // below and an edge row on each side, above the notice's row.
+    assert_eq!(app.conversation_height(), 0);
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
