@@ -10,7 +10,7 @@ use contract::events::CommandAccepted;
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, Surface, mint, session_command};
-use crate::editor::Target;
+use crate::editor::{OpenFile, Target};
 use crate::import_report::ImportSource;
 use crate::input::Draft;
 use crate::keymap::KeyMap;
@@ -1196,9 +1196,27 @@ impl App {
         Effect::Send(vec![line])
     }
 
-    /// Ctrl+G: the paste token beside the cursor, or else the whole draft,
-    /// every token expanded. A recall waiting for a page waits no more.
+    /// Ctrl+G: the Changed files row or diff at its first change, or the
+    /// paste token beside the cursor, or else the whole draft, every token
+    /// expanded. A recall waiting for a page waits no more.
     pub(super) fn open_in_editor(&mut self) -> Effect {
+        if self.changed_files_open() {
+            return match self.changed_file_for_editor() {
+                Some((path, line)) => Effect::OpenFile(OpenFile {
+                    path,
+                    line: Some(line),
+                }),
+                None if self.remote().is_some() => {
+                    // A remote terminal's files live on the hub, past no
+                    // hub operation that reads and writes an arbitrary
+                    // workspace path: the existing notice, and nothing
+                    // opens.
+                    self.push_notice("io_failed", super::config_views::UNAVAILABLE.to_owned());
+                    Effect::None
+                }
+                None => Effect::None,
+            };
+        }
         if let Some(number) = self.draft.token_at_cursor() {
             return self.open_token(number);
         }

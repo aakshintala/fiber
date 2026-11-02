@@ -200,7 +200,7 @@ pub(crate) enum Effect {
         description: String,
     },
     /// Open this file in the editor (`docs/tui.md`, "Swapped views").
-    OpenFile(PathBuf),
+    OpenFile(crate::editor::OpenFile),
 }
 
 /// What clicking a line, or Enter on it, opens, keyed by an id that stays
