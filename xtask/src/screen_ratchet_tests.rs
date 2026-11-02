@@ -404,6 +404,31 @@ fn a_block_comment_closing_at_the_line_start_releases_the_next_read() {
 }
 
 #[test]
+fn a_close_inside_an_open_comment_returns_the_code_after_it() {
+    assert_eq!(code_part("x */ y", 1), (" y".to_owned(), 0));
+    assert_eq!(code_part("x */ y", 2), ("".to_owned(), 1));
+}
+
+#[test]
+fn a_nested_open_inside_an_open_comment_closes_from_the_outside() {
+    assert_eq!(
+        code_part("abc /* def */ ghi */ code", 1),
+        (" code".to_owned(), 0)
+    );
+}
+
+#[test]
+fn a_close_before_a_later_open_inside_a_comment_closes_first() {
+    assert_eq!(code_part("a */ b /* c", 1), (" b ".to_owned(), 1));
+}
+
+#[test]
+fn an_unclosed_open_inside_an_open_comment_deepens() {
+    assert_eq!(code_part("abc /* def", 1), ("".to_owned(), 2));
+    assert_eq!(code_part("abc /* def", 2), ("".to_owned(), 3));
+}
+
+#[test]
 fn a_char_literal_advances_past_its_closing_quote() {
     assert_eq!(code_part("'a' x", 0), ("  x".to_owned(), 0));
     assert_eq!(code_part("'\\n' x", 0), ("  x".to_owned(), 0));

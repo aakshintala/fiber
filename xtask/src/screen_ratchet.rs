@@ -171,20 +171,21 @@ fn code_part(line: &str, mut comment: u32) -> (String, u32) {
     while !rest.is_empty() {
         let before = rest.len();
         if comment > 0 {
-            match (rest.find("/*"), rest.find("*/")) {
-                (Some(at), Some(end)) if at < end => {
+            // The earlier of the two comment tokens decides. The needles
+            // differ in their first byte, so their positions can never tie
+            // and no comparison between them is needed: branch on which
+            // token starts at the earlier position instead.
+            let next = rest.find("/*").into_iter().chain(rest.find("*/")).min();
+            match next {
+                Some(at) if rest[at..].starts_with("/*") => {
                     comment += 1;
                     rest = &rest[at + 2..];
                 }
-                (Some(at), None) => {
-                    comment += 1;
-                    rest = &rest[at + 2..];
-                }
-                (_, Some(end)) => {
+                Some(at) => {
                     comment -= 1;
-                    rest = &rest[end + 2..];
+                    rest = &rest[at + 2..];
                 }
-                (None, None) => return (code, comment),
+                None => return (code, comment),
             }
         } else if rest.starts_with("//") {
             break;
