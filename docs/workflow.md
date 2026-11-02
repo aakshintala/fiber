@@ -330,7 +330,8 @@ Before asking the owner, the orchestrator confirms on the exact head:
 - the pull request body starts with `Break-glass:`, then names the blocked
   pull requests and the defect that stops its own `CI`.
 
-The owner merges with `gh pr merge <n> --admin --squash --delete-branch`.
+The owner merges in the browser, on the pull request page, with "Merge
+without waiting for requirements to be met", as a squash merge.
 `CI` still runs on the merge commit. If it fails on a job the diff touched,
 as classified by `ci-triage`, the merge is reverted at once in a new pull
 request, and nobody fixes it forward. A failure on a job the diff did not
@@ -338,6 +339,7 @@ touch is handled like any other failure on `main`.
 
 The bypass is the repository-admin role on the `main` ruleset, in
 pull-request mode, so a direct push to `main` is still refused. Agents run
-`gh` with their own credential, which holds no admin role, so an `--admin`
-merge by an agent fails on GitHub's side whatever harness runs it. The
+`gh` as a separate machine account with the Write role, and no admin login
+is kept on the machines agents run on. An `--admin` merge by an agent fails
+on GitHub's side, whatever harness runs it. The
 nightly report lists every merge whose head had no green `CI`.
