@@ -1438,12 +1438,6 @@ fn wheel_read_call(n: usize, path: &str) -> fakes::Response {
 /// whose parent let the wheel reach the wrong surface.
 #[test]
 fn wheel_over_each_swapped_view_scrolls_that_view() {
-    // Fixture arithmetic: each model uses two display rows and a wheel
-    // step advances three, so one step advances `3 / 2 = 1` whole model
-    // with one row left over.
-    const MODEL_DISPLAY_ROWS: usize = 2;
-    const WHEEL_STEP_ROWS: usize = 3;
-    const MODELS_PER_WHEEL_STEP: usize = WHEEL_STEP_ROWS / MODEL_DISPLAY_ROWS;
     const SWAPPED_HEADER_ROWS: u16 = 1;
     const OVERLAY_TOP_EDGE_AND_PAD_ROWS: u16 = 2;
     const PICKER_CONTROL_ROWS: u16 = 2;
@@ -1452,6 +1446,8 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
         + OVERLAY_TOP_EDGE_AND_PAD_ROWS
         + PICKER_CONTROL_ROWS
         + PROVIDER_HEADING_ROWS;
+    // SGR mouse coordinates are one-based, unlike the grid row above.
+    const PICKER_WHEEL_ROW: u16 = PICKER_MODEL_ROW + 1;
 
     run_journey(
         "wheel_over_each_swapped_view_scrolls_that_view",
@@ -1529,11 +1525,9 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             // One wheel step down inside each view, clear of the rail and
             // the panel. The compact picker row is placed from fixture
             // constants: 1 header + 2 top-frame rows + 2 controls + 1
-            // provider heading = screen row 6; other views use row 9.
+            // provider heading = screen row 6; SGR coordinates add one.
             let at = (21, 9);
-            let picker_at = (at.0, PICKER_MODEL_ROW);
-            // The picker fixture has two rows per model and the wheel moves
-            // three rows, so one step advances `3 / 2 = 1` whole model.
+            let picker_at = (at.0, PICKER_WHEEL_ROW);
             run.write(b"/model\r");
             let pre = run.wait_screen("the open picker", |grid| {
                 shows(grid, "Type to search") && shows(grid, "m-00") && !shows(grid, "refreshing")
@@ -1545,14 +1539,21 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 pre.rows
             );
             run.write(&wheel_down(picker_at));
-            let next_model = format!("m-{:02}", MODELS_PER_WHEEL_STEP);
             let post = run.wait_screen("the wheeled picker", |grid| {
-                find_grid_row(&grid.rows, &next_model)
-                    .is_some_and(|row| row > 0 && grid.rows[usize::from(row) - 1].contains("fake"))
+                grid.rows.iter().enumerate().any(|(row, line)| {
+                    line.contains("› m-")
+                        && !line.contains("m-00")
+                        && row > 0
+                        && grid.rows[row - 1].contains("fake")
+                })
             });
-            let next = find_grid_row(&post.rows, &next_model).expect("the next model row");
+            let focused = post
+                .rows
+                .iter()
+                .position(|line| line.contains("› m-"))
+                .expect("the focused model row");
             assert!(
-                post.rows[usize::from(next) - 1].contains("fake"),
+                focused > 0 && post.rows[focused - 1].contains("fake"),
                 "the section row heads the focused model: {:?}",
                 post.rows
             );
@@ -1676,13 +1677,14 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 "the keys wheel left the conversation's scroll"
             );
             // The context breakdown: the sizes heading, the bar, the
-            // categories, then the largest tool results. One step moves
-            // three rows, from the heading to the first category.
+            // categories, then the largest tool results. At fourteen rows
+            // the categories fill the initial window; one step moves three
+            // rows from the heading to the first category.
             run.write(b"/context\r");
             let pre = run.wait_screen("the open context", |grid| {
                 shows(grid, "Context")
                     && shows(grid, "system prompt")
-                    && shows(grid, "Largest tool results")
+                    && shows(grid, "tool results")
             });
             let first = find_grid_row(&pre.rows, "tokens ·").expect("the sizes row");
             run.write(&wheel_down(at));

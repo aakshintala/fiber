@@ -1429,6 +1429,51 @@ fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() 
 }
 
 #[test]
+fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
+    let mut app = attached(120, 14);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let first = app.model_picker_view().expect("open");
+    assert!(first.focused.is_some(), "the current model has focus");
+    let _ = screen(&app, 120, 14);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelDown,
+        col: slab.x + 1,
+        row: slab.y + 1,
+    });
+
+    let view = app.model_picker_view().expect("still open");
+    assert_eq!(
+        view.top,
+        3,
+        "wheel did not shift the window; conversation rows={}, slab={slab:?}",
+        app.conversation_area_height()
+    );
+    let next = view.sections[0]
+        .models
+        .iter()
+        .find(|model| model.id == "m2")
+        .expect("the next model");
+    assert_eq!(view.focused, Some(next.at));
+    let text = screen(&app, 120, 14);
+    let (model_y, model) = find_row(&text, "m2");
+    assert!(model.contains("› m2"), "{text}");
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the focused model: {text}"
+    );
+    assert!(!text.contains("m1 ● current"), "{text}");
+}
+
+#[test]
 fn a_zero_fit_down_keeps_the_focused_model_with_its_heading_before_the_footer() {
     let mut app = attached(80, 8);
     current_model(&mut app, "acme/m1");

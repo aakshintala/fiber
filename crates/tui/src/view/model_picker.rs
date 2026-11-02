@@ -855,10 +855,10 @@ pub(crate) fn focus_window_top(view: &PickerView, height: u16) -> usize {
 }
 
 /// The stored top clamped to the current list and moved only enough to
-/// keep the focused row's first display row visible.
-pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
+/// keep the focused row's first display row visible at `fit` rows.
+fn keep_focus_visible_top_at_fit(view: &PickerView, fit: usize) -> usize {
     let display = display_rows(view, false);
-    let fit = model_fit(view, height).max(usize::from(view.focused.is_some()));
+    let fit = fit.max(usize::from(view.focused.is_some()));
     let max = display.rows.len().saturating_sub(fit);
     let top = view.top.min(max);
     if fit == 0 {
@@ -876,6 +876,15 @@ pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
     top.clamp(low, focused).min(max)
 }
 
+/// The stored top clamped to the current list and moved only enough to
+/// keep the focused row's first display row visible.
+pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
+    keep_focus_visible_top_at_fit(
+        view,
+        model_fit(view, height).max(usize::from(view.focused.is_some())),
+    )
+}
+
 /// The next body-row top and the nearest visible selectable layout row,
 /// if wheel movement carries the current focus offscreen.
 pub(crate) fn picker_wheel_window(
@@ -884,9 +893,19 @@ pub(crate) fn picker_wheel_window(
     height: u16,
 ) -> (usize, Option<usize>) {
     let display = display_rows(view, false);
-    let fit = model_fit(view, height).max(usize::from(view.focused.is_some()));
+    // When fewer than two body rows fit, a short draw yields the footer
+    // and gap to keep a model with its heading. Wheel against that expanded
+    // window or the step can land on a nonfocusable detail row and leave
+    // the focused model pinned.
+    let fit = model_fit(view, height);
+    let fit = if fit < 2 {
+        short_model_fit(view, height).unwrap_or(fit)
+    } else {
+        fit
+    }
+    .max(usize::from(view.focused.is_some()));
     let max = display.rows.len().saturating_sub(fit);
-    let effective = keep_focus_visible_top(view, height);
+    let effective = keep_focus_visible_top_at_fit(view, fit);
     let top = if up {
         effective.saturating_sub(3)
     } else {
