@@ -19,6 +19,12 @@ pub(crate) struct Timing {
     tail_wait: bool,
     preview_fold: bool,
     tail_install: bool,
+    attach_setup: Option<log::diag::Timer>,
+    attach_wait: Option<log::diag::Timer>,
+    attach_tail: Option<log::diag::Timer>,
+    attach_prepare: Option<log::diag::Timer>,
+    attach_draw: Option<log::diag::Timer>,
+    attach_done: bool,
 }
 
 impl Timing {
@@ -32,6 +38,12 @@ impl Timing {
             tail_wait: false,
             preview_fold: false,
             tail_install: false,
+            attach_setup: None,
+            attach_wait: None,
+            attach_tail: None,
+            attach_prepare: None,
+            attach_draw: None,
+            attach_done: false,
         }
     }
 
@@ -132,6 +144,151 @@ impl Timing {
             return None;
         }
         log::diag::timed(&self.diag, Op::TuiTailInstall, None, None)
+    }
+
+    /// Starts the attach setup guard at `run_with` entry, once per
+    /// process: a start while one runs keeps it, and none starts after
+    /// the spans emit or discard.
+    pub(crate) fn start_attach_setup(&mut self) {
+        start_span(
+            &mut self.attach_setup,
+            self.attach_done,
+            &self.diag,
+            Op::TuiAttachSetup,
+        );
+    }
+
+    /// Stamps the setup end after the initial unattached draw; the
+    /// retained guard still writes only at the attached-history draw.
+    pub(crate) fn stop_attach_setup(&mut self) {
+        stop_span(&mut self.attach_setup);
+    }
+
+    /// Starts the attach wait guard after the initial draw, once per
+    /// process: a start while one runs keeps it, and none starts after
+    /// the spans emit or discard.
+    pub(crate) fn start_attach_wait(&mut self) {
+        start_span(
+            &mut self.attach_wait,
+            self.attach_done,
+            &self.diag,
+            Op::TuiAttachWait,
+        );
+    }
+
+    /// Stamps the wait end at the first due tail attempt; the retained
+    /// guard still writes only at the attached-history draw.
+    pub(crate) fn stop_attach_wait(&mut self) {
+        stop_span(&mut self.attach_wait);
+    }
+
+    /// Starts the attach tail guard at the first due tail attempt, once
+    /// per process: a start while one runs keeps the first attempt's
+    /// guard across false-returning attempts, and none starts after
+    /// the spans emit or discard.
+    pub(crate) fn start_attach_tail(&mut self) {
+        start_span(
+            &mut self.attach_tail,
+            self.attach_done,
+            &self.diag,
+            Op::TuiAttachTail,
+        );
+    }
+
+    /// Stamps the tail end at the install the successful attempt
+    /// reaches; the retained guard still writes only at the
+    /// attached-history draw.
+    pub(crate) fn stop_attach_tail(&mut self) {
+        stop_span(&mut self.attach_tail);
+    }
+
+    /// Starts the attach prepare guard at the installed tail return,
+    /// once per process: a start while one runs keeps it, and none
+    /// starts after the spans emit or discard.
+    pub(crate) fn start_attach_prepare(&mut self) {
+        start_span(
+            &mut self.attach_prepare,
+            self.attach_done,
+            &self.diag,
+            Op::TuiAttachPrepare,
+        );
+    }
+
+    /// Stamps the prepare end immediately before the attached-history
+    /// draw; the retained guard still writes only at that draw.
+    pub(crate) fn stop_attach_prepare(&mut self) {
+        stop_span(&mut self.attach_prepare);
+    }
+
+    /// Starts the attach draw guard immediately before the
+    /// attached-history draw, once per process: a start while one runs
+    /// keeps it, and none starts after the spans emit or discard.
+    pub(crate) fn start_attach_draw(&mut self) {
+        start_span(
+            &mut self.attach_draw,
+            self.attach_done,
+            &self.diag,
+            Op::TuiAttachDraw,
+        );
+    }
+
+    /// Stamps the draw end at its completion; the retained guard still
+    /// writes only when the draw held attached-session history.
+    pub(crate) fn stop_attach_draw(&mut self) {
+        stop_span(&mut self.attach_draw);
+    }
+
+    /// Writes the five retained spans at the first attached-history
+    /// draw, once per process: each line covers its stamped boundary,
+    /// in boundary order.
+    pub(crate) fn emit_attach_spans(&mut self) {
+        if self.attach_done {
+            return;
+        }
+        self.attach_done = true;
+        drop(self.attach_setup.take());
+        drop(self.attach_wait.take());
+        drop(self.attach_tail.take());
+        drop(self.attach_prepare.take());
+        drop(self.attach_draw.take());
+    }
+
+    /// Discards the five spans without writing, when the parent
+    /// attached-frame guard is discarded; once per process, so nothing
+    /// starts afterwards.
+    pub(crate) fn discard_attach_spans(&mut self) {
+        if self.attach_done {
+            return;
+        }
+        self.attach_done = true;
+        discard(self.attach_setup.take());
+        discard(self.attach_wait.take());
+        discard(self.attach_tail.take());
+        discard(self.attach_prepare.take());
+        discard(self.attach_draw.take());
+    }
+}
+
+/// Starts one attach span guard unless the spans already emitted or
+/// discarded, or one already runs: the first start wins, so a later
+/// attempt never restarts its span.
+fn start_span(
+    slot: &mut Option<log::diag::Timer>,
+    done: bool,
+    diag: &Arc<log::diag::Diag>,
+    op: Op,
+) {
+    if done || slot.is_some() {
+        return;
+    }
+    *slot = log::diag::timed(diag, op, None, None);
+}
+
+/// Stamps one attach span guard's end; a guard that never started, or
+/// already stopped, is untouched.
+fn stop_span(slot: &mut Option<log::diag::Timer>) {
+    if let Some(timer) = slot.as_mut() {
+        timer.stop();
     }
 }
 

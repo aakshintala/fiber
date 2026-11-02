@@ -466,8 +466,9 @@ What is recorded:
   `data` holds only `op` and `ms`.
   Installed for the terminal are `tui.extensions`, `tui.first_render`,
   `tui.attached_frame`, `tui.log_read`, `tui.transcript`, `tui.frame`,
-  `tui.attach_summary`, `tui.tail_wait`, `tui.preview_fold` and
-  `tui.tail_install`.
+  `tui.attach_summary`, `tui.tail_wait`, `tui.preview_fold`,
+  `tui.tail_install`, `tui.attach_setup`, `tui.attach_wait`,
+  `tui.attach_tail`, `tui.attach_prepare` and `tui.attach_draw`.
   `tui.extensions` covers extension loading before the first draw; when a
   loader exists it writes once per process, and without one it writes none
   (`docs/tui.md`, "How a TUI extension runs"). `tui.first_render` covers
@@ -492,7 +493,16 @@ What is recorded:
   answer's fold from `app.tail_lines` entry through completion, not the
   empty seed fold or installation. `tui.tail_install` covers the preview
   installation from `app.install_tail` entry through completion after the
-  pre-frame tail-history fetch.
+  pre-frame tail-history fetch. `tui.attach_setup` covers `run_with`
+  entry through the initial unattached draw, `tui.attach_wait` covers
+  that draw through the first due tail read, `tui.attach_tail` covers
+  the first due tail attempt through the install it reaches, across
+  false-returning attempts, `tui.attach_prepare` covers the install
+  return through immediately before the attached-history draw, and
+  `tui.attach_draw` covers that draw through its completion. The five
+  write once, together with `tui.attached_frame`, only when the first
+  attached-history draw succeeds; an attach whose parent timer is
+  discarded writes none. Their `data` holds only `op` and `ms`.
   Each is written at most once per process on the first attach; an attach
   with no stream writes none. Their `data` holds only `op` and `ms`.
   Request, model, hook and network timings may overlap as nested

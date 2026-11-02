@@ -9,9 +9,9 @@ use crate::test_support::loopback;
 
 use super::{
     ATTACH_PASS, ATTACH_TAIL, FIXTURE_COUNT, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures,
-    PLANS, PROBE_A, PROBE_B, SPAN_METRIC, Step, TURN_REPLY_BYTES, attach_stage_rows,
-    await_pass_end, feed_step, memory_rows, open_command, open_error_samples, parse_open_line,
-    pass_entry, plan_turns, replay_finished, size_note, span_samples, stage_rows,
+    PLANS, PROBE_A, PROBE_B, REMAINDER_OP, SPAN_METRIC, Step, TURN_REPLY_BYTES, attach_remainder,
+    attach_stage_rows, await_pass_end, feed_step, memory_rows, open_command, open_error_samples,
+    parse_open_line, pass_entry, plan_turns, replay_finished, size_note, span_samples, stage_rows,
 };
 
 #[test]
@@ -633,6 +633,37 @@ fn span_samples_emit_one_row_per_op_timing_line() {
     assert_eq!(SPAN_METRIC, "attach_span_ms");
 }
 
+/// A complete sample log gains the remainder row beside its span rows:
+/// the parent 30 with children 2, 3, 15, 6 and 0 leaves 4, on the same
+/// fixture and sample.
+#[test]
+fn span_samples_derive_the_remainder_beside_the_span_rows() {
+    let text = [
+        span_op("tui.attached_frame", 30),
+        span_op("tui.attach_setup", 2),
+        span_op("tui.attach_wait", 3),
+        span_op("tui.attach_tail", 15),
+        span_op("tui.attach_prepare", 6),
+        span_op("tui.attach_draw", 0),
+    ]
+    .join("\n");
+    let dir = span_home(4242, &text);
+    let rows = span_samples(dir.path(), 4242, "10 MiB", 10_485_760, 2).expect("spans read");
+    assert_eq!(rows.len(), 7, "{rows:?}");
+    let remainder = rows
+        .iter()
+        .find(|(_, row)| row["op"] == REMAINDER_OP)
+        .unwrap_or_else(|| panic!("the remainder row: {rows:?}"));
+    assert_eq!(
+        remainder,
+        &(
+            SPAN_METRIC,
+            json!({"fixture": "10 MiB", "log_bytes": 10_485_760, "sample": 2,
+                "op": "tui.attached_frame_remainder", "ms": 4}),
+        )
+    );
+}
+
 /// Each sample reads only its own TUI process's log: two samples in one
 /// home attribute their spans to their own sample number.
 #[test]
@@ -690,4 +721,147 @@ fn span_samples_fail_when_the_log_cannot_be_read() {
     std::fs::create_dir_all(logs.join("tui-4242.log")).expect("a directory at the log path");
     let err = span_samples(dir.path(), 4242, "1 MiB", 1_048_576, 0).expect_err("unreadable fails");
     assert!(err.contains("tui-4242.log"), "{err}");
+}
+
+/// One span row under the span metric, as `span_samples` leaves it.
+fn span_row(op: &str, ms: u64) -> (&'static str, serde_json::Value) {
+    (
+        SPAN_METRIC,
+        json!({"fixture": "1 MiB", "log_bytes": 1_048_576, "sample": 0, "op": op, "ms": ms}),
+    )
+}
+
+/// The sample's five live spans under their parent: parent 30 with
+/// children 2, 3, 15, 6 and 0.
+fn live_spans() -> super::Samples {
+    vec![
+        span_row("tui.attached_frame", 30),
+        span_row("tui.attach_setup", 2),
+        span_row("tui.attach_wait", 3),
+        span_row("tui.attach_tail", 15),
+        span_row("tui.attach_prepare", 6),
+        span_row("tui.attach_draw", 0),
+    ]
+}
+
+/// The remainder is the parent minus its five children, on the same
+/// sample's span metric with the synthetic remainder identity: 30
+/// minus 26 leaves 4.
+#[test]
+fn attach_remainder_subtracts_the_five_spans_from_their_parent() {
+    let row = attach_remainder("1 MiB", 1_048_576, 0, &live_spans())
+        .expect("a complete sample derives")
+        .expect("the parent covers its children");
+    assert_eq!(REMAINDER_OP, "tui.attached_frame_remainder");
+    assert_eq!(
+        row,
+        (
+            SPAN_METRIC,
+            json!({"fixture": "1 MiB", "log_bytes": 1_048_576, "sample": 0,
+                "op": "tui.attached_frame_remainder", "ms": 4}),
+        )
+    );
+}
+
+/// A sample missing the parent or any child keeps no remainder row,
+/// never a zero: missing stays missing.
+#[test]
+fn attach_remainder_is_missing_without_the_parent_or_any_child() {
+    let mut spans = live_spans();
+    spans.retain(|(_, row)| row["op"] != "tui.attached_frame");
+    assert_eq!(attach_remainder("1 MiB", 1_048_576, 0, &spans), Ok(None));
+    for child in [
+        "tui.attach_setup",
+        "tui.attach_wait",
+        "tui.attach_tail",
+        "tui.attach_prepare",
+        "tui.attach_draw",
+    ] {
+        let mut spans = live_spans();
+        spans.retain(|(_, row)| row["op"] != child);
+        assert_eq!(
+            attach_remainder("1 MiB", 1_048_576, 0, &spans),
+            Ok(None),
+            "without {child}"
+        );
+    }
+    assert!(
+        attach_remainder("1 MiB", 1_048_576, 0, &[])
+            .expect("empty derives")
+            .is_none()
+    );
+}
+
+/// A duplicated live operation fails as a malformed measurement
+/// instead of summing twice: the log never holds a span twice.
+#[test]
+fn attach_remainder_fails_on_a_duplicate_live_op() {
+    for duplicate in ["tui.attached_frame", "tui.attach_tail"] {
+        let mut spans = live_spans();
+        spans.push(span_row(duplicate, 1));
+        let err = attach_remainder("1 MiB", 1_048_576, 0, &spans).expect_err("a duplicate fails");
+        assert!(err.contains("malformed measurement"), "{err}");
+        assert!(err.contains(duplicate), "{err}");
+    }
+}
+
+/// Children outweighing their parent fail as a malformed measurement,
+/// never wrapping: exactly covered children leave a zero remainder.
+#[test]
+fn attach_remainder_fails_when_children_outweigh_the_parent() {
+    let mut spans = live_spans();
+    spans[0] = span_row("tui.attached_frame", 25);
+    let err = attach_remainder("1 MiB", 1_048_576, 0, &spans).expect_err("26 over 25 fails");
+    assert!(err.contains("malformed measurement"), "{err}");
+    spans[0] = span_row("tui.attached_frame", 26);
+    let row = attach_remainder("1 MiB", 1_048_576, 0, &spans)
+        .expect("26 over 26 derives")
+        .expect("an exact cover leaves zero");
+    assert_eq!(row.1["ms"], json!(0));
+}
+
+/// A child sum past `u64::MAX` fails as a malformed measurement,
+/// never wrapping: checked addition guards the five children.
+#[test]
+fn attach_remainder_fails_on_child_sum_overflow() {
+    let mut spans = live_spans();
+    spans[1] = span_row("tui.attach_setup", u64::MAX);
+    spans[2] = span_row("tui.attach_wait", u64::MAX);
+    let err = attach_remainder("1 MiB", 1_048_576, 0, &spans).expect_err("the sum overflows fails");
+    assert!(err.contains("malformed measurement"), "{err}");
+}
+
+/// Comparator jig rows and unrelated span operations never enter the
+/// remainder: only the same sample's live parent and children sum.
+#[test]
+fn attach_remainder_ignores_comparator_rows_and_other_ops() {
+    let mut spans = live_spans();
+    spans.push((
+        "attach_stage_ms",
+        json!({"fixture": "1 MiB", "log_bytes": 1_048_576, "stage": "fold", "ms": 6.0}),
+    ));
+    spans.push(span_row("tui.first_render", 2));
+    spans.push((
+        SPAN_METRIC,
+        json!({"fixture": "1 MiB", "log_bytes": 1_048_576, "sample": 0, "op": "tui.frame"}),
+    ));
+    let row = attach_remainder("1 MiB", 1_048_576, 0, &spans)
+        .expect("comparators derive")
+        .expect("live spans still cover");
+    assert_eq!(row.1["ms"], json!(4));
+}
+
+/// A live operation without a whole `ms` fails as a malformed
+/// measurement instead of counting as zero.
+#[test]
+fn attach_remainder_fails_on_a_live_op_without_whole_ms() {
+    let mut spans = live_spans();
+    spans[4] = (
+        SPAN_METRIC,
+        json!({"fixture": "1 MiB", "log_bytes": 1_048_576, "sample": 0,
+            "op": "tui.attach_prepare", "ms": "6"}),
+    );
+    let err = attach_remainder("1 MiB", 1_048_576, 0, &spans).expect_err("a string ms fails");
+    assert!(err.contains("malformed measurement"), "{err}");
+    assert!(err.contains("tui.attach_prepare"), "{err}");
 }

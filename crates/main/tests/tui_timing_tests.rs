@@ -1,7 +1,8 @@
 //! Binary-level terminal timers (`docs/state.md`, "Diagnostic logs"): the
 //! built `fiber resume` on a seeded session over a pty. At `debug` the
-//! attach records `tui.first_render` on its first frame, and the first
-//! fetched page records `tui.log_read` with its successful load recording
+//! attach records `tui.first_render` on its first frame, the five attach
+//! spans across the attached-history draw, and the first fetched page
+//! records `tui.log_read` with its successful load recording
 //! `tui.transcript`, each once per process; at the default no debug line
 //! is written. The seeded tail proves the attach built its preview: the
 //! wait below holds seeded text only the tail read can draw, and paging
@@ -386,5 +387,67 @@ fn a_debug_resume_records_extension_and_attached_frame() {
     assert_terminal_wire(
         &ops(&setup, pid, "tui.attached_frame"),
         "tui.attached_frame",
+    );
+}
+
+/// A debug resume records one line per attach span when the attached
+/// history draws: the five spans partition the attached frame, each in
+/// the terminal wire shape, in boundary order.
+#[test]
+fn a_debug_resume_records_each_attach_span_once_in_order() {
+    let setup = Setup::new();
+    seed(&setup, json!({"diagnostics": {"level": "debug"}}));
+    let mut run = Run::spawn(
+        &setup,
+        COLS,
+        ROWS,
+        &["resume", ID],
+        &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+    );
+    let pid = run.id();
+    // The seeded rows prove the tail read built the preview they came
+    // from, so the attached-history draw the spans end at happened.
+    run.ready();
+    run.wait_screen("the last turn's rows", |grid| grid.contents.contains(LAST));
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    for op in [
+        "tui.attach_setup",
+        "tui.attach_wait",
+        "tui.attach_tail",
+        "tui.attach_prepare",
+        "tui.attach_draw",
+    ] {
+        assert_terminal_wire(&ops(&setup, pid, op), op);
+    }
+    let all = op_lines(&setup, pid);
+    let spans: Vec<&str> = all
+        .iter()
+        .filter_map(|line| line["data"]["op"].as_str())
+        .filter(|op| {
+            [
+                "tui.attach_setup",
+                "tui.attach_wait",
+                "tui.attach_tail",
+                "tui.attach_prepare",
+                "tui.attach_draw",
+            ]
+            .contains(op)
+        })
+        .collect();
+    assert_eq!(
+        spans,
+        [
+            "tui.attach_setup",
+            "tui.attach_wait",
+            "tui.attach_tail",
+            "tui.attach_prepare",
+            "tui.attach_draw"
+        ],
+        "{all:?}"
     );
 }
