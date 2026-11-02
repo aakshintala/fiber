@@ -149,6 +149,11 @@ fn card_edges(grid: &Grid, y: u16, inner: u16) -> (u16, u16) {
 /// Opens the ledger and returns the grid with its gutter, derived from
 /// the group row.
 fn open_ledger(run: &mut Run) -> (Grid, u16) {
+    // Each fixture's one scripted call produces `THOUGHT`; wait for that
+    // row before Ctrl+O, which is dropped when there is no thought to open.
+    run.wait_screen("the scripted call's thought", |grid| {
+        grid.rows.iter().any(|row| row.contains(THOUGHT))
+    });
     run.write(b"\x0f");
     let grid = run.wait_screen("the open ledger", |grid| {
         grid.rows.iter().any(|row| row.contains("+ Thought: Doing"))
