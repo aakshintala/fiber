@@ -206,7 +206,13 @@ check, and a diff that touches no test function skips the run. A test
 function in a target whose `Cargo.toml` declares `test = false` is not one:
 only an explicit `--test <name>` builds such a target, so a plain filter
 matches nothing in it, and a diff whose touched test functions are all in
-such targets skips the run. A run whose
+such targets skips the run. The plan is then intersected with
+`cargo nextest list` on the runner, using the same filter and packages
+the run uses. A touched test the runner does not compile, such as
+`cfg(target_os = "macos")` on this Linux x86_64 job, is dropped from the
+plan, named in the job output and not stressed. It still runs in the
+macOS `scripts/check` leg. A plan left empty by that intersection skips
+the run. A run whose
 filter matches no test, or whose iteration runs fewer tests than the plan
 names, fails the job. The count is read from the linked issue's labels. The job is in `ci`'s `needs`,
 so one failure stops the merge. It writes its wall
@@ -339,7 +345,9 @@ On Linux x86_64 alone:
   saying its only touched tests are journey tests, which pull-request CI
   does not run until #3899 step 6; the legs agree on that result or the
   check fails. A red commit that also holds another test file runs that
-  file and needs it to fail, and any other empty plan fails. When the
+  file and needs it to fail, and any other empty plan fails. Each leg
+  plans only the touched tests its platform compiles, and names the ones
+  it drops. A plan empty on both legs after that drop fails. When the
   journey target joins pull-request CI (#3899, step 6), the plans emit
   `--test <name>` for it instead. The label is read when the run's selection job
   runs, so a relabel takes effect at the next push or a whole-run rerun;

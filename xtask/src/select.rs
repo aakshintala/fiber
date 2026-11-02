@@ -11,7 +11,10 @@ mod plan;
 mod runtime_read;
 mod test_filter;
 
-pub(crate) use changed_tests::{TestRef, changed_tests, filter};
+pub(crate) use changed_tests::{
+    TestRef, changed_tests, filter, narrow_plan, narrow_to_compiled_tests, planned_line,
+    tests_in_files,
+};
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
 use plan::BINARY_TESTS;
