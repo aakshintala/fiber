@@ -15,6 +15,9 @@ set -euo pipefail
 # The last line says pass or fail, so a caller reading only the tail of the
 # output (`| tail`) cannot mistake a failure for a pass.
 log=
+# The resource-exhaustion cause for the FAIL line: set by the preflight and
+# by step_failed when classify matches, empty otherwise.
+resource_cause=
 rc=0
 # Set inside the EXIT trap below; initialised here so shellcheck sees the
 # assignment (the trap string is the only other place it is set).
@@ -26,7 +29,7 @@ scan_leaks=0
 # processes owned by the user with ppid 1 that started after this time.
 check_start=$(date +%s)
 export FIBER_CHECK_START=$check_start
-trap 'rc=$?; if [ $rc -eq 0 ]; then rm -f "$log"; fi; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else [ -n "$log" ] && [ -s "$log" ] && echo "scripts/check: full output in $log"; echo "scripts/check: FAIL (exit $rc)"; fi; exit $rc' EXIT
+trap 'rc=$?; if [ $rc -eq 0 ]; then rm -f "$log"; fi; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else [ -n "$log" ] && [ -s "$log" ] && echo "scripts/check: full output in $log"; if [ -n "$resource_cause" ]; then echo "scripts/check: FAIL (exit $rc): $resource_cause"; else echo "scripts/check: FAIL (exit $rc)"; fi; fi; exit $rc' EXIT
 cd "$(git rev-parse --show-toplevel)"
 
 base=origin/main
@@ -40,7 +43,49 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-selection=$(cargo xtask select --base "$base")
+# A compile or link step, wrapped: the pipeline status is the step's (tee
+# exits 0, and pipefail keeps cargo's), so a pass truncates the shared log
+# and a failure classifies the output. Runs in the main shell, so a failure
+# exits the script. Defined beside count would run too late: the select step
+# below already calls step_failed.
+build_step() {
+  if "$@" 2>&1 | tee "$log"; then : >"$log"; else step_rc=$?; step_failed "$step_rc"; fi
+}
+
+# The failure branch of a wrapped step: classify turns a killed compile or
+# link step into exit 75 and keeps the cause for the FAIL line, and every
+# other failure keeps the step's code. The substitution is an if condition,
+# so set -e cannot pre-empt it.
+step_failed() {
+  if resource_cause=$(scripts/check-resources classify "$log"); then
+    resource_cause=
+    exit "$1"
+  else
+    classify_rc=$?
+  fi
+  if [ "$classify_rc" -eq 75 ]; then
+    exit 75
+  else
+    resource_cause=
+    exit "$1"
+  fi
+}
+
+# The preflight runs before any build step and before the log exists: a
+# refusal exits here, so no build step ran. On exit 75 the refusal sentence
+# becomes the FAIL line's cause; any other preflight failure keeps its code.
+if pre=$(scripts/check-resources preflight); then echo "== preflight: $pre"; else pre_rc=$?; [ "$pre_rc" -ne 75 ] || resource_cause=$pre; exit "$pre_rc"; fi
+
+log=$(mktemp)
+
+# The select step's stderr goes to the log and is replayed after the step
+# ends; a cold xtask build shows no progress until it finishes. A pass
+# truncates the log, so a later failure cannot mislabel this output as its
+# own. step_failed turns a killed compile or link step into exit 75.
+if selection=$(cargo xtask select --base "$base" 2>"$log"); then step_rc=0; else step_rc=$?; fi
+cat "$log" >&2
+if [ "$step_rc" -ne 0 ]; then step_failed "$step_rc"; fi
+: >"$log"
 value() { sed -n "s/^$1=//p" <<<"$selection"; }
 mode=$(value mode)
 packages=$(value packages)
@@ -59,7 +104,6 @@ for p in $packages; do package_args+=(-p "$p"); done
 package_spec_args=()
 for p in $package_specs; do package_spec_args+=(-p "$p"); done
 
-log=$(mktemp)
 # Sums the numbers in every match of $1 in the last command's output, with
 # colour codes removed (CI sets CARGO_TERM_COLOR=always). No match is an error.
 count() {
@@ -87,7 +131,7 @@ if [ "$scope" != platform ]; then
   if { git diff --name-only "$(git merge-base "$base" HEAD)"; git ls-files --others --exclude-standard; } | grep -q "^$prototype/"; then
     echo "== tui-prototype: cargo fmt --check, cargo clippy"
     cargo fmt --check --manifest-path "$prototype/Cargo.toml"
-    cargo clippy --all-targets --manifest-path "$prototype/Cargo.toml" -- -D warnings
+    build_step cargo clippy --all-targets --manifest-path "$prototype/Cargo.toml" -- -D warnings
   fi
   if [ "$mode" != docs ]; then
     if [ ${#package_args[@]} -gt 0 ]; then
@@ -197,7 +241,7 @@ EOF
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl \
         crates/main/tests/release_pack_fixture/bin/gh
-      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/test-flake-report scripts/leak-scan scripts/test-leak-scan scripts/look-diff scripts/test-look-diff scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/cache-prune scripts/check-docs scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/mutants-shard-finish scripts/test-mutants-shard-finish scripts/paging-jig scripts/release-size scripts/release-pack scripts/stored-results scripts/lib/release.sh
+      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/test-flake-report scripts/leak-scan scripts/test-leak-scan scripts/look-diff scripts/test-look-diff scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/cache-prune scripts/check-docs scripts/check-resources scripts/test-check-resources scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/mutants-shard-finish scripts/test-mutants-shard-finish scripts/paging-jig scripts/release-size scripts/release-pack scripts/stored-results scripts/lib/release.sh
       shellcheck --shell=bash scripts/test-journey-report
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
@@ -239,8 +283,10 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   scripts/test-bug-red
   echo "== class-data self-test"
   scripts/test-class-data
+  echo "== check-resources self-test"
+  scripts/test-check-resources
   echo "== cargo clippy -q --all-targets -- -D warnings"
-  cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
+  build_step cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
   # A per-run nonce in the environment: every descendant inherits it, so
   # the EXIT trap's scan names only this run's leaked processes. uuidgen
   # ships on Linux CI and macOS; the fallback needs only bash and date.
@@ -255,7 +301,7 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   # example; ProcessFixture::example_path starts that example, so build
   # it for every selection, since any crate's tests may use ProcessFixture.
   echo "== build the process-extension example"
-  cargo build -q -p fakes --example process-extension
+  build_step cargo build -q -p fakes --example process-extension
   # One thread per CPU the host has free, from the load when the run
   # starts: a loaded host runs fewer tests at once rather than starving
   # each of them. CI runners keep their own counts.
@@ -277,9 +323,9 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   # One timing flake must not hide the other tests' results: a failed run
   # reports every failure, so a rerun is not needed to see them.
   if [ -n "$threads" ]; then
-    cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet --test-threads "$threads" "${package_spec_args[@]}" 2>&1 | tee "$log"
+    if cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet --test-threads "$threads" "${package_spec_args[@]}" 2>&1 | tee "$log"; then :; else step_rc=$?; step_failed "$step_rc"; fi
   else
-    cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet "${package_spec_args[@]}" 2>&1 | tee "$log"
+    if cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet "${package_spec_args[@]}" 2>&1 | tee "$log"; then :; else step_rc=$?; step_failed "$step_rc"; fi
   fi
   nextest=$(count '[0-9]+ tests? run')
   case " $packages " in
@@ -289,6 +335,10 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
       ;;
   esac
   if [ -n "$extension_packages" ]; then
+    # The binary builds once here, wrapped so a killed link fails 75; the
+    # loop below only runs it.
+    echo "== fiber extension build"
+    build_step cargo build -q -p main --bin fiber
     echo "== fiber extension test"
     # cargo run builds the binary and runs it from Cargo's own target
     # directory, so no path is read back from cargo metadata.
@@ -306,7 +356,7 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
     # The full output goes to the log; the console keeps only the summary,
     # so a passing run stays short. A failure prints everything, since the
     # failing test's name and output are what the failure needs.
-    cargo test --doc "${library_spec_args[@]}" >"$log" 2>&1 || { doctest_rc=$?; cat "$log"; exit $doctest_rc; }
+    if cargo test --doc "${library_spec_args[@]}" >"$log" 2>&1; then :; else step_rc=$?; cat "$log"; step_failed "$step_rc"; fi
     grep "test result" "$log" || true
     doctests=$(count '[0-9]+ passed')
   fi

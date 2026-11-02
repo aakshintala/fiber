@@ -259,10 +259,10 @@ On Linux x86_64 alone:
   selects the docs job alone
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
 - `shellcheck --shell=bash` on every other `scripts/` shell file: `bug-red`,
-  `cache-prune`, `check`, `check-docs`, `flaky-tests`, `install-shells`,
+  `cache-prune`, `check`, `check-docs`, `check-resources`, `flaky-tests`, `install-shells`,
   `leak-scan`, `paging-jig`, `release-pack`, `release-size`,
   `stored-results`,
-  `test-bug-red`, `test-bug-red-cargo`, `test-flake-report`, `test-flaky-tests`, `test-leak-probe`,
+  `test-bug-red`, `test-bug-red-cargo`, `test-check-resources`, `test-flake-report`, `test-flaky-tests`, `test-leak-probe`,
   `test-leak-scan`, and `lib/release.sh`
 - actionlint over every file in `.github/workflows/`, when the diff changes
   one. A workflow change runs the whole selection ("Selection"), so the job is

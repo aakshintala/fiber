@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# The resource-exhaustion guard for the gate (issue #3954). `scripts/check`
+# runs `preflight` before any build step and `classify` after a compile or
+# link step fails. A refusal or a kill match exits 75 (`EX_TEMPFAIL`): the
+# machine could not run the gate, so the code is unproven, not broken.
+#
+# Usage: scripts/check-resources preflight
+#        scripts/check-resources classify <file>
+#
+# `preflight` prints one line to stdout: a report of the free space in the
+# scratch directory (`TMPDIR`, or `/tmp` when unset) and in the `target`
+# directory, and exits 0; or one refusal sentence naming the short directory
+# and exits 75. `classify` prints the cause sentence to stdout and exits 75
+# when the log holds a killed-compiler shape, else prints nothing and exits 0.
+#
+# Shell notes: the preflight runs before `scripts/check` creates its log, so
+# this script uses pipes and command substitution only, never a here-string
+# or here-document (bash before 5.1 writes those to a file in `TMPDIR`, so a
+# full or unwritable scratch directory would fail before 75 is reached).
+# `df -Pk` prints the POSIX layout on Linux and macOS: field 4 of line 2 is
+# the free space in KiB, field 1 the filesystem, fields 6 to the end the
+# mount point.
+set -euo pipefail
+
+# Minimum free scratch space for one gate run, in MiB. Peak TMPDIR growth
+# of a full `scripts/check --base origin/main` run on main, measured cold on
+# Linux x86_64 (origin/main 137f1c8c47c2688db62ba959a6968f638506e3e1,
+# 2026-11-02, private empty TMPDIR, `CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0`):
+# 1916936 KiB, rounded up to 1873 MiB and doubled. Both platforms use this
+# constant; it was not measured twice and macOS was not measured.
+PREFLIGHT_TMPDIR_MIN_MIB=3746
+# Minimum free `target` space for one gate run, in MiB. Peak target growth
+# of the same measured run (cold target, same commit, date and environment
+# as above): 28019224 KiB, rounded up to 27363 MiB and doubled. Both
+# platforms use this constant; only `CARGO_TARGET_DIR` is read (the repo's
+# `.cargo/config.toml` sets no target directory).
+PREFLIGHT_TARGET_MIN_MIB=54726
+EX_TEMPFAIL=75
+
+prog=scripts/check-resources
+
+usage() {
+  echo "$prog: usage: $prog preflight | $prog classify <file>" >&2
+  exit 2
+}
+
+# read_df <asked> <shown>: parse `df -Pk <asked>` into df_avail (KiB), df_fs
+# and df_mnt. Sets df_ok=1. When df fails or Available is not a number,
+# prints a warning to stderr naming <shown> and sets df_ok=0, so the caller
+# skips that directory's check. The warning carries the `scripts/check:`
+# prefix the gate's output is read by.
+read_df() {
+  df_avail=
+  df_fs=
+  df_mnt=
+  df_ok=0
+  df_out=$(df -Pk "$1" 2>/dev/null | sed -n '2p') || df_out=
+  df_avail=$(printf '%s\n' "$df_out" | awk '{print $4}')
+  case $df_avail in
+    '' | *[!0-9]*)
+      echo "scripts/check: preflight skipped for $2: df unreadable" >&2
+      return 0
+      ;;
+  esac
+  df_fs=$(printf '%s\n' "$df_out" | awk '{print $1}')
+  df_mnt=$(printf '%s\n' "$df_out" | awk '{for (i = 6; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : "")}')
+  if [ -z "$df_fs" ] || [ -z "$df_mnt" ]; then
+    echo "scripts/check: preflight skipped for $2: df unreadable" >&2
+    return 0
+  fi
+  df_ok=1
+}
+
+preflight() {
+  tmpdir=${TMPDIR:-/tmp}
+  if [ -z "${TMPDIR-}" ]; then
+    tmpdisp="TMPDIR=(unset, using /tmp)"
+  else
+    tmpdisp="TMPDIR=$tmpdir"
+  fi
+  if [ ! -e "$tmpdir" ]; then
+    echo "$prog: $tmpdisp does not exist, the gate cannot run" >&2
+    exit 1
+  fi
+  if [ ! -d "$tmpdir" ]; then
+    echo "$prog: $tmpdisp is not a directory, the gate cannot run" >&2
+    exit 1
+  fi
+  # The `target` directory is `CARGO_TARGET_DIR` when set, else `target`
+  # under the top level. A missing path is measured at its nearest existing
+  # parent. Only `CARGO_TARGET_DIR` is read.
+  targetdir=${CARGO_TARGET_DIR:-$PWD/target}
+  case $targetdir in
+    /*) targetmeas=$targetdir ;;
+    *) targetmeas=$PWD/$targetdir ;;
+  esac
+  while [ ! -e "$targetmeas" ]; do
+    targetmeas=$(dirname "$targetmeas")
+  done
+  read_df "$tmpdir" "$tmpdir"
+  tmp_ok=$df_ok
+  tmp_avail=$df_avail
+  tmp_fs=$df_fs
+  tmp_mnt=$df_mnt
+  read_df "$targetmeas" "$targetdir"
+  tgt_ok=$df_ok
+  tgt_avail=$df_avail
+  tgt_fs=$df_fs
+  tgt_mnt=$df_mnt
+  need_tmp_kib=$((PREFLIGHT_TMPDIR_MIN_MIB * 1024))
+  need_tgt_kib=$((PREFLIGHT_TARGET_MIN_MIB * 1024))
+  tmp_mib=0
+  tgt_mib=0
+  if [ "$tmp_ok" = 1 ]; then
+    tmp_mib=$((tmp_avail / 1024))
+  fi
+  if [ "$tgt_ok" = 1 ]; then
+    tgt_mib=$((tgt_avail / 1024))
+  fi
+  shared=0
+  if [ "$tmp_ok" = 1 ] && [ "$tgt_ok" = 1 ]; then
+    if [ "$tmp_fs" = "$tgt_fs" ] && [ "$tmp_mnt" = "$tgt_mnt" ]; then
+      shared=1
+    fi
+  fi
+  if [ "$shared" = 1 ]; then
+    # One filesystem holds both directories, so the free space must cover
+    # both growths at once: the sum, not each constant alone.
+    need_sum_kib=$((need_tmp_kib + need_tgt_kib))
+    need_sum_mib=$((PREFLIGHT_TMPDIR_MIN_MIB + PREFLIGHT_TARGET_MIN_MIB))
+    if [ "$tmp_avail" -ge "$need_sum_kib" ]; then
+      echo "$tmpdisp and target ($targetdir) share a filesystem with $tmp_mib MiB free (need $need_sum_mib MiB)"
+      return 0
+    fi
+    echo "not started: $tmpdisp and target ($targetdir) share a filesystem with $tmp_mib MiB free, the gate needs $need_sum_mib MiB (PREFLIGHT_TMPDIR_MIN_MIB + PREFLIGHT_TARGET_MIN_MIB); set TMPDIR= to a larger filesystem or free space under $targetdir, and rerun; the code is untested."
+    exit "$EX_TEMPFAIL"
+  fi
+  tmp_short=0
+  tgt_short=0
+  if [ "$tmp_ok" = 1 ] && [ "$tmp_avail" -lt "$need_tmp_kib" ]; then
+    tmp_short=1
+  fi
+  if [ "$tgt_ok" = 1 ] && [ "$tgt_avail" -lt "$need_tgt_kib" ]; then
+    tgt_short=1
+  fi
+  if [ "$tmp_short" = 1 ] && [ "$tgt_short" = 1 ]; then
+    echo "not started: $tmpdisp has $tmp_mib MiB free, the gate needs $PREFLIGHT_TMPDIR_MIN_MIB MiB (PREFLIGHT_TMPDIR_MIN_MIB); target ($targetdir) has $tgt_mib MiB free, the gate needs $PREFLIGHT_TARGET_MIN_MIB MiB (PREFLIGHT_TARGET_MIN_MIB); set TMPDIR= to a larger filesystem or free space under $targetdir, and rerun; the code is untested."
+    exit "$EX_TEMPFAIL"
+  fi
+  if [ "$tmp_short" = 1 ]; then
+    echo "not started: $tmpdisp has $tmp_mib MiB free, the gate needs $PREFLIGHT_TMPDIR_MIN_MIB MiB (PREFLIGHT_TMPDIR_MIN_MIB); set TMPDIR= to a larger filesystem and rerun; the code is untested."
+    exit "$EX_TEMPFAIL"
+  fi
+  if [ "$tgt_short" = 1 ]; then
+    echo "not started: target ($targetdir) has $tgt_mib MiB free, the gate needs $PREFLIGHT_TARGET_MIN_MIB MiB (PREFLIGHT_TARGET_MIN_MIB); free space under $targetdir, or set CARGO_TARGET_DIR= to a larger filesystem, and rerun; the code is untested."
+    exit "$EX_TEMPFAIL"
+  fi
+  if [ "$tmp_ok" = 1 ] && [ "$tgt_ok" = 1 ]; then
+    echo "$tmpdisp $tmp_mib MiB free, target ($targetdir) $tgt_mib MiB free (need $PREFLIGHT_TMPDIR_MIN_MIB and $PREFLIGHT_TARGET_MIN_MIB)"
+    return 0
+  fi
+  if [ "$tmp_ok" = 1 ]; then
+    echo "$tmpdisp $tmp_mib MiB free, target ($targetdir) check skipped: df unreadable (need $PREFLIGHT_TARGET_MIN_MIB MiB)"
+    return 0
+  fi
+  if [ "$tgt_ok" = 1 ]; then
+    echo "$tmpdisp check skipped: df unreadable, target ($targetdir) $tgt_mib MiB free (need $PREFLIGHT_TARGET_MIN_MIB MiB)"
+    return 0
+  fi
+  echo "$tmpdisp check skipped: df unreadable, target ($targetdir) check skipped: df unreadable"
+  return 0
+}
+
+# has_marker: the log names a cargo build failure, so a `signal: N, SIG...`
+# line in it is cargo reporting the kill, not some other program's output.
+has_marker() {
+  printf '%s\n' "$classify_clean" | grep -qF -e 'error: could not compile' -e 'error: linking with' -e 'error: failed to run custom build command'
+}
+
+classify() {
+  if [ $# -ne 1 ]; then
+    usage
+  fi
+  if [ ! -r "$1" ]; then
+    echo "$prog: cannot read $1" >&2
+    exit 2
+  fi
+  # The compiler-driver shapes need no marker: test code never prints them.
+  # The `signal: N, SIG...` shapes need a cargo build-failure marker, since
+  # a killed test child can print such a line while nextest wraps the step.
+  classify_clean=$(sed $'s/\033\\[[0-9;]*m//g' "$1")
+  classify_shape=
+  if printf '%s\n' "$classify_clean" | grep -qF 'terminated with signal 7'; then
+    classify_shape='terminated with signal 7'
+  elif printf '%s\n' "$classify_clean" | grep -qF 'terminated with signal 9'; then
+    classify_shape='terminated with signal 9'
+  elif printf '%s\n' "$classify_clean" | grep -qF 'signal: 9, SIGKILL' && has_marker; then
+    classify_shape='signal: 9, SIGKILL'
+  elif printf '%s\n' "$classify_clean" | grep -qF 'signal: 7, SIGBUS' && has_marker; then
+    classify_shape='signal: 7, SIGBUS'
+  else
+    return 0
+  fi
+  echo "the build was killed for lack of resources (matched \"$classify_shape\"); the code is unproven, not broken; rerun once the machine has memory."
+  exit "$EX_TEMPFAIL"
+}
+
+if [ $# -lt 1 ]; then
+  usage
+fi
+cmd=$1
+shift
+case $cmd in
+  preflight)
+    if [ $# -ne 0 ]; then
+      usage
+    fi
+    preflight
+    ;;
+  classify) classify "$@" ;;
+  *) usage ;;
+esac
