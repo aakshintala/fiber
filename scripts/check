@@ -129,6 +129,7 @@ crates/main/tests/approval_look.rs 53
 crates/main/tests/ask_user_form_look.rs 66
 crates/main/tests/at_path_search.rs 1
 crates/main/tests/attach_first_frame.rs 4
+crates/main/tests/cache_countdown.rs 2
 crates/main/tests/call_view.rs 35
 crates/main/tests/change_workspace.rs 1
 crates/main/tests/changed_files_editor.rs 4
@@ -159,7 +160,7 @@ crates/main/tests/main_journeys.rs 60
 crates/main/tests/model_picker_keys.rs 14
 crates/main/tests/model_picker_name.rs 3
 crates/main/tests/opened_call_look.rs 52
-crates/main/tests/panel_look.rs 37
+crates/main/tests/panel_look.rs 38
 crates/main/tests/pinned_call_row.rs 20
 crates/main/tests/placeholders_picker.rs 2
 crates/main/tests/pty_sync_output.rs 13
