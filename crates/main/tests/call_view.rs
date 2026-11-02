@@ -291,8 +291,30 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
     let mut ids = vec![temp_id(setup)];
     ids.extend(extra.iter().cloned());
     let text = grid_text(&grid.rows, grid.cursor, grid.hide_cursor, &ids);
+    // The workspace the card renders, canonicalised like the status it
+    // draws from. A card narrower than the path cuts the workspace row
+    // from the right, before the temp id the redaction above looks for:
+    // a long temp base (macOS `/private/var/folders/…`) leaves a bare
+    // path prefix behind where Linux already reads `[workspace]/w`.
+    // Fold any such right-truncated workspace row to the same
+    // `[workspace]/w` the whole row folds to. The match is this
+    // runner's own workspace, so it holds on every machine.
+    let workspace = fs::canonicalize(setup.workspace())
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
     text.lines()
         .map(|row| {
+            let mut row = row.to_owned();
+            let bare = row.trim();
+            if !workspace.is_empty()
+                && let Some(prefix) = bare.strip_suffix('…')
+                && prefix.starts_with('/')
+                && workspace.starts_with(prefix)
+                && !row.contains("[workspace]")
+            {
+                let indent = row.len() - row.trim_start().len();
+                row = format!("{}[workspace]/w", &row[..indent]);
+            }
             let mut row = if let Some(path) = row.find("[session]/w") {
                 let path_end = path + "[session]/w".len();
                 let path_start = row[..path].rfind(' ').map_or(0, |space| space + 1);

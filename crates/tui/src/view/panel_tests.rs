@@ -35,6 +35,26 @@ fn attached(width: u16, height: u16) -> App {
     app
 }
 
+/// An app with home state, attached, at `width` by `height`, drawing
+/// `cards` in order.
+fn attached_cards(width: u16, height: u16, cards: &[&str]) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: cards.iter().map(|name| (*name).to_owned()).collect(),
+        ..Default::default()
+    });
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.set_size(width, height);
+    app
+}
+
 /// One envelope of the attached session.
 fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     timed_line(kind, 0, payload)
@@ -493,6 +513,57 @@ fn cache_countdown_counts_minutes_and_seconds_under_the_last_minute() {
     assert_eq!(cache_countdown(60_001), "1m");
     assert_eq!(cache_countdown(2_520_000), "42m");
     assert_eq!(cache_countdown(3_600_000), "60m");
+}
+
+/// The recorded countdown row counts the rows before its card plus its
+/// row inside the card: `out.len() + row`. With a card drawing before
+/// the Session card both operands stay clear of 0, 1 and each other,
+/// so `+` and `*` record different rows and only the sum paints a wake
+/// at the countdown's row.
+#[test]
+fn the_countdown_row_counts_the_rows_before_its_card() {
+    let mut app = attached_cards(80, 24, &["changed_files", "session"]);
+    app.on_line(timed_line(
+        "tool_call_completed",
+        0,
+        serde_json::json!({"status": "completed", "content": [],
+            "changes": [{"path": "a.rs", "added": 3, "removed": 1}]}),
+    ));
+    app.on_line(timed_line(
+        "session_status",
+        0,
+        serde_json::json!({
+            "name": "one", "workspace": "/w", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 900, "cache_read": 100,
+                "cache_write": {"5m": 50}, "output": 200},
+                "cost": 4.12, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0, "cache_expires": 2_550_000,
+        }),
+    ));
+    let mut countdown = None;
+    let (built, _) = super::collect_rows(&app, 80, &mut countdown);
+    let texts: Vec<String> = built.iter().map(|row| row.line.to_string()).collect();
+    // The rows before the Session card: the changed-files card, the
+    // blank separator and the Session card's own top edge.
+    let before = texts
+        .iter()
+        .position(|row| row.starts_with("Session status"))
+        .expect("the Session title");
+    let at = texts
+        .iter()
+        .position(|row| row.contains("cache resets in"))
+        .expect("the countdown row");
+    let inside = at - before;
+    assert!(before > 1, "rows before the Session card: {before}");
+    assert!(inside > 1, "rows into the Session card: {inside}");
+    assert_ne!(before, inside, "the two operands differ");
+    assert_eq!(
+        countdown.map(|(row, _)| row),
+        Some(at),
+        "the recorded row is rows-before plus rows-inside"
+    );
 }
 
 /// "cache resets in" shows a dim dash before the first request.

@@ -1208,13 +1208,28 @@ impl Screen {
             );
             row.to_owned()
         };
-        let mut expected = expected_card(workspace, text, panel);
+        let mut expected = expected_card(text, panel);
         let cache_at = card
             .iter()
             .position(|row| row.starts_with("cache resets in"))
             .unwrap_or_else(|| panic!("no cache resets row at {cols} columns: {card:?}"));
         expected[cache_at] = card[cache_at].to_owned();
         expected[speed_at] = speed;
+        // The working directory names this runner's temp workspace:
+        // whole when it fits, cut from the right with `…` past `text`
+        // columns (`panel.rs fit_rows`). Pin that it renders the
+        // workspace, never the machine-specific text, by normalising
+        // both sides before comparing.
+        assert!(
+            card[1] == workspace || card[1] == fit_row(workspace, text),
+            "the directory row renders the workspace at {cols} columns: {:?}",
+            card[1]
+        );
+        let card: Vec<&str> = card
+            .into_iter()
+            .enumerate()
+            .map(|(at, row)| if at == 1 { "[workspace]" } else { row })
+            .collect();
         assert_eq!(
             card,
             expected.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -1224,23 +1239,20 @@ impl Screen {
 }
 
 /// The Session card's exact rows at `text` columns, without the speed
-/// row: the title names the card with `auto` right-aligned, the working
-/// directory on the next row, the model reads `fake/m` with thinking
-/// `high` right-aligned, the context bar is 17 cells of `▆` with its
+/// row and with the working directory normalised to `[workspace]`
+/// (`assert_session_cut` pins the real directory separately): the title
+/// names the card with `auto` right-aligned, the directory placeholder
+/// on the next row, the model reads `fake/m` with thinking `high`
+/// right-aligned, the context bar is 17 cells of `▆` with its
 /// marker and size, then the handoff rows; the scripted turn's fixed
 /// usage reads `tokens in / out  10 / 3` with 40% cache hits, the
 /// cache-reset countdown, the context sits at 0% with the handoff
 /// marker at 70.0k, the cost is still unknown, and one turn ran
 /// (`panel.rs`).
-fn expected_card(workspace: &str, text: usize, _panel: u16) -> Vec<String> {
+fn expected_card(text: usize, _panel: u16) -> Vec<String> {
     let pad = text - "Session status".len() - "auto".len();
     let mut rows = vec![format!("Session status{}auto", " ".repeat(pad))];
-    let directory = if workspace.chars().count() <= text {
-        workspace.to_owned()
-    } else {
-        cut_left_path(workspace, text)
-    };
-    rows.push(directory);
+    rows.push("[workspace]".to_owned());
     rows.push(format!(
         "{}{}high",
         "fake/m",
@@ -1284,23 +1296,6 @@ fn expected_card(workspace: &str, text: usize, _panel: u16) -> Vec<String> {
         figure("turns", "1"),
     ]);
     rows
-}
-
-/// `panel.rs` `cut_left` over the ASCII workspace path: at most `max`
-/// columns, cut from the left with a leading `…`.
-fn cut_left_path(path: &str, max: usize) -> String {
-    if path.chars().count() <= max {
-        return path.to_owned();
-    }
-    let kept: String = path
-        .chars()
-        .rev()
-        .take(max - 1)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    format!("…{kept}")
 }
 
 /// `panel.rs` `fit_rows` for a single-span row: whole when it fits,
