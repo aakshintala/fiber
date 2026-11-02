@@ -99,6 +99,7 @@
 
 mod bench;
 mod budget_bounds;
+mod census_ratchet;
 mod ci_needs;
 mod docs;
 mod flake_report;
