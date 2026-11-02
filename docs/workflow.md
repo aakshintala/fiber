@@ -74,7 +74,8 @@ An implementer is given:
 
 ## The gate
 
-`scripts/check` passing in CI on the exact head gates the merge. Before a
+`scripts/check` passing in CI on the exact head gates the merge. The one
+exception is an owner's break-glass merge ("Break-glass merge"). Before a
 push, the implementer runs the checks for the paths they changed ("Rules by
 path").
 
@@ -312,25 +313,31 @@ When the `CI` check itself is broken and that blocks other pull requests, the
 owner can merge the fix without a green `CI`. Only the owner breaks glass.
 Agents never do, and never ask a peer to.
 
-A pull request is eligible only when both hold:
+A pull request is eligible only when all of these hold:
 
 - its diff stays inside `xtask/`, `.github/`, `scripts/` and `docs/ci.md`;
-- `CI` failing or hanging on it is the reason one or more other open pull
-  requests cannot merge.
+- its own `CI` fails or cannot finish because of the defect it fixes, and
+  that defect blocks one or more other open pull requests; a `CI` that is
+  only slow, or red for another reason, does not qualify;
+- it names its ticket.
 
 Before asking the owner, the orchestrator confirms on the exact head:
 
 - `scripts/check` passes locally;
 - the review loop is done, with every finding resolved;
+- when the diff changes what a required check does, a surveyor approval
+  comment is on the pull request;
 - the pull request body starts with `Break-glass:`, then names the blocked
-  pull requests and why `CI` can't pass in time.
+  pull requests and the defect that stops its own `CI`.
 
 The owner merges with `gh pr merge <n> --admin --squash --delete-branch`.
-`CI` still runs on `main` after the merge. If it fails, the merge is reverted
-at once in a new pull request. Nobody fixes it forward.
+`CI` still runs on the merge commit. If it fails on a job the diff touched,
+as classified by `ci-triage`, the merge is reverted at once in a new pull
+request, and nobody fixes it forward. A failure on a job the diff did not
+touch is handled like any other failure on `main`.
 
 The bypass is the repository-admin role on the `main` ruleset, in
 pull-request mode, so a direct push to `main` is still refused. Agents run
-`gh` as the owner's account, so a deny rule in each agent harness's settings
-blocks `--admin` merges. The nightly report lists every merge whose head had
-no green `CI`.
+`gh` with their own credential, which holds no admin role, so an `--admin`
+merge by an agent fails on GitHub's side whatever harness runs it. The
+nightly report lists every merge whose head had no green `CI`.

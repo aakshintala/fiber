@@ -5,7 +5,8 @@ matches the work before starting it.
 
 - How a ticket becomes a merged pull request: `docs/workflow.md`.
   `scripts/check` passing in CI gates every merge (`docs/workflow.md`,
-  "The gate").
+  "The gate"), except an owner's break-glass merge (`docs/workflow.md`,
+  "Break-glass merge").
 - Vocabulary: `GLOSSARY.md`. Use its terms in code, docs and issues.
 - Pages for a person using Fiber: `docs/user/`. Each links into the area docs
   rather than restating them, and is written only once its area is built.

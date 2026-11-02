@@ -36,7 +36,9 @@ One check is required to merge: `CI`. It passes only when every job the
 selection chose succeeded and every job it did not choose was skipped. If
 the selection itself fails, `CI` fails. On a draft pull request the verdict
 job reports as `CI (draft)`, so the required `CI` check stays pending until
-the pull request is marked ready, which starts the full run.
+the pull request is marked ready, which starts the full run. The owner can
+merge without it only by a break-glass merge (`docs/workflow.md`,
+"Break-glass merge").
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report without gating it
