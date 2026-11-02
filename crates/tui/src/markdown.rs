@@ -117,6 +117,13 @@ pub(crate) fn render(text: &str, width: u16) -> Rendered {
 
 /// Counts the rows at `width` without constructing their styled lines.
 pub(crate) fn render_count(text: &str, width: u16) -> Counted {
+    if plain_words(text) {
+        return Counted {
+            rows: plain_word_rows(text, width),
+            targets: Vec::new(),
+            over_width: false,
+        };
+    }
     let mut writer = Writer {
         width,
         out: Rendered::default(),
@@ -151,6 +158,42 @@ pub(crate) fn render_count(text: &str, width: u16) -> Counted {
         targets: writer.count_targets,
         over_width: writer.over_width,
     }
+}
+
+/// Whether `text` is a single paragraph of words with no Markdown syntax.
+fn plain_words(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .split(' ')
+            .all(|word| !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+}
+
+/// The row count for plain words, with the same greedy word wrapping as
+/// [`visit_wrap_ranges`], without parsing Markdown or building character
+/// cells. Plain ASCII can never overflow the width it was wrapped to.
+fn plain_word_rows(text: &str, width: u16) -> usize {
+    let room = usize::from(width).max(1);
+    let mut rows = 0usize;
+    let mut used = 0usize;
+    for (at, word) in text.split(' ').enumerate() {
+        if at > 0 {
+            if used == room {
+                rows = rows.saturating_add(1);
+                used = 0;
+            } else {
+                used = used.saturating_add(1);
+            }
+        }
+        let word = word.len();
+        if word <= room && used.saturating_add(word) > room {
+            rows = rows.saturating_add(1);
+            used = 0;
+        }
+        let cells = used.saturating_add(word);
+        rows = rows.saturating_add(cells.saturating_sub(1) / room);
+        used = (cells.saturating_sub(1) % room).saturating_add(1);
+    }
+    rows.saturating_add(1)
 }
 
 /// One open list: its next number, when ordered, and its item's marker
