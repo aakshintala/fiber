@@ -125,6 +125,12 @@ pub(crate) struct NumstatAnswer {
 pub(crate) struct ResolvedFigures {
     pub(crate) figures: BTreeMap<String, (u64, u64)>,
     pub(crate) untracked: BTreeSet<String>,
+    /// The row label for each card path: the workspace-relative form
+    /// where the card holds an absolute path under the launch or viewed
+    /// workspace, else the path itself. A hub workspace prefix would
+    /// otherwise push the figures off narrow columns, so the reread
+    /// row could never show them.
+    pub(crate) labels: BTreeMap<String, String>,
 }
 
 /// Counts lines for `paths` under `root`: the added figure for
@@ -152,6 +158,29 @@ pub(crate) fn count_lines(root: &std::path::Path, paths: &[&str]) -> BTreeMap<St
 /// shows the card's figures. An answered path git omits is
 /// untracked, per the doc: numstat never lists one.
 ///
+/// The row label for a card path: the workspace-relative form where
+/// the card holds an absolute path under the launch or viewed
+/// workspace, else the path itself. An absolute hub workspace prefix
+/// would otherwise push the figures off narrow columns, so a reread
+/// row could never show them.
+fn display_label(
+    path: &str,
+    workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
+) -> String {
+    for root in [workspace, viewed].into_iter().flatten() {
+        if let Some(relative) = std::path::Path::new(path)
+            .strip_prefix(root)
+            .ok()
+            .and_then(|relative| relative.to_str())
+            .filter(|relative| !relative.is_empty())
+        {
+            return relative.to_owned();
+        }
+    }
+    path.to_owned()
+}
+
 /// Git prints paths relative to the repository root while the card
 /// holds workspace paths, so a card path also matches by its
 /// workspace-relative form; anything else keeps the card's figures.
@@ -169,6 +198,7 @@ pub(crate) fn resolve_figures(
     let answered = numstat.is_some();
     let mut figures = BTreeMap::new();
     let mut untracked = BTreeSet::new();
+    let mut labels = BTreeMap::new();
     for (path, card) in changes.iter() {
         let figure = match lookup(&parsed, path, workspace, viewed) {
             Some(NumstatFigure::Counted(added, removed)) => (*added, *removed),
@@ -183,8 +213,13 @@ pub(crate) fn resolve_figures(
             None => *card,
         };
         figures.insert(path.clone(), figure);
+        labels.insert(path.clone(), display_label(path, workspace, viewed));
     }
-    ResolvedFigures { figures, untracked }
+    ResolvedFigures {
+        figures,
+        untracked,
+        labels,
+    }
 }
 
 /// The answer's figure for a card path: the path as listed, its launch
@@ -292,6 +327,7 @@ pub(crate) fn frame(
             resolved = ResolvedFigures {
                 figures: changes.clone(),
                 untracked: BTreeSet::new(),
+                labels: BTreeMap::new(),
             };
             &resolved
         }
@@ -300,15 +336,16 @@ pub(crate) fn frame(
     let rows = paths
         .iter()
         .map(|(path, added, removed)| {
+            let label = figures.labels.get(*path).map_or(*path, String::as_str);
             if figures.untracked.contains(*path) {
                 return vec![
-                    (safe_line(path), None, Ink::Heading),
+                    (safe_line(label), None, Ink::Heading),
                     (" · ".to_owned(), None, Ink::Muted),
                     ("untracked, wholly added".to_owned(), None, Ink::Muted),
                 ];
             }
             vec![
-                (safe_line(path), None, Ink::Heading),
+                (safe_line(label), None, Ink::Heading),
                 (" · ".to_owned(), None, Ink::Muted),
                 (
                     format!("+{added}"),

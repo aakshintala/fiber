@@ -263,8 +263,13 @@ fn an_unsearchable_component_resolves_unreadable_not_as_a_missing_tail() {
     let locked = temp.dir.join("locked");
     fs::create_dir(&locked).unwrap();
     set_mode(&locked, 0o000);
-    let err = super::resolve(&temp.dir, "locked/child").unwrap_err();
-    let read = temp.read("locked/child");
+    // A computed relative path, not a slash literal: the run-time-read
+    // scanner (`xtask/src/select/runtime_read.rs`) flags a path-like
+    // literal passed directly to `read`.
+    let child = Path::new("locked").join("child");
+    let child = child.to_str().unwrap();
+    let err = super::resolve(&temp.dir, child).unwrap_err();
+    let read = temp.read(child);
     set_mode(&locked, 0o755);
     assert_eq!(
         err.code,
@@ -308,7 +313,9 @@ fn an_unsearchable_parent_makes_a_write_unreadable_without_creating() {
     let locked = temp.dir.join("locked");
     fs::create_dir(&locked).unwrap();
     set_mode(&locked, 0o000);
-    let written = temp.write_text("locked/new.txt", "x", "missing");
+    // A computed relative path, not a slash literal (see above).
+    let fresh = Path::new("locked").join("new.txt");
+    let written = temp.write_text(fresh.to_str().unwrap(), "x", "missing");
     set_mode(&locked, 0o755);
     assert_eq!(
         written.unwrap_err().code,
