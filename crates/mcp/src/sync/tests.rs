@@ -49,9 +49,11 @@ impl Setup {
     /// it borrowed, so the test stops what the stage left behind.
     ///
     /// The receive on the returned channel is a hang guard on a thread
-    /// that launches real child processes, so it takes the shared 40 s
-    /// wait: a loaded runner took 10.1 s to launch two fake servers
-    /// (#4008).
+    /// that launches real child processes, so it takes the `fakes::WAIT`
+    /// bound. A signal cannot replace the bound: a signal after the
+    /// launch would need a hook in `stage_sync`, production code this
+    /// ticket leaves untouched, and the only existing signal, the spawn
+    /// guard, fires before the spawn.
     fn stage_on_thread(
         rows: Vec<SyncRow>,
         servers: crate::start::Servers,
