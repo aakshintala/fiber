@@ -168,6 +168,7 @@ fn code_part(line: &str, mut in_block: bool) -> (String, bool) {
     let mut code = String::with_capacity(line.len());
     let mut rest = line;
     while !rest.is_empty() {
+        let before = rest.len();
         if in_block {
             match rest.find("*/") {
                 Some(end) => {
@@ -176,22 +177,15 @@ fn code_part(line: &str, mut in_block: bool) -> (String, bool) {
                 }
                 None => return (code, true),
             }
-            continue;
-        }
-        if rest.starts_with("//") {
+        } else if rest.starts_with("//") {
             break;
-        }
-        if rest.starts_with("/*") {
+        } else if rest.starts_with("/*") {
             rest = &rest[2..];
             in_block = true;
-            continue;
-        }
-        if let Some(after) = strip_raw_string(rest) {
+        } else if let Some(after) = strip_raw_string(rest) {
             rest = after;
             code.push(' ');
-            continue;
-        }
-        if rest.starts_with('"') {
+        } else if rest.starts_with('"') {
             match cooked_end(&rest[1..]) {
                 Some(after) => {
                     rest = after;
@@ -202,9 +196,7 @@ fn code_part(line: &str, mut in_block: bool) -> (String, bool) {
                     break;
                 }
             }
-            continue;
-        }
-        if rest.starts_with('\'') {
+        } else if rest.starts_with('\'') {
             match char_end(&rest[1..]) {
                 Some(len) => {
                     rest = &rest[1 + len..];
@@ -215,11 +207,17 @@ fn code_part(line: &str, mut in_block: bool) -> (String, bool) {
                     rest = &rest[1..];
                 }
             }
-            continue;
+        } else {
+            let len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            code.push_str(&rest[..len]);
+            rest = &rest[len..];
         }
-        let len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-        code.push_str(&rest[..len]);
-        rest = &rest[len..];
+        // Every branch above strictly shortens `rest` on well-formed input;
+        // a helper that ever stops shrinking it (only a mutant can) ends the
+        // line here instead of spinning forever.
+        if rest.len() >= before {
+            break;
+        }
     }
     (code, in_block)
 }
