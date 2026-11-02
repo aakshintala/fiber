@@ -376,13 +376,23 @@ fn a_suffixed_wait_name_opens_a_wait() {
         "    run.wait_screen_leading(\"x\", |grid| true);",
         "    run.wait_screen2(\"x\", |grid| true);",
     ] {
-        assert!(opens_wait(&code_part(code, false).0), "code: {code:?}");
+        assert!(opens_wait(&code_part(code, 0).0), "code: {code:?}");
     }
 }
 
 #[test]
 fn a_decoy_wait_prefix_does_not_hide_a_later_wait() {
     assert!(opens_wait("ab.wait_screened.wait_screen("));
+}
+
+#[test]
+fn a_nested_comment_holding_a_fake_wait_hides_no_read() {
+    assert_eq!(
+        count_unmarked(
+            "    /* outer /* inner */ .wait_screen(\"x\", |grid| {\n    let grid = run.screen();\n    }); */\n"
+        ),
+        1
+    );
 }
 
 #[test]
@@ -395,8 +405,8 @@ fn a_block_comment_closing_at_the_line_start_releases_the_next_read() {
 
 #[test]
 fn a_char_literal_advances_past_its_closing_quote() {
-    assert_eq!(code_part("'a' x", false), ("  x".to_owned(), false));
-    assert_eq!(code_part("'\\n' x", false), ("  x".to_owned(), false));
+    assert_eq!(code_part("'a' x", 0), ("  x".to_owned(), 0));
+    assert_eq!(code_part("'\\n' x", 0), ("  x".to_owned(), 0));
 }
 
 #[test]

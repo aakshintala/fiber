@@ -73,7 +73,9 @@ test took before the input that causes the bytes, never from an earlier
 match, so it does not depend on the order in which two markers arrive.
 
 A screen predicate checks every cell property its assertions read, so a
-partial redraw can't satisfy it. A test sends input only after output the
+partial redraw can't satisfy it. A needle that can be empty must `expect`,
+never default: `contains("")` is unconditionally true, so the wait would
+return on the first frame. A test sends input only after output the
 terminal already emits once it is ready for that input, such as the
 mode-enable sequences or the end of the first frame, never after a grid
 match alone. That signal is existing output: the shipped binary gets no

@@ -103,13 +103,13 @@ pub(crate) fn check(files: &[RustFile], maxima: &BTreeMap<String, usize>) -> Vec
 /// `wait_screen` call's span.
 pub(crate) fn count_unmarked(source: &str) -> usize {
     let mut depth = 0i32;
-    let mut in_block = false;
+    let mut comment = 0u32;
     let mut wait_base: Option<i32> = None;
     let mut previous_settled = false;
     let mut count = 0usize;
     for line in source.lines() {
-        let (code, open) = code_part(line, in_block);
-        in_block = open;
+        let (code, unclosed) = code_part(line, comment);
+        comment = unclosed;
         if wait_base.is_none() && opens_wait(&code) {
             wait_base = Some(depth);
         }
@@ -161,27 +161,36 @@ fn delimiter_depth(code: &str) -> i32 {
 /// removed, for wait detection and delimiter depth only, so a
 /// `.wait_screen` inside a string or a comment opens no wait and quoted
 /// delimiters move no depth. Pattern matching still runs on the raw line:
-/// the count stays a conservative upper bound. `in_block` threads an open
-/// block comment from the previous line; the return carries whether one
-/// stays open.
-fn code_part(line: &str, mut in_block: bool) -> (String, bool) {
+/// the count stays a conservative upper bound. `comment` threads the open
+/// block-comment depth from the previous line — Rust block comments nest,
+/// so only a `*/` with no unclosed `/*` before it leaves comment mode;
+/// the return carries the depth that stays open.
+fn code_part(line: &str, mut comment: u32) -> (String, u32) {
     let mut code = String::with_capacity(line.len());
     let mut rest = line;
     while !rest.is_empty() {
         let before = rest.len();
-        if in_block {
-            match rest.find("*/") {
-                Some(end) => {
-                    rest = &rest[end + 2..];
-                    in_block = false;
+        if comment > 0 {
+            match (rest.find("/*"), rest.find("*/")) {
+                (Some(at), Some(end)) if at < end => {
+                    comment += 1;
+                    rest = &rest[at + 2..];
                 }
-                None => return (code, true),
+                (Some(at), None) => {
+                    comment += 1;
+                    rest = &rest[at + 2..];
+                }
+                (_, Some(end)) => {
+                    comment -= 1;
+                    rest = &rest[end + 2..];
+                }
+                (None, None) => return (code, comment),
             }
         } else if rest.starts_with("//") {
             break;
         } else if rest.starts_with("/*") {
             rest = &rest[2..];
-            in_block = true;
+            comment += 1;
         } else if let Some(after) = strip_raw_string(rest) {
             rest = after;
             code.push(' ');
@@ -219,7 +228,7 @@ fn code_part(line: &str, mut in_block: bool) -> (String, bool) {
             break;
         }
     }
-    (code, in_block)
+    (code, comment)
 }
 
 /// The remainder after the raw-string literal at the start of `rest`
