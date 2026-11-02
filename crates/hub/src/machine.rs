@@ -53,6 +53,20 @@ pub trait Machine: Send + Sync {
         text: &str,
         version: &str,
     ) -> Result<(), Failure>;
+    /// Reads one workspace file and its version.
+    fn read_workspace_file(
+        &self,
+        workspace: &Path,
+        path: &Path,
+    ) -> Result<(String, String), Failure>;
+    /// Writes text only while the workspace file still has `version`.
+    fn write_workspace_file(
+        &self,
+        workspace: &Path,
+        path: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), Failure>;
     /// Prunes the machine's Fiber home across every project. With
     /// `dry_run`, selects and answers the preview without removing
     /// anything; otherwise removes the previewed `expect` items and answers
@@ -235,6 +249,40 @@ fn shape(args: &Map<String, Value>, keys: &[&str]) -> Result<(), Refused> {
         string(args, key)?;
     }
     Ok(())
+}
+
+pub(crate) fn on_read_workspace_file(
+    hub: &Hub,
+    args: &Map<String, Value>,
+) -> Result<Option<Value>, Refused> {
+    shape(args, &["workspace", "path"])?;
+    let (workspace, path) = paths(args)?;
+    let (text, version) = hub
+        .machine
+        .as_ref()
+        .ok_or_else(invalid)?
+        .read_workspace_file(workspace, path)
+        .map_err(refused)?;
+    Ok(Some(json!({"text":text,"version":version})))
+}
+
+pub(crate) fn on_write_workspace_file(
+    hub: &Hub,
+    args: &Map<String, Value>,
+) -> Result<Option<Value>, Refused> {
+    shape(args, &["workspace", "path", "text", "version"])?;
+    let (workspace, path) = paths(args)?;
+    hub.machine
+        .as_ref()
+        .ok_or_else(invalid)?
+        .write_workspace_file(
+            workspace,
+            path,
+            string(args, "text")?,
+            string(args, "version")?,
+        )
+        .map_err(refused)?;
+    Ok(None)
 }
 
 fn refused(failure: Failure) -> Refused {

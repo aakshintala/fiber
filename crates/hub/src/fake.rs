@@ -1079,6 +1079,25 @@ impl crate::Machine for FakeMachine {
         lock(&self.calls).push(serde_json::json!({"write":[workspace,path,text,version]}));
         Ok(())
     }
+    fn read_workspace_file(
+        &self,
+        workspace: &Path,
+        path: &Path,
+    ) -> Result<(String, String), Failure> {
+        lock(&self.calls).push(serde_json::json!({"read_workspace":[workspace,path]}));
+        crate::workspace_file::read(workspace, path)
+    }
+    fn write_workspace_file(
+        &self,
+        workspace: &Path,
+        path: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), Failure> {
+        lock(&self.calls)
+            .push(serde_json::json!({"write_workspace":[workspace,path,text,version]}));
+        crate::workspace_file::write(workspace, path, text, version)
+    }
     #[allow(
         clippy::too_many_arguments,
         clippy::type_complexity,

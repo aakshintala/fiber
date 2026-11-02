@@ -1237,6 +1237,8 @@ answers each command it read exactly once. `Exited`: its log ends in
 | `configure` | `operation` (string), plus that operation's arguments below | Reads or writes configuration on the hub's machine. Sent without `session_id`. |
 | `read_config` | `workspace` (absolute string), `path` (string) | Reads a configuration view's file as UTF-8 `text` with a content `version`. A missing file answers empty text and version `missing`. |
 | `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
+| `read_workspace_file` | `workspace` (absolute string), `path` (string) | Reads one workspace file as UTF-8 `text` with a content `version`. A missing file answers empty text and version `missing`. |
+| `write_workspace_file` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `stop` | `sessions` (boolean, optional) | Ends the hub as SIGTERM does. With `sessions` true, first shuts down every running session and keeper the hub finds in `run/`, each session through its own shutdown (`close` with `now`) and each keeper by its stop (`docs/tools.md`, "The keeper"), bounded, then exits. Any authenticated connection may send it. |
@@ -1328,6 +1330,8 @@ skill files leave no lock file. A stale write says the path changed since
 it was read. A matching write stores even invalid configuration or rules:
 the client rereads the view to show its error. `read_file` remains limited
 to session artifacts.
+
+`read_workspace_file` and `write_workspace_file` read and write one file under `workspace`, an absolute path the client names. The Changed files view sends its session's workspace. `path` must resolve, symbolic links included, inside `workspace`, otherwise `invalid_arguments`. A non-regular file or a relative `workspace` is rejected `invalid_arguments`. Both refuse text over 10 MiB with `too_large`, without cutting it. Non-UTF-8 files fail `io_failed`, naming the path. Versions are 16-digit lowercase hexadecimal content hashes, or `missing`. The write lands only while the file still has the read version, else `stale_request` with nothing written; a write at `missing` creates the file. No lock file is left in the workspace, so racing matching-version writes last-writer-wins.
 
 ### Remote clients
 

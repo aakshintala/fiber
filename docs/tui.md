@@ -881,8 +881,11 @@ install still running.
   hunk, or 1 when there is no hunk. The editor gets the whole screen, as
   Ctrl+G on the draft does. On return, the view reads the file's diff and
   numstat again. Its footer says "Ctrl+G edits", dim. On a remote terminal,
-  Ctrl+G opens nothing and shows "Not available in this terminal."; the
-  footer omits the Ctrl+G hint.
+  Ctrl+G fetches the hub file at the session's workspace and opens a temporary
+  copy in `$VISUAL` or `$EDITOR` at the same line, and on return writes the copy
+  back only while the hub file still has the fetched version. A hub-side edit in
+  between leaves the file unwritten with the changed-file notice, and the view
+  still reads the diff and numstat again. Its footer keeps the Ctrl+G hint.
 - **The release notes,** `/release-notes`: the running binary's
   changelog section for its own version (`docs/releasing.md`, "The
   changelog"), embedded in the binary at build time, so the view asks
