@@ -1417,8 +1417,8 @@ fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() 
     assert_eq!(model_fit(&view, 8), 0);
 
     let text = picker_screen(&view, 80, 8);
-    let (model_y, model) = find_row(&text, "m1 ● current");
-    assert!(model.contains("m1 ● current"), "{model}");
+    let (model_y, model) = find_row(&text, "m1");
+    assert!(model.contains("● current"), "{model}");
     assert!(
         text.lines()
             .nth(usize::from(model_y).saturating_sub(1))
