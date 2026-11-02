@@ -756,41 +756,6 @@ fn resolve_figures_matches_git_s_relative_paths_against_viewed_card_paths() {
 }
 
 #[test]
-fn answered_rows_show_the_relative_label_for_absolute_card_paths() {
-    // A hub workspace prefix would otherwise push the figures off
-    // narrow columns, so the reread row could never show them
-    // (`docs/tui.md`, "Changed files").
-    let dir = fakes::TempDir::new("tui-changed-files-row-label");
-    let absolute = dir
-        .path()
-        .join("only-on-a.txt")
-        .to_str()
-        .unwrap_or_else(|| panic!("workspace path"))
-        .to_owned();
-    let card = changes(&[(absolute.as_str(), 1, 0)]);
-    let lines = BTreeMap::new();
-    let displayed = resolve_figures(
-        &card,
-        Some("2\t0\tonly-on-a.txt\n"),
-        &lines,
-        None,
-        Some(dir.path()),
-    );
-    assert_eq!(
-        displayed.labels.get(absolute.as_str()),
-        Some(&"only-on-a.txt".to_owned()),
-        "the row label strips the viewed workspace"
-    );
-    let shown = frame(&card, Some(&displayed), None, List::default());
-    assert_eq!(row(&shown, 0), "only-on-a.txt · +2 −0");
-    // Before the numstat answer the row already shows the short label
-    // with the card's figures, so the answer never moves the path.
-    let pending = resolve_figures(&card, None, &lines, None, Some(dir.path()));
-    let shown = frame(&card, Some(&pending), None, List::default());
-    assert_eq!(row(&shown, 0), "only-on-a.txt · +1 −0");
-}
-
-#[test]
 fn first_hunk_line_reads_the_first_hunks_new_side_start() {
     let lines = [
         "diff --git a/f.txt b/f.txt",

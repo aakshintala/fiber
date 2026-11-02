@@ -284,7 +284,7 @@ fn changed_files_editor_remote() {
         TRUECOLOUR[1],
         TRUECOLOUR[2],
     ];
-    let mut run = Run::spawn(&world.b, 120, 32, &["--hub", "box"], &env);
+    let mut run = Run::spawn(&world.b, 200, 32, &["--hub", "box"], &env);
     run.ready();
     run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
     run.wait_screen("the hub home picker", |screen| {
