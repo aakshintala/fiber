@@ -407,6 +407,8 @@ fn a_block_comment_closing_at_the_line_start_releases_the_next_read() {
 fn a_close_inside_an_open_comment_returns_the_code_after_it() {
     assert_eq!(code_part("x */ y", 1), (" y".to_owned(), 0));
     assert_eq!(code_part("x */ y", 2), ("".to_owned(), 1));
+    // A close at offset 5, where `at + 2` and `at * 2` differ.
+    assert_eq!(code_part("abcd */ x", 1), (" x".to_owned(), 0));
 }
 
 #[test]
