@@ -4333,7 +4333,9 @@ fn background_without_timeout_runs_until_stopped() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    // CHILD_START's 20 s inline: budget-bounds resolves only direct
+    // literals, and startup under load needs the full bound.
+    let pgid = ready.wait(fakes::Deadline::after(Duration::from_secs(20)))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
