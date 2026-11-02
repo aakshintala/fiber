@@ -149,10 +149,13 @@ fn card_edges(grid: &Grid, y: u16, inner: u16) -> (u16, u16) {
 /// Opens the ledger and returns the grid with its gutter, derived from
 /// the group row.
 fn open_ledger(run: &mut Run) -> (Grid, u16) {
-    // Each fixture's one scripted call produces `THOUGHT`; wait for that
-    // row before Ctrl+O, which is dropped when there is no thought to open.
+    // Each fixture's one scripted call produces `THOUGHT` or
+    // `FETCH_THOUGHT`; wait for its row before Ctrl+O, which is dropped
+    // when there is no thought to open.
     run.wait_screen("the scripted call's thought", |grid| {
-        grid.rows.iter().any(|row| row.contains(THOUGHT))
+        grid.rows
+            .iter()
+            .any(|row| row.contains(THOUGHT) || row.contains(FETCH_THOUGHT))
     });
     run.write(b"\x0f");
     let grid = run.wait_screen("the open ledger", |grid| {
@@ -539,6 +542,8 @@ const WHEEL_DOWN: &[u8] = b"\x1b[<65;21;41M";
 /// The thought row's marker: the turn ran one command, so the finished
 /// turn names it once.
 const THOUGHT: &str = "Ran 1 command";
+/// The fetch fixture's one-call thought-row marker.
+const FETCH_THOUGHT: &str = "Called 1 tool, thought once";
 
 /// The first filler line: it stays on screen while the conversation scrolls
 /// toward its thought row, so its downward motion proves a wheel step moved
