@@ -263,9 +263,11 @@ impl Tool for Shell {
             name: "shell".to_owned(),
             description: "Runs a command in a new process session. `command` is the command. \
                  `workdir` defaults to the workspace; a relative path is resolved against it. \
-                 `timeout_ms` defaults to 600000, or to 300000 for a monitor. A monitor's maximum is 1800000, \
-                 or 600000 in a non-interactive run. Standard output and standard error are one stream, \
-                 except in a monitor, whose standard error goes to its own file."
+                 A background call with no `timeout_ms` has no timeout: it runs until it exits, \
+                 until `jobs stop`, or until the session shuts down. Any other call with no \
+                 `timeout_ms` defaults to 600000, or to 300000 for a monitor. `timeout_ms` is at least 1. \
+                 A monitor's maximum is 1800000, or 600000 in a non-interactive run. Standard output \
+                 and standard error are one stream, except in a monitor, whose standard error goes to its own file."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -280,8 +282,8 @@ impl Tool for Shell {
                     },
                     "timeout_ms": {
                         "type": ["integer", "null"],
-                        "minimum": 0,
-                        "description": "How long the command may run, in milliseconds. The default is 600000; for a monitor, the default is 300000 and the maximum is 1800000 (600000 in a non-interactive run)."
+                        "minimum": 1,
+                        "description": "How long the command may run, in milliseconds. A background call with no `timeout_ms` has no timeout. The default is 600000; for a monitor, the default is 300000 and the maximum is 1800000 (600000 in a non-interactive run). `timeout_ms` is at least 1: leave it out of a background call that should run until stopped."
                     },
                     "run_in_background": {
                         "type": ["boolean", "null"],

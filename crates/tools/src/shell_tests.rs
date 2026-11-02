@@ -95,14 +95,23 @@ fn nullable_optional_arguments_parse_as_absent() {
     assert_eq!(
         schema["properties"]["timeout_ms"]["description"],
         json!(
-            "How long the command may run, in milliseconds. The default is 600000; \
-             for a monitor, the default is 300000 and the maximum is 1800000 \
-             (600000 in a non-interactive run)."
+            "How long the command may run, in milliseconds. A background call with no `timeout_ms` has no timeout. \
+             The default is 600000; for a monitor, the default is 300000 and the maximum is 1800000 \
+             (600000 in a non-interactive run). `timeout_ms` is at least 1: leave it out of a background call that should run until stopped."
         )
     );
-    assert!(tool.definition().description.contains(
-        "`timeout_ms` defaults to 600000, or to 300000 for a monitor. \
-             A monitor's maximum is 1800000, or 600000 in a non-interactive run."
+    assert_eq!(schema["properties"]["timeout_ms"]["minimum"], json!(1));
+    let description = tool.definition().description.clone();
+    assert!(
+        description.contains("A background call with no `timeout_ms` has no timeout"),
+        "{description}"
+    );
+    assert!(
+        description.contains("`timeout_ms` is at least 1"),
+        "{description}"
+    );
+    assert!(description.contains(
+        "Any other call with no `timeout_ms` defaults to 600000, or to 300000 for a monitor."
     ));
     for (overrides, mode, timeout) in [
         (json!({"monitor": true}), Mode::Monitor, Some(300_000)),
