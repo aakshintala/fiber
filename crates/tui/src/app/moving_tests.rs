@@ -674,6 +674,58 @@ fn the_countdown_wake_arms_at_the_next_text_boundary() {
     );
 }
 
+/// Constructing or scrolling past the Session card cannot keep an idle
+/// terminal awake; only its painted countdown requests a boundary.
+#[test]
+fn the_countdown_wake_follows_the_visible_panel_rows() {
+    let clock = FakeClock::new();
+    let now = clock.now();
+    let mut app = app();
+    fed(&mut app, json!({"cache_expires": WALL + 2_550_000}));
+    app.on_line(session_line(
+        SESSION,
+        "extension_ui",
+        json!({"extension": "test", "widget": "padding", "lines": vec!["padding"; 30]}),
+        None,
+    ));
+    app.set_now(now, WALL);
+    let rows = crate::view::panel::rows(&app, 34);
+    assert!(rows.iter().any(|row| row.line.to_string().contains("42m")));
+    assert_eq!(app.take_wake(), None, "measurement is not painting");
+    let paint = |app: &App, height| {
+        let area = Rect::new(0, 0, 34, height);
+        let mut buf = Buffer::empty(area);
+        crate::view::panel::draw(app, area, &mut buf, &mut Vec::new());
+        (crate::view::text(&buf), app.take_wake())
+    };
+    let (shown, wake) = paint(&app, 24);
+    assert!(shown.contains("42m"), "{shown}");
+    assert_eq!(wake, Some(now + Duration::from_millis(30_001)));
+    let (shown, wake) = paint(&app, 5);
+    assert!(!shown.contains("42m"), "{shown}");
+    assert_eq!(wake, None, "below the viewport");
+    // Horizontal cuts must retain an actual digit, not just its ellipsis.
+    for (width, visible) in [(0, false), (7, false), (8, true)] {
+        let area = Rect::new(0, 0, width, 24);
+        let mut buf = Buffer::empty(area);
+        crate::view::panel::draw(&app, area, &mut buf, &mut Vec::new());
+        assert_eq!(
+            app.take_wake(),
+            visible.then(|| now + Duration::from_millis(30_001)),
+            "panel width {width}",
+        );
+    }
+    app.set_size(160, 12);
+    for _ in 0..8 {
+        app.scroll_panel(false);
+    }
+    assert!(app.panel_state().scroll() > 16);
+    let (shown, wake) = paint(&app, 5);
+    assert!(shown.contains("padding"), "{shown}");
+    assert!(!shown.contains("42m"), "{shown}");
+    assert_eq!(wake, None, "scrolled above the viewport");
+}
+
 /// The countdown arms no wake with no future expiry on screen: no
 /// status, no expiry, or already expired (WAKE-RULED).
 #[test]

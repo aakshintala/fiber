@@ -1256,6 +1256,44 @@ fn the_cache_segment_shows_the_time_until_it_resets() {
     }
 }
 
+/// The countdown wakes only for cells that survive both segment cutting
+/// and vertical clipping, including a partly visible countdown.
+#[test]
+fn the_countdown_wake_follows_the_visible_narrow_cells() {
+    use std::time::Duration;
+    let clock = fakes::clock::FakeClock::new();
+    for cards in [&["session"][..], &["changed_files", "session"][..]] {
+        let mut app = attached_with(80, 30, cards);
+        app.on_line(full_status());
+        app.on_line(changed_call(serde_json::json!([
+            {"path": "a.rs", "added": 3, "removed": 1},
+        ])));
+        app.set_now(clock.now(), 0);
+        let rows = super::status(&app, 100);
+        let line = rows[0].line.to_string();
+        let column = line.find("42m").expect("a countdown");
+        let column = u16::try_from(crate::format::width(&line[..column])).unwrap();
+        assert_eq!(app.take_wake(), None, "construction is not painting");
+        for (width, height, visible) in [
+            (0, 1, false),
+            (column + 2, 1, false), // Only the ellipsis reaches the countdown.
+            (column + 3, 1, true),  // Its first digit survives before the ellipsis.
+            (100, 0, false),
+            (100, 1, true),
+        ] {
+            let area = Rect::new(0, 0, width, height);
+            let mut buf = Buffer::empty(area);
+            let mut bottom = height;
+            super::paint_builtin(&app, area, &mut buf, &mut bottom, &mut Vec::new());
+            assert_eq!(
+                app.take_wake(),
+                visible.then(|| clock.now() + Duration::from_millis(1)),
+                "cards={cards:?} width={width} height={height}",
+            );
+        }
+    }
+}
+
 /// Row 1 cut at 61: the shorter row still ends in `…` keeping its
 /// styles, past the terminal's right edge, and only the visible
 /// targets keep.

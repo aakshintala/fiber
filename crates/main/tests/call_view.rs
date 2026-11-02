@@ -328,6 +328,9 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
             {
                 row = format!("{} {}", &row[..after], &row[after + pad..]);
             }
+            if let Some(countdown) = row.find("cache resets in") {
+                row = format!("{}cache resets in     [duration]", &row[..countdown]);
+            }
             if let Some(speed) = row.find("speed, last reply") {
                 row = format!("{}speed, last reply            —", &row[..speed]);
             }

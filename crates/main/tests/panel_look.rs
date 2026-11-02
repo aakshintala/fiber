@@ -516,8 +516,19 @@ fn narrow_status_rows_match_the_doc() {
     // layout").
     let line: String = (1..100).map(|x| grid.cell(x, first).symbol).collect();
     let line = line.trim_end();
+    let countdown = line
+        .split_once("cache 0% ")
+        .and_then(|(_, tail)| tail.split_once("  │  "))
+        .map(|(value, _)| value)
+        .expect("the cache countdown");
+    let digits = countdown
+        .strip_suffix('m')
+        .or_else(|| countdown.strip_suffix('s'))
+        .expect("a countdown in minutes or seconds");
+    assert!(digits.parse::<u64>().is_ok(), "{countdown:?}");
     assert_eq!(
-        line, "▌0 waiting  │  $0.00  │  cache 0% 59m  │  ± 3 files +3 −0",
+        line.replace(countdown, "[duration]"),
+        "▌0 waiting  │  $0.00  │  cache 0% [duration]  │  ± 3 files +3 −0",
         "{line:?}"
     );
     assert!(line.contains("  │  "), "{line:?}");

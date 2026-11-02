@@ -628,7 +628,7 @@ impl Fold {
             cache_expires: self
                 .cache_ts
                 .zip(self.lifetime)
-                .map(|(ts, lifetime)| ts.saturating_add(lifetime_ms(lifetime))),
+                .map(|(ts, lifetime)| ts.saturating_add(crate::warm::lifetime_ms(lifetime))),
             spend: self.spend.clone(),
             delegates: u32::try_from(self.delegates.len()).unwrap_or(u32::MAX),
             jobs: u32::try_from(jobs).unwrap_or(u32::MAX),
@@ -688,15 +688,6 @@ impl PreambleTag {
             system_prompt: built.system_prompt.clone(),
             tools: built.tools.clone(),
         }
-    }
-}
-
-/// A cache lifetime in milliseconds, as `Loop::lifetime` maps it
-/// (`crates/loop/src/warm.rs`).
-fn lifetime_ms(lifetime: CacheLifetime) -> u64 {
-    match lifetime {
-        CacheLifetime::FiveMinutes => 300_000,
-        CacheLifetime::OneHour => 3_600_000,
     }
 }
 

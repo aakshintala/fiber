@@ -14,7 +14,7 @@ expression: "snapshot_text(&setup, &grid, &[])"
  470                                                                                                                             then a summary, fresh context
  471                                                                                                                             tokens in / out          0 / 0
  472                                                                                                                             cache hits                   —
- 473                                                                                                                             cache resets in            59m
+ 473                                                                                                                             cache resets in     [duration]
  474                                                                                                                             cost                   unknown
  475                                                                                                                             cost on subscription     $0.00
  476                                                                                                                             speed, last reply            —

@@ -119,6 +119,14 @@ pub(crate) enum Refreshed {
     Stopped(Instant),
 }
 
+/// The cache lifetime shared by warming deadlines and status expiry.
+pub(crate) fn lifetime_ms(lifetime: CacheLifetime) -> u64 {
+    match lifetime {
+        CacheLifetime::FiveMinutes => 300_000,
+        CacheLifetime::OneHour => 3_600_000,
+    }
+}
+
 impl Loop {
     /// Keeps an idle session's cache warm for `cap` cache lifetimes after
     /// the last turn (`cache.warm_idle` and `cache.warm_cap`). `None` never
@@ -132,10 +140,7 @@ impl Loop {
     fn lifetime(&self) -> Option<Duration> {
         self.preamble
             .as_ref()
-            .map(|preamble| match preamble.cache_lifetime {
-                CacheLifetime::FiveMinutes => Duration::from_secs(5 * 60),
-                CacheLifetime::OneHour => Duration::from_secs(60 * 60),
-            })
+            .map(|preamble| Duration::from_millis(lifetime_ms(preamble.cache_lifetime)))
     }
 
     /// When warming stops for an idle wait that began at `start`: `cap`

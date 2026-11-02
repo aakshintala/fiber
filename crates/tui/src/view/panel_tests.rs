@@ -495,36 +495,6 @@ fn cache_countdown_counts_minutes_and_seconds_under_the_last_minute() {
     assert_eq!(cache_countdown(3_600_000), "60m");
 }
 
-/// The title names the card, with the permission mode right-aligned;
-/// the working directory is the first row under it (`docs/tui.md`,
-/// "The panel").
-#[test]
-fn the_session_card_title_names_the_session_status_with_the_mode() {
-    use crate::theme::{Role, style};
-    use ratatui::style::Modifier;
-    let mut app = attached(160, 40);
-    // Blank before the first status: the row holds its place.
-    assert_eq!(rows(&app, 40)[2].line.to_string(), "");
-    app.on_line(status_line(
-        spend(0, 0, 0, 5, serde_json::json!(0.0), 0.0),
-        None,
-    ));
-    let drawn = rows(&app, 40);
-    let title = &drawn[1];
-    assert!(title.line.to_string().starts_with("Session status"));
-    assert!(title.line.to_string().ends_with("auto"));
-    assert_eq!(title.line.spans[0].content, "Session status");
-    assert_eq!(
-        title.line.spans[0].style,
-        style(Role::Text).add_modifier(Modifier::BOLD)
-    );
-    assert_eq!(
-        title.line.spans.last().map(|span| span.style),
-        Some(style(Role::Attention))
-    );
-    assert_eq!(drawn[2].line.to_string(), "/Users/you/work/fiber");
-}
-
 /// "cache resets in" shows a dim dash before the first request.
 #[test]
 fn cache_resets_in_shows_a_dash_before_the_first_request() {
@@ -2027,6 +1997,7 @@ fn the_session_title_names_the_session_status_with_auto_right_aligned() {
         (34u16, "Session status            auto"),
         (30u16, "Session status        auto"),
     ] {
+        assert_eq!(rows(&attached(160, 40), width)[2].line.to_string(), "");
         let app = status_only();
         let drawn = rows(&app, width);
         // The top edge, the title, the working directory, blank branch

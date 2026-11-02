@@ -26,6 +26,8 @@ pub(crate) struct StatusRow {
     pub(crate) line: Line<'static>,
     /// The click targets on the row: their column offset, width and spot.
     pub(crate) spots: Vec<(u16, u16, Spot)>,
+    /// First countdown column before cutting; only painting may arm it.
+    countdown: Option<usize>,
 }
 
 /// The status line's non-empty rows at `width`, row 1 first. Each row is
@@ -128,7 +130,11 @@ pub(super) fn cut_row(joined: Joined, width: usize) -> StatusRow {
             (start < end).then(|| (start, end.saturating_sub(start), spot))
         })
         .collect();
-    StatusRow { line, spots }
+    StatusRow {
+        line,
+        spots,
+        countdown: None,
+    }
 }
 
 /// Row 1: each listed card's segments in order, joined by a dim `  │  `.
@@ -142,12 +148,17 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
         spans: Vec::new(),
         spots: Vec::new(),
     };
+    let mut countdown = None;
     for card in cards(app.panel_cards(), &names) {
         match card {
             Card::Session => {
-                for segment in session_segments(app) {
+                let base = joined.spans.iter().map(Span::width).sum::<usize>()
+                    + usize::from(!joined.spans.is_empty()) * 5;
+                let mut local_countdown = None;
+                for segment in session_segments(app, &mut local_countdown) {
                     push_segment(&mut joined, segment);
                 }
+                countdown = local_countdown.map(|column| base + column);
             }
             Card::ChangedFiles => {
                 if let Some(segment) = changed_files_segment(app) {
@@ -170,7 +181,9 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
     if joined.spans.is_empty() {
         return None;
     }
-    Some(cut_row(joined, width))
+    let mut row = cut_row(joined, width);
+    row.countdown = countdown;
+    Some(row)
 }
 
 /// The Session card's status segments: "N waiting" while the rail is not
@@ -179,7 +192,7 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
 /// permission mode and the context bar moved to the input box's status
 /// row (`docs/tui.md`, "The input box"). A card with no kept segment
 /// leaves no row.
-fn session_segments(app: &App) -> Vec<Segment> {
+fn session_segments(app: &App, countdown: &mut Option<usize>) -> Vec<Segment> {
     let panel = app.panel_state();
     let status = panel.status();
     let mut out = Vec::new();
@@ -255,20 +268,20 @@ fn session_segments(app: &App) -> Vec<Segment> {
             let share = format!("{hits}%",);
             spans.push(Span::raw(share));
             if let Some(expiry) = status.cache_expires {
-                let now = app.motion().wall_ms().unwrap_or(0);
-                // Painted and counting: ask the frame for the moment
-                // the text next changes (WAKE-RULED).
-                if let Some(due) = crate::view::panel::countdown_due_wall(expiry, now) {
-                    app.motion().ask_wall(due);
-                }
                 spans.push(Span::raw(" ".to_owned()));
-                if now >= expiry {
-                    spans.push(Span::styled("expired".to_owned(), style(Role::Attention)));
-                } else {
-                    spans.push(Span::raw(crate::view::panel::cache_countdown(
-                        expiry.saturating_sub(now),
-                    )));
-                }
+                *countdown = Some(
+                    out.iter()
+                        .flat_map(|segment| &segment.spans)
+                        .map(Span::width)
+                        .sum::<usize>()
+                        + out.len() * 5
+                        + spans.iter().map(Span::width).sum::<usize>(),
+                );
+                spans.push(super::panel::countdown_span(
+                    expiry,
+                    app.motion().wall_ms().unwrap_or(0),
+                    ratatui::style::Style::default(),
+                ));
             }
             let wide: usize = spans
                 .iter()
@@ -660,6 +673,11 @@ fn paint_builtin(
             break;
         };
         buf.set_line(x, at, &row.line, wide);
+        if let Some(column) = row.countdown
+            && column < usize::from(wide.saturating_sub(1))
+        {
+            super::panel::ask_countdown(app);
+        }
         y = at;
         for (start, wide, spot) in &row.spots {
             targets.push(Target {
