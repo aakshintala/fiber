@@ -318,6 +318,126 @@ fn usage(generation: &str, input: u64, cost: Option<f64>) -> Value {
     })
 }
 
+fn preamble(reason: &str, lifetime: &str, system: &str) -> Value {
+    json!({
+        "reason": reason, "model": "fake/m", "context_window": 1000,
+        "tool_choice": "auto", "cache_lifetime": lifetime,
+        "system_prompt": system, "tools": [],
+    })
+}
+
+#[test]
+fn cache_expiry_pins_repins_and_clears() {
+    let mut w = world();
+    w.start();
+    // Absent before the first request, and a request before any
+    // preamble pins nothing: the lifetime must come first.
+    assert_eq!(w.status().cache_expires, None);
+    w.feed("usage_recorded", Some("a0"), &usage("g0", 100, None));
+    assert_eq!(w.status().cache_expires, None);
+    // A one-hour preamble, then a conversation request: the pin is the
+    // request's end plus the lifetime.
+    w.feed("preamble_built", None, &preamble("start", "1h", "s"));
+    w.feed("usage_recorded", Some("a1"), &usage("g1", 100, None));
+    assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
+    // A warming refresh re-pins without an action.
+    let mut warm = usage("g2", 5, None);
+    warm["warming"] = json!(true);
+    w.feed("usage_recorded", None, &warm);
+    assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
+    let pinned = w.status().cache_expires;
+    // Non-movers leave it put: a late correction of the refresh, an
+    // extension's call, a delegate's copy, a reviewer's call, and a
+    // notes proposal after the request, which carries no action and no
+    // marker.
+    w.feed("usage_recorded", None, &warm);
+    let mut extension = usage("g3", 5, None);
+    extension["extension"] = json!("ext");
+    w.feed("usage_recorded", Some("a3"), &extension);
+    let mut copy = usage("g4", 5, None);
+    copy["origin_session_id"] = json!("s_delegate");
+    w.feed("usage_recorded", Some("a4"), &copy);
+    let mut reviewer = usage("g5", 5, None);
+    reviewer["reviewer"] = json!({"purpose": "handoff"});
+    w.feed("usage_recorded", None, &reviewer);
+    w.feed("usage_recorded", None, &usage("g6", 5, None));
+    assert_eq!(w.status().cache_expires, pinned);
+    // A fresh start build with different inputs is no resume: it only
+    // retires the lifetime, never the pin.
+    w.feed("preamble_built", None, &preamble("start", "1h", "other"));
+    assert_eq!(w.status().cache_expires, pinned);
+    // An unchanged resume preserves the pin; a resume that rebuilt the
+    // inputs clears it, until the next qualifying request re-pins.
+    w.feed(
+        "fiber_started",
+        None,
+        &json!({"version": "0.0.1", "resumed": true}),
+    );
+    w.feed("preamble_built", None, &preamble("resume", "1h", "other"));
+    assert_eq!(w.status().cache_expires, pinned);
+    w.feed(
+        "fiber_started",
+        None,
+        &json!({"version": "0.0.1", "resumed": true}),
+    );
+    w.feed("preamble_built", None, &preamble("resume", "1h", "changed"));
+    assert_eq!(w.status().cache_expires, None);
+    w.feed("usage_recorded", Some("a7"), &usage("g7", 10, None));
+    assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
+    // A reload, a model switch and a handoff each clear the pin; the
+    // next qualifying request re-pins either way.
+    w.feed(
+        "reloaded",
+        None,
+        &json!({"servers": {"kept": [], "restarted": [], "started": [], "stopped": []},
+            "extensions": []}),
+    );
+    assert_eq!(w.status().cache_expires, None);
+    w.feed("usage_recorded", Some("a8"), &usage("g8", 10, None));
+    assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
+    w.feed(
+        "model_changed",
+        None,
+        &json!({"before": {"model": "fake/m", "cache_lifetime": "1h"},
+            "after": {"model": "fake/n", "cache_lifetime": "1h"}, "source": "driver"}),
+    );
+    assert_eq!(w.status().cache_expires, None);
+    w.feed("usage_recorded", Some("a9"), &usage("g9", 10, None));
+    assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
+    w.feed(
+        "handoff_completed",
+        None,
+        &json!({"outcome": "completed", "tokens_before": 12}),
+    );
+    assert_eq!(w.status().cache_expires, None);
+    w.feed("usage_recorded", Some("a10"), &usage("g10", 10, None));
+    assert_eq!(w.status().cache_expires, Some(w.ts + 3_600_000));
+}
+
+#[test]
+fn cache_expiry_counts_the_five_minute_lifetime_and_saturates_at_the_top() {
+    // The five-minute preamble pins through 300 seconds.
+    let mut five = world();
+    five.start();
+    five.feed("preamble_built", None, &preamble("start", "5m", "s"));
+    five.feed("usage_recorded", Some("a1"), &usage("g1", 100, None));
+    assert_eq!(five.status().cache_expires, Some(five.ts + 300_000));
+    // A pin near the top of the range saturates instead of overflowing.
+    let mut top = world();
+    top.start();
+    top.feed("preamble_built", None, &preamble("start", "1h", "s"));
+    let line = envelope(
+        "usage_recorded",
+        u64::MAX - 100,
+        None,
+        Some("a9"),
+        Some(1),
+        &usage("g9", 10, None),
+    );
+    top.fold.observe(&line);
+    assert_eq!(top.status().cache_expires, Some(u64::MAX));
+}
+
 #[test]
 fn a_new_fold_is_idle_with_the_loops_own_model_and_workspace() {
     let mut w = world();
@@ -1550,6 +1670,7 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
         extension: None,
         origin_session_id: None,
         reviewer: None,
+        warming: None,
         input_bytes: 1,
         input_media: None,
     }));

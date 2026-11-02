@@ -213,8 +213,8 @@ fn pinned(bytes: &[u8], len: usize, hash: u64) {
 fn system_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/system.md"),
-        1219,
-        0xd3272595a6580bfd,
+        1574,
+        0x7164e4d94572814c,
     );
 }
 

@@ -1,7 +1,9 @@
 //! The stress job's helpers (`docs/ci.md`, "On every pull request that changes code").
 
-use crate::select::{Members, TestRef, filter, spec};
+use crate::rules::RustFile;
+use crate::select::{Members, TestRef, filter, has_test_functions, spec};
 use crate::test_index::TestIndex;
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 /// Runs of one selected test in the stress job, unless the pull request fixes a flaky test.
 pub(crate) const STRESS_COUNT: u32 = 30;
@@ -230,26 +232,60 @@ fn merge_base(base: &str) -> Result<String, String> {
         .ok_or("no merge base")?)
 }
 
-/// The workspace members with the test functions the working tree adds
-/// or changes against `base`, found with the same selector as the stress
-/// job.
+/// Whether the file's top-level inner attributes include `#![cfg(...)]`.
+fn has_cfg_inner_attr(source: &str) -> Result<bool, String> {
+    let tokens: TokenStream = source.parse().map_err(|_| "cannot parse".to_owned())?;
+    let mut tokens = tokens.into_iter();
+    while let Some(TokenTree::Punct(hash)) = tokens.next() {
+        if hash.as_char() != '#' {
+            continue;
+        }
+        let Some(TokenTree::Punct(bang)) = tokens.next() else {
+            continue;
+        };
+        if bang.as_char() != '!' {
+            continue;
+        }
+        let Some(TokenTree::Group(attribute)) = tokens.next() else {
+            continue;
+        };
+        if attribute.delimiter() != Delimiter::Bracket {
+            continue;
+        }
+        let mut attribute = attribute.stream().into_iter();
+        if matches!(attribute.next(), Some(TokenTree::Ident(name)) if name == "cfg")
+            && matches!(attribute.next(), Some(TokenTree::Group(args)) if args.delimiter() == Delimiter::Parenthesis)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// A test binary has no listed tests for a changed file that still holds a
+/// test function. Files with no functions, cfg-gated files, and files the
+/// runner did not compile need no selector-miss error.
 fn empty_test_file_error(
     files: &[String],
-    selected: &[(String, Vec<TestRef>)],
+    sources: &[RustFile],
     members: &Members,
     index: &TestIndex,
 ) -> Option<String> {
     files.iter().find_map(|path| {
         let package = crate::select::owner(path, members)?;
         let member = members.get(package)?;
-        let selected_tests = selected
-            .iter()
-            .find(|(selected_path, _)| selected_path == path)
-            .is_some_and(|(_, tests)| !tests.is_empty());
-        (!member.unrun_tests.iter().any(|unrun| unrun == path)
-            && !index.binaries_for(path).is_empty()
-            && !selected_tests)
-            .then(|| format!("{path}: changed test file selected no tests"))
+        if member.unrun_tests.iter().any(|unrun| unrun == path) {
+            return None;
+        }
+        let source = sources.iter().find(|source| source.path == *path)?;
+        if has_cfg_inner_attr(&source.source).unwrap_or(false) {
+            return None;
+        }
+        let binaries = index.binaries_for(path);
+        (!binaries.is_empty()
+            && binaries.iter().all(|binary| binary.tests.is_empty())
+            && matches!(has_test_functions(&source.source), Ok(true)))
+        .then(|| format!("{path}: changed test file selected no tests"))
     })
 }
 
@@ -276,7 +312,7 @@ fn touched_against(base: &str, profile: &str) -> Result<(Members, Vec<TestRef>),
         Some(profile),
     )?;
     let selected = crate::select::changed_tests_by_file(&diff, &members, &sources, &index)?;
-    if let Some(error) = empty_test_file_error(&test_files, &selected, &members, &index) {
+    if let Some(error) = empty_test_file_error(&test_files, &sources, &members, &index) {
         return Err(error);
     }
     let mut touched = Vec::new();

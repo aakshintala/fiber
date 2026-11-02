@@ -14,7 +14,8 @@ mod test_filter;
 #[cfg(test)]
 pub(crate) use changed_tests::changed_tests;
 pub(crate) use changed_tests::{
-    TestRef, changed_tests_by_file, filter, narrow_plan, planned_line, tests_in_files,
+    TestRef, changed_tests_by_file, filter, has_test_functions, narrow_plan, planned_line,
+    tests_in_files,
 };
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};

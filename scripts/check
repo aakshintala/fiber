@@ -109,41 +109,82 @@ if [ "$scope" != platform ]; then
     cargo xtask must-succeed
     echo "== budget bounds"
     cargo xtask budget-bounds --base "$base"
-    echo "== bare screen-call ratchet"
-    # A `.screen()` call outside a wait reads a grid no wait settled, so
-    # the frame it observes can differ from the waited one
+    echo "== grid-read ratchet"
+    # A grid read outside a wait observes a frame no wait settled, so the
+    # frame it compares can differ from the waited one
     # (docs/testing/screens.md, "Screens"). Each file under
     # crates/main/tests/ holds at most its inline maximum of unmarked
-    # call lines, and a file missing from the list holds none: the literal
-    # text `// settled:` on the call line or the line before it exempts a
-    # call, even inside a string literal, since the count is a conservative
+    # grid-read lines (`.screen()`, `.cell(`, `.contents`, `.rows`), and a
+    # file missing from the list holds none: a line inside a `wait_screen`
+    # call's span is the wait's own check, while the literal text
+    # `// settled:` on the read line or the line before it exempts a read,
+    # even inside a string literal, since the count is a conservative
     # upper bound. `crates/main/tests/support/` is outside the rule,
-    # and a `.screen` field access (as in `login.rs`) is not a call. Call
-    # detection, comment recognition and the per-file comparison live in
-    # `cargo xtask screen-ratchet` (docs/testing.md, "Levels").
+    # and a `.screen` field access (as in `login.rs`) is not a call. Read
+    # detection, wait-span tracking, comment recognition and the per-file
+    # comparison live in `cargo xtask screen-ratchet`
+    # (docs/testing.md, "Levels").
     cargo xtask screen-ratchet <<'EOF'
-crates/main/tests/ask_user_form_look.rs 3
-crates/main/tests/attach_first_frame.rs 1
-crates/main/tests/call_view.rs 1
+crates/main/tests/approval_look.rs 53
+crates/main/tests/ask_user_form_look.rs 66
+crates/main/tests/at_path_search.rs 1
+crates/main/tests/attach_first_frame.rs 4
+crates/main/tests/cache_countdown.rs 2
+crates/main/tests/call_view.rs 35
 crates/main/tests/change_workspace.rs 1
-crates/main/tests/delegates.rs 2
-crates/main/tests/delete.rs 1
-crates/main/tests/inline_images.rs 2
-crates/main/tests/link_look.rs 4
-crates/main/tests/look.rs 5
-crates/main/tests/look_diff.rs 2
-crates/main/tests/model_picker_keys.rs 0
-crates/main/tests/model_picker_name.rs 0
-crates/main/tests/pinned_call_row.rs 1
-crates/main/tests/placeholders_picker.rs 0
-crates/main/tests/quota_fetch_session.rs 1
-crates/main/tests/release_notes.rs 4
-crates/main/tests/steer_drawn.rs 2
-crates/main/tests/stream_closed_notice.rs 2
-crates/main/tests/terminal.rs 2
-crates/main/tests/tui_context_after_cd.rs 1
-crates/main/tests/tui_extensions.rs 2
-crates/main/tests/wheel_scroll.rs 1
+crates/main/tests/changed_files_editor.rs 4
+crates/main/tests/clear.rs 2
+crates/main/tests/credential_signals.rs 3
+crates/main/tests/delegates.rs 32
+crates/main/tests/delete.rs 14
+crates/main/tests/doctor_command.rs 3
+crates/main/tests/exit_alias.rs 1
+crates/main/tests/group_look.rs 38
+crates/main/tests/handoff_look.rs 24
+crates/main/tests/history_page_failed.rs 4
+crates/main/tests/home_rail.rs 17
+crates/main/tests/hover_look.rs 9
+crates/main/tests/hub_pairing.rs 1
+crates/main/tests/hub_remote_terminal.rs 5
+crates/main/tests/hub_version.rs 11
+crates/main/tests/inline_images.rs 11
+crates/main/tests/item_views_look.rs 31
+crates/main/tests/journeys.rs 19
+crates/main/tests/light_no_color_look.rs 61
+crates/main/tests/line_start_end.rs 6
+crates/main/tests/link_look.rs 21
+crates/main/tests/look.rs 166
+crates/main/tests/look_diff.rs 6
+crates/main/tests/look_markdown.rs 29
+crates/main/tests/main_journeys.rs 63
+crates/main/tests/model_picker_keys.rs 14
+crates/main/tests/model_picker_name.rs 3
+crates/main/tests/opened_call_look.rs 52
+crates/main/tests/panel_look.rs 38
+crates/main/tests/pinned_call_row.rs 20
+crates/main/tests/placeholders_picker.rs 2
+crates/main/tests/pty_sync_output.rs 13
+crates/main/tests/quit_after_completed.rs 4
+crates/main/tests/quota_fetch_session.rs 9
+crates/main/tests/rail_focus.rs 17
+crates/main/tests/rail_look.rs 18
+crates/main/tests/rail_shown.rs 2
+crates/main/tests/rail_state_tints.rs 3
+crates/main/tests/release_notes.rs 6
+crates/main/tests/reviewer_setup.rs 15
+crates/main/tests/search_look.rs 91
+crates/main/tests/slash_aliases.rs 8
+crates/main/tests/steer_drawn.rs 13
+crates/main/tests/stream_closed_notice.rs 15
+crates/main/tests/swapped_panels_look.rs 50
+crates/main/tests/terminal.rs 25
+crates/main/tests/tui_context_after_cd.rs 0
+crates/main/tests/tui_extensions.rs 8
+crates/main/tests/tui_key_whole_screen.rs 8
+crates/main/tests/tui_timing_tests.rs 2
+crates/main/tests/wheel_scroll.rs 11
+crates/main/tests/working_line_look.rs 69
+crates/main/tests/workspace_picker.rs 1
 EOF
     echo "== kinds ratchet"
     cargo xtask kinds-ratchet --max 238 --support-max 36

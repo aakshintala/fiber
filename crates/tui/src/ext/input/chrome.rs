@@ -479,6 +479,7 @@ impl SessionCard<'_> {
             context.window.hash(&mut key);
             context.trigger_at.hash(&mut key);
         }
+        self.cache_expires.hash(&mut key);
         self.spend.is_some().hash(&mut key);
         if let Some(spend) = &self.spend {
             hash_spend(spend, &mut key);

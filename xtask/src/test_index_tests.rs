@@ -159,7 +159,7 @@ fn compiler_index_covers_the_reported_layouts() {
             path: "crates/loop/tests/support/mod.rs",
             source: "pub fn shared_setup() {}\n",
             changed_line: 0,
-            changed_expected: None,
+            changed_expected: Some(vec![]),
             extra_sources: vec![],
             suites: vec![
                 Suite {
@@ -257,7 +257,7 @@ fn compiler_index_covers_the_reported_layouts() {
             path: "crates/log/tests/support/repo_reader.rs",
             source: "pub fn read_repo_file() { let _ = std::fs::read(\"docs/testing.md\"); }\n",
             changed_line: 0,
-            changed_expected: None,
+            changed_expected: Some(vec![]),
             extra_sources: vec![],
             suites: vec![Suite {
                 key: "reader",

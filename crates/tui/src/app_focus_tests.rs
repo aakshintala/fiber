@@ -336,7 +336,10 @@ fn stepping_down_past_the_bottom_scrolls_the_item_below_onto_the_last_row() {
 
 #[test]
 fn an_item_off_screen_below_wins_over_the_stop_under_the_conversation() {
-    let mut app = groups(12, 60, 10);
+    // Twelve groups on a twelve-row screen: the five-row card leaves
+    // the same two conversation rows the old three-row queue left on
+    // ten rows, so the walk still sheds items below.
+    let mut app = groups(12, 60, 12);
     app.on_line(steering_queue(&[("steer me", Some("c_1"))]));
     frame(&mut app);
     key(&mut app, Key::BackTab);
