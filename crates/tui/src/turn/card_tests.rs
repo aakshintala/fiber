@@ -2244,6 +2244,7 @@ fn the_card_input_holds_every_entry_variant() {
     assert_eq!(card.started, 0);
     assert!(matches!(card.state, crate::ext::TurnCardState::Running));
     assert!(!card.flat);
+    let mut groups: Vec<(usize, Vec<String>, Vec<String>)> = Vec::new();
     let kinds: Vec<&str> = card
         .entries
         .iter()
@@ -2260,21 +2261,22 @@ fn the_card_input_holds_every_entry_variant() {
             }
             TurnEntry::Group(group) => {
                 // (`docs/tui.md`, "The slots", `turn_card`: a group entry carries the ledger's sections.)
-                // The thought folds at step zero, the call after the
-                // step line, so they land in different sections.
-                assert!(group.sections.len() > 1);
-                let thoughts: Vec<&&str> = group
+                let thoughts: Vec<String> = group
                     .sections
                     .iter()
-                    .flat_map(|section| section.thoughts.iter().map(|thought| &thought.text))
+                    .flat_map(|section| {
+                        section
+                            .thoughts
+                            .iter()
+                            .map(|thought| thought.text.to_owned())
+                    })
                     .collect();
-                assert_eq!(thoughts, [&"Plan."]);
-                let calls: Vec<&&str> = group
+                let calls: Vec<String> = group
                     .sections
                     .iter()
-                    .flat_map(|section| section.calls.iter().map(|call| &call.name))
+                    .flat_map(|section| section.calls.iter().map(|call| call.name.to_owned()))
                     .collect();
-                assert_eq!(calls, [&"read", &"ask_user", &"ask_user"]);
+                groups.push((group.sections.len(), thoughts, calls));
                 assert!(matches!(
                     group.state,
                     crate::ext::TurnGroupState::Running | crate::ext::TurnGroupState::Finished
@@ -2320,4 +2322,15 @@ fn the_card_input_holds_every_entry_variant() {
     ] {
         assert!(kinds.contains(&expected), "{kinds:?} misses {expected}");
     }
+    // (`docs/tui.md`, "Tool groups and the ledger": the "you answered"
+    // rule ends the group above it. The thought folds at step zero and the
+    // read after the step line, so the first group spans sections; the
+    // answered ask stays in it, and the declined ask starts a new group
+    // below the rule. No call left the card.)
+    assert_eq!(groups.len(), 2, "{groups:?}");
+    assert!(groups[0].0 > 1, "{groups:?}");
+    assert_eq!(groups[0].1, ["Plan."], "{groups:?}");
+    assert_eq!(groups[0].2, ["read", "ask_user"], "{groups:?}");
+    assert!(groups[1].1.is_empty(), "{groups:?}");
+    assert_eq!(groups[1].2, ["ask_user"], "{groups:?}");
 }

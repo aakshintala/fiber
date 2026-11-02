@@ -61,7 +61,7 @@ fn up_selects_the_newest_then_older_and_stops_at_the_oldest() {
     // At the oldest, Up keeps the row and its edit.
     steering.up(&mut draft);
     assert_eq!(draft.expand(), "one!");
-    assert_eq!(steering.lines(20), ["▸ one", "↳ two", "↳ three"]);
+    assert_eq!(steering.lines(), ["▸ one", "↳ two", "↳ three"]); // docs/tui.md:3048: oldest-first.
 }
 
 #[test]
@@ -90,12 +90,12 @@ fn fibers_own_message_shows_but_cannot_be_selected() {
         &queue(&[("first", Some("c_1")), ("from fiber", None)]),
         &mut draft,
     );
-    assert_eq!(steering.lines(20), ["↳ first", "↳ from fiber"]);
+    assert_eq!(steering.lines(), ["↳ first", "↳ from fiber"]); // docs/tui.md:3048: oldest-first.
     steering.up(&mut draft);
     assert_eq!(draft.expand(), "first");
     assert!(!steering.select(1, &mut draft));
     assert_eq!(draft.expand(), "first");
-    assert_eq!(steering.lines(20), ["▸ first", "↳ from fiber"]);
+    assert_eq!(steering.lines(), ["▸ first", "↳ from fiber"]); // docs/tui.md:3048: oldest-first.
     // Down from the only selectable row clears, skipping Fiber's.
     steering.down(&mut draft);
     assert!(!steering.is_selected());
@@ -115,12 +115,12 @@ fn a_row_leaving_the_queue_clears_the_selection_and_restores() {
         &mut draft,
     );
     assert!(steering.is_selected());
-    assert_eq!(steering.lines(20), ["▸ three", "↳ one"]);
+    assert_eq!(steering.lines(), ["▸ three", "↳ one"]); // docs/tui.md:3048: oldest-first.
     steering.fold(&queue(&[("one", Some("c_1"))]), &mut draft);
     assert!(!steering.is_selected());
     assert_eq!(draft.expand(), "mine");
     steering.fold(&queue(&[]), &mut draft);
-    assert!(steering.lines(20).is_empty());
+    assert!(steering.lines().is_empty()); // docs/tui.md:3050: empty queue draws nothing.
 }
 
 #[test]
@@ -164,17 +164,16 @@ fn clear_restores_only_with_a_selection() {
 }
 
 #[test]
-fn rows_are_cut_to_the_width_on_one_line() {
+fn rows_keep_the_full_text_on_one_line() {
     let mut draft = Draft::default();
     let mut steering = Steering::default();
     steering.fold(
         &queue(&[("a long message\nover lines", Some("c_1"))]),
         &mut draft,
     );
-    // The indent, the mark and the row's `✕` are reserved: at width 10
-    // three cells of text fit.
-    assert_eq!(steering.lines(10), ["↳ a l"]);
-    assert_eq!(steering.lines(40), ["↳ a long message over lines"]);
+    // The view wraps the row; the model keeps its full text flattened
+    // to one line whatever the width.
+    assert_eq!(steering.lines(), ["↳ a long message over lines"]); // docs/tui.md:3048: oldest-first.
 }
 
 #[test]
@@ -182,7 +181,7 @@ fn rows_carry_the_mark_selection_and_droppable() {
     let mut draft = typed("mine");
     let mut steering = three(&mut draft);
     assert_eq!(
-        steering.rows(80),
+        steering.rows(),
         [
             LaidRow {
                 mark: '↳',
@@ -205,7 +204,7 @@ fn rows_carry_the_mark_selection_and_droppable() {
         ]
     );
     steering.up(&mut draft);
-    let rows = steering.rows(80);
+    let rows = steering.rows();
     assert_eq!(
         rows.iter().map(|row| row.mark).collect::<Vec<_>>(),
         ['↳', '↳', '▸']
@@ -217,7 +216,7 @@ fn rows_carry_the_mark_selection_and_droppable() {
 }
 
 #[test]
-fn rows_reserve_the_indent_mark_and_cross() {
+fn rows_keep_the_full_text_whatever_the_width() {
     let mut draft = Draft::default();
     let mut steering = Steering::default();
     // One droppable row, one of Fiber's own: the text is 24 cells.
@@ -228,15 +227,11 @@ fn rows_reserve_the_indent_mark_and_cross() {
         ]),
         &mut draft,
     );
-    // A droppable row keeps 2 for the indent, 2 for the mark and 3 for
-    // its `✕`: at 32 the text fits whole, at 31 one cell is cut.
-    assert_eq!(steering.rows(32)[0].text, "a long message over lines");
-    assert_eq!(steering.rows(31)[0].text, "a long message over line");
-    // Fiber's own row keeps no `✕`: at 29 its text fits whole, at 28
-    // one cell is cut.
-    assert_eq!(steering.rows(29)[1].text, "a long message over lines");
-    assert_eq!(steering.rows(28)[1].text, "a long message over line");
-    assert!(!steering.rows(80)[1].droppable);
+    // No cutting at any width: the view wraps the rows and draws the
+    // `✕` itself.
+    assert_eq!(steering.rows()[0].text, "a long message over lines");
+    assert_eq!(steering.rows()[1].text, "a long message over lines");
+    assert!(!steering.rows()[1].droppable);
 }
 
 #[test]
@@ -249,7 +244,7 @@ fn a_row_with_an_image_is_droppable_but_never_selected() {
     // its `✕` but no selection mark.
     assert_eq!(
         steering
-            .rows(80)
+            .rows()
             .iter()
             .map(|row| (row.mark, row.selected, row.droppable))
             .collect::<Vec<_>>(),
@@ -305,7 +300,7 @@ fn a_click_does_not_select_a_row_with_an_image() {
     // Every row draws its `✕`: whether a `steer` sent it.
     assert_eq!(
         steering
-            .rows(80)
+            .rows()
             .iter()
             .map(|row| row.droppable)
             .collect::<Vec<_>>(),
