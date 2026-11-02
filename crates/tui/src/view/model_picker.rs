@@ -777,8 +777,13 @@ fn footerless_fit(view: &PickerView, height: u16) -> usize {
     usize::from(height.saturating_sub(CHROME.saturating_sub(2))).saturating_sub(reserved_rows(view))
 }
 
-/// Whether the short picker must give up the footer to keep a model and
-/// its provider heading visible.
+/// The rows the picker can use after yielding its filter and buttons too.
+fn footerless_fit_without_controls(view: &PickerView, height: u16) -> usize {
+    footerless_fit(view, height).saturating_add(2)
+}
+
+/// Whether the short picker must give up the footer, and if needed its
+/// controls, to keep a model and its provider heading visible.
 fn short_model_fit(view: &PickerView, height: u16) -> Option<usize> {
     let fit = model_fit(view, height);
     let items = items(view);
@@ -804,7 +809,13 @@ fn short_model_fit(view: &PickerView, height: u16) -> Option<usize> {
     let visible = fit.max(usize::from(view.focused.is_some()));
     let top = keep_focus_visible_top(view, height);
     let end = top.saturating_add(visible);
-    (fit < 2 || heading < top || model < top || model >= end).then(|| footerless_fit(view, height))
+    let footerless = footerless_fit(view, height);
+    let compact = if footerless < 2 {
+        footerless_fit_without_controls(view, height)
+    } else {
+        footerless
+    };
+    (fit < 2 || heading < top || model < top || model >= end).then_some(compact)
 }
 
 /// The minimum list window, with the chosen model's provider heading first.
@@ -894,9 +905,9 @@ pub(crate) fn picker_wheel_window(
 ) -> (usize, Option<usize>) {
     let display = display_rows(view, false);
     // When fewer than two body rows fit, a short draw yields the footer
-    // and gap to keep a model with its heading. Wheel against that expanded
-    // window or the step can land on a nonfocusable detail row and leave
-    // the focused model pinned.
+    // and, if needed, its controls to keep a model with its heading. Wheel
+    // against that expanded window or the step can land on a nonfocusable
+    // detail row and leave the focused model pinned.
     let fit = model_fit(view, height);
     let fit = if fit < 2 {
         short_model_fit(view, height).unwrap_or(fit)
@@ -938,7 +949,7 @@ pub(crate) fn picker_wheel_window(
 fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     let priced = overlay::inner(overlay::width(PREFER, PREFER, width)) >= PRICE_MIN_INNER;
     let short_fit = short_model_fit(view, height);
-    let controls = short_fit != Some(0);
+    let controls = short_fit.is_none_or(|_| footerless_fit(view, height) >= 2);
     let list = if let Some(fit) = short_fit {
         let mut list = compact_model_rows(view, priced, fit).unwrap_or_default();
         if controls {

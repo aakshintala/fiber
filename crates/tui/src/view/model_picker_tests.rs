@@ -8,8 +8,8 @@ use ratatui::style::{Modifier, Style};
 use std::path::PathBuf;
 
 use super::{
-    body, display_rows, focus_window_top, id_spans, items, keep_focus_visible_top, model_fit,
-    page_step, picker_wheel_window, rows_for, window,
+    body, display_rows, focus_window_top, footerless_fit, id_spans, items, keep_focus_visible_top,
+    model_fit, page_step, picker_wheel_window, rows_for, window,
 };
 use crate::app::{App, Effect};
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry, Price};
@@ -1353,6 +1353,8 @@ fn body_lines(text: &str) -> Vec<String> {
 
 #[test]
 fn a_short_overlay_keeps_the_focused_model_row() {
+    // `docs/tui.md:669-714` specifies the filter/count/provider/model order
+    // and requires the model with its provider heading to outlast the footer.
     // A Choose open and the checklist open, each with the first model
     // focused over `catalogue()`: ten rows hold the filter, the
     // buttons, the heading and the focused row, eleven add its
@@ -1409,6 +1411,8 @@ fn a_short_overlay_keeps_the_focused_model_row() {
 
 #[test]
 fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() {
+    // `docs/tui.md:710-714`: the session model and provider heading stay
+    // visible on open, with the footer yielding first.
     let mut app = attached(80, 8);
     current_model(&mut app, "acme/m1");
     app.on_models(Ok(catalogue()));
@@ -1430,6 +1434,8 @@ fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() 
 
 #[test]
 fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
+    // `docs/tui.md:710-714`: after scrolling, focus stays on a model with
+    // its provider heading in the compact window.
     let mut app = attached(120, 14);
     current_model(&mut app, "acme/m1");
     app.on_models(Ok(catalogue()));
@@ -1475,6 +1481,8 @@ fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
 
 #[test]
 fn a_zero_fit_down_keeps_the_focused_model_with_its_heading_before_the_footer() {
+    // `docs/tui.md:710-714`: the focused model and provider heading stay
+    // visible after Down, with the footer yielding first.
     let mut app = attached(80, 8);
     current_model(&mut app, "acme/m1");
     app.on_models(Ok(catalogue()));
@@ -1497,6 +1505,30 @@ fn a_zero_fit_down_keeps_the_focused_model_with_its_heading_before_the_footer() 
             .is_some_and(|line| line.contains("acme")),
         "the provider heading must precede the focused model: {text}"
     );
+    assert!(!text.contains("Enter choose"), "footer remains: {text}");
+}
+
+#[test]
+fn a_one_footerless_row_yields_controls_for_the_provider_heading() {
+    // `docs/tui.md:710-714`: when the ordinary list and footer cannot hold
+    // the heading and session model, both stay visible in the compact view.
+    let mut app = attached(80, 7);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(footerless_fit(&view, 7), 1);
+
+    let text = picker_screen(&view, 80, 7);
+    let (model_y, model) = find_row(&text, "m1");
+    assert!(model.contains("● current"), "{model}");
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the current model: {text}"
+    );
+    assert!(!text.contains("Type to search"), "controls remain: {text}");
     assert!(!text.contains("Enter choose"), "footer remains: {text}");
 }
 
