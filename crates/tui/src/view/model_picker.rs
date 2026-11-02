@@ -815,7 +815,7 @@ fn short_model_fit(view: &PickerView, height: u16) -> Option<usize> {
     } else {
         footerless
     };
-    (fit < 2 || heading < top || model < top || model >= end).then_some(compact)
+    (fit < 2 || heading < top || model >= end).then_some(compact)
 }
 
 /// The minimum list window, with the chosen model's provider heading first.
