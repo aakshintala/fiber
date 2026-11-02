@@ -25,7 +25,7 @@ use fakes::{Deadline, ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
     HELLO_KINDS, KillGroup, Run, Setup, Socket, hello, is_status, run_to_exit, until, until_close,
-    wait_for_log_line, write_json,
+    write_json,
 };
 
 /// Installs the Lua extension `test-ext` with hooks on every reachable
@@ -752,18 +752,6 @@ fn debug_ask_records_a_hook_http_call_as_extension() {
         "the hook fetch joins the provider fetches and the model call"
     );
     let id = run.session_id().to_owned();
-    // The request count only proves the hook fetch started: its record
-    // lands when the fetch ends, so the test waits for the record.
-    wait_for_log_line(
-        &setup.home().join("logs").join(format!("ask-{id}.log")),
-        setup.deadline,
-        "the hook http_request record in the ask log",
-        |text| {
-            support::complete_lines(text).into_iter().any(|line| {
-                line["code"] == "http_request" && line["data"]["purpose"] == "extension"
-            })
-        },
-    );
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let hooks: Vec<&Value> = lines
         .iter()

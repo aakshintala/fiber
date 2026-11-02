@@ -1626,9 +1626,20 @@ fn skills_answer(client: &Socket) -> (Vec<Value>, Value) {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(client, r#"{"id":"c_skills","command":"skills"}"#);
-    let lines = until_session(client, "the skills answer", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_skills"
-    });
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the skills answer",
+        "c_skills",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
     let result = lines.last().unwrap()["payload"]["result"].clone();
     (lines, result)
 }
@@ -1641,9 +1652,20 @@ fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until_session(client, "the commands answer", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
-    });
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the commands answer",
+        "c_cmds",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
     let result = lines.last().unwrap()["payload"]["result"].clone();
     (lines, result)
 }
@@ -2780,22 +2802,12 @@ fn close_without_now_waits_for_the_job_to_finish() {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    // The acceptance only proves the close was admitted: the test waits
-    // past it for the notice turn's completion, matched by its id.
-    let closed = wait_for_effect_after_accept(
-        "the notice turn_completed",
-        "c_close",
-        |what, got| client.next(what, got),
-        |line| line["kind"] == "turn_completed",
-    );
-    let accepted = closed
-        .iter()
-        .find(|line| {
-            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close"
-        })
-        .expect("the close was admitted: {closed:?}");
+    let accepted = answer(&client, "c_close");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
     // The ending-notice turn completes, and the session waits for the job.
+    let _notice = until_session(&client, "the notice turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
     assert!(
         running.child.try_wait().unwrap().is_none(),
         "the session waits for the job"
@@ -2905,21 +2917,11 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    // The acceptance only proves the close was admitted: the test waits
-    // past it for the notice turn's completion, matched by its id.
-    let closed = wait_for_effect_after_accept(
-        "the notice turn_completed",
-        "c_close",
-        |what, got| client.next(what, got),
-        |line| line["kind"] == "turn_completed",
-    );
-    let accepted = closed
-        .iter()
-        .find(|line| {
-            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close"
-        })
-        .expect("the close was admitted: {closed:?}");
+    let accepted = answer(&client, "c_close");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    let _notice = until_session(&client, "the notice turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
     send_close_now(&client);
     let _tail = until_session_close(&client);
     drop(client);

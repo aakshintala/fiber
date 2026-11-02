@@ -1913,11 +1913,13 @@ fn image_named(text: &str, wanted: &str) -> Option<(String, u64, u64)> {
 fn image_for_read(setup: &Setup, events: &Path, reads: usize, wanted: &str) -> (String, u64, u64) {
     let events = events.to_owned();
     let wanted_line = wanted.to_owned();
-    // The reads' log lines land after their tool calls complete: the log
-    // exists (the session already ran), so the test waits for the lines
-    // with the native file watch instead of polling.
-    support::wait_for_log_line(
-        &events,
+    // The reads' log lines land after their tool calls complete, and the
+    // log exists (the session already ran): the watch registers before the
+    // wait, and the reread after registration never loses a line, so no
+    // polling loop can miss the lines either way.
+    let watch = support::watch_log(&events, setup.deadline, "all reads to log their image");
+    support::wait_for_watched_line(
+        &watch,
         setup.deadline,
         "all reads to log their image",
         |text| logged_images(text).len() >= reads && image_named(text, &wanted_line).is_some(),

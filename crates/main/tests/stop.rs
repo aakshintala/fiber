@@ -78,17 +78,15 @@ fn stop_stops_the_session_and_the_hub_and_the_session_resumes() {
         "the stopped hub exits as SIGTERM does"
     );
     // The stop's print proves its exchange closed (`docs/invocation.md`,
-    // "Commands and flags"): each listener going quiet lands after, so
-    // each socket gets the wait that proves it is closed.
-    wait_for_socket_closed(
-        setup.deadline,
-        &setup.hub_socket(),
-        "the hub socket to close",
+    // "Commands and flags"), so the sockets are asserted at once: the
+    // print IS the proof.
+    assert!(
+        UnixStream::connect(setup.hub_socket()).is_err(),
+        "the hub socket is gone"
     );
-    wait_for_socket_closed(
-        setup.deadline,
-        &setup.session_socket(&session),
-        "the session socket to close",
+    assert!(
+        UnixStream::connect(setup.session_socket(&session)).is_err(),
+        "the session socket is gone"
     );
 
     let prefix = &session[..8];
@@ -169,12 +167,12 @@ fn stop_with_a_dead_hub_starts_one_to_stop_the_orphaned_session() {
         String::from_utf8_lossy(&output.stdout),
         "Stopped 1 sessions and the hub.\n"
     );
-    // The stop's print proves its exchange closed: the session unlinks its
-    // path at its own exit (`docs/state.md`, "Sockets"), after.
-    wait_for_socket_closed(
-        setup.deadline,
-        &setup.session_socket(&session),
-        "the session socket to close",
+    // The stop's print proves its exchange closed (`docs/invocation.md`,
+    // "Commands and flags"), so the socket is asserted at once: the print
+    // IS the proof.
+    assert!(
+        UnixStream::connect(setup.session_socket(&session)).is_err(),
+        "the session socket is gone"
     );
     guard.wait_gone();
 }

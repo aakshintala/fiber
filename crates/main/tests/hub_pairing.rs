@@ -120,6 +120,14 @@ fn hub_token_revoke_deletes_the_record_and_a_client_sees_device_changed() {
     record(&setup);
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
+    // The watch registers before the revoke runs: hub.log exists (the hub
+    // is up), and the reread after registration covers a line landing
+    // before the wait.
+    let revoked_watch = watch_log(
+        &hub_log_path(&setup),
+        setup.deadline,
+        "the device_revoked line in hub.log",
+    );
     let output = run(&setup, &["hub", "token", "revoke", "phone"]);
     assert_eq!(
         output.status.code(),
@@ -136,14 +144,14 @@ fn hub_token_revoke_deletes_the_record_and_a_client_sees_device_changed() {
     );
     // The announcement only proves the client heard the revoke: the record
     // delete and the log line land after, so each gets the wait that
-    // proves it instead of a poll.
+    // proves it instead of a poll. The watch registered before the revoke.
     wait_for_path_gone(
         setup.deadline,
         &setup.home().join("hub/devices/phone"),
         "the revoked device record to go",
     );
-    wait_for_log_line(
-        &hub_log_path(&setup),
+    wait_for_watched_line(
+        &revoked_watch,
         setup.deadline,
         "the device_revoked line in hub.log",
         |text| text.contains("device_revoked"),

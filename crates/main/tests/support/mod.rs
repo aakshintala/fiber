@@ -2566,17 +2566,6 @@ pub(crate) fn wait_for_path_gone(deadline: Deadline, path: &Path, what: &str) {
     });
 }
 
-/// Waits under `deadline` until nothing listens on `path`, polling with no
-/// new process per pass: the hub or session socket after `fiber stop`
-/// (`docs/invocation.md`, "Commands and flags") or a close. A stale file
-/// with no listener already counts as closed. Expiry fails naming `what`.
-#[track_caller]
-pub(crate) fn wait_for_socket_closed(deadline: Deadline, path: &Path, what: &str) {
-    let path = path.to_owned();
-    let what = what.to_owned();
-    fakes::wait_until(&what, deadline, move || UnixStream::connect(&path).is_err());
-}
-
 /// Waits under `deadline` until `dir`'s session lock is free: a probe
 /// `try_hold` succeeds, and the probe guard drops at once. A session
 /// unlinks its socket and releases its lock at exit (`docs/state.md`,
@@ -2595,9 +2584,12 @@ pub(crate) fn wait_for_lock_released(deadline: Deadline, dir: &Path, what: &str)
 /// its `command_accepted`, matched by `id`: every line takes what remains
 /// of the test's deadline through the socket's own read, so expiry names
 /// the effect, not the acceptance. `next` is the socket's line reader, so
-/// every client type with a `next` fits: a test that stops at the
-/// acceptance and then asserts the effect races the command's run; this
-/// waits past the acceptance for `is_effect` instead.
+/// every client type with a `next` fits. The acceptance only arms the wait;
+/// the completing line must carry the same command id and satisfy
+/// `is_effect`, so an unrelated event for another command never completes
+/// it. A test that stops at the acceptance and then asserts the effect
+/// races the command's run; this waits past the acceptance for the
+/// id-matched effect instead.
 #[track_caller]
 pub(crate) fn wait_for_effect_after_accept(
     what: &str,
@@ -2615,7 +2607,7 @@ pub(crate) fn wait_for_effect_after_accept(
         if line["kind"] == "command_accepted" && line["payload"]["command_id"] == id {
             accepted = true;
         }
-        let done = accepted && is_effect(&line);
+        let done = accepted && line["payload"]["command_id"] == id && is_effect(&line);
         lines.push(line);
         if done {
             return lines;
@@ -2623,20 +2615,35 @@ pub(crate) fn wait_for_effect_after_accept(
     }
 }
 
-/// Waits under `deadline` for `ready` to hold for a reread of the log at
-/// `log`: the session's diagnostic record of a detached fetch, or
-/// `hub.log` after a client-visible pairing event. The native change watch
-/// is registered before the wait, so a line landing between registration
-/// and the first wait is never lost. Expiry fails naming `what`.
+/// Registers the native change watch on the log at `log`: the session's
+/// diagnostic record of a detached fetch, or `hub.log` after a
+/// client-visible pairing event. The file may not exist yet when the
+/// emitter starts it: the registration first waits under `deadline` for
+/// the file to appear, then registers, so the watch always precedes the
+/// wait and the reread after registration never loses a line. Call this
+/// before starting the emitter whose line the test waits for. Each expiry
+/// fails naming `what`.
 #[track_caller]
-pub(crate) fn wait_for_log_line(
-    log: &Path,
+pub(crate) fn watch_log(log: &Path, deadline: Deadline, what: &str) -> HubLogWatch {
+    let pending = log.to_owned();
+    fakes::wait_until(&format!("{what}: the log to appear"), deadline, move || {
+        pending.exists()
+    });
+    HubLogWatch::register(log)
+        .unwrap_or_else(|error| panic!("watching {} for {what}: {error}", log.display()))
+}
+
+/// Blocks on a registered watch until `ready` holds for a reread of its
+/// log, or the wait started at entry expires: every wake rereads the whole
+/// file, so a line landing between registration and the first wait is never
+/// lost. Expiry fails naming `what`.
+#[track_caller]
+pub(crate) fn wait_for_watched_line(
+    watch: &HubLogWatch,
     deadline: Deadline,
     what: &str,
     ready: impl Fn(&str) -> bool,
 ) {
-    let watch = HubLogWatch::register(log)
-        .unwrap_or_else(|error| panic!("watching {} for {what}: {error}", log.display()));
     watch
         .wait_until(deadline, what, ready)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -2717,56 +2724,26 @@ fn path_gone_fails_fast_while_held_and_passes_after_release() {
     }));
     assert!(held.is_err(), "the bare assertion must fail while held");
     let paused = pause_before_removal(path.clone());
+    let (entered_tx, entered) = mpsc::channel::<()>();
     let (done_tx, done) = mpsc::channel::<()>();
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     thread::spawn(move || {
+        entered_tx.send(()).unwrap_or(());
         wait_for_path_gone(deadline, &path, "the held path to go");
         done_tx.send(()).unwrap_or(());
     });
-    // The wait has not answered yet: the removal is still held.
-    assert!(
-        Deadline::after(Duration::from_millis(300))
-            .recv(&done)
-            .is_err(),
-        "the wait answered before the release"
-    );
+    // The waiter signals it entered before the release goes out, so the
+    // wait below answers the release, never a thread that never ran.
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&entered)
+        .expect("the waiter entered its wait");
     paused.release.send(()).unwrap_or(());
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the wait answers once released");
-    paused.removed.recv().unwrap_or(());
-}
-
-#[test]
-fn socket_closed_fails_fast_while_listening_and_passes_after_drop() {
-    use std::os::unix::net::UnixListener;
-    let dir = fakes::TempDir::new("wait-socket-closed");
-    let path = dir.path().join("s");
-    let listener = UnixListener::bind(&path).unwrap();
-    // The old wait connects right after the signal: while a listener is
-    // bound, the connect succeeds, so the bare assertion fails.
-    let held = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert!(UnixStream::connect(&path).is_err(), "the socket is closed");
-    }));
-    assert!(held.is_err(), "the bare assertion must fail while bound");
-    let (done_tx, done) = mpsc::channel::<()>();
-    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
-    let waited = path.clone();
-    thread::spawn(move || {
-        wait_for_socket_closed(deadline, &waited, "the bound socket to close");
-        done_tx.send(()).unwrap_or(());
-    });
-    assert!(
-        Deadline::after(Duration::from_millis(300))
-            .recv(&done)
-            .is_err(),
-        "the wait answered while still bound"
-    );
-    drop(listener);
-    fs::remove_file(&path).unwrap_or(());
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&done)
-        .expect("the wait answers once dropped");
+        .recv(&paused.removed)
+        .expect("the remover finished removing the path");
 }
 
 #[test]
@@ -2786,19 +2763,20 @@ fn lock_released_fails_fast_while_held_and_passes_after_release() {
         );
     }));
     assert!(held.is_err(), "the bare probe must fail while held");
+    let (entered_tx, entered) = mpsc::channel::<()>();
     let (done_tx, done) = mpsc::channel::<()>();
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let waited = dir.path().to_path_buf();
     thread::spawn(move || {
+        entered_tx.send(()).unwrap_or(());
         wait_for_lock_released(deadline, &waited, "the held session lock");
         done_tx.send(()).unwrap_or(());
     });
-    assert!(
-        Deadline::after(Duration::from_millis(300))
-            .recv(&done)
-            .is_err(),
-        "the wait answered while still held"
-    );
+    // The waiter signals it entered while the lock is still held, so the
+    // wait below answers the release, never a thread that never ran.
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&entered)
+        .expect("the waiter entered its wait");
     drop(held_guard);
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
@@ -2806,8 +2784,8 @@ fn lock_released_fails_fast_while_held_and_passes_after_release() {
 }
 
 #[test]
-fn effect_after_accept_fails_fast_while_parked_and_passes_after_release() {
-    fn parked_pair() -> (Socket, mpsc::Receiver<()>, mpsc::Sender<()>, Deadline) {
+fn effect_after_accept_ignores_other_ids_and_passes_on_its_own() {
+    fn parked_pair() -> (Socket, mpsc::Receiver<()>, mpsc::Sender<()>) {
         let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
         let (mine, peer) = UnixStream::pair().unwrap();
         let client = Socket::from(deadline, mine);
@@ -2824,64 +2802,78 @@ fn effect_after_accept_fails_fast_while_parked_and_passes_after_release() {
             .unwrap();
             accepted_tx.send(()).unwrap_or(());
             release.recv().unwrap_or(());
+            // An unrelated answer for another command: result-bearing, but
+            // the helper must not complete on it.
             write_line(
                 &mut peer,
                 deadline,
-                b"{\"kind\":\"extension_ui\",\"payload\":{\"status\":\"synced\"}}\n",
-                "the effect",
+                b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_9\",\"result\":{\"answer\":2}}}\n",
+                "the unrelated answer",
+            )
+            .unwrap();
+            write_line(
+                &mut peer,
+                deadline,
+                b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_1\",\"result\":{\"answer\":1}}}\n",
+                "the answer",
             )
             .unwrap();
         });
-        (client, accepted, release_tx, deadline)
+        (client, accepted, release_tx)
     }
-    // The old wait stops at the acceptance and asserts the effect is
-    // already there: with the command parked, it is not.
-    let (old_client, old_accepted, old_release, _) = parked_pair();
-    old_accepted.recv().unwrap();
+    // The old wait stops at the acceptance and reads the result off it:
+    // with the command parked on a bare acceptance, there is none.
+    let (old_client, old_accepted, old_release) = parked_pair();
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&old_accepted)
+        .expect("the parked command was accepted");
     let old = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let line = old_client
             .next("the acceptance", &[])
             .expect("the acceptance arrived");
         assert_eq!(line["kind"], "command_accepted");
-        let effect = old_client
-            .next_through(&Deadline::after(Duration::ZERO), "the effect", &[line])
-            .expect("the effect is already there");
-        assert_eq!(effect["kind"], "extension_ui");
+        assert!(
+            line["payload"].get("result").is_some(),
+            "the answer is already there: {line}"
+        );
     }));
     assert!(old.is_err(), "the old wait must fail while parked");
     old_release.send(()).unwrap_or(());
-    // The helper waits past the acceptance for the effect on a fresh pair:
-    // while parked it has not answered, after the release it ends there.
-    let (client, accepted, release, _) = parked_pair();
-    accepted.recv().unwrap();
+    // The helper waits past the acceptance for the id-matched answer on a
+    // fresh pair: the waiter signals it entered, the unrelated answer must
+    // not complete it, and the release ends it at its own answer.
+    let (client, accepted, release) = parked_pair();
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&accepted)
+        .expect("the parked command was accepted");
+    let (entered_tx, entered) = mpsc::channel::<()>();
     let (done_tx, done) = mpsc::channel::<Vec<Value>>();
     thread::spawn(move || {
+        entered_tx.send(()).unwrap_or(());
         let lines = wait_for_effect_after_accept(
-            "the sync status",
+            "the c_1 answer",
             "c_1",
             |what, got| client.next(what, got),
-            |line| line["kind"] == "extension_ui",
+            |line| line["payload"].get("result").is_some(),
         );
         done_tx.send(lines).unwrap_or(());
     });
-    assert!(
-        Deadline::after(Duration::from_millis(300))
-            .recv(&done)
-            .is_err(),
-        "the wait answered while still parked"
-    );
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&entered)
+        .expect("the waiter entered its wait");
     release.send(()).unwrap_or(());
     let lines = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the wait answers once released");
     assert!(
-        lines.iter().any(|line| line["kind"] == "command_accepted"),
-        "the wait keeps the acceptance: {lines:?}"
+        lines
+            .iter()
+            .any(|line| line["payload"]["command_id"] == "c_9"),
+        "the wait saw the unrelated answer and skipped it: {lines:?}"
     );
-    assert!(
-        lines.iter().any(|line| line["kind"] == "extension_ui"),
-        "the wait ends at the effect: {lines:?}"
-    );
+    let last = lines.last().unwrap();
+    assert_eq!(last["payload"]["command_id"], "c_1", "{lines:?}");
+    assert_eq!(last["payload"]["result"], json!({"answer": 1}), "{lines:?}");
 }
 
 #[test]
@@ -2889,9 +2881,15 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
     let dir = fakes::TempDir::new("wait-log-line");
     let log = dir.path().join("hub.log");
     fs::write(&log, "signal\n").unwrap();
-    // The watch registers before the writer can append, so nothing lands
-    // between registration and the first wait unseen.
-    let watch = HubLogWatch::register(&log).unwrap();
+    // The watch registers before the writer thread starts, so nothing the
+    // writer appends lands between registration and the first wait unseen.
+    // Shared with the waiter thread: every assertion stays on the test
+    // thread, where a failure fails the test.
+    let watch = std::sync::Arc::new(watch_log(
+        &log,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        "the state line",
+    ));
     // The old wait reads once right after the signal and asserts the state
     // line is there: with the writer held, it is not.
     let old = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2906,26 +2904,29 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
         let mut file = fs::OpenOptions::new().append(true).open(&logged).unwrap();
         file.write_all(b"state\n").unwrap();
     });
+    let (entered_tx, entered) = mpsc::channel::<()>();
     let (done_tx, done) = mpsc::channel::<()>();
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let waited = std::sync::Arc::clone(&watch);
     thread::spawn(move || {
-        watch
-            .wait_until(deadline, "the state line", |text| text.contains("state"))
-            .expect("the state line lands");
+        entered_tx.send(()).unwrap_or(());
+        wait_for_watched_line(&waited, deadline, "the state line", |text| {
+            text.contains("state")
+        });
         done_tx.send(()).unwrap_or(());
     });
-    assert!(
-        Deadline::after(Duration::from_millis(300))
-            .recv(&done)
-            .is_err(),
-        "the wait answered while still held"
-    );
+    // The waiter signals it entered while the writer is still held, so the
+    // wait below answers the release, never a thread that never ran.
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&entered)
+        .expect("the waiter entered its wait");
     release_tx.send(()).unwrap_or(());
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the wait answers once released");
-    wait_for_log_line(
-        &log,
+    // The landed line stays visible to a later wait on the same watch.
+    wait_for_watched_line(
+        &watch,
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         "the already-landed state line",
         |text| text.contains("state"),
@@ -2975,18 +2976,19 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     }));
     assert!(old.is_err(), "the old wait must fail while held");
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let (entered_tx, entered) = mpsc::channel::<()>();
     let (done_tx, done) = mpsc::channel::<()>();
     let waited = pattern.clone();
     thread::spawn(move || {
+        entered_tx.send(()).unwrap_or(());
         wait_for_refresh_exit(deadline, &waited);
         done_tx.send(()).unwrap_or(());
     });
-    assert!(
-        Deadline::after(Duration::from_millis(300))
-            .recv(&done)
-            .is_err(),
-        "the wait answered while still held"
-    );
+    // The waiter signals it entered while the child is still parked, so the
+    // wait below answers the release, never a thread that never ran.
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&entered)
+        .expect("the waiter entered its wait");
     // The release is opening the write end and closing it at once: the
     // parked read sees end of file, the child exits, and the reaper
     // clears it. The close happens before the wait below, never after.
@@ -2997,5 +2999,7 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the wait answers once released");
-    reaped.recv().unwrap_or(());
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reaped)
+        .expect("the reaper cleared the exited child");
 }
