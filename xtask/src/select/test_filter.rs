@@ -1,386 +1,87 @@
-//! Which nextest filter a changed test file selects (`bug-filter`).
+//! Compiler-index filters for changed test files (`bug-filter`).
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
 
-use proc_macro2::{TokenStream, TokenTree};
-
-use super::{Members, owner, string_literal};
+use super::{Members, owner};
 use crate::rules::RustFile;
+use crate::test_index::TestIndex;
 
-/// Whether `rel`, a path relative to its crate, is a test file
-/// (`docs/code-quality.md`, "Size").
+/// Whether `rel`, a path relative to its crate, is a test file for the
+/// source-size and timeout rules.
 pub(crate) fn is_test_file(rel: &str) -> bool {
     let name = rel.rsplit('/').next().unwrap_or(rel);
     name == "tests.rs" || name.ends_with("_tests.rs") || rel.starts_with("tests/")
 }
 
-/// The extra module segment a unit-test file's tests sit in, when that is
-/// not its directory's own module (`docs/code-quality.md`, "Size"):
-/// `foo_tests.rs` holds `foo::tests`, while `tests.rs` and, at the crate
-/// root, `lib_tests.rs` and `main_tests.rs` hold `tests`.
-fn test_module(root: bool, stem: &str) -> Option<&str> {
-    match stem.strip_suffix("_tests") {
-        None => None,
-        Some("lib" | "main") if root => None,
-        Some(module) => Some(module),
-    }
-}
-
-/// A top-level `#[path = "<lit>"] mod <ident>;` declaration: the file the
-/// literal resolves to (relative to the repository, `/` separators), with
-/// the file that declares it and the declared module name.
-pub(super) type DeclarerIdent = (String, String);
-type PathDecl = (String, DeclarerIdent);
-
-/// The `<lit>` of a `path = <lit>` item in an attribute's tokens, if it
-/// holds one. Other attributes, and items without a literal, give nothing.
-fn path_attr(stream: TokenStream) -> Option<String> {
-    let tokens: Vec<TokenTree> = stream.into_iter().collect();
-    for window in tokens.windows(3) {
-        if let [
-            TokenTree::Ident(name),
-            TokenTree::Punct(eq),
-            TokenTree::Literal(lit),
-        ] = window
-            && name == "path"
-            && eq.as_char() == '='
-        {
-            return string_literal(&lit.to_string());
-        }
-    }
-    None
-}
-
-/// The files a plain `mod <ident>;` in the file at `path` names: Rust
-/// resolves it beside the declarer when the declarer is its directory's
-/// own module (`lib.rs`, `main.rs` or `mod.rs`), and in the subdirectory
-/// named for the declarer's stem otherwise. Both the `<ident>.rs` and the
-/// `<ident>/mod.rs` forms resolve.
-fn plain_targets(path: &str, ident: &str) -> [String; 2] {
-    let declarer = Path::new(path);
-    let dir = declarer.parent().unwrap_or(Path::new(""));
-    let base: PathBuf = match declarer.file_name().and_then(|name| name.to_str()) {
-        Some("lib.rs" | "main.rs" | "mod.rs") => dir.to_path_buf(),
-        _ => dir.join(
-            declarer
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or(""),
-        ),
-    };
-    let normalise = |joined: PathBuf| joined.to_string_lossy().replace('\\', "/");
-    [
-        normalise(base.join(format!("{ident}.rs"))),
-        normalise(base.join(ident).join("mod.rs")),
-    ]
-}
-
-/// Every top-level `mod <ident>;` declaration in the Rust file at `path`:
-/// `#[path = "<lit>"]` ones with `<lit>` resolved relative to the
-/// declarer's directory (the same join `compiled_in_mismatches` uses), and
-/// plain ones with each of `plain_targets` that names a file in `exists`.
-/// Attributes may be interleaved with `#[cfg(test)]` and the like; a
-/// declaration inside an inline `mod x { ... }` block is ignored, so brace
-/// groups are never scanned. A file that does not tokenise declares
-/// nothing: its test files keep the conventional filter.
-fn path_decls(path: &str, source: &str, exists: &BTreeSet<String>) -> Vec<PathDecl> {
-    let stream: TokenStream = match source.parse() {
-        Ok(stream) => stream,
-        Err(_) => return Vec::new(),
-    };
-    let dir = Path::new(path).parent().unwrap_or(Path::new(""));
-    let mut tokens = stream.into_iter().peekable();
-    let mut decls = Vec::new();
-    let mut pending: Option<String> = None;
-    // A token the `mod` lookahead consumed but did not use: the loop
-    // reprocesses it next, so `mod mod x;` still sees its second `mod`.
-    let mut pushback: Option<TokenTree> = None;
-    loop {
-        let tree = pushback.take().or_else(|| tokens.next());
-        let Some(tree) = tree else {
-            break;
-        };
-        match tree {
-            TokenTree::Punct(hash) if hash.as_char() == '#' => match tokens.peek() {
-                Some(TokenTree::Group(group))
-                    if group.delimiter() == proc_macro2::Delimiter::Bracket =>
-                {
-                    if let Some(TokenTree::Group(group)) = tokens.next()
-                        && let Some(lit) = path_attr(group.stream())
-                    {
-                        pending = Some(lit);
-                    }
-                }
-                None | Some(_) => {}
-            },
-            TokenTree::Ident(keyword) if keyword == "mod" => match tokens.next() {
-                Some(TokenTree::Ident(ident)) => match tokens.peek() {
-                    Some(TokenTree::Punct(semi)) if semi.as_char() == ';' => {
-                        tokens.next();
-                        if let Some(lit) = pending.take() {
-                            decls.push((
-                                crate::docs::join(dir, &lit)
-                                    .to_string_lossy()
-                                    .replace('\\', "/"),
-                                (path.to_owned(), ident.to_string()),
-                            ));
-                        } else {
-                            let ident = ident.to_string();
-                            for target in plain_targets(path, &ident) {
-                                if exists.contains(&target) {
-                                    decls.push((target, (path.to_owned(), ident.clone())));
-                                }
-                            }
-                        }
-                    }
-                    None | Some(_) => {
-                        pending = None;
-                        pushback = Some(TokenTree::Ident(ident));
-                    }
-                },
-                other => {
-                    pending = None;
-                    pushback = other;
-                }
-            },
-            // Any other item ends the attribute run a pending `#[path]`
-            // belonged to, so a `#[path]` on a non-`mod` item registers
-            // nothing. Any punctuation but `#` and any brace group clear
-            // it: neither can sit between an attribute and its `mod`, while
-            // a paren group is the `(crate)` of `pub(crate) mod`.
-            TokenTree::Punct(_) => pending = None,
-            TokenTree::Group(body) if body.delimiter() == proc_macro2::Delimiter::Brace => {
-                pending = None;
-            }
-            TokenTree::Group(_) | TokenTree::Ident(_) | TokenTree::Literal(_) => {}
-        }
-    }
-    decls
-}
-
-/// The module path a file's location under `src/` gives it: `lib.rs` and
-/// `main.rs` at the root are the crate root, `a/mod.rs` is `a`, `a/b.rs`
-/// is `a::b`. A file under `examples/<name>/` is placed the same way within
-/// that example. `None` when the file sits outside both.
-fn conventional_module(path: &str, members: &Members) -> Option<String> {
-    let name = owner(path, members)?;
-    let member = members.get(name)?;
-    let rel = path.get(member.dir.len() + 1..)?;
-    // An example directory is its own crate root, `main.rs` its root file.
-    let modules = match rel.strip_prefix("examples/") {
-        Some(example) => example.split_once('/')?.1,
-        None => rel.strip_prefix("src/")?,
-    };
-    let parts: Vec<&str> = modules.split('/').collect();
-    match parts.as_slice() {
-        [file] if *file == "lib.rs" || *file == "main.rs" => Some(String::new()),
-        [file] => Some(file.strip_suffix(".rs").unwrap_or(file).to_owned()),
-        [dirs @ .., file] if *file == "mod.rs" => Some(dirs.join("::")),
-        [dirs @ .., file] => {
-            let mut module = dirs.join("::");
-            if !module.is_empty() {
-                module.push_str("::");
-            }
-            module.push_str(file.strip_suffix(".rs").unwrap_or(file));
-            Some(module)
-        }
-        // `split` never yields no parts; the arm is only for the compiler.
-        [] => None,
-    }
-}
-
-/// The module path the file at `path` declares its items in: through the
-/// declaration naming it when exactly one does (resolved recursively, so
-/// a declared file declaring further files chains), else from its
-/// location. `None` on a declaration cycle or outside `src/`.
-fn module_path(
-    path: &str,
-    members: &Members,
-    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
-    stack: &mut Vec<String>,
-) -> Option<String> {
-    if stack.iter().any(|seen| seen == path) {
-        return None;
-    }
-    stack.push(path.to_owned());
-    let result = match by_target.get(path).map(Vec::as_slice) {
-        Some([(declarer, ident)]) => {
-            let (declarer, ident) = (declarer.clone(), ident.clone());
-            module_path(declarer.as_str(), members, by_target, stack).map(|parent| {
-                if parent.is_empty() {
-                    ident
-                } else {
-                    format!("{parent}::{ident}")
-                }
-            })
-        }
-        // No declaration, or two naming one file: the file's location.
-        _ => conventional_module(path, members),
-    };
-    stack.pop();
-    result
-}
-
-/// The test files' `mod` declarations indexed by the file they name,
-/// so the scope of a test file follows its declaring module: `#[path]`
-/// declarations by their literal, and plain ones by the file Rust
-/// resolves them to.
-pub(super) fn index_path_decls(sources: &[RustFile]) -> BTreeMap<String, Vec<DeclarerIdent>> {
-    let exists: BTreeSet<String> = sources.iter().map(|f| f.path.clone()).collect();
-    let mut by_target: BTreeMap<String, Vec<DeclarerIdent>> = BTreeMap::new();
-    for f in sources {
-        for (target, declarer) in path_decls(&f.path, &f.source, &exists) {
-            by_target.entry(target).or_default().push(declarer);
-        }
-    }
-    by_target
-}
-
-/// Where the tests in one test file run: a file directly in `tests/` is
-/// its own binary, a file under `src/` runs in the package's unit tests,
-/// and a file under `examples/<name>/` runs in that example's binary. A
-/// file in a subdirectory of `tests/` is a module those binaries include,
-/// so it has no scope of its own.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Scope {
-    /// A file directly in `tests/`: its binary's file stem.
-    Binary(String),
-    /// A file under `src/`: the package's own tests.
-    Package,
-    /// A file under `examples/<name>/`: that example's directory name.
-    Example(String),
-}
-
-/// The package, scope and test-name prefix of the test file at `path`:
-/// `None` for any other path, including every file in a subdirectory of
-/// `tests/`. The binary arm selects the whole binary, so it carries no
-/// test-name prefix.
-pub(super) fn scope_of(
-    path: &str,
-    members: &Members,
-    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
-) -> Option<(String, Scope, String)> {
-    if !path.ends_with(".rs") {
-        return None;
-    }
-    let name = owner(path, members)?;
-    let member = members.get(name)?;
-    let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
-    if !is_test_file(rel) {
-        return None;
-    }
-    let parts: Vec<&str> = rel.split('/').collect();
-    match parts.as_slice() {
-        // Only a file directly in `tests/` is a binary; a file in a
-        // subdirectory of `tests/` is a module the binaries include,
-        // so it adds no term of its own.
-        // A `[[test]]` target with `test = false` is not part of a plain
-        // nextest run, so its file selects nothing.
-        ["tests", _] if member.unrun_tests.iter().any(|t| t == path) => None,
-        ["tests", binary] => {
-            let binary = binary.strip_suffix(".rs").unwrap_or(binary);
-            Some((
-                name.to_owned(),
-                Scope::Binary(binary.to_owned()),
-                String::new(),
-            ))
-        }
-        ["src", modules @ .., file] => {
-            let prefix = test_prefix(path, modules, file, members, by_target);
-            Some((name.to_owned(), Scope::Package, prefix))
-        }
-        // An example directory is a binary of its own, named
-        // `<package>::example/<name>`.
-        ["examples", example, modules @ .., file] => {
-            let prefix = test_prefix(path, modules, file, members, by_target);
-            Some((
-                name.to_owned(),
-                Scope::Example((*example).to_owned()),
-                prefix,
-            ))
-        }
-        _ => None,
-    }
-}
-
-/// The test-id prefix of the tests in the test file at `path`, whose
-/// directories under its binary's root are `modules` and whose name is
-/// `file`: the module the declaration naming it gives it, else the module
-/// its location gives it. A file nothing declares keeps the conventional
-/// guess.
-pub(super) fn test_prefix(
-    path: &str,
-    modules: &[&str],
-    file: &str,
-    members: &Members,
-    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
-) -> String {
-    let declared = match by_target.get(path).map(Vec::as_slice) {
-        Some([_]) => {
-            let mut stack = Vec::new();
-            module_path(path, members, by_target, &mut stack).map(|module| format!("{module}::"))
-        }
-        _ => None,
-    };
-    declared.unwrap_or_else(|| {
-        let stem = file.strip_suffix(".rs").unwrap_or(file);
-        let module = test_module(modules.is_empty(), stem);
-        modules
-            .iter()
-            .copied()
-            .chain(module)
-            .chain(["tests"])
-            .map(|m| format!("{m}::"))
-            .collect()
-    })
-}
-
 /// The test files among `files` that a plain nextest run never builds:
-/// those of a `[[test]]` target declaring `test = false`. `test_filter`
-/// leaves them out; `bug-filter` names them so the red-commit check can
-/// tell a plan emptied by them from one with no test file at all.
+/// those of a `[[test]]` target declaring `test = false`.
+pub(crate) fn test_files(
+    files: &[String],
+    members: &Members,
+    sources: &[RustFile],
+) -> Result<Vec<String>, String> {
+    let mut test_files = Vec::new();
+    for path in files {
+        let Some(package) = owner(path, members) else {
+            continue;
+        };
+        let Some(member) = members.get(package) else {
+            continue;
+        };
+        let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
+        if member.unrun_tests.iter().any(|unrun| unrun == path) {
+            continue;
+        }
+        if rel.starts_with("tests/") {
+            test_files.push(path.clone());
+        } else if let Some(source) = sources.iter().find(|source| source.path == *path)
+            && super::changed_tests::has_test_functions(&source.source)
+                .map_err(|error| format!("{path}: {error}"))?
+        {
+            test_files.push(path.clone());
+        }
+    }
+    Ok(test_files)
+}
+
 pub(crate) fn unrun_test_files(files: &[String], members: &Members) -> Vec<String> {
     files
         .iter()
-        .filter(|p| {
-            owner(p, members)
+        .filter(|path| {
+            owner(path, members)
                 .and_then(|name| members.get(name))
-                .is_some_and(|member| member.unrun_tests.contains(p))
+                .is_some_and(|member| member.unrun_tests.contains(path))
         })
         .cloned()
         .collect()
 }
 
-/// The nextest filter selecting every test in the test files among
-/// `files`, and the packages that own them. `sources` is every Rust file
-/// in the workspace: a `src/` test file a declaration names maps to the
-/// module path that declares it.
+/// The nextest filter selecting the changed test files, using their
+/// compiler-reported binaries and test names.
 pub(crate) fn test_filter(
     files: &[String],
     members: &Members,
     sources: &[RustFile],
-) -> (String, Vec<String>) {
-    let by_target = index_path_decls(sources);
-    let mut terms = Vec::new();
+    index: &TestIndex,
+) -> Result<(String, Vec<String>), String> {
+    let mut tests = Vec::new();
     let mut packages = BTreeSet::new();
-    for path in files.iter().filter(|p| p.ends_with(".rs")) {
-        let Some((name, scope, prefix)) = scope_of(path, members, &by_target) else {
+    for path in test_files(files, members, sources)? {
+        if index.binaries_for(&path).is_empty() {
+            // The runner did not compile this source file, as with a
+            // platform-gated target. It contributes no tests on this runner.
             continue;
-        };
-        let term = match scope {
-            Scope::Binary(binary) => format!("binary_id({name}::{binary})"),
-            Scope::Package => format!("(package({name}) & test(/^{prefix}/))"),
-            Scope::Example(example) => {
-                format!("(binary_id({name}::example/{example}) & test(/^{prefix}/))")
+        }
+        let selected = super::tests_in_files(std::slice::from_ref(&path), members, sources, index)?;
+        if selected.is_empty() {
+            return Err(format!("{path}: compiler index maps this file to no tests"));
+        }
+        for test in selected {
+            packages.insert(test.package.clone());
+            if !tests.contains(&test) {
+                tests.push(test);
             }
-        };
-        terms.push(term);
-        packages.insert(name);
+        }
     }
-    (terms.join(" | "), packages.into_iter().collect())
+    Ok((super::filter(&tests), packages.into_iter().collect()))
 }
-
-#[cfg(test)]
-#[path = "test_filter_tests.rs"]
-mod tests;

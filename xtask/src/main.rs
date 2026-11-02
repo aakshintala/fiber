@@ -111,6 +111,7 @@ mod screen_ratchet;
 mod select;
 mod site;
 mod stress;
+mod test_index;
 mod threads;
 mod ticket;
 
@@ -270,7 +271,9 @@ fn run(args: &[String]) -> Result<bool, String> {
         "bug-filter" => {
             let members = workspace_members()?;
             let sources = rust_files(&members)?;
-            let (filter, packages) = select::test_filter(rest, &members, &sources);
+            let test_files = select::test_files(rest, &members, &sources)?;
+            let index = test_index::TestIndex::build(Path::new("."), &test_files, &members, None)?;
+            let (filter, packages) = select::test_filter(rest, &members, &sources, &index)?;
             println!("filter\t{filter}");
             for package in packages {
                 println!("package\t{package}");
@@ -278,7 +281,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             for path in select::unrun_test_files(rest, &members) {
                 println!("unrun\t{path}");
             }
-            for test in select::tests_in_files(rest, &members, &sources)? {
+            for test in select::tests_in_files(rest, &members, &sources, &index)? {
                 println!("{}", select::planned_line(&test));
             }
             Ok(true)
@@ -299,12 +302,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             println!("filter\t{}", plan.filter);
             Ok(true)
         }
-        "stress-plan" => {
-            // Only this command asks the selector to list. `touched-retries`
-            // reads the same selector and must not compile the suite again.
-            select::narrow_to_compiled_tests(true);
-            stress::plan_command(rest)
-        }
+        "stress-plan" => stress::plan_command(rest),
         "stress-check" => stress::stress_check_command(rest),
         "touched-retries" => stress::touched_retries_command(rest),
         "stress-cost" => stress::cost_command(rest),
