@@ -782,15 +782,10 @@ fn losing_the_hub_mid_install_fails_without_retry_or_session() {
     drop((server, served.hub, cleanup));
 }
 
-/// A hello slice that outlives a zero outer bound names the outer wait's
-/// own timeout, the bounds behind it and what the hub had written: the
-/// diagnostic path for the loaded-hub sightings, driven without a loaded
-/// hub. The far end gets two seconds to answer while the outer wait holds
-/// nothing, so the slice's work is still blocked when the zero bound
-/// expires and `within`'s `waited 0ns` timeout fires on every run. Only
-/// the enriched panic can follow `give_up`, so its text also proves the
-/// live child was reaped. A missing `hub.log` and an empty one report
-/// distinctly.
+/// Drives both hello-slice exits: an expired outer wait reports a missing
+/// log, while an exhausted root with a live outer wait returns the no-room
+/// error. The returned live child then goes through `give_up` to prove an
+/// empty `hub.log` reports distinctly from a missing one.
 #[test]
 fn hello_slice_timeout_reports_bounds_and_hub_state() {
     let setup = support::Setup::new();
@@ -865,21 +860,40 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
     fs::create_dir_all(setup.home().join("logs")).unwrap();
     fs::write(setup.home().join("logs").join("hub.log"), "").unwrap();
     let (process, capture) = spawn_live();
+    let outer_wait = support::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let exhausted_root = support::Deadline::after(Duration::ZERO);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        hub_start::hello_slice(
+        hub_start::hello_slice_with_budgets(
             &setup,
             process,
             &capture,
-            wait,
+            (outer_wait, exhausted_root),
             Duration::from_secs(2),
             entry,
             &slices,
         )
     }));
+    let process = match outcome {
+        Ok((Err(error), process)) => {
+            assert_eq!(
+                error.to_string(),
+                "the test root leaves no room for another hello attempt"
+            );
+            process
+        }
+        Ok((Ok(hub), process)) => {
+            drop((hub, process));
+            panic!("an exhausted root returns the no-room error");
+        }
+        Err(_) => panic!("the live outer wait returns the no-room error"),
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hub_start::give_up(&setup, process, &capture, "empty-log report")
+    }));
     let message = outcome
         .err()
         .and_then(|payload| payload.downcast::<String>().ok().map(|boxed| *boxed))
-        .expect("the zero-bound slice panics again");
+        .expect("give_up reports the empty hub.log");
     assert!(
         message.contains("hub.log empty (0 bytes)"),
         "an empty hub.log reports distinctly from a missing one: {message}"
