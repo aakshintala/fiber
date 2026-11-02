@@ -127,9 +127,7 @@ fn entry_rows(
     columns: usize,
 ) -> Vec<CardRow> {
     let cross = droppable && columns > MARK_CELLS + 1 + 1;
-    // MARK_CELLS (2) with the cross's gap and cross (2): 4. A literal
-    // keeps no `+` for a mutant to flip to `*` (`MARK_CELLS` is 2, so
-    // both read 4 with no consumer-visible difference).
+    // The mark's two cells, then the cross's gap and the cross.
     let width = if cross {
         columns.saturating_sub(4)
     } else {
