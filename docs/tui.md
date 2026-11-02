@@ -707,6 +707,12 @@ row, logged-out row or not-installed row matches, the picker shows one dim line,
 "No models match", and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
 Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 
+On a screen too short for every row, the list scrolls in the rows left
+between the count row and the footer, and it always shows at least one
+model with its provider's heading: the session's model when the picker
+opens, the focused model after ↓ or a click. Where even that does not fit,
+the list keeps it and the footer goes first.
+
 After the model sections and their left-out count rows, the choosing picker
 lists each installed provider with provider data but no credential, one row
 per provider in provider-name order. It never lists the scripted provider.
@@ -1276,15 +1282,21 @@ Enter during a turn sends `steer`. There is no follow-up queue: a prompt that
 arrives mid-turn is still rejected `busy` (`docs/invocation.md`). A draft left
 in the input box during a turn is untouched until sent.
 
-Queued steering messages sit above the input box, one row each, from the
-`steering_queue` event, so every attached client sees and edits the same
+Queued steering messages sit above the input box in the steering card, one
+entry each, from the `steering_queue` event, so every attached client sees and edits the same
 queue. ⌥↑ and ⌥↓ select a row and load it into the input box, Enter sends
 `steer_drop` then `steer`, and ⌥X sends `steer_drop`. Each also has a mouse target.
 
-The queue is indented two columns under the working line: "• Steering, joins
-the turn at the next step" dim; each message "  ↳ <text>  ✕" dim, or "  ▸ "
-in `attention` and the text in the text colour while it is selected; then
-"⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop" dim. A click
+The steering card sits under the working line and is drawn as a panel card
+("The panel"): a `surface` slab edged ▄ and ▀ in `surface`, with two columns
+of padding on the left and one on the right, and a stripe in `attention` down
+its left edge. Its title row is "Steering" bold in `attention`, with "N queued ·
+joins at the next step" dim, right-aligned. Each message
+follows on its own entry: "↳ " in `attention`, the text in the text colour,
+and a dim "✕" right-aligned. A message too long for the card wraps, its
+continuation lines starting under the text rather than under the ↳. A
+selected message reads "▸ " in `attention` and its text bold. The last row is the key hint, with each key bold and the
+rest dim: "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop". A click
 on a row selects it and a click on its ✕ drops it. While a message is being
 edited, the input box's stripe is `attention` and the box ends, right-aligned
 and dim, "editing a queued message · Enter amends · ⌥X drops · Esc stops".
@@ -2535,7 +2547,7 @@ The roles, in order, with each built-in theme's values:
 | `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` | `#0969da` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` | `#bc4c00` |
 | `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown, a failed login's reason | `#ff5d73` | `#cf222e` |
-| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
+| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", the steering card's title, stripe and marks, notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
 | `added` | lines added: an edited file's `+N`, added lines in a diff | `#73c991` | `#1a7f37` |
 | `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` | `#cf222e` |
 | `code_text` | code with no syntax role | the terminal's foreground | `#1f2328` |
@@ -2553,7 +2565,7 @@ The roles, in order, with each built-in theme's values:
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
 | `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
 | `panel` | the rail's and the panel's regions | `#0c0c11` | `#f6f8fa` |
-| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
+| `surface` | the input box, the panel's cards, the steering card, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
 | `surface_raised` | the card on screen, a hovered card | `#3a3a4a` | `#d0d7de` |
 | `card_retrying` | a rail card in RETRYING | `#262014` | `#ebe5d9` |
 | `card_needs_input` | a rail card in NEEDS INPUT | `#241a10` | `#efe5db` |
