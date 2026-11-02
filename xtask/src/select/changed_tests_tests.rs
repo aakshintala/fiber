@@ -1851,8 +1851,10 @@ fn compiled_plan_probe() {
     assert!(!std::path::Path::new(&root).join("args").exists());
     narrow_to_compiled_tests(true);
     assert_eq!(
-        changed_tests(&diff, &workspace, &span_sources()).unwrap(),
-        [second.clone()]
+        changed_tests(&diff, &workspace, &span_sources())
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&second)
     );
     narrow_to_compiled_tests(false);
     assert_eq!(
