@@ -1079,7 +1079,7 @@ fn a_session_only_model_takes_three_rows_in_the_window() {
     assert_eq!(window(&view, 6), (0, 2));
 }
 
-/// The wheel moves the picker top by three body rows (`docs/tui.md:576`).
+/// The wheel moves the picker top by three body rows, as docs/tui.md:589 states.
 #[test]
 fn wheel_moves_the_picker_top_by_three_body_rows() {
     let mut app = attached(100, 18);
@@ -1897,7 +1897,7 @@ fn count_rows_scroll_with_their_sections_window() {
     assert_eq!(body(&view, 160, 48).len(), 2 + 15);
 }
 
-/// Wheel offsets count headings and blank rows as displayed rows (`docs/tui.md:576`).
+/// Wheel offsets count headings and blank rows as displayed rows.
 #[test]
 fn wheel_offsets_count_headings_and_blank_rows_as_displayed_rows() {
     let mut app = choosing_left_out(160, 18);
@@ -1913,7 +1913,7 @@ fn wheel_offsets_count_headings_and_blank_rows_as_displayed_rows() {
             .iter()
             .any(|span| span.content.contains("api_key"))
     );
-    // The wheel advances three displayed rows per step (`docs/tui.md:576`);
+    // The wheel advances three displayed rows per step;
     // headings, counts and models all count as displayed rows here.
     let (top, _) = picker_wheel_window(&view, false, height);
     assert_eq!(
@@ -2212,8 +2212,7 @@ fn chips_need_a_spaceless_middle() {
     assert!(!super::is_chip("]"));
 }
 
-/// A headed model never trims with its heading, while a headed count does
-/// (`docs/tui.md:576`).
+/// A headed model never trims with its heading, while a headed count does.
 #[test]
 fn trim_count_only_for_headed_counts() {
     let app = choosing(160, 48);
@@ -2243,7 +2242,7 @@ fn trim_count_only_for_headed_counts() {
     );
 }
 
-/// A far focus resets to a nonzero window offset (`docs/tui.md:576`).
+/// A far focus resets to a nonzero window offset (docs/tui.md:710-714).
 #[test]
 fn focus_window_top_is_nonzero_for_a_far_focus() {
     let mut app = choosing(160, 10);
@@ -2259,7 +2258,7 @@ fn focus_window_top_is_nonzero_for_a_far_focus() {
 
 /// An up wheel that lands the focus exactly on the new exclusive bottom
 /// keeps it offscreen and clamps to the nearest visible row, never the
-/// row at the edge (`docs/tui.md:576`).
+/// row at the edge.
 #[test]
 fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
     let mut app = attached(160, 11);
@@ -2353,8 +2352,7 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
 
 /// An up wheel that resets the window to the start while the focus sits
 /// just past the new end clamps to the nearest visible row: row zero can
-/// never stand in for the focus, since only an exact focus match counts
-/// (`docs/tui.md:576`).
+/// never stand in for the focus, since only an exact focus match counts.
 #[test]
 fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
     let mut app = attached(160, 11);
