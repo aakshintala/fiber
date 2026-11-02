@@ -1518,3 +1518,222 @@ fn the_same_test_is_selected_when_no_target_declares_test_false() {
         )]
     );
 }
+
+const MACOS_TESTS: [&str; 9] = [
+    "macos_absolute_git_pointer_at_root_grants_neither",
+    "macos_git_pointer_at_a_non_git_dir_grants_neither",
+    "macos_git_pointer_with_root_commondir_grants_neither",
+    "macos_prepare_failure_names_the_unresolvable_root",
+    "macos_profile_denies_a_link_and_its_target",
+    "macos_profile_follows_a_worktree_pointer",
+    "macos_profile_grants_roots_denies_and_names_no_paths",
+    "macos_profile_keeps_hostile_paths_literal",
+    "macos_profile_protects_a_checkout_gitdir",
+];
+
+fn sandbox(name: &str) -> TestRef {
+    refer(
+        "tools",
+        None,
+        true,
+        &format!("shell::sandbox::tests::{name}"),
+    )
+}
+
+fn listed(package: &str, binary_id: &str, kind: &str, name: &str) -> ListedTest {
+    ListedTest {
+        package: package.to_owned(),
+        binary_id: binary_id.to_owned(),
+        kind: kind.to_owned(),
+        name: name.to_owned(),
+    }
+}
+
+/// The stress job runs its nextest step only when `stress-plan` prints
+/// `run\ttrue`, which is when the selector returns a test.
+fn stress_run_line(tests: &[TestRef]) -> &'static str {
+    if tests.is_empty() {
+        "run\tfalse"
+    } else {
+        "run\ttrue"
+    }
+}
+
+fn stress_iterations(iterations: u32, tests: usize) -> String {
+    let word = if tests == 1 { "test" } else { "tests" };
+    let mut log = String::new();
+    for iteration in 1..=iterations {
+        log.push_str(&format!(
+            " Stress test [   0.001s] iteration {iteration}/{iterations}: {tests} {word} run: {tests} passed\n"
+        ));
+    }
+    log.push_str(&format!(
+        "     Summary [   0.001s] {iterations}/{iterations} stress run iterations: {iterations} passed\n"
+    ));
+    log
+}
+
+/// Thirty tests planned, twenty-one compiled on this runner: the nine
+/// `macos_*` names from the Linux stress failure, logged, and the count
+/// check accepts the twenty-one the run would execute.
+#[test]
+fn the_stress_job_logs_the_nine_macos_tests_and_accepts_the_twenty_one() {
+    let mut planned = Vec::new();
+    let mut present = Vec::new();
+    for index in 1..=21 {
+        let test = sandbox(&format!("kept_{index:02}"));
+        present.push(listed("tools", "tools", "lib", &test.name.clone()));
+        planned.push(test);
+    }
+    for name in MACOS_TESTS {
+        planned.push(sandbox(name));
+    }
+    let (kept, dropped) = compiled_tests(&planned, &present);
+    assert_eq!(kept.len(), 21);
+    assert_eq!(
+        dropped.iter().map(test_label).collect::<Vec<_>>(),
+        MACOS_TESTS
+            .iter()
+            .map(|name| format!("tools shell::sandbox::tests::{name}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(stress_run_line(&kept), "run\ttrue");
+    let temp = fakes::TempDir::new("xtask-stress-cfg");
+    temp.write("run.log", &stress_iterations(30, 21));
+    let path = temp.path().join("run.log");
+    let args = vec![
+        "--log".to_owned(),
+        path.to_string_lossy().into_owned(),
+        "--count".to_owned(),
+        "30".to_owned(),
+        "--tests".to_owned(),
+        "21".to_owned(),
+    ];
+    assert_eq!(crate::stress::stress_check_command(&args), Ok(true));
+    let mut planned_thirty = args;
+    *planned_thirty.last_mut().unwrap() = "30".to_owned();
+    let mismatch = crate::stress::stress_check_command(&planned_thirty);
+    assert!(
+        mismatch
+            .as_ref()
+            .is_err_and(|error| error.contains("ran 21 tests; plan names 30")),
+        "{mismatch:?}"
+    );
+}
+
+/// Every planned test compiled out: the selector returns nothing, so
+/// `stress-plan` prints `run\tfalse` and the job skips the run.
+#[test]
+fn the_stress_job_skips_when_the_runner_compiles_none_of_the_plan() {
+    let planned: Vec<TestRef> = MACOS_TESTS.iter().copied().map(sandbox).collect();
+    let (kept, dropped) = compiled_tests(&planned, &[]);
+    assert!(kept.is_empty());
+    assert_eq!(dropped.len(), MACOS_TESTS.len());
+    for name in MACOS_TESTS {
+        assert!(
+            dropped.iter().any(|test| test.name.ends_with(name)),
+            "{name}"
+        );
+    }
+    assert_eq!(stress_run_line(&kept), "run\tfalse");
+}
+
+#[test]
+fn a_listed_mismatch_is_not_a_compiled_test() {
+    let json = r#"{"rust-suites":{"tools":{"package-name":"tools","binary-id":"tools","kind":"lib","testcases":{"shell::sandbox::tests::linux_one":{"filter-match":{"status":"matches"}},"shell::sandbox::tests::macos_one":{"filter-match":{"status":"mismatch","reason":"expression"}}}}}}"#;
+    let listed = matching_tests(json).expect("json");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "shell::sandbox::tests::linux_one");
+}
+
+#[test]
+fn a_narrowed_filter_excludes_only_the_test_the_runner_omitted() {
+    let planned = "\
+planned\ttools\t\ttrue\tshell::sandbox::tests::linux_one
+planned\ttools\t\ttrue\tshell::sandbox::tests::macos_one
+";
+    let json = r#"{"rust-suites":{"tools":{"package-name":"tools","binary-id":"tools","kind":"lib","testcases":{"shell::sandbox::tests::linux_one":{"filter-match":{"status":"matches"}}}}}}"#;
+    let plan = narrow_plan("binary_id(tools::sandbox)", planned, json).expect("plan");
+    assert!(plan.run);
+    assert_eq!(
+        plan.dropped,
+        vec!["tools shell::sandbox::tests::macos_one".to_owned()]
+    );
+    assert!(
+        plan.filter
+            .contains("not (package(tools) & test(=shell::sandbox::tests::macos_one))")
+    );
+    assert!(!plan.filter.contains("linux_one"));
+    let empty = narrow_plan(
+        "binary_id(tools::sandbox)",
+        planned,
+        r#"{"rust-suites":{}}"#,
+    )
+    .expect("empty");
+    assert!(!empty.run);
+    assert!(empty.filter.is_empty());
+    assert_eq!(empty.dropped.len(), 2);
+}
+
+#[test]
+fn a_unit_test_listing_does_not_keep_an_integration_test_of_the_same_name() {
+    let planned = [refer("tools", Some("tools::extra"), false, "same")];
+    let (kept, dropped) = compiled_tests(&planned, &[listed("tools", "tools", "lib", "same")]);
+    assert!(kept.is_empty());
+    assert_eq!(dropped.len(), 1);
+    let (kept, dropped) =
+        compiled_tests(&planned, &[listed("tools", "tools::extra", "test", "same")]);
+    assert_eq!(kept.len(), 1);
+    assert!(dropped.is_empty());
+}
+
+#[test]
+fn tests_in_files_names_every_test_and_skips_a_missing_file() {
+    let sources = span_sources();
+    let files = vec!["crates/log/src/span_tests.rs".to_owned()];
+    assert_eq!(
+        tests_in_files(&files, &members(), &sources).expect("tests"),
+        vec![
+            refer("log", None, true, "span::tests::first"),
+            refer("log", None, true, "span::tests::second"),
+        ]
+    );
+    let missing = vec!["crates/log/src/missing_tests.rs".to_owned()];
+    assert_eq!(
+        tests_in_files(&missing, &members(), &sources).expect("missing"),
+        Vec::<TestRef>::new()
+    );
+}
+
+#[test]
+fn a_planned_line_round_trips() {
+    let unit = refer("tools", None, true, "shell::sandbox::tests::macos_one");
+    assert_eq!(
+        parse_planned(&planned_line(&unit)).expect("unit"),
+        vec![unit]
+    );
+    let binary = refer("tools", Some("tools::extra"), false, "integration_one");
+    assert_eq!(
+        parse_planned(&planned_line(&binary)).expect("binary"),
+        vec![binary]
+    );
+}
+
+struct ResetNarrow;
+
+impl Drop for ResetNarrow {
+    fn drop(&mut self) {
+        narrow_to_compiled_tests(false);
+    }
+}
+
+#[test]
+fn the_program_test_fixture_keeps_the_source_plan() {
+    let _reset = ResetNarrow;
+    narrow_to_compiled_tests(true);
+    let diff = span_diff("@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
+    assert_eq!(
+        selected(&diff, &span_sources()),
+        vec![refer("log", None, true, "span::tests::second")]
+    );
+}

@@ -593,6 +593,70 @@ pub(crate) fn changed_tests(
     Ok(out)
 }
 
+// Test-first signatures preserve the source-only planner: no runner list
+// is consulted and no planned test is dropped.
+#[cfg(test)]
+struct ListedTest {
+    package: String,
+    binary_id: String,
+    kind: String,
+    name: String,
+}
+
+#[cfg(test)]
+struct RunnerPlan {
+    run: bool,
+    filter: String,
+    dropped: Vec<String>,
+}
+
+#[cfg(test)]
+fn compiled_tests(planned: &[TestRef], _listed: &[ListedTest]) -> (Vec<TestRef>, Vec<TestRef>) {
+    (planned.to_vec(), Vec::new())
+}
+
+#[cfg(test)]
+fn test_label(test: &TestRef) -> String {
+    let id = test.binary.as_deref().unwrap_or(&test.package);
+    format!("{id} {}", test.name)
+}
+
+#[cfg(test)]
+fn matching_tests(_json: &str) -> Result<Vec<ListedTest>, String> {
+    Ok(Vec::new())
+}
+
+#[cfg(test)]
+fn narrow_plan(expression: &str, _planned: &str, _json: &str) -> Result<RunnerPlan, String> {
+    Ok(RunnerPlan {
+        run: true,
+        filter: expression.to_owned(),
+        dropped: Vec::new(),
+    })
+}
+
+#[cfg(test)]
+fn tests_in_files(
+    _files: &[String],
+    _members: &Members,
+    _sources: &[RustFile],
+) -> Result<Vec<TestRef>, String> {
+    Ok(Vec::new())
+}
+
+#[cfg(test)]
+fn planned_line(_test: &TestRef) -> String {
+    String::new()
+}
+
+#[cfg(test)]
+fn parse_planned(_text: &str) -> Result<Vec<TestRef>, String> {
+    Ok(Vec::new())
+}
+
+#[cfg(test)]
+fn narrow_to_compiled_tests(_enabled: bool) {}
+
 /// Every touched function into the selection, once each.
 fn select(hunk: &Hunk, tests: &[(TestFn, TestRef)], out: &mut Vec<TestRef>) {
     for (f, test) in tests {

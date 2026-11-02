@@ -26,6 +26,7 @@ fail() {
 bug_red="$top/scripts/bug-red"
 record="$tmp/filter-args.txt"
 export BUG_RED_RECORD="$record"
+real_cargo=$(command -v cargo)
 
 mkdir -p "$tmp/bin"
 ln -s "$top/scripts/test-bug-red-cargo" "$tmp/bin/cargo"
@@ -357,3 +358,135 @@ if grep -Fq "crates/a/tests/existing.rs" "$record" || grep -Fq "crates/a/tests/m
   cat "$tmp/out4.txt" >&2
   fail "merged-main filter names a test file main changed"
 fi
+
+# The wrapper stands in for a runner's `cargo nextest list`. bug-filter
+# gains two planned tests, one of which each list omits, and narrow-plan
+# is the real command from this checkout.
+mkdir -p "$tmp/bin-cfg"
+cat >"$tmp/bin-cfg/cargo" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1-}" = xtask ] && [ "${2-}" = narrow-plan ]; then
+  shift 2
+  exec "$BUG_RED_REAL_CARGO" run --quiet --manifest-path "$BUG_RED_TOP/Cargo.toml" --package xtask -- narrow-plan "$@"
+fi
+if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
+  "$BUG_RED_STUB_CARGO" "$@"
+  printf 'planned\ttools\t\ttrue\tshell::sandbox::tests::linux_one\n'
+  printf 'planned\ttools\t\ttrue\tshell::sandbox::tests::macos_one\n'
+  exit 0
+fi
+if [ "${1-}" = nextest ] && [ "${2-}" = list ]; then
+  cat "$BUG_RED_LIST_FILE"
+  exit 0
+fi
+if [ "${1-}" = nextest ] && [ "${2-}" = run ]; then
+  printf '%s\n' "$@" >"$BUG_RED_NEXTEST_ARGS"
+  exit "${BUG_RED_NEXTEST_STATUS:-100}"
+fi
+exec "$BUG_RED_STUB_CARGO" "$@"
+WRAPPER
+chmod +x "$tmp/bin-cfg/cargo"
+export BUG_RED_STUB_CARGO="$tmp/bin/cargo"
+export BUG_RED_REAL_CARGO="$real_cargo"
+export BUG_RED_TOP="$top"
+
+cat >"$tmp/list-linux.json" <<'JSON'
+{"rust-suites":{"tools":{"package-name":"tools","binary-id":"tools","kind":"lib","testcases":{"shell::sandbox::tests::linux_one":{"filter-match":{"status":"matches"}}}}}}
+JSON
+cat >"$tmp/list-macos.json" <<'JSON'
+{"rust-suites":{"tools":{"package-name":"tools","binary-id":"tools","kind":"lib","testcases":{"shell::sandbox::tests::macos_one":{"filter-match":{"status":"matches"}}}}}}
+JSON
+cat >"$tmp/list-empty.json" <<'JSON'
+{"rust-suites":{}}
+JSON
+
+repo_c="$tmp/repo-cfg"
+new_repo "$repo_c"
+mkdir -p "$repo_c/crates/a/tests" "$repo_c/crates/a/src"
+printf '// red\n' >"$repo_c/crates/a/tests/red.rs"
+git -C "$repo_c" add crates/a/tests/red.rs
+git -C "$repo_c" commit -q -m red
+printf '// fix\n' >"$repo_c/crates/a/src/fix.rs"
+git -C "$repo_c" add crates/a/src/fix.rs
+git -C "$repo_c" commit -q -m fix
+base_c=$(git -C "$repo_c" rev-parse HEAD~2)
+head_c=$(git -C "$repo_c" rev-parse HEAD)
+
+# A test the list contains stays in that leg's run. The test the list
+# omits is named and excluded, so it is planned on the other leg alone.
+a_test_present_on_one_leg_only_is_planned_on_that_leg_alone() {
+  local list_file=$1
+  local kept=$2
+  local dropped=$3
+  local out=$4
+  local args=$5
+  rm -f "$args"
+  export BUG_RED_LIST_FILE="$list_file"
+  export BUG_RED_NEXTEST_ARGS="$args"
+  export BUG_RED_NEXTEST_STATUS=100
+  local rc=0
+  cd "$repo_c"
+  PATH="$tmp/bin-cfg:$PATH" "$bug_red" "$base_c" "$head_c" >"$out" 2>&1 || rc=$?
+  cd "$top"
+  [ "$rc" -eq 0 ] || { cat "$out" >&2; fail "cfg leg ($kept) exited $rc, want 0"; }
+  grep -Fq "bug-red: dropping tools shell::sandbox::tests::$dropped" "$out" || {
+    cat "$out" >&2
+    fail "leg ($kept) did not drop $dropped"
+  }
+  if grep -Fq "bug-red: dropping tools shell::sandbox::tests::$kept" "$out"; then
+    cat "$out" >&2
+    fail "leg ($kept) dropped $kept"
+  fi
+  [ -f "$args" ] || { cat "$out" >&2; fail "leg ($kept) did not run nextest"; }
+  grep -Fq "$dropped" "$args" || { cat "$args" >&2; fail "leg ($kept) did not exclude $dropped"; }
+  if grep -Fq "$kept" "$args"; then
+    cat "$args" >&2
+    fail "leg ($kept) names $kept in the filter, so the exclusion is not the dropped test alone"
+  fi
+}
+a_test_present_on_one_leg_only_is_planned_on_that_leg_alone \
+  "$tmp/list-linux.json" linux_one macos_one \
+  "$tmp/out-linux-leg.txt" "$tmp/args-linux.txt"
+a_test_present_on_one_leg_only_is_planned_on_that_leg_alone \
+  "$tmp/list-macos.json" macos_one linux_one \
+  "$tmp/out-macos-leg.txt" "$tmp/args-macos.txt"
+
+# Neither leg compiles a planned test. Each reports the no-match status,
+# and the collector fails. This is not the docs or journey pass.
+a_plan_empty_on_both_legs_fails() {
+  rm -f "$tmp/args-empty.txt"
+  : >"$tmp/github-output.txt"
+  export BUG_RED_LIST_FILE="$tmp/list-empty.json"
+  export BUG_RED_NEXTEST_ARGS="$tmp/args-empty.txt"
+  cd "$repo_c"
+  GITHUB_OUTPUT="$tmp/github-output.txt" PATH="$tmp/bin-cfg:$PATH" "$bug_red" --report "$base_c" "$head_c" >"$tmp/out-empty-cfg.txt" 2>&1 || {
+    cat "$tmp/out-empty-cfg.txt" >&2
+    fail "empty intersection report failed"
+  }
+  cd "$top"
+  grep -Fxq 'status=4' "$tmp/github-output.txt" || {
+    cat "$tmp/github-output.txt" >&2
+    fail "empty intersection did not record status 4"
+  }
+  if [ -f "$tmp/args-empty.txt" ]; then
+    cat "$tmp/args-empty.txt" >&2
+    fail "empty intersection ran nextest"
+  fi
+  if grep -Fq "journey" "$tmp/out-empty-cfg.txt" || grep -Fq "only docs" "$tmp/out-empty-cfg.txt"; then
+    cat "$tmp/out-empty-cfg.txt" >&2
+    fail "empty intersection took a pass"
+  fi
+  grep -Fq "none of the red commit's tests runs" "$tmp/out-empty-cfg.txt" || {
+    cat "$tmp/out-empty-cfg.txt" >&2
+    fail "empty intersection misses the no-match message"
+  }
+  local rc=0
+  "$bug_red" --collect 4 4 >"$tmp/out-collect-cfg.txt" 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || { cat "$tmp/out-collect-cfg.txt" >&2; fail "empty on both legs exited $rc, want 1"; }
+  grep -Fq "no test ran" "$tmp/out-collect-cfg.txt" || {
+    cat "$tmp/out-collect-cfg.txt" >&2
+    fail "empty on both legs misses the failure"
+  }
+}
+a_plan_empty_on_both_legs_fails
