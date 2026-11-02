@@ -6,3 +6,4 @@ crates/tui/src/configure_fake.rs	fiber-3743	grant	2026-11-02T19:08:41Z	Amoghs-Ma
 crates/main/tests/link_look.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/links.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app_focus.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/model_picker_tests.rs	fiber-4018	plan	2026-11-02T21:36:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
