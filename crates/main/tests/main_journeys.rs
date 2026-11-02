@@ -1438,6 +1438,13 @@ fn wheel_read_call(n: usize, path: &str) -> fakes::Response {
 /// whose parent let the wheel reach the wrong surface.
 #[test]
 fn wheel_over_each_swapped_view_scrolls_that_view() {
+    // Fixture arithmetic: each model uses two display rows and a wheel
+    // step advances three, so one step advances `3 / 2 = 1` whole model
+    // with one row left over.
+    const MODEL_DISPLAY_ROWS: usize = 2;
+    const WHEEL_STEP_ROWS: usize = 3;
+    const MODELS_PER_WHEEL_STEP: usize = WHEEL_STEP_ROWS / MODEL_DISPLAY_ROWS;
+
     run_journey(
         "wheel_over_each_swapped_view_scrolls_that_view",
         // As in the earlier journeys: the body borrows the fake server,
@@ -1477,10 +1484,10 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             )
             .unwrap();
             let bin = journey_bin();
-            // Fourteen rows: the context breakdown still overflows its
-            // body viewport by one full three-row wheel step, while the
-            // picker stays in its full layout. At thirteen rows the picker
-            // compacts, and the wheel coordinate lands outside its list.
+            // At fourteen terminal rows, the picker cannot hold a full
+            // wheel step. It must keep the session model under its provider
+            // heading on open, then the focused model under its heading
+            // after the wheel; the footer gives way before either row does.
             let mut run = Run::spawn_journey(
                 &setup,
                 120,
@@ -1529,9 +1536,17 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 pre.rows
             );
             run.write(&wheel_down(at));
+            let next_model = format!("m-{:02}", MODELS_PER_WHEEL_STEP);
             let post = run.wait_screen("the wheeled picker", |grid| {
-                grid.rows[usize::from(first) - 1].contains("m-01")
+                find_grid_row(&grid.rows, &next_model)
+                    .is_some_and(|row| row > 0 && grid.rows[usize::from(row) - 1].contains("fake"))
             });
+            let next = find_grid_row(&post.rows, &next_model).expect("the next model row");
+            assert!(
+                post.rows[usize::from(next) - 1].contains("fake"),
+                "the section row heads the focused model: {:?}",
+                post.rows
+            );
             assert!(
                 post.rows.iter().all(|row| !row.contains("m-00 ●")),
                 "the first model scrolled out: {:?}",
