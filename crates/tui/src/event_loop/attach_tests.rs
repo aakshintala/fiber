@@ -6148,8 +6148,7 @@ mod attach_span_tests {
         let data = line["data"].as_object().expect("data is an object");
         for key in data.keys() {
             assert!(
-                ["ms", "op", "alloc_bytes", "allocs", "live_delta_bytes"]
-                    .contains(&key.as_str()),
+                ["ms", "op", "alloc_bytes", "allocs", "live_delta_bytes"].contains(&key.as_str()),
                 "only documented wire keys: {line}"
             );
         }
