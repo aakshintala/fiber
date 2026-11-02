@@ -107,6 +107,7 @@ fn usage(model: &str, generation: &str, input: u64) -> Event {
         extension: None,
         origin_session_id: None,
         reviewer: None,
+        warming: None,
     })
 }
 

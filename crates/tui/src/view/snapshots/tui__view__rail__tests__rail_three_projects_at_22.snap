@@ -5,21 +5,21 @@ expression: text(&screen(&app))
 ---
   fibe + $0.41 · 0 ✓
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ 2 ✓ READY       9m                                                                                                                                             /Users/you/work/fiber             auto
-▌ fix the parser                                                                                                                                                 git  main
-▌ ⎇ main                                                                                                                                                         test/model
-▌ $0.41          11%                                                                                                                                             ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                  119
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                            handoff at —             11% of window
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                            then a summary, fresh context
-▌ 3 ● WORKING     2h                                                                                                                                             tokens in / out                  1 / 2
-▌ write the rail                                                                                                                                                 cache hits                          0%
-▌ ⎇ detached                                                                                                                                                     cost                             $0.41
-▌ $0.00                                                                                                                                                          cost on subscription             $0.00
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                            speed, last reply                    —
-  hub +  $1.35 · 0 ✓                                                                                                                                             turns                                0
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                          ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-▌ 1 ! NEEDS INPU 16s
-▌ fix flaky lock tes
+▌ 2 ✓ READY       9m                                                                                                                                             Session status                    auto
+▌ fix the parser                                                                                                                                                 /Users/you/work/fiber
+▌ ⎇ main                                                                                                                                                         git  main
+▌ $0.41          11%                                                                                                                                             test/model
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                            ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                  119
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                            handoff at —             11% of window
+▌ 3 ● WORKING     2h                                                                                                                                             then a summary, fresh context
+▌ write the rail                                                                                                                                                 tokens in / out                  1 / 2
+▌ ⎇ detached                                                                                                                                                     cache hits                          0%
+▌ $0.00                                                                                                                                                          cache resets in                      —
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                            cost                             $0.41
+  hub +  $1.35 · 0 ✓                                                                                                                                             cost on subscription             $0.00
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                            speed, last reply                    —
+▌ 1 ! NEEDS INPU 16s                                                                                                                                             turns                                0
+▌ fix flaky lock tes                                                                                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▌ approval: shell ca
 ▌ $1.35          70%
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀⋮                                                                                                                                        ⋮

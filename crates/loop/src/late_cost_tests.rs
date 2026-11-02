@@ -113,6 +113,7 @@ fn first(id: &str) -> UsageRecorded {
         extension: Some("ext".into()),
         origin_session_id: None,
         reviewer: None,
+        warming: None,
     }
 }
 

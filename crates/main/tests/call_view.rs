@@ -299,8 +299,45 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
     let mut ids = vec![temp_id(setup)];
     ids.extend(extra.iter().cloned());
     let text = grid_text(&grid.rows, grid.cursor, grid.hide_cursor, &ids);
+    // The workspace the card renders, canonicalised like the status it
+    // draws from (see `hooks_offer.rs`: the hub stores the canonical
+    // workspace, so on macOS `/var/...` reads `/private/var/...`).
+    // A card narrower than the path cuts the workspace row from the
+    // right, before the temp id the redaction above looks for: a long
+    // temp base (macOS `/private/var/folders/…`) leaves a bare path
+    // prefix behind where Linux already reads `[workspace]/w`. Fold any
+    // such right-truncated workspace tail to the same `[workspace]/w`
+    // the whole row folds to, whether the row holds only the directory
+    // or shares it with output on its left (the call view's status
+    // column does). Both the raw and the canonical workspace match, so
+    // the fold holds on Linux (no symlink) and macOS (`/var` is a
+    // symlink to `/private/var`). The match is this runner's own
+    // workspace, so it holds on every machine.
+    let raw_workspace = setup.workspace().to_string_lossy().into_owned();
+    let workspace = fs::canonicalize(setup.workspace())
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
     text.lines()
         .map(|row| {
+            let mut row = row.to_owned();
+            if !row.contains("[workspace]") && row.trim_end().ends_with('…') {
+                let trimmed = row.trim_end().to_owned();
+                let token_start = trimmed
+                    .rfind([' ', '│'])
+                    .map(|idx| {
+                        let sep_len = trimmed[idx..].chars().next().map_or(1, |c| c.len_utf8());
+                        idx + sep_len
+                    })
+                    .unwrap_or(0);
+                if let Some(token) = trimmed.get(token_start..)
+                    && let Some(prefix) = token.strip_suffix('…')
+                    && prefix.starts_with('/')
+                    && ((!workspace.is_empty() && workspace.starts_with(prefix))
+                        || (!raw_workspace.is_empty() && raw_workspace.starts_with(prefix)))
+                {
+                    row = format!("{}[workspace]/w", &trimmed[..token_start]);
+                }
+            }
             let mut row = if let Some(path) = row.find("[session]/w") {
                 let path_end = path + "[session]/w".len();
                 let path_start = row[..path].rfind(' ').map_or(0, |space| space + 1);
@@ -335,6 +372,9 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
                 && row[after + pad..].starts_with(|c: char| !c.is_whitespace())
             {
                 row = format!("{} {}", &row[..after], &row[after + pad..]);
+            }
+            if let Some(countdown) = row.find("cache resets in") {
+                row = format!("{}cache resets in     [duration]", &row[..countdown]);
             }
             if let Some(speed) = row.find("speed, last reply") {
                 row = format!("{}speed, last reply            —", &row[..speed]);
