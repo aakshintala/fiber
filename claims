@@ -3,14 +3,4 @@ crates/main/tests/quota_fetch_session.rs	lane-2526	grant	2026-10-19T20:54:05Z	Am
 crates/tui/src/app/panel_tests.rs	lane-2526	grant	2026-10-19T20:54:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2834
 crates/config/src/keys_tests.rs	lane-2844	grant	2026-10-20T00:24:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/find/state.rs	lane-2854	grant	2026-10-20T04:58:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2870
-crates/tui/src/jigs.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
-crates/tui/src/pages_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
-crates/tui/src/app/select_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
-crates/tui/src/app_focus_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
-crates/tui/src/turn/answers_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
 crates/main/tests/opencode_go_store_false.rs	2845	grant	2026-10-20T06:18:19Z	HOST:DIR	2873
-crates/tui/src/turn.rs	lane-2764	grant	2026-10-20T15:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
-crates/tui/src/turn/images.rs	lane-2764	grant	2026-10-20T15:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
-crates/tui/src/turn/images_tests.rs	lane-2764	grant	2026-10-20T15:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
-crates/tui/src/turn_tests.rs	lane-2764	grant	2026-10-20T15:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
-crates/tui/src/local_time_tests.rs	lane-2764	grant	2026-10-20T15:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
