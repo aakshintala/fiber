@@ -77,13 +77,18 @@ fn stop_stops_the_session_and_the_hub_and_the_session_resumes() {
         !hub.wait().success(),
         "the stopped hub exits as SIGTERM does"
     );
-    assert!(
-        UnixStream::connect(setup.hub_socket()).is_err(),
-        "the hub socket is gone"
+    // The stop's print proves its exchange closed (`docs/invocation.md`,
+    // "Commands and flags"): each listener going quiet lands after, so
+    // each socket gets the wait that proves it is closed.
+    wait_for_socket_closed(
+        setup.deadline,
+        &setup.hub_socket(),
+        "the hub socket to close",
     );
-    assert!(
-        UnixStream::connect(setup.session_socket(&session)).is_err(),
-        "the session socket is gone"
+    wait_for_socket_closed(
+        setup.deadline,
+        &setup.session_socket(&session),
+        "the session socket to close",
     );
 
     let prefix = &session[..8];
@@ -121,9 +126,12 @@ fn a_bare_stop_leaves_the_session_socket_accepting() {
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
-    assert!(
-        !setup.session_socket(&session).exists(),
-        "the closed session unlinked its socket"
+    // The close ending the socket only proves the peer went away: the
+    // session unlinks its path at exit (`docs/state.md`, "Sockets"), after.
+    wait_for_path_gone(
+        setup.deadline,
+        &setup.session_socket(&session),
+        "the closed session to unlink its socket",
     );
     guard.wait_gone();
 }
@@ -161,9 +169,12 @@ fn stop_with_a_dead_hub_starts_one_to_stop_the_orphaned_session() {
         String::from_utf8_lossy(&output.stdout),
         "Stopped 1 sessions and the hub.\n"
     );
-    assert!(
-        UnixStream::connect(setup.session_socket(&session)).is_err(),
-        "the session socket is gone"
+    // The stop's print proves its exchange closed: the session unlinks its
+    // path at its own exit (`docs/state.md`, "Sockets"), after.
+    wait_for_socket_closed(
+        setup.deadline,
+        &setup.session_socket(&session),
+        "the session socket to close",
     );
     guard.wait_gone();
 }

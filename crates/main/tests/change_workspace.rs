@@ -1212,11 +1212,12 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
         .parent()
         .expect("the leaf log lives in its session directory")
         .to_path_buf();
-    let probe_dir = dir.clone();
-    fakes::wait_until(
+    // `fiber_exited` only proves the exit: the delete needs the lock
+    // released after it, so the test waits for the release, not the event.
+    wait_for_lock_released(
+        setup.deadline,
+        &dir,
         &format!("the leaf {next}'s session lock to become available"),
-        setup.deadline.start_wait(),
-        move || matches!(log::try_hold(&probe_dir).unwrap(), log::Hold::Held(_)),
     );
     // The probe drops its temporary guard; the test retains the lock here.
     let log::Hold::Held(leaf_guard) = log::try_hold(&dir).unwrap() else {

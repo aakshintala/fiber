@@ -21,7 +21,7 @@ use std::fs;
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Setup, function_call, session_dir};
+use support::{Setup, function_call, session_dir, wait_for_effect_after_accept};
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
@@ -358,15 +358,24 @@ fn command_runs_idle_reports_status_and_duplicates_reject() {
         &client,
         r#"{"id":"c_1","command":"command","args":{"name":"sync-now","text":"3/10"}}"#,
     );
-    let accepted = until_session(&client, "command_accepted", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
-    });
-    assert!(accepted.last().unwrap()["payload"].get("result").is_none());
+    // The acceptance only proves the command was admitted: the test waits
+    // past it for the command's effect, matched by its id.
+    let lines = wait_for_effect_after_accept(
+        "the sync status",
+        "c_1",
+        |what, got| client.next(what, got),
+        |line| {
+            line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
+        },
+    );
+    let admitted = lines
+        .iter()
+        .find(|line| line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1")
+        .expect("the command was admitted");
+    assert!(admitted["payload"].get("result").is_none());
     // Its `host.status` reaches the client as `extension_ui`...
-    let ui = until_session(&client, "extension_ui", |line| {
-        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
-    });
-    assert_eq!(ui.last().unwrap()["payload"]["status"], "synced 3/10");
+    let ui = lines.last().unwrap();
+    assert_eq!(ui["payload"]["status"], "synced 3/10");
     // ...resending the accepted id gets `duplicate_command`...
     send(
         &client,
@@ -432,20 +441,24 @@ fn command_runs_during_a_turn() {
         &client,
         r#"{"id":"c_1","command":"command","args":{"name":"sync-now","text":"turn"}}"#,
     );
-    // Admitted at once even while the turn runs: the last line before this
-    // returns is the command's own acceptance.
-    let accepted = until_session(&client, "command_accepted", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
-    });
-    assert_eq!(
-        accepted.last().unwrap()["payload"]["command_id"],
+    // Admitted at once even while the turn runs, but the acceptance alone
+    // proves nothing about the run: the test waits past it for the
+    // command's effect, matched by its id.
+    let lines = wait_for_effect_after_accept(
+        "the sync status",
         "c_1",
-        "{accepted:?}"
+        |what, got| client.next(what, got),
+        |line| {
+            line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
+        },
     );
-    let ui = until_session(&client, "extension_ui", |line| {
-        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
-    });
-    assert_eq!(ui.last().unwrap()["payload"]["status"], "synced turn");
+    let admitted = lines
+        .iter()
+        .find(|line| line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1")
+        .expect("the command was admitted: {lines:?}");
+    assert_eq!(admitted["payload"]["command_id"], "c_1", "{lines:?}");
+    let ui = lines.last().unwrap();
+    assert_eq!(ui["payload"]["status"], "synced turn");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let _tail = until_session_close(&client);
     drop(client);

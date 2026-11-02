@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use support::{
     Deadline, KillGroup, PIXEL, PIXEL_BASE64, Setup, assert_kinds_multiset,
     assert_session_process_boundaries, complete_lines, function_call, git, hello, kinds, stream,
-    text_reply, write_json,
+    text_reply, wait_for_effect_after_accept, write_json,
 };
 
 impl Setup {
@@ -2780,12 +2780,22 @@ fn close_without_now_waits_for_the_job_to_finish() {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let accepted = answer(&client, "c_close");
+    // The acceptance only proves the close was admitted: the test waits
+    // past it for the notice turn's completion, matched by its id.
+    let closed = wait_for_effect_after_accept(
+        "the notice turn_completed",
+        "c_close",
+        |what, got| client.next(what, got),
+        |line| line["kind"] == "turn_completed",
+    );
+    let accepted = closed
+        .iter()
+        .find(|line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close"
+        })
+        .expect("the close was admitted: {closed:?}");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
     // The ending-notice turn completes, and the session waits for the job.
-    let _notice = until_session(&client, "the notice turn_completed", |line| {
-        line["kind"] == "turn_completed"
-    });
     assert!(
         running.child.try_wait().unwrap().is_none(),
         "the session waits for the job"
@@ -2895,11 +2905,21 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let accepted = answer(&client, "c_close");
+    // The acceptance only proves the close was admitted: the test waits
+    // past it for the notice turn's completion, matched by its id.
+    let closed = wait_for_effect_after_accept(
+        "the notice turn_completed",
+        "c_close",
+        |what, got| client.next(what, got),
+        |line| line["kind"] == "turn_completed",
+    );
+    let accepted = closed
+        .iter()
+        .find(|line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close"
+        })
+        .expect("the close was admitted: {closed:?}");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
-    let _notice = until_session(&client, "the notice turn_completed", |line| {
-        line["kind"] == "turn_completed"
-    });
     send_close_now(&client);
     let _tail = until_session_close(&client);
     drop(client);

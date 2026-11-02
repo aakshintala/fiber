@@ -1912,13 +1912,16 @@ fn image_named(text: &str, wanted: &str) -> Option<(String, u64, u64)> {
 /// `reads` images landed and the wanted source's image is among them.
 fn image_for_read(setup: &Setup, events: &Path, reads: usize, wanted: &str) -> (String, u64, u64) {
     let events = events.to_owned();
-    let waiting = events.clone();
     let wanted_line = wanted.to_owned();
-    fakes::wait_until("all reads to log their image", setup.deadline, move || {
-        fs::read_to_string(&waiting).ok().is_some_and(|text| {
-            logged_images(&text).len() >= reads && image_named(&text, &wanted_line).is_some()
-        })
-    });
+    // The reads' log lines land after their tool calls complete: the log
+    // exists (the session already ran), so the test waits for the lines
+    // with the native file watch instead of polling.
+    support::wait_for_log_line(
+        &events,
+        setup.deadline,
+        "all reads to log their image",
+        |text| logged_images(text).len() >= reads && image_named(text, &wanted_line).is_some(),
+    );
     let text = fs::read_to_string(events).expect("the session log");
     image_named(&text, wanted).expect("the wanted logged image")
 }
