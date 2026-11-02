@@ -720,8 +720,10 @@ fn a_mark_at_or_two_past_the_overlay_clamp_does_not_spin() {
 #[test]
 fn untargeted_lines_never_spin() {
     let (mut app, clock) = running();
-    // A steering message and thinking: lines with no mark and no target,
-    // and the group still runs.
+    // A steering message ends the group above it (`docs/tui.md`, "Tool
+    // groups and the ledger"), so the thinking after it opens a new
+    // group: lines with no mark and no target, and the new group runs
+    // once its own call starts.
     app.on_line(session_line(
         "steering_applied",
         serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
@@ -736,6 +738,11 @@ fn untargeted_lines_never_spin() {
         "reasoning_completed",
         serde_json::json!({"text": "# Plan"}),
         Some("a_t"),
+    ));
+    app.on_line(session_line(
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "b.rs"}}),
+        Some("a_2"),
     ));
     // Without time nothing spins: the baseline buffer.
     let base = buffer(&app);

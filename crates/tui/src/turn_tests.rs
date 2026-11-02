@@ -386,7 +386,7 @@ fn edited_files_count_distinct_paths_and_sum_their_lines() {
 }
 
 #[test]
-fn text_splits_groups_and_steering_does_not() {
+fn text_and_steering_split_groups() {
     let mut app = app();
     start(&mut app, "go", 0);
     call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
@@ -405,6 +405,9 @@ fn text_splits_groups_and_steering_does_not() {
     call(&mut app, "a_4", "read", json!({"path": "d.rs"}), 0);
     text(&mut app, "a_n", "More.", 0);
     end(&mut app, "completed", 0);
+    // A steering message ends the group above it like assistant text
+    // does (`docs/tui.md`, "Tool groups and the ledger"); the whole-turn
+    // total still counts every call.
     assert_eq!(
         texts(&app),
         vec![
@@ -415,10 +418,12 @@ fn text_splits_groups_and_steering_does_not() {
             "you 00:00 ",
             "",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " ● Read 2 files                                       0s ▸",
+            " ● Read 1 file                                        0s ▸",
             "",
             " steer · 00:00 ───────────────────────────────────────────",
             " also b",
+            "",
+            " ● Read 1 file                                        0s ▸",
             "",
             " Read them.",
             "",

@@ -2,13 +2,13 @@
 source: crates/tui/src/view_tests.rs
 expression: shown
 ---
-                                                 you 00:00
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ● Read 1 file                                        1s ▸
 
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄┃
- ● Read 1 file, asked 2 questions                     3s ▸ ┃
-                                                           ┃
- steer · 00:00 ─────────────────────────────────────────── ┃
+ steer · 00:00 ───────────────────────────────────────────
  use x                                                     ┃
+                                                           ┃
+ ● Asked 2 questions                                  1s ▸ ┃
                                                            ┃
  you answered · 00:00 ──────────────────────────────────── ┃
  Base         main (Recommended), dev, "and tags"          ┃
