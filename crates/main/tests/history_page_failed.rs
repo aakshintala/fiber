@@ -148,7 +148,7 @@ fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>) {
         std::io::Write::write_all(&mut writer, format!("{answer}\n").as_bytes()).unwrap();
         if open_last {
             // After the state it announces
-            // (docs/code-quality.md:251-254).
+            // (docs/code-quality.md:257-261).
             let _result = hub.done.send(());
         }
     }
@@ -445,7 +445,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         "a frame drew after the scroll past the page that cannot load",
     );
     // One notice per code, shown once per terminal run
-    // (docs/tui.md:1322-1325): every scroll past the failed page fails
+    // (docs/tui.md:1376-1379): every scroll past the failed page fails
     // it again with the same code and text, so exactly one grouped row
     // shows.
     assert_eq!(
