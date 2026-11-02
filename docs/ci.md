@@ -201,8 +201,13 @@ tests the pull request did not touch.
 The `stress` job runs on a ready pull request on Linux x86_64 beside the
 test jobs and builds from the same restored cache. The tests it runs are
 the test functions the diff adds or changes, found by
-`cargo xtask stress-plan` with the same test-file rules as the red-commit
-check, and a diff that touches no test function skips the run. A test
+`cargo xtask stress-plan`. An empty plan skips the run unless a changed
+source contains a test function, at least one indexed test binary compiles
+it, and every such binary lists no tests; this error also applies when the
+diff changes only helper code. A test-name mismatch is not caught when a
+binary lists other tests. A changed file under `tests/` with no test
+function selects nothing and skips the run. A source with a top-level
+`#![cfg(...)]` inner attribute is excluded from this error. A test
 function in a target whose `Cargo.toml` declares `test = false` is not one:
 only an explicit `--test <name>` builds such a target, so a plain filter
 matches nothing in it, and a diff whose touched test functions are all in
