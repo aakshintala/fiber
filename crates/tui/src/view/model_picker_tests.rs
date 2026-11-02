@@ -37,6 +37,27 @@ fn attached(width: u16, height: u16) -> App {
     app
 }
 
+/// Sets the attached session's current model.
+fn current_model(app: &mut App, reference: &str) {
+    app.on_line(crate::link::Line::Session(contract::Envelope {
+        kind: "preamble_built".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({
+            "reason": "start", "model": reference, "context_window": 200000,
+            "trigger_at": 150000, "thinking": null, "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+}
+
 /// Four models over two providers: `acme/m1` with two levels, roles and
 /// a price, `acme/m2` with none, `zeta/z1` with one, `zeta/z2` with two
 /// and a tiered price. No list times: every section reads unknown.
@@ -132,6 +153,14 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     let mut buf = Buffer::empty(area);
     crate::view::render(app, area, &mut buf, None);
     buf
+}
+
+/// Draws the picker overlay on a `width` by `height` area as text.
+fn picker_screen(view: &PickerView, width: u16, height: u16) -> String {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    super::draw(view, area, &mut buf, &mut Vec::new());
+    crate::view::text(&buf)
 }
 
 /// The rows with a cell on the selection bar: the bar covers the whole
@@ -1327,11 +1356,11 @@ fn a_short_overlay_keeps_the_focused_model_row() {
     // A Choose open and the checklist open, each with the first model
     // focused over `catalogue()`: ten rows hold the filter, the
     // buttons, the heading and the focused row, eleven add its
-    // thinking row, and nine cut the heading rather than the focused
-    // row. The checklist differs only in its count.
+    // thinking row. At nine rows the footer gives way so the heading,
+    // focused row and thinking row remain visible. The checklist differs
+    // only in its count.
     for (choose, count) in [(true, "4 models"), (false, "0 of 4 marked")] {
-        for (height, heading, thinking) in
-            [(10u16, true, false), (11, true, true), (9, false, false)]
+        for (height, heading, thinking) in [(10u16, true, false), (11, true, true), (9, true, true)]
         {
             let mut app = attached(80, height);
             app.on_models(Ok(catalogue()));
@@ -1365,6 +1394,9 @@ fn a_short_overlay_keeps_the_focused_model_row() {
                 thinking,
                 "{text}"
             );
+            if height == 9 {
+                assert!(!text.contains("Enter choose"), "footer remains: {text}");
+            }
             // The focused row sits on the bar.
             let (y, _) = find_row(&text, "m1");
             assert!(
@@ -1373,6 +1405,99 @@ fn a_short_overlay_keeps_the_focused_model_row() {
             );
         }
     }
+}
+
+#[test]
+fn a_zero_fit_open_keeps_the_session_model_with_its_heading_before_the_footer() {
+    let mut app = attached(80, 8);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(model_fit(&view, 8), 0);
+
+    let text = picker_screen(&view, 80, 8);
+    let (model_y, model) = find_row(&text, "m1");
+    assert!(model.contains("● current"), "{model}");
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the current model: {text}"
+    );
+    assert!(!text.contains("Enter choose"), "footer remains: {text}");
+}
+
+#[test]
+fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
+    let mut app = attached(120, 14);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    let first = app.model_picker_view().expect("open");
+    assert!(first.focused.is_some(), "the current model has focus");
+    let _ = screen(&app, 120, 14);
+    let slab = app
+        .frames()
+        .slab_of(crate::app::Surface::Picker)
+        .expect("the picker notes a slab");
+
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelDown,
+        col: slab.x + 1,
+        row: slab.y + 1,
+    });
+
+    let view = app.model_picker_view().expect("still open");
+    assert_eq!(
+        view.top,
+        3,
+        "wheel did not shift the window; conversation rows={}, slab={slab:?}",
+        app.conversation_area_height()
+    );
+    let next = view.sections[0]
+        .models
+        .iter()
+        .find(|model| model.id == "m2")
+        .expect("the next model");
+    assert_eq!(view.focused, Some(next.at));
+    let text = screen(&app, 120, 14);
+    let (model_y, model) = find_row(&text, "m2");
+    assert!(model.contains("› m2"), "{text}");
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the focused model: {text}"
+    );
+    assert!(!text.contains("m1 ● current"), "{text}");
+}
+
+#[test]
+fn a_zero_fit_down_keeps_the_focused_model_with_its_heading_before_the_footer() {
+    let mut app = attached(80, 8);
+    current_model(&mut app, "acme/m1");
+    app.on_models(Ok(catalogue()));
+    open(&mut app);
+    assert_eq!(
+        app.on_key(Key::Down, fakes::clock::FakeClock::new().now()),
+        Effect::None
+    );
+
+    let view = app.model_picker_view().expect("open");
+    let text = picker_screen(&view, 80, 8);
+    let (model_y, model) = find_row(&text, "m2");
+    assert!(
+        model.contains("› m2"),
+        "the focused row is not shown: {model}"
+    );
+    assert!(
+        text.lines()
+            .nth(usize::from(model_y).saturating_sub(1))
+            .is_some_and(|line| line.contains("acme")),
+        "the provider heading must precede the focused model: {text}"
+    );
+    assert!(!text.contains("Enter choose"), "footer remains: {text}");
 }
 
 #[test]

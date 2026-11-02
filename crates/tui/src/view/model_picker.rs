@@ -548,13 +548,15 @@ fn window(view: &PickerView, fit: usize) -> (usize, usize) {
     (start, end)
 }
 
-/// The body rows available for the items: the area less the chrome, the
-/// filter and buttons rows above it, the status lines, the no-match
-/// line, and the outcome lines under the list, which are not windowed.
+/// The filter and buttons rows, status lines, no-match line and outcomes
+/// under the list, which are not windowed.
+fn reserved_rows(view: &PickerView) -> usize {
+    2 + view.status.len() + usize::from(view.no_match) + outcome_rows(&view.outcomes).len()
+}
+
+/// The body rows available for the items with the footer and its gap.
 fn model_fit(view: &PickerView, height: u16) -> usize {
-    let reserved =
-        2 + view.status.len() + usize::from(view.no_match) + outcome_rows(&view.outcomes).len();
-    usize::from(height.saturating_sub(CHROME)).saturating_sub(reserved)
+    usize::from(height.saturating_sub(CHROME)).saturating_sub(reserved_rows(view))
 }
 
 /// The page step over `view` at `height`: the windowed focusable model,
@@ -749,6 +751,97 @@ fn display_rows(view: &PickerView, priced: bool) -> DisplayRows {
     DisplayRows { rows, item_starts }
 }
 
+/// The model whose provider heading must stay with it in a short viewport.
+fn compact_model_item(view: &PickerView, items: &[Item], display: &DisplayRows) -> Option<usize> {
+    if let Some(focused) = view.focused {
+        return items
+            .iter()
+            .position(|item| matches!(item, Item::Model(flat) if flat.row.at == focused));
+    }
+    if view.top > 0
+        && let Some(at) = display.rows.iter().skip(view.top).find_map(|row| row.focus)
+        && let Some(item) = items
+            .iter()
+            .position(|item| matches!(item, Item::Model(flat) if flat.row.at == at))
+    {
+        return Some(item);
+    }
+    items
+        .iter()
+        .position(|item| matches!(item, Item::Model(flat) if flat.row.current))
+        .or_else(|| items.iter().position(|item| matches!(item, Item::Model(_))))
+}
+
+/// The rows the picker can use without its footer and gap.
+fn footerless_fit(view: &PickerView, height: u16) -> usize {
+    usize::from(height.saturating_sub(CHROME.saturating_sub(2))).saturating_sub(reserved_rows(view))
+}
+
+/// Whether the short picker must give up the footer to keep a model and
+/// its provider heading visible.
+fn short_model_fit(view: &PickerView, height: u16) -> Option<usize> {
+    let fit = model_fit(view, height);
+    let items = items(view);
+    let display = display_rows(view, false);
+    let item = compact_model_item(view, &items, &display)?;
+    let Item::Model(flat) = items.get(item)? else {
+        return None;
+    };
+    let model = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(flat.row.at))?;
+    let heading = (0..model).rev().find(|at| {
+        display.rows.get(*at).is_some_and(|row| {
+            row.focus.is_none()
+                && row
+                    .row
+                    .spans
+                    .first()
+                    .is_some_and(|span| span.content == flat.provider)
+        })
+    })?;
+    let visible = fit.max(usize::from(view.focused.is_some()));
+    let top = keep_focus_visible_top(view, height);
+    let end = top.saturating_add(visible);
+    (fit < 2 || heading < top || model < top || model >= end).then(|| footerless_fit(view, height))
+}
+
+/// The minimum list window, with the chosen model's provider heading first.
+fn compact_model_rows(view: &PickerView, priced: bool, fit: usize) -> Option<Vec<Row>> {
+    let items = items(view);
+    let display = display_rows(view, priced);
+    let item = compact_model_item(view, &items, &display)?;
+    let Item::Model(flat) = items.get(item)? else {
+        return None;
+    };
+    let start = display
+        .rows
+        .iter()
+        .position(|row| row.focus == Some(flat.row.at))?;
+    let focused = Some(flat.row.at) == view.focused;
+    if fit < 2 {
+        return Some(vec![model_first_row(flat.row, focused, priced)]);
+    }
+    let mut rows = vec![heading_row(flat.provider, flat.state, &view.spinner)];
+    rows.extend(
+        display
+            .rows
+            .into_iter()
+            .skip(start)
+            .take(fit.saturating_sub(1))
+            .map(|row| row.row),
+    );
+    Some(rows)
+}
+
+/// The picker footer, which yields when its rows are needed for a model.
+fn picker_footer(view: &PickerView, height: u16) -> Option<Row> {
+    short_model_fit(view, height)
+        .is_none()
+        .then(|| overlay::legend(&view.footer))
+}
+
 /// The focus-derived list start, using the same item window as the
 /// keyboard page step but returning a displayed body-row offset.
 pub(crate) fn focus_window_top(view: &PickerView, height: u16) -> usize {
@@ -762,10 +855,10 @@ pub(crate) fn focus_window_top(view: &PickerView, height: u16) -> usize {
 }
 
 /// The stored top clamped to the current list and moved only enough to
-/// keep the focused row's first display row visible.
-pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
+/// keep the focused row's first display row visible at `fit` rows.
+fn keep_focus_visible_top_at_fit(view: &PickerView, fit: usize) -> usize {
     let display = display_rows(view, false);
-    let fit = model_fit(view, height).max(usize::from(view.focused.is_some()));
+    let fit = fit.max(usize::from(view.focused.is_some()));
     let max = display.rows.len().saturating_sub(fit);
     let top = view.top.min(max);
     if fit == 0 {
@@ -783,6 +876,15 @@ pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
     top.clamp(low, focused).min(max)
 }
 
+/// The stored top clamped to the current list and moved only enough to
+/// keep the focused row's first display row visible.
+pub(crate) fn keep_focus_visible_top(view: &PickerView, height: u16) -> usize {
+    keep_focus_visible_top_at_fit(
+        view,
+        model_fit(view, height).max(usize::from(view.focused.is_some())),
+    )
+}
+
 /// The next body-row top and the nearest visible selectable layout row,
 /// if wheel movement carries the current focus offscreen.
 pub(crate) fn picker_wheel_window(
@@ -791,9 +893,19 @@ pub(crate) fn picker_wheel_window(
     height: u16,
 ) -> (usize, Option<usize>) {
     let display = display_rows(view, false);
-    let fit = model_fit(view, height).max(usize::from(view.focused.is_some()));
+    // When fewer than two body rows fit, a short draw yields the footer
+    // and gap to keep a model with its heading. Wheel against that expanded
+    // window or the step can land on a nonfocusable detail row and leave
+    // the focused model pinned.
+    let fit = model_fit(view, height);
+    let fit = if fit < 2 {
+        short_model_fit(view, height).unwrap_or(fit)
+    } else {
+        fit
+    }
+    .max(usize::from(view.focused.is_some()));
     let max = display.rows.len().saturating_sub(fit);
-    let effective = keep_focus_visible_top(view, height);
+    let effective = keep_focus_visible_top_at_fit(view, fit);
     let top = if up {
         effective.saturating_sub(3)
     } else {
@@ -825,37 +937,58 @@ pub(crate) fn picker_wheel_window(
 
 fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     let priced = overlay::inner(overlay::width(PREFER, PREFER, width)) >= PRICE_MIN_INNER;
-    let fit = model_fit(view, height);
-    let visible = fit.max(usize::from(view.focused.is_some()));
-    let display = display_rows(view, priced);
-    let top = keep_focus_visible_top(view, height).min(display.rows.len());
-    let mut list: Vec<Row> = display
-        .rows
-        .into_iter()
-        .skip(top)
-        .take(visible)
-        .filter_map(|row| {
-            if fit < 2 && row.trim_count {
-                None
-            } else {
-                Some(row.row)
+    let short_fit = short_model_fit(view, height);
+    let controls = short_fit != Some(0);
+    let list = if let Some(fit) = short_fit {
+        let mut list = compact_model_rows(view, priced, fit).unwrap_or_default();
+        if controls {
+            list.extend(outcome_rows(&view.outcomes));
+            if view.no_match {
+                list.push(dim_row("No models match".to_owned()));
             }
-        })
-        .collect();
-    list.extend(outcome_rows(&view.outcomes));
-    if view.no_match {
-        list.push(dim_row("No models match".to_owned()));
-    }
-    for status in &view.status {
-        list.push(dim_row(status.clone()));
-    }
+            for status in &view.status {
+                list.push(dim_row(status.clone()));
+            }
+        }
+        list
+    } else {
+        let fit = model_fit(view, height);
+        let visible = fit.max(usize::from(view.focused.is_some()));
+        let display = display_rows(view, priced);
+        let top = keep_focus_visible_top(view, height).min(display.rows.len());
+        let mut list: Vec<Row> = display
+            .rows
+            .into_iter()
+            .skip(top)
+            .take(visible)
+            .filter_map(|row| {
+                if fit < 2 && row.trim_count {
+                    None
+                } else {
+                    Some(row.row)
+                }
+            })
+            .collect();
+        list.extend(outcome_rows(&view.outcomes));
+        if view.no_match {
+            list.push(dim_row("No models match".to_owned()));
+        }
+        for status in &view.status {
+            list.push(dim_row(status.clone()));
+        }
+        list
+    };
 
     // The filter and button rows stay fixed; only the provider/list rows
     // above are windowed. Width is measured from the rows actually shown.
     // Width is measured from the spans alone: the footer legend always
     // outruns any right column here, so testing it adds only an
     // equivalent mutant on emptiness (removed).
-    let mut rows = vec![filter_row(view)];
+    let mut rows = if controls {
+        vec![filter_row(view)]
+    } else {
+        Vec::new()
+    };
     let mut content: usize = 0;
     let mut widen = |row: &Row| {
         content = content.max(spans_width(&row.spans));
@@ -863,13 +996,16 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     for row in &rows {
         widen(row);
     }
-    let footer = overlay::legend(&view.footer);
-    widen(&footer);
+    if let Some(footer) = picker_footer(view, height) {
+        widen(&footer);
+    }
     for row in &list {
         widen(row);
     }
     let buttons = buttons_row(view, None);
-    widen(&buttons);
+    if controls {
+        widen(&buttons);
+    }
     let inner = overlay::inner(overlay::width(
         u16::try_from(content).unwrap_or(u16::MAX),
         PREFER,
@@ -883,7 +1019,9 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     } else {
         None
     };
-    rows.push(buttons_row(view, refresh_at));
+    if controls {
+        rows.push(buttons_row(view, refresh_at));
+    }
     rows.extend(list);
     rows
 }
@@ -919,7 +1057,7 @@ pub(crate) fn note_selection(
         title: None,
         close: None,
         body: body(view, area.width, area.height),
-        footer: Some(overlay::legend(&view.footer)),
+        footer: picker_footer(view, area.height),
         prefer: PREFER,
     };
     let (_, placed) = overlay::body_rows(&framed, area, Place::Under { top: area.y });
@@ -970,7 +1108,7 @@ pub(crate) fn draw(
         title: None,
         close: None,
         body: body(view, area.width, area.height),
-        footer: Some(overlay::legend(&view.footer)),
+        footer: picker_footer(view, area.height),
         prefer: PREFER,
     };
     overlay::draw(buf, area, &framed, Place::Under { top: area.y }, targets)
