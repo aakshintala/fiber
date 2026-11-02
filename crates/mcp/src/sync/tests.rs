@@ -14,7 +14,7 @@ use serde_json::json;
 use crate::Hints;
 use crate::slot::Served;
 use crate::test_support::FakeImages;
-use crate::test_support::{Setup, WITHIN};
+use crate::test_support::Setup;
 use crate::{Disposition, SyncRow, apply_sync, classify_sync, plan_sync, stage_sync};
 
 const HI: &str = r#"{"content":[{"type":"text","text":"hi"}]}"#;
@@ -47,6 +47,11 @@ impl Setup {
     /// thread: the wedge tests advance the fake clock past each bound
     /// while the stage parks. Sends the staged sync back with the servers
     /// it borrowed, so the test stops what the stage left behind.
+    ///
+    /// The receive on the returned channel is a hang guard on a thread
+    /// that launches real child processes, so it takes the shared 40 s
+    /// wait: a loaded runner took 10.1 s to launch two fake servers
+    /// (#4008).
     fn stage_on_thread(
         rows: Vec<SyncRow>,
         servers: crate::start::Servers,
@@ -93,9 +98,7 @@ fn commit_writes_no_cache_for_an_unchanged_keep() {
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("an unchanged keep stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -174,9 +177,7 @@ fn commit_writes_a_prompts_only_change_for_an_unchanged_tool_list() {
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a prompts-only change stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -207,9 +208,7 @@ fn commit_installs_a_keep_dead_at_install_as_listed() {
     assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a keep stages");
     let cache_before = setup.cache_bytes();
     setup.kill_slot(&slot);
@@ -259,9 +258,7 @@ fn commit_never_writes_a_declined_keep_payload() {
     assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a keep stages");
     setup.kill_slot(&slot);
     assert!(!slot.is_live(), "the kept slot died before the commit");
@@ -318,9 +315,7 @@ fn an_optional_replacement_failure_still_writes_the_detected_death() {
     ));
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("an optional shadow failure stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -366,9 +361,7 @@ fn commit_declares_mcp_resources_only_when_a_slot_offers_them() {
         assert!(!setup.spawned(), "the cache declares without spawning");
         let images = FakeImages::ok();
         let result = Setup::stage_on_thread(Vec::new(), started.servers, &setup, &images);
-        let (outcome, servers) = Deadline::after(WITHIN)
-            .recv(&result)
-            .expect("the stage ends");
+        let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
         let staged = outcome.expect("an empty stage");
         let owned = setup.owned_inputs(&images);
         let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -413,9 +406,7 @@ fn classify_starts_a_lazy_slot_and_commit_swaps_it_for_a_live_one() {
         }]
     ));
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = fakes::Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a fresh start stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -490,9 +481,7 @@ fn classify_replaces_a_nonlive_slot_and_the_commit_files_it_restarted() {
         );
         std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");
         let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-        let (outcome, servers) = Deadline::after(WITHIN)
-            .recv(&result)
-            .expect("the stage ends");
+        let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
         let staged = outcome.expect("a replacement stages");
         let owned = setup.owned_inputs(&images);
         let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -570,9 +559,7 @@ fn classify_files_a_changed_key_by_whether_the_slot_ran_this_session() {
             "a {state} slot with a changed key files {disposition:?}"
         );
         let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-        let (outcome, servers) = Deadline::after(WITHIN)
-            .recv(&result)
-            .expect("the stage ends");
+        let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
         let staged = outcome.expect("a replacement stages");
         let owned = setup.owned_inputs(&images);
         let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -648,19 +635,16 @@ fn stage_sync_starts_shadows_in_parallel() {
     // Both shadows enter before either launches: on serial code the
     // second send never comes and this Deadline fails the test.
     let mut entered_names = Vec::new();
+    let entered_wait = Deadline::start().start_wait();
     for _ in 0..2 {
         entered_names.push(
-            Deadline::after(WITHIN)
-                .recv(&entered)
-                .expect("both shadows enter before either launches"),
+            entered_wait.recv_or_fail(&entered, "both shadows to enter before either launches"),
         );
     }
     entered_names.sort();
     assert_eq!(entered_names, vec!["aa".to_owned(), "bb".to_owned()]);
     gate.wait();
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("fresh starts stage");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -761,9 +745,7 @@ fn dropping_an_unapplied_stage_stops_its_shadows() {
     assert!(matches!(rows.as_slice(), [SyncRow::Shadow { .. }]));
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, empty.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a fresh start stages");
     let shadow = staged
         .rows
@@ -823,9 +805,7 @@ fn a_required_shadow_failure_rejects_and_stops_every_shadow() {
     ];
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, empty.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let failure = match outcome {
         Err(failure) => failure,
         Ok(_) => panic!("a required shadow failure rejects"),
@@ -867,9 +847,7 @@ fn an_optional_shadow_failure_stages_beside_a_live_shadow() {
     ];
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, empty.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("an optional shadow failure stages");
     let live = staged
         .rows
@@ -923,9 +901,7 @@ fn plan_ignores_resources_of_a_dropped_slot() {
     assert!(matches!(rows.as_slice(), [SyncRow::Shadow { .. }]));
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a fresh start stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -953,9 +929,7 @@ fn plan_declares_no_resources_for_a_keep_offering_none() {
     assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("an unchanged keep stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -993,9 +967,7 @@ fn keep_redeclare_with_a_newly_disabled_tool_drops_it_and_keeps_the_new_spec() {
     );
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a keep stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -1046,9 +1018,7 @@ fn keep_redeclare_with_a_newly_enabled_tool_adds_it_and_keeps_the_new_spec() {
     );
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a keep stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
@@ -1104,9 +1074,7 @@ fn keep_redeclare_with_a_changed_hint_shows_in_the_declared_effects() {
     );
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
+    let (outcome, servers) = Deadline::start().recv_or_fail(&result, "the stage to end");
     let staged = outcome.expect("a keep stages");
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
