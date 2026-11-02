@@ -309,6 +309,40 @@ fn under_removes_an_exited_owner_and_keeps_a_live_owner() {
 }
 
 #[test]
+fn under_leaves_an_exited_owner_outside_its_prefix_alone() {
+    let parent = TempDir::new("sweep-parent");
+    let prefix = "fiber-tools-shell-sandbox-protected";
+    let mut child = Command::new("true").process_group(0).spawn().unwrap();
+    let exited_pid = child.id();
+    assert!(child.wait().unwrap().success());
+
+    let outside_prefix = parent.path().join("other-prefix-exited");
+    fs::create_dir(&outside_prefix).unwrap();
+    fs::write(outside_prefix.join(OWNER_MARKER), exited_pid.to_string()).unwrap();
+
+    let next = TempDir::under(parent.path(), prefix);
+    assert!(
+        outside_prefix.is_dir(),
+        "the sweep reached a directory outside its own prefix"
+    );
+    assert_only_owner_marker(next.path());
+}
+
+#[test]
+fn under_leaves_a_pid_one_marker_alone() {
+    let parent = TempDir::new("sweep-parent");
+    let prefix = "fiber-tools-shell-sandbox-protected";
+    let pid_one = parent.path().join(format!("{prefix}-pid-one"));
+    fs::create_dir(&pid_one).unwrap();
+    fs::write(pid_one.join(OWNER_MARKER), "1").unwrap();
+
+    let next = TempDir::under(parent.path(), prefix);
+    assert!(pid_one.is_dir(), "the PID 1 marker directory was removed");
+    assert_eq!(fs::read_to_string(pid_one.join(OWNER_MARKER)).unwrap(), "1");
+    assert_only_owner_marker(next.path());
+}
+
+#[test]
 fn a_closed_stdin_lets_the_child_exit_and_clean_up() {
     let parent = TempDir::new("fk-parent");
     let mut child = spawn_child(parent.path());
