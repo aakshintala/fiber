@@ -280,15 +280,19 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
         1
     );
 
-    // The agent's first request after the handoff holds the same kept
-    // message word for word, between the opening and the note, and not the
-    // dropped one.
+    // The agent's first request after the handoff holds the kept message
+    // in its earlier-message block, between the opening and the note, and
+    // not the dropped one.
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
     assert!(agent[0].starts_with("This message is from Fiber"));
     assert_eq!(
         agent[1..],
-        ["never push to main", "The note.", "now run it"]
+        [
+            "The person's earlier message:\nThe person: never push to main",
+            "The note.",
+            "now run it"
+        ]
     );
 }
 
@@ -1610,11 +1614,15 @@ fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
     assert!(agent[0].starts_with("This message is from Fiber"));
-    // The kept message is carried whole, before the turn's input and the
-    // note.
-    assert_eq!(agent[2..], ["second", "The note."]);
-    assert!(
-        agent[1] == long,
+    // The kept message stays whole in its earlier-message block, before
+    // the labelled current input and the note.
+    assert_eq!(
+        agent[2..],
+        ["The person's new message:\nsecond", "The note."]
+    );
+    assert_eq!(
+        agent[1],
+        format!("The person's earlier message:\nThe person: {long}"),
         "the kept message is carried whole: {} bytes of {}",
         agent[1].len(),
         long.len()

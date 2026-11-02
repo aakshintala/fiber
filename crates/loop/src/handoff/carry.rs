@@ -10,6 +10,7 @@ use contract::provider::Input;
 use contract::shapes::Question;
 
 use crate::prompt::{fill, message};
+use crate::reviewer::{Reviewed, Shown, render_reviewed};
 
 /// The render state a handoff reads: the same fold in the live loop and in a
 /// rebuild, so the two never differ (`docs/loop.md`, "What the model is
@@ -23,7 +24,8 @@ pub(crate) struct Carry {
     /// The conversation's length before the rewind summary turn.
     pub(crate) summary: Option<usize>,
     /// This turn's input: its message items and the steering messages
-    /// applied, in log order. A handoff carries it verbatim.
+    /// applied, in log order. A handoff labels a copy, leaving this source
+    /// untouched for ordinary rendering.
     pub(crate) input: Vec<Input>,
     /// The jobs started and not completed, in start order, as
     /// `(job id, description)`.
@@ -74,16 +76,13 @@ pub(crate) struct Carry {
     /// `session_start` context placed while it is armed move it on by one;
     /// the `reviewer_kept` line takes it.
     pub(crate) input_at: Option<usize>,
-    /// The person's messages the reviewer still holds, oldest first, each
-    /// under the `seq` and item of the line that holds it: the driver
-    /// messages outside a rewind summary turn, pruned to the kept ones at
-    /// every `reviewer_kept`, as the reviewer's own transcript is.
-    pub(crate) person: Vec<(KeptMessage, Input)>,
-    /// The index in `person` where this turn's messages start: the turn's
-    /// input is carried whole, so a kept message at or after it is not
-    /// inserted again. A position, never a key: a fork's log counts `seq`
-    /// from its own start, so a parent's message can share a key with this
-    /// turn's, and the reviewer keeps both.
+    /// The messages and replies the reviewer still holds, rendered by the
+    /// same fold. Tool-call entries are discarded after they break links.
+    pub(crate) reviewed: Vec<Reviewed>,
+    /// The number of person occurrences before this turn: its input is
+    /// carried whole, so a kept message at or after it is not inserted
+    /// again. A position, never a key: a fork's log counts `seq` from its
+    /// own start, so a parent's message can share a key with this turn's.
     pub(crate) turn_from: usize,
 }
 
@@ -171,11 +170,72 @@ pub(crate) struct StepCall {
 }
 
 impl Carry {
+    /// Observes the reviewer's rendered messages and replies once for this
+    /// durable event. The summary gate is shared by live, rebuild and fold
+    /// callers; call entries only need to live long enough to break links.
+    pub(crate) fn observe_reviewed(
+        &mut self,
+        event: &Event,
+        action: Option<&ActionId>,
+        seq: Option<contract::Seq>,
+        skip_summary: bool,
+    ) {
+        if skip_summary
+            || matches!(event, Event::TurnStarted(started) if crate::reviewer::summary_turn(started))
+        {
+            return;
+        }
+
+        if matches!(event, Event::TurnStarted(_)) {
+            self.turn_from = self
+                .reviewed
+                .iter()
+                .filter(|entry| matches!(entry.shown, Shown::Person(_)))
+                .count();
+        }
+        let prior_kept = if let Event::ReviewerKept(kept) = event {
+            Some(
+                self.reviewed
+                    .iter()
+                    .filter_map(|entry| match &entry.shown {
+                        Shown::Person(key) => Some(key),
+                        Shown::Call(_) | Shown::Reply(_) => None,
+                    })
+                    .take(self.turn_from)
+                    .filter(|key| kept.kept.contains(*key))
+                    .count(),
+            )
+        } else {
+            None
+        };
+        render_reviewed(&mut self.reviewed, event, action, seq);
+        self.reviewed
+            .retain(|entry| !matches!(entry.shown, Shown::Call(_)));
+        if let Some(prior_kept) = prior_kept {
+            self.turn_from = prior_kept;
+        }
+    }
+
     /// The conversation after a completed handoff: the carried input, the
     /// note, a line for the jobs still running and, when tools set the note,
     /// the other calls of that step with their results.
     pub(crate) fn restart(&mut self, done: &HandoffCompleted) -> Vec<Input> {
-        let mut conversation = self.input.clone();
+        let mut conversation: Vec<Input> = self
+            .input
+            .iter()
+            .cloned()
+            .map(|input| match input {
+                Input::User { text, images } => Input::User {
+                    text: fill(message("handoff-new"), &[("message", text.as_str())]),
+                    images,
+                },
+                other @ Input::Assistant { .. }
+                | other @ Input::Reasoning { .. }
+                | other @ Input::ToolCall { .. }
+                | other @ Input::ToolResult { .. }
+                | other @ Input::ToolSearchResult { .. } => other,
+            })
+            .collect();
         let texts = std::mem::take(&mut self.texts);
         let step = std::mem::take(&mut self.step);
         // The loads move into the resend the next opening sends again: a
@@ -250,39 +310,28 @@ impl Carry {
         conversation
     }
 
-    /// Records a person's message the reviewer holds, under its line's key.
-    pub(crate) fn record_person(&mut self, key: KeptMessage, input: Input) {
-        self.person.push((key, input));
-    }
-
-    /// Keeps only the entries `kept` names, in their current order, and
-    /// moves `turn_from` to the count kept from before it.
-    pub(crate) fn prune(&mut self, kept: &[KeptMessage]) {
-        let before = self
-            .person
-            .iter()
-            .take(self.turn_from)
-            .filter(|(key, _)| kept.contains(key))
-            .count();
-        self.person.retain(|(key, _)| kept.contains(key));
-        self.turn_from = before;
-    }
-
-    /// Carries the messages a `reviewer_kept` line names into the context a
-    /// completed handoff started, at the armed spot and in the reviewer's
-    /// order, then prunes the index to them. Nothing is inserted when no
-    /// completed handoff armed the spot, a message of this turn stays where
-    /// the turn's input put it, and a key naming no entry matches nothing.
+    /// Carries the earlier kept message/reply pairs into the context a
+    /// completed handoff started, at the armed spot and in reviewer order.
+    /// It inserts nothing without an armed handoff, leaves this turn's input
+    /// in place, and ignores keys with no matching entry.
     pub(crate) fn keep(&mut self, kept: &[KeptMessage], conversation: &mut Vec<Input>) {
         if let Some(mut at) = self.input_at.take() {
-            for (key, input) in self.person.iter().take(self.turn_from) {
-                if kept.contains(key) {
-                    conversation.insert(at.min(conversation.len()), input.clone());
+            for (key, text) in Reviewed::person_pairs(&self.reviewed)
+                .into_iter()
+                .take(self.turn_from)
+            {
+                if kept.contains(&key) {
+                    conversation.insert(
+                        at.min(conversation.len()),
+                        Input::User {
+                            text: fill(message("handoff-earlier"), &[("message", text.as_str())]),
+                            images: Vec::new(),
+                        },
+                    );
                     at += 1;
                 }
             }
         }
-        self.prune(kept);
     }
 
     /// A call of the last reply was requested.

@@ -231,8 +231,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        6647,
-        0x422bcc6984ce7865,
+        6852,
+        0xc8c6a047265663d3,
     );
 }
 
@@ -268,6 +268,9 @@ fn messages_md_holds_every_section_the_doc_names() {
         "handoff-note",
         "handoff-focus",
         "handoff-jobs",
+        "handoff-earlier",
+        "handoff-new",
+        "handoff-skill",
         "job-line",
         "job-line-suppressed",
         "session-message",

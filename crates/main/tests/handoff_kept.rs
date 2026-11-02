@@ -38,9 +38,7 @@ fn fiber(setup: &Setup, args: &[&str]) -> Run {
 #[test]
 fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
     let setup = Setup::new();
-    let skill_path = setup
-        .workspace()
-        .join(".agents/skills/review/SKILL.md");
+    let skill_path = setup.workspace().join(".agents/skills/review/SKILL.md");
     fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
     fs::write(
         &skill_path,
@@ -143,12 +141,16 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
     );
     let skill_result: Value = serde_json::from_slice(&requests[3].body).unwrap();
     assert!(
-        skill_result["input"].as_array().unwrap().iter().any(|item| {
-            item["type"] == "function_call_output"
-                && item["output"]
-                    .as_str()
-                    .is_some_and(|text| text.contains("Use the current review skill instructions."))
-        }),
+        skill_result["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| {
+                item["type"] == "function_call_output"
+                    && item["output"].as_str().is_some_and(|text| {
+                        text.contains("Use the current review skill instructions.")
+                    })
+            }),
         "the ordinary skill result is present before handoff"
     );
 
@@ -158,15 +160,17 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
         .filter(|text| text.contains("The person's earlier message:"))
         .collect();
     assert_eq!(earlier.len(), 2, "each kept answer has its own block");
-    let pair_one = "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.\n\n";
-    let pair_two = "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.\n\n";
+    let pair_one =
+        "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.";
+    let pair_two =
+        "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.";
     assert_eq!(earlier[0].as_str(), pair_one);
     assert_eq!(earlier[1].as_str(), pair_two);
-    let current = "The person's new message:\nPlease hand off now.\n\n";
+    let current = "The person's new message:\nPlease hand off now.";
     let note = "The handoff note.";
     let skill = &resent["payload"]["skills"][0];
     let skill_block = format!(
-        "Skills reloaded from the previous context:\n{} — {}\n\n{}\n\n",
+        "Skills reloaded from the previous context:\n{} — {}\n\n{}",
         skill["name"].as_str().unwrap(),
         skill["path"].as_str().unwrap(),
         skill["content"].as_str().unwrap(),
@@ -178,7 +182,10 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
     );
     let flattened = messages.join("");
     for expected in [pair_one, pair_two, current, note, skill_block.as_str()] {
-        assert!(flattened.contains(expected), "flattened request lost {expected:?}");
+        assert!(
+            flattened.contains(expected),
+            "flattened request lost {expected:?}"
+        );
     }
 }
 
@@ -195,9 +202,9 @@ fn turn_started_seq(lines: &[Value], text: &str) -> u64 {
             line["kind"] == "turn_started"
                 && line["payload"]["input"].as_array().is_some_and(|items| {
                     items.iter().any(|item| {
-                        item["content"].as_array().is_some_and(|parts| {
-                            parts.iter().any(|part| part["text"] == text)
-                        })
+                        item["content"]
+                            .as_array()
+                            .is_some_and(|parts| parts.iter().any(|part| part["text"] == text))
                     })
                 })
         })

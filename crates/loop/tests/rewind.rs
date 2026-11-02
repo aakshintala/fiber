@@ -3492,7 +3492,10 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
         user_text(&a_second.conversation[0]).starts_with("This message is from Fiber"),
         "the opening message renders first"
     );
-    assert_eq!(user_text(&a_second.conversation[1]), "hi");
+    assert_eq!(
+        user_text(&a_second.conversation[1]),
+        "The person's new message:\nhi"
+    );
     assert_eq!(user_text(&a_second.conversation[2]), "The note.");
     assert!(
         matches!(&a_second.conversation[3], Input::Assistant { text, .. } if text == "Done."),

@@ -219,10 +219,53 @@ fn a_restart_is_the_carried_input_then_the_note() {
         note: vec![ActionId("a_note".into())],
     }));
     let restarted = carry.restart(&done);
-    assert_eq!(restarted, [user("one"), user("two"), user("first\nsecond")]);
+    assert_eq!(
+        restarted,
+        [
+            user("The person's new message:\none"),
+            user("The person's new message:\ntwo"),
+            user("first\nsecond")
+        ]
+    );
+    assert_eq!(carry.input, [user("one"), user("two")]);
     // A new context: not nudged, and the window's texts are spent.
     assert!(!carry.nudged);
     assert!(carry.texts.is_empty());
+}
+
+#[test]
+fn a_restart_labels_a_copy_and_preserves_current_input_media() {
+    let image = contract::provider::ImageRef {
+        path: "images/in.png".into(),
+        mime_type: "image/png".into(),
+        width: 8,
+        height: 6,
+    };
+    let original = Input::User {
+        text: "look".into(),
+        images: vec![image.clone()],
+    };
+    let mut carry = Carry {
+        input: vec![original.clone()],
+        ..Carry::default()
+    };
+
+    let restarted = carry.restart(&completed(Some(Note::Hook {
+        note_text: "note".into(),
+        extension: "ext".into(),
+    })));
+
+    assert_eq!(
+        restarted,
+        [
+            Input::User {
+                text: "The person's new message:\nlook".into(),
+                images: vec![image],
+            },
+            user("note")
+        ]
+    );
+    assert_eq!(carry.input, [original]);
 }
 
 #[test]
@@ -654,8 +697,12 @@ fn a_resend_appends_each_skill_after_the_note_in_event_order() {
         [
             user("ask"),
             user("the note"),
-            user("/w/alpha/SKILL.md\n\nAlpha body."),
-            user("/w/beta/SKILL.md\n\nBeta body."),
+            user(
+                "Skills reloaded from the previous context:\nalpha — /w/alpha/SKILL.md\n\nAlpha body."
+            ),
+            user(
+                "Skills reloaded from the previous context:\nbeta — /w/beta/SKILL.md\n\nBeta body."
+            ),
         ]
     );
     // The render records the loads but never touches the turn's input.
@@ -708,8 +755,16 @@ fn a_full_handoff_renders_the_opening_then_the_context_then_the_skills() {
     );
     assert_eq!(conversation.len(), 7);
     assert!(matches!(&conversation[1], Input::User { text, .. } if text == "hook context"));
-    assert_eq!(conversation[5], user("/w/alpha/SKILL.md\n\nAlpha body."));
-    assert_eq!(conversation[6], user("/w/beta/SKILL.md\n\nBeta body."));
+    assert_eq!(
+        conversation[5],
+        user(
+            "Skills reloaded from the previous context:\nalpha — /w/alpha/SKILL.md\n\nAlpha body."
+        )
+    );
+    assert_eq!(
+        conversation[6],
+        user("Skills reloaded from the previous context:\nbeta — /w/beta/SKILL.md\n\nBeta body.")
+    );
     assert!(matches!(&conversation[0], Input::User { text, .. } if text.contains("2023-11-14")));
 }
 

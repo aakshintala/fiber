@@ -1055,16 +1055,17 @@ fn folded_at(sessions: &Path, at: u64) -> (crate::resume::Resumed, Vec<contract:
 /// reviewer's index of them, and nothing else.
 fn seeded(texts: &[&str]) -> Carry {
     Carry {
-        person: texts
+        reviewed: texts
             .iter()
             .map(|text| {
-                (
-                    contract::events::KeptMessage {
-                        seq: Seq(1),
-                        item: 0,
-                    },
-                    user_input(text),
-                )
+                let key = contract::events::KeptMessage {
+                    seq: Seq(1),
+                    item: 0,
+                };
+                crate::reviewer::Reviewed {
+                    shown: crate::reviewer::Shown::Person(key),
+                    input: user_input(&format!("The person: {text}")),
+                }
             })
             .collect(),
         ..Carry::default()
@@ -1095,7 +1096,10 @@ fn a_handoff_before_the_point_applies_to_the_fork() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message renders first: {conversation:?}"
     );
-    assert_eq!(conversation[1], user_input("two"));
+    assert_eq!(
+        conversation[1],
+        user_input("The person's new message:\ntwo")
+    );
     assert_eq!(conversation[2], user_input("the handoff note"));
 }
 
@@ -1134,7 +1138,10 @@ fn a_point_on_the_handoffs_completion_applies_it() {
     // is past the point.
     assert_eq!(
         conversation,
-        [user_input("two"), user_input("the handoff note")]
+        [
+            user_input("The person's new message:\ntwo"),
+            user_input("the handoff note")
+        ]
     );
     // One line earlier, on the note's own line, it does not: the
     // completion is past the point, so the window stays at the chain's
@@ -1381,7 +1388,10 @@ fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message renders first: {conversation:?}"
     );
-    assert_eq!(conversation[1], user_input("b-two"));
+    assert_eq!(
+        conversation[1],
+        user_input("The person's new message:\nb-two")
+    );
     assert_eq!(conversation[2], user_input("the middle note"));
     // C continued before the handoff instead: the handoff is after the
     // point, so the window stays at the chain's start.
@@ -1472,7 +1482,10 @@ fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the first opening renders first: {conversation:?}"
     );
-    assert_eq!(conversation[1], user_input("two"));
+    assert_eq!(
+        conversation[1],
+        user_input("The person's new message:\ntwo")
+    );
     assert_eq!(conversation[2], user_input("the first note"));
     assert!(
         conversation.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the second note") || text.contains("three"))),
@@ -1558,7 +1571,10 @@ fn a_hook_context_after_the_handoffs_opening_is_inherited() {
         "the opening message renders first: {conversation:?}"
     );
     assert_eq!(conversation[1], user_input("the hook context"));
-    assert_eq!(conversation[2], user_input("two"));
+    assert_eq!(
+        conversation[2],
+        user_input("The person's new message:\ntwo")
+    );
     assert_eq!(conversation[3], user_input("the handoff note"));
     // On the opening message's own line: the handoff applies but the
     // context after it does not.
@@ -1568,7 +1584,7 @@ fn a_hook_context_after_the_handoffs_opening_is_inherited() {
         matches!(&earlier[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message still renders first: {earlier:?}"
     );
-    assert_eq!(earlier[1], user_input("two"));
+    assert_eq!(earlier[1], user_input("The person's new message:\ntwo"));
     assert_eq!(earlier[2], user_input("the handoff note"));
     assert!(
         earlier.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the hook context"))),

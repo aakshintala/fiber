@@ -3198,7 +3198,10 @@ fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
 
     let seen = texts(&conversation);
     assert!(seen[0].contains("new-os"), "{seen:?}");
-    assert_eq!(seen[1..], ["one", "the note", "two"]);
+    assert_eq!(
+        seen[1..],
+        ["The person's new message:\none", "the note", "two"]
+    );
     // The new context has had no request, and its opening is written once.
     assert_eq!(history.provider.requests()[0].previous_end, None);
     assert_eq!(
@@ -3261,7 +3264,10 @@ fn a_crash_between_the_completion_and_the_new_opening_writes_it_at_the_next_turn
     );
     assert!(seen[0].contains("Session log:"), "{seen:?}");
     assert!(!seen[0].contains("old-os"));
-    assert_eq!(seen[1..], ["one", "the note", "two"]);
+    assert_eq!(
+        seen[1..],
+        ["The person's new message:\none", "the note", "two"]
+    );
     assert_eq!(
         history.new_kinds(),
         [
@@ -3654,7 +3660,15 @@ fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() 
         })
         .collect();
     assert!(seen[0].contains("new-os"), "{seen:?}");
-    assert_eq!(seen[1..], ["two", "the note", "after", "three"]);
+    assert_eq!(
+        seen[1..],
+        [
+            "The person's new message:\ntwo",
+            "the note",
+            "after",
+            "three"
+        ]
+    );
 }
 
 #[test]

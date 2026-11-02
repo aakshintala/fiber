@@ -365,7 +365,7 @@ fn a_hook_note_completes_the_handoff_with_no_note_request() {
     let next = &requests[1].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("hi"));
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("Hook note."));
     assert_eq!(requests[1].previous_end, None);
     // The hook saw the trigger, no instructions, and the loop's
@@ -728,7 +728,7 @@ fn an_overflow_handoff_hands_the_hook_the_moved_results() {
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("hi"));
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("Hook note."));
     assert_eq!(attempt_numbers(&lines), [1, 1, 1]);
     assert_no_stored_attempt(&lines);
@@ -1092,7 +1092,7 @@ fn a_hook_note_runs_session_start_with_reason_handoff() {
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
     assert!(text_of(&next[1]).contains("at handoff"), "{next:?}");
-    assert_eq!(next[2], user("hi"));
+    assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("Hook note."));
 }
 

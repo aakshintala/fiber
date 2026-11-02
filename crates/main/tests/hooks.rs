@@ -1951,7 +1951,11 @@ fn a_handoff_runs_session_start_with_reason_handoff() {
     assert!(users[0].starts_with("This message is from Fiber"));
     assert_eq!(
         &users[1..],
-        ["reason:handoff", "read the note", "The note."]
+        [
+            "reason:handoff",
+            "The person's new message:\nread the note",
+            "The note."
+        ]
     );
 }
 

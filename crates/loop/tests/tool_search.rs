@@ -1184,7 +1184,9 @@ fn a_handoff_carries_a_same_step_search_past_the_note() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].conversation.len(), 5);
     assert!(is_opening(&requests[1].conversation[0]));
-    assert!(matches!(&requests[1].conversation[1], Input::User { text, .. } if text == "hi"));
+    assert!(
+        matches!(&requests[1].conversation[1], Input::User { text, .. } if text == "The person's new message:\nhi")
+    );
     assert!(
         matches!(&requests[1].conversation[2], Input::User { text, .. } if text == "Wrap note.")
     );
