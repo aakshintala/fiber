@@ -1269,8 +1269,10 @@ fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
     w.feed("tool_call_requested", Some("a1"), &paris);
     assert_eq!(w.status().repeats, None);
     w.feed("tool_call_requested", Some("a2"), &paris);
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     w.feed("tool_call_requested", Some("a3"), &paris);
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(3));
     // A different name resets the run.
     w.feed(
@@ -1284,6 +1286,7 @@ fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
         Some("a5"),
         &json!({"name": "shell", "arguments": {"city": "Paris"}}),
     );
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     // The same name with different arguments resets it too.
     w.feed(
@@ -1305,6 +1308,7 @@ fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
         Some("a8"),
         &json!({"name": "shell", "arguments": {"days": "2"}}),
     );
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     // An inner call counts like any other: the fold tracks no `ran_by`.
     w.feed(
@@ -1313,6 +1317,7 @@ fn repeats_counts_same_name_and_arguments_and_resets_on_change() {
         &json!({"name": "shell", "arguments": {"days": "2"},
             "ran_by": {"extension": "x", "outer_action_id": "a0"}}),
     );
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(3));
 }
 
@@ -1333,6 +1338,7 @@ fn repeats_compares_arguments_structurally_and_survives_turns() {
         Some("a2"),
         &json!({"name": "read", "arguments": "{\"city\": \"Paris\"}"}),
     );
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     // A non-JSON string compares by bytes: an identical one counts, a
     // trailing space does not.
@@ -1347,6 +1353,7 @@ fn repeats_compares_arguments_structurally_and_survives_turns() {
         Some("a4"),
         &json!({"name": "read", "arguments": "not json"}),
     );
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     w.feed(
         "tool_call_requested",
@@ -1359,17 +1366,21 @@ fn repeats_compares_arguments_structurally_and_survives_turns() {
         Some("a6"),
         &json!({"name": "read", "arguments": "not json "}),
     );
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     // The run persists across the turn boundary: no differing call reset it.
     w.finish();
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     w.prompt("again");
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(2));
     w.feed(
         "tool_call_requested",
         Some("a7"),
         &json!({"name": "read", "arguments": "not json "}),
     );
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(w.status().repeats, Some(3));
 }
 

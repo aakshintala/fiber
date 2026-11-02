@@ -562,7 +562,9 @@ fn output_at_moves_only_each_ten_seconds_of_a_streaming_reply() {
         .filter_map(|line| line.payload.get("output_at").and_then(Value::as_u64))
         .collect();
     ats.dedup();
+    // docs/events.md, "session_status": an `output_at` change counts only 10 s on from the value last written.
     assert_eq!(ats.len(), 2, "one status per 10-second step, got {ats:?}");
+    // Same 10-second gate: 5 s on writes nothing, 11 s further on writes once (5 + 11 = 16 s).
     assert_eq!(ats[1] - ats[0], 16_000);
     // The first output is stamped with the streaming state's start.
     let streaming = seen
@@ -611,8 +613,14 @@ fn tool_output_at_stops_at_the_running_calls_last_output() {
         .iter()
         .filter(|line| line.kind == "tool_call_delta")
         .collect();
-    assert_eq!(deltas.len(), 1, "the tool wrote once, then went silent");
-    let at = deltas[0].ts;
+    // No count is promised for `tool_call_delta` lines: the tool emits then waits at its gate,
+    // so at least one delta is on the log. docs/events.md, "session_status": `tool_output_at`
+    // is the running tool's last output, absent before its first output.
+    assert!(
+        !deltas.is_empty(),
+        "the tool wrote, then went silent at its gate"
+    );
+    let at = deltas.last().expect("a tool delta").ts;
     let statuses: Vec<&Envelope> = lines
         .iter()
         .filter(|line| line.kind == "session_status")
@@ -675,7 +683,9 @@ fn repeats_counts_three_same_calls_and_resets_on_new_arguments() {
         line.payload["calls"] == 3 && line.payload["state"] == "idle"
     });
     let last = first.last().expect("statuses for the first turn");
+    // docs/events.md, "session_status": `repeats` counts same-name+args runs, absent when 1.
     assert_eq!(last.payload.get("repeats").and_then(Value::as_u64), Some(3));
+    // docs/events.md, "session_status": same `repeats` promise, the run passes through 2 on its way to 3.
     assert!(
         first
             .iter()
