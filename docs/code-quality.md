@@ -239,6 +239,9 @@ Only what no tool can:
   existing `if`/`else` chain or a second flag that must stay in step with a
   first
 - a pull request that adds a member to a closed set lists in its body every consumer of that set, found by searching for the type, and what each does with the new member
+- a pull request that calls a failing check pre-existing names the base commit
+  and a CI run on that commit where the same check fails (`docs/workflow.md`,
+  "The pull request")
 - code that works around its doc is reported as a doc finding that cites
   the doc rule and the code, for `docs/workflow.md`, "When a doc should
   change", not as a code fix

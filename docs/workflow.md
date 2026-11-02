@@ -207,6 +207,10 @@ The orchestrator waits on `CI` with `gh-ci`. A failed check is fixed in a new
 commit. A failed run is never re-run until it passes; the one exception is
 CI's own retry of a binary-level test (`docs/testing.md`, "Flaky tests").
 
+A pull request or readiness report that calls a failing check pre-existing
+names the base commit and a CI run on that commit where the same check fails.
+Without both, the failure belongs to the pull request.
+
 ## Review
 
 Every pull request gets one review, after the gate passes. The reviewer is
