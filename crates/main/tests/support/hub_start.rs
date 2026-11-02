@@ -236,7 +236,12 @@ fn report(setup: &Setup, status: Option<ExitStatus>, stderr: &str, threads: &str
 /// precedes the panic exactly as before, and the stderr text waits for the
 /// drain's EOF under its own bound before cloning, so a slow drain cannot
 /// omit what the hub wrote.
-fn give_up(setup: &Setup, mut process: HubProc, capture: &CapturedStderr, why: &str) -> ! {
+pub(crate) fn give_up(
+    setup: &Setup,
+    mut process: HubProc,
+    capture: &CapturedStderr,
+    why: &str,
+) -> ! {
     let pid = process.child.id();
     let threads = hub_threads(pid);
     let status = process.child.try_wait().unwrap();
@@ -358,8 +363,31 @@ pub(crate) fn hello_slice(
     entry: &str,
     attempts: &[Duration],
 ) -> (std::io::Result<doors::hub::Hub>, HubProc) {
+    hello_slice_with_budgets(
+        setup,
+        process,
+        capture,
+        (wait, wait),
+        bound,
+        entry,
+        attempts,
+    )
+}
+
+/// Runs one hello slice with separate outer and root budgets. A spent root
+/// can be tested with a live outer wait, so the no-room error returns before
+/// the outer timeout races it.
+pub(crate) fn hello_slice_with_budgets(
+    setup: &Setup,
+    process: HubProc,
+    capture: &CapturedStderr,
+    waits: (Deadline, Deadline),
+    bound: Duration,
+    entry: &str,
+    attempts: &[Duration],
+) -> (std::io::Result<doors::hub::Hub>, HubProc) {
+    let (wait, root) = waits;
     let home = setup.home();
-    let root = wait;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         bounded(wait, "the installed hub's hello", move || {
             let current_bound = hello_bound(root.left()).ok_or_else(|| {
