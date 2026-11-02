@@ -518,6 +518,7 @@ fn usage(generation: &str) -> UsageRecorded {
         extension: Some("fiber.test/notes".to_owned()),
         origin_session_id: None,
         reviewer: None,
+        warming: None,
     }
 }
 

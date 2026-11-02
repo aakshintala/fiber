@@ -303,7 +303,10 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
                 prop_assert!(!is_error);
             }
             Fate::Unknown => {
-                prop_assert_eq!(text, "Its outcome is unknown: it may have run.");
+                prop_assert_eq!(
+                    text,
+                    "Its outcome is unknown: it may have run. Check for its effects in the workspace, in git and in any outside service it reaches before making it again."
+                );
                 prop_assert!(is_error);
             }
             Fate::NeverRan => {

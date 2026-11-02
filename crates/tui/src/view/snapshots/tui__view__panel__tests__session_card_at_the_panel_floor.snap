@@ -1,10 +1,12 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
+assertion_line: 1192
 expression: "super::super::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-   /Users/you/work/fiber auto
+   Session status        auto
+   /Users/you/work/fiber
 
    test/model            high
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│     500
@@ -12,6 +14,7 @@ expression: "super::super::text(&buf)"
    then a summary, fresh con…
    tokens in / out 1.1k / 200
    cache hits              9%
+   cache resets in          —
    cost                 $0.41
    cost on subscription $1.10
    speed, last … 250 tokens/s

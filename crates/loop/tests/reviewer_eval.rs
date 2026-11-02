@@ -1962,6 +1962,7 @@ fn stage_usage(action: &str) -> Event {
         subscription: None,
         extension: None,
         origin_session_id: None,
+        warming: None,
         reviewer: Some(contract::events::ReviewerUse::Stage1 {
             action_id: ActionId(action.to_owned()),
         }),

@@ -625,6 +625,7 @@ fn a_late_cost_replaces_the_notes_calls_usage_without_a_turn_or_action() {
         assert_eq!(line.turn_id, None);
         assert_eq!(line.action_id, None);
         assert!(line.payload.get("reviewer").is_none());
+        assert!(line.payload.get("warming").is_none());
     }
 }
 

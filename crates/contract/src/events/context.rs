@@ -43,6 +43,10 @@ pub struct UsageRecorded {
     /// On a copy, the session whose call it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_session_id: Option<SessionId>,
+    /// `true` on a cache-warming refresh (`docs/prompt-cache.md`,
+    /// "Warming while idle"); absent on every other call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warming: Option<bool>,
     /// What the reviewer was doing on a call the reviewer made; absent on
     /// every other call (`docs/permissions.md`, "At a handoff").
     #[serde(default, skip_serializing_if = "Option::is_none")]

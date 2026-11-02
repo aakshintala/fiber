@@ -98,6 +98,7 @@ fn status(name: &str) -> Event {
         step: None,
         git: None,
         context: None,
+        cache_expires: None,
         spend: usage(),
         delegates: 0,
         jobs: 0,
@@ -1045,6 +1046,7 @@ fn tools_give_tokens_from_the_first_request_after_each_preamble() {
             extension: extension.map(str::to_owned),
             origin_session_id: origin,
             reviewer: None,
+            warming: None,
             input_bytes,
             input_media,
         })
