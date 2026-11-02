@@ -1455,6 +1455,8 @@ fn a_wheel_on_the_short_picker_keeps_the_next_model_with_its_heading() {
     });
 
     let view = app.model_picker_view().expect("still open");
+    // `docs/tui.md:589`: "The mouse wheel over a view moves its visible rows 3
+    // a step and never the conversation under it."
     assert_eq!(
         view.top,
         3,
