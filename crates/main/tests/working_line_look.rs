@@ -14,8 +14,9 @@
 
 mod support;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
 use support::{Setup, TRUECOLOUR};
 
@@ -55,26 +56,20 @@ fn shell_script(setup: &Setup, command: &str) {
     );
 }
 
-/// A shell command that returns once `hold` is gone. The test creates the
-/// file before the turn starts and removes it when it has read what it
-/// needs, so the tool runs exactly as long as the test says. The loop
-/// stops itself at 120 s (`docs/testing.md`, "Running tests"). Fiber moves
-/// a shell call to the background after 30 s (`docs/tools.md`, "Moving to
-/// the background"), so the hold lasts at most that long: a stall past it
-/// fails a named wait, never a false pass.
+/// A shell command that blocks on the hold FIFO until the test writes
+/// the release line. `read` is not on the shell's built-in read-only
+/// list, so the call raises the approval the tests wait on; the holder
+/// parks in its read, so the tool runs exactly as long as the test says,
+/// and the watchdog reaps the holder if the test dies.
 fn hold_command(hold: &Path) -> String {
-    format!(
-        "i=0; while [ -e '{}' ] && [ $i -lt 2400 ]; do sleep 0.05; i=$((i+1)); done",
-        hold.display()
-    )
+    format!("read -r _ < '{}'", hold.display())
 }
 
-/// The turn's shell call, held on a marker file the test removes.
-fn held_tool(setup: &Setup) -> PathBuf {
+/// The turn's shell call, held on the shared helper's FIFO.
+fn held_tool(setup: &Setup) -> Hold {
     let hold = setup.workspace().join("hold");
-    std::fs::write(&hold, "").expect("the hold marker");
     shell_script(setup, &hold_command(&hold));
-    hold
+    Hold::park(setup, &hold_command(&hold))
 }
 
 /// Answers the approval on screen and waits for the held tool to run
@@ -305,7 +300,7 @@ fn quit(mut run: Run) {
 #[test]
 fn the_working_line_glimmers_and_the_queue_selects() {
     let setup = Setup::new();
-    let hold = held_tool(&setup);
+    let mut hold = held_tool(&setup);
     config(&setup, false);
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
@@ -374,7 +369,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
 
     // Reopening the approval and answering it starts the held command:
     // the panel goes for good with the turn still running, until the test
-    // removes the marker.
+    // writes the release line.
     answer_approval(&mut run);
     run.wait_screen("the tool running", |grid| {
         !grid.rows.iter().any(|row| row.contains("Allow once")) && working(grid).is_some()
@@ -493,8 +488,9 @@ fn the_working_line_glimmers_and_the_queue_selects() {
 
     // The draft clears and the tool is released: the turn ends.
     clear_draft(&mut run);
-    std::fs::remove_file(&hold).expect("the hold marker");
+    std::io::Write::write_all(hold.release(), b"\n").expect("the release line");
     run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
@@ -504,7 +500,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
 #[test]
 fn the_empty_session_box_fills_while_the_turn_streams() {
     let setup = Setup::new();
-    let hold = held_tool(&setup);
+    let mut hold = held_tool(&setup);
     config(&setup, false);
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
@@ -520,8 +516,9 @@ fn the_empty_session_box_fills_while_the_turn_streams() {
     assert_fill(&grid, empty_box, empty_x, "session empty");
     assert_eq!(grid.cell(empty_x + 2, empty_box).symbol.as_str(), "›");
     assert_eq!(grid.cell(empty_x + 2, empty_box).fg, INFO);
-    std::fs::remove_file(&hold).expect("the hold marker");
+    std::io::Write::write_all(hold.release(), b"\n").expect("the release line");
     run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
@@ -530,7 +527,7 @@ fn the_empty_session_box_fills_while_the_turn_streams() {
 #[test]
 fn the_reduced_working_line_stays_still() {
     let setup = Setup::new();
-    let hold = held_tool(&setup);
+    let mut hold = held_tool(&setup);
     config(&setup, true);
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
@@ -563,8 +560,9 @@ fn the_reduced_working_line_stays_still() {
         run.write(b"x");
     }
     clear_draft(&mut run);
-    std::fs::remove_file(&hold).expect("the hold marker");
+    std::io::Write::write_all(hold.release(), b"\n").expect("the release line");
     run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
@@ -573,7 +571,7 @@ fn the_reduced_working_line_stays_still() {
 #[test]
 fn the_input_box_fills_at_100x40() {
     let setup = Setup::new();
-    let hold = held_tool(&setup);
+    let mut hold = held_tool(&setup);
     config(&setup, false);
     let mut run = Run::spawn(&setup, 100, 40, &[], &TRUECOLOUR);
     run.ready();
@@ -617,7 +615,8 @@ fn the_input_box_fills_at_100x40() {
     let (wrap_s, wrap_s_x) = session_box(&grid).expect("the box");
     assert_fill(&grid, wrap_s, wrap_s_x, "session wrapping");
     clear_draft(&mut run);
-    std::fs::remove_file(&hold).expect("the hold marker");
+    std::io::Write::write_all(hold.release(), b"\n").expect("the release line");
     run.turn_finished(from);
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }

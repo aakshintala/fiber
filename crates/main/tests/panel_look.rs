@@ -20,6 +20,7 @@ use std::fs;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::json;
+use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
 use support::{Deadline, Setup, TRUECOLOUR, write_json};
 
@@ -40,14 +41,6 @@ fn quit(mut run: Run) {
     run.write(b"\x03\x03\r");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
-}
-
-/// The held background job's release: writing a line lets its read
-/// finish. Dropping the guard kills the job's group, so a failure leaks
-/// nothing.
-struct Release {
-    file: fs::File,
-    guard: Watchdog,
 }
 
 /// The cell index of `needle` in `row`, counting cells.
@@ -96,8 +89,9 @@ fn script(job: &str) -> serde_json::Value {
 /// 400k handoff, the pinned panel, the fake provider serving the
 /// delegate's hung stream, and a reviewer allowing every call, so no
 /// approval stalls the turn. Returns the setup with its provider
-/// server, held to the test's end, and the held job's release.
-fn panel_setup() -> (Setup, ProviderServer, Release) {
+/// server, held to the test's end, and the hold helper that parks the
+/// job's holder and releases it.
+fn panel_setup() -> (Setup, ProviderServer, Hold) {
     // A short root: the status line shows the whole workspace path, and
     // the narrow row must still reach the `ctx` segment in 99 columns.
     let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "pl");
@@ -112,18 +106,15 @@ fn panel_setup() -> (Setup, ProviderServer, Release) {
     fs::write(workspace.join("b.txt"), "B1\n").unwrap();
     fs::write(workspace.join("c.txt"), "C1\n").unwrap();
     // The held shell call runs in the background at once and waits on
-    // the FIFO: the test holds it open, so neither open blocks, and the
-    // job outlives every assertion until the test writes its release.
-    let hold = workspace.join("hold");
-    fakes::fifo(&hold);
+    // the FIFO: the helper holds it open, so neither open blocks, and
+    // the job outlives every assertion until the test writes its release.
     let waiter = workspace.join("wait.sh");
-    fs::write(&waiter, "read -r _ < hold\necho done\n").unwrap();
-    let release = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&hold)
-        .unwrap();
-    let command = format!("sh {}", waiter.display());
+    fs::write(&waiter, "read -r _ < \"$1\"\necho done\n").unwrap();
+    let command = format!(
+        "sh {} {}",
+        waiter.display(),
+        workspace.join("hold").display()
+    );
     write_json(&workspace.join("s.json"), &script(&command));
     // The reviewer allows far more calls than the turn makes, so every
     // call runs without asking.
@@ -169,17 +160,10 @@ fn panel_setup() -> (Setup, ProviderServer, Release) {
             .collect::<String>(),
     )
     .unwrap();
-    // The job's guard kills its group if the test fails before the
-    // release lets the read finish.
-    let guard = Watchdog::matching(waiter.to_str().unwrap());
-    (
-        setup,
-        server,
-        Release {
-            file: release,
-            guard,
-        },
-    )
+    // The hold parks the job's holder and reaps its group if the test
+    // fails before the release lets the read finish.
+    let hold = Hold::park(&setup, &command);
+    (setup, server, hold)
 }
 
 /// Starts the scripted turn and waits for the panel's whole state: both
@@ -325,6 +309,7 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         ),
     )
     .unwrap();
+    // Keeps its own hold: the screen pins this call's subject, which a pid-scoped or absolute command would lose or overflow (#3844).
     let guard = Watchdog::matching("head -n 1 hold");
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
@@ -343,7 +328,7 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
 
 #[test]
 fn panel_cards_match_the_doc() {
-    let (setup, _server, release) = panel_setup();
+    let (setup, _server, mut hold) = panel_setup();
     // The session shows the canonical workspace, symlinks resolved.
     let workspace = fs::canonicalize(setup.workspace())
         .unwrap()
@@ -463,18 +448,14 @@ fn panel_cards_match_the_doc() {
         }
     }
 
-    let Release {
-        file: release,
-        guard,
-    } = release;
-    std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    guard.stand_down(setup.deadline.cleanup_phase());
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
 #[test]
 fn narrow_status_rows_match_the_doc() {
-    let (setup, _server, release) = panel_setup();
+    let (setup, _server, mut hold) = panel_setup();
     let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
         .into_iter()
         .chain(TRUECOLOUR)
@@ -543,12 +524,8 @@ fn narrow_status_rows_match_the_doc() {
         8,
         "{bar:?}"
     );
-    let Release {
-        file: release,
-        guard,
-    } = release;
-    std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    guard.stand_down(setup.deadline.cleanup_phase());
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
@@ -560,8 +537,8 @@ fn click(run: &mut Run, x: u16, y: u16) {
 
 /// The settled narrow run: the scripted turn with the running delegate
 /// and job, so the input box's status row carries the `ctx` segment.
-fn narrow_settled() -> (Setup, ProviderServer, Release, Run, Grid) {
-    let (setup, server, release) = panel_setup();
+fn narrow_settled() -> (Setup, ProviderServer, Hold, Run, Grid) {
+    let (setup, server, hold) = panel_setup();
     let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
         .into_iter()
         .chain(TRUECOLOUR)
@@ -574,7 +551,7 @@ fn narrow_settled() -> (Setup, ProviderServer, Release, Run, Grid) {
             && grid.contents.contains("1 delegate running")
             && grid.contents.contains("1 job running")
     });
-    (setup, server, release, run, grid)
+    (setup, server, hold, run, grid)
 }
 
 /// The input box's status row above the kept status lines: the nearest
@@ -596,7 +573,7 @@ fn status_row(grid: &Grid) -> u16 {
 /// right side stays whole (`docs/tui.md`, "The input box").
 #[test]
 fn narrow_width_cuts_the_working_directory_first() {
-    let (setup, _server, release) = panel_setup();
+    let (setup, _server, mut hold) = panel_setup();
     // The session shows the canonical workspace, symlinks resolved.
     let workspace = fs::canonicalize(setup.workspace())
         .unwrap()
@@ -658,12 +635,8 @@ fn narrow_width_cuts_the_working_directory_first() {
         "eight cells stay at 68 columns: {row:?}"
     );
 
-    let Release {
-        file: release,
-        guard,
-    } = release;
-    std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    guard.stand_down(setup.deadline.cleanup_phase());
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
@@ -672,7 +645,7 @@ fn narrow_width_cuts_the_working_directory_first() {
 /// and the Context view opens (`docs/tui.md`, "The input box").
 #[test]
 fn clicking_ctx_opens_the_context_breakdown() {
-    let (setup, _server, release, mut run, grid) = narrow_settled();
+    let (setup, _server, mut hold, mut run, grid) = narrow_settled();
     assert!(
         !grid.contents.contains("/context"),
         "no breakdown before the click"
@@ -688,19 +661,15 @@ fn clicking_ctx_opens_the_context_breakdown() {
     assert!(top.contains("Context"), "the breakdown title: {top:?}");
     assert!(top.contains("/context"), "the breakdown command: {top:?}");
 
-    let Release {
-        file: release,
-        guard,
-    } = release;
-    std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    guard.stand_down(setup.deadline.cleanup_phase());
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
 #[test]
 fn panel_tint_quantises_to_233() {
     // 256 colours: xterm without COLORTERM.
-    let (setup, _server, release) = panel_setup();
+    let (setup, _server, mut hold) = panel_setup();
     let mut run = Run::spawn(
         &setup,
         160,
@@ -727,11 +696,7 @@ fn panel_tint_quantises_to_233() {
             "blank cell ({x}, {blank})"
         );
     }
-    let Release {
-        file: release,
-        guard,
-    } = release;
-    std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    guard.stand_down(setup.deadline.cleanup_phase());
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
