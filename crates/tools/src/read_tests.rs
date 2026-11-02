@@ -76,17 +76,31 @@ fn text_details_name_the_first_returned_line() {
     let dir = TempDir::new("fiber-read-details");
     fs::write(dir.path().join("ten.txt"), "line\n".repeat(10)).unwrap();
     fs::write(dir.path().join("empty.txt"), "").unwrap();
-    for (arguments, expected) in [
+    for (arguments, name, start_line, body) in [
         (
             json!({"path": "ten.txt", "offset": 5}),
-            json!({"start_line": 5}),
+            "ten.txt",
+            5,
+            "line\n".repeat(10),
         ),
-        (json!({"path": "ten.txt"}), json!({"start_line": 1})),
-        (json!({"path": "empty.txt"}), json!({"start_line": 1})),
+        (
+            json!({"path": "ten.txt"}),
+            "ten.txt",
+            1,
+            "line\n".repeat(10),
+        ),
+        (json!({"path": "empty.txt"}), "empty.txt", 1, String::new()),
     ] {
         let output = run(dir.path(), arguments);
         assert!(output.error.is_none());
-        assert_eq!(output.details, Some(expected));
+        let path = canonical(dir.path()).join(name);
+        let hash = crate::files::hash_bytes(body.as_bytes());
+        assert_eq!(
+            output.details,
+            Some(
+                json!({"start_line": start_line, "file_seen": {"path": path_text(&path), "hash": hash}})
+            )
+        );
     }
     let failed = run(dir.path(), json!({"path": "ten.txt", "offset": 11}));
     assert_eq!(code(&failed), Some(ErrorCode::InvalidArguments));
@@ -103,6 +117,8 @@ fn image_details_do_not_number_lines() {
         r#"cat >/dev/null
 printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
     );
+    let path = canonical(dir.path()).join("a.png");
+    let hash = crate::files::hash_bytes(b"\x89PNG\r\n\x1a\nimage");
     let (send, recv) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let files =
@@ -121,7 +137,10 @@ printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#
         output.content.get(1),
         Some(ContentPart::Image { .. })
     ));
-    assert_eq!(output.details, None);
+    assert_eq!(
+        output.details,
+        Some(json!({"file_seen": {"path": path_text(&path), "hash": hash}}))
+    );
 }
 
 #[test]
@@ -604,6 +623,28 @@ fn a_capped_read_keeps_its_name() {
     assert_eq!(
         files.read().with_cap(100).unwrap().definition(),
         files.read().definition()
+    );
+}
+
+#[test]
+fn a_ranged_read_logs_the_whole_files_hash_beside_the_resolved_path() {
+    let dir = TempDir::new("fiber-read-seen-details");
+    fs::write(dir.path().join("a.txt"), "first\nsecond\nthird\n").unwrap();
+    let output = run(
+        dir.path(),
+        json!({"path": "a.txt", "offset": 2, "limit": 1}),
+    );
+    assert!(output.error.is_none());
+    assert!(
+        fakes::text_of(&output).starts_with("second\n"),
+        "{}",
+        fakes::text_of(&output)
+    );
+    let path = canonical(dir.path()).join("a.txt");
+    let hash = crate::files::hash_bytes("first\nsecond\nthird\n".as_bytes());
+    assert_eq!(
+        output.details,
+        Some(json!({"start_line": 2, "file_seen": {"path": path_text(&path), "hash": hash}}))
     );
 }
 

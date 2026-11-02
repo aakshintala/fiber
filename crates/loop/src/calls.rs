@@ -21,7 +21,7 @@ use contract::shapes::{ContentPart, DeclaredEffects};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use contract::{ActionId, RequestId, SessionId, TurnId};
 use log::Log;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::before_tool::Prepared;
 use super::completion::{completed, denied, resolved};
@@ -168,6 +168,53 @@ pub(crate) fn job_event(log: &Log, record: contract::jobs::JobRecord) -> Event {
             Event::DelegateFinished(crate::delegated::bounded(log, finished))
         }
         contract::jobs::JobRecord::Completed(completed) => Event::JobCompleted(completed),
+    }
+}
+
+/// The reserved `details.file_seen` a file tool logged with its result
+/// (`docs/tools.md`, "Stale files"): what the call saw. A missing or
+/// malformed object is none.
+fn file_seen_of(details: &Option<Value>) -> Option<Value> {
+    details.as_ref()?.get("file_seen").cloned()
+}
+
+/// The `details` an `after_tool` hook is shown: the tool's own details
+/// without the reserved `file_seen` record (`docs/tools.md`, "Stale files").
+/// An object left empty by the removal is no `details`
+/// (`docs/extensions.md`, "after_tool").
+fn without_seen(details: Option<Value>) -> Option<Value> {
+    match details {
+        Some(Value::Object(mut object)) => {
+            object.remove("file_seen");
+            if object.is_empty() {
+                None
+            } else {
+                Some(Value::Object(object))
+            }
+        }
+        other => other,
+    }
+}
+
+/// Merges the tool's reserved `file_seen` record into the shaped details,
+/// after hooks that never saw it ran (`docs/tools.md`, "Stale files"). An
+/// `after_tool` hook is not given `file_seen` and cannot replace it: the
+/// tool's own record wins over a hook's, as a hook replaces display data,
+/// never what the call saw. A hook may return any `details` value
+/// (`docs/extensions.md`, "after_tool"), but the history fold reads only
+/// the reserved `details.file_seen` object (`docs/events.md`,
+/// `tool_call_completed`), so a non-object replacement is preserved under
+/// `value` beside the record: `details` stays an object carrying
+/// `file_seen`, a shape `details: any JSON` already allows, and no hook
+/// data is lost.
+fn with_seen(details: Option<Value>, seen: Value) -> Option<Value> {
+    match details {
+        Some(Value::Object(mut object)) => {
+            object.insert("file_seen".to_owned(), seen);
+            Some(Value::Object(object))
+        }
+        None => Some(json!({"file_seen": seen})),
+        Some(value) => Some(json!({"value": value, "file_seen": seen})),
     }
 }
 
@@ -1406,6 +1453,18 @@ impl Loop {
             images = Vec::new();
             rewritten = None;
         }
+        // The reserved `file_seen` the file tools log beside their own
+        // details (`docs/tools.md`, "Stale files"): an `after_tool` hook is
+        // not given `file_seen` and cannot replace it, so the hook sees the
+        // details without the record while the logged completion keeps what
+        // the call saw. A hook that replaces `details` must not drop what
+        // the call saw, or the history fold loses the model's context;
+        // every `Ran.details` reader past the hook input (the unchanged and
+        // no-hook paths, the replacement fallback) carries the stripped
+        // details, and the merge below restores the record for a completed
+        // call, exactly as logged before.
+        let seen = file_seen_of(&details);
+        let details = without_seen(details);
         let ran = super::hooks::Ran {
             tool,
             arguments,
@@ -1421,6 +1480,14 @@ impl Loop {
         if let Some(failure) = shaped.error.take() {
             status = CallStatus::Failed;
             error = Some(failure);
+        }
+        // Only a completed call's record reaches the history fold: a call
+        // the shaping failed keeps whatever it left, while a completed
+        // one carries what the tool saw, as the live session does.
+        if status == CallStatus::Completed
+            && let Some(seen) = seen
+        {
+            shaped.details = with_seen(shaped.details, seen);
         }
         if let Some(named) = write
             && status == CallStatus::Completed
