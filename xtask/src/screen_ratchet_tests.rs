@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 
 // Rule sources: `docs/testing/screens.md` ("Screens") requires each kept
 // read to name its signal in a `// settled:` comment and defines the
-// ratchet's line rule (plain `.screen()` text, full-line `//` exclusion,
-// literal marker on the call or previous line) as a conservative upper
-// bound; every count asserted below cites that section, and the
-// `screen_ratchet` module doc enforces the same rule.
+// ratchet's line rule (grid-read text, full-line `//` exclusion, literal
+// marker on the read or previous line, wait-span exclusion) as a
+// conservative upper bound; every count asserted below cites that section,
+// and the `screen_ratchet` module doc enforces the same rule.
 
 fn file(path: &str, source: &str) -> RustFile {
     RustFile {
@@ -20,7 +20,7 @@ fn file(path: &str, source: &str) -> RustFile {
 fn maxima(entries: &[(&str, usize)]) -> BTreeMap<String, usize> {
     entries
         .iter()
-        .map(|(path, maximum)| ((*path).to_owned(), *maximum))
+        .map(|(path, maximum)| ((*path).to_owned(), (*maximum)))
         .collect()
 }
 
@@ -29,6 +29,28 @@ fn the_line_rule_counts_plain_calls() {
     let cases: &[(&str, usize)] = &[
         ("    let grid = run.screen();\n", 1),
         ("    let a = run.screen();\n    let b = run.screen();\n", 2),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(count_unmarked(source), *expected, "source: {source:?}");
+    }
+}
+
+#[test]
+fn a_grid_comparison_outside_a_wait_counts() {
+    let cases: &[(&str, usize)] = &[
+        (
+            "    assert_eq!(grid.cell(0, 0).symbol.as_str(), \"x\");\n",
+            1,
+        ),
+        ("    assert!(grid.contents.contains(\"ready.\"));\n", 1),
+        (
+            "    assert!(grid.rows.iter().any(|row| row.contains(\"hi\")));\n",
+            1,
+        ),
+        (
+            "    let screen = parser.screen();\n    let cell = screen.cell(2, 3);\n",
+            2,
+        ),
     ];
     for (source, expected) in cases {
         assert_eq!(count_unmarked(source), *expected, "source: {source:?}");
@@ -82,9 +104,35 @@ fn a_settled_marker_on_the_call_line_exempts() {
 }
 
 #[test]
+fn a_settled_marker_on_the_read_line_exempts_a_grid_comparison() {
+    assert_eq!(
+        count_unmarked(
+            "    assert_eq!(grid.cell(0, 0).symbol.as_str(), \"x\"); // settled: wait checked the cell\n"
+        ),
+        0
+    );
+    assert_eq!(
+        count_unmarked(
+            "    assert!(grid.contents.contains(\"hi\")); // settled: wait checked the text\n"
+        ),
+        0
+    );
+}
+
+#[test]
 fn a_settled_marker_on_the_previous_line_exempts() {
     assert_eq!(
         count_unmarked("    // settled: wait checked tint\n    let grid = run.screen();\n"),
+        0
+    );
+}
+
+#[test]
+fn a_settled_marker_on_the_previous_line_exempts_a_grid_read() {
+    assert_eq!(
+        count_unmarked(
+            "    // settled: wait checked the rows\n    assert!(grid.rows.len() > 3);\n"
+        ),
         0
     );
 }
@@ -120,6 +168,76 @@ fn a_marker_two_lines_above_does_not_exempt() {
 }
 
 #[test]
+fn a_single_line_wait_predicate_does_not_count() {
+    assert_eq!(
+        count_unmarked(
+            "    run.wait_screen(\"the first frame\", |grid| grid.contents.contains(\">\"));\n"
+        ),
+        0
+    );
+}
+
+#[test]
+fn a_multiline_wait_body_does_not_count() {
+    assert_eq!(
+        count_unmarked(
+            "    run.wait_screen(\"the rows\", |grid| {\n        grid.rows.iter().any(|row| row.contains(\"hi\"))\n    });\n"
+        ),
+        0
+    );
+}
+
+#[test]
+fn a_nested_closure_inside_a_wait_does_not_end_the_span() {
+    assert_eq!(
+        count_unmarked(
+            "    let past = run.wait_screen(\"the past-end cursor\", |screen| {\n        needle_start(screen, \"abc\").is_some_and(|(x, y)| {\n            x.checked_add(3).is_some_and(|at| {\n                at < 160 && {\n                    let cell = screen.cell(at, y);\n                    cell.symbol == \"x\"\n                }\n            })\n        })\n    });\n"
+        ),
+        0
+    );
+}
+
+#[test]
+fn a_read_after_the_wait_still_counts() {
+    assert_eq!(
+        count_unmarked(
+            "    let grid = run.wait_screen(\"the rows\", |grid| {\n        grid.rows.iter().any(|row| row.contains(\"hi\"))\n    });\n    assert!(grid.contents.contains(\"hi\"));\n"
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_wait_mention_inside_a_string_opens_no_wait() {
+    assert_eq!(
+        count_unmarked(
+            "    let note = \"run.wait_screen(\\\"x\\\")\";\n    assert!(grid.contents.contains(\"hi\"));\n"
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_wait_mention_inside_a_comment_opens_no_wait() {
+    assert_eq!(
+        count_unmarked(
+            "    // the next line used to call run.wait_screen(\"x\") here\n    assert!(grid.contents.contains(\"hi\"));\n"
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_quoted_delimiter_moves_no_wait_depth() {
+    assert_eq!(
+        count_unmarked(
+            "    run.wait_screen(\"the (open) frame\", |grid| grid.contents.contains(\")\"));\n    assert!(grid.rows.len() > 1);\n"
+        ),
+        1
+    );
+}
+
+#[test]
 fn support_files_are_outside_the_rule() {
     let files = [file(
         "crates/main/tests/support/pty.rs",
@@ -139,7 +257,7 @@ fn per_file_maxima_are_independent() {
     ];
     assert_eq!(
         check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])),
-        ["crates/main/tests/b.rs holds 2 unmarked .screen() call lines (maximum 0)"]
+        ["crates/main/tests/b.rs holds 2 unmarked grid-read lines (maximum 0)"]
     );
 }
 
@@ -151,7 +269,7 @@ fn an_absent_file_has_maximum_zero() {
     )];
     assert_eq!(
         check(&files, &maxima(&[])),
-        ["crates/main/tests/fresh.rs holds 1 unmarked .screen() call lines (maximum 0)"]
+        ["crates/main/tests/fresh.rs holds 1 unmarked grid-read lines (maximum 0)"]
     );
 }
 
@@ -165,14 +283,26 @@ fn a_file_at_its_maximum_passes() {
 }
 
 #[test]
-fn a_failure_names_the_file_the_count_and_the_maximum() {
+fn a_count_above_the_pinned_maximum_fails() {
     let files = [file(
         "crates/main/tests/a.rs",
-        "    let a = run.screen();\n    let b = run.screen();\n",
+        "    let grid = run.screen();\n    assert!(grid.contents.contains(\"hi\"));\n",
     )];
     assert_eq!(
         check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])),
-        ["crates/main/tests/a.rs holds 2 unmarked .screen() call lines (maximum 1)"]
+        ["crates/main/tests/a.rs holds 2 unmarked grid-read lines (maximum 1)"]
+    );
+}
+
+#[test]
+fn a_failure_names_the_file_the_count_and_the_maximum() {
+    let files = [file(
+        "crates/main/tests/a.rs",
+        "    let a = run.screen();\n    assert!(a.contents.contains(\"hi\"));\n",
+    )];
+    assert_eq!(
+        check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])),
+        ["crates/main/tests/a.rs holds 2 unmarked grid-read lines (maximum 1)"]
     );
 }
 
@@ -199,7 +329,7 @@ fn the_maxima_table_parses_paths_and_counts() {
             parse_maxima(input),
             Ok(expected
                 .iter()
-                .map(|(path, maximum)| ((*path).to_owned(), *maximum))
+                .map(|(path, maximum)| ((*path).to_owned(), (*maximum)))
                 .collect()),
             "input: {input:?}"
         );

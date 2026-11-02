@@ -1,16 +1,25 @@
-//! The bare screen-call ratchet (`docs/testing/screens.md`, "Screens"): each
-//! file under `crates/main/tests/` holds at most its inline maximum of
-//! unmarked `.screen()` call-form lines, outside
-//! `crates/main/tests/support/`. The count is conservative: a line counts
-//! when it holds the text `.screen()`, even inside a string literal or a
-//! block comment, and only a full-line `//` comment line or the literal
-//! text `// settled:` on the call line or the line before it exempts it.
-//! Literal false positives are safe because the ratchet is an upper bound:
-//! over-counting a `.screen()` inside a string, or exempting on marker
-//! text inside a string, never lets a real bare read slip past. A file
-//! missing from the maxima table holds none. `scripts/check` keeps the
-//! table inline and passes it here on stdin; this module owns call
-//! detection, comment recognition and the per-file comparison.
+//! The grid-read ratchet (`docs/testing/screens.md`, "Screens"): each file
+//! under `crates/main/tests/` holds at most its inline maximum of unmarked
+//! grid-read lines, outside `crates/main/tests/support/`. A grid-read line
+//! is a source line holding one of `.screen()`, `.cell(`, `.contents` or
+//! `.rows`: acquiring a grid, or reading its cells, text or rows. The rule
+//! is deliberately outside-a-wait: a line inside a `wait_screen` call's
+//! span never counts, because the wait's own check settles the grid and its
+//! predicate reads are the assertion, not a read outside a wait. A
+//! predicate that derives its expected value from the grid it asserts on
+//! sits inside the wait, where a line ratchet cannot tell it from the
+//! wait's own probe, so that shape stays outside this check.
+//!
+//! The count is conservative: a line counts when it holds the read text,
+//! even inside a string literal or a block comment, and only a full-line
+//! `//` comment line or the literal text `// settled:` on the read line or
+//! the line before it exempts it. Literal false positives are safe because
+//! the ratchet is an upper bound: over-counting a read inside a string, or
+//! exempting on marker text inside a string, never lets a real unsettled
+//! read slip past. A file missing from the maxima table holds none.
+//! `scripts/check` keeps the table inline and passes it here on stdin; this
+//! module owns read detection, wait-span tracking, comment recognition and
+//! the per-file comparison.
 
 use std::collections::BTreeMap;
 
@@ -24,8 +33,14 @@ const SUPPORT_PREFIX: &str = "crates/main/tests/support/";
 const RUST_SUFFIX: &str = ".rs";
 /// The exemption marker, as written in a Rust line comment.
 const MARKER: &str = "// settled:";
-/// The call form the ratchet counts; a `.screen` field access is not a call.
-const CALL: &str = ".screen()";
+/// The source texts that read the grid: `.screen()` acquires one (a
+/// `.screen` field access without the call parens is not a call),
+/// `.cell(` reads cells exactly, and `.contents` / `.rows` read the
+/// grid's text and rows.
+const READS: &[&str] = &[".screen()", ".cell(", ".contents", ".rows"];
+/// The waits whose call span the ratchet skips: `wait_screen`,
+/// `wait_screen_leading`, `wait_screen_reporting`.
+const WAIT: &str = ".wait_screen";
 
 /// Parses the inline maxima table from stdin: one `<path> <maximum>` per
 /// line. Blank lines and `#` comment lines are ignored.
@@ -74,7 +89,7 @@ pub(crate) fn check(files: &[RustFile], maxima: &BTreeMap<String, usize>) -> Vec
         let maximum = maxima.get(&file.path).copied().unwrap_or(0);
         if count > maximum {
             failures.push(format!(
-                "{} holds {count} unmarked .screen() call lines (maximum {maximum})",
+                "{} holds {count} unmarked grid-read lines (maximum {maximum})",
                 file.path
             ));
         }
@@ -82,22 +97,183 @@ pub(crate) fn check(files: &[RustFile], maxima: &BTreeMap<String, usize>) -> Vec
     failures
 }
 
-/// The number of `.screen()` call-form lines in `source` with no literal
-/// `// settled:` text on the call line or the line before it. A line
-/// whose trimmed start begins `//` never counts.
+/// The number of grid-read lines in `source` with no literal `// settled:`
+/// text on the read line or the line before it. A line whose trimmed start
+/// begins `//` never counts, and neither does a line inside a
+/// `wait_screen` call's span.
 pub(crate) fn count_unmarked(source: &str) -> usize {
+    let mut depth = 0i32;
+    let mut in_block = false;
+    let mut wait_base: Option<i32> = None;
     let mut previous_settled = false;
     let mut count = 0usize;
     for line in source.lines() {
-        let has_call = line.contains(CALL);
+        let (code, open) = code_part(line, in_block);
+        in_block = open;
+        if wait_base.is_none() && opens_wait(&code) {
+            wait_base = Some(depth);
+        }
+        let in_wait = wait_base.is_some();
+        let has_read = READS.iter().any(|read| line.contains(read));
         let is_comment = line.trim_start().starts_with("//");
         let has_settled = line.contains(MARKER);
-        if has_call && !is_comment && !has_settled && !previous_settled {
+        if has_read && !is_comment && !has_settled && !previous_settled && !in_wait {
             count = count.saturating_add(1);
         }
         previous_settled = has_settled;
+        depth += delimiter_depth(&code);
+        if let Some(base) = wait_base {
+            if depth <= base {
+                wait_base = None;
+            }
+        }
     }
     count
+}
+
+/// Whether `code` — a line with strings and comments stripped — opens a
+/// grid wait: a `.wait_screen*(` method call.
+fn opens_wait(code: &str) -> bool {
+    let mut search = code;
+    while let Some(at) = search.find(WAIT) {
+        let after = search[at + WAIT.len()..]
+            .trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        if after.trim_start().starts_with('(') {
+            return true;
+        }
+        search = &search[at + WAIT.len()..];
+    }
+    false
+}
+
+/// The net delimiter depth change of `code`: `(` `{` `[` open, `)` `}`
+/// `]` close. `code` carries no strings or comments, so every delimiter
+/// here is real code.
+fn delimiter_depth(code: &str) -> i32 {
+    code.chars().fold(0, |depth, c| match c {
+        '(' | '{' | '[' => depth + 1,
+        ')' | '}' | ']' => depth - 1,
+        _ => depth,
+    })
+}
+
+/// The code part of `line`: string and character literals and comments
+/// removed, for wait detection and delimiter depth only, so a
+/// `.wait_screen` inside a string or a comment opens no wait and quoted
+/// delimiters move no depth. Pattern matching still runs on the raw line:
+/// the count stays a conservative upper bound. `in_block` threads an open
+/// block comment from the previous line; the return carries whether one
+/// stays open.
+fn code_part(line: &str, mut in_block: bool) -> (String, bool) {
+    let mut code = String::with_capacity(line.len());
+    let mut rest = line;
+    while !rest.is_empty() {
+        if in_block {
+            match rest.find("*/") {
+                Some(end) => {
+                    rest = &rest[end + 2..];
+                    in_block = false;
+                }
+                None => return (code, true),
+            }
+            continue;
+        }
+        if rest.starts_with("//") {
+            break;
+        }
+        if rest.starts_with("/*") {
+            rest = &rest[2..];
+            in_block = true;
+            continue;
+        }
+        if let Some(after) = strip_raw_string(rest) {
+            rest = after;
+            code.push(' ');
+            continue;
+        }
+        if rest.starts_with('"') {
+            match cooked_end(&rest[1..]) {
+                Some(after) => {
+                    rest = after;
+                    code.push(' ');
+                }
+                None => {
+                    code.push(' ');
+                    break;
+                }
+            }
+            continue;
+        }
+        if rest.starts_with('\'') {
+            match char_end(&rest[1..]) {
+                Some(len) => {
+                    rest = &rest[1 + len..];
+                    code.push(' ');
+                }
+                None => {
+                    code.push('\'');
+                    rest = &rest[1..];
+                }
+            }
+            continue;
+        }
+        let len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        code.push_str(&rest[..len]);
+        rest = &rest[len..];
+    }
+    (code, in_block)
+}
+
+/// The remainder after the raw-string literal at the start of `rest`
+/// (`r"..."`, `r#"..."#`, with an optional `b` prefix), if `rest` opens
+/// one.
+fn strip_raw_string(rest: &str) -> Option<&str> {
+    let mut body = rest.strip_prefix('b').unwrap_or(rest);
+    body = body.strip_prefix('r')?;
+    let hashes = body.chars().take_while(|&c| c == '#').count();
+    body = body.get(hashes..)?;
+    body = body.strip_prefix('"')?;
+    let closer = format!("\"{}", "#".repeat(hashes));
+    let end = body.find(&closer)?;
+    Some(&body[end + closer.len()..])
+}
+
+/// The remainder after the cooked string body at the start of `body`
+/// (past its opening quote), honouring backslash escapes, or `None` when
+/// no closing quote follows on this line.
+fn cooked_end(body: &str) -> Option<&str> {
+    let mut escaped = false;
+    for (at, c) in body.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        if c == '"' {
+            return Some(&body[at + 1..]);
+        }
+    }
+    None
+}
+
+/// The byte length of the character literal body at the start of `body`
+/// (past its opening quote), including its closing quote, or `None` when
+/// `body` holds no complete literal (a lifetime or a broken literal stays
+/// code).
+fn char_end(body: &str) -> Option<usize> {
+    let mut chars = body.char_indices();
+    let (_, first) = chars.next()?;
+    if first == '\\' {
+        chars.next()?;
+    }
+    let (at, quote) = chars.next()?;
+    if quote != '\'' {
+        return None;
+    }
+    Some(at + 1)
 }
 
 #[cfg(test)]
