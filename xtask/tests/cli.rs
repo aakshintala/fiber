@@ -61,7 +61,7 @@ fn xtask(dir: &TempDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i3
 
 /// A `cargo nextest list` fixture and binary dep-info for the test sources
 /// used by the stress-plan integration cases.
-fn fake_nextest(dir: &TempDir) -> (String, String) {
+fn fake_nextest(dir: &TempDir, list_b_tests: bool) -> (String, String) {
     let root = dir.path();
     let deps = root.join("target/debug/deps");
     std::fs::create_dir_all(&deps).unwrap();
@@ -69,6 +69,7 @@ fn fake_nextest(dir: &TempDir) -> (String, String) {
     let b_binary = deps.join("b");
     let a_source = root.join("crates/a/tests/t.rs");
     let b_source = root.join("crates/b/src/fold_tests.rs");
+    let b_support_source = root.join("crates/b/tests/support/mod.rs");
     std::fs::write(
         format!("{}.d", a_binary.display()),
         format!("{}: {}\n", a_binary.display(), a_source.display()),
@@ -76,9 +77,22 @@ fn fake_nextest(dir: &TempDir) -> (String, String) {
     .unwrap();
     std::fs::write(
         format!("{}.d", b_binary.display()),
-        format!("{}: {}\n", b_binary.display(), b_source.display()),
+        format!(
+            "{}: {} {}\n",
+            b_binary.display(),
+            b_source.display(),
+            b_support_source.display()
+        ),
     )
     .unwrap();
+    let b_testcases = if list_b_tests {
+        serde_json::json!({
+            "fold::tests::first": {"filter-match": {"status": "matches"}},
+            "fold::tests::second": {"filter-match": {"status": "matches"}}
+        })
+    } else {
+        serde_json::json!({})
+    };
     let listed = serde_json::json!({
         "rust-suites": {
             "a::t": {
@@ -95,10 +109,7 @@ fn fake_nextest(dir: &TempDir) -> (String, String) {
                 "binary-id": "b",
                 "kind": "lib",
                 "binary-path": b_binary.display().to_string(),
-                "testcases": {
-                    "fold::tests::first": {"filter-match": {"status": "matches"}},
-                    "fold::tests::second": {"filter-match": {"status": "matches"}}
-                }
+                "testcases": b_testcases
             }
         }
     });
@@ -121,7 +132,26 @@ fn fake_nextest(dir: &TempDir) -> (String, String) {
 }
 
 fn xtask_with_nextest(dir: &TempDir, args: &[&str], home: &str, stdin: &str) -> (i32, String) {
-    let (path, json) = fake_nextest(dir);
+    xtask_with_nextest_listing(dir, args, home, stdin, true)
+}
+
+fn xtask_with_empty_b_nextest(
+    dir: &TempDir,
+    args: &[&str],
+    home: &str,
+    stdin: &str,
+) -> (i32, String) {
+    xtask_with_nextest_listing(dir, args, home, stdin, false)
+}
+
+fn xtask_with_nextest_listing(
+    dir: &TempDir,
+    args: &[&str],
+    home: &str,
+    stdin: &str,
+    list_b_tests: bool,
+) -> (i32, String) {
+    let (path, json) = fake_nextest(dir, list_b_tests);
     let mut env = home_env(home);
     env.push(("PATH", &path));
     env.push(("NEXTTEST_JSON", &json));
@@ -438,8 +468,7 @@ fn stress_plan_prints_the_touched_tests() {
     assert!(out.starts_with("run\ttrue\ncount\t100\n"), "{out}");
 }
 
-#[test]
-fn stress_plan_skips_a_helper_only_change_in_a_test_file() {
+fn fold_helper_only_branch() -> TempDir {
     let dir = workspace();
     dir.write(
         "crates/b/src/lib.rs",
@@ -458,10 +487,90 @@ fn stress_plan_skips_a_helper_only_change_in_a_test_file() {
     );
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "helper only"]);
+    dir
+}
+
+#[test]
+fn stress_plan_skips_a_helper_only_change_in_a_test_file() {
+    let dir = fold_helper_only_branch();
     let home = home(&dir);
     let (code, out) = xtask_with_nextest(&dir, &["stress-plan", "--base", "main"], &home, "");
     assert_eq!(code, 0, "{out}");
     assert!(out.starts_with("run\tfalse\n"), "{out}");
+
+    dir.write("flaky.txt", "b fold::tests::first\tfirst failure\n");
+    let list = dir.path().join("flaky.txt");
+    let list = list.to_str().unwrap();
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &["touched-retries", "--base", "main", "--list", list],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "touched-retries: ok\n");
+}
+
+#[test]
+fn stress_commands_error_when_the_index_lists_no_tests_for_a_test_file() {
+    let dir = fold_helper_only_branch();
+    let home = home(&dir);
+    let expected = "xtask: crates/b/src/fold_tests.rs: changed test file selected no tests\n";
+    let (code, out) =
+        xtask_with_empty_b_nextest(&dir, &["stress-plan", "--base", "main"], &home, "");
+    assert_eq!(code, 2);
+    assert_eq!(out, expected);
+
+    dir.write("flaky.txt", "b fold::tests::first\tfirst failure\n");
+    let list = dir.path().join("flaky.txt");
+    let list = list.to_str().unwrap();
+    let (code, out) = xtask_with_empty_b_nextest(
+        &dir,
+        &["touched-retries", "--base", "main", "--list", list],
+        &home,
+        "",
+    );
+    assert_eq!(code, 2);
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn stress_plan_and_touched_retries_skip_test_support_files_without_test_functions() {
+    let dir = workspace();
+    dir.write(
+        "crates/b/src/lib.rs",
+        "#[cfg(test)] #[path = \"fold_tests.rs\"] mod fold;\n",
+    );
+    dir.write(
+        "crates/b/src/fold_tests.rs",
+        "mod tests {\n    #[test]\n    fn first() {}\n\n    #[test]\n    fn second() {}\n}\n",
+    );
+    dir.write("crates/b/tests/support/mod.rs", "pub fn setup() {}\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "tests and support helper"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    dir.write(
+        "crates/b/tests/support/mod.rs",
+        "pub fn setup() { let _ = 1; }\n",
+    );
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "edit support helper"]);
+    let home = home(&dir);
+    let (code, out) = xtask_with_nextest(&dir, &["stress-plan", "--base", "main"], &home, "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("run\tfalse\n"), "{out}");
+
+    dir.write("flaky.txt", "b fold::tests::first\tfirst failure\n");
+    let list = dir.path().join("flaky.txt");
+    let list = list.to_str().unwrap();
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &["touched-retries", "--base", "main", "--list", list],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "touched-retries: ok\n");
 }
 
 #[test]
