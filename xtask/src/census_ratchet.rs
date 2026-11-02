@@ -15,8 +15,18 @@
 //! both count. A site split across lines is invisible here, as it is to
 //! the census.
 
+use std::collections::BTreeMap;
+
+use crate::rules::RustFile;
+use crate::select::is_test_file;
+
+/// The four closed-set names the census tracks.
 /// The four closed-set names the census tracks.
 const NAMES: &[&str] = &["kind", "code", "view", "format"];
+/// Files in scope: Rust files under `crates/`, outside test files.
+const SCOPE_PREFIX: &str = "crates/";
+/// Suffix of the files the ratchet scans.
+const RUST_SUFFIX: &str = ".rs";
 
 /// Occurrences of the six census forms in `source`, summed over its lines.
 pub(crate) fn count_sites(source: &str) -> usize {
@@ -109,6 +119,51 @@ fn match_index(rest: &str) -> Option<&str> {
 /// `.get("` name `")`.
 fn match_get(rest: &str) -> Option<&str> {
     match_name(rest.strip_prefix(".get(\"")?)?.strip_prefix("\")")
+}
+
+/// Per-file census counts for the files in scope: Rust files under
+/// `crates/`, excluding test files (`crate::select::is_test_file` on the
+/// crate-relative path). Only files with a nonzero count appear.
+pub(crate) fn counts(files: &[RustFile]) -> BTreeMap<String, usize> {
+    let mut table = BTreeMap::new();
+    for file in files {
+        if !file.path.starts_with(SCOPE_PREFIX) || !file.path.ends_with(RUST_SUFFIX) {
+            continue;
+        }
+        if is_test_file(&file.rel) {
+            continue;
+        }
+        let count = count_sites(&file.source);
+        if count > 0 {
+            table.insert(file.path.clone(), count);
+        }
+    }
+    table
+}
+
+/// Each in-scope file whose count exceeds its maximum (0 when the table
+/// names no maximum for it), in path order. Each failure names the file,
+/// the count and the maximum.
+pub(crate) fn check(files: &[RustFile], maxima: &BTreeMap<String, usize>) -> Vec<String> {
+    let mut failures = Vec::new();
+    for (path, count) in counts(files) {
+        let maximum = maxima.get(&path).copied().unwrap_or(0);
+        if count > maximum {
+            failures.push(format!(
+                "{path} holds {count} string-typed closed-set sites (maximum {maximum})"
+            ));
+        }
+    }
+    failures
+}
+
+/// The current per-file counts as `<path> <count>` lines, in path order:
+/// the seed `scripts/check` carries, and what `--print` prints.
+pub(crate) fn table(files: &[RustFile]) -> String {
+    counts(files)
+        .into_iter()
+        .map(|(path, count)| format!("{path} {count}\n"))
+        .collect()
 }
 
 #[cfg(test)]

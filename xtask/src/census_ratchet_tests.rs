@@ -143,6 +143,96 @@ fn near_misses_count_zero() {
     }
 }
 
+fn file(path: &str, source: &str) -> RustFile {
+    let rel = path.split('/').skip(2).collect::<Vec<_>>().join("/");
+    RustFile {
+        krate: "a".to_owned(),
+        path: path.to_owned(),
+        rel,
+        source: source.to_owned(),
+    }
+}
+
+fn maxima(entries: &[(&str, usize)]) -> std::collections::BTreeMap<String, usize> {
+    entries
+        .iter()
+        .map(|(path, maximum)| ((*path).to_owned(), *maximum))
+        .collect()
+}
+
+#[test]
+fn at_max_passes_one_above_fails_and_below_passes() {
+    let files = [file(
+        "crates/a/src/lib.rs",
+        "struct A { kind: String }\nstruct B { code: &str }\n",
+    )];
+    assert!(check(&files, &maxima(&[("crates/a/src/lib.rs", 2)])).is_empty());
+    assert_eq!(
+        check(&files, &maxima(&[("crates/a/src/lib.rs", 1)])),
+        ["crates/a/src/lib.rs holds 2 string-typed closed-set sites (maximum 1)"]
+    );
+    assert!(check(&files, &maxima(&[("crates/a/src/lib.rs", 5)])).is_empty());
+}
+
+#[test]
+fn a_file_missing_from_the_table_holds_none() {
+    let files = [file("crates/a/src/lib.rs", "struct A { kind: String }\n")];
+    assert_eq!(
+        check(&files, &maxima(&[])),
+        ["crates/a/src/lib.rs holds 1 string-typed closed-set sites (maximum 0)"]
+    );
+}
+
+#[test]
+fn test_files_hold_no_maximum() {
+    let files = [
+        file("crates/a/tests.rs", "struct A { kind: String }\n"),
+        file("crates/a/src/fold_tests.rs", "struct A { kind: String }\n"),
+        file("crates/a/tests/y.rs", "struct A { kind: String }\n"),
+        file("crates/a/src/testsuite.rs", "struct A { kind: String }\n"),
+    ];
+    let counted = counts(&files);
+    assert_eq!(
+        counted,
+        maxima(&[("crates/a/src/testsuite.rs", 1)]),
+        "only testsuite.rs counts"
+    );
+}
+
+#[test]
+fn files_outside_crates_hold_no_maximum() {
+    let files = [
+        file("xtask/src/main.rs", "struct A { kind: String }\n"),
+        file("research/notes.md", "struct A { kind: String }\n"),
+        file("crates/a/notes.txt", "struct A { kind: String }\n"),
+        file("crates/a/src/lib.rs", "// no sites here\n"),
+    ];
+    assert!(counts(&files).is_empty());
+}
+
+#[test]
+fn failures_sort_by_path_and_table_round_trips() {
+    let files = [
+        file("crates/b/src/lib.rs", "struct A { kind: String }\n"),
+        file("crates/a/src/lib.rs", "struct A { kind: String }\n"),
+    ];
+    assert_eq!(
+        check(&files, &maxima(&[])),
+        [
+            "crates/a/src/lib.rs holds 1 string-typed closed-set sites (maximum 0)",
+            "crates/b/src/lib.rs holds 1 string-typed closed-set sites (maximum 0)",
+        ]
+    );
+    let printed = table(&files);
+    assert_eq!(printed, "crates/a/src/lib.rs 1\ncrates/b/src/lib.rs 1\n");
+    let parsed = crate::screen_ratchet::parse_maxima(&printed).unwrap_or_default();
+    assert_eq!(
+        parsed,
+        maxima(&[("crates/a/src/lib.rs", 1), ("crates/b/src/lib.rs", 1),])
+    );
+    assert!(check(&files, &parsed).is_empty());
+}
+
 #[test]
 fn a_site_in_a_string_or_a_comment_counts() {
     let cases: &[(&str, usize)] = &[
