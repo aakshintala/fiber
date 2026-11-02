@@ -1122,7 +1122,10 @@ fn the_item_views_top_row_closes_them() {
         "the completed parent reply and running panel cards",
         |grid| {
             grid.contents.contains(REPLY)
-                && grid.contents.contains("completed · 2 calls")
+                && grid
+                    .contents
+                    .lines()
+                    .any(|row| row.contains("completed ·") && row.contains(" 2 calls"))
                 && panel_item_at(grid, "review the diff").is_some()
                 && panel_item_at(grid, "Jobs").is_some()
                 && support::session_cost_drawn(grid, 100)
