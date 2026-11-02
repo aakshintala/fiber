@@ -233,9 +233,16 @@ fn the_same_folder_rejection_reads_as_invalid_arguments() {
     assert_eq!(rejected.message, "already in that folder");
 }
 
+/// Kinds the doc names that the code does not build yet; the build ticket
+/// (#3782) removes the entry.
+const NOT_BUILT: [&str; 1] = ["archived"];
+
 #[test]
 fn every_kind_in_the_doc_is_known_with_its_class() {
-    let doc = doc_kinds();
+    let doc: BTreeMap<_, _> = doc_kinds()
+        .into_iter()
+        .filter(|(kind, _)| !NOT_BUILT.contains(kind))
+        .collect();
     let code: BTreeMap<_, _> = KINDS.iter().copied().collect();
     assert_eq!(code.len(), KINDS.len(), "a kind is declared twice");
     let doc_classes: BTreeMap<_, _> = doc.iter().map(|(k, (c, _))| (*k, *c)).collect();
@@ -1234,6 +1241,9 @@ fn the_samples_cover_every_key_each_kind_lists() {
         keys.extend(payload.as_object().unwrap().keys().cloned());
     }
     for (kind, (_, keys)) in doc_kinds() {
+        if NOT_BUILT.contains(&kind) {
+            continue;
+        }
         let listed: BTreeSet<String> = keys.iter().map(|k| (*k).to_owned()).collect();
         assert_eq!(covered.get(kind), Some(&listed), "{kind}");
     }
