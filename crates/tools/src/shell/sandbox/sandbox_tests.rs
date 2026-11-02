@@ -876,10 +876,11 @@ fn a_fixture_walk_counts_every_grant_exactly() {
     let denied = [home.join("secret")];
     let clock = fakes::clock::FakeClock::new();
     let (count, _elapsed) = measure_read_walk(dir.path(), &denied, clock.as_ref());
-    // The walk grants `home`'s three readable siblings and nothing else:
-    // the denied entry, its missing parents and the root's other entries
-    // stay out. A mutant returning 0 or 1 fails here.
-    assert_eq!(count, 3);
+    // The walk grants `home`'s three readable siblings and the owner's
+    // marker at the root, but nothing else: the denied entry, its missing
+    // parents and the root's other entries stay out. A mutant returning 0,
+    // 1, 2 or 3 fails here.
+    assert_eq!(count, 4);
 }
 
 #[cfg(target_os = "linux")]
