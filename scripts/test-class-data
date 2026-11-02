@@ -26,8 +26,7 @@ fail() {
 
 # No network in this test: any gh call fails loudly.
 mkdir -p "$tmp/bin"
-printf '#!/usr/bin/env bash\necho "scripts/test-class-data: unexpected gh call: $*" >&2\nexit 1\n' >"$tmp/bin/gh"
-chmod +x "$tmp/bin/gh"
+ln -s "$PWD/scripts/test-class-data-gh" "$tmp/bin/gh"
 PATH="$tmp/bin:$PATH"
 
 # Usage errors exit 2: no arguments, one argument, two arguments, and
