@@ -7,22 +7,18 @@
 //! `touches` says it changes the function. Anything unreadable is an error
 //! naming the path, never an empty selection.
 
-use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet};
-
 use proc_macro2::{Delimiter, Group, LineColumn, TokenStream, TokenTree};
 
-use super::test_filter::{DeclarerIdent, Scope, index_path_decls, scope_of};
-use super::{Members, is_test_file, owner};
+use super::{Members, owner};
 use crate::rules::RustFile;
+use crate::test_index::TestIndex;
 
 /// A test function the diff touches: the package and the nextest binary id
 /// and test name that select it. `binary` is the nextest binary id for
-/// integration and example tests and for `tests/<dir>/` modules with a
-/// root file; `None` for unit tests and for shared `tests/<dir>/` modules.
-/// `unit` is whether the test compiles into the package's unit tests (a
-/// file under `src/`): only then does the filter use the package term, so
-/// a unit test whose module path holds no `tests::` segment still matches.
+/// integration, example and shared test-module sources; it is `None` for
+/// unit tests. `unit` records whether nextest lists the suite as a `lib` or
+/// `bin`: those tests use the package term, so a unit test whose module
+/// path holds no `tests::` segment still matches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestRef {
     pub(crate) package: String,
@@ -31,179 +27,12 @@ pub(crate) struct TestRef {
     pub(crate) unit: bool,
 }
 
-/// Where one test file's tests run: its package, optional nextest binary,
-/// name prefixes and whether its tests compile into package unit tests.
-struct FileScope {
-    package: String,
-    binary: Option<String>,
-    prefixes: Vec<String>,
-    unit: bool,
-}
-
-/// The package, binary and name prefixes for tests in `path`, or `None`
-/// when it is not a test file. Files under `tests/<dir>/` use each
-/// same-package declaring module name; without a usable declaration they
-/// keep the file-layout prefix. A declaration cycle also falls back to the
-/// layout prefix. `src/` and `examples/` keep their `bug-filter` scope.
-fn file_scope(
-    path: &str,
-    members: &Members,
-    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
-    sources: &[RustFile],
-) -> Option<FileScope> {
-    if let Some((package, scope, prefix)) = scope_of(path, members, by_target) {
-        // Only a file under `src/` runs in the package's unit tests; a
-        // file directly in `tests/` or under `examples/` runs in its own
-        // binary instead.
-        let unit = matches!(scope, Scope::Package);
-        let binary = match scope {
-            Scope::Binary(stem) => Some(format!("{package}::{stem}")),
-            Scope::Package => None,
-            Scope::Example(example) => Some(format!("{package}::example/{example}")),
-        };
-        return Some(FileScope {
-            package,
-            binary,
-            prefixes: vec![prefix],
-            unit,
-        });
-    }
-    if !path.ends_with(".rs") {
-        return None;
-    }
-    let name = owner(path, members)?;
-    let member = members.get(name)?;
-    let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
-    if !is_test_file(rel) {
-        return None;
-    }
-    let parts: Vec<&str> = rel.split('/').collect();
-    let ["tests", _, rest @ ..] = parts.as_slice() else {
-        return None;
-    };
-    if rest.is_empty() {
-        return None;
-    }
-
-    let prefixes = declared_prefixes(path, members, by_target, sources, &mut Vec::new());
-    if !prefixes.is_empty() {
-        return Some(FileScope {
-            package: name.to_owned(),
-            binary: None,
-            prefixes,
-            unit: false,
-        });
-    }
-    layout_scope(path, name, members, sources)
-}
-
-/// The existing file-layout scope for a shared `tests/<dir>/` file.
-fn layout_scope(
-    path: &str,
-    package: &str,
-    members: &Members,
-    sources: &[RustFile],
-) -> Option<FileScope> {
-    let member = members.get(package)?;
-    let rel = path.get(member.dir.len() + 1..)?;
-    let parts: Vec<&str> = rel.split('/').collect();
-    let ["tests", dir, rest @ ..] = parts.as_slice() else {
-        return None;
-    };
-    if rest.is_empty() {
-        return None;
-    }
-    let mut below: Vec<&str> = rest.to_vec();
-    if below.last() == Some(&"mod.rs") {
-        below.pop();
-    }
-    let mut short = String::new();
-    for segment in &below {
-        short.push_str(segment.strip_suffix(".rs").unwrap_or(segment));
-        short.push_str("::");
-    }
-    let root = format!("{}/tests/{dir}.rs", member.dir);
-    if sources.iter().any(|f| f.path == root) {
-        Some(FileScope {
-            package: package.to_owned(),
-            binary: Some(format!("{package}::{dir}")),
-            prefixes: vec![short],
-            unit: false,
-        })
-    } else {
-        Some(FileScope {
-            package: package.to_owned(),
-            binary: None,
-            prefixes: vec![format!("{dir}::{short}")],
-            unit: false,
-        })
-    }
-}
-
-/// Every usable module prefix for a shared test file. Any cycle invalidates
-/// the full result, so callers use the file-layout scope instead.
-fn declared_prefixes(
-    path: &str,
-    members: &Members,
-    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
-    sources: &[RustFile],
-    stack: &mut Vec<String>,
-) -> Vec<String> {
-    fn walk(
-        path: &str,
-        members: &Members,
-        by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
-        sources: &[RustFile],
-        stack: &mut Vec<String>,
-    ) -> Result<Vec<String>, ()> {
-        if stack.iter().any(|seen| seen == path) {
-            return Err(());
-        }
-        stack.push(path.to_owned());
-        let result = (|| {
-            let Some(package) = owner(path, members) else {
-                return Ok(Vec::new());
-            };
-            let Some(member) = members.get(package) else {
-                return Ok(Vec::new());
-            };
-            let Some(declarers) = by_target.get(path) else {
-                return Ok(Vec::new());
-            };
-            let mut prefixes = BTreeSet::new();
-            for (declarer, ident) in declarers {
-                if owner(declarer, members) != Some(package) {
-                    continue;
-                }
-                let Some(declarer_rel) = declarer.get(member.dir.len() + 1..) else {
-                    continue;
-                };
-                let parts: Vec<&str> = declarer_rel.split('/').collect();
-                let parent_prefixes = match parts.as_slice() {
-                    ["tests", _binary] => vec![String::new()],
-                    ["tests", _, ..] => {
-                        let declared = walk(declarer, members, by_target, sources, stack)?;
-                        if declared.is_empty() {
-                            layout_scope(declarer, package, members, sources)
-                                .map(|scope| scope.prefixes)
-                                .unwrap_or_default()
-                        } else {
-                            declared
-                        }
-                    }
-                    _ => continue,
-                };
-                for parent in parent_prefixes {
-                    prefixes.insert(format!("{parent}{}::", strip_raw(ident)));
-                }
-            }
-            Ok(prefixes.into_iter().collect())
-        })();
-        stack.pop();
-        result
-    }
-
-    walk(path, members, by_target, sources, stack).unwrap_or_default()
+/// A test selection is either the changed functions in a source file or,
+/// for a shared helper with no test functions, every test binary that
+/// compiles that source.
+enum FileTests {
+    Functions(Vec<(TestFn, TestRef)>),
+    Whole(Vec<TestRef>),
 }
 
 /// A test function in one file: its name with inline modules, and its
@@ -377,6 +206,12 @@ fn test_fns(source: &str) -> Result<Vec<TestFn>, ()> {
     Ok(out)
 }
 
+pub(crate) fn has_test_functions(source: &str) -> Result<bool, String> {
+    test_fns(source)
+        .map(|functions| !functions.is_empty())
+        .map_err(|()| "cannot parse".to_owned())
+}
+
 /// One hunk's new side: the lines it holds, or the gap a zero-count hunk
 /// leaves between new lines `before` and `before + 1`.
 enum Hunk {
@@ -439,42 +274,70 @@ fn parse_hunk(header: &str, path: &str) -> Result<(u32, u32, u32, u32), String> 
     Ok((old_start, old_count, new_start, new_count))
 }
 
-/// The tests in scope at `path`: an empty selection when the file is no
-/// test file, or an error naming the path when its source is missing or
-/// does not tokenise.
+/// The tests compiled from `path`, selected by nextest's names rather than
+/// a module path inferred from the file's location.
 fn resolve(
     path: &str,
     members: &Members,
-    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
     sources: &[RustFile],
-) -> Result<Option<Vec<(TestFn, TestRef)>>, String> {
-    let Some(scope) = file_scope(path, members, by_target, sources) else {
+    index: &TestIndex,
+) -> Result<Option<FileTests>, String> {
+    if !path.ends_with(".rs") {
+        return Ok(None);
+    }
+    let Some(package) = owner(path, members) else {
         return Ok(None);
     };
-    let Some(source) = sources.iter().find(|f| f.path == path) else {
+    let member = members
+        .get(package)
+        .ok_or_else(|| format!("{path}: no workspace member"))?;
+    let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
+    if member.unrun_tests.contains(&path.to_owned()) {
+        return Ok(None);
+    }
+    let Some(source) = sources.iter().find(|source| source.path == path) else {
         return Err(format!("{path}: no source in the working tree"));
     };
-    let fns = test_fns(&source.source).map_err(|()| format!("{path}: cannot parse"))?;
+    let binaries = index.binaries_for(path);
+    if binaries.is_empty() {
+        // This runner did not compile the file, as with a test gated for
+        // another target OS. It contributes no tests to this runner's plan.
+        return Ok(None);
+    }
+    let functions = test_fns(&source.source).map_err(|()| format!("{path}: cannot parse"))?;
+    if functions.is_empty() && !rel.starts_with("tests/") {
+        return Ok(None);
+    }
+    if functions.is_empty() {
+        return Ok(Some(FileTests::Whole(
+            binaries
+                .iter()
+                .flat_map(|binary| binary.tests.iter().cloned())
+                .collect(),
+        )));
+    }
     let mut tests = Vec::new();
-    for f in fns {
-        for prefix in &scope.prefixes {
-            let test = TestRef {
-                package: scope.package.clone(),
-                binary: scope.binary.clone(),
-                name: format!("{prefix}{}", f.name),
-                unit: scope.unit,
-            };
-            tests.push((
-                TestFn {
-                    name: f.name.clone(),
-                    start: f.start,
-                    end: f.end,
-                },
-                test,
-            ));
+    for function in functions {
+        for binary in binaries {
+            for test in &binary.tests {
+                if test_name_matches(&test.name, &function.name) {
+                    tests.push((
+                        TestFn {
+                            name: function.name.clone(),
+                            start: function.start,
+                            end: function.end,
+                        },
+                        test.clone(),
+                    ));
+                }
+            }
         }
     }
-    Ok(Some(tests))
+    Ok(Some(FileTests::Functions(tests)))
+}
+
+fn test_name_matches(test: &str, function: &str) -> bool {
+    test == function || test.ends_with(&format!("::{function}"))
 }
 
 /// What the open file's hunks have resolved to: no test file, or its
@@ -483,22 +346,39 @@ struct OpenFile {
     path: Option<String>,
     raw: String,
     deleted: bool,
-    tests: Option<Vec<(TestFn, TestRef)>>,
+    tests: Option<FileTests>,
+    selected: Vec<TestRef>,
 }
 
-/// The test functions the diff adds or changes, in diff order,
-/// de-duplicated. It reads the working tree through `sources` and never
-/// git or the clock. When the stress planner has called
-/// `narrow_to_compiled_tests` and this is Fiber's workspace, tests the
-/// runner's `cargo nextest list` does not report are removed and each
-/// removed test is printed as a `dropped` line (`docs/ci.md`).
+/// The test functions the diff adds or changes, in diff order and
+/// de-duplicated. The compiler index already excludes tests the runner did
+/// not build.
+#[cfg(test)]
 pub(crate) fn changed_tests(
     diff: &str,
     members: &Members,
     sources: &[RustFile],
+    index: &TestIndex,
 ) -> Result<Vec<TestRef>, String> {
-    let by_target = index_path_decls(sources);
-    let mut out: Vec<TestRef> = Vec::new();
+    let mut out = Vec::new();
+    for (_, tests) in changed_tests_by_file(diff, members, sources, index)? {
+        for test in tests {
+            if !out.contains(&test) {
+                out.push(test);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The tests selected from each changed file, in diff order.
+pub(crate) fn changed_tests_by_file(
+    diff: &str,
+    members: &Members,
+    sources: &[RustFile],
+    index: &TestIndex,
+) -> Result<Vec<(String, Vec<TestRef>)>, String> {
+    let mut out: Vec<(String, Vec<TestRef>)> = Vec::new();
     let mut file: Option<OpenFile> = None;
     // The open hunk's remaining old and new lines and its next new line.
     let mut hunk: Option<(u32, u32, u32)> = None;
@@ -516,8 +396,14 @@ pub(crate) fn changed_tests(
                     let next_new = next_new
                         .checked_add(1)
                         .ok_or_else(|| format!("{path}: hunk body does not match its header"))?;
-                    if let Some(tests) = current.and_then(|f| f.tests.as_ref()) {
-                        select(&Hunk::Lines(next_new - 1, next_new - 1), tests, &mut out);
+                    if let Some(current) = file.as_mut()
+                        && let Some(tests) = current.tests.as_ref()
+                    {
+                        select(
+                            &Hunk::Lines(next_new - 1, next_new - 1),
+                            tests,
+                            &mut current.selected,
+                        );
                     }
                     hunk = Some((remaining_old, remaining_new, next_new));
                     continue;
@@ -539,8 +425,14 @@ pub(crate) fn changed_tests(
                     let next_new = next_new
                         .checked_add(1)
                         .ok_or_else(|| format!("{path}: hunk body does not match its header"))?;
-                    if let Some(tests) = current.and_then(|f| f.tests.as_ref()) {
-                        select(&Hunk::Lines(next_new - 1, next_new - 1), tests, &mut out);
+                    if let Some(current) = file.as_mut()
+                        && let Some(tests) = current.tests.as_ref()
+                    {
+                        select(
+                            &Hunk::Lines(next_new - 1, next_new - 1),
+                            tests,
+                            &mut current.selected,
+                        );
                     }
                     hunk = Some((remaining_old, remaining_new, next_new));
                     continue;
@@ -553,11 +445,17 @@ pub(crate) fn changed_tests(
             hunk = None;
         }
         if let Some(rest) = line.strip_prefix("diff --git ") {
+            if let Some(previous) = file.take()
+                && let Some(path) = previous.path
+            {
+                out.push((path, previous.selected));
+            }
             file = Some(OpenFile {
                 path: None,
                 raw: rest.to_owned(),
                 deleted: false,
                 tests: None,
+                selected: Vec::new(),
             });
         } else if let Some(rest) = line.strip_prefix("--- ") {
             if rest.starts_with('"') {
@@ -573,53 +471,39 @@ pub(crate) fn changed_tests(
                 } else {
                     let path = rest.strip_prefix("b/").unwrap_or(rest).to_owned();
                     current.path = Some(path.clone());
-                    current.tests = resolve(&path, members, &by_target, sources)?;
+                    current.tests = resolve(&path, members, sources, index)?;
                 }
             }
         } else if line.starts_with("@@ ") {
             let Some(current) = file.as_ref() else {
                 return Err(format!("{line}: hunk outside any file"));
             };
-            let name = current.path.as_deref().unwrap_or(current.raw.as_str());
-            let (_, old_count, new_start, new_count) = parse_hunk(line, name)?;
-            if !current.deleted
-                && new_count == 0
-                && let Some(tests) = current.tests.as_ref()
-            {
+            let name = current
+                .path
+                .as_deref()
+                .unwrap_or(current.raw.as_str())
+                .to_owned();
+            let deleted = current.deleted;
+            let (_, old_count, new_start, new_count) = parse_hunk(line, &name)?;
+            if !deleted && new_count == 0 {
                 let after = new_start
                     .checked_add(1)
                     .ok_or_else(|| format!("{name}: malformed hunk header"))?;
-                select(&Hunk::Gap(new_start, after), tests, &mut out);
+                if let Some(current) = file.as_mut()
+                    && let Some(tests) = current.tests.as_ref()
+                {
+                    select(&Hunk::Gap(new_start, after), tests, &mut current.selected);
+                }
             }
             hunk = Some((old_count, new_count, new_start));
         }
     }
-    if narrow_compiled() && members.contains_key(FIBER_PACKAGE) {
-        return retain_compiled(&out, members);
+    if let Some(current) = file
+        && let Some(path) = current.path
+    {
+        out.push((path, current.selected));
     }
     Ok(out)
-}
-
-/// Fiber's own workspace has this package. The program tests run
-/// `stress-plan` in a fixture workspace that does not, inside a bound
-/// that cannot hold a nested `cargo nextest list`, so the list runs only
-/// for Fiber's checkout.
-const FIBER_PACKAGE: &str = "xtask";
-
-thread_local! {
-    static NARROW_COMPILED: Cell<bool> = const { Cell::new(false) };
-}
-
-fn narrow_compiled() -> bool {
-    NARROW_COMPILED.with(Cell::get)
-}
-
-/// The stress planner asks `changed_tests` to drop tests this runner did
-/// not compile. `touched-retries` uses the same selector and does not ask:
-/// it reads a retry list the test job already produced, and a nested list
-/// there would compile the suite again.
-pub(crate) fn narrow_to_compiled_tests(enabled: bool) {
-    NARROW_COMPILED.set(enabled);
 }
 
 /// One test `cargo nextest list --message-format json` reported as
@@ -819,24 +703,41 @@ pub(crate) fn narrow_plan(
     })
 }
 
-/// Every test in `files`, in file order. A path with no source in
-/// `sources` adds nothing: the filter for that path still stands, and
-/// the runner list is what drops a test the platform did not compile.
+/// Every test in `files`, in file order, as selected by the compiler index.
 pub(crate) fn tests_in_files(
     files: &[String],
     members: &Members,
     sources: &[RustFile],
+    index: &TestIndex,
 ) -> Result<Vec<TestRef>, String> {
-    let by_target = index_path_decls(sources);
     let mut out = Vec::new();
     for path in files {
-        if !sources.iter().any(|source| source.path == *path) {
+        let Some(package) = owner(path, members) else {
+            continue;
+        };
+        let Some(member) = members.get(package) else {
+            continue;
+        };
+        let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
+        if member.unrun_tests.iter().any(|unrun| unrun == path) {
             continue;
         }
-        if let Some(tests) = resolve(path, members, &by_target, sources)? {
-            for (_, test) in tests {
-                if !out.contains(&test) {
-                    out.push(test);
+        let Some(source) = sources.iter().find(|source| source.path == *path) else {
+            continue;
+        };
+        let functions = test_fns(&source.source).map_err(|()| format!("{path}: cannot parse"))?;
+        if functions.is_empty() && !rel.starts_with("tests/") {
+            continue;
+        }
+        for binary in index.binaries_for(path) {
+            for test in &binary.tests {
+                if (functions.is_empty()
+                    || functions
+                        .iter()
+                        .any(|function| test_name_matches(&test.name, &function.name)))
+                    && !out.contains(test)
+                {
+                    out.push(test.clone());
                 }
             }
         }
@@ -844,67 +745,31 @@ pub(crate) fn tests_in_files(
     Ok(out)
 }
 
-fn retain_compiled(planned: &[TestRef], members: &Members) -> Result<Vec<TestRef>, String> {
-    if planned.is_empty() {
-        return Ok(Vec::new());
-    }
-    let listed = stress_runner_list(planned, members)?;
-    let (kept, dropped) = compiled_tests(planned, &listed);
-    for test in &dropped {
-        println!("dropped\t{}", test_label(test));
-    }
-    Ok(kept)
-}
-
-/// The stress run's list: the same packages, filter and `stress` profile
-/// the job passes to `cargo nextest run`.
-fn stress_runner_list(planned: &[TestRef], members: &Members) -> Result<Vec<ListedTest>, String> {
-    let expression = filter(planned);
-    let mut packages: Vec<String> = planned
-        .iter()
-        .map(|test| super::spec(&test.package, members))
-        .collect();
-    packages.sort();
-    packages.dedup();
-    let mut args = vec![
-        "nextest".to_owned(),
-        "list".to_owned(),
-        "--message-format".to_owned(),
-        "json".to_owned(),
-        "--color".to_owned(),
-        "never".to_owned(),
-        "--no-pager".to_owned(),
-        "--profile".to_owned(),
-        "stress".to_owned(),
-    ];
-    for package in &packages {
-        args.push("-p".to_owned());
-        args.push(package.clone());
-    }
-    args.push("-E".to_owned());
-    args.push(expression);
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    matching_tests(&crate::output("cargo", &refs)?)
-}
-
-/// Every touched function into the selection, once each.
-fn select(hunk: &Hunk, tests: &[(TestFn, TestRef)], out: &mut Vec<TestRef>) {
-    for (f, test) in tests {
-        if touches(hunk, f.start, f.end) && !out.contains(test) {
-            out.push(test.clone());
+/// Add each test touched by a hunk, once, in diff order.
+fn select(hunk: &Hunk, tests: &FileTests, out: &mut Vec<TestRef>) {
+    match tests {
+        FileTests::Functions(functions) => {
+            for (function, test) in functions {
+                if touches(hunk, function.start, function.end) && !out.contains(test) {
+                    out.push(test.clone());
+                }
+            }
+        }
+        FileTests::Whole(tests) => {
+            for test in tests {
+                if !out.contains(test) {
+                    out.push(test.clone());
+                }
+            }
         }
     }
 }
 
 /// The nextest filter selecting exactly the touched tests, in diff order:
-/// a binary term for integration and example tests, a package term for
-/// unit tests, and a `kind(test)` package term for shared `tests/`
-/// support modules. Their name prefixes follow same-package declarations,
-/// with the file layout as a fallback. Which package term a test without a
-/// binary takes is kept from where it compiles, never read from its module
-/// path: a unit test in a `#[path]`-declared file (as
-/// `app::commands::aliases::<name>`) holds no `tests::` segment, yet still
-/// runs in package unit tests, where a `kind(test)` term would match nothing.
+/// a binary-id term for test binaries and a package term for unit tests.
+/// Test names and binary ids come from nextest, not a file-layout guess. A
+/// unit test in a `#[path]`-declared file can have any module path, yet
+/// still runs in package unit tests.
 pub(crate) fn filter(tests: &[TestRef]) -> String {
     tests
         .iter()
