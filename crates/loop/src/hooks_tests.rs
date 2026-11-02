@@ -3006,6 +3006,30 @@ fn a_hook_details_replacement_keeps_the_reserved_file_seen() {
 }
 
 #[test]
+fn a_hook_non_object_details_replacement_keeps_both_values() {
+    let hooks = FakeHooks::new(
+        changed(None, Some(json!("redacted")), None),
+        &["acme"],
+        Vec::new(),
+    );
+    let ran = run(
+        fixed(Output {
+            details: Some(json!({"diff": "@@ x", "file_seen": {"path": "/w/a.txt", "hash": 7}})),
+            ..text("wrote /w/a.txt")
+        }),
+        script("probe", json!({})),
+        Some(hooks),
+        Arc::new(TurnCancel::default()),
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "completed");
+    assert_eq!(
+        completed.payload["details"],
+        json!({"value": "redacted", "file_seen": {"path": "/w/a.txt", "hash": 7}})
+    );
+}
+
+#[test]
 fn a_cancelled_search_rewritten_before_it_ran_completes_with_the_cancel_line_only() {
     let mut hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
     Arc::get_mut(&mut hooks).unwrap().before = Some(BeforeToolOutcome::Rewritten {

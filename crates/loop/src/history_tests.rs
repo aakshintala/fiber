@@ -2487,6 +2487,9 @@ fn failed_handoff() -> Event {
 
 #[test]
 fn the_fold_keeps_the_last_hash_for_each_path_through_the_point() {
+    // Rebuilds what was seen from the log up to the point the context
+    // continues from (`docs/tools.md`, "Stale files"): later entries win,
+    // and a fork sees only its prefix.
     let (_home, sessions) = sessions("seen-latest");
     write_log(
         &sessions,
@@ -2535,6 +2538,9 @@ fn the_fold_keeps_the_last_hash_for_each_path_through_the_point() {
 
 #[test]
 fn legacy_malformed_and_unfinished_completions_create_and_erase_nothing() {
+    // A log written before the field existed rebuilds nothing, and only a
+    // well-formed `file_seen` on a completed call creates a record
+    // (`docs/tools.md`, "Stale files").
     let (_home, sessions) = sessions("seen-legacy");
     write_log(
         &sessions,
@@ -2625,6 +2631,8 @@ fn legacy_malformed_and_unfinished_completions_create_and_erase_nothing() {
 
 #[test]
 fn a_completed_handoff_clears_seen_while_a_failed_one_keeps_it() {
+    // A handoff clears what was seen, and a fork rebuilds up to its point
+    // (`docs/tools.md`, "Stale files").
     let (_home, sessions) = sessions("seen-handoff");
     write_log(
         &sessions,

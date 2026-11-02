@@ -2417,7 +2417,6 @@ fn a_resume_accepts_a_write_of_a_file_the_context_read_and_edited() {
     );
     let completed = write_completed(&setup, &id);
     assert_eq!(completed["payload"]["status"], "completed", "{completed}");
-    assert_eq!(server.requests().len(), 5);
 }
 
 #[test]

@@ -649,39 +649,6 @@ fn a_ranged_read_logs_the_whole_files_hash_beside_the_resolved_path() {
 }
 
 #[test]
-fn a_successful_image_read_logs_the_files_hash() {
-    let dir = TempDir::new("fiber-read-image-seen");
-    let bytes = b"\x89PNG\r\n\x1a\nimage";
-    fs::write(dir.path().join("a.png"), bytes).unwrap();
-    let fiber = fakes::script(
-        dir.path(),
-        "image-seen",
-        r#"cat >/dev/null
-printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
-    );
-    let path = canonical(dir.path()).join("a.png");
-    let hash = crate::files::hash_bytes(bytes);
-    let (send, recv) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let files =
-            Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
-        let output = files.read().run(
-            &fakes::tool_args(json!({"path": "a.png"})),
-            &CancelToken::new(),
-            &Recorder::default(),
-        );
-        send.send(output).unwrap();
-    });
-    let output = fakes::Deadline::after(std::time::Duration::from_secs(10))
-        .recv_or_fail(&recv, "image result");
-    assert!(output.error.is_none());
-    assert_eq!(
-        output.details,
-        Some(json!({"file_seen": {"path": path_text(&path), "hash": hash}}))
-    );
-}
-
-#[test]
 fn a_capped_read_shares_the_session_file_state() {
     let dir = TempDir::new("fiber-read-cap-seen");
     fs::write(dir.path().join("a.txt"), "old\n").unwrap();

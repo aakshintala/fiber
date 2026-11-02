@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fs;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Component, Path, PathBuf};
@@ -534,13 +533,21 @@ pub(crate) fn attach_seen(details: Option<Value>, path: &Path, hash: u64) -> Opt
     }
 }
 
-/// A hash of the file's bytes. In-process only: nothing persists or logs it.
+/// A hash of the file's bytes. Persisted in `file_seen` (`docs/events.md`,
+/// `tool_call_completed`), so it is stable across Rust releases and
+/// platforms: FNV-1a 64-bit, a fixed algorithm. The live stale check and the
+/// logged hash use this same function.
 ///
 /// debt: a 64-bit hash collision lets a changed file look seen, a measured collision in a session
 pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
+    const OFFSET: u64 = 14695981039346656037;
+    const PRIME: u64 = 1099511628211;
+    let mut hash = OFFSET;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 /// The path as text. A non-UTF-8 byte is escaped rather than rejected.

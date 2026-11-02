@@ -181,8 +181,12 @@ fn file_seen_of(details: &Option<Value>) -> Option<Value> {
 /// Merges the tool's reserved `file_seen` record into the shaped details,
 /// keeping every field an `after_tool` hook returned. The tool's own record
 /// wins over a hook's: a hook replaces display data, never what the call
-/// saw. A non-object replacement stays as the hook wrote it, so an opaque
-/// value it owns is never rewritten.
+/// saw. A hook may return any `details` value (`docs/extensions.md`,
+/// "after_tool"), but the history fold reads only the reserved
+/// `details.file_seen` object (`docs/events.md`, `tool_call_completed`), so
+/// a non-object replacement is preserved under `value` beside the record:
+/// `details` stays an object carrying `file_seen`, a shape `details: any
+/// JSON` already allows, and no hook data is lost.
 fn with_seen(details: Option<Value>, seen: Value) -> Option<Value> {
     match details {
         Some(Value::Object(mut object)) => {
@@ -190,7 +194,7 @@ fn with_seen(details: Option<Value>, seen: Value) -> Option<Value> {
             Some(Value::Object(object))
         }
         None => Some(json!({"file_seen": seen})),
-        kept => kept,
+        Some(value) => Some(json!({"value": value, "file_seen": seen})),
     }
 }
 
