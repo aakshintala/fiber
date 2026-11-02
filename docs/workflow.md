@@ -346,7 +346,8 @@ touch is handled like any other failure on `main`.
 
 While the bypass list is empty, an `--admin` merge fails on GitHub's side,
 whoever runs it. Agents run `gh` with the owner's admin login, so nothing on
-GitHub stops one from editing the ruleset: agents never change a ruleset,
-branch protection or repository setting, and never ask a peer to. The
+GitHub stops one from editing the ruleset, or from using the bypass while
+the owner has it on: agents never merge with `--admin`, never change a
+ruleset, branch protection or repository setting, and never ask a peer to. The
 nightly report lists every merge whose head had no green `CI`, and flags the
 `main` ruleset whenever its bypass list is not empty.
