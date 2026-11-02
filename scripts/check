@@ -183,7 +183,7 @@ crates/main/tests/tui_extensions.rs 8
 crates/main/tests/tui_key_whole_screen.rs 8
 crates/main/tests/tui_timing_tests.rs 2
 crates/main/tests/wheel_scroll.rs 11
-crates/main/tests/working_line_look.rs 49
+crates/main/tests/working_line_look.rs 69
 crates/main/tests/workspace_picker.rs 1
 EOF
     echo "== kinds ratchet"
