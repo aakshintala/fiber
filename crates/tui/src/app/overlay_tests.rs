@@ -4359,8 +4359,8 @@ mod stacked {
         app
     }
 
-    /// A seam over two rows, so the Settings a test opens lists
-    /// something.
+    /// A seam over more rows than either view draws, so a wheel step
+    /// that reached the list would move its window.
     fn fake() -> Fake {
         Fake::new(vec![
             row(
@@ -4368,13 +4368,8 @@ mod stacked {
                 Shown::Value("400000".to_owned()),
                 "default",
                 WriteScope::Any { repo: true },
-            ),
-            row(
-                "tui.theme",
-                Shown::Unset,
-                "default",
-                WriteScope::Any { repo: false },
-            ),
+            );
+            40
         ])
     }
 
@@ -4561,23 +4556,28 @@ mod stacked {
         app.set_configure(Arc::new(fake()) as Arc<dyn Configure>);
         app.on_wheel(&wheel(30, 5, false));
         assert!(app.top().is_some(), "setup scrolled the conversation up");
-        // The seam opens real Settings, still a swapped view
-        // over the conversation area.
         app.open_config_view(crate::app::ConfigView::Settings);
         assert!(app.config_view_open(), "the view opened");
         open(&mut app, Surface::Keymap);
         let top = app.top();
         assert!(top.is_some(), "opening keeps the scrolled conversation");
+        let frame = app.config_view_screen().expect("the view stays open");
+        let (window, marked) = (frame.list.top(), frame.list.selected());
         // The view region: swallowed, view and conversation unchanged.
+        // A wheel that reached the list would move its window over this
+        // many rows.
         app.on_wheel(&wheel(30, 5, true));
         assert_eq!(app.top(), top, "the wheel left the conversation");
+        let frame = app.config_view_screen().expect("the view stays open");
         assert_eq!(
-            app.config_view_screen()
-                .expect("the view stays open")
-                .list
-                .selected(),
-            0,
-            "the wheel left the view"
+            frame.list.top(),
+            window,
+            "the wheel moved the view's window"
+        );
+        assert_eq!(
+            frame.list.selected(),
+            marked,
+            "the wheel moved the view's selection"
         );
         assert!(app.top_surfaces().contains(&Surface::Keymap));
         // The panel region: the panel scrolls instead.
@@ -4609,8 +4609,6 @@ mod stacked {
         app.on_wheel(&wheel(2, 5, true));
         let scrolled = app.home_list_scroll();
         assert!(scrolled > 0, "setup scrolled the home list down");
-        // The seam opens real Settings, still a swapped view
-        // over the whole screen.
         app.open_config_view(crate::app::ConfigView::Settings);
         assert!(app.config_view_open(), "the view opened");
         open(&mut app, Surface::Keymap);
@@ -4619,20 +4617,27 @@ mod stacked {
             scrolled,
             "opening keeps the scrolled list"
         );
-        // The list region: swallowed, view and list unchanged.
+        let frame = app.config_view_screen().expect("the view stays open");
+        let (window, marked) = (frame.list.top(), frame.list.selected());
+        // The list region: swallowed, view and list unchanged. A wheel
+        // that reached the list would move its window over this many
+        // rows.
         app.on_wheel(&wheel(2, 5, true));
         assert_eq!(
             app.home_list_scroll(),
             scrolled,
             "the wheel left the home list"
         );
+        let frame = app.config_view_screen().expect("the view stays open");
         assert_eq!(
-            app.config_view_screen()
-                .expect("the view stays open")
-                .list
-                .selected(),
-            0,
-            "the wheel left the view"
+            frame.list.top(),
+            window,
+            "the wheel moved the view's window"
+        );
+        assert_eq!(
+            frame.list.selected(),
+            marked,
+            "the wheel moved the view's selection"
         );
         assert!(app.top_surfaces().contains(&Surface::Keymap));
         // The rail region: the rail takes it, not the list.
