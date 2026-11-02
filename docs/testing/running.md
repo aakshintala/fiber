@@ -66,6 +66,8 @@ reports the number of tests run on each target, so an empty suite cannot pass.
 Each test uses its own temporary directory and checks only its own processes
 and files, never a machine-wide count.
 
+A temporary directory made under `$HOME` records the process that made it. The next one made beside it with the same prefix removes any whose process has exited, so a killed run's leftovers go at the next run.
+
 Every process-group signal in a test goes through the guarded helper in
 `fakes`, which refuses a group id of 1 or less: `kill(-1)` signals every
 process the user owns. Code that signals a process or group refuses an id of

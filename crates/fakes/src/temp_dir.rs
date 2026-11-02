@@ -19,7 +19,10 @@ use contract::clock::Clock;
 use crate::MUST_SUCCEED_WITHIN;
 use crate::clock::SystemClock;
 use crate::deadline::Deadline;
-use crate::process_group::{pids_exit, stop_closed};
+use crate::process_group::{pid_alive, pids_exit, stop_closed};
+
+/// The marker naming the process that created a temporary directory.
+const OWNER_MARKER: &str = ".fiber-owner-pid";
 
 /// How many names [`TempDir::new`] tries before giving up.
 const ATTEMPTS: usize = 64;
@@ -32,7 +35,7 @@ const COMMAND_LINE_TIMEOUT: Duration = Duration::from_secs(5);
 static NEXT: AtomicU64 = AtomicU64::new(0);
 static STATE: LazyLock<RandomState> = LazyLock::new(RandomState::new);
 
-/// A directory under the system temporary directory, owned by the caller.
+/// A temporary directory, owned by the caller.
 ///
 /// Drop removes it, including a nested directory left mode `0o000` or
 /// `0o555`, once no live process holds it: a holder still running past the
@@ -53,21 +56,44 @@ fn creating_thread_name() -> Option<String> {
 }
 
 impl TempDir {
-    /// Creates `<temp>/<prefix>-<8 lowercase hex digits>`.
+    /// Creates `<temp>/<prefix>-<8 lowercase hex digits>` without an owner
+    /// marker or sibling sweep.
     ///
     /// The directory did not exist: `create_dir` fails when the path is
     /// taken, and another suffix is drawn. Panics if creating the directory
     /// fails for any other reason, or after [`ATTEMPTS`] names were taken.
     pub fn new(prefix: &str) -> Self {
-        Self::under(&std::env::temp_dir(), prefix)
+        let path = create(&std::env::temp_dir(), prefix, std::iter::from_fn(suffix));
+        Self {
+            path,
+            owner: creating_thread_name(),
+        }
     }
 
-    /// Creates `<parent>/<prefix>-<8 lowercase hex digits>`, as [`TempDir::new`]
-    /// but under `parent` instead of the system temporary directory. Root a
-    /// directory that holds a socket or a Fiber home a `fiber` process runs in
-    /// under a short parent such as `/tmp`: socket paths are limited to SUN_LEN bytes.
+    /// Creates `<parent>/<prefix>-<8 lowercase hex digits>` and records its
+    /// creating process in `.fiber-owner-pid`. Before creation, matching
+    /// siblings with a marker for an exited process are removed; siblings
+    /// without a readable marker or with a live process are left alone. Root
+    /// a directory that holds a socket or a Fiber home a `fiber` process runs
+    /// in under a short parent such as `/tmp`: socket paths are limited to
+    /// SUN_LEN bytes.
+    ///
+    /// # Panics
+    ///
+    /// When the parent cannot be read for the sweep or the marker cannot be
+    /// written, as well as when creating the directory fails.
+    #[allow(
+        clippy::panic,
+        reason = "a directory without its owner marker cannot be safely returned"
+    )]
     pub fn under(parent: &Path, prefix: &str) -> Self {
+        sweep(parent, prefix);
         let path = create(parent, prefix, std::iter::from_fn(suffix));
+        let marker = path.join(OWNER_MARKER);
+        if let Err(error) = fs::write(&marker, std::process::id().to_string()) {
+            remove(&path);
+            panic!("writing {}: {error}", marker.display());
+        }
         Self {
             path,
             owner: creating_thread_name(),
@@ -366,6 +392,56 @@ fn suffix() -> Option<String> {
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
     let hash = STATE.hash_one(n) & 0xffff_ffff;
     Some(format!("{hash:08x}"))
+}
+
+/// Removes each matching sibling directory whose owner marker names an
+/// exited process. Siblings without a readable marker or with a live owner
+/// are left alone. A parent that cannot be read fails the sweep rather than
+/// creating a directory without checking its siblings.
+#[allow(
+    clippy::panic,
+    reason = "a sweep that cannot inspect siblings must not return a new directory unchecked"
+)]
+fn sweep(parent: &Path, prefix: &str) {
+    let entries = fs::read_dir(parent).unwrap_or_else(|error| {
+        panic!("reading {} for stale temp dirs: {error}", parent.display())
+    });
+    let sibling_prefix = format!("{prefix}-");
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| {
+            panic!(
+                "reading an entry in {} for stale temp dirs: {error}",
+                parent.display()
+            )
+        });
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(&sibling_prefix) || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            continue;
+        }
+        let path = entry.path();
+        let marker = path.join(OWNER_MARKER);
+        if !fs::symlink_metadata(&marker).is_ok_and(|metadata| metadata.is_file()) {
+            continue;
+        }
+        let Ok(owner) = fs::read_to_string(&marker) else {
+            continue;
+        };
+        let Ok(pid) = owner.trim().parse::<u32>() else {
+            continue;
+        };
+        if pid > 1 && i32::try_from(pid).is_ok() && !pid_alive(pid) {
+            remove(&path);
+            assert!(
+                !path.exists(),
+                "could not remove stale temp dir {}",
+                path.display()
+            );
+        }
+    }
 }
 
 /// Creates `parent`/`prefix`-`suffix` with `create_dir`. An existing path,

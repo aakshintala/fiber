@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use super::TempDir;
+use super::{OWNER_MARKER, TempDir};
 use crate::MUST_SUCCEED_WITHIN;
 use crate::children::Ready;
 use crate::clock::FakeClock;
@@ -19,6 +19,7 @@ use contract::clock::Clock;
 /// re-executes. Unset, the test does nothing.
 const CHILD: &str = "temp_dir::tests::child_leaves_a_read_only_directory";
 const CHILD_PREFIX: &str = "FAKES_TEMP_PREFIX";
+const CHILD_PARENT: &str = "FAKES_TEMP_PARENT";
 
 fn set_mode(path: &Path, mode: u32) {
     let mut perms = fs::metadata(path).unwrap().permissions();
@@ -39,6 +40,23 @@ fn name_is(path: &Path, prefix: &str) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
+fn assert_only_owner_marker(path: &Path) {
+    let names: Vec<String> = fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        vec![OWNER_MARKER.to_owned()],
+        "a new temporary directory contains only {OWNER_MARKER}"
+    );
+    assert_eq!(
+        fs::read_to_string(path.join(OWNER_MARKER)).unwrap(),
+        std::process::id().to_string(),
+        "{OWNER_MARKER} names the creating process"
+    );
+}
+
 #[test]
 fn under_places_the_directory_under_its_parent_and_removes_it_on_drop() {
     let parent = TempDir::new("under-parent");
@@ -46,7 +64,7 @@ fn under_places_the_directory_under_its_parent_and_removes_it_on_drop() {
     assert_eq!(child.path().parent(), Some(parent.path()));
     assert!(name_is(child.path(), "kid"), "{}", child.path().display());
     assert!(child.path().is_dir());
-    assert_eq!(fs::read_dir(child.path()).unwrap().count(), 0);
+    assert_only_owner_marker(child.path());
     let path = child.path().to_path_buf();
     drop(child);
     assert!(!path.exists());
@@ -193,10 +211,11 @@ fn a_symlink_is_not_followed_when_modes_are_restored() {
     reason = "the parent test quotes this line in its failure message"
 )]
 fn child_leaves_a_read_only_directory() {
-    let Ok(prefix) = std::env::var(CHILD_PREFIX) else {
+    let (Ok(prefix), Ok(parent)) = (std::env::var(CHILD_PREFIX), std::env::var(CHILD_PARENT))
+    else {
         return;
     };
-    let dir = TempDir::new(&prefix);
+    let dir = TempDir::under(Path::new(&parent), &prefix);
     let locked = dir.path().join("locked");
     fs::create_dir(&locked).unwrap();
     set_mode(&locked, 0o000);
@@ -209,7 +228,8 @@ fn child_leaves_a_read_only_directory() {
 
 #[test]
 fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
-    let mut child = spawn_child();
+    let parent = TempDir::new("fk-parent");
+    let mut child = spawn_child(parent.path());
     let leftover = printed_dir(&mut child);
 
     if let Some(running) = child.0.as_mut() {
@@ -248,20 +268,50 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
         leftover.display()
     );
 
-    let next = TempDir::new("fk");
+    let next = TempDir::under(parent.path(), "fk");
     assert_ne!(next.path(), leftover);
     assert!(next.path().is_dir());
-    assert_eq!(fs::read_dir(next.path()).unwrap().count(), 0);
+    assert!(
+        !leftover.exists(),
+        "the next directory removed the killed run's leftover"
+    );
+    assert_only_owner_marker(next.path());
     fs::write(next.path().join("probe"), "ok").unwrap();
+}
 
-    super::restore_modes(&leftover);
-    fs::remove_dir_all(&leftover).unwrap();
-    assert!(!leftover.exists());
+#[test]
+fn under_removes_an_exited_owner_and_keeps_a_live_owner() {
+    let parent = TempDir::new("sweep-parent");
+    let prefix = "fiber-tools-shell-sandbox-protected";
+    let mut child = Command::new("true").process_group(0).spawn().unwrap();
+    let exited_pid = child.id();
+    assert!(child.wait().unwrap().success());
+
+    let stale = parent.path().join(format!("{prefix}-exited"));
+    fs::create_dir(&stale).unwrap();
+    fs::write(stale.join(OWNER_MARKER), exited_pid.to_string()).unwrap();
+
+    let live = parent.path().join(format!("{prefix}-live"));
+    fs::create_dir(&live).unwrap();
+    fs::write(live.join(OWNER_MARKER), std::process::id().to_string()).unwrap();
+
+    let next = TempDir::under(parent.path(), prefix);
+    assert!(
+        !stale.exists(),
+        "the exited owner's directory was not swept"
+    );
+    assert!(live.is_dir(), "the live owner's directory was swept");
+    assert_eq!(
+        fs::read_to_string(live.join(OWNER_MARKER)).unwrap(),
+        std::process::id().to_string()
+    );
+    assert_only_owner_marker(next.path());
 }
 
 #[test]
 fn a_closed_stdin_lets_the_child_exit_and_clean_up() {
-    let mut child = spawn_child();
+    let parent = TempDir::new("fk-parent");
+    let mut child = spawn_child(parent.path());
     let leftover = printed_dir(&mut child);
     drop(child.0.as_mut().unwrap().stdin.take());
     let mut exited = child.0.take().unwrap();
@@ -306,11 +356,12 @@ fn a_closed_stdin_lets_the_child_exit_and_clean_up() {
 /// leave it running.
 struct ChildGuard(Option<Child>);
 
-fn spawn_child() -> ChildGuard {
+fn spawn_child(parent: &Path) -> ChildGuard {
     ChildGuard(Some(
         Command::new(std::env::current_exe().unwrap())
             .args(["--exact", CHILD, "--nocapture"])
             .env(CHILD_PREFIX, "fk")
+            .env(CHILD_PARENT, parent)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
