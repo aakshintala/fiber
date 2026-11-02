@@ -19,6 +19,31 @@ use extensions::{Quota, QuotaEntry, Window, WindowUse};
 
 use crate::switch::quota::{ModelQuotaRead, QuotaView};
 
+/// Captures the effective settings when a delegate starts, not when wired.
+pub(crate) fn sandbox_snapshot_reader(
+    handle: &crate::settings::SandboxHandle,
+) -> jobs::SandboxSnapshot {
+    let handle = Arc::clone(handle);
+    Arc::new(move || {
+        let settings = support::lock(&handle).clone();
+        let mut overrides = vec![format!("sandbox.enabled={}", settings.enabled)];
+        if !settings.enabled {
+            return Ok(overrides);
+        }
+        for (key, paths) in [
+            ("sandbox.allow_write", settings.allow_write),
+            ("sandbox.deny_read", settings.deny_read),
+        ] {
+            let paths = paths
+                .iter()
+                .map(|path| path.to_str().ok_or_else(|| key.to_owned()))
+                .collect::<Result<Vec<_>, _>>()?;
+            overrides.push(format!("{key}={}", serde_json::json!(paths)));
+        }
+        Ok(overrides)
+    })
+}
+
 static DEPTH: OnceLock<u32> = OnceLock::new();
 
 pub(crate) fn set_depth(depth: u32) {
@@ -71,6 +96,7 @@ pub(crate) struct Delegates {
     /// began after a removal reload, so it ends stopped. `None` until
     /// the first `retain`.
     loaded: Mutex<Option<Vec<String>>>,
+    sandbox: crate::settings::SandboxHandle,
 }
 
 impl Delegates {
@@ -95,6 +121,7 @@ impl Delegates {
         jobs: Arc<jobs::Registry>,
         clock: Arc<dyn Clock>,
         resolve: jobs::Resolve,
+        sandbox: crate::settings::SandboxHandle,
     ) -> Self {
         let launch = launcher(&fiber);
         let watch = watcher(&home);
@@ -117,6 +144,7 @@ impl Delegates {
             worktree_record,
             quota: None,
             loaded: Mutex::new(None),
+            sandbox,
         }
     }
 
@@ -158,6 +186,7 @@ impl Delegates {
             parent: self.parent.clone(),
             workspace: self.workspace.clone(),
             inherited: inherited_roots_reader(&self.sessions, &self.parent),
+            sandbox: sandbox_snapshot_reader(&self.sandbox),
             events_for: Arc::new(move |workspace, id| {
                 let sessions = log::sessions_dir(&home, &worktree::project(workspace));
                 log::SessionDir::new(&sessions, id).events()
@@ -226,6 +255,7 @@ impl Delegates {
     /// and no other session's.
     pub(crate) fn message(&self) -> jobs::DelegateMessage {
         jobs::DelegateMessage {
+            sandbox: sandbox_snapshot_reader(&self.sandbox),
             finish: worktree_finisher(&self.home, &self.clock),
             depth: self.depth,
             registry: Arc::clone(&self.jobs),
@@ -647,7 +677,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     // optional credential override, a fork carries its point and neither
     // a model nor a credential, and a resume carries neither, continuing
     // the recorded session.
-    let (model, overrides, resume, forked_from, forked_seq) = match &launched.start {
+    let (model, mut overrides, resume, forked_from, forked_seq) = match &launched.start {
         jobs::Start::Fresh(jobs::Fresh::Spawn { model, credential }) => {
             // A role naming a credential label runs the child under it: the
             // label travels as a run override, so the child's `preamble_built`
@@ -677,6 +707,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         ),
         jobs::Start::Resume => (None, Vec::new(), true, None, None),
     };
+    overrides.extend(launched.sandbox.iter().cloned());
     // A delegate carries its parent's environment, so it carries the
     // parent's source too (`docs/invocation.md`, "A session's
     // environment").

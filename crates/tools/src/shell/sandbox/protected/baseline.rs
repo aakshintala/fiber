@@ -283,6 +283,17 @@ pub(crate) fn snapshot(workspace: &Path) -> Result<Vec<Entry>, String> {
             && canonical(&pointer).is_some_and(|resolved| Some(resolved) == canonical(&found.path));
         if !is_shared_dir {
             entries.push(snapshot_entry(&pointer, &display(&main_root, &pointer))?);
+            if pointer.is_file() {
+                let text = super::super::read_capped(&pointer)
+                    .map_err(|error| format!("cannot read {}: {error}", pointer.display()))?;
+                if let Some(gitdir) = super::super::pointer_gitdir(&worktree.root, &text) {
+                    let commondir = gitdir.join("commondir");
+                    entries.push(snapshot_entry(
+                        &commondir,
+                        &display(&main_root, &commondir),
+                    )?);
+                }
+            }
         }
         let fiber = worktree.root.join(".fiber");
         entries.push(snapshot_entry(&fiber, &display(&main_root, &fiber))?);

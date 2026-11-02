@@ -12,6 +12,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod extension_harness;
 mod support;
 
 use std::fs;
@@ -1219,4 +1220,555 @@ fn a_confined_spawn_failure_starts_confined_and_names_its_cause() {
         "the end names the cause: {text}"
     );
     assert!(!marker.is_file(), "no command ran after the apply failure");
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_lines(text: &str) -> Vec<serde_json::Value> {
+    text.lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+/// Count the security-boundary events with the full kind multiset, not
+/// pacing-dependent text deltas: every ordered line kind is asserted so a
+/// duplicated or missing event fails, unordered self-triggered lines are
+/// set aside by the shared helper, and pacing `job_delta` lines are
+/// ignored (`docs/testing.md`, "Event streams"). The streamed delta
+/// kinds carry chunking- and pacing-dependent counts no doc promises
+/// (`docs/tools.md`, "Progress"; `docs/events.md`, "Ephemeral"), so
+/// they are excluded the same way: the boundary events keep exact counts.
+#[cfg(target_os = "linux")]
+fn sandbox_call_counts(lines: &[serde_json::Value], expected: &[&str]) {
+    let steady: Vec<serde_json::Value> = lines
+        .iter()
+        .filter(|line| {
+            !matches!(
+                line["kind"].as_str(),
+                Some("assistant_message_delta" | "tool_call_delta")
+            )
+        })
+        .cloned()
+        .collect();
+    support::assert_kinds_multiset(
+        &steady,
+        expected,
+        &[],
+        Some("pacing job_delta lines carry no count under test"),
+        "docs/events.md, tool_call_requested/tool_call_started/tool_call_completed/permission_resolved",
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_child_provider(setup: &Setup, server: &fakes::ProviderServer) {
+    use serde_json::json;
+    let source = setup.root.path().join("child-provider");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({
+            "name": "child", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+            "providers": {"child": [format!("{}/v1", server.url())]}
+        }),
+    );
+    support::write_json(
+        &source.join("providers/child.json"),
+        &json!({
+            "name": "child", "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// docs/permissions.md, "The destructive-command guard": push stays
+/// reviewed even when the sandbox could run it on the confined fast path.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_push_reaches_the_reviewer_and_a_block_never_spawns_it() {
+    use serde_json::json;
+    use support::{function_call, hello, stream, text_reply};
+    let setup = Setup::new_with_sandbox_root();
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "plain",
+            "shell",
+            &json!({"command":"printf confined-ok"}),
+        )]),
+        stream(&[function_call(
+            "push",
+            "shell",
+            &json!({"command": "git -C . push origin branch"}),
+        )]),
+        // The reviewer asks in two stages: `check` sends the call to the
+        // second stage, whose `block` verdict with a reason denies it. The
+        // denial returns to the model, whose closing turn needs a scripted
+        // answer like every other terminal turn.
+        text_reply("check"),
+        text_reply("block no pushes"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model":"fake/m", "reviewer":{"model":"fake/m"}, "sandbox":{"enabled":true}
+        }),
+    );
+    let run = setup.fiber_run(&["ask", "push the branch"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let lines = sandbox_lines(&run.stdout);
+    sandbox_call_counts(
+        &lines,
+        &[
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_started",
+            "assistant_message_started",
+            "assistant_message_started",
+            "extensions_loaded",
+            "fiber_exited",
+            "fiber_started",
+            "opening_message",
+            "permission_resolved",
+            "preamble_built",
+            "session_started",
+            "step_started",
+            "step_started",
+            "step_started",
+            "text_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_started",
+            "turn_completed",
+            "turn_started",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+        ],
+    );
+    let push = lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_requested"
+                && line["payload"]["arguments"]["command"] == "git -C . push origin branch"
+        })
+        .unwrap();
+    let id = &push["action_id"];
+    let decision = lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved" && &line["action_id"] == id)
+        .unwrap();
+    assert_eq!(decision["payload"]["decided_by"], "reviewer");
+    assert_eq!(decision["payload"]["decision"], "deny");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started" && &line["action_id"] == id)
+    );
+    let started = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started")
+        .unwrap();
+    assert_eq!(started["payload"]["confined"], true);
+    assert!(run.stdout.contains("confined-ok"));
+}
+
+/// docs/sandbox.md, "What it cannot do": a linked-worktree delegate can
+/// commit and create local branches. All refs and logs remain writable so
+/// a moved branch can be recovered, without granting the shared config.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_worktree_delegate_commits_branches_and_recovers_a_reflog() {
+    use serde_json::json;
+    use support::{function_call, hello, stream};
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let workspace = setup.workspace();
+    fakes::git::git(&workspace, &["init", "--quiet"]);
+    fs::write(workspace.join("base"), "base").unwrap();
+    fakes::git::git(&workspace, &["add", "."]);
+    fakes::git::git(&workspace, &["commit", "--quiet", "-m", "base"]);
+    let original_config = fs::read(workspace.join(".git/config")).unwrap();
+    let parent = fakes::ProviderServer::start([
+        stream(&[function_call("spawn", "delegate_spawn", &json!({
+            "description":"commit", "prompt":"commit and recover", "model":"fiber:child/m", "isolation":"worktree"
+        }))]), allow_verdict(), hello(), hello(), hello(),
+    ]).unwrap();
+    let command = "git checkout -b local && printf new > new && git add new && git -c user.name=Test -c user.email=test@example.com commit -m child && git branch recovery HEAD && git branch -f recovery HEAD~1 && git branch rescue 'recovery@{1}' && git rev-parse HEAD rescue";
+    let child = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "commit",
+            "shell",
+            &json!({"command":command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&parent);
+    sandbox_child_provider(&setup, &child);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model":"fake/m", "reviewer":{"model":"fake/m"}}),
+    );
+    // Only the parent enables confinement. The child must receive its
+    // effective run-layer value rather than rereading the disabled file.
+    let run = setup.fiber_run(&["ask", "-c", "sandbox.enabled=true", "delegate the commit"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let lines = sandbox_lines(&run.stdout);
+    sandbox_call_counts(
+        &lines,
+        &[
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_started",
+            "assistant_message_started",
+            "assistant_message_started",
+            "assistant_message_started",
+            "delegate_finished",
+            "delegate_started",
+            "extensions_loaded",
+            "fiber_exited",
+            "fiber_started",
+            "job_completed",
+            "job_started",
+            "jobs_pending_notified",
+            "opening_message",
+            "permission_resolved",
+            "preamble_built",
+            "session_started",
+            "step_started",
+            "step_started",
+            "step_started",
+            "step_started",
+            "text_completed",
+            "text_completed",
+            "text_completed",
+            "tool_call_completed",
+            "tool_call_requested",
+            "tool_call_started",
+            "turn_completed",
+            "turn_completed",
+            "turn_completed",
+            "turn_started",
+            "turn_started",
+            "turn_started",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+        ],
+    );
+    let job = lines
+        .iter()
+        .find(|line| line["kind"] == "job_started")
+        .unwrap();
+    let child_log = fs::read_to_string(job["payload"]["output_path"].as_str().unwrap()).unwrap();
+    let child_lines = sandbox_lines(&child_log);
+    sandbox_call_counts(
+        &child_lines,
+        &[
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_started",
+            "assistant_message_started",
+            "extensions_loaded",
+            "fiber_exited",
+            "fiber_started",
+            "opening_message",
+            "preamble_built",
+            "session_started",
+            "step_started",
+            "step_started",
+            "text_completed",
+            "tool_call_completed",
+            "tool_call_requested",
+            "tool_call_started",
+            "turn_completed",
+            "turn_started",
+            "usage_recorded",
+            "usage_recorded",
+        ],
+    );
+    let started = child_lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started")
+        .unwrap();
+    assert_eq!(started["payload"]["confined"], true);
+    let end = child_lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(end["payload"]["details"]["exit_code"], 0, "{end}");
+    let head = fakes::git::git(&workspace, &["rev-parse", "local"]);
+    assert_ne!(head, fakes::git::git(&workspace, &["rev-parse", "HEAD"]));
+    assert_eq!(fakes::git::git(&workspace, &["rev-parse", "rescue"]), head);
+    assert_eq!(
+        fakes::git::git(&workspace, &["rev-parse", "recovery"]),
+        fakes::git::git(&workspace, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+        fs::read(workspace.join(".git/config")).unwrap(),
+        original_config
+    );
+}
+
+/// docs/delegates.md, "Permissions": each launch inherits effective
+/// settings, including a refresh during the parent session. The global
+/// enabled=false cannot explain a confined child: only the parent has -c.
+#[cfg(target_os = "linux")]
+#[test]
+fn delegates_inherit_a_run_override_and_refreshed_denials() {
+    use extension_harness::{send, until_session, until_session_close};
+    use serde_json::json;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use support::{function_call, hello, stream};
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let private = setup.root.path().join("private");
+    fs::create_dir(&private).unwrap();
+    fs::write(private.join("first"), "PRIVATE-FIRST-BYTES").unwrap();
+    fs::write(private.join("second"), "PRIVATE-SECOND-BYTES").unwrap();
+    fs::write(private.join("sibling"), "public-sibling-ok").unwrap();
+    let next_spawn = Arc::new(AtomicBool::new(true));
+    let launch = Arc::clone(&next_spawn);
+    let parent = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
+        let body = String::from_utf8_lossy(&request.body);
+        if !body.contains(r#""name":"delegate_spawn""#) {
+            return allow_verdict();
+        }
+        if launch.swap(false, Ordering::SeqCst) {
+            stream(&[function_call(
+                "spawn",
+                "delegate_spawn",
+                &json!({
+                    "description":"read", "prompt":"read the files", "model":"fiber:child/m"
+                }),
+            )])
+        } else {
+            hello()
+        }
+    })
+    .unwrap();
+    let read = |id: &str, name: &str| {
+        stream(&[function_call(
+            id,
+            "shell",
+            &json!({
+                "command": format!("cat {}", private.join(name).display())
+            }),
+        )])
+    };
+    let child = fakes::ProviderServer::start([
+        read("first", "first"),
+        read("sibling1", "sibling"),
+        hello(),
+        read("second", "second"),
+        read("sibling2", "sibling"),
+        hello(),
+    ])
+    .unwrap();
+    child.hold();
+    setup.provider(&parent);
+    sandbox_child_provider(&setup, &child);
+    let config = |name: &str| {
+        json!({"model":"fake/m", "reviewer":{"model":"fake/m"},
+        "sandbox":{"enabled":false, "deny_read":[private.join(name)]}})
+    };
+    support::write_json(&setup.home().join("config.json"), &config("first"));
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &["-c", "sandbox.enabled=true"]);
+    let client = running.connect(&setup.socket(&id));
+    send(
+        &client,
+        r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    until_session(&client, "subscription", |line| {
+        line["kind"] == "command_accepted"
+    });
+    let mut all = Vec::new();
+    for phase in ["first", "second"] {
+        if phase == "second" {
+            child.hold();
+            support::write_json(&setup.home().join("config.json"), &config("second"));
+            send(&client, r#"{"id":"reload","command":"reload"}"#);
+            let reloaded = until_session(&client, "settings refresh", |line| {
+                line["kind"] == "reloaded"
+            });
+            assert!(reloaded.last().unwrap()["payload"].get("failed").is_none());
+            next_spawn.store(true, Ordering::SeqCst);
+        }
+        send(&client, &json!({"id":phase,"command":"prompt","args":{"content":[{"type":"text","text":phase}]}}).to_string());
+        let mut lines = until_session(&client, "spawn turn while the child is held", |line| {
+            line["kind"] == "turn_completed"
+        });
+        child.release();
+        lines.extend(until_session(&client, "delegate finish", |line| {
+            line["kind"] == "delegate_finished"
+        }));
+        lines.extend(until_session(&client, "delegate wake turn", |line| {
+            line["kind"] == "turn_completed"
+        }));
+        let job = lines
+            .iter()
+            .find(|line| line["kind"] == "job_started")
+            .unwrap();
+        let log = fs::read_to_string(job["payload"]["output_path"].as_str().unwrap()).unwrap();
+        let calls = sandbox_lines(&log);
+        sandbox_call_counts(
+            &calls,
+            &[
+                "assistant_message_completed",
+                "assistant_message_completed",
+                "assistant_message_completed",
+                "assistant_message_started",
+                "assistant_message_started",
+                "assistant_message_started",
+                "extensions_loaded",
+                "fiber_exited",
+                "fiber_started",
+                "opening_message",
+                "preamble_built",
+                "session_started",
+                "step_started",
+                "step_started",
+                "step_started",
+                "text_completed",
+                "tool_call_completed",
+                "tool_call_completed",
+                "tool_call_requested",
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_started",
+                "turn_completed",
+                "turn_started",
+                "usage_recorded",
+                "usage_recorded",
+                "usage_recorded",
+            ],
+        );
+        for started in calls
+            .iter()
+            .filter(|line| line["kind"] == "tool_call_started")
+        {
+            assert_eq!(started["payload"]["confined"], true);
+        }
+        let ends: Vec<_> = calls
+            .iter()
+            .filter(|line| line["kind"] == "tool_call_completed")
+            .collect();
+        assert_eq!(ends.first().unwrap()["payload"]["details"]["exit_code"], 1);
+        assert_eq!(ends.last().unwrap()["payload"]["details"]["exit_code"], 0);
+        assert!(log.contains("Permission denied"));
+        assert!(log.contains("public-sibling-ok"));
+        assert!(!log.contains("PRIVATE-FIRST-BYTES"));
+        assert!(!log.contains("PRIVATE-SECOND-BYTES"));
+        all.extend(lines);
+    }
+    sandbox_call_counts(
+        &all,
+        &[
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_completed",
+            "assistant_message_started",
+            "assistant_message_started",
+            "assistant_message_started",
+            "assistant_message_started",
+            "assistant_message_started",
+            "assistant_message_started",
+            "command_accepted",
+            "command_accepted",
+            "command_accepted",
+            "delegate_finished",
+            "delegate_finished",
+            "delegate_started",
+            "delegate_started",
+            "extensions_loaded",
+            "extensions_loaded",
+            "fiber_started",
+            "job_completed",
+            "job_completed",
+            "job_started",
+            "job_started",
+            "opening_message",
+            "permission_resolved",
+            "permission_resolved",
+            "preamble_built",
+            "preamble_built",
+            "session_started",
+            "step_started",
+            "step_started",
+            "step_started",
+            "step_started",
+            "step_started",
+            "step_started",
+            "text_completed",
+            "text_completed",
+            "text_completed",
+            "text_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_started",
+            "turn_completed",
+            "turn_completed",
+            "turn_completed",
+            "turn_completed",
+            "turn_started",
+            "turn_started",
+            "turn_started",
+            "turn_started",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded",
+        ],
+    );
+    for decision in all
+        .iter()
+        .filter(|line| line["kind"] == "permission_resolved")
+    {
+        assert_eq!(decision["payload"]["decided_by"], "reviewer");
+    }
+    send(&client, r#"{"id":"close","command":"close"}"#);
+    until_session_close(&client);
+    let (status, _, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
 }

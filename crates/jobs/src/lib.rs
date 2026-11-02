@@ -13,6 +13,7 @@ mod tool;
 
 pub use delegate::EventsFor;
 pub use delegate::InheritedRoots;
+pub use delegate::SandboxSnapshot;
 pub use delegate::{
     CreateWorktree, DelegateFork, DelegateMessage, DelegateModels, DelegateSpawn, DelegateWiring,
     EndWorktree, FinishWorktree, ForkPoint, Forking, Fresh, LastSeq, Launch, Launched, Resolve,

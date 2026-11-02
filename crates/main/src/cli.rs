@@ -856,7 +856,7 @@ pub(crate) struct SessionArgs {
         requires = "parent",
         requires = "delegate_id",
         requires = "prompt",
-        conflicts_with_all = ["resume", "model", "overrides", "rewound_from", "continues"]
+        conflicts_with_all = ["resume", "model", "rewound_from", "continues"]
     )]
     pub(crate) forked_from: Option<String>,
 
@@ -870,7 +870,7 @@ pub(crate) struct SessionArgs {
         requires = "parent",
         requires = "delegate_id",
         requires = "prompt",
-        conflicts_with_all = ["resume", "model", "overrides", "rewound_from", "continues"]
+        conflicts_with_all = ["resume", "model", "rewound_from", "continues"]
     )]
     pub(crate) forked_seq: Option<u64>,
 

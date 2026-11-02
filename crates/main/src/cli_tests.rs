@@ -3237,7 +3237,6 @@ fn session_forked_from_conflicts_with_a_fresh_start() {
     for extra in [
         vec!["--resume"],
         vec!["--model", "fake/m"],
-        vec!["-c", "retry.attempts=2"],
         vec!["--rewound-from", "s_bbbbbbbbbbbbbbbb"],
     ] {
         let mut argv = vec![
@@ -3283,6 +3282,38 @@ fn session_forked_from_conflicts_with_a_fresh_start() {
         said.contains("--rewound-from") || said.contains("--forked-seq"),
         "{said}"
     );
+}
+
+#[test]
+fn session_forked_flags_accept_config_overrides() {
+    // The sandbox snapshot rides `-c` entries into every fork child's
+    // argv: `--forked-from` and `--forked-seq` take overrides, while
+    // `--model` still conflicts (pinned in the test beside this one).
+    let Invocation::Run(Some(Commands::Session(args)), _) = parse_from([
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--forked-from",
+        "s_aaaaaaaaaaaaaaaa",
+        "--forked-seq",
+        "41",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+        "--prompt",
+        "hi",
+        "-c",
+        "retry.attempts=2",
+    ]) else {
+        panic!("a fork with -c overrides must parse");
+    };
+    assert_eq!(args.overrides, vec!["retry.attempts=2".to_owned()]);
+    assert_eq!(args.forked_from.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
+    assert_eq!(args.forked_seq, Some(41));
 }
 
 #[test]

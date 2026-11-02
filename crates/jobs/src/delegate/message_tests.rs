@@ -258,6 +258,7 @@ fn rig(replies: Vec<SteerReply>) -> Rig {
         panic!("no steering test launches");
     });
     let tool = Arc::new(DelegateMessage {
+        sandbox: Arc::new(|| Ok(Vec::new())),
         finish: crate::support::clean_finish(),
         depth: 0,
         registry: Arc::clone(&registry),

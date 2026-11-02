@@ -224,6 +224,7 @@ impl Fixture {
                 parent: SessionId("s_parent".into()),
                 workspace: self._dir.path().to_path_buf(),
                 inherited: Arc::new(Vec::new),
+                sandbox: Arc::new(|| Ok(Vec::new())),
                 events_for: {
                     let sessions = self.sessions.clone();
                     Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl"))
@@ -239,6 +240,7 @@ impl Fixture {
 
     fn messenger(&self, launch: Launch, watch: Watch, last_seq: LastSeq) -> DelegateMessage {
         DelegateMessage {
+            sandbox: Arc::new(|| Ok(Vec::new())),
             finish: crate::support::clean_finish(),
             depth: 0,
             registry: Arc::clone(&self.registry),
