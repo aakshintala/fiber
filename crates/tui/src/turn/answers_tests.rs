@@ -514,6 +514,8 @@ fn the_rule_splits_the_group_below_the_answer() {
     let rule = texts
         .iter()
         .position(|text| text.trim_start().starts_with("you answered"));
+    // The "you answered" rule ends the group; the calls after it start
+    // a new one (`docs/tui.md`, "Tool groups and the ledger").
     assert!(rule.is_some() && rule < read, "{texts:#?}");
     let groups = texts.iter().filter(|text| text.starts_with(" ● ")).count();
     assert_eq!(groups, 2, "{texts:#?}");

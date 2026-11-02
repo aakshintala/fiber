@@ -106,6 +106,25 @@ fn steered(session: &str, text: &str) -> Line {
     )
 }
 
+/// Each `(action, path)` as a `read` call that completes with "ok".
+fn reads(app: &mut App, calls: &[(&str, &str)]) {
+    use serde_json::json;
+    for &(action, path) in calls {
+        app.on_line(at(
+            "tool_call_requested",
+            Some(action),
+            0,
+            json!({"name": "read", "arguments": {"path": path}}),
+        ));
+        app.on_line(at(
+            "tool_call_completed",
+            Some(action),
+            0,
+            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        ));
+    }
+}
+
 #[test]
 fn first_frame() {
     insta::assert_snapshot!("first_frame", screen(&empty()));
@@ -140,20 +159,7 @@ fn steer_splits_tool_group() {
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
     app.on_line(at("step_started", None, 0, json!({})));
-    for (action, path) in [("a_1", "src/a.rs"), ("a_2", "src/b.rs")] {
-        app.on_line(at(
-            "tool_call_requested",
-            Some(action),
-            0,
-            json!({"name": "read", "arguments": {"path": path}}),
-        ));
-        app.on_line(at(
-            "tool_call_completed",
-            Some(action),
-            0,
-            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
-        ));
-    }
+    reads(&mut app, &[("a_1", "src/a.rs"), ("a_2", "src/b.rs")]);
     app.on_line(at("step_started", None, 0, json!({})));
     app.on_line(steered("s_aaaaaaaaaaaaaaaa", "use x"));
     app.on_line(at("reasoning_started", Some("a_t"), 0, json!({})));
@@ -163,20 +169,7 @@ fn steer_splits_tool_group() {
         0,
         json!({"text": "look closer"}),
     ));
-    for (action, path) in [("a_3", "src/c.rs"), ("a_4", "src/d.rs")] {
-        app.on_line(at(
-            "tool_call_requested",
-            Some(action),
-            0,
-            json!({"name": "read", "arguments": {"path": path}}),
-        ));
-        app.on_line(at(
-            "tool_call_completed",
-            Some(action),
-            0,
-            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
-        ));
-    }
+    reads(&mut app, &[("a_3", "src/c.rs"), ("a_4", "src/d.rs")]);
     let shown = screen(&app);
     let rows: Vec<&str> = shown.lines().collect();
     let groups: Vec<usize> = rows
@@ -184,6 +177,8 @@ fn steer_splits_tool_group() {
         .enumerate()
         .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
         .collect();
+    // A labelled rule ends the tool group above it (`docs/tui.md`,
+    // "Tool groups and the ledger").
     assert_eq!(groups.len(), 2, "{shown}");
     let steer = rows
         .iter()
@@ -236,20 +231,7 @@ fn answers_split_tool_group() {
         0,
         json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
     ));
-    for (action, path) in [("a_2", "src/c.rs"), ("a_3", "src/d.rs")] {
-        app.on_line(at(
-            "tool_call_requested",
-            Some(action),
-            0,
-            json!({"name": "read", "arguments": {"path": path}}),
-        ));
-        app.on_line(at(
-            "tool_call_completed",
-            Some(action),
-            0,
-            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
-        ));
-    }
+    reads(&mut app, &[("a_2", "src/c.rs"), ("a_3", "src/d.rs")]);
     // Sixteen rows: the two answer rows need room above the second
     // group line (`docs/testing/screens.md`).
     let shown = sized(&mut app, WIDTH, 16);
@@ -259,6 +241,8 @@ fn answers_split_tool_group() {
         .enumerate()
         .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
         .collect();
+    // A labelled rule ends the tool group above it (`docs/tui.md`,
+    // "Tool groups and the ledger").
     assert_eq!(groups.len(), 2, "{shown}");
     let rule = rows
         .iter()
@@ -281,20 +265,7 @@ fn non_driver_message_splits_tool_group() {
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
     app.on_line(at("step_started", None, 0, json!({})));
-    for (action, path) in [("a_1", "src/a.rs"), ("a_2", "src/b.rs")] {
-        app.on_line(at(
-            "tool_call_requested",
-            Some(action),
-            0,
-            json!({"name": "read", "arguments": {"path": path}}),
-        ));
-        app.on_line(at(
-            "tool_call_completed",
-            Some(action),
-            0,
-            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
-        ));
-    }
+    reads(&mut app, &[("a_1", "src/a.rs"), ("a_2", "src/b.rs")]);
     app.on_line(at("step_started", None, 0, json!({})));
     app.on_line(at(
         "steering_applied",
@@ -303,20 +274,7 @@ fn non_driver_message_splits_tool_group() {
         json!({"content": [{"type": "text", "text": "check the logs"}],
             "source": "session", "from_session_id": "s_bbbbbbbbbbbbbbbb"}),
     ));
-    for (action, path) in [("a_3", "src/c.rs"), ("a_4", "src/d.rs")] {
-        app.on_line(at(
-            "tool_call_requested",
-            Some(action),
-            0,
-            json!({"name": "read", "arguments": {"path": path}}),
-        ));
-        app.on_line(at(
-            "tool_call_completed",
-            Some(action),
-            0,
-            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
-        ));
-    }
+    reads(&mut app, &[("a_3", "src/c.rs"), ("a_4", "src/d.rs")]);
     let shown = screen(&app);
     let rows: Vec<&str> = shown.lines().collect();
     let groups: Vec<usize> = rows
@@ -324,6 +282,8 @@ fn non_driver_message_splits_tool_group() {
         .enumerate()
         .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
         .collect();
+    // A labelled rule ends the tool group above it (`docs/tui.md`,
+    // "Tool groups and the ledger").
     assert_eq!(groups.len(), 2, "{shown}");
     let message = rows
         .iter()
