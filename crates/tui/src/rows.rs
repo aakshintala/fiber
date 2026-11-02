@@ -121,6 +121,13 @@ impl Rows {
 
     /// Inserts one empty placeholder per counted Markdown row.
     pub(crate) fn push_counted(&mut self, count: usize, targets: &[(usize, Target)]) {
+        if targets.is_empty() {
+            let end = self.rows.len().saturating_add(count);
+            self.rows.resize_with(end, || (Line::default(), None));
+            self.texts.resize_with(end, RowText::plain);
+            self.sources.resize(end, self.source);
+            return;
+        }
         for at in 0..count {
             let target = targets
                 .iter()
@@ -215,13 +222,17 @@ impl Rows {
     /// outermost first. A body with no target draws as it would closed:
     /// nothing could reveal a match there.
     pub(crate) fn open_scope(&mut self, target: Target, open: bool) -> bool {
-        self.scopes.push(target);
+        if !self.count_only {
+            self.scopes.push(target);
+        }
         open || self.all_open
     }
 
     /// Leaves the innermost open section; nothing without one.
     pub(crate) fn end_scope(&mut self) {
-        self.scopes.pop();
+        if !self.count_only {
+            self.scopes.pop();
+        }
     }
 
     /// Adds a row that starts a line of its own.
@@ -247,7 +258,9 @@ impl Rows {
 
     /// Adds a row with what it adds to its logical line.
     pub(crate) fn push_text(&mut self, row: Row, mut text: RowText) {
-        text.scopes = self.scopes.clone();
+        if !self.count_only {
+            text.scopes = self.scopes.clone();
+        }
         self.rows.push(row);
         self.texts.push(text);
         self.sources.push(self.source);
@@ -294,9 +307,28 @@ impl Rows {
     /// blank prefix takes the line's background, so call this before
     /// [`Rows::on_surface`], whose edge rows are never padded.
     pub(crate) fn pad(&mut self, from: usize, pad: u16, inner: u16) {
+        if self.count_only
+            && self
+                .rows
+                .get(from..)
+                .is_some_and(|rows| rows.iter().all(|(line, _)| line.spans.is_empty()))
+        {
+            return;
+        }
         let mut at = from;
         let original_len = self.rows.len();
         for _ in from..original_len {
+            // Counted reply rows are empty placeholders already measured
+            // at `inner`; their padding cannot change their row count.
+            if self.count_only
+                && self
+                    .rows
+                    .get(at)
+                    .is_some_and(|(line, _)| line.spans.is_empty())
+            {
+                at = at.saturating_add(1);
+                continue;
+            }
             // The row moves out without cloning: fitting rows move back
             // below, split rows move into their pieces.
             let Some(((line, target), text)) = self.take_row(at) else {
@@ -393,7 +425,11 @@ impl Rows {
         self.texts.insert(
             at,
             RowText {
-                scopes: self.scopes.clone(),
+                scopes: if self.count_only {
+                    Vec::new()
+                } else {
+                    self.scopes.clone()
+                },
                 ..RowText::plain()
             },
         );
@@ -410,8 +446,10 @@ impl Rows {
         if body.is_empty() {
             return;
         }
-        for (line, _) in body {
-            line.style.bg = Some(tint.color());
+        if !self.count_only {
+            for (line, _) in body {
+                line.style.bg = Some(tint.color());
+            }
         }
         let width = usize::from(width);
         if edges.bottom {
@@ -419,7 +457,11 @@ impl Rows {
             self.sources.push(None);
             self.texts.push(RowText {
                 decoration: true,
-                scopes: self.scopes.clone(),
+                scopes: if self.count_only {
+                    Vec::new()
+                } else {
+                    self.scopes.clone()
+                },
                 ..RowText::plain()
             });
         }
@@ -432,7 +474,11 @@ impl Rows {
                 from,
                 RowText {
                     decoration: true,
-                    scopes: self.scopes.clone(),
+                    scopes: if self.count_only {
+                        Vec::new()
+                    } else {
+                        self.scopes.clone()
+                    },
                     ..RowText::plain()
                 },
             );

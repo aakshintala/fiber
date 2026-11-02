@@ -106,6 +106,16 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<Row> {
 
 /// [`rows`], with the Delegates card's row indices when it draws.
 pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Range<usize>>) {
+    collect_rows(app, width, &mut None)
+}
+
+/// Builds rows and records the countdown's row and first text column,
+/// without requesting a wake until the draw knows which cells survive.
+fn collect_rows(
+    app: &App,
+    width: u16,
+    countdown: &mut Option<(usize, usize)>,
+) -> (Vec<Row>, Option<Range<usize>>) {
     let widgets = app.panel_state().widgets();
     let names: Vec<(&str, &str)> = widgets
         .iter()
@@ -117,7 +127,8 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
     let mut out = Vec::new();
     let mut span = None;
     for card in cards(app.panel_cards(), &names) {
-        let drawn = fit_rows(card_rows(app, &card, text), text);
+        let mut local_countdown = None;
+        let drawn = fit_rows(card_rows(app, &card, text, &mut local_countdown), text);
         if drawn.is_empty() {
             continue;
         }
@@ -142,6 +153,9 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
         });
         if card == Card::Delegates {
             span = Some(card_start..card_start + drawn.len() + 2);
+        }
+        if let Some((row, column)) = local_countdown {
+            *countdown = Some((out.len() + row, column));
         }
         out.extend(drawn.into_iter().map(|mut row| {
             row.tint = Some(Role::Surface);
@@ -169,7 +183,8 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     // box takes the sides.
     let text = card_text_width(area.width);
     let width = u16::try_from(text).unwrap_or(u16::MAX);
-    let (rows, span) = rows_and_delegates(app, area.width);
+    let mut countdown = None;
+    let (rows, span) = collect_rows(app, area.width, &mut countdown);
     // A screen that grew never shows a gap: a scroll past the end clamps
     // when drawn.
     let height = usize::from(area.height.saturating_sub(1));
@@ -187,7 +202,7 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     let x = area.x.saturating_add(3);
     let mut y = area.y.saturating_add(1);
     let mut drawn: usize = 0;
-    for row in rows.iter().skip(skip) {
+    for (index, row) in rows.iter().enumerate().skip(skip) {
         if y >= area.bottom() {
             break;
         }
@@ -203,6 +218,12 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
                 );
             }
             buf.set_line(x, y, &row.line, width);
+            if let Some((at, column)) = countdown
+                && at == index
+                && column < text.saturating_sub(1)
+            {
+                ask_countdown(app);
+            }
             if boxed {
                 surface::draw_sides(buf, Rect::new(card_x, y, card_w, 1));
             }
@@ -317,9 +338,14 @@ pub(super) fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'sta
 /// rows. A card with no content rows draws nothing: no edge, no title
 /// and no blank row (`docs/tui.md`, "The panel"). Title rows carry no
 /// target, except the Jobs title, whose `▸` toggles the list.
-fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
+fn card_rows(
+    app: &App,
+    card: &Card,
+    text: usize,
+    countdown: &mut Option<(usize, usize)>,
+) -> Vec<Row> {
     match card {
-        Card::Session => session_rows(app, text),
+        Card::Session => session_rows(app, text, countdown),
         Card::ChangedFiles => {
             let content = changed_files_rows(app, text);
             if content.is_empty() {
@@ -379,20 +405,28 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
 /// a repository and the trailing tools line stay conditional. Labels
 /// read dim with their figures right-aligned in the text colour; the
 /// bar is 17 cells of `▆` toward the handoff point.
-fn session_rows(app: &App, text: usize) -> Vec<Row> {
+fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
-    // The title row holds the working-directory slot from the first
-    // frame, so no row moves when the first status names it.
+    // The title names the card, with the permission mode right-aligned;
+    // the working directory is the first row under it, blank until the
+    // first status names it, so no row moves when it lands
+    // (`docs/tui.md`, "The panel").
+    out.push(title_row(
+        "Session status",
+        vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
+        text,
+    ));
     let workspace = panel
         .status()
         .map(|status| status.workspace.as_str())
         .unwrap_or("");
-    out.push(title_row(
-        workspace,
-        vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
-        text,
-    ));
+    out.push(Row {
+        line: Line::from(workspace.to_owned()),
+        spot: None,
+        tint: None,
+        edge: false,
+    });
     out.push(branch_row(app));
     let model = panel
         .model()
@@ -523,6 +557,33 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             } else {
                 out.push(reserved_row("cache hits", Some(Spot::Usage), text));
             }
+            // "cache resets in": the pinned expiry counted down on the
+            // frame's wall time — a dim dash before the first request,
+            // whole minutes, seconds under the last minute, "expired"
+            // in attention once the lifetime has passed
+            // (`docs/tui.md`, "The panel").
+            match status.cache_expires {
+                None => out.push(reserved_row("cache resets in", Some(Spot::Usage), text)),
+                Some(expiry) => {
+                    let value = countdown_span(
+                        expiry,
+                        app.motion().wall_ms().unwrap_or(0),
+                        style(Role::Text),
+                    );
+                    let line = sides(
+                        vec![Span::styled("cache resets in", style(Role::Muted))],
+                        value.clone(),
+                        text,
+                    );
+                    *countdown = Some((out.len(), line.width().saturating_sub(value.width())));
+                    out.push(Row {
+                        line,
+                        spot: Some(Spot::Usage),
+                        tint: None,
+                        edge: false,
+                    });
+                }
+            }
             // With a budget the cost row always shows spend against it; a
             // cost still null counts as zero until it settles
             // (`docs/loop.md`, "Spending budget"). A known billed cost
@@ -546,6 +607,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             for label in [
                 "tokens in / out",
                 "cache hits",
+                "cache resets in",
                 "cost",
                 "cost on subscription",
             ] {
@@ -744,6 +806,65 @@ pub(super) fn branch_text(app: &App) -> Option<String> {
             Some(git.branch.as_deref().unwrap_or("detached").to_owned())
         }
     }
+}
+
+/// Time left on the prompt cache, in milliseconds: whole minutes, in
+/// seconds under the last minute (`docs/tui.md`, "The panel"). Unlike
+/// `duration`, minutes never carry their seconds.
+pub(super) fn cache_countdown(remaining_ms: u64) -> String {
+    let (unit, suffix) = countdown_unit(remaining_ms);
+    format!("{}{suffix}", remaining_ms / unit)
+}
+
+/// Text and wakes use the same seconds-to-minutes crossover.
+fn countdown_unit(remaining_ms: u64) -> (u64, &'static str) {
+    if remaining_ms < 60_000 {
+        (1_000, "s")
+    } else {
+        (60_000, "m")
+    }
+}
+
+/// The shared panel and narrow-line countdown, styled in attention
+/// after expiry. Constructing it never requests a wake.
+pub(super) fn countdown_span(expiry: u64, now: u64, normal: Style) -> Span<'static> {
+    if now >= expiry {
+        Span::styled("expired", style(Role::Attention))
+    } else {
+        Span::styled(cache_countdown(expiry.saturating_sub(now)), normal)
+    }
+}
+
+/// A painted countdown requests its next text boundary, never a wake
+/// while rows are only being measured or constructed.
+pub(super) fn ask_countdown(app: &App) {
+    if let Some(expiry) = app
+        .panel_state()
+        .status()
+        .and_then(|status| status.cache_expires)
+        && let Some(due) = countdown_due_wall(expiry, app.motion().wall_ms().unwrap_or(0))
+    {
+        app.motion().ask_wall(due);
+    }
+}
+
+/// The next wall time the countdown text changes after `now`: the
+/// minute rollover while minutes show, every second under the last
+/// minute with the 60-second crossover first, the expiry itself last;
+/// none once expired (`docs/tui.md`, "The panel"; WAKE-RULED). The
+/// one-millisecond step lands past the boundary the floor keeps, so
+/// the woken frame always reads a new text.
+pub(crate) fn countdown_due_wall(expiry_ms: u64, now_ms: u64) -> Option<u64> {
+    let remaining = expiry_ms.checked_sub(now_ms)?;
+    if remaining == 0 {
+        return None;
+    }
+    let (unit, _) = countdown_unit(remaining);
+    Some(
+        now_ms
+            .saturating_add(remaining - remaining / unit * unit)
+            .saturating_add(1),
+    )
 }
 
 /// A token count without its trailing `token` word.

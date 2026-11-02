@@ -259,5 +259,7 @@ Only what no tool can:
   streams"); every pointer input follows a readiness signal, not a grid
   match (`docs/testing/screens.md`); every fake's signal is sent after the
   state it announces
+- the Spec review of a build pull request checks every doc line its ticket
+  lists has its test (`docs/workflow.md`, "Review")
 
 Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docscode-qualitymd).

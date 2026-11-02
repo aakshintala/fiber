@@ -495,6 +495,7 @@ sent the latest.
 | `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request that reported its input tokens, and `window`, the model's context window (integers) |
+| `cache_expires` | integer | no | after the first model request: when the session's prompt cache expires, as `ts`: the end of its latest model request, a warming refresh included, plus its cache lifetime (`docs/prompt-cache.md`, "Cache lifetime") |
 | `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |
 | `delegates` | integer | yes | delegates running |
 | `jobs` | integer | yes | jobs running, delegates excluded |
@@ -875,6 +876,7 @@ none.
 | `subscription` | boolean | no | `true` when a subscription login covered the call, so `cost` is an API-price estimate, not money billed; absent means billed per token |
 | `extension` | string | no | the extension whose `host.model` made the call |
 | `origin_session_id` | string | no | on a copy, the session whose call it was (`docs/delegates.md`, "Streams"); absent on the session's own calls |
+| `warming` | boolean | no | `true` on a cache-warming refresh (`docs/prompt-cache.md`, "Warming while idle"); absent on every other call |
 | `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, `stage_2` or `handoff`, the handoff selection) and `action_id` (string, the tool call under review; absent on `handoff`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
 
 #### `quota_noticed`

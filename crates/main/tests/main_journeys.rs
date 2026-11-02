@@ -1438,6 +1438,17 @@ fn wheel_read_call(n: usize, path: &str) -> fakes::Response {
 /// whose parent let the wheel reach the wrong surface.
 #[test]
 fn wheel_over_each_swapped_view_scrolls_that_view() {
+    const SWAPPED_HEADER_ROWS: u16 = 1;
+    const OVERLAY_TOP_EDGE_AND_PAD_ROWS: u16 = 2;
+    const PICKER_CONTROL_ROWS: u16 = 2;
+    const PROVIDER_HEADING_ROWS: u16 = 1;
+    const PICKER_MODEL_ROW: u16 = SWAPPED_HEADER_ROWS
+        + OVERLAY_TOP_EDGE_AND_PAD_ROWS
+        + PICKER_CONTROL_ROWS
+        + PROVIDER_HEADING_ROWS;
+    // SGR mouse coordinates are one-based, unlike the grid row above.
+    const PICKER_WHEEL_ROW: u16 = PICKER_MODEL_ROW + 1;
+
     run_journey(
         "wheel_over_each_swapped_view_scrolls_that_view",
         // As in the earlier journeys: the body borrows the fake server,
@@ -1477,10 +1488,10 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             )
             .unwrap();
             let bin = journey_bin();
-            // Fourteen rows: the context breakdown still overflows its
-            // body viewport by one full three-row wheel step, while the
-            // picker stays in its full layout. At thirteen rows the picker
-            // compacts, and the wheel coordinate lands outside its list.
+            // At fourteen terminal rows, the picker cannot hold a full
+            // wheel step. It must keep the session model under its provider
+            // heading on open, then the focused model under its heading
+            // after the wheel; the footer gives way before either row does.
             let mut run = Run::spawn_journey(
                 &setup,
                 120,
@@ -1511,14 +1522,15 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                     .is_some()
             });
             let (mark_row, mark_text) = mark.expect("the marker row");
-            // One wheel step down inside every view, at the same fixed
-            // coordinate in the conversation area, clear of the rail and
-            // the panel.
+            // `docs/tui.md:710-714` keeps the session model and heading
+            // visible on open; the focused model and heading stay visible
+            // after scrolling. Place the wheel in the compact list using
+            // fixture-derived row arithmetic; SGR coordinates add one.
             let at = (21, 9);
-            // The model picker: each model takes two display rows, so one
-            // three-row step moves the list top from the section row to
-            // the second model.
+            let picker_at = (at.0, PICKER_WHEEL_ROW);
+            let picker_frame = run.output().len();
             run.write(b"/model\r");
+            run.wait_bytes(picker_frame, FRAME_END, "the open picker frame");
             let pre = run.wait_screen("the open picker", |grid| {
                 shows(grid, "Type to search") && shows(grid, "m-00") && !shows(grid, "refreshing")
             });
@@ -1528,10 +1540,22 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 "the section row heads the list: {:?}",
                 pre.rows
             );
-            run.write(&wheel_down(at));
+            run.write(&wheel_down(picker_at));
             let post = run.wait_screen("the wheeled picker", |grid| {
-                grid.rows[usize::from(first) - 1].contains("m-01")
+                grid.rows
+                    .iter()
+                    .any(|line| line.contains("› m-") && !line.contains("m-00"))
             });
+            let focused = post
+                .rows
+                .iter()
+                .position(|line| line.contains("› m-"))
+                .expect("the focused model row");
+            assert!(
+                focused > 0 && post.rows[focused - 1].contains("fake"),
+                "the section row heads the focused model: {:?}",
+                post.rows
+            );
             assert!(
                 post.rows.iter().all(|row| !row.contains("m-00 ●")),
                 "the first model scrolled out: {:?}",
@@ -1652,18 +1676,22 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 "the keys wheel left the conversation's scroll"
             );
             // The context breakdown: the sizes heading, the bar, the
-            // categories, then the largest tool results. One step moves
-            // three rows, from the heading to the first category.
+            // categories, then the largest tool results. At fourteen rows,
+            // the latter heading is below the initial viewport; one wheel
+            // step moves it into view while moving the sizes row out.
+            let context_frame = run.output().len();
             run.write(b"/context\r");
+            run.wait_bytes(context_frame, FRAME_END, "the open context frame");
             let pre = run.wait_screen("the open context", |grid| {
                 shows(grid, "Context")
                     && shows(grid, "system prompt")
-                    && shows(grid, "Largest tool results")
+                    && shows(grid, "tool results")
             });
             let first = find_grid_row(&pre.rows, "tokens ·").expect("the sizes row");
             run.write(&wheel_down(at));
             let post = run.wait_screen("the wheeled context", |grid| {
                 grid.rows[usize::from(first)].contains("system prompt")
+                    && shows(grid, "Largest tool results")
             });
             assert!(
                 !post.rows[usize::from(first)].contains("tokens ·"),

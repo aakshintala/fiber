@@ -38,6 +38,15 @@ pub(super) fn strings(items: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn test_files_are_named_or_under_tests() {
+    assert!(is_test_file("src/tests.rs"));
+    assert!(is_test_file("src/a/b_tests.rs"));
+    assert!(is_test_file("tests/journey.rs"));
+    assert!(!is_test_file("src/tests_helper.rs"));
+    assert!(!is_test_file("src/a/tests/fixture.rs"));
+}
+
+#[test]
 fn a_bare_name_is_ambiguous_once_a_dependency_shares_it() {
     // `members()` has a workspace crate named `log` (`crates/log`), like
     // Fiber's own `log` crate. Once any crate depends on `ureq`, which pulls

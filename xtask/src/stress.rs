@@ -1,6 +1,9 @@
 //! The stress job's helpers (`docs/ci.md`, "On every pull request that changes code").
 
-use crate::select::{Members, TestRef, changed_tests, filter, spec};
+use crate::rules::RustFile;
+use crate::select::{Members, TestRef, filter, has_test_functions, spec};
+use crate::test_index::TestIndex;
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 /// Runs of one selected test in the stress job, unless the pull request fixes a flaky test.
 pub(crate) const STRESS_COUNT: u32 = 30;
@@ -229,10 +232,64 @@ fn merge_base(base: &str) -> Result<String, String> {
         .ok_or("no merge base")?)
 }
 
-/// The workspace members with the test functions the working tree adds
-/// or changes against `base`, found with the same selector as the stress
-/// job.
-fn touched_against(base: &str) -> Result<(Members, Vec<TestRef>), String> {
+/// Whether the file's top-level inner attributes include `#![cfg(...)]`.
+fn has_cfg_inner_attr(source: &str) -> Result<bool, String> {
+    let tokens: TokenStream = source.parse().map_err(|_| "cannot parse".to_owned())?;
+    let mut tokens = tokens.into_iter();
+    while let Some(TokenTree::Punct(hash)) = tokens.next() {
+        if hash.as_char() != '#' {
+            continue;
+        }
+        let Some(TokenTree::Punct(bang)) = tokens.next() else {
+            continue;
+        };
+        if bang.as_char() != '!' {
+            continue;
+        }
+        let Some(TokenTree::Group(attribute)) = tokens.next() else {
+            continue;
+        };
+        if attribute.delimiter() != Delimiter::Bracket {
+            continue;
+        }
+        let mut attribute = attribute.stream().into_iter();
+        if matches!(attribute.next(), Some(TokenTree::Ident(name)) if name == "cfg")
+            && matches!(attribute.next(), Some(TokenTree::Group(args)) if args.delimiter() == Delimiter::Parenthesis)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// A test binary has no listed tests for a changed file that still holds a
+/// test function. Files with no functions, cfg-gated files, and files the
+/// runner did not compile need no selector-miss error.
+fn empty_test_file_error(
+    files: &[String],
+    sources: &[RustFile],
+    members: &Members,
+    index: &TestIndex,
+) -> Option<String> {
+    files.iter().find_map(|path| {
+        let package = crate::select::owner(path, members)?;
+        let member = members.get(package)?;
+        if member.unrun_tests.iter().any(|unrun| unrun == path) {
+            return None;
+        }
+        let source = sources.iter().find(|source| source.path == *path)?;
+        if has_cfg_inner_attr(&source.source).unwrap_or(false) {
+            return None;
+        }
+        let binaries = index.binaries_for(path);
+        (!binaries.is_empty()
+            && binaries.iter().all(|binary| binary.tests.is_empty())
+            && matches!(has_test_functions(&source.source), Ok(true)))
+        .then(|| format!("{path}: changed test file selected no tests"))
+    })
+}
+
+fn touched_against(base: &str, profile: &str) -> Result<(Members, Vec<TestRef>), String> {
     let members = crate::workspace_members()?;
     let merge_base = merge_base(base)?;
     let diff = crate::output(
@@ -245,8 +302,27 @@ fn touched_against(base: &str) -> Result<(Members, Vec<TestRef>), String> {
             merge_base.as_str(),
         ],
     )?;
+    let paths = crate::git_lines(&["diff", "--name-only", "--no-renames", merge_base.as_str()])?;
     let sources = crate::rust_files(&members)?;
-    let touched = changed_tests(&diff, &members, &sources)?;
+    let test_files = crate::select::test_files(&paths, &members, &sources)?;
+    let index = TestIndex::build(
+        std::path::Path::new("."),
+        &test_files,
+        &members,
+        Some(profile),
+    )?;
+    let selected = crate::select::changed_tests_by_file(&diff, &members, &sources, &index)?;
+    if let Some(error) = empty_test_file_error(&test_files, &sources, &members, &index) {
+        return Err(error);
+    }
+    let mut touched = Vec::new();
+    for (_, tests) in selected {
+        for test in tests {
+            if !touched.contains(&test) {
+                touched.push(test);
+            }
+        }
+    }
     Ok((members, touched))
 }
 
@@ -254,7 +330,7 @@ pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     let base = crate::flag(args, "--base")?;
     let labels = crate::optional(args, "--labels").unwrap_or_default();
     let summary = crate::optional(args, "--summary");
-    let (members, touched) = touched_against(&base)?;
+    let (members, touched) = touched_against(&base, "stress")?;
     let count = stress_count(&labels);
     println!("run\t{}", if touched.is_empty() { "false" } else { "true" });
     println!("count\t{count}");
@@ -287,7 +363,7 @@ pub(crate) fn touched_retries_command(args: &[String]) -> Result<bool, String> {
     let base = crate::flag(args, "--base")?;
     let list_path = crate::flag(args, "--list")?;
     let list = std::fs::read_to_string(&list_path).map_err(|e| format!("{list_path}: {e}"))?;
-    let (_, touched) = touched_against(&base)?;
+    let (_, touched) = touched_against(&base, "ci")?;
     let failures = touched_retries(&list, &touched);
     if failures.is_empty() {
         println!("touched-retries: ok");

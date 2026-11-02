@@ -33,6 +33,11 @@ pub(crate) enum ShellError {
         /// The longest deadline in this session, in milliseconds.
         max_ms: u64,
     },
+    /// `timeout_ms` is below the least a command may run.
+    #[error(
+        "`timeout_ms` must be at least 1. Leave `timeout_ms` out of a background call that should run until stopped."
+    )]
+    TimeoutTooSmall,
     /// A background mode was asked for in a session with no jobs.
     #[error("Background jobs are not available in this session.")]
     NoJobs,
@@ -108,6 +113,7 @@ impl ShellError {
             Self::NotADirectory { .. }
             | Self::MonitorAlone
             | Self::DeadlineTooLong { .. }
+            | Self::TimeoutTooSmall
             | Self::NoJobs
             | Self::BareWait => ErrorCode::InvalidArguments,
             Self::NotStarted { .. } | Self::NotReaped | Self::SandboxApply { .. } => {

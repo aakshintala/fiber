@@ -11,8 +11,10 @@ mod plan;
 mod runtime_read;
 mod test_filter;
 
+#[cfg(test)]
+pub(crate) use changed_tests::changed_tests;
 pub(crate) use changed_tests::{
-    TestRef, changed_tests, filter, narrow_plan, narrow_to_compiled_tests, planned_line,
+    TestRef, changed_tests_by_file, filter, has_test_functions, narrow_plan, planned_line,
     tests_in_files,
 };
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
@@ -21,7 +23,7 @@ use plan::BINARY_TESTS;
 pub(crate) use plan::{base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict};
 pub(crate) use runtime_read::runtime_read_mismatches;
 pub(crate) use runtime_read::string_literal;
-pub(crate) use test_filter::{is_test_file, test_filter, unrun_test_files};
+pub(crate) use test_filter::{is_test_file, test_files, test_filter, unrun_test_files};
 
 /// A workspace member: its directory relative to the workspace root, its
 /// version, and the members it depends on.
