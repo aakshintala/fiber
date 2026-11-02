@@ -2318,3 +2318,135 @@ fn a_resumed_session_declares_delegate_spawn() {
         assert!(names.contains(&"delegate_spawn"), "{names:?}");
     }
 }
+
+fn read_call() -> Response {
+    stream(&[function_call(
+        "c_read",
+        "read",
+        &json!({"path": "note.txt", "offset": null, "limit": null, "pages": null}),
+    )])
+}
+
+fn edit_call() -> Response {
+    stream(&[function_call(
+        "c_edit",
+        "edit",
+        &json!({"path": "note.txt", "edits": [{"old_text": "v1\n", "new_text": "v2\n"}]}),
+    )])
+}
+
+fn write_call() -> Response {
+    stream(&[function_call(
+        "c_write",
+        "write",
+        &json!({"path": "note.txt", "content": "replaced\n"}),
+    )])
+}
+
+/// The `tool_call_completed` for the `write` the model called: completions
+/// carry no tool name, so the request's `action_id` names it.
+fn write_completed(setup: &Setup, id: &str) -> Value {
+    let log = fs::read_to_string(setup.sessions().join(id).join("events.jsonl")).unwrap();
+    let lines: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let action = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested" && line["payload"]["name"] == "write")
+        .unwrap()["action_id"]
+        .clone();
+    lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == action)
+        .unwrap()
+        .clone()
+}
+
+fn read_completed(setup: &Setup, id: &str) -> Value {
+    let log = fs::read_to_string(setup.sessions().join(id).join("events.jsonl")).unwrap();
+    let lines: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let action = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested" && line["payload"]["name"] == "read")
+        .unwrap()["action_id"]
+        .clone();
+    lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == action)
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn a_resume_accepts_a_write_of_a_file_the_context_read_and_edited() {
+    let setup = Setup::new_with_fa_root();
+    fs::write(setup.workspace().join("note.txt"), "v1\n").unwrap();
+    let server =
+        ProviderServer::start([read_call(), edit_call(), hello(), write_call(), hello()]).unwrap();
+    setup.provider(&server);
+
+    let first = setup.run_in_workspace(&["ask", "prepare the note"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(
+        fs::read(setup.workspace().join("note.txt")).unwrap(),
+        b"v2\n"
+    );
+    let id = first.session_id().to_owned();
+
+    // The read logged the whole file's hash beside its resolved path.
+    let completed = read_completed(&setup, &id);
+    assert_eq!(completed["payload"]["status"], "completed");
+    let resolved = fs::canonicalize(setup.workspace())
+        .unwrap()
+        .join("note.txt");
+    assert_eq!(
+        completed["payload"]["details"]["file_seen"]["path"],
+        resolved.display().to_string()
+    );
+    assert!(completed["payload"]["details"]["file_seen"]["hash"].is_u64());
+
+    let second = setup.run_in_workspace(&["ask", "--resume", &id, "replace the note"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(
+        fs::read(setup.workspace().join("note.txt")).unwrap(),
+        b"replaced\n"
+    );
+    let completed = write_completed(&setup, &id);
+    assert_eq!(completed["payload"]["status"], "completed", "{completed}");
+    assert_eq!(server.requests().len(), 5);
+}
+
+#[test]
+fn a_resume_refuses_a_write_when_the_file_changed_while_down() {
+    let setup = Setup::new_with_fa_root();
+    fs::write(setup.workspace().join("note.txt"), "v1\n").unwrap();
+    let server =
+        ProviderServer::start([read_call(), edit_call(), hello(), write_call(), hello()]).unwrap();
+    setup.provider(&server);
+
+    let first = setup.run_in_workspace(&["ask", "prepare the note"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+
+    fs::write(setup.workspace().join("note.txt"), "outside\n").unwrap();
+    let second = setup.run_in_workspace(&["ask", "--resume", &id, "replace the note"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(
+        fs::read(setup.workspace().join("note.txt")).unwrap(),
+        b"outside\n"
+    );
+    let completed = write_completed(&setup, &id);
+    assert_eq!(completed["payload"]["status"], "failed", "{completed}");
+    assert_eq!(completed["payload"]["error"]["code"], "stale_file");
+    assert!(
+        completed["payload"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("changed since it was read"),
+        "{completed}"
+    );
+}

@@ -21,7 +21,7 @@ use contract::shapes::{ContentPart, DeclaredEffects};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use contract::{ActionId, RequestId, SessionId, TurnId};
 use log::Log;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::before_tool::Prepared;
 use super::completion::{completed, denied, resolved};
@@ -168,6 +168,29 @@ pub(crate) fn job_event(log: &Log, record: contract::jobs::JobRecord) -> Event {
             Event::DelegateFinished(crate::delegated::bounded(log, finished))
         }
         contract::jobs::JobRecord::Completed(completed) => Event::JobCompleted(completed),
+    }
+}
+
+/// The reserved `details.file_seen` a file tool logged with its result
+/// (`docs/tools.md`, "Stale files"): what the call saw. A missing or
+/// malformed object is none.
+fn file_seen_of(details: &Option<Value>) -> Option<Value> {
+    details.as_ref()?.get("file_seen").cloned()
+}
+
+/// Merges the tool's reserved `file_seen` record into the shaped details,
+/// keeping every field an `after_tool` hook returned. The tool's own record
+/// wins over a hook's: a hook replaces display data, never what the call
+/// saw. A non-object replacement stays as the hook wrote it, so an opaque
+/// value it owns is never rewritten.
+fn with_seen(details: Option<Value>, seen: Value) -> Option<Value> {
+    match details {
+        Some(Value::Object(mut object)) => {
+            object.insert("file_seen".to_owned(), seen);
+            Some(Value::Object(object))
+        }
+        None => Some(json!({"file_seen": seen})),
+        kept => kept,
     }
 }
 
@@ -1406,6 +1429,11 @@ impl Loop {
             images = Vec::new();
             rewritten = None;
         }
+        // The reserved `file_seen` the file tools log beside their own
+        // details (`docs/tools.md`, "Stale files"): an `after_tool` hook
+        // that replaces `details` must not drop what the call saw, or the
+        // history fold loses the model's context.
+        let seen = file_seen_of(&details);
         let ran = super::hooks::Ran {
             tool,
             arguments,
@@ -1421,6 +1449,14 @@ impl Loop {
         if let Some(failure) = shaped.error.take() {
             status = CallStatus::Failed;
             error = Some(failure);
+        }
+        // Only a completed call's record reaches the history fold: a call
+        // the shaping failed keeps whatever it left, while a completed
+        // one carries what the tool saw, as the live session does.
+        if status == CallStatus::Completed
+            && let Some(seen) = seen
+        {
+            shaped.details = with_seen(shaped.details, seen);
         }
         if let Some(named) = write
             && status == CallStatus::Completed

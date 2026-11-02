@@ -2450,3 +2450,213 @@ fn a_workspace_move_drops_added_directories() {
     assert_eq!(folded.workspace, "/w2");
     assert!(folded.added.is_empty());
 }
+
+fn file_completed(status: CallStatus, details: Option<Value>) -> Event {
+    Event::ToolCallCompleted(ToolCallCompleted {
+        status,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![ContentPart::Text { text: "ok".into() }],
+        details,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        protected_paths: None,
+        provider_item: None,
+        hosts_surfaced: Vec::new(),
+        loaded: None,
+    })
+}
+
+fn seen_details(path: &str, hash: u64) -> Value {
+    json!({"file_seen": {"path": path, "hash": hash}})
+}
+
+fn failed_handoff() -> Event {
+    Event::HandoffCompleted(HandoffCompleted {
+        outcome: Outcome::Failed,
+        error: None,
+        note: None,
+        tokens_before: 0,
+        instructions: None,
+    })
+}
+
+#[test]
+fn the_fold_keeps_the_last_hash_for_each_path_through_the_point() {
+    let (_home, sessions) = sessions("seen-latest");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(
+                A,
+                1,
+                Some("t_1"),
+                Some("a_1"),
+                &file_completed(CallStatus::Completed, Some(seen_details("/w/a.txt", 1))),
+            ),
+            envelope(
+                A,
+                2,
+                Some("t_1"),
+                Some("a_2"),
+                &file_completed(CallStatus::Completed, Some(seen_details("/w/a.txt", 2))),
+            ),
+            envelope(
+                A,
+                3,
+                Some("t_1"),
+                Some("a_3"),
+                &file_completed(CallStatus::Completed, Some(seen_details("/w/a.txt", 3))),
+            ),
+        ],
+    );
+    let at_first = forked(&sessions.join(A), Seq(1)).unwrap();
+    assert_eq!(
+        at_first.seen_files(),
+        &BTreeMap::from([(PathBuf::from("/w/a.txt"), 1)])
+    );
+    let at_all = forked(&sessions.join(A), Seq(3)).unwrap();
+    assert_eq!(
+        at_all.seen_files(),
+        &BTreeMap::from([(PathBuf::from("/w/a.txt"), 3)])
+    );
+    let whole = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(
+        whole.seen_files(),
+        &BTreeMap::from([(PathBuf::from("/w/a.txt"), 3)])
+    );
+}
+
+#[test]
+fn legacy_malformed_and_unfinished_completions_create_and_erase_nothing() {
+    let (_home, sessions) = sessions("seen-legacy");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(
+                A,
+                1,
+                Some("t_1"),
+                Some("a_1"),
+                &file_completed(CallStatus::Completed, Some(seen_details("/w/a.txt", 1))),
+            ),
+            // A legacy completion with no record: creates nothing.
+            envelope(
+                A,
+                2,
+                Some("t_1"),
+                Some("a_2"),
+                &file_completed(CallStatus::Completed, Some(json!({"start_line": 1}))),
+            ),
+            // A legacy completion for an unseen path: creates nothing.
+            envelope(
+                A,
+                3,
+                Some("t_1"),
+                Some("a_3"),
+                &file_completed(CallStatus::Completed, Some(json!({"diff": "@@ x"}))),
+            ),
+            // Malformed records: erase nothing.
+            envelope(
+                A,
+                4,
+                Some("t_1"),
+                Some("a_4"),
+                &file_completed(CallStatus::Completed, Some(json!({"file_seen": "opaque"}))),
+            ),
+            envelope(
+                A,
+                5,
+                Some("t_1"),
+                Some("a_5"),
+                &file_completed(
+                    CallStatus::Completed,
+                    Some(json!({"file_seen": {"path": 7, "hash": "x"}})),
+                ),
+            ),
+            envelope(
+                A,
+                6,
+                Some("t_1"),
+                Some("a_6"),
+                &file_completed(
+                    CallStatus::Completed,
+                    Some(json!({"file_seen": {"path": "/w/a.txt"}})),
+                ),
+            ),
+            // Unfinished calls carry no record, even well-formed.
+            envelope(
+                A,
+                7,
+                Some("t_1"),
+                Some("a_7"),
+                &file_completed(CallStatus::Failed, Some(seen_details("/w/a.txt", 99))),
+            ),
+            envelope(
+                A,
+                8,
+                Some("t_1"),
+                Some("a_8"),
+                &file_completed(CallStatus::Cancelled, Some(seen_details("/w/a.txt", 100))),
+            ),
+            envelope(
+                A,
+                9,
+                Some("t_1"),
+                Some("a_9"),
+                &file_completed(CallStatus::Denied, Some(seen_details("/w/b.txt", 3))),
+            ),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(
+        folded.seen_files(),
+        &BTreeMap::from([(PathBuf::from("/w/a.txt"), 1)])
+    );
+}
+
+#[test]
+fn a_completed_handoff_clears_seen_while_a_failed_one_keeps_it() {
+    let (_home, sessions) = sessions("seen-handoff");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(
+                A,
+                1,
+                Some("t_1"),
+                Some("a_1"),
+                &file_completed(CallStatus::Completed, Some(seen_details("/w/a.txt", 1))),
+            ),
+            envelope(A, 2, Some("t_1"), None, &handoff()),
+            envelope(
+                A,
+                3,
+                Some("t_2"),
+                Some("a_2"),
+                &file_completed(CallStatus::Completed, Some(seen_details("/w/b.txt", 2))),
+            ),
+            envelope(A, 4, Some("t_2"), None, &failed_handoff()),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(
+        folded.seen_files(),
+        &BTreeMap::from([(PathBuf::from("/w/b.txt"), 2)])
+    );
+    let before_handoff = forked(&sessions.join(A), Seq(1)).unwrap();
+    assert_eq!(
+        before_handoff.seen_files(),
+        &BTreeMap::from([(PathBuf::from("/w/a.txt"), 1)])
+    );
+}

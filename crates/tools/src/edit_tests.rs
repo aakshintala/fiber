@@ -90,11 +90,16 @@ fn edit_details_hold_only_the_exact_unified_diff() {
         ]}),
     );
     let shown = path_text(&resolved(dir.path(), "a.txt"));
+    let path = resolved(dir.path(), "a.txt");
+    let hash = crate::files::hash_bytes("after\n".as_bytes());
     assert_eq!(
         output.details,
-        Some(json!({"diff": format!(
-            "--- {shown}\n+++ {shown}\n@@ -1 +1 @@\n-before\n+after\n"
-        )}))
+        Some(json!({
+            "diff": format!(
+                "--- {shown}\n+++ {shown}\n@@ -1 +1 @@\n-before\n+after\n"
+            ),
+            "file_seen": {"path": path_text(&path), "hash": hash},
+        }))
     );
 }
 
@@ -948,5 +953,31 @@ fn an_edit_inside_a_protected_path_advances_the_baseline() {
         std::fs::read(fiber.join("keep.txt")).unwrap(),
         b"approved\n",
         "the end restores to the approved edit"
+    );
+}
+
+#[test]
+fn a_successful_edit_logs_the_post_edit_hash_beside_the_diff() {
+    let dir = TempDir::new("fiber-edit-seen-details");
+    fs::write(dir.path().join("a.txt"), "a\nb\nc\n").unwrap();
+    let output = edit_of(
+        dir.path(),
+        json!({
+            "path": "a.txt",
+            "edits": [{"old_text": "b\n", "new_text": "B\n"}]
+        }),
+    );
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
+    let path = resolved(dir.path(), "a.txt");
+    let hash = crate::files::hash_bytes("a\nB\nc\n".as_bytes());
+    let details = output.details.expect("a successful edit carries details");
+    assert_eq!(
+        details.get("file_seen"),
+        Some(&json!({"path": path_text(&path), "hash": hash})),
+        "{details}"
+    );
+    assert!(
+        details.get("diff").is_some_and(|diff| diff.is_string()),
+        "the diff stays beside the record: {details}"
     );
 }

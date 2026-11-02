@@ -139,10 +139,13 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   what the hook returned (`docs/extensions.md`, "Hooks"). A foreground `shell`
   call's output past 1 MiB is cut before the hook runs ("Result and output").
 - `details`: JSON for clients, such as an edit's diff for the terminal to draw.
-  It is never sent to the model and the loop never reads it. A client that does
-  not recognise a tool's `details` shows `content` instead: tool identity is an
-  opaque name and an extension can replace any tool, so no client may depend
-  on one tool's `details`. A confined Linux shell result includes
+  It is never sent to the model and live control flow never reads it. A client
+  that does not recognise a tool's `details` shows `content` instead: tool
+  identity is an opaque name and an extension can replace any tool, so no
+  client may depend on one tool's `details`. The history fold is the one
+  exception: it reads only the reserved `file_seen` object the file tools
+  write (`docs/events.md`, `tool_call_completed`), to rebuild what the model's
+  context has seen ("Stale files"). A confined Linux shell result includes
   `protected_paths: { restored, failed }` when it restores a protected path or
   cannot restore one. The shell names each changed path in `content`; the loop
   also carries the report on the completion event.
@@ -178,9 +181,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   the processed file (`docs/model-routing.md`, "Image limits") and referenced
   by path, never inlined as base64 in the log.
 - The loop reads `status`, `error.code`, `control` and the declared effects,
-  never `content` or `details`, except that it drops `details.matches` when a
-  hook rewrote the output (Shell, "Result and output"). A tool's prose cannot
-  steer control flow.
+  never `content` or `details`, except that the history fold reads the
+  reserved `details.file_seen` ("Stale files") and that the loop drops
+  `details.matches` when a hook rewrote the output (Shell, "Result and
+  output"). A tool's prose cannot steer control flow.
 - A `failed` status is sent to the provider as that protocol's error flag on the tool result. A `failed` result whose content holds no text is sent with its `error.message` as the text, so the provider never receives an empty error result. The log keeps `content` as the tool wrote it.
 
 ## What a result proves
@@ -383,10 +387,18 @@ path's directory, ending in `/`.
 - The message says the file changed or was never read, and to read it first.
   A file changed by the session's own shell command, such as a formatter,
   counts as changed.
-- What was seen is held in memory for the live context. It is cleared at a
-  handoff, because the model's context no longer holds the file
-  (`docs/handoff.md`), and it starts empty after a resume, a fork or a rewind.
-  Nothing is logged for it.
+- What was seen follows the model's context, not the process. Each successful
+  `read`, `edit` and `write` logs the whole file's hash beside its resolved
+  path, in the completion's reserved `details.file_seen`
+  (`docs/events.md`, `tool_call_completed`); a resume, a fork and a rewind
+  rebuild what was seen from the log, up to the point the context continues
+  from. Nothing is re-hashed at startup, so a file changed while Fiber was
+  down still meets the stored hash and is refused with the message that it
+  changed since it was read. A log written before the field existed rebuilds
+  nothing, as when the record started empty.
+- A handoff clears what was seen, because the new context has not seen the
+  file (`docs/handoff.md`); a `write` there is refused until the file is read
+  again.
 
 ### How a change lands
 

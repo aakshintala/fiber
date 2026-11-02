@@ -672,7 +672,7 @@ Durable. The call's outcome.
 | `error` | `error` | no | on `failed` |
 | `process` | `process` | no | on any call that ran a process |
 | `content` | content parts | yes | exactly what the model is sent, except a `tool_search` result, rendered from `loaded` (`docs/tools.md`, "What a result carries") |
-| `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model |
+| `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model. File tools also carry the reserved `file_seen` object here (below) |
 | `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
 | `kept` | array | no | when the result was cut, the byte ranges of the full output that `content` holds, each `[start, end]` (integers, `end` exclusive), in order (`docs/tools.md`, "Bounded results") |
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
@@ -682,6 +682,15 @@ Durable. The call's outcome.
 | `hosts_surfaced` | array of strings | no | the hosts the result surfaced, as URLs, which become known in the session (`docs/tools.md`, "What a result carries"); absent when empty |
 | `loaded` | array of strings | no | the tools a search loaded, by name, best first, ties by name; `[]` when it matched nothing; absent on every other result, and when an `after_tool` hook failed (`docs/tools.md`, "Tool search") |
 | `protected_paths` | object | no | on a confined shell call that changed a protected path: `restored` (array of strings, workspace-relative paths restored to the recorded baseline) and `failed` (array of `path` and `message` objects, one per restore that did not succeed); absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
+
+On a successful `read`, `edit` or `write`, `details` carries the reserved
+`file_seen` object beside the tool's own fields: `path`, the file's resolved
+path as a string, and `hash`, the whole file's content hash as an integer.
+`read` logs the hash of the bytes it read; `edit` and `write` log the hash of
+the bytes they stored. A failed call carries no `file_seen`. The history fold
+reads only this object (`docs/tools.md`, "Stale files"): a resume, a fork or
+a rewind rebuilds what the model's context has seen from it, and only a
+completed handoff clears it.
 
 A failed model call is an assistant message that completed with a failed
 outcome and an `error`; the retry is a new action. Its codes

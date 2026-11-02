@@ -568,7 +568,7 @@ pub(crate) fn run_new(
                 }
             }
             .map_err(|error| failed(error.code(), error))?;
-            parts_with_session(
+            let mut composed = parts_with_session(
                 Vec::new(),
                 folded.model.as_deref(),
                 folded.credential.as_deref(),
@@ -592,7 +592,11 @@ pub(crate) fn run_new(
                     event_cursor: 0,
                 },
                 fiber_path.clone(),
-            )?
+            )?;
+            // The continuation keeps what the point's history saw, as a
+            // resume does (`docs/tools.md`, "Stale files").
+            composed.seen_files = folded.seen_files().clone();
+            composed
         }
         None => {
             let overrides_for_fix = overrides.clone();
@@ -711,6 +715,7 @@ pub(crate) fn assemble_session(
                 sandbox,
                 protection,
                 repository,
+                seen_files,
                 ..
             } = parts;
             // The log is already open: install the writer before any append the
@@ -800,6 +805,7 @@ pub(crate) fn assemble_session(
                 shell_read_only.clone(),
                 sandbox.clone(),
                 Some(protection),
+                seen_files,
             ) {
                 Ok(tools) => tools,
                 Err(failure) => {
@@ -1175,6 +1181,7 @@ pub(crate) fn assemble_session(
                 switchable,
                 resolve,
                 web_search,
+                seen_files,
             } = parts;
             let (job_emit, jobs) = late_emit::registry(&dir, &clock);
             shutdown::arm(signals, &reads);
@@ -1257,6 +1264,7 @@ pub(crate) fn assemble_session(
                 shell_read_only.clone(),
                 sandbox.clone(),
                 Some(protection),
+                seen_files,
             ) {
                 Ok(tools) => tools,
                 Err(failure) => {
