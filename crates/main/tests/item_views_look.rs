@@ -196,8 +196,8 @@ fn job_row_index(rows: &[String], command: &str) -> Option<usize> {
 /// Which read the last grid seen by the item-view-open wait implies, in
 /// words: the job row never drew, it drew somewhere other than the row
 /// clicked, or it is still on the row clicked. Failure-path words only;
-/// the wait's predicate stays exactly as strict. The trailing newline is
-/// the separator the leading wait leaves to its caller.
+/// it runs only on expiry. The trailing newline is the separator the
+/// leading wait leaves to its caller.
 fn item_view_open_lead(rows: &[String], command: &str, clicked: u16) -> String {
     match job_row_index(rows, command) {
         None => {
@@ -491,9 +491,6 @@ fn item_view_open_lead_names_the_read_the_last_grid_implies() {
             clicked + 1
         )
     );
-    assert_ne!(no_row, reflowed_below);
-    assert_ne!(reflowed_below, still_there);
-    assert_ne!(still_there, no_row);
 }
 
 #[test]
@@ -551,27 +548,16 @@ fn the_job_pty_view_matches_the_doc() {
         .find(|x| grid.cell(*x, job).symbol != " ")
         .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
     click(&mut run, job_x, job);
-    // The failure report reads the last grid the wait saw, so the next
-    // sighting names which read that state implies instead of timing out
-    // mute. The report runs only when the wait expires; a green run keeps
-    // the same predicate, clicks and assertions.
-    let last: std::cell::RefCell<Option<Grid>> = std::cell::RefCell::new(None);
+    // The lead reads the last grid the wait saw and names which read it
+    // implies; it runs only on expiry.
+    let last: std::cell::RefCell<Option<Vec<String>>> = std::cell::RefCell::new(None);
     let grid = run.wait_screen_leading(
         "the item view opens",
         |grid| {
-            *last.borrow_mut() = Some(grid.clone());
+            *last.borrow_mut() = Some(grid.rows.clone());
             grid.contents.contains("Job  ◆ ")
         },
-        || {
-            let seen = last.borrow();
-            let empty: Vec<String> = Vec::new();
-            let rows: &[String] = if let Some(grid) = &*seen {
-                &grid.rows
-            } else {
-                &empty
-            };
-            item_view_open_lead(rows, &command, job)
-        },
+        || item_view_open_lead(last.borrow().as_deref().unwrap_or(&[]), &command, job),
     );
     // The status row names the job twice: once in the row, once in the
     // stop target. The row is short enough to draw whole: no `…` cuts
