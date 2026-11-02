@@ -1561,12 +1561,56 @@ jobs:
           fi
           # The one body construction for the issue, the sighting comment
           # and the pull request comment: the sentence, the tested commit,
-          # then the failure text in a fence when there is any.
+          # then the failure text in a fence when there is any. The one
+          # GitHub body limit lives here, in the filer: the API rejects
+          # larger bodies, so only the filer knows where the cut falls. A
+          # body past it keeps the sentence, the tested commit and the head
+          # of the failure text, and the rest continues whole in follow-up
+          # comments, so the text outlives the run's logs.
+          BODY_LIMIT=65536
           flake_body() {
-            printf '%s\n%s' "$1" "$tested"
-            if [ -n "$detail" ]; then
-              printf "\n\`\`\`\n%s\n\`\`\`" "$detail"
+            body=$(printf '%s\n%s' "$1" "$tested")
+            overflow_dir="$RUNNER_TEMP/flake-overflow"
+            rm -rf "$overflow_dir"
+            if [ -z "$detail" ]; then
+              printf '%s' "$body"
+              return 0
             fi
+            # shellcheck disable=SC2016 # backticks are literal markdown in the issue body.
+            fenced=$(printf '%s\n```\n%s\n```' "$body" "$detail")
+            if [ "${#fenced}" -le "$BODY_LIMIT" ]; then
+              printf '%s' "$fenced"
+              return 0
+            fi
+            pointer_line="... (failure text continues in the follow-up comments below)"
+            head_len=$((BODY_LIMIT - ${#body} - ${#pointer_line} - 10))
+            if [ "$head_len" -lt 0 ]; then
+              head_len=0
+            fi
+            shown=${detail:0:$head_len}
+            rest=${detail:$head_len}
+            mkdir -p "$overflow_dir"
+            piece_len=$((BODY_LIMIT - 8))
+            n=1
+            while [ -n "$rest" ]; do
+              piece=${rest:0:$piece_len}
+              # shellcheck disable=SC2016 # backticks are literal markdown in the follow-up body.
+              printf '```\n%s\n```' "$piece" >"$overflow_dir/$(printf '%03d' "$n")"
+              rest=${rest:$piece_len}
+              n=$((n + 1))
+            done
+            # shellcheck disable=SC2016 # backticks are literal markdown in the issue body.
+            printf '%s\n```\n%s\n```\n%s' "$body" "$shown" "$pointer_line"
+          }
+          # Posts flake_body's overflow, if any, as follow-up comments on
+          # issue $1, oldest chunk first. No overflow posts nothing.
+          flake_followups() {
+            overflow_dir="$RUNNER_TEMP/flake-overflow"
+            [ -d "$overflow_dir" ] || return 0
+            for chunk in "$overflow_dir"/*; do
+              [ -f "$chunk" ] || continue
+              gh issue comment "$1" --body "$(cat "$chunk")"
+            done
           }
           # The first open issue with exactly this title, never a pull
           # request. Prints the number or nothing; fails on failed or
@@ -1597,6 +1641,7 @@ jobs:
               pr-owned)
                 pr_body=$(flake_body "The test \`$name\` passed after a retry on $runner, but its failing file \`$failing\` belongs to #$PR rather than main: $RUN_URL.")
                 gh issue comment "$PR" --body "$pr_body"
+                flake_followups "$PR"
                 continue
                 ;;
               lookup)
@@ -1616,6 +1661,7 @@ jobs:
               if number=$(open_number "$title"); then
                 if [ -n "$number" ]; then
                   gh issue comment "$number" --body "$body"
+                  flake_followups "$number"
                   continue
                 fi
               else
@@ -1665,6 +1711,7 @@ jobs:
                   fi
                   gh issue reopen "$action_issue"
                   gh issue comment "$action_issue" --body "$body"
+                  flake_followups "$action_issue"
                   gh issue edit "$action_issue" --add-label needs-triage
                   ;;
                 file-new)
@@ -1677,7 +1724,13 @@ jobs:
                     echo "unknown open lookup: the recheck for $title failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
                     continue
                   fi
-                  gh issue create --title "$title" --body "$body" --label test-only
+                  created=$(gh issue create --title "$title" --body "$body" --label test-only)
+                  number=${created##*/}
+                  if printf '%s' "$number" | grep -Eq '^[0-9]+$'; then
+                    flake_followups "$number"
+                  else
+                    echo "unknown create output: no overflow filed for $title" >> "$GITHUB_STEP_SUMMARY"
+                  fi
                   ;;
                 stale)
                   echo "stale fix: $title stays closed: its fix is not in the tested commit" >> "$GITHUB_STEP_SUMMARY"
