@@ -1465,6 +1465,7 @@ fn a_turn_that_ends_over_budget_stops_delegates_through_trip_and_end() {
                 extension: None,
                 origin_session_id: None,
                 reviewer: None,
+                warming: None,
             },
         })
         .unwrap();

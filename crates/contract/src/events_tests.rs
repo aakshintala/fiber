@@ -523,7 +523,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "idle", "started": 0, "calls": 0, "since": 1, "git": {"branch": "main"},
-            "context": {"tokens": 3, "window": 4}, "spend": usage,
+            "context": {"tokens": 3, "window": 4}, "cache_expires": 1754000000000u64, "spend": usage,
             "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
@@ -825,6 +825,11 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
             "input_bytes": 48213, "cost": 0.25,
             "reviewer": {"purpose": "stage_1", "action_id": "a_1"}}),
+        ),
+        (
+            "usage_recorded",
+            json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+            "input_bytes": 48213, "cost": 0.25, "warming": true}),
         ),
         (
             "quota_noticed",
@@ -1224,6 +1229,48 @@ fn a_session_status_writes_closing_only_when_true() {
     assert!(!hidden.closing);
     payload.as_object_mut().unwrap().remove("closing");
     assert_eq!(serde_json::to_value(&hidden).unwrap(), payload);
+}
+
+#[test]
+fn a_session_status_round_trips_cache_expires_and_omits_it_when_absent() {
+    let mut payload = samples()
+        .into_iter()
+        .find(|(kind, _)| *kind == "session_status")
+        .unwrap()
+        .1;
+    payload["cache_expires"] = json!(1754000000000u64);
+    let status: SessionStatus = serde_json::from_value(payload.clone()).unwrap();
+    assert_eq!(status.cache_expires, Some(1754000000000u64));
+    assert_eq!(serde_json::to_value(&status).unwrap(), payload);
+    payload.as_object_mut().unwrap().remove("cache_expires");
+    let old: SessionStatus = serde_json::from_value(payload.clone()).unwrap();
+    assert_eq!(old.cache_expires, None);
+    assert_eq!(serde_json::to_value(&old).unwrap(), payload);
+}
+
+#[test]
+fn a_usage_recorded_round_trips_warming_and_omits_it_when_absent() {
+    let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
+    let base = || {
+        json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+        "input_bytes": 1, "cost": null})
+    };
+    let recorded = |payload: Value| match read("usage_recorded", payload).unwrap() {
+        Some(Event::UsageRecorded(recorded)) => recorded,
+        other => panic!("{other:?}"),
+    };
+    let mut warmed = base();
+    warmed["warming"] = json!(true);
+    let line = recorded(warmed.clone());
+    assert_eq!(line.warming, Some(true));
+    assert_eq!(
+        Value::Object(Event::UsageRecorded(line).payload().unwrap()),
+        warmed
+    );
+    let line = recorded(base());
+    assert_eq!(line.warming, None);
+    let written = Value::Object(Event::UsageRecorded(line).payload().unwrap());
+    assert!(written.get("warming").is_none(), "{written}");
 }
 
 #[test]

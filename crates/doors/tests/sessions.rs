@@ -64,6 +64,7 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
             step: None,
             git: None,
             context: None,
+            cache_expires: None,
             spend: Usage {
                 tokens: Tokens {
                     input: 0,
