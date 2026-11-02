@@ -3039,9 +3039,11 @@ retry line carries no interrupt target but Esc still interrupts; a
 replacement keeps one interrupt target over each line's full width either
 way.
 
-**`steering_queue`** draws the queued steering messages: its heading, the
-queue rows and the footer. A replacement that returns no lines hides all
-three.
+**`steering_queue`** draws the steering card ("Steering"): its slab and
+stripe, the title row, one entry per message and the key hint. A
+replacement's lines take the card's place, with no slab and no click
+targets; the keys still pick and drop messages. A replacement that returns
+no lines hides the whole card.
 
 | Field | What it holds |
 |---|---|
