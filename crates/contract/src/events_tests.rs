@@ -541,12 +541,12 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "streaming", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "state": "streaming", "started": 0, "calls": 0, "since": 1, "output_at": 2, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "tool", "tool": "shell", "started": 0, "calls": 0, "step": "shell ls", "since": 1, "spend": usage,
+            "state": "tool", "tool": "shell", "started": 0, "calls": 0, "step": "shell ls", "since": 1, "tool_output_at": 2, "repeats": 2, "spend": usage,
             "delegates": 1, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (

@@ -478,8 +478,10 @@ Ephemeral. Written whenever a `full` connection attaches or leaves
 
 Ephemeral. The session's own summary of itself, for a client that is not
 showing it: a session list, a rail, a delegate card. Written when any field
-changes. The latest wins, and a client that subscribes, at either level, is
-sent the latest.
+changes. For `output_at` and `tool_output_at`, a change counts only once it
+has moved at least 10 seconds from the value last written, so a streaming
+reply does not write a status per delta. The latest wins, and a client that
+subscribes, at either level, is sent the latest.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -496,8 +498,11 @@ sent the latest.
 | `tool` | string | no | with `tool`, the running tool's name |
 | `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval`, `question` or `offer`, a repository's offer: "Repository code") and `summary` (string, one line) |
 | `since` | integer | yes | when this state began, as `ts` |
+| `output_at` | integer | no | with `streaming` or `retrying`: when the model last sent output for the current request (text, reasoning or tool arguments), as `ts`; absent before the request's first output |
+| `tool_output_at` | integer | no | with `tool`: when the running tool last wrote output (`tool_call_delta`), as `ts`; absent before its first output |
 | `started` | integer | yes | when the session started, as `ts` |
 | `calls` | integer | yes | tool calls the session has made so far |
+| `repeats` | integer | no | how many tool calls in a row, ending with the latest, had the same name and the same arguments; absent when it is 1 |
 | `turns` | integer | no | turns the session has run so far, counted as the usage view counts them (`docs/tui.md`); a client draws no turn count when it is absent |
 | `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
