@@ -1214,12 +1214,13 @@ fn a_tool_call_between_the_text_and_the_message_hides_the_reply() {
 }
 
 #[test]
-fn a_handoff_keeps_the_pair_and_drops_the_calls() {
+fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
-            Scripted::text("Delete the 3 stale branches?"),
-            Scripted::text("On it."),
+            Scripted::text("Which color?"),
+            Scripted::text("Which number?"),
+            Scripted::text("Noted."),
             Scripted::text("The note."),
             calls_reply("", &[("shell", paris())]),
             Scripted::text("Done."),
@@ -1227,9 +1228,10 @@ fn a_handoff_keeps_the_pair_and_drops_the_calls() {
         None,
         vec![tool as Arc<dyn Tool>],
     );
-    let reviewer = session.reviewer(vec![Scripted::text("1, 2"), Scripted::text("allow")]);
+    let reviewer = session.reviewer(vec![Scripted::text("2, 3"), Scripted::text("allow")]);
     let mut lines = prompt_turn(&mut session, "go");
-    lines.extend(prompt_turn(&mut session, "yes"));
+    lines.extend(prompt_turn(&mut session, "Blue"));
+    lines.extend(prompt_turn(&mut session, "Seven"));
     lines.extend(handoff_turn(&mut session, "c_h"));
     lines.extend(prompt_turn(&mut session, "now run it"));
     let kept = kept_lines(&lines);
@@ -1237,34 +1239,44 @@ fn a_handoff_keeps_the_pair_and_drops_the_calls() {
     assert_eq!(
         kept[0].payload["kept"],
         json!([
-            {"seq": turn_started_seq(&lines, "go"), "item": 0},
-            {"seq": turn_started_seq(&lines, "yes"), "item": 0}
+            {"seq": turn_started_seq(&lines, "Blue"), "item": 0},
+            {"seq": turn_started_seq(&lines, "Seven"), "item": 0}
         ])
     );
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 2);
-    // The selection holds the kept pair with the reply directly before
-    // its message, and no pre-handoff call.
+    // The selection keeps two distinct reply/message pairs, and no
+    // pre-handoff call.
     let selecting = texts(&requests[0]);
     let at = selecting
         .iter()
-        .position(|text| text == &"The person: yes")
+        .position(|text| text == &"The person: Blue")
         .unwrap();
-    assert_eq!(selecting[at - 1], "The agent: Delete the 3 stale branches?");
+    assert_eq!(selecting[at - 1], "The agent: Which color?");
+    let at = selecting
+        .iter()
+        .position(|text| text == &"The person: Seven")
+        .unwrap();
+    assert_eq!(selecting[at - 1], "The agent: Which number?");
     assert!(selecting.contains(&"The person: go"));
     assert!(
         !selecting.iter().any(|text| text.starts_with("Tool call: ")),
         "no pre-handoff call reaches the selection: {selecting:?}"
     );
-    // The post-handoff review holds the kept pair too, then the new call
-    // as the only tool call.
+    // The post-handoff review keeps those pairs and the new call, but not
+    // the dropped message.
     let after = texts(&requests[1]);
     let at = after
         .iter()
-        .position(|text| text == &"The person: yes")
+        .position(|text| text == &"The person: Blue")
         .unwrap();
-    assert_eq!(after[at - 1], "The agent: Delete the 3 stale branches?");
-    assert!(after.contains(&"The person: go"));
+    assert_eq!(after[at - 1], "The agent: Which color?");
+    let at = after
+        .iter()
+        .position(|text| text == &"The person: Seven")
+        .unwrap();
+    assert_eq!(after[at - 1], "The agent: Which number?");
+    assert!(!after.contains(&"The person: go"));
     assert!(after.contains(&"The person: now run it"));
     assert_eq!(
         after
@@ -1272,6 +1284,21 @@ fn a_handoff_keeps_the_pair_and_drops_the_calls() {
             .filter(|text| text.starts_with("Tool call: "))
             .count(),
         1
+    );
+
+    // Kept messages carry their reviewer-rendered replies in separate,
+    // labelled blocks. Ordinary turn input stays unframed.
+    let first = noted_request(&session, "The note.");
+    let agent = user_texts(&first);
+    assert!(agent[0].starts_with("This message is from Fiber"));
+    assert_eq!(
+        agent[1..],
+        [
+            "The person's earlier message:\nThe agent: Which color?\nThe person: Blue",
+            "The person's earlier message:\nThe agent: Which number?\nThe person: Seven",
+            "The note.",
+            "now run it"
+        ]
     );
 }
 
