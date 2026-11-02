@@ -1299,6 +1299,35 @@ fn tests_in_files_only_keeps_compiler_tests_with_a_source_function_match() {
 }
 
 #[test]
+fn tests_in_files_keeps_every_compiler_test_for_a_helper_under_tests() {
+    let path = "crates/log/tests/support/mod.rs";
+    let sources = vec![file("log", path, "pub fn shared_setup() {}\n")];
+    let index = TestIndex::from_fixtures(vec![
+        (
+            path.to_owned(),
+            TestBinary {
+                tests: vec![refer("log", Some("log::driver"), false, "runs_driver")],
+            },
+        ),
+        (
+            path.to_owned(),
+            TestBinary {
+                tests: vec![refer("log", Some("log::journey"), false, "runs_journey")],
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        super::tests_in_files(&[path.to_owned()], &members(), &sources, &index)
+            .expect("tests in helper file"),
+        vec![
+            refer("log", Some("log::driver"), false, "runs_driver"),
+            refer("log", Some("log::journey"), false, "runs_journey"),
+        ]
+    );
+}
+
+#[test]
 fn tests_in_files_compares_the_path_with_each_unrun_test_path() {
     let normal = "crates/main/tests/normal.rs";
     let unrun = "crates/main/tests/main_journeys.rs";
