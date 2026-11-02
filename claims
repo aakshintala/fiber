@@ -7,4 +7,3 @@ crates/main/tests/link_look.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7
 crates/tui/src/app/links.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app_focus.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker_tests.rs	fiber-4018	plan	2026-11-02T21:36:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
-fiber-4014-plan-2.md	fiber-4014	plan	2026-11-02T21:36:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
