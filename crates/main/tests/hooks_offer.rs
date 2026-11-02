@@ -862,30 +862,26 @@ fn hello_slice_timeout_reports_bounds_and_hub_state() {
     let (process, capture) = spawn_live();
     let outer_wait = support::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let exhausted_root = support::Deadline::after(Duration::ZERO);
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        hub_start::hello_slice_with_budgets(
-            &setup,
-            process,
-            &capture,
-            (outer_wait, exhausted_root),
-            Duration::from_secs(2),
-            entry,
-            &slices,
-        )
-    }));
-    let process = match outcome {
-        Ok((Err(error), process)) => {
+    let (result, process) = hub_start::hello_slice_with_budgets(
+        &setup,
+        process,
+        &capture,
+        (outer_wait, exhausted_root),
+        Duration::from_secs(2),
+        entry,
+        &slices,
+    );
+    let process = match result {
+        Err(error) => {
             assert_eq!(
                 error.to_string(),
                 "the test root leaves no room for another hello attempt"
             );
             process
         }
-        Ok((Ok(hub), process)) => {
-            drop((hub, process));
+        Ok(_) => {
             panic!("an exhausted root returns the no-room error");
         }
-        Err(_) => panic!("the live outer wait returns the no-room error"),
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hub_start::give_up(&setup, process, &capture, "empty-log report")
