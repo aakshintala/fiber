@@ -52,7 +52,7 @@ fn fake() -> Arc<Fake> {
 }
 
 /// An app on home at 80x24 in `/w`, with `seam`.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -62,13 +62,13 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         },
         ..Default::default()
     });
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app.set_size(80, 24);
     app
 }
 
 /// An app attached to [`SESSION`], with `seam`.
-fn attached(seam: Option<Arc<Fake>>) -> App {
+fn attached(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.attach(contract::SessionId(SESSION.to_owned()));
     app
@@ -115,7 +115,7 @@ fn session_line(kind: &str, payload: serde_json::Value) -> Line {
 #[test]
 fn slash_settings_opens_the_view_attached_and_on_home() {
     let seam = fake();
-    let mut app = home(Some(Arc::clone(&seam)));
+    let mut app = home(Arc::clone(&seam));
     assert_eq!(slash_settings(&mut app), Effect::None);
     assert!(app.config_view_open());
     assert!(app.input().is_empty());
@@ -130,7 +130,7 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
     );
     assert_eq!(seam.reads(), [PathBuf::from("/w")]);
 
-    let mut app = attached(Some(seam));
+    let mut app = attached(seam);
     slash_settings(&mut app);
     assert!(app.config_view_open());
     let rows = screen(&app);
@@ -145,14 +145,37 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
 }
 
 #[test]
+fn the_default_seam_opens_settings_with_no_configure_call() {
+    // `App::new` installs a seam of its own: opening `/settings`
+    // without any `set_configure` call reads through that default,
+    // with no `Option` guard on the path.
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    assert_eq!(slash_settings(&mut app), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(
+        app.config_view_screen().map(|frame| frame.footer),
+        Some("Ctrl+G opens the file".to_owned())
+    );
+}
+
+#[test]
 fn notices_show_above_the_open_view_on_home_and_attached() {
     // Notices float above the conversation (`docs/tui.md`, "Notices"),
     // and above a configuration view swapped into its place.
     for on_home in [false, true] {
         let mut app = if on_home {
-            home(Some(fake()))
+            home(fake())
         } else {
-            attached(Some(fake()))
+            attached(fake())
         };
         app.push_notice("config_invalid", "The theme solar floats above.".to_owned());
         slash_settings(&mut app);
@@ -168,7 +191,7 @@ fn notices_show_above_the_open_view_on_home_and_attached() {
 #[test]
 fn esc_and_the_x_close_it_and_send_nothing() {
     let seam = fake();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     slash_settings(&mut app);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(!app.config_view_open());
@@ -180,7 +203,7 @@ fn esc_and_the_x_close_it_and_send_nothing() {
 
 #[test]
 fn every_key_but_ctrl_c_lands_in_the_view() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     for key in [Key::Char('x'), Key::Tab, Key::BackTab, Key::AltP, Key::F1] {
         assert_eq!(app.on_key(key.clone(), now()), Effect::None, "{key:?}");
@@ -192,7 +215,7 @@ fn every_key_but_ctrl_c_lands_in_the_view() {
 
 #[test]
 fn ctrl_c_still_reaches_the_quit_flow() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     let now = now();
     assert_eq!(app.on_key(Key::CtrlC, now), Effect::None);
@@ -202,7 +225,7 @@ fn ctrl_c_still_reaches_the_quit_flow() {
 
 #[test]
 fn an_approval_waits_until_the_view_closes() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     app.on_line(session_line(
         "tool_call_requested",
@@ -223,7 +246,7 @@ fn an_approval_waits_until_the_view_closes() {
 #[test]
 fn opening_a_view_drops_its_unsaved_field() {
     let seam = fake();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     slash_settings(&mut app);
     app.on_key(Key::Enter, now());
     app.on_key(Key::Char('9'), now());
@@ -240,35 +263,8 @@ fn opening_a_view_drops_its_unsaved_field() {
 }
 
 #[test]
-fn without_a_seam_the_view_says_not_available() {
-    let mut app = attached(None);
-    slash_settings(&mut app);
-    let frame = app.config_view_screen();
-    assert_eq!(
-        frame.map(|frame| frame.below),
-        Some(vec!["Not available in this terminal.".to_owned()])
-    );
-    assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
-    assert_eq!(app.on_click(TargetId::View(Spot::Row(0))), Effect::None);
-    app.on_key(Key::Esc, now());
-    assert!(!app.config_view_open());
-}
-
-#[test]
-fn without_a_seam_the_placeholder_carries_the_opening_command() {
-    // One site's pair pins the shape: the title names the view, the
-    // command the slash command that opened it (`docs/tui.md`,
-    // "Swapped views").
-    let mut app = attached(None);
-    slash_settings(&mut app);
-    let frame = app.config_view_screen().expect("the view is open");
-    assert_eq!(frame.title, "Settings");
-    assert_eq!(frame.command, "/settings");
-}
-
-#[test]
 fn ctrl_g_returns_the_file_to_open() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     assert_eq!(
         app.on_key(Key::CtrlG, now()),
@@ -282,7 +278,7 @@ fn ctrl_g_returns_the_file_to_open() {
 #[test]
 fn file_closed_rereads_the_rows() {
     let seam = fake();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     slash_settings(&mut app);
     app.config_file_closed(Ok(()));
     assert_eq!(seam.reads().len(), 2);
@@ -294,7 +290,7 @@ fn save_setting_writes_the_global_layer_through_the_seam() {
     // The rail queues the save; the seam write below is what the
     // loop's `save_shares` reaches.
     let seam = fake();
-    let mut app = home(Some(Arc::clone(&seam)));
+    let mut app = home(Arc::clone(&seam));
     app.save_setting("tui.theme", "\"solar\"");
     assert_eq!(
         seam.writes(),
@@ -334,7 +330,7 @@ fn global_save_without_a_workspace_writes_at_the_hub_global_parent() {
 
 #[test]
 fn a_file_error_is_a_notice() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     app.config_file_closed(Err("The editor exited with status 1.".to_owned()));
     assert_eq!(
@@ -345,7 +341,7 @@ fn a_file_error_is_a_notice() {
 
 #[test]
 fn a_usage_line_sets_the_reload_cost() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     app.on_line(session_line(
         "usage_recorded",
         serde_json::json!({"generation_id": "g_1", "model": "a/b",
@@ -379,7 +375,7 @@ fn a_usage_line_sets_the_reload_cost() {
 
 #[test]
 fn a_theme_choice_is_taken_once() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     for key in [Key::Down, Key::Enter, Key::Up, Key::Up, Key::Enter] {
         app.on_key(key, now());
@@ -393,7 +389,7 @@ fn a_theme_choice_is_taken_once() {
 
 #[test]
 fn the_quit_question_takes_keys_over_the_view() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     app.phase = super::super::Phase::Attached {
         session: contract::SessionId(SESSION.to_owned()),
         busy: true,
@@ -408,7 +404,7 @@ fn the_quit_question_takes_keys_over_the_view() {
 
 #[test]
 fn a_new_session_stroke_does_not_leave_the_view() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     let stroke = crate::stroke::Stroke::parse("ctrl+n").unwrap_or_else(|err| panic!("{err}"));
     app.on_press(stroke, now());
@@ -418,7 +414,7 @@ fn a_new_session_stroke_does_not_leave_the_view() {
 
 #[test]
 fn the_view_hides_the_cursor_and_keeps_the_input_box_attached() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     let area = Rect::new(0, 0, 80, 24);
     assert_eq!(crate::view::cursor(&app, area), None);
@@ -431,7 +427,7 @@ fn the_view_hides_the_cursor_and_keeps_the_input_box_attached() {
 
 #[test]
 fn the_reload_cost_is_the_session_on_screens_only() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     app.on_line(session_line(
         "usage_recorded",
         serde_json::json!({"generation_id": "g_1", "model": "a/b",
@@ -455,7 +451,7 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
         ),
         (true, "changing handoff.tokens needs a reload"),
     ] {
-        let mut app = attached(Some(fake()));
+        let mut app = attached(fake());
         app.on_line(session_line(
             "usage_recorded",
             serde_json::json!({"generation_id": "g_1", "model": "a/b",
@@ -488,7 +484,7 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
 
 #[test]
 fn an_edit_goes_to_the_open_field_not_the_input_box() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     slash_settings(&mut app);
     app.on_key(Key::Enter, now());
     app.on_edit(Edit::Paste("9".to_owned()));
@@ -503,19 +499,9 @@ fn an_edit_goes_to_the_open_field_not_the_input_box() {
     assert!(app.input().is_empty());
 }
 
-#[test]
-fn without_a_seam_only_esc_closes_the_view() {
-    let mut app = attached(None);
-    slash_settings(&mut app);
-    app.on_key(Key::Char('x'), now());
-    assert!(app.config_view_open(), "a key other than Esc keeps it open");
-    app.on_key(Key::Esc, now());
-    assert!(!app.config_view_open());
-}
-
 /// A connected app attached to [`SESSION`], with `seam`: the link is up,
 /// so a command can go out.
-fn connected(seam: Option<Arc<Fake>>) -> App {
+fn connected(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
         kind: "hub_hello".to_owned(),
@@ -583,7 +569,7 @@ fn tools_answer() -> serde_json::Value {
 
 #[test]
 fn slash_tools_with_no_session_is_the_notice_and_opens_nothing() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     assert_eq!(slash_tools(&mut app), Effect::None);
     assert_eq!(app.notices.newest(), Some("No session on screen."));
     assert!(!app.config_view_open());
@@ -591,7 +577,7 @@ fn slash_tools_with_no_session_is_the_notice_and_opens_nothing() {
 
 #[test]
 fn slash_tools_sends_tools_for_the_session_on_screen() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_tools(&mut app);
     assert!(id.starts_with("c_"), "{id}");
     assert!(app.config_view_open());
@@ -607,7 +593,7 @@ fn slash_tools_sends_tools_for_the_session_on_screen() {
 
 #[test]
 fn the_answer_to_the_sent_id_fills_the_view() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_tools(&mut app);
     app.on_line(session_line(
         "command_accepted",
@@ -644,7 +630,7 @@ fn the_answer_to_the_sent_id_fills_the_view() {
 
 #[test]
 fn a_session_rejection_of_tools_shows_its_message() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_tools(&mut app);
     app.on_line(session_line(
         "command_rejected",
@@ -656,7 +642,7 @@ fn a_session_rejection_of_tools_shows_its_message() {
 
 #[test]
 fn a_hub_rejection_of_tools_shows_its_message() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_tools(&mut app);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
         kind: "command_rejected".to_owned(),
@@ -672,20 +658,8 @@ fn a_hub_rejection_of_tools_shows_its_message() {
 }
 
 #[test]
-fn without_a_seam_tools_says_not_available() {
-    let mut app = connected(None);
-    assert_eq!(slash_tools(&mut app), Effect::None);
-    let frame = app.config_view_screen().expect("the view is open");
-    assert_eq!(frame.title, "Tools");
-    assert_eq!(
-        frame.below,
-        vec!["Not available in this terminal.".to_owned()]
-    );
-}
-
-#[test]
 fn a_click_on_the_panels_tools_line_opens_the_tools_view() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let effect = app.on_click(crate::mouse::TargetId::Panel(
         crate::app::panel::Spot::Tools,
     ));
@@ -701,7 +675,7 @@ fn a_click_on_the_panels_tools_line_opens_the_tools_view() {
 #[test]
 fn left_and_right_reach_the_tools_view_not_the_draft() {
     let seam = fake();
-    let mut app = connected(Some(seam.clone()));
+    let mut app = connected(seam.clone());
     let id = open_tools(&mut app);
     app.on_line(session_line(
         "command_accepted",
@@ -763,7 +737,7 @@ fn priced(reference: &str, micros: Option<u64>) -> crate::catalogue::ModelEntry 
 /// The tools view's last row on an app that made a call of `usage` tokens
 /// on model `a/b`, with `entry` in the catalogue.
 fn tools_footer(usage: Option<u64>, entry: Option<crate::catalogue::ModelEntry>) -> String {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     app.on_line(preamble("a/b"));
     if let Some(tokens) = usage {
         app.on_line(usage_of(tokens));
@@ -808,7 +782,7 @@ fn the_tools_last_row_says_what_the_rebuild_costs() {
 
 #[test]
 fn the_tools_last_row_counts_only_the_session_on_screen() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     app.on_line(usage_of(84_000));
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
     let lines = sent(slash_tools(&mut app));
@@ -865,7 +839,7 @@ fn rules_fake() -> (Arc<Fake>, String) {
 #[test]
 fn slash_rules_opens_the_view_attached_and_on_home() {
     let seam = fake();
-    let mut app = home(Some(Arc::clone(&seam)));
+    let mut app = home(Arc::clone(&seam));
     assert_eq!(slash_rules(&mut app), Effect::None);
     assert!(app.config_view_open());
     assert!(app.input().is_empty());
@@ -877,7 +851,7 @@ fn slash_rules_opens_the_view_attached_and_on_home() {
     assert!(rows.iter().any(|row| row.trim() == "Global"), "{rows:?}");
     assert_eq!(seam.reads(), [PathBuf::from("/w")]);
 
-    let mut app = attached(Some(seam));
+    let mut app = attached(seam);
     slash_rules(&mut app);
     assert!(app.config_view_open());
     let rows = screen(&app);
@@ -888,23 +862,9 @@ fn slash_rules_opens_the_view_attached_and_on_home() {
 }
 
 #[test]
-fn without_a_seam_rules_says_not_available_and_delete_does_nothing() {
-    let mut app = attached(None);
-    slash_rules(&mut app);
-    let frame = app.config_view_screen();
-    assert_eq!(
-        frame.map(|frame| frame.below),
-        Some(vec!["Not available in this terminal.".to_owned()])
-    );
-    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
-    assert!(app.config_view_open());
-    assert!(app.input().is_empty());
-}
-
-#[test]
 fn delete_reaches_the_rules_view_not_the_draft() {
     let (seam, text) = rules_fake();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     slash_rules(&mut app);
     assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     assert_eq!(
@@ -923,7 +883,7 @@ fn delete_reaches_the_rules_view_not_the_draft() {
 #[test]
 fn the_rules_view_reads_each_age_from_the_frames_wall_time() {
     let (seam, _) = rules_fake();
-    let mut app = attached(Some(seam));
+    let mut app = attached(seam);
     // The rule was added at 1791331200000; two days later it is "2d ago".
     app.set_now(now(), 1_791_331_200_000 + 2 * 86_400_000);
     slash_rules(&mut app);
@@ -935,7 +895,7 @@ fn the_rules_view_reads_each_age_from_the_frames_wall_time() {
     );
     // With no wall time set, the rule shows the minute it was added.
     let (seam, _) = rules_fake();
-    let mut app = attached(Some(seam));
+    let mut app = attached(seam);
     slash_rules(&mut app);
     let rows = screen(&app);
     assert!(
@@ -948,7 +908,7 @@ fn the_rules_view_reads_each_age_from_the_frames_wall_time() {
 #[test]
 fn a_click_on_a_rules_x_revokes() {
     let (seam, text) = rules_fake();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     slash_rules(&mut app);
     assert_eq!(app.on_click(TargetId::View(Spot::Revoke(1))), Effect::None);
     assert_eq!(
@@ -966,7 +926,7 @@ fn a_click_on_a_rules_x_revokes() {
 #[test]
 fn file_closed_rereads_the_rules() {
     let seam = fake();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     slash_rules(&mut app);
     app.config_file_closed(Ok(()));
     assert_eq!(seam.reads().len(), 2);
@@ -996,7 +956,7 @@ fn remote_editor_case(
         |router| {
             let seam = Arc::new(Fake::new(vec![]));
             let remote = Arc::new(crate::remote::Remote::new(seam, "/client".into(), router));
-            let mut app = attached(None);
+            let mut app = attached(fake());
             app.set_remote(remote);
             app
         },
@@ -1023,7 +983,7 @@ fn no_workspace_remote_case(
                 ..Default::default()
             });
             app.set_size(80, 24);
-            app.set_configure(Some(Arc::clone(&remote) as Arc<dyn Configure>));
+            app.set_configure(Arc::clone(&remote) as Arc<dyn Configure>);
             app.set_remote(remote);
             app
         },
@@ -1254,7 +1214,7 @@ fn failed_remote_fetch_opens_nothing_and_client_files_never_use_the_hub() {
             })
         );
     });
-    let mut local = attached(Some(fake()));
+    let mut local = attached(fake());
     assert_eq!(
         local.config_act(super::Act::OpenLocal(None)),
         Effect::OpenFile(OpenFile {
@@ -1405,7 +1365,7 @@ fn slash_theme_opens_the_picker_with_live_preview_and_esc_restore() {
 
     // The picker lists the built-ins plus the seam's file themes, marking
     // the saved entry.
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     assert_eq!(slash_theme(&mut app), Effect::None);
     assert!(app.config_view_open());
     assert_eq!(
@@ -1486,13 +1446,13 @@ fn slash_theme_opens_the_picker_with_live_preview_and_esc_restore() {
     )]));
     assert_eq!(slash_theme(&mut app), Effect::None);
     app.on_key(Key::Down, now());
-    app.set_configure(Some(Arc::new(other) as Arc<dyn Configure>));
+    app.set_configure(Arc::new(other) as Arc<dyn Configure>);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
 
     // Enter saves the focused theme globally and queues it live: from the
     // saved dark entry one step down focuses light.
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     assert_eq!(slash_theme(&mut app), Effect::None);
     app.on_key(Key::Down, now());
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -1529,7 +1489,7 @@ fn slash_theme_without_a_theme_row_opens_the_rows() {
         "default",
         WriteScope::Any { repo: true },
     )]));
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     assert_eq!(slash_theme(&mut app), Effect::None);
     assert!(app.config_view_open());
     assert_eq!(
@@ -1552,7 +1512,7 @@ fn slash_theme_restores_the_saved_entry_theme() {
         "global",
         WriteScope::Any { repo: false },
     )]));
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     assert_eq!(slash_theme(&mut app), Effect::None);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
@@ -1590,7 +1550,7 @@ fn slash_theme_name_saves_applies_and_refuses() {
 
     // `/theme light` saves globally and queues the live theme, opening
     // nothing.
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     assert!(enter_text(&mut app, "/theme light").is_empty());
     assert!(!app.config_view_open());
     assert_eq!(
@@ -1617,7 +1577,7 @@ fn slash_theme_name_saves_applies_and_refuses() {
     insta::assert_snapshot!("theme_named_light_saved", painted_text(&saved));
 
     // A spaced file theme saves whole.
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     assert!(enter_text(&mut app, "/theme solar dawn").is_empty());
     assert_eq!(
         seam.writes().last(),
@@ -1633,7 +1593,7 @@ fn slash_theme_name_saves_applies_and_refuses() {
     );
 
     // An unknown name is refused with a notice naming it, changing nothing.
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     let writes = seam.writes().len();
     assert!(enter_text(&mut app, "/theme nope").is_empty());
     assert!(
@@ -1649,7 +1609,7 @@ fn slash_theme_name_saves_applies_and_refuses() {
     // Case folds nothing: `Light` is unknown. Esc dismisses the
     // completion panel first: with it open, Enter would accept the
     // shown `light` candidate instead, as the accepted-name test proves.
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     for ch in "/theme Light".chars() {
         app.on_key(Key::Char(ch), now());
     }
@@ -1827,7 +1787,7 @@ fn big_fake() -> Arc<Fake> {
 /// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_settings_scrolls_the_list_not_the_conversation() {
-    let mut app = attached(Some(big_fake()));
+    let mut app = attached(big_fake());
     // Scroll first, while the wheel still reaches the conversation: the
     // view covers it once open. (The scroll-up must precede the open both
     // at base, where the wheel would reach the conversation, and after
@@ -1892,7 +1852,7 @@ fn wheel_over_theme_moves_the_picker_not_the_conversation() {
         "reef".to_owned(),
         "sable".to_owned(),
     ];
-    let mut app = attached(Some(Arc::new(fake)));
+    let mut app = attached(Arc::new(fake));
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
     // Direct open: typing the slash command first would disturb the
@@ -1961,7 +1921,7 @@ fn six_tools_answer() -> serde_json::Value {
 #[test]
 fn wheel_over_tools_moves_the_selection_not_the_conversation() {
     // Connected: the open sends its `tools` command through the hub.
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     app.set_size(80, 24);
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
@@ -2059,7 +2019,7 @@ fn six_skills_answer() -> serde_json::Value {
 /// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_skills_scrolls_the_list_not_the_conversation() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     app.set_size(80, 24);
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
@@ -2131,7 +2091,7 @@ fn wheel_over_rules_scrolls_the_list_not_the_conversation() {
             section("/global.md", &["- m", "- n", "- o", "- p", "- q"]),
         ));
     }
-    let mut app = attached(Some(seam));
+    let mut app = attached(seam);
     app.set_size(80, 24);
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
@@ -2174,7 +2134,7 @@ fn wheel_over_login_scrolls_the_list_not_the_conversation() {
             })
             .collect());
     }
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     app.set_size(80, 24);
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
@@ -2213,7 +2173,7 @@ fn wheel_over_logout_scrolls_the_list_not_the_conversation() {
             })
             .collect());
     }
-    let mut app = attached(Some(seam));
+    let mut app = attached(seam);
     app.set_size(80, 24);
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
@@ -2295,7 +2255,7 @@ fn six_servers_answer() -> serde_json::Value {
 /// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_mcp_scrolls_the_list_not_the_conversation() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     app.set_size(80, 24);
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
@@ -2338,7 +2298,7 @@ fn wheel_over_mcp_scrolls_the_list_not_the_conversation() {
 /// no list move to pin.
 #[test]
 fn wheel_over_credential_leaves_the_conversation() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     app.set_size(80, 24);
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
@@ -2355,7 +2315,7 @@ fn wheel_over_credential_leaves_the_conversation() {
 /// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_doctor_scrolls_the_list_not_the_conversation() {
-    let mut app = attached(Some(fake()));
+    let mut app = attached(fake());
     let report = (0..60).map(|n| format!("line {n:02}")).collect::<Vec<_>>();
     let report = report.join("\n");
     app.set_doctor(Some(Arc::new(move || Ok(report.clone()))));

@@ -4415,10 +4415,10 @@ mod stacked {
     fn a_swapped_view_on_home_gives_the_notice_frame_the_whole_screen() {
         for kind in ["keys", "settings", "picker"] {
             let mut app = short_home();
-            app.set_configure(Some(
+            app.set_configure(
                 std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]))
                     as std::sync::Arc<dyn crate::Configure>,
-            ));
+            );
             match kind {
                 "picker" => {
                     app.on_key(Key::CtrlL, now());
@@ -4761,7 +4761,7 @@ mod outside_click {
                 kind: LoginKind::Key,
             }]);
         }
-        app.set_configure(Some(Arc::new(fake) as Arc<dyn Configure>));
+        app.set_configure(Arc::new(fake) as Arc<dyn Configure>);
         let _ = app.open_config_view(ConfigView::Login);
         assert!(
             app.top_surfaces().contains(&Surface::ConfigView),
@@ -4784,7 +4784,7 @@ mod outside_click {
                 siblings: Vec::new(),
             }]);
         }
-        app.set_configure(Some(Arc::new(fake) as Arc<dyn Configure>));
+        app.set_configure(Arc::new(fake) as Arc<dyn Configure>);
         let _ = app.open_config_view(ConfigView::Logout);
         assert!(
             app.top_surfaces().contains(&Surface::ConfigView),

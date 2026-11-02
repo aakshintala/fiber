@@ -237,7 +237,7 @@ pub(in crate::app) fn open(app: &mut App, surface: Surface) {
 fn open_hooks_offer(app: &mut App) {
     // The offer's query runs on the seam; the helper answers its names
     // itself, so the fake's canned answer never runs.
-    app.set_configure(Some(Arc::new(Fake::new(Vec::new())) as Arc<dyn Configure>));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn Configure>);
     if app.session().is_some() {
         app.on_line(session_line(
             "session_status",
@@ -662,7 +662,7 @@ fn open_keymap(app: &mut App) {
 /// `/reviewer-setup` typed on the attached session.
 pub(in crate::app) fn open_reviewer_setup(app: &mut App) {
     let seam = Arc::new(crate::configure_fake::Fake::new(Vec::new()));
-    app.set_configure(Some(seam as Arc<dyn crate::Configure>));
+    app.set_configure(seam as Arc<dyn crate::Configure>);
     crate::app::commands::commands_testkit::enter(app, "/reviewer-setup");
 }
 
@@ -711,9 +711,9 @@ fn open_import(app: &mut App) {
 }
 
 fn open_login(app: &mut App) {
-    app.set_configure(Some(
+    app.set_configure(
         Arc::new(crate::configure_fake::Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    );
     let _ = app.open_config_view(ConfigView::Login);
     assert!(
         app.top_surfaces().contains(&Surface::ConfigView),
@@ -722,9 +722,9 @@ fn open_login(app: &mut App) {
 }
 
 fn open_logout(app: &mut App) {
-    app.set_configure(Some(
+    app.set_configure(
         Arc::new(crate::configure_fake::Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    );
     let _ = app.open_config_view(ConfigView::Logout);
     assert!(
         app.top_surfaces().contains(&Surface::ConfigView),

@@ -69,7 +69,7 @@ fn dim(name: &str, label: &str, origin: &str) -> LogoutRow {
 }
 
 /// An app on home at 80x26 in `/w`, with `seam`.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -79,13 +79,13 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         },
         ..Default::default()
     });
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app.set_size(80, 26);
     app
 }
 
 /// An app attached to a session, with `seam`.
-fn attached(seam: Option<Arc<Fake>>) -> App {
+fn attached(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app
@@ -142,7 +142,7 @@ fn logout_deletes_the_confirmed_label_and_drops_its_row() {
     }
     store_file(&seam, "credentials/acme/work");
     store_file(&seam, "credentials/acme/home");
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // The list names the provider and the label, marking the default;
@@ -213,7 +213,7 @@ fn logout_deletes_the_confirmed_label_and_drops_its_row() {
 #[test]
 fn a_dim_origin_row_shows_its_source_and_enter_deletes_nothing() {
     let seam = logout_seam(vec![dim("acme", "prod", "environment variable ACME_KEY")]);
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     let rows = screen(&app);
@@ -247,7 +247,7 @@ fn clicking_a_dim_row_neither_selects_nor_confirms_it() {
         dim("acme", "prod", "environment variable ACME_KEY"),
         stored("acme", "work", true, &[]),
     ]);
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // The dim row draws dimmed while the deletable row draws full:
@@ -293,7 +293,7 @@ fn moving_over_the_rows_reaches_a_dim_row_but_enter_does_nothing() {
         dim("acme", "b", "environment variable ACME_KEY"),
         stored("acme", "c", false, &[]),
     ]);
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // Down reaches the dim row; Enter there does nothing.
@@ -326,7 +326,7 @@ fn moving_over_the_rows_reaches_a_dim_row_but_enter_does_nothing() {
 #[test]
 fn an_empty_list_shows_the_note_and_enter_does_nothing() {
     let seam = logout_seam(Vec::new());
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     let rows = screen(&app);
@@ -351,7 +351,7 @@ fn a_failed_delete_keeps_the_row_and_says_why() {
         });
     }
     store_file(&seam, "credentials/acme/work");
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -392,7 +392,7 @@ fn a_relist_after_delete_names_the_error_beside_the_removed_line() {
         *deleted = Ok("credentials/acme/work".to_owned());
     }
     store_file(&seam, "credentials/acme/work");
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // The delete lands but the re-list fails: both lines stay, and the
@@ -431,7 +431,7 @@ fn the_confirm_names_siblings_and_the_removed_line_keeps_them() {
     if let Ok(mut deleted) = seam.deleted.lock() {
         *deleted = Ok("credentials/acme/work".to_owned());
     }
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // The confirm names who else reads the stored directory.
@@ -462,7 +462,7 @@ fn a_secret_row_confirms_by_name_and_deletes_with_no_label() {
         *deleted = Ok("credentials/acme.api_key".to_owned());
     }
     store_file(&seam, "credentials/acme.api_key");
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     let rows = screen(&app);
@@ -492,7 +492,7 @@ fn up_moves_back_over_the_target_rows() {
         stored("acme", "bbb", false, &[]),
         stored("acme", "ccc", false, &[]),
     ]);
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // Down twice reaches the last label; two Ups return to the first,
@@ -512,7 +512,7 @@ fn up_moves_back_over_the_target_rows() {
 #[test]
 fn paging_moves_a_page_of_labels_each_step() {
     let seam = logout_seam(many_labels());
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // A page is the shown body rows less one: PageDown from the first
@@ -546,7 +546,7 @@ fn providers_and_secrets_list_under_their_own_headings() {
             deletable: true,
         },
     ]);
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // Each row lists under its own heading, with a blank row between
@@ -578,7 +578,7 @@ fn providers_and_secrets_list_under_their_own_headings() {
 #[test]
 fn a_tall_list_scrolls_its_window_with_focus() {
     let seam = logout_seam(many_labels());
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     open_logout(&mut app);
 
     // Thirteen body rows show over the view: twelve Downs put focus on
@@ -646,7 +646,7 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
 fn wheel_over_the_delete_confirmation_is_swallowed() {
     let seam = logout_seam(vec![stored("acme", "work", true, &[])]);
     store_file(&seam, "credentials/acme/work");
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
     open_logout(&mut app);

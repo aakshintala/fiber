@@ -14,9 +14,11 @@ use crate::ThemeSetting;
 use crate::configure::{
     BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
     LoginTarget, LogoutRow, NotesFile, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes,
-    Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored,
-    SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    Revoked, RulesScope, RulesSection, Saved, SettingRow, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolLists, ToolSwitches,
 };
+#[cfg(test)]
+use crate::configure::{Shown, WriteScope};
 
 /// One notes save the view asked for: the workspace and each sent layer.
 pub(crate) type NotesSave = (PathBuf, Option<NotesWrite>, Option<NotesWrite>);
@@ -61,6 +63,7 @@ impl FakeLogin {
     }
 
     /// How many times `cancel` ran.
+    #[cfg(test)]
     pub(crate) fn cancels(&self) -> usize {
         self.cancels.lock().map(|cancels| *cancels).unwrap_or(0)
     }
@@ -70,14 +73,22 @@ impl BrowserLogin for FakeLogin {
     fn run(&self) -> Result<Stored, ConfigureError> {
         // The test answers from its own thread. The wait has no deadline
         // of its own: the test ending drops the sender and releases it.
-        let rx = self
-            .answer_rx
-            .lock()
-            .ok()
-            .and_then(|mut rx| rx.take())
-            .unwrap_or_else(|| panic!("the FakeLogin's run ran twice"));
-        rx.recv()
-            .unwrap_or_else(|_| panic!("the FakeLogin was never answered"))
+        // A test bug (a second run, or no answer) is an error, so the
+        // worker folds it instead of panicking on it.
+        let rx = self.answer_rx.lock().ok().and_then(|mut rx| rx.take());
+        let Some(rx) = rx else {
+            return Err(ConfigureError {
+                code: ErrorCode::IoFailed,
+                message: "the FakeLogin's run ran twice".to_owned(),
+            });
+        };
+        match rx.recv() {
+            Ok(answer) => answer,
+            Err(_) => Err(ConfigureError {
+                code: ErrorCode::IoFailed,
+                message: "the FakeLogin was never answered".to_owned(),
+            }),
+        }
     }
 
     fn cancel(&self) {
@@ -94,15 +105,13 @@ pub(crate) type Revoke = (PathBuf, RulesScope, usize, String);
 pub(crate) type Write = (PathBuf, Layer, String, String);
 
 /// A fresh directory `delete_stored` removes files from, plain
-/// `std::fs`: unique per `Fake`, gone on drop, so a screen test can
-/// assert the file is gone from the fake home. Setup is best-effort:
-/// the tests assert the files they need.
+/// `std::fs`: unique per `Fake`, created only when a delete runs, gone
+/// on drop, so a screen test can assert the file is gone from the fake
+/// home. Setup is best-effort: the tests assert the files they need.
 fn fresh_home() -> PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("fiber-tui-fake-home-{}-{n}", std::process::id()));
-    drop(std::fs::create_dir_all(&dir));
-    dir
+    std::env::temp_dir().join(format!("fiber-tui-fake-home-{}-{n}", std::process::id()))
 }
 
 /// One switch the view asked for: the group, tool, scope and whether on.
@@ -313,7 +322,12 @@ impl Fake {
             notes_saved: Mutex::new(Ok(NotesSaved::Written(Vec::new()))),
         }
     }
+}
 
+/// What the views' tests observe: every inspection method lives here so
+/// the release crate ships only the constructor and the seam itself.
+#[cfg(test)]
+impl Fake {
     /// The providers asked to log in through the browser so far, in order.
     pub(crate) fn login_names(&self) -> Vec<String> {
         self.login_names
@@ -519,6 +533,7 @@ pub(crate) fn file(layer: Layer) -> PathBuf {
 }
 
 /// A row for `key` holding `value` from `layer`, written within `scope`.
+#[cfg(test)]
 pub(crate) fn row(key: &str, value: Shown, layer: &str, scope: WriteScope) -> SettingRow {
     let file = match layer {
         "global" => Some(file(Layer::Global)),
@@ -572,10 +587,13 @@ impl Configure for Fake {
             .and_then(|mut gates| gates.pop());
         if let Some(gate) = gate {
             gate.entered.send(()).unwrap_or(());
-            return gate
-                .answer
-                .recv()
-                .unwrap_or_else(|_| panic!("the install was never answered"));
+            return match gate.answer.recv() {
+                Ok(answer) => answer,
+                Err(_) => Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "the install was never answered".to_owned(),
+                }),
+            };
         }
         self.install_answer.lock().map_or_else(
             |_| {
@@ -695,6 +713,10 @@ impl Configure for Fake {
     }
 
     fn delete_stored(&self, name: &str, label: Option<String>) -> Result<String, ConfigureError> {
+        // The home directory itself is lazy: `new` writes nothing, and
+        // the first delete creates it, so an untouched fake leaves no
+        // directory behind.
+        drop(std::fs::create_dir_all(&self.home));
         if let Ok(mut deletes) = self.deletes.lock() {
             deletes.push((name.to_owned(), label.clone()));
         }
@@ -794,9 +816,13 @@ impl Configure for Fake {
             .ok()
             .and_then(|mut gates| gates.pop());
         if let Some(rx) = gate {
-            return rx
-                .recv()
-                .unwrap_or_else(|_| panic!("the reviewer read was never answered"));
+            return match rx.recv() {
+                Ok(answer) => answer,
+                Err(_) => Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "the reviewer read was never answered".to_owned(),
+                }),
+            };
         }
         self.reviewer_answer.lock().map_or_else(
             |_| {

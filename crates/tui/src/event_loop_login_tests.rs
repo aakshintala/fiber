@@ -60,8 +60,7 @@ fn loop_with(
     String,
 ) {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    lp.app
-        .set_configure(Some(Arc::clone(seam) as Arc<dyn Configure>));
+    lp.app.set_configure(Arc::clone(seam) as Arc<dyn Configure>);
     lp.app.set_home(crate::Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),

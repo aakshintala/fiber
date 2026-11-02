@@ -993,9 +993,9 @@ fn opening_the_picker_closes_a_config_view() {
     use std::sync::Arc;
 
     let mut app = home();
-    app.set_configure(Some(
+    app.set_configure(
         Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
-    ));
+    );
     app.open_config_view(super::super::ConfigView::Settings);
     assert!(app.config_view_open());
     app.open_model_picker(crate::model_picker::Mode::Choose);
@@ -1008,9 +1008,9 @@ fn opening_a_config_view_closes_the_picker() {
     use std::sync::Arc;
 
     let mut app = home();
-    app.set_configure(Some(
+    app.set_configure(
         Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
-    ));
+    );
     app.open_model_picker(crate::model_picker::Mode::Choose);
     assert!(app.model_picker_open());
     app.open_config_view(super::super::ConfigView::Settings);
@@ -1028,7 +1028,7 @@ fn choosing_app() -> (App, Arc<crate::configure_fake::Fake>) {
     let mut app = attached();
     app.on_line(hello());
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_models(Ok(three()));
     (app, seam)
 }
@@ -1059,7 +1059,7 @@ fn logged_out_app(login: bool) -> (App, Arc<crate::configure_fake::Fake>) {
         ]);
     }
     let mut app = home();
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     let mut catalogue = three();
     catalogue.logged_out.push(LoggedOutProvider {
         provider: "zed".to_owned(),
@@ -1531,20 +1531,6 @@ fn shown_notices(app: &App) -> String {
 }
 
 #[test]
-fn with_no_seam_the_switch_says_it_is_not_saved() {
-    let mut app = attached();
-    app.on_line(hello());
-    app.on_models(Ok(three()));
-    open(&mut app);
-    sends_one(app.on_key(Key::Enter, now()));
-    assert_eq!(
-        app.notice(),
-        Some("Saving is not available; the switch is for this session only.")
-    );
-    assert!(!app.model_picker_open());
-}
-
-#[test]
 fn a_chip_click_chooses_that_level() {
     let (mut app, seam) = choosing_app();
     open(&mut app);
@@ -1651,7 +1637,7 @@ fn enter_on_the_empty_scoped_view_sends_nothing() {
 fn choosing_on_home_writes_at_once_and_sets_the_chips() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_models(Ok(three()));
     open(&mut app);
     app.on_edit(Edit::Left);
@@ -1687,26 +1673,6 @@ fn choosing_on_home_writes_at_once_and_sets_the_chips() {
             .and_then(|entry| entry.configured.clone()),
         Some("low".to_owned())
     );
-}
-
-#[test]
-fn a_home_choice_that_needs_saving_reports_when_the_configure_seam_is_missing() {
-    let mut app = home();
-    app.on_models(Ok(three()));
-    open(&mut app);
-
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-
-    assert_eq!(
-        app.notice(),
-        Some("Saving is not available; the switch is for this session only.")
-    );
-    assert!(!app.model_picker_open());
-    assert!(app.model_picker.awaiting.is_empty());
-    assert!(app.model_picker.start_model.is_none());
-    let launch = &app.home.as_ref().expect("home").launch;
-    assert_eq!(launch.model, None);
-    assert_eq!(launch.thinking, None);
 }
 
 #[test]
@@ -2013,7 +1979,7 @@ fn ctrl_s_with_the_quit_question_up_sends_nothing() {
 fn ctrl_s_on_home_holds_the_choice_and_saves_nothing() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_line(hello());
     app.on_models(Ok(three()));
     open(&mut app);
@@ -2049,7 +2015,7 @@ fn started(effect: Effect) -> serde_json::Value {
 fn s_on_home_rides_the_next_start() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_line(hello());
     app.on_models(Ok(three()));
     open(&mut app);
@@ -2307,7 +2273,7 @@ fn the_start_model_clears_once_start_is_accepted() {
 fn enter_after_s_on_home_forgets_the_session_only_choice() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_line(hello());
     app.on_models(Ok(three()));
     // `s` holds `acme/m1` for the next `start`, saving nothing.
@@ -2335,7 +2301,7 @@ fn enter_after_s_on_home_forgets_the_session_only_choice() {
 fn enter_on_home_supersedes_a_pending_choice_for_the_same_model() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_line(hello());
     app.on_models(Ok(three()));
 
@@ -2365,7 +2331,7 @@ fn enter_on_home_supersedes_a_pending_choice_for_the_same_model() {
 fn s_after_enter_on_home_still_rides_the_next_start() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_line(hello());
     app.on_models(Ok(three()));
     // Enter saves `acme/m2` as the default, holding nothing back.
@@ -2393,7 +2359,7 @@ fn s_after_enter_on_home_still_rides_the_next_start() {
 fn acceptance_clears_a_pending_home_choice() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_line(hello());
     app.on_models(Ok(three()));
     // A session-only choice on home rides the next `start`.
@@ -2629,9 +2595,9 @@ fn choosing_another_row_there_is_an_ordinary_choice() {
 #[test]
 fn thinking_uses_the_pending_home_choice() {
     let mut app = home();
-    app.set_configure(Some(
+    app.set_configure(
         Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
-    ));
+    );
     app.on_models(Ok(three()));
     // `s` holds `acme/m1` for the next `start`: the chips still name no
     // model.
@@ -2653,7 +2619,7 @@ fn thinking_uses_the_pending_home_choice() {
 fn thinking_with_a_level_saves_for_the_pending_home_choice() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_models(Ok(three()));
     open(&mut app);
     assert_eq!(ctrl_s(&mut app), Effect::None);
@@ -2672,7 +2638,7 @@ fn thinking_with_a_level_saves_for_the_pending_home_choice() {
 fn thinking_low_updates_a_pending_home_choice_and_the_next_start() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.on_line(hello());
     app.on_models(Ok(three()));
     open(&mut app);
@@ -2731,7 +2697,7 @@ fn thinking_low_updates_a_pending_home_choice_and_the_next_start() {
 fn an_accepted_level_updates_only_the_matching_pending_start_model() {
     let mut app = home();
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     let held = crate::model_picker::Choice {
         reference: "acme/m1".to_owned(),
         level: Some("high".to_owned()),
@@ -2830,7 +2796,7 @@ fn scope_app(scoped: &[&str]) -> (App, Arc<crate::configure_fake::Fake>) {
     let mut app = attached();
     app.on_line(hello());
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.model_picker.scoped = scoped.iter().map(|name| (*name).to_owned()).collect();
     app.on_models(Ok(three()));
     (app, seam)
@@ -3113,9 +3079,9 @@ fn the_saved_list_scopes_the_next_open() {
 #[test]
 fn saving_on_home_writes_at_once_and_sets_the_saved_list() {
     let mut app = scoped_home(&[]);
-    app.set_configure(Some(
+    app.set_configure(
         Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
-    ));
+    );
     app.on_models(Ok(three()));
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -3202,7 +3168,7 @@ fn opening_before_the_first_read_marks_toggles_and_saves() {
     let mut app = attached();
     app.on_line(hello());
     let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
-    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     app.model_picker.scoped = vec!["acme/m1".to_owned(), "gone/x".to_owned()];
     // Opening before any catalogue arrives shows no rows yet, and the
     // draft is cleared.
