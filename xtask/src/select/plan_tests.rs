@@ -99,12 +99,84 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
     );
     assert!(!draft.jobs["test"]);
     assert!(draft.jobs["test_linux"]);
-    for job in ["lint", "test_linux", "mutants", "bug_red", "release"] {
+    for job in ["lint", "test_linux", "mutants", "bug_red"] {
         assert_eq!(draft.jobs[job], ready.jobs[job], "{job}");
     }
+    assert!(!draft.jobs["release"]);
     assert!(!draft.jobs["stress"]);
     assert!(ready.jobs["stress"]);
     assert_eq!(draft.shards, ready.shards);
+}
+
+#[test]
+fn a_draft_pull_request_never_runs_the_release_job() {
+    let inputs = [
+        ("binary package", "crates", strings(&["main"]), vec![]),
+        (
+            "benchmark path",
+            "crates",
+            strings(&["log"]),
+            strings(&["crates/bench/src/lib.rs"]),
+        ),
+        (
+            "release-size path",
+            "crates",
+            strings(&["log"]),
+            strings(&["scripts/release-size"]),
+        ),
+    ];
+
+    for (input, mode, packages, release_paths) in inputs {
+        let plan = plan(
+            mode,
+            &packages,
+            "pull_request",
+            true,
+            false,
+            false,
+            0,
+            &release_paths,
+        );
+        assert!(!plan.jobs["release"], "{input}");
+        assert!(plan.jobs["lint"], "{input}");
+        assert!(plan.jobs["test_linux"], "{input}");
+    }
+}
+
+#[test]
+fn a_ready_pull_request_keeps_the_release_job_for_every_input_that_selected_it() {
+    let inputs = [
+        ("binary package", "crates", strings(&["main"]), vec![]),
+        (
+            "benchmark path",
+            "crates",
+            strings(&["log"]),
+            strings(&["crates/bench/src/lib.rs"]),
+        ),
+        (
+            "release-size path",
+            "crates",
+            strings(&["log"]),
+            strings(&["scripts/release-size"]),
+        ),
+    ];
+
+    for (input, mode, packages, release_paths) in inputs {
+        let plan = plan(
+            mode,
+            &packages,
+            "pull_request",
+            false,
+            false,
+            false,
+            0,
+            &release_paths,
+        );
+        assert!(plan.jobs["release"], "{input}");
+    }
+
+    let push = plan("crates", &[], "push", false, false, false, 0, &[]);
+    assert!(push.jobs["release"]);
 }
 
 #[test]
