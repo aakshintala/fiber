@@ -122,10 +122,10 @@ pub(crate) fn count_unmarked(source: &str) -> usize {
         }
         previous_settled = has_settled;
         depth += delimiter_depth(&code);
-        if let Some(base) = wait_base {
-            if depth <= base {
-                wait_base = None;
-            }
+        if let Some(base) = wait_base
+            && depth <= base
+        {
+            wait_base = None;
         }
     }
     count
