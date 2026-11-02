@@ -417,6 +417,9 @@ fn a_nested_open_inside_an_open_comment_closes_from_the_outside() {
         code_part("abc /* def */ ghi */ code", 1),
         (" code".to_owned(), 0)
     );
+    // An open at offset 3, where `at + 2` and `at * 2` differ: skipping
+    // too far would swallow the inner close.
+    assert_eq!(code_part("ab /**/ */ x", 1), (" x".to_owned(), 0));
 }
 
 #[test]
