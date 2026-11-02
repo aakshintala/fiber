@@ -1444,6 +1444,14 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
     const MODEL_DISPLAY_ROWS: usize = 2;
     const WHEEL_STEP_ROWS: usize = 3;
     const MODELS_PER_WHEEL_STEP: usize = WHEEL_STEP_ROWS / MODEL_DISPLAY_ROWS;
+    const SWAPPED_HEADER_ROWS: u16 = 1;
+    const OVERLAY_TOP_EDGE_AND_PAD_ROWS: u16 = 2;
+    const PICKER_CONTROL_ROWS: u16 = 2;
+    const PROVIDER_HEADING_ROWS: u16 = 1;
+    const PICKER_MODEL_ROW: u16 = SWAPPED_HEADER_ROWS
+        + OVERLAY_TOP_EDGE_AND_PAD_ROWS
+        + PICKER_CONTROL_ROWS
+        + PROVIDER_HEADING_ROWS;
 
     run_journey(
         "wheel_over_each_swapped_view_scrolls_that_view",
@@ -1518,13 +1526,14 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                     .is_some()
             });
             let (mark_row, mark_text) = mark.expect("the marker row");
-            // One wheel step down inside every view, at the same fixed
-            // coordinate in the conversation area, clear of the rail and
-            // the panel.
+            // One wheel step down inside each view, clear of the rail and
+            // the panel. The compact picker row is placed from fixture
+            // constants: 1 header + 2 top-frame rows + 2 controls + 1
+            // provider heading = screen row 6; other views use row 9.
             let at = (21, 9);
-            // The model picker: each model takes two display rows, so one
-            // three-row step moves the list top from the section row to
-            // the second model.
+            let picker_at = (at.0, PICKER_MODEL_ROW);
+            // The picker fixture has two rows per model and the wheel moves
+            // three rows, so one step advances `3 / 2 = 1` whole model.
             run.write(b"/model\r");
             let pre = run.wait_screen("the open picker", |grid| {
                 shows(grid, "Type to search") && shows(grid, "m-00") && !shows(grid, "refreshing")
@@ -1535,7 +1544,7 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                 "the section row heads the list: {:?}",
                 pre.rows
             );
-            run.write(&wheel_down(at));
+            run.write(&wheel_down(picker_at));
             let next_model = format!("m-{:02}", MODELS_PER_WHEEL_STEP);
             let post = run.wait_screen("the wheeled picker", |grid| {
                 find_grid_row(&grid.rows, &next_model)
