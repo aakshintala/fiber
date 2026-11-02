@@ -371,7 +371,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
                 extension_jobs: pass.running.extension_jobs.clone(),
                 session_log: pass.running.session_log.clone(),
                 skills: pass.running.skills.clone(),
-                person: pass.running.person.clone(),
+                reviewed: pass.running.reviewed.clone(),
                 ..Carry::default()
             };
             pass.starts
@@ -403,14 +403,12 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         // next `turn_started`.
         pass.starts.retain(|started, _| Some(started) == turn);
     }
-    // The person's messages the reviewer still holds, recorded after the
-    // chain so a `turn_started`'s snapshot holds them as they were before
-    // that line: the resume rebuild renders the line again from the seed.
+    // Observe after `turn_started` snapshots the state from before that
+    // line: the resume rebuild renders the line again from the seed. The
+    // shared summary gate also covers recovery after a process start.
     if !summary {
-        crate::conversation::record_persons(&mut pass.running, &event, line.seq);
-    }
-    if let Event::ReviewerKept(kept) = &event {
-        pass.running.prune(&kept.kept);
+        pass.running
+            .observe_reviewed(&event, line.action_id.as_ref(), line.seq, false);
     }
     Ok(())
 }
