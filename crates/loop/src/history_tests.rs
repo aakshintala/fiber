@@ -1916,7 +1916,7 @@ fn a_resume_seed_carries_the_kept_messages() {
     // seed.
     // No doc promises the resume window's position, so the rebuild reads
     // from wherever the fold put it instead of pinning the count.
-    let window = &lines[folded.window.1 as usize..];
+    let window = &lines[usize::try_from(folded.window.1).unwrap()..];
     // No doc promises the index position of the carried reply; the pairs
     // below pin its rendered content.
     assert!(
