@@ -156,7 +156,7 @@ crates/main/tests/link_look.rs 21
 crates/main/tests/look.rs 166
 crates/main/tests/look_diff.rs 6
 crates/main/tests/look_markdown.rs 29
-crates/main/tests/main_journeys.rs 60
+crates/main/tests/main_journeys.rs 63
 crates/main/tests/model_picker_keys.rs 14
 crates/main/tests/model_picker_name.rs 3
 crates/main/tests/opened_call_look.rs 52
