@@ -1,29 +1,28 @@
 ---
 source: crates/tui/src/view_tests.rs
-assertion_line: 1245
 expression: "sized(&mut app, 80, 24)"
 ---
 
-
-
                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    fix the build ▐
-                                                               ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                      Prompt history                     ✕           you 00:00
-
-                      › fix█
-                      2 matches · newest first                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                        Fix the docs and the build              run the tests ▐
-                      › fix the build                          ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                fix the build ▐
+                    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                      you 00:00
-                      Enter recalls · Esc closes
+                      Prompt history                     ✕
 
-                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                                Fix the docs  ▐
+                      › fix█                                   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                      2 matches · newest first                  run the tests ▐
+                        Fix the docs and the build             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                      › fix the build                                you 00:00
+
+                      Enter recalls · Esc closes
+                                                               ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    Fix the docs  ▐
                                                                 and the build ▐
                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                      you 00:00
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › draft█
+▌──────────────────────────────────────────────────────────────────────────────
+▌auto                                                        ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

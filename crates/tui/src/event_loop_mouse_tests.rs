@@ -86,7 +86,15 @@ fn long_session(turns: usize) -> Vec<Input> {
 /// following new output.
 #[track_caller]
 fn following() -> super::Loop<TestBackend> {
-    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so fixed wheel and page counts land where
+    // they did. The backend is built at the new size because a resize
+    // cannot grow a smaller `TestBackend` buffer.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 14), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, long_session(80));
@@ -646,9 +654,9 @@ fn a_click_on_the_badge_reopens_the_approval_queue() {
     feed(&mut lp, vec![offering("r_1"), esc()]);
     assert!(lp.app.panel().is_none());
     // A click beside the badge does nothing.
-    feed(&mut lp, vec![click(41, 8)]);
+    feed(&mut lp, vec![click(41, 6)]);
     assert!(lp.app.panel().is_none());
-    feed(&mut lp, vec![click(29, 8)]);
+    feed(&mut lp, vec![click(29, 6)]);
     assert!(lp.app.panel().is_some());
 }
 
@@ -659,8 +667,8 @@ fn a_press_and_release_split_across_reads_still_click() {
     feed(
         &mut lp,
         vec![
-            Input::Bytes(b"\x1b[<0;1;9M".to_vec()),
-            Input::Bytes(b"\x1b[<0;2;9m".to_vec()),
+            Input::Bytes(b"\x1b[<0;1;7M".to_vec()),
+            Input::Bytes(b"\x1b[<0;2;7m".to_vec()),
         ],
     );
     assert!(lp.app.panel().is_some());
@@ -700,10 +708,10 @@ fn a_click_on_new_messages_below_jumps_to_the_end() {
         ],
     );
     assert!(lp.app.has_new());
-    // The overlay's 30 cells are centred on row 8: columns 14 to 43.
-    feed(&mut lp, vec![click(13, 8)]);
+    // The overlay's 30 cells are centred on row 6: columns 14 to 43.
+    feed(&mut lp, vec![click(13, 6)]);
     assert!(lp.app.has_new());
-    feed(&mut lp, vec![click(38, 8)]);
+    feed(&mut lp, vec![click(38, 6)]);
     assert!(!lp.app.has_new());
     assert_eq!(lp.app.top(), None);
 }
@@ -722,11 +730,11 @@ fn hover_writes_only_when_the_target_under_the_pointer_changes() {
         bytes
     };
     assert_eq!(wrote(&mut lp, motion(40, 5)), 0, "off every target");
-    assert!(wrote(&mut lp, motion(2, 8)) > 0, "onto the badge");
-    assert_eq!(wrote(&mut lp, motion(2, 8)), 0, "the same cell");
-    assert_eq!(wrote(&mut lp, motion(29, 8)), 0, "the same target");
-    assert!(wrote(&mut lp, motion(41, 8)) > 0, "off the badge");
-    assert_eq!(wrote(&mut lp, motion(42, 8)), 0, "still off");
+    assert!(wrote(&mut lp, motion(2, 6)) > 0, "onto the badge");
+    assert_eq!(wrote(&mut lp, motion(2, 6)), 0, "the same cell");
+    assert_eq!(wrote(&mut lp, motion(29, 6)), 0, "the same target");
+    assert!(wrote(&mut lp, motion(41, 6)) > 0, "off the badge");
+    assert_eq!(wrote(&mut lp, motion(42, 6)), 0, "still off");
 }
 
 #[test]
@@ -734,10 +742,10 @@ fn hover_redraws_only_the_targets_row() {
     let (mut lp, _) = new_loop(Cells::default(), None);
     feed(&mut lp, vec![offering("r_1"), esc()]);
     lp.screen.backend_mut().drawn.clear();
-    feed(&mut lp, vec![motion(2, 8)]);
+    feed(&mut lp, vec![motion(2, 6)]);
     let drawn = &lp.screen.backend().drawn;
     assert_eq!(drawn.len(), 41);
-    assert!(drawn.iter().all(|&(x, y)| y == 8 && x < 41), "{drawn:?}");
+    assert!(drawn.iter().all(|&(x, y)| y == 6 && x < 41), "{drawn:?}");
 }
 
 #[test]
@@ -747,10 +755,10 @@ fn with_hover_off_motion_writes_nothing_and_clicks_still_work() {
     lp.hover = false;
     feed(&mut lp, vec![offering("r_1"), esc()]);
     let before = sink.len();
-    feed(&mut lp, vec![motion(2, 8)]);
+    feed(&mut lp, vec![motion(2, 6)]);
     assert_eq!(sink.len(), before);
     assert_eq!(lp.pointer.at, None);
-    feed(&mut lp, vec![click(2, 8)]);
+    feed(&mut lp, vec![click(2, 6)]);
     assert!(lp.app.panel().is_some());
 }
 
@@ -821,8 +829,8 @@ impl Backend for Cells {
 #[test]
 fn hover_frames_counts_the_bytes_each_report_wrote() {
     let events = include_str!("../examples/hover.jsonl");
-    // The request is put aside: the badge is on row 8 of 60x12.
-    let (_, bytes) = crate::hover_frames(events, 60, 12, &[(3, 8), (4, 8), (3, 0), (3, 0)])
+    // The request is put aside: the badge is on row 6 of 60x12.
+    let (_, bytes) = crate::hover_frames(events, 60, 12, &[(3, 6), (4, 6), (3, 0), (3, 0)])
         .unwrap_or_else(|error| panic!("hover_frames: {error}"));
     assert_eq!(bytes.len(), 4);
     assert!(bytes[0] > 0);
@@ -890,7 +898,16 @@ fn grouped<B: ratatui::backend::Backend + crate::screen::SyncEmit>(backend: B) -
 
 #[test]
 fn clicks_open_the_ledger_then_a_call_then_the_thought() {
-    let mut lp = grouped(TestBackend::new(60, 12));
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so the collapsed group stays visible.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 14), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, thought_and_read());
     assert!(!shown(&lp).contains("src/a.rs"), "{}", shown(&lp));
     let group = row_of(&lp, "● Read");
     feed(&mut lp, vec![click(40, group)]);
@@ -963,17 +980,17 @@ fn a_click_on_a_steering_row_selects_it_into_the_draft() {
             None,
         ),
     ]);
-    // The queue's rows sit on rows 6 and 7, newest lowest, above the
+    // The queue's rows sit on rows 4 and 5, newest lowest, above the
     // footer and the input box's edges: indented, with no stripe
     // (`docs/tui.md`, "Steering").
-    assert_eq!(row_of(&lp, "↳ use the parser"), 6);
-    assert_eq!(row_of(&lp, "↳ and test it"), 7);
+    assert_eq!(row_of(&lp, "↳ use the parser"), 4);
+    assert_eq!(row_of(&lp, "↳ and test it"), 5);
     // The edge row below the queue is no target.
-    feed(&mut lp, vec![click(40, 9)]);
+    feed(&mut lp, vec![click(40, 7)]);
     assert_eq!(lp.app.input().expand(), "mine");
-    feed(&mut lp, vec![click(3, 6)]);
+    feed(&mut lp, vec![click(3, 4)]);
     assert_eq!(lp.app.input().expand(), "use the parser");
-    assert_eq!(row_of(&lp, "▸ use the parser"), 6);
+    assert_eq!(row_of(&lp, "▸ use the parser"), 4);
     // Esc puts the stashed draft back.
     feed(&mut lp, vec![esc()]);
     assert_eq!(lp.app.input().expand(), "mine");
@@ -1109,21 +1126,14 @@ fn enter_on_the_focused_notice_opens_it_after_its_row_moved() {
     let mut lp = live(notices(1));
     feed(&mut lp, vec![Input::Bytes(b"\x1b[Z".to_vec())]);
     // With no conversation item Shift+Tab focuses the last stop, the
-    // notice's own dismiss cross on the same row; walk to the notice
-    // itself, bounded by the frame's rows.
+    // box row's ctx segment below the notices; walk up past it and the
+    // notice's dismiss cross to the notice itself, bounded by the
+    // frame's rows.
     for _ in 0..12 {
         if matches!(lp.app.focused(), Some(TargetId::Notice(_))) {
             break;
         }
-        let up = matches!(lp.app.focused(), Some(TargetId::DismissNotice(_)));
-        feed(
-            &mut lp,
-            vec![Input::Bytes(if up {
-                b"\x1b[A".to_vec()
-            } else {
-                b"\x1b[B".to_vec()
-            })],
-        );
+        feed(&mut lp, vec![Input::Bytes(b"\x1b[A".to_vec())]);
     }
     assert!(
         matches!(lp.app.focused(), Some(TargetId::Notice(_))),
@@ -1188,27 +1198,39 @@ fn a_click_on_a_handoffs_note_line_opens_the_note() {
         "trigger_at": 400_000});
     let started = json!({"input": [{"type": "message", "source": "driver",
         "content": [{"type": "text", "text": "go"}]}]});
-    let mut lp = attached(vec![
-        session("preamble_built", preamble, None),
-        session("turn_started", started, None),
-        session("handoff_started", json!({"trigger": "auto"}), None),
-        session(
-            "text_completed",
-            json!({"text": "## Note\nkeep going"}),
-            Some("a_n"),
-        ),
-        session(
-            "handoff_completed",
-            json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 402_000}),
-            None,
-        ),
-        session(
-            "assistant_message_delta",
-            json!({"text": "Continuing."}),
-            Some("a_2"),
-        ),
-        session("turn_completed", json!({"outcome": "completed"}), None),
-    ]);
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so the collapsed note stays visible.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 14), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(
+        &mut lp,
+        vec![
+            session("preamble_built", preamble, None),
+            session("turn_started", started, None),
+            session("handoff_started", json!({"trigger": "auto"}), None),
+            session(
+                "text_completed",
+                json!({"text": "## Note\nkeep going"}),
+                Some("a_n"),
+            ),
+            session(
+                "handoff_completed",
+                json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 402_000}),
+                None,
+            ),
+            session(
+                "assistant_message_delta",
+                json!({"text": "Continuing."}),
+                Some("a_2"),
+            ),
+            session("turn_completed", json!({"outcome": "completed"}), None),
+        ],
+    );
     assert!(!shown(&lp).contains("keep going"), "{}", shown(&lp));
     let note = row_of(&lp, "▸ note");
     feed(&mut lp, vec![click(4, note)]);
@@ -1275,27 +1297,27 @@ fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
             None,
         )],
     );
-    // Rows 5 to 7 above the footer and the input box's edges, oldest on
+    // Rows 3 to 5 above the footer and the input box's edges, oldest on
     // top: each droppable row's ✕ follows its text, and Fiber's own row
     // has none (`docs/tui.md`, "Steering").
     let rows: Vec<String> = shown(&lp).lines().map(str::to_owned).collect();
-    assert!(rows[5].ends_with('✕') && rows[6].ends_with('✕'), "{rows:?}");
-    assert!(!rows[7].contains('✕'), "{rows:?}");
+    assert!(rows[3].ends_with('✕') && rows[4].ends_with('✕'), "{rows:?}");
+    assert!(!rows[5].contains('✕'), "{rows:?}");
     // Fiber's own row is a steering target with no ✕ on it.
     assert!(matches!(
-        hit_at(&lp, 59, 7),
+        hit_at(&lp, 59, 5),
         Some(crate::mouse::TargetId::Steering(2))
     ));
     // The oldest row's ✕ sits two spaces past its text: 2 for the
     // indent, 1 for the mark, 1 for its gap, 14 for the text, 2 gap.
-    feed(&mut lp, vec![click(20, 5)]);
+    feed(&mut lp, vec![click(20, 3)]);
     let (_, dropped) = super::tests::command(BufReader::new(theirs), "the steer_drop");
     assert_eq!(dropped["command"], "steer_drop");
     assert_eq!(dropped["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(dropped["args"], json!({"command_id": "c_1"}));
     // The ✕ selects nothing; the row's text still selects it.
     assert_eq!(lp.app.input().expand(), "");
-    feed(&mut lp, vec![click(3, 6)]);
+    feed(&mut lp, vec![click(3, 4)]);
     assert_eq!(lp.app.input().expand(), "and test it");
 }
 
@@ -1355,7 +1377,7 @@ fn hover_never_tints_a_turn() {
     // The `hover` jig's frames write what they wrote before turns were
     // stops, byte for byte.
     let events = include_str!("../examples/hover.jsonl");
-    let (_, bytes) = crate::hover_frames(events, 60, 12, &[(3, 8), (4, 8), (3, 0), (3, 0)])
+    let (_, bytes) = crate::hover_frames(events, 60, 12, &[(3, 6), (4, 6), (3, 0), (3, 0)])
         .unwrap_or_else(|error| panic!("hover_frames: {error}"));
     assert_eq!(bytes.len(), 4);
     assert!(bytes[0] > 0);
@@ -1586,7 +1608,13 @@ fn reads(turns: usize) -> Vec<Input> {
 
 #[test]
 fn a_click_queued_after_wheel_ups_opens_the_scrolled_group() {
-    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    // The taller input box shrank the conversation area by two rows:
+    // widen the screen back so the scroll clamps where it did.
+    let (mut lp, _) = new_loop(TestBackend::new(60, 14), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, reads(3));
@@ -1604,9 +1632,16 @@ fn a_click_queued_after_wheel_ups_opens_the_scrolled_group() {
 #[test]
 fn queued_page_ups_keep_their_frames_and_fresh_targets() {
     // Queued together: the click hits turn 1's group at grid row 7,
-    // drawn after the third PageUp.
+    // drawn after the third PageUp. The taller input box shrank the
+    // conversation area by two rows: widen the screen back so the
+    // scroll lands where it did.
     let queued = || vec![page_up(), page_up(), page_up(), click(40, 7)];
-    let (mut shown_lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (mut shown_lp, _) = new_loop(TestBackend::new(60, 14), None);
+    shown_lp.app.set_size(60, 14);
+    shown_lp
+        .screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
     shown_lp
         .app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -1620,9 +1655,15 @@ fn queued_page_ups_keep_their_frames_and_fresh_targets() {
         shown(&shown_lp)
     );
     // Each PageUp keeps its frame: the three mid-batch frames and the
-    // batch's own, as four batches draw today.
+    // batch's own, as four batches draw today. The taller input box
+    // shrank the conversation area by two rows: widen the screen back
+    // so each PageUp still moves.
     let sink = Sink::default();
     let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.app.set_size(60, 14);
+    lp.screen
+        .resize(60, 14)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     // Four turns, so each of the three PageUps still moves: a clamped
@@ -1643,8 +1684,9 @@ fn queued_motions_keep_their_frames() {
     let drawn = blocks(&sink.bytes());
     // The hover tint toggles between turn 2's group row and the row above
     // it, so every report changes the frame, as one batch each does today.
+    // The two box rows moved every bottom-anchored row up by two.
     let inputs: Vec<Input> = (0..10)
-        .map(|i| motion(5, if i % 2 == 0 { 5 } else { 4 }))
+        .map(|i| motion(5, if i % 2 == 0 { 3 } else { 2 }))
         .collect();
     feed(&mut lp, inputs);
     assert_eq!(blocks(&sink.bytes()) - drawn, 10);

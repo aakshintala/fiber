@@ -1,6 +1,6 @@
 use super::*;
 use crate::rules::RustFile;
-use crate::select::tests::members;
+use crate::select::tests::{members, members_with_unrun_test};
 
 fn file(krate: &str, path: &str, source: &str) -> RustFile {
     RustFile {
@@ -691,10 +691,214 @@ fn filter_joins_one_term_per_touched_test() {
 
 #[test]
 fn filter_marks_a_shared_support_test_with_its_kind() {
-    let tests = vec![refer("log", None, false, "support::helper")];
+    let sources = vec![
+        file(
+            "main",
+            "crates/main/tests/support/hub_start.rs",
+            "mod tests {\n    #[test]\n    fn offers() {}\n}\n",
+        ),
+        file(
+            "main",
+            "crates/main/tests/hub_list.rs",
+            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\n",
+        ),
+        file(
+            "main",
+            "crates/main/tests/hooks_offer.rs",
+            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\n",
+        ),
+        file(
+            "main",
+            "crates/main/tests/other.rs",
+            "#[path = \"support/hub_start.rs\"]\nmod start;\n",
+        ),
+    ];
+    let diff = diff_file(
+        "crates/main/tests/support/hub_start.rs",
+        "@@ -3,1 +3,1 @@\n-    fn offers() {}\n+    fn offers() {}\n",
+    );
     assert_eq!(
-        filter(&tests),
-        "(package(log) & kind(test) & test(=support::helper))"
+        filter(&selected(&diff, &sources)),
+        "(package(main) & kind(test) & test(=hub_start::tests::offers)) | (package(main) & kind(test) & test(=start::tests::offers))"
+    );
+}
+
+#[test]
+fn a_declared_support_module_dedups_across_binaries() {
+    let sources = vec![
+        file(
+            "main",
+            "crates/main/tests/support/hub_start.rs",
+            "mod tests {\n    #[test]\n    fn offers() {}\n}\n",
+        ),
+        file(
+            "main",
+            "crates/main/tests/hub_list.rs",
+            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\n",
+        ),
+        file(
+            "main",
+            "crates/main/tests/hooks_offer.rs",
+            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\n",
+        ),
+    ];
+    let diff = diff_file(
+        "crates/main/tests/support/hub_start.rs",
+        "@@ -3,1 +3,1 @@\n-    fn offers() {}\n+    fn offers() {}\n",
+    );
+    let members = members();
+    let by_target = index_path_decls(&sources);
+    let scope = file_scope(
+        "crates/main/tests/support/hub_start.rs",
+        &members,
+        &by_target,
+        &sources,
+    );
+    assert_eq!(
+        scope.map(|scope| scope.prefixes),
+        Some(vec!["hub_start::".to_owned()])
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("main", None, false, "hub_start::tests::offers")]
+    );
+}
+
+#[test]
+fn a_support_module_declared_by_a_support_module_chains() {
+    let sources = vec![
+        file(
+            "loop",
+            "crates/loop/tests/driver.rs",
+            "#[path = \"support/mod.rs\"]\nmod harness;\n",
+        ),
+        file(
+            "loop",
+            "crates/loop/tests/support/mod.rs",
+            "#[path = \"review.rs\"]\nmod review;\n",
+        ),
+        file(
+            "loop",
+            "crates/loop/tests/support/review.rs",
+            "#[test]\nfn helper() {}\n",
+        ),
+    ];
+    let diff = diff_file(
+        "crates/loop/tests/support/review.rs",
+        "@@ -2,1 +2,1 @@\n-fn helper() {}\n+fn helper() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("loop", None, false, "harness::review::helper")]
+    );
+}
+
+#[test]
+fn a_declaration_cycle_falls_back_to_layout() {
+    let sources = vec![
+        file(
+            "loop",
+            "crates/loop/tests/driver.rs",
+            "#[path = \"support/a.rs\"]\nmod x;\n",
+        ),
+        file(
+            "loop",
+            "crates/loop/tests/support/a.rs",
+            "#[path = \"b.rs\"]\nmod b;\n#[test]\nfn cycle() {}\n",
+        ),
+        file(
+            "loop",
+            "crates/loop/tests/support/b.rs",
+            "#[path = \"a.rs\"]\nmod a;\n",
+        ),
+    ];
+    let diff = diff_file(
+        "crates/loop/tests/support/a.rs",
+        "@@ -4,1 +4,1 @@\n-fn cycle() {}\n+fn cycle() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("loop", None, false, "support::a::cycle")]
+    );
+}
+
+#[test]
+fn a_declarer_outside_tests_is_ignored() {
+    let sources = vec![
+        file(
+            "loop",
+            "crates/loop/src/lib.rs",
+            "#[path = \"../tests/support/a.rs\"]\nmod a;\n",
+        ),
+        file(
+            "loop",
+            "crates/loop/tests/support/a.rs",
+            "#[test]\nfn helper() {}\n",
+        ),
+    ];
+    let diff = diff_file(
+        "crates/loop/tests/support/a.rs",
+        "@@ -2,1 +2,1 @@\n-fn helper() {}\n+fn helper() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("loop", None, false, "support::a::helper")]
+    );
+}
+
+#[test]
+fn a_declarer_in_another_package_is_ignored() {
+    let foreign = file(
+        "main",
+        "crates/main/tests/ask.rs",
+        "#[path = \"../../loop/tests/support/probes.rs\"]\nmod probes;\n",
+    );
+    let support = file(
+        "loop",
+        "crates/loop/tests/support/probes.rs",
+        "#[test]\nfn probes() {}\n",
+    );
+    let diff = diff_file(
+        "crates/loop/tests/support/probes.rs",
+        "@@ -2,1 +2,1 @@\n-fn probes() {}\n+fn probes() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &[foreign.clone(), support.clone()]),
+        vec![refer("loop", None, false, "support::probes::probes")]
+    );
+
+    let same_package = file(
+        "loop",
+        "crates/loop/tests/live.rs",
+        "#[path = \"support/probes.rs\"]\nmod probes;\n",
+    );
+    assert_eq!(
+        selected(&diff, &[foreign, support, same_package]),
+        vec![refer("loop", None, false, "probes::probes")]
+    );
+}
+
+#[test]
+fn a_raw_identifier_module_is_named_without_r_hash() {
+    let sources = vec![
+        file(
+            "main",
+            "crates/main/tests/driver.rs",
+            "#[path = \"support/raw.rs\"]\nmod r#type;\n",
+        ),
+        file(
+            "main",
+            "crates/main/tests/support/raw.rs",
+            "mod tests {\n    #[test]\n    fn runs() {}\n}\n",
+        ),
+    ];
+    let diff = diff_file(
+        "crates/main/tests/support/raw.rs",
+        "@@ -3,1 +3,1 @@\n-    fn runs() {}\n+    fn runs() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("main", None, false, "type::tests::runs")]
     );
 }
 
@@ -1264,4 +1468,53 @@ fn a_hunk_count_past_u32_is_an_error_naming_the_path() {
             }
         }
     }
+}
+
+const JOURNEY: &str = "#[test]\nfn walks_a_journey() {}\n";
+const JOURNEY_HUNK: &str = "@@ -1,0 +1,2 @@\n+#[test]\n+fn walks_a_journey() {}\n";
+
+#[test]
+fn a_test_in_a_test_false_target_selects_nothing() {
+    let sources = [file("main", "crates/main/tests/main_journeys.rs", JOURNEY)];
+    let diff = diff_file("crates/main/tests/main_journeys.rs", JOURNEY_HUNK);
+    let result = changed_tests(&diff, &members_with_unrun_test(), &sources);
+    assert_eq!(result, Ok(vec![]));
+}
+
+#[test]
+fn a_test_false_target_leaves_a_sibling_binary_selected() {
+    let sources = [
+        file("main", "crates/main/tests/main_journeys.rs", JOURNEY),
+        file("main", "crates/main/tests/journeys.rs", JOURNEY),
+    ];
+    let diff = format!(
+        "{}{}",
+        diff_file("crates/main/tests/main_journeys.rs", JOURNEY_HUNK),
+        diff_file("crates/main/tests/journeys.rs", JOURNEY_HUNK),
+    );
+    let result = changed_tests(&diff, &members_with_unrun_test(), &sources);
+    assert_eq!(
+        result,
+        Ok(vec![refer(
+            "main",
+            Some("main::journeys"),
+            false,
+            "walks_a_journey"
+        )])
+    );
+}
+
+#[test]
+fn the_same_test_is_selected_when_no_target_declares_test_false() {
+    let sources = [file("main", "crates/main/tests/main_journeys.rs", JOURNEY)];
+    let diff = diff_file("crates/main/tests/main_journeys.rs", JOURNEY_HUNK);
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer(
+            "main",
+            Some("main::main_journeys"),
+            false,
+            "walks_a_journey"
+        )]
+    );
 }

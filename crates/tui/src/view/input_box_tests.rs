@@ -5,8 +5,10 @@ use std::path::PathBuf;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 
 use super::draw;
+use super::status_left;
 use crate::app::App;
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
@@ -56,18 +58,19 @@ fn every_cell_of_the_box_rows_is_surface() {
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    // One draft row in a room of 11: the box is three rows at the bottom.
+    // One draft row in a room of 11: the box is five rows at the
+    // bottom, with the rule and the status row under the draft.
     let edge = Role::Surface.color();
     for x in 0..80 {
-        assert_eq!(buf[(x, 9)].fg, edge, "top edge at {x}");
+        assert_eq!(buf[(x, 7)].fg, edge, "top edge at {x}");
         assert_eq!(buf[(x, 11)].fg, edge, "bottom edge at {x}");
-        assert_eq!(buf[(x, 10)].bg, edge, "text row at {x}");
+        assert_eq!(buf[(x, 8)].bg, edge, "text row at {x}");
     }
-    assert_eq!(buf[(0, 10)].symbol(), "▌");
-    assert_eq!(buf[(0, 10)].fg, Role::Accent.color());
-    assert_eq!(buf[(2, 10)].symbol(), "›");
-    assert_eq!(buf[(4, 10)].symbol(), "h");
-    assert_eq!(buf[(5, 10)].symbol(), "i");
+    assert_eq!(buf[(0, 8)].symbol(), "▌");
+    assert_eq!(buf[(0, 8)].fg, Role::Accent.color());
+    assert_eq!(buf[(2, 8)].symbol(), "›");
+    assert_eq!(buf[(4, 8)].symbol(), "h");
+    assert_eq!(buf[(5, 8)].symbol(), "i");
 }
 
 #[test]
@@ -77,20 +80,17 @@ fn the_prompt_is_info_and_the_cursor_is_a_text_coloured_block() {
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
     // The prompt in `info`, the draft after it, and the cursor as a block
-    // in the text colour at the caret (`docs/tui.md`, "The input box").
+    // in the text colour at the caret, all above the rule and the row
+    // (`docs/tui.md`, "The input box").
     for x in [2, 3] {
-        assert_eq!(
-            buf[(x, 10)].style().fg,
-            Some(Role::Info.color()),
-            "cell {x}"
-        );
+        assert_eq!(buf[(x, 8)].style().fg, Some(Role::Info.color()), "cell {x}");
     }
-    assert_eq!(buf[(2, 10)].symbol(), "›");
-    assert_eq!(buf[(6, 10)].symbol(), "█");
-    assert_eq!(buf[(6, 10)].style().fg, Some(Role::Text.color()));
-    assert_eq!(buf[(6, 10)].bg, Role::Surface.color());
+    assert_eq!(buf[(2, 8)].symbol(), "›");
+    assert_eq!(buf[(6, 8)].symbol(), "█");
+    assert_eq!(buf[(6, 8)].style().fg, Some(Role::Text.color()));
+    assert_eq!(buf[(6, 8)].bg, Role::Surface.color());
     assert!(
-        !buf[(6, 10)]
+        !buf[(6, 8)]
             .style()
             .add_modifier
             .contains(ratatui::style::Modifier::DIM),
@@ -107,12 +107,12 @@ fn the_cursor_reverses_the_covered_character() {
     crate::view::render(&app, area, &mut buf, None);
     // The caret on `i`: the covered character stays, in the slab's
     // colour on the text colour, with no dim (`docs/tui.md`, "The input
-    // box").
-    assert_eq!(buf[(5, 10)].symbol(), "i");
-    assert_eq!(buf[(5, 10)].style().fg, Some(Role::Surface.color()));
-    assert_eq!(buf[(5, 10)].bg, Role::Text.color());
+    // box"). The taller box lifts the draft two rows above main's.
+    assert_eq!(buf[(5, 8)].symbol(), "i");
+    assert_eq!(buf[(5, 8)].style().fg, Some(Role::Surface.color()));
+    assert_eq!(buf[(5, 8)].bg, Role::Text.color());
     assert!(
-        !buf[(5, 10)]
+        !buf[(5, 8)]
             .style()
             .add_modifier
             .contains(ratatui::style::Modifier::DIM),
@@ -129,12 +129,13 @@ fn the_cursor_draws_over_a_backward_selection() {
     let mut buf = Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     // Press past the draft's end, then drag back onto `h`: a backward
-    // selection covering the caret's cell.
+    // selection covering the caret's cell. The taller box lifts the
+    // draft two rows above main's.
     app.on_select(
         &Mouse {
             kind: MouseKind::Press(Button::Left),
             col: 6,
-            row: 10,
+            row: 8,
         },
         &targets,
     );
@@ -142,7 +143,7 @@ fn the_cursor_draws_over_a_backward_selection() {
         &Mouse {
             kind: MouseKind::Drag(Button::Left),
             col: 4,
-            row: 10,
+            row: 8,
         },
         &targets,
     );
@@ -151,9 +152,9 @@ fn the_cursor_draws_over_a_backward_selection() {
     // The caret's cell draws last, over the selection: the covered `h`
     // in the slab's colour on the text colour (`docs/tui.md`, "The input
     // box").
-    assert_eq!(buf[(4, 10)].symbol(), "h");
-    assert_eq!(buf[(4, 10)].style().fg, Some(Role::Surface.color()));
-    assert_eq!(buf[(4, 10)].bg, Role::Text.color());
+    assert_eq!(buf[(4, 8)].symbol(), "h");
+    assert_eq!(buf[(4, 8)].style().fg, Some(Role::Surface.color()));
+    assert_eq!(buf[(4, 8)].bg, Role::Text.color());
 }
 
 #[test]
@@ -183,13 +184,14 @@ fn the_box_fill_covers_empty_and_wrapped_drafts() {
             assert_eq!(buf[(x, top)].fg, edge, "top edge at {x}");
             assert_eq!(buf[(x, bottom)].fg, edge, "bottom edge at {x}");
         }
-        // The cursor marks the caret on the draft's last row: past the
-        // end it is a block in the text colour on the slab.
+        // The cursor marks the caret on the draft's last row, above the
+        // rule and the status row: past the end it is a block in the
+        // text colour on the slab.
         let inner = crate::surface::inset(80);
         let shown = app.input().rows(inner);
         let (cursor_row, cursor_col) = app.input().cursor(inner);
         assert_eq!(cursor_row, shown.len() - 1);
-        let y = bottom - 1;
+        let y = bottom - 3;
         let x = 2 + cursor_col;
         assert_eq!(buf[(x, y)].symbol(), "█", "draft {draft:?}");
         assert_eq!(
@@ -224,6 +226,82 @@ fn the_cursor_hides_with_search_open() {
             );
         }
     }
+}
+
+/// The launch description: `/w`, outside git, default cards.
+fn launch() -> crate::home::Launch {
+    crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    }
+}
+
+/// An app with home state, attached, at `width` by `height`, holding a
+/// preamble naming `model` with `thinking`, `window` and `trigger` and a
+/// status naming `workspace` with `tokens` of `window`.
+fn row_app(
+    width: u16,
+    height: u16,
+    workspace: &str,
+    model: &str,
+    thinking: &str,
+    tokens: u64,
+) -> App {
+    let window = 1_000_000;
+    let trigger = 400_000;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(launch());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.set_size(width, height);
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": model, "context_window": window,
+            "trigger_at": trigger, "thinking": thinking,
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "session_status",
+        serde_json::json!({
+            "name": "one", "workspace": workspace, "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": model, "delegates": 0, "jobs": 0, "clients": 0,
+            "context": {"tokens": tokens, "window": window},
+        }),
+    ));
+    app
+}
+
+/// A full-data app at `width` by `height`: workspace `/w/fiber`, model
+/// `test/model`, thinking `high`, 268000 of 1000000 with a trigger.
+fn full(width: u16, height: u16) -> App {
+    row_app(width, height, "/w/fiber", "test/model", "high", 268_000)
+}
+
+/// The rule row's index on `screen`: the first row of `─` past the
+/// draft's prompt row, past the slab's stripe cell.
+fn rule_row(screen: &str) -> usize {
+    screen
+        .lines()
+        .position(|row| {
+            let trimmed: String = row
+                .chars()
+                .filter(|cell| !matches!(cell, ' ' | '▌' | '│'))
+                .collect();
+            !trimmed.is_empty() && trimmed.chars().all(|cell| cell == '─')
+        })
+        .expect("a rule row")
 }
 
 /// One session envelope for the box's keyboard tests.
@@ -375,17 +453,18 @@ fn only_the_first_draft_row_takes_the_prompt_style() {
     let area = Rect::new(0, 0, 60, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
+    // The rule and the status row sit under the draft.
     for x in [2, 3] {
-        assert_eq!(buf[(x, 7)].symbol(), " ", "cell {x}");
-        assert_eq!(buf[(x, 7)].fg, ratatui::style::Color::Reset, "cell {x}");
+        assert_eq!(buf[(x, 5)].symbol(), " ", "cell {x}");
+        assert_eq!(buf[(x, 5)].fg, ratatui::style::Color::Reset, "cell {x}");
     }
     // Two rows at the top: the second shown row is past the prompt.
     let app = typed_lines(60, 12, &["hi", "there"]);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
     for x in [2, 3] {
-        assert_eq!(buf[(x, 10)].symbol(), " ", "cell {x}");
-        assert_eq!(buf[(x, 10)].fg, ratatui::style::Color::Reset, "cell {x}");
+        assert_eq!(buf[(x, 8)].symbol(), " ", "cell {x}");
+        assert_eq!(buf[(x, 8)].fg, ratatui::style::Color::Reset, "cell {x}");
     }
 }
 
@@ -415,7 +494,10 @@ fn the_cursor_sits_in_the_same_column_as_without_edges() {
 
 #[test]
 fn a_screen_too_short_for_the_edges_keeps_the_input_row() {
-    // One draft row: the edges draw only when the row plus 2 fits.
+    // One draft row: the edges draw only when the row plus 2 fits, and
+    // the rule with the status row only when the draft, both edges and
+    // both fit. Cut short, the box keeps the draft with its edges, and
+    // the chrome sheds first (`docs/tui.md`, "The input box").
     for (height, edges) in [(1, false), (2, false), (3, true), (5, true)] {
         let app = typed(20, height, "hi");
         let area = Rect::new(0, 0, 20, height);
@@ -424,11 +506,25 @@ fn a_screen_too_short_for_the_edges_keeps_the_input_row() {
         draw(&app, area, &mut bottom, &mut buf, &mut Vec::new());
         let edge = Role::Surface.color();
         let text = (0..height).find(|y| (0..20).any(|x| buf[(x, *y)].symbol() == "h"));
-        assert_eq!(text, Some(height.saturating_sub(if edges { 2 } else { 1 })));
-        let edge_rows = if edges {
+        // The rule and the row take two rows under the draft: five rows
+        // hold the draft, both edges and both.
+        let chrome = height >= 5;
+        assert_eq!(
+            text,
+            Some(height.saturating_sub(if !edges {
+                1
+            } else if !chrome {
+                2
+            } else {
+                4
+            }))
+        );
+        let edge_rows = if !edges {
+            Vec::new()
+        } else if !chrome {
             vec![height.saturating_sub(3), height.saturating_sub(1)]
         } else {
-            Vec::new()
+            vec![height.saturating_sub(5), height.saturating_sub(1)]
         };
         for y in 0..height {
             for x in 0..20 {
@@ -445,9 +541,10 @@ fn a_screen_too_short_for_the_edges_keeps_the_input_row() {
 #[test]
 fn the_cursor_counts_the_bottom_edge_only_where_it_draws() {
     let app = typed(60, 12, "hi");
-    // One draft row: no edges fit a body of 2, two fit a body of 5.
-    assert_eq!(super::cursor_row(&app, 60, 2), (1, 6));
-    assert_eq!(super::cursor_row(&app, 60, 5), (2, 6));
+    // One draft row: no edges fit a body of 2, two fit a body of 5,
+    // with the rule and the status row under the draft in both.
+    assert_eq!(super::cursor_row(&app, 60, 2), (3, 6));
+    assert_eq!(super::cursor_row(&app, 60, 5), (4, 6));
 }
 
 #[test]
@@ -458,13 +555,13 @@ fn the_box_rows_start_past_the_stripe_and_gap() {
     let area = Rect::new(0, 0, 60, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    assert_eq!(buf[(0, 10)].symbol(), "▌");
-    assert_eq!(buf[(0, 10)].fg, Role::Accent.color());
-    assert_eq!(buf[(0, 10)].bg, Role::Surface.color());
-    assert_eq!(buf[(1, 10)].symbol(), " ");
-    assert_eq!(buf[(1, 10)].bg, Role::Surface.color());
-    assert_eq!(buf[(2, 10)].symbol(), "›");
-    let row: String = (0..6).map(|x| buf[(x, 10)].symbol().to_owned()).collect();
+    assert_eq!(buf[(0, 8)].symbol(), "▌");
+    assert_eq!(buf[(0, 8)].fg, Role::Accent.color());
+    assert_eq!(buf[(0, 8)].bg, Role::Surface.color());
+    assert_eq!(buf[(1, 8)].symbol(), " ");
+    assert_eq!(buf[(1, 8)].bg, Role::Surface.color());
+    assert_eq!(buf[(2, 8)].symbol(), "›");
+    let row: String = (0..6).map(|x| buf[(x, 8)].symbol().to_owned()).collect();
     assert_eq!(row, "▌ › hi");
 }
 
@@ -477,10 +574,11 @@ fn the_box_follows_its_area_x() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 50, 6));
     let mut bottom = 6;
     draw(&app, area, &mut bottom, &mut buf, &mut Vec::new());
-    assert_eq!(buf[(5, 4)].symbol(), "▌");
-    assert_eq!(buf[(7, 4)].symbol(), "›");
+    // The rule and the status row sit under the draft.
+    assert_eq!(buf[(5, 2)].symbol(), "▌");
+    assert_eq!(buf[(7, 2)].symbol(), "›");
     for x in 5..45 {
-        assert_eq!(buf[(x, 3)].symbol(), "▄", "top edge at {x}");
+        assert_eq!(buf[(x, 1)].symbol(), "▄", "top edge at {x}");
         assert_eq!(buf[(x, 5)].symbol(), "▀", "bottom edge at {x}");
     }
     for y in 0..6 {
@@ -535,16 +633,18 @@ fn a_token_target_starts_past_the_stripe() {
         .find(|target| matches!(target.id, TargetId::Token(1)))
         .expect("a token target");
     assert_eq!(token.rect.x, 5 + 2 + 6);
-    assert_eq!(token.rect.y, 4);
+    // The rule and the status row sit under the draft.
+    assert_eq!(token.rect.y, 2);
     assert!(token.rect.right() <= 5 + 40, "{:?}", token.rect);
 }
 
 #[test]
 fn the_cursor_column_counts_the_stripe_and_gap() {
     let app = typed(60, 12, "hi");
-    assert_eq!(super::cursor_row(&app, 60, 11), (2, 6));
+    // The rule and the status row sit under the draft.
+    assert_eq!(super::cursor_row(&app, 60, 11), (4, 6));
     let narrow = typed(2, 12, "hi");
-    assert_eq!(super::cursor_row(&narrow, 2, 11), (2, 2));
+    assert_eq!(super::cursor_row(&narrow, 2, 11), (4, 2));
 }
 
 /// The NO_COLOR look: every role paints to the terminal's default.
@@ -661,10 +761,10 @@ fn no_color_boxes_the_input_box_around_the_draft() {
     let app = typed(40, 6, "hi");
     let area = Rect::new(0, 0, 40, 6);
     let (buf, _, _) = no_color_drawn(&app, area);
-    // One draft row: the box is three rows at the bottom, as with
-    // colour, but thin.
+    // One draft row: the box is five rows at the bottom, as with
+    // colour but thin, with the rule and the status row under it.
     for x in 0..40 {
-        let top = &buf[(x, 3)];
+        let top = &buf[(x, 1)];
         assert_eq!(
             top.symbol(),
             if x == 0 {
@@ -692,16 +792,16 @@ fn no_color_boxes_the_input_box_around_the_draft() {
     }
     // The text row sits between │ sides: the prompt and draft one
     // column in, the final text character surviving before the side.
-    assert_eq!(buf[(0, 4)].symbol(), "│");
-    assert_eq!(buf[(39, 4)].symbol(), "│");
-    assert_eq!(buf[(1, 4)].symbol(), "›");
-    assert_eq!(buf[(2, 4)].symbol(), " ");
-    assert_eq!(buf[(3, 4)].symbol(), "h");
-    assert_eq!(buf[(4, 4)].symbol(), "i");
+    assert_eq!(buf[(0, 2)].symbol(), "│");
+    assert_eq!(buf[(39, 2)].symbol(), "│");
+    assert_eq!(buf[(1, 2)].symbol(), "›");
+    assert_eq!(buf[(2, 2)].symbol(), " ");
+    assert_eq!(buf[(3, 2)].symbol(), "h");
+    assert_eq!(buf[(4, 2)].symbol(), "i");
     // The drawn cursor sits on the interior's last draft cell, never on
     // a border.
-    assert_eq!(buf[(5, 4)].symbol(), "█");
-    for y in 3..=5 {
+    assert_eq!(buf[(5, 2)].symbol(), "█");
+    for y in 1..=5 {
         for x in 0..40 {
             assert_eq!(
                 (buf[(x, y)].fg, buf[(x, y)].bg),
@@ -720,17 +820,18 @@ fn no_color_wraps_a_full_width_draft_inside_the_sides() {
     let app = typed(10, 6, "12345");
     let area = Rect::new(0, 0, 10, 6);
     let (buf, _, _) = no_color_drawn(&app, area);
-    assert_eq!(buf[(0, 4)].symbol(), "│");
-    assert_eq!(buf[(9, 4)].symbol(), "│");
-    assert_eq!(buf[(1, 4)].symbol(), "›");
-    assert_eq!(buf[(7, 4)].symbol(), "5");
-    assert_eq!(buf[(8, 4)].symbol(), "█");
+    // The rule and the status row sit under the draft.
+    assert_eq!(buf[(0, 2)].symbol(), "│");
+    assert_eq!(buf[(9, 2)].symbol(), "│");
+    assert_eq!(buf[(1, 2)].symbol(), "›");
+    assert_eq!(buf[(7, 2)].symbol(), "5");
+    assert_eq!(buf[(8, 2)].symbol(), "█");
     // A draft past the interior wraps at the boxed width: the overflow
     // row draws above, between the same sides.
     let long = typed(10, 6, "123456");
     let (wide, _, _) = no_color_drawn(&long, area);
-    let first: String = (0..10).map(|x| wide[(x, 3)].symbol()).collect();
-    let second: String = (0..10).map(|x| wide[(x, 4)].symbol()).collect();
+    let first: String = (0..10).map(|x| wide[(x, 1)].symbol()).collect();
+    let second: String = (0..10).map(|x| wide[(x, 2)].symbol()).collect();
     assert_eq!(first, "│› 123456│");
     assert_eq!(second, "│  █     │");
 }
@@ -763,11 +864,12 @@ fn no_color_cursor_column_counts_one_side() {
     crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let app = typed(60, 12, "hi");
     // The text sits one column in, past the box's left side.
-    assert_eq!(super::cursor_row(&app, 60, 11), (2, 5));
+    // The rule and the status row sit under the draft.
+    assert_eq!(super::cursor_row(&app, 60, 11), (4, 5));
     // Too narrow for two sides plus text: the text-first fallback keeps
     // the colour columns.
     let narrow = typed(2, 12, "hi");
-    assert_eq!(super::cursor_row(&narrow, 2, 11), (2, 2));
+    assert_eq!(super::cursor_row(&narrow, 2, 11), (4, 2));
 }
 
 #[test]
@@ -826,9 +928,10 @@ fn type_draft(app: &mut App, draft: &str) {
     }
 }
 
-/// The box prompt's cell: the \u{203a} in the bottom three rows.
+/// The box prompt's cell: the \u{203a} in the bottom five rows, above
+/// the rule and the status row.
 fn box_prompt(buf: &Buffer, area: Rect) -> (u16, u16) {
-    for y in area.bottom().saturating_sub(3)..area.bottom() {
+    for y in area.bottom().saturating_sub(5)..area.bottom() {
         for x in area.left()..area.right() {
             if buf[(x, y)].symbol() == "\u{203a}" {
                 return (x, y);
@@ -1280,4 +1383,746 @@ fn steering_selected_hides_the_item_hint_itself() {
     // hint. The draw keeps the editing hint, but the guard itself must
     // already be `None`.
     assert_eq!(super::item_hint(&app), None);
+}
+
+/// The status row at a fitting width: the working directory and the
+/// permission mode on the left, the model, the thinking level and the
+/// ctx segment right-aligned, each side joined by a dim `  │  ` with at
+/// least two columns between them (`docs/tui.md`, "The input box").
+#[test]
+fn the_status_row_holds_both_sides_with_a_dim_joiner() {
+    let app = full(100, 30);
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+    let column = app
+        .chrome()
+        .layout()
+        .map(|layout| layout.column)
+        .expect("a column");
+    let left = "/w/fiber  │  auto";
+    let right = "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · 26%";
+    // The left side starts in the stripe's next column; the right side
+    // ends one column short of the slab's edge.
+    let start = usize::from(column.x.saturating_add(1));
+    let end = usize::from(column.right().saturating_sub(1));
+    let row: String = (start..end)
+        .map(|x| {
+            buf[(u16::try_from(x).expect("a cell"), y)]
+                .symbol()
+                .to_owned()
+        })
+        .collect();
+    assert!(row.starts_with(left), "{row:?}");
+    assert!(row.ends_with(right), "{row:?}");
+    // The two sides keep at least two columns between them.
+    let middle = &row[left.len()..row.len() - right.len()];
+    assert!(middle.chars().all(|cell| cell == ' '), "{row:?}");
+    assert!(crate::format::width(middle) >= 2, "{row:?}");
+    // The row says nothing about handoff: the handoff point lives in
+    // the Session status card and the context breakdown.
+    assert!(!row.contains("handoff"), "{row:?}");
+}
+
+/// The rule above the status row: `─` in `rule` from the stripe's next
+/// column to one column short of the slab's right edge
+/// (`docs/tui.md`, "The input box").
+#[test]
+fn the_rule_sits_above_the_row_in_rule() {
+    let app = full(100, 30);
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let at = rule_row(&shown);
+    let y = u16::try_from(at).expect("a rule row");
+    let column = app
+        .chrome()
+        .layout()
+        .map(|layout| layout.column)
+        .expect("a column");
+    let start = column.x.saturating_add(1);
+    let end = column.right().saturating_sub(1);
+    for x in column.x..column.right() {
+        let cell = &buf[(x, y)];
+        if x >= start && x < end {
+            assert_eq!(cell.symbol(), "─", "rule cell {x}");
+            assert_eq!(cell.fg, Role::Rule.color(), "rule cell {x}");
+        } else {
+            assert_ne!(cell.symbol(), "─", "no rule past the slab at {x}");
+        }
+    }
+}
+
+/// The row's cells between the slab's columns on `buf`'s row `y`.
+fn row_cells(buf: &Buffer, app: &App, y: u16) -> String {
+    let column = app
+        .chrome()
+        .layout()
+        .map(|layout| layout.column)
+        .expect("a column");
+    let start = usize::from(column.x.saturating_add(1));
+    let end = usize::from(column.right().saturating_sub(1));
+    (start..end)
+        .map(|x| {
+            buf[(u16::try_from(x).expect("a cell"), y)]
+                .symbol()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// The working directory is cut from the left first: at the exact fit
+/// the whole directory shows with two columns to spare, one column
+/// narrower keeps the tail behind an ellipsis, and two narrower keeps
+/// a shorter tail, while the right side stays whole
+/// (`docs/tui.md`, "The input box").
+#[test]
+fn the_working_directory_is_cut_from_the_left_first() {
+    // At 100x30 the rail and the panel hide, leaving a one-column grip:
+    // the column is 99 wide, the row 97.
+    let probe = full(100, 30);
+    let column = probe
+        .chrome()
+        .layout()
+        .map(|layout| layout.column)
+        .expect("a column");
+    assert_eq!((column.x, column.width), (1, 99));
+    let avail = usize::from(column.width) - 2;
+    // The left side takes the workspace plus `  │  auto`; the right
+    // side takes 45 cells. The exact fit leaves a two-column gap; one
+    // and two columns past it keep shorter tails behind an ellipsis.
+    let head = "w".repeat(avail - 62);
+    let right = "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · 26%";
+    assert_eq!(crate::format::width(right), 45);
+    // The exact fit shows the whole directory; longer ones shed from
+    // the left to the same room, keeping their tails.
+    for (ws, left) in [
+        (format!("{head}/fiber"), format!("{head}/fiber  │  auto")),
+        (
+            format!("w{head}/fiber"),
+            format!("…{}/fiber  │  auto", &head[1..]),
+        ),
+        (
+            format!("{head}/longer/repos/fiber"),
+            format!("…{}/longer/repos/fiber  │  auto", &head[14..]),
+        ),
+    ] {
+        let app = row_app(100, 30, &ws, "test/model", "high", 268_000);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        let shown = crate::view::text(&buf);
+        let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+        let row = row_cells(&buf, &app, y);
+        assert!(row.starts_with(&left), "{row:?} for {ws:?}");
+        assert!(row.ends_with(right), "{row:?} for {ws:?}");
+        assert_eq!(crate::format::width(&row), avail, "{row:?} for {ws:?}");
+    }
+}
+
+/// Past the working directory the left side is cut at its right end:
+/// at columns 50 through 53 the room leaves one through four cells,
+/// while the right side stays whole (`docs/tui.md`, "The input box").
+#[test]
+fn the_left_side_is_cut_at_its_right_end() {
+    let right = "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · 26%";
+    for (screen, width, left) in [
+        (51, 50, "…"),
+        (52, 51, "a…"),
+        (53, 52, "au…"),
+        (54, 53, "auto"),
+    ] {
+        let app = full(screen, 30);
+        let column = app
+            .chrome()
+            .layout()
+            .map(|layout| layout.column)
+            .expect("a column");
+        assert_eq!((column.x, column.width), (1, width), "screen {screen}");
+        let area = Rect::new(0, 0, screen, 30);
+        let mut buf = Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        let shown = crate::view::text(&buf);
+        let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+        let row = row_cells(&buf, &app, y);
+        assert!(row.starts_with(left), "{row:?} at {screen}");
+        assert!(row.ends_with(right), "{row:?} at {screen}");
+        assert_eq!(
+            crate::format::width(&row),
+            usize::from(width) - 2,
+            "{row:?}"
+        );
+    }
+}
+
+/// The right side is cut only when the slab is narrower than it: at
+/// columns 45 and 44 the row keeps the cut right side alone, at 47 the
+/// whole right side with no left (`docs/tui.md`, "The input box").
+#[test]
+fn the_right_side_is_cut_only_when_the_slab_is_narrower() {
+    // A 45-cell right side: cut at 43 and 44, whole from 45 on, with the
+    // left side dropped until room for it past the two-column gap.
+    for (screen, width, start, end) in [
+        (46, 45, "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · …", "…"),
+        (47, 46, "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · 2…", "…"),
+        (
+            48,
+            47,
+            "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · 26%",
+            "26%",
+        ),
+        (
+            50,
+            49,
+            "test/model high  │  ctx ▆▆▆▆▆▆▆▆ 268.0k · 26%",
+            "26%",
+        ),
+    ] {
+        let app = full(screen, 30);
+        let column = app
+            .chrome()
+            .layout()
+            .map(|layout| layout.column)
+            .expect("a column");
+        assert_eq!((column.x, column.width), (1, width), "screen {screen}");
+        let area = Rect::new(0, 0, screen, 30);
+        let mut buf = Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        let shown = crate::view::text(&buf);
+        let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+        let row = row_cells(&buf, &app, y);
+        // A dropped left side leaves its gap cells blank; the right
+        // side stays right-aligned.
+        assert!(row.trim_start().starts_with(start), "{row:?} at {screen}");
+        assert!(row.ends_with(end), "{row:?} at {screen}");
+        assert_eq!(
+            crate::format::width(&row),
+            usize::from(width) - 2,
+            "{row:?}"
+        );
+        assert!(!row.contains("auto"), "{row:?} at {screen}");
+    }
+}
+
+/// The fill boundaries: the full fixture's right side is 45 cells, so
+/// sweeping narrow screens parks the cut, the exact fill and the
+/// zero-room window (`docs/tui.md`, "The input box"). Below 45 the
+/// right side cuts at the slab's edge with the left side dropped; at
+/// exactly 45 it draws whole with the left side dropped, cell-for-cell
+/// like the cut narrower; just above, the room hits zero and the left
+/// side still drops while the right draws whole.
+#[test]
+fn narrow_slabs_pin_the_fill_boundaries() {
+    let mut saw_cut = false;
+    let mut saw_exact = false;
+    let mut saw_zero_room = false;
+    for screen in 46u16..=52 {
+        let app = full(screen, 30);
+        let area = Rect::new(0, 0, screen, 30);
+        let mut buf = Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        let shown = crate::view::text(&buf);
+        let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+        let row = row_cells(&buf, &app, y);
+        let avail = usize::from(
+            app.chrome()
+                .layout()
+                .map(|layout| layout.column.width)
+                .expect("a column"),
+        ) - 2;
+        assert_eq!(crate::format::width(&row), avail, "{row:?} at {screen}");
+        if avail < 45 {
+            // Narrower than the right side: cut at the slab's edge.
+            saw_cut = true;
+            assert!(row.ends_with('…'), "{row:?} at {screen}");
+            assert!(!row.contains("fiber"), "{row:?} at {screen}");
+        } else if avail == 45 {
+            // Exactly full: whole right side, dropped left side.
+            saw_exact = true;
+            assert!(!row.contains("fiber"), "{row:?} at {screen}");
+            assert!(row.ends_with("26%"), "{row:?} at {screen}");
+        } else if avail <= 47 {
+            // No room: the left side still drops, the right draws whole.
+            saw_zero_room = true;
+            assert!(!row.contains("fiber"), "{row:?} at {screen}");
+            assert!(row.ends_with("26%"), "{row:?} at {screen}");
+        }
+    }
+    assert!(saw_cut && saw_exact && saw_zero_room);
+}
+
+/// The tail-cut guard is strict: when the shed exactly fills the
+/// workspace the side is cut at its right end (mode only) instead of
+/// cutting a zero-keep tail (`docs/tui.md`, "The input box").
+#[test]
+fn exact_workspace_fill_skips_the_tail_cut() {
+    // "/w/fiber" is 8 cells, "auto" 4, and the joiner 5: the full
+    // side is 17, so room 10 sheds 7 (the tail cut runs), room 9
+    // sheds exactly 8 (no cut), room 8 sheds 9.
+    let cut = status_left("/w/fiber", 10);
+    let cut_text: String = spans_text(&cut.line);
+    assert!(cut_text.contains('…'), "{cut_text:?}");
+    let plain = status_left("/w/fiber", 8);
+    let plain_text: String = spans_text(&plain.line);
+    assert!(!plain_text.contains("fiber"), "{plain_text:?}");
+    // The edge itself: no ellipsis, the mode draws whole. Under `<=`
+    // the tail cut runs with zero keep and the row starts with `…`.
+    let row = status_left("/w/fiber", 9);
+    let text: String = spans_text(&row.line);
+    assert!(!text.contains('…'), "{text:?}");
+    assert!(text.starts_with("auto"), "{text:?}");
+}
+
+/// The joined spans' text, for unit tests that call the row builders
+/// directly instead of rendering a screen.
+fn spans_text(line: &Line) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// A wide slab keeps the working directory: with room past the gap the
+/// left side draws (`docs/tui.md`, "The input box").
+#[test]
+fn a_wide_slab_keeps_the_working_directory() {
+    let app = full(110, 30);
+    let area = Rect::new(0, 0, 110, 30);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+    let row = row_cells(&buf, &app, y);
+    let avail = usize::from(
+        app.chrome()
+            .layout()
+            .map(|layout| layout.column.width)
+            .expect("a column"),
+    ) - 2;
+    assert!(row.contains("fiber"), "{row:?}");
+    assert_eq!(crate::format::width(&row), avail, "{row:?}");
+}
+
+/// Before the preamble names the model or the first status lands, the
+/// row keeps both sides fixed: the mode on the left, the model slot
+/// blank, and the ctx segment with an empty 8-cell bar and dashes for
+/// size and share (`docs/tui.md`, "The input box").
+#[test]
+fn unknown_figures_keep_both_sides_fixed() {
+    // Attached with home state but no events yet: no preamble names a
+    // model and no status names a workspace or a context.
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(launch());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.set_size(100, 30);
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+    let row = row_cells(&buf, &app, y);
+    assert!(row.starts_with("auto"), "{row:?}");
+    assert!(!row.contains("test/model"), "{row:?}");
+    let ctx = "ctx ▆▆▆▆▆▆▆▆ — · —";
+    assert!(row.ends_with(ctx), "{row:?}");
+}
+
+/// The two sides keep at least two columns between them wherever both
+/// draw, and a cut right side ends in an ellipsis: a sweep over narrow
+/// widths (`docs/tui.md`, "The input box").
+#[test]
+fn the_sides_keep_two_columns_across_widths() {
+    for screen in 46..=110 {
+        let app = full(screen, 30);
+        let area = Rect::new(0, 0, screen, 30);
+        let mut buf = Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        let shown = crate::view::text(&buf);
+        let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+        let row = row_cells(&buf, &app, y);
+        let avail = usize::from(
+            app.chrome()
+                .layout()
+                .map(|layout| layout.column.width)
+                .expect("a column"),
+        ) - 2;
+        assert!(
+            crate::format::width(&row) <= avail,
+            "{row:?} at {screen} with {avail}"
+        );
+        if row.contains("26%") {
+            // The right side is whole: either the left side dropped or
+            // two columns part them.
+            if let Some(at) = row.find("test/model") {
+                let prefix = &row[..at];
+                let left = prefix.trim();
+                if !left.is_empty() {
+                    assert!(
+                        left.ends_with("auto") || left.ends_with('…'),
+                        "{row:?} at {screen}"
+                    );
+                    let gap = prefix.len() - prefix.trim_end().len();
+                    assert!(gap >= 2, "{row:?} at {screen}");
+                }
+            }
+        } else {
+            // The right side is cut at the slab's right edge.
+            assert!(row.ends_with('…'), "{row:?} at {screen}");
+        }
+    }
+}
+
+/// The row's clickable segments: the model and the thinking level open
+/// the model picker, the ctx segment opens the context breakdown. The
+/// working directory and the permission mode keep no target until the
+/// Session-status spot lands (`docs/tui.md`, "The input box").
+#[test]
+fn the_row_aims_its_segments_at_the_picker_and_the_breakdown() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+
+    let app = full(100, 30);
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+    let row: String = (0..100).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    let cells = |text: &str| -> (u16, u16) {
+        let (at, _) = row.match_indices(text).next().expect(text);
+        let start = u16::try_from(crate::format::width(&row[..at])).expect("a cell");
+        let wide = u16::try_from(crate::format::width(text)).expect("cells");
+        (start, wide)
+    };
+    let cover = |spot: Spot| -> Vec<ratatui::layout::Rect> {
+        targets
+            .iter()
+            .filter(|target| target.id == TargetId::Panel(spot))
+            .filter(|target| target.rect.y == y)
+            .map(|target| target.rect)
+            .collect()
+    };
+    // The model and the thinking level share one picker target.
+    let (start, wide) = cells("test/model high");
+    assert_eq!(
+        cover(Spot::Model),
+        vec![Rect::new(start, y, wide, 1)],
+        "the picker target"
+    );
+    // The ctx segment opens the context breakdown across its whole
+    // segment.
+    let (start, wide) = cells("ctx ▆▆▆▆▆▆▆▆ 268.0k · 26%");
+    assert_eq!(
+        cover(Spot::Context),
+        vec![Rect::new(start, y, wide, 1)],
+        "the breakdown target"
+    );
+    // The working directory and the permission mode each open the
+    // Session status card's view (`docs/tui.md`, "The input box").
+    let (ws_start, ws_wide) = cells("/w/fiber");
+    let (mode_start, mode_wide) = cells("auto");
+    assert_eq!(
+        cover(Spot::Status),
+        vec![
+            Rect::new(ws_start, y, ws_wide, 1),
+            Rect::new(mode_start, y, mode_wide, 1),
+        ],
+        "the status targets"
+    );
+}
+
+/// The status row's roles: the model in `accent`, the permission mode
+/// and the thinking level in `attention`, the working directory in the
+/// default foreground, the joiners and the ctx figures dim, and the bar
+/// filled in `info` over `rule` (`docs/tui.md`, "The input box").
+#[test]
+fn the_status_row_roles() {
+    let app = full(100, 30);
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let at = rule_row(&shown);
+    let y = u16::try_from(at + 1).expect("a row under the rule");
+    let row: String = (0..100).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    let cell = |text: &str| {
+        let (at, _): (usize, &str) = row.match_indices(text).next().expect(text);
+        crate::format::width(&row[..at])
+    };
+    let accent = Role::Accent.color();
+    let attention = Role::Attention.color();
+    // The model in accent, the mode and the thinking level in
+    // attention, the working directory plain.
+    for (text, fg) in [
+        ("test/model", accent),
+        ("high", attention),
+        ("auto", attention),
+        ("/w/fiber", ratatui::style::Color::Reset),
+    ] {
+        let x = u16::try_from(cell(text)).expect("a cell");
+        assert_eq!(buf[(x, y)].fg, fg, "{text}");
+    }
+    // Dim joiners on each side and dim ctx figures.
+    for text in ["  │  ", "ctx", "268.0k", "·", "26%"] {
+        let x = u16::try_from(cell(text)).expect("a cell");
+        assert_eq!(buf[(x, y)].fg, Role::Muted.color(), "{text}");
+    }
+    // The bar: eight cells of fill in info over track in rule.
+    let bar: String = "▆".repeat(8);
+    let x = u16::try_from(cell(&bar)).expect("the bar");
+    assert_eq!(buf[(x, y)].fg, Role::Info.color(), "bar fill");
+}
+
+/// A renderer filling `slots` with `script`, installed on `app`.
+fn slot_app(
+    app: &mut App,
+    slots: &[&str],
+    script: crate::ext::tests::SlotScript,
+) -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
+    use std::rc::Rc;
+    let fake = Rc::new(crate::ext::tests::SlotRenderer::filling(slots, script));
+    let renderer: Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    fake
+}
+
+/// The input_status slot draws the row: a replacement's line in place
+/// of the built-in row, with the rule staying above it
+/// (`docs/tui.md`, "Extension seams").
+#[test]
+fn input_status_replacement_draws_its_line_for_the_row() {
+    use crate::ext::tests::{SlotScript, raw};
+    let mut app = full(100, 30);
+    slot_app(
+        &mut app,
+        &["input_status"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    );
+    let shown = screen(&app, 100, 30);
+    let at = rule_row(&shown);
+    let row = shown.lines().nth(at + 1).expect("a row under the rule");
+    assert!(row.contains("custom"), "the replacement line shows: {row}");
+    assert!(!row.contains("test/model"), "the built-in row goes: {row}");
+}
+
+/// The input_status slot drops further lines: a replacement owns
+/// exactly one row (`docs/tui.md`, "Extension seams").
+#[test]
+fn input_status_replacement_drops_further_lines() {
+    use crate::ext::tests::{SlotScript, raw};
+    let mut app = full(100, 30);
+    slot_app(
+        &mut app,
+        &["input_status"],
+        SlotScript::Replace(vec![vec![raw("first")], vec![raw("second")]]),
+    );
+    let shown = screen(&app, 100, 30);
+    assert!(shown.contains("first"), "the first line shows");
+    assert!(!shown.contains("second"), "further lines drop");
+}
+
+/// A replacement keeps one target, the Session status view, over the
+/// row's full width: a click anywhere on the row opens the Session
+/// status card's view, as the working directory and the mode do
+/// (`docs/tui.md`, "Extension seams").
+#[test]
+fn input_status_replacement_keeps_a_whole_row_session_status_target() {
+    use crate::app::panel::Spot;
+    use crate::ext::tests::{SlotScript, raw};
+    use crate::mouse::TargetId;
+
+    let mut app = full(100, 30);
+    slot_app(
+        &mut app,
+        &["input_status"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    );
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let y = u16::try_from(rule_row(&shown) + 1).expect("a row under the rule");
+    let row: String = (0..100).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    assert!(
+        row.contains("custom"),
+        "the replacement line shows: {row:?}"
+    );
+    // The row's full width: past the stripe and gap, to the slab's
+    // edge, derived from the layout column like the paint.
+    let column = app
+        .chrome()
+        .layout()
+        .map(|layout| layout.column)
+        .expect("a column");
+    let status: Vec<Rect> = targets
+        .iter()
+        .filter(|target| target.id == TargetId::Panel(Spot::Status))
+        .filter(|target| target.rect.y == y)
+        .map(|target| target.rect)
+        .collect();
+    assert_eq!(
+        status,
+        vec![Rect::new(
+            column.x.saturating_add(1),
+            y,
+            column.width.saturating_sub(1),
+            1
+        )],
+        "the whole-row Session-status target"
+    );
+}
+
+/// An empty input_status replacement leaves the row blank: the rule
+/// stays, the built-in figures go, and the row keeps its row
+/// (`docs/tui.md`, "Extension seams").
+#[test]
+fn input_status_empty_replacement_leaves_the_row_blank() {
+    use crate::ext::tests::SlotScript;
+    let mut app = full(100, 30);
+    let plain = screen(&full(100, 30), 100, 30);
+    slot_app(&mut app, &["input_status"], SlotScript::Replace(vec![]));
+    let shown = screen(&app, 100, 30);
+    // The rule stays on its row.
+    let at = rule_row(&shown);
+    assert_eq!(at, rule_row(&plain), "the rule keeps its row");
+    // The row under it is blank but present.
+    let row = shown.lines().nth(at + 1).expect("a row under the rule");
+    let blank: String = row
+        .chars()
+        .filter(|cell| !matches!(cell, ' ' | '▌'))
+        .collect();
+    assert!(blank.is_empty(), "the row reads blank: {row:?}");
+    assert!(!shown.contains("test/model"), "the built-in row goes");
+}
+
+/// Neither slot runs while the input box itself is not built in: an
+/// open approval panel draws instead of the box, so no replacement
+/// paints and the rule never draws (`docs/tui.md`, "Extension seams").
+#[test]
+fn no_slot_runs_while_the_approval_panel_replaces_the_box() {
+    use crate::ext::tests::{SlotScript, raw};
+    let mut app = typed(100, 30, "hi");
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+    ));
+    assert!(app.panel().is_some());
+    let fake = slot_app(
+        &mut app,
+        &["input_status", "status_rows"],
+        SlotScript::Replace(vec![vec![raw("custom")]]),
+    );
+    let shown = screen(&app, 100, 30);
+    assert!(fake.calls.borrow().is_empty(), "neither slot runs");
+    assert!(!shown.contains("custom"), "no replacement paints");
+}
+
+/// The status_rows slot draws the line: a replacement's lines in place
+/// of the kept built-in rows under the status row, with no built-in
+/// target (`docs/tui.md`, "Extension seams").
+#[test]
+fn status_rows_replacement_draws_its_lines_under_the_row() {
+    use crate::ext::tests::{SlotScript, raw};
+    let mut app = full(100, 30);
+    app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
+    slot_app(
+        &mut app,
+        &["status_rows"],
+        SlotScript::Replace(vec![vec![raw("custom line")]]),
+    );
+    let shown = screen(&app, 100, 30);
+    let at = rule_row(&shown);
+    let under: Vec<&str> = shown.lines().skip(at + 2).collect();
+    assert!(
+        under.iter().any(|row| row.contains("custom line")),
+        "the replacement line shows under the row"
+    );
+    assert!(!shown.contains("cache"), "the built-in line goes: {shown}");
+}
+
+/// A renderer recording the context figures the input_status slot is
+/// handed on every call, `None` where the row shows dashes.
+#[derive(Debug, Default)]
+struct ContextRecorder {
+    seen: std::cell::RefCell<Vec<Option<(u64, u64)>>>,
+}
+
+impl crate::ext::Renderer for ContextRecorder {
+    fn name(&self) -> &str {
+        "context-recorder"
+    }
+
+    fn fills(&self, slot: &str) -> bool {
+        slot == "input_status"
+    }
+
+    fn render(
+        &self,
+        _ctx: &crate::ext::SessionCtx,
+        _slot: &str,
+        input: &crate::ext::Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&crate::ext::Input<'_>, u16) -> Vec<Vec<crate::ext::RawSpan>>,
+    ) -> crate::ext::Decision {
+        if let crate::ext::Input::InputStatus(row) = input {
+            self.seen.borrow_mut().push(
+                row.context
+                    .as_ref()
+                    .map(|context| (context.tokens, context.window)),
+            );
+        }
+        crate::ext::tests::decide("context-recorder", || Ok(Vec::new()))
+    }
+}
+
+/// The input_status slot is handed the context figures, and a zero window
+/// names none: the row shows dashes (`docs/tui.md`, "The input box").
+#[test]
+fn the_input_status_input_drops_a_zero_window() {
+    use std::rc::Rc;
+    let mut app = full(100, 30);
+    let fake = Rc::new(ContextRecorder::default());
+    let renderer: Rc<dyn crate::ext::Renderer> = fake.clone();
+    app.install_renderer(renderer);
+    let _ = screen(&app, 100, 30);
+    let seen = fake.seen.take();
+    assert_eq!(seen.last(), Some(&Some((268_000, 1_000_000))));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "test/model", "context_window": 0,
+            "trigger_at": 0, "thinking": "high", "tool_choice": "auto",
+            "cache_lifetime": "5m", "system_prompt": "", "tools": [],
+        }),
+    ));
+    let _ = screen(&app, 100, 30);
+    let seen = fake.seen.take();
+    assert_eq!(seen.last(), Some(&None));
+}
+
+/// A decorating renderer on the input_status slot is handed the built-in
+/// row, so the row's figures reach the screen (`docs/tui.md`, "Extension
+/// seams").
+#[test]
+fn the_input_status_builtin_row_reaches_a_decorating_renderer() {
+    use crate::ext::tests::SlotScript;
+    let mut app = full(100, 30);
+    slot_app(
+        &mut app,
+        &["input_status"],
+        SlotScript::Decorate {
+            badge: Vec::new(),
+            trim: 0,
+        },
+    );
+    let shown = screen(&app, 100, 30);
+    let at = rule_row(&shown);
+    let row = shown.lines().nth(at + 1).expect("a row under the rule");
+    assert!(row.contains("test/model"), "{row:?}");
 }

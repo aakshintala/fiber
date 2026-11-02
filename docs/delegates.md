@@ -157,7 +157,10 @@ final message, any questions, usage totals and worktree state. Their keys are
 `docs/events.md`, "Jobs".
 
 - `delegate_started` is written after `job_started`, for each run.
-  `delegate_finished` is written just before `job_completed`.
+  `delegate_finished` is written just before `job_completed`, except for a
+  delegate that ended while its parent was gone: the keeper wrote its
+  `job_completed`, and the resumed parent writes `delegate_finished` when it
+  delivers the result.
 - The usage totals are output, never a source, as `fiber_exited`'s copy of the
   final text is. For a Fiber delegate, the cost ledger is the fold over the
   delegate's own `usage_recorded` lines, and a cost that settles after the
@@ -225,15 +228,15 @@ final message, any questions, usage totals and worktree state. Their keys are
   waited for.
 - Stopping a delegate (`jobs stop`, `job_stop`) stops its own jobs and delegates
   as its shutdown does (`docs/invocation.md`, "Shutdown"), so a stop reaches
-  every descendant. Its parent waits for it to exit, up to the shutdown
+  every descendant. Its keeper waits for it to exit, up to the shutdown
   bound, before sending SIGKILL.
-- Every delegate is a child process of the session that started it, whatever
-  its harness. A Fiber delegate runs the internal session command
-  ([ADR 0009](adr/0009-each-session-is-one-process.md)). Its parent is an
-  ordinary client over its socket and drives it only through the driver
-  commands and events, so no delegate has a path a supervisor lacks.
-- A Fiber delegate's stdin is a lifeline. The parent holds it open and never
-  writes to it. End of file on it means the parent is gone, however it died,
+- Every delegate is a child process of its parent session's keeper
+  (`docs/tools.md`, "The keeper"). A Fiber delegate runs the internal
+  session command ([ADR 0009](adr/0009-each-session-is-one-process.md)). Its
+  parent is an ordinary client over its socket and drives it only through the
+  driver commands and events, so no delegate has a path a supervisor lacks.
+- A Fiber delegate's stdin is a lifeline. The keeper holds it open and never
+  writes to it. End of file on it means the keeper is gone, however it died,
   and the delegate shuts down within the bound (`docs/invocation.md`,
   "Shutdown"). A dropped socket connection is only a client leaving: the
   parent reconnects and the delegate carries on.
@@ -245,11 +248,18 @@ final message, any questions, usage totals and worktree state. Their keys are
   delegate when marked `required` (`docs/extensions.md`, "Code a repository
   ships").
 - How a stopped Fiber delegate is ended is the stop rule above.
-- If a parent's process dies without a shutdown, each Fiber delegate sees
-  end of file on its lifeline and shuts down. The parent's log marks each job
-  `orphaned` on resume (`docs/tools.md`, "Background jobs"), because the
-  parent cannot know, and the resumed parent reads each orphaned delegate's
-  log for the `usage_recorded` lines it is missing.
+- If a parent's process dies without a shutdown, each Fiber delegate carries
+  on and finishes its task, as it would with its parent connected. When it
+  exits, the parent's keeper writes its `job_completed` in the parent's log.
+  A delegate still running when the keeper's 2 hours pass is stopped as a
+  shutdown stops it (`docs/tools.md`, "The keeper"). A delegate on another
+  harness carries on the same way, and the keeper records its end by the
+  rule in `docs/tools.md`, "The keeper".
+- A resumed parent connects to each delegate still running, as after a
+  dropped connection. For each delegate that ended while it was gone, it
+  writes the `delegate_finished` from the delegate's own log when it
+  delivers the result, and it reads each delegate's log for the
+  `usage_recorded` lines it is missing.
 - A crash of any kind in a delegate, in Rust or in Lua's C code, ends that
   delegate `failed` and nothing else.
 

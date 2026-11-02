@@ -140,3 +140,21 @@ passing under repeated runs under load.
 
 Crate-level and cross-crate tests never retry: they are deterministic, so a
 failure there is signal.
+
+## Journey suite
+
+The main journeys in `crates/main/tests/main_journeys.rs` drive the release
+binary, so build it first, then name it and an empty failures file the
+suite appends to rather than creating:
+
+```
+cargo build --release -p main
+: > /tmp/journey-failures.txt
+FIBER_JOURNEY_BIN=$PWD/target/release/fiber \
+FIBER_JOURNEY_FAILURES=/tmp/journey-failures.txt \
+cargo nextest run -p main --test main_journeys
+```
+
+Without the variables the run panics naming the missing one, not how to
+satisfy it. A journey failure does not block a merge (`docs/ci.md`,
+"The journey suite").

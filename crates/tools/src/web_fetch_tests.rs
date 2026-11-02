@@ -61,6 +61,11 @@ impl WebFetch {
         self.headers_received = Some(signal);
         self
     }
+
+    fn signaling_body_progress(mut self, signal: mpsc::Sender<u64>) -> Self {
+        self.body_progress = Some(signal);
+        self
+    }
 }
 
 fn response(status: u16, content_type: Option<&str>, body: impl Into<Vec<u8>>) -> Response {
@@ -1422,11 +1427,28 @@ fn a_cancel_while_the_body_is_read_stops_the_call() {
     );
 }
 
+/// Waits until the client's body reads total at least `bytes`: the cancel or
+/// deadline below must land after the client read the prefix, not merely
+/// after the server sent it.
+#[track_caller]
+fn wait_for_body(rx: &Receiver<u64>, bytes: usize, what: &str) {
+    let wanted = u64::try_from(bytes).unwrap();
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let mut read = 0;
+    while read < wanted {
+        read = deadline.recv(rx).unwrap_or_else(|_| panic!("{what}"));
+    }
+}
+
 #[test]
 fn a_deadline_while_the_body_is_read_keeps_status_and_partial_bytes() {
     let server = serve([stall()]);
     let (headers_tx, headers_rx) = mpsc::channel();
-    let rig = Rig::new().with(|tool| tool.signaling_headers_received(headers_tx));
+    let (progress_tx, progress_rx) = mpsc::channel();
+    let rig = Rig::new().with(|tool| {
+        tool.signaling_headers_received(headers_tx)
+            .signaling_body_progress(progress_tx)
+    });
     let call = rig.start(&server.url());
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&headers_rx)
@@ -1439,6 +1461,12 @@ fn a_deadline_while_the_body_is_read_keeps_status_and_partial_bytes() {
     assert!(
         server.await_partial(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the partial response was sent"
+    );
+    // The client has read the 7-byte prefix before the clock advances.
+    wait_for_body(
+        &progress_rx,
+        b"partial".len(),
+        "the client reads the 7-byte prefix before the deadline",
     );
     rig.clock.advance_when_parked(
         Some(rig.clock.origin() + Duration::from_secs(60)),
@@ -1470,7 +1498,11 @@ fn a_deadline_while_the_body_is_read_keeps_status_and_partial_bytes() {
 fn a_cancel_while_the_body_is_read_keeps_status_and_partial_bytes() {
     let server = serve([stall()]);
     let (headers_tx, headers_rx) = mpsc::channel();
-    let rig = Rig::new().with(|tool| tool.signaling_headers_received(headers_tx));
+    let (progress_tx, progress_rx) = mpsc::channel();
+    let rig = Rig::new().with(|tool| {
+        tool.signaling_headers_received(headers_tx)
+            .signaling_body_progress(progress_tx)
+    });
     let call = rig.start(&server.url());
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&headers_rx)
@@ -1482,6 +1514,12 @@ fn a_cancel_while_the_body_is_read_keeps_status_and_partial_bytes() {
     assert!(
         server.await_partial(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the partial response was sent"
+    );
+    // The client has read the 7-byte prefix before the cancel lands.
+    wait_for_body(
+        &progress_rx,
+        b"partial".len(),
+        "the client reads the 7-byte prefix before the cancel",
     );
     call.cancel.cancel();
     let output = call.wait();
@@ -1520,6 +1558,7 @@ fn a_stop_after_a_full_body_read_keeps_the_completed_line() {
                 debug: Arc::clone(&rig.lines) as Arc<dyn DebugLog>,
                 clock: Arc::clone(&clock),
                 headers_received: None,
+                body_progress: None,
             }),
         };
         hop.get(&request, |head, body| {

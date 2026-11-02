@@ -1790,6 +1790,7 @@ fn read_only_busy_rejection_reaches_the_diff_not_the_question_guard() {
 fn read_only_lost_request_continues_to_the_diff_with_the_notice() {
     for kind in ["stream_reopened", "stream_closed", "session_left"] {
         let (mut app, _) = app();
+        app.set_size(80, 26);
         start(&mut app);
         ask(&mut app, one_line());
         press(&mut app, Key::Enter);

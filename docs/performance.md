@@ -128,8 +128,7 @@ Basis says where a number came from:
   one only where the measurement exceeds that number. Every other ceiling stays
   as it is, and a ceiling the measurement does not exceed keeps its basis. A
   ceiling given as a formula stays picked. Attaching's first-frame ceiling
-  stays at the approved flat 50 ms for both own-log fixtures, independent
-  of base measurements.
+  stays at the approved flat 50 ms for both own-log fixtures.
 
 The class columns hold the timing gates per runner speed class, keyed by CPU
 model strings matched case-insensitively. A model's class is the slowest
@@ -324,8 +323,13 @@ over the base median in place of its tolerance: it fails only when the median is
 1 ms over the base median. Every other row is judged on its recorded ceiling and tolerance. A model
 with fewer than 5 stored runs, an unknown CPU model and any row without a comparable same-job base timing stay
 advisory, and the comment says why. Attaching's warm first-frame row is
-an exception: on eligible fast and slow models, each 1 MiB and 10 MiB
-own-log fixture fails if its median exceeds 50 ms. When the comparable base median from the same job is also over 50 ms, a fixture fails only when its median exceeds that base median by more than the row's tolerance, or by 10 % while the tolerance cell is `—`; the report still names the breach. With no base, a failed base, a missing or malformed base metric, or a different base CPU, the 50 ms bound holds on its own.
+judged on eligible fast and slow models against a 50 ms ceiling. Each 1 MiB
+and 10 MiB own-log fixture fails only when its median is over 50 ms and more
+than the row's tolerance over the comparable base median from the same job,
+or more than 10 % over it while the tolerance cell is `—`. The report names
+every median over 50 ms, whether it fails or not. When there is no base, the
+base failed, a base metric is missing or malformed, or the base ran on a
+different CPU, the 50 ms bound holds on its own.
 Middle, unknown and few-run models stay advisory. The opening-pass-end row
 stays advisory reference data, with no timing gate. Each over-ceiling fixture
 produces one named failure; malformed attach data fails without duplicating errors.

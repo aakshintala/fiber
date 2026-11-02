@@ -1,9 +1,7 @@
 ---
 source: crates/tui/src/view/notice_rows_tests.rs
-assertion_line: 200
 expression: shown
 ---
-
               ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
                 Notices                                                           ✕
@@ -25,11 +23,12 @@ expression: shown
                 Esc closes
 
               ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
   ⚠ key_clash · Two actions share the key Ctrl+F: `search` and `search_results` act in a context … ✕
   ⚠ stream_closed · this session's log can't be read past here; reopen the session to try again    ✕
   ⚠ config_invalid · a configuration file is invalid: one extension key is set under both its ful… ✕
   +1 more
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────────────────────────────────────────────────────────────────
+▌auto                                                                            ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

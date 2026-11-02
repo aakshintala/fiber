@@ -1607,6 +1607,31 @@ fn built_binary_imports_native_session_files() {
     assert_eq!(entry.tool, "shell");
 }
 
+/// Every session slug in the committed set carries the `$OWNER_NAME`
+/// placeholder, never the `--name` value: `extract.sh`'s slug mask once
+/// substituted the value itself (issue #3885), and the scan step does not
+/// treat a name as a secret class, so nothing but this test catches a
+/// rebuild regressing it. A slug is anchored on `/` because a hyphenated
+/// literal such as `fiber-home-paths` is not one.
+#[test]
+fn committed_set_masks_every_session_slug() {
+    let set = include_str!("fixtures/reviewer_eval/calls.jsonl");
+    let unmasked: Vec<&str> = ["/-home-", "/-Users-"]
+        .iter()
+        .flat_map(|prefix| set.match_indices(prefix).map(move |(at, _)| (at, *prefix)))
+        .filter_map(|(at, prefix)| {
+            let rest = &set[at + prefix.len()..];
+            let end = set.len().min(at + prefix.len() + 40);
+            (!rest.starts_with("$OWNER_NAME")).then(|| &set[at..end])
+        })
+        .collect();
+    assert!(unmasked.is_empty(), "unmasked session slugs: {unmasked:?}");
+    assert!(
+        set.contains("/-home-$OWNER_NAME-"),
+        "no masked slug to check"
+    );
+}
+
 #[test]
 fn built_binary_scans_a_committed_set() {
     let dir = fakes::TempDir::new("fiber-eval-scan");

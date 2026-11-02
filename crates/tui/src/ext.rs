@@ -28,6 +28,7 @@ pub use input::{
     TurnGroupState, TurnOrphan, TurnSection, TurnSizes, TurnStreaming, TurnThought, WidgetCard,
     WorkingLine, WorkingRetry,
 };
+pub use input::{Context, InputStatus};
 pub(crate) mod spans;
 
 /// The seam bound to one page's rows: the installed renderer, the
