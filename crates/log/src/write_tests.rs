@@ -461,6 +461,7 @@ fn status(name: &str) -> Event {
         step: None,
         git: None,
         context: None,
+        cache_expires: None,
         spend: Usage {
             tokens: Tokens {
                 input: 0,

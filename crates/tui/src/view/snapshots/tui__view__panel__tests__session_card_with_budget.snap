@@ -1,24 +1,25 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
+assertion_line: 1011
 expression: "screen(&app, 160, 40)"
 ---
   fiber +  $1.51 · 0 ✓
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ 1 ✓ READY         0s                                                                                                           /Users/you/work/fiber     auto
-▌ work
-▌                                                                                                                                test/model                high
-▌ $1.51            50%                                                                                                           ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆          500
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                          handoff at —     50% of window
+▌ 1 ✓ READY         0s                                                                                                           Session status            auto
+▌ work                                                                                                                           /Users/you/work/fiber
+▌
+▌ $1.51            50%                                                                                                           test/model                high
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                          ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆          500
+                                                                                                                                 handoff at —     50% of window
                                                                                                                                  then a summary, fresh context
                                                                                                                                  tokens in / out     1.1k / 200
                                                                                                                                  cache hits                  9%
+                                                                                                                                 cache resets in              —
                                                                                                                                  cost            $0.41 of $5.00
                                                                                                                                  cost on subscription     $1.10
                                                                                                                                  speed, last reply            —
                                                                                                                                  turns                        0
                                                                                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
 
 
                        ⋮                                                                                                      ⋮

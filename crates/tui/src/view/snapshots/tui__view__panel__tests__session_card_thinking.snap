@@ -1,10 +1,12 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
+assertion_line: 1048
 expression: "screen(&app, 160, 40)"
 ---
 
                                                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                                                                                                                                                           auto
+                                                                                                                                 Session status            auto
+
 
                                                                                                                                  test/model              high ∴
                                                                                                                                  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
@@ -12,13 +14,12 @@ expression: "screen(&app, 160, 40)"
                                                                                                                                  then a summary, fresh context
                                                                                                                                  tokens in / out              —
                                                                                                                                  cache hits                   —
+                                                                                                                                 cache resets in              —
                                                                                                                                  cost                         —
                                                                                                                                  cost on subscription         —
                                                                                                                                  speed, last reply            —
                                                                                                                                  turns                        0
                                                                                                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
 
 
                        ⋮                                                                                                      ⋮

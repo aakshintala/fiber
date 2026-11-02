@@ -82,6 +82,7 @@ fn usage(generation: &str, input: u64, written: u64) -> Event {
         extension: None,
         origin_session_id: None,
         reviewer: None,
+        warming: None,
         input_bytes: 500,
         input_media: None,
     })

@@ -18,6 +18,7 @@ fn call(generation: &str, tokens: Tokens, cost: Option<f64>, subscription: bool)
         extension: None,
         origin_session_id: None,
         reviewer: None,
+        warming: None,
     }
 }
 

@@ -34,6 +34,7 @@ fn recorded(
         extension: None,
         origin_session_id: origin.map(|id| SessionId(id.to_owned())),
         reviewer: None,
+        warming: None,
     }
 }
 
@@ -93,6 +94,7 @@ fn an_entry_is_one_row_with_compact_counts() {
             extension: None,
             origin_session_id: None,
             reviewer: None,
+            warming: None,
         },
     );
     let frame = frame(&fold, None, List::default());

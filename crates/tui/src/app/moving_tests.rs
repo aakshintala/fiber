@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use contract::Seq;
+use contract::clock::Clock;
 use fakes::clock::FakeClock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -18,7 +19,8 @@ use crate::mouse::TargetId;
 
 const WALL: u64 = 1_700_000_000_000;
 
-/// An app with home state, attached to [`SESSION`], at 80x24.
+/// An app with home state, attached to [`SESSION`], at 80x24, its
+/// panel showing the default cards so the Session card paints.
 fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
@@ -27,6 +29,9 @@ fn app() -> App {
             project: "-w".to_owned(),
             git: false,
         },
+        panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
+            .map(str::to_owned)
+            .to_vec(),
         ..Default::default()
     });
     app.attach(contract::SessionId(SESSION.to_owned()));
@@ -48,6 +53,15 @@ fn status(state: Value) -> Line {
         payload[key] = value;
     }
     session_line(SESSION, "session_status", payload, None)
+}
+
+/// Renders `app` into an 80x24 frame and takes the wake the drawn
+/// frame asked for, as the loop does after a draw.
+fn rendered_wake(app: &App) -> Option<std::time::Instant> {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    app.take_wake()
 }
 
 /// A turn running since `ts` milliseconds.
@@ -615,6 +629,93 @@ fn a_still_frame_takes_no_wake() {
     crate::view::render(&app, area, &mut buf, None);
     // Nothing painted, nothing moving: no wake, no timer.
     assert_eq!(app.take_wake(), None);
+}
+
+/// The countdown wake arms at the next text change: the minute
+/// rollover while minutes show, every second under the last minute
+/// with the 60-second crossover first, and the expiry itself last
+/// (`docs/tui.md`, "The panel"; WAKE-RULED).
+#[test]
+fn the_countdown_wake_arms_at_the_next_text_boundary() {
+    let clock = FakeClock::new();
+    let now = clock.now();
+    // Minutes: 2_550_000 ms left reads "42m"; the 42-minute rollover
+    // sits 30_001 ms out.
+    let mut minutes = app();
+    fed(&mut minutes, json!({"cache_expires": WALL + 2_550_000}));
+    minutes.set_now(now, WALL);
+    assert_eq!(
+        rendered_wake(&minutes),
+        Some(now + Duration::from_millis(30_001))
+    );
+    // The 60-second crossover: 61_000 ms left reads "1m" for 1_001 ms.
+    let mut crossover = app();
+    fed(&mut crossover, json!({"cache_expires": WALL + 61_000}));
+    crossover.set_now(now, WALL);
+    assert_eq!(
+        rendered_wake(&crossover),
+        Some(now + Duration::from_millis(1_001))
+    );
+    // Seconds: 59_999 ms left ticks every second.
+    let mut seconds = app();
+    fed(&mut seconds, json!({"cache_expires": WALL + 59_999}));
+    seconds.set_now(now, WALL);
+    assert_eq!(
+        rendered_wake(&seconds),
+        Some(now + Duration::from_millis(1_000))
+    );
+    // The last second wakes at the expiry itself.
+    let mut last = app();
+    fed(&mut last, json!({"cache_expires": WALL + 999}));
+    last.set_now(now, WALL);
+    assert_eq!(
+        rendered_wake(&last),
+        Some(now + Duration::from_millis(1_000))
+    );
+}
+
+/// The countdown arms no wake with no future expiry on screen: no
+/// status, no expiry, or already expired (WAKE-RULED).
+#[test]
+fn the_countdown_wake_stays_quiet_without_a_future_expiry() {
+    let clock = FakeClock::new();
+    // Attached with no status on screen.
+    let mut bare = app();
+    bare.set_now(clock.now(), WALL);
+    assert_eq!(rendered_wake(&bare), None);
+    // A status with no expiry: the row reads "—".
+    let mut dash = app();
+    fed(&mut dash, json!({}));
+    dash.set_now(clock.now(), WALL);
+    assert_eq!(rendered_wake(&dash), None);
+    // Expired: the row reads "expired" and nothing further can change.
+    let mut spent = app();
+    fed(&mut spent, json!({"cache_expires": WALL}));
+    spent.set_now(clock.now(), WALL + 1);
+    assert_eq!(rendered_wake(&spent), None);
+}
+
+/// An idle tick that does not change the countdown text draws an
+/// identical frame and re-arms the same due: one wake per text change
+/// (RULING-3771-REDRAW).
+#[test]
+fn an_idle_tick_without_a_text_change_draws_an_identical_frame() {
+    let clock = FakeClock::new();
+    let now = clock.now();
+    let mut app = app();
+    fed(&mut app, json!({"cache_expires": WALL + 2_550_000}));
+    app.set_now(now, WALL);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut first = Buffer::empty(area);
+    crate::view::render(&app, area, &mut first, None);
+    let due = app.take_wake();
+    assert_eq!(due, Some(now + Duration::from_millis(30_001)));
+    // The tick the wake fires, with the text unchanged, repaints the
+    // same rows and re-arms the same due.
+    let mut second = Buffer::empty(area);
+    crate::view::render(&app, area, &mut second, None);
+    assert_eq!(second, first);
+    assert_eq!(app.take_wake(), due);
 }
 
 #[test]

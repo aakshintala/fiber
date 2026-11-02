@@ -466,6 +466,7 @@ fn usage(id: &str, output: u64, cost: Option<f64>, subscription: Option<bool>) -
         extension: None,
         origin_session_id: None,
         reviewer: None,
+        warming: None,
         input_bytes: 1,
         input_media: None,
     })

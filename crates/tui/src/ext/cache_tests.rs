@@ -1172,6 +1172,22 @@ fn each_chrome_slot_caches_by_input_and_width() {
     }
 }
 
+/// The session card's key covers the cache expiry: the same card with
+/// a new expiry misses, while an unchanged expiry hits, so a re-pinned
+/// countdown never shares one cache entry with the old text
+/// (`docs/tui.md`, "How a TUI extension runs").
+#[test]
+fn the_session_card_key_covers_cache_expires() {
+    let tools_down = std::collections::BTreeSet::new();
+    let spend = usage(Some(4.12));
+    let card = session_card(Some("m"), Some(Spend::Status(&spend)), &tools_down, None);
+    let first = card.key("card:session");
+    assert_eq!(first, card.key("card:session"), "same expiry hits");
+    let mut repinned = session_card(Some("m"), Some(Spend::Status(&spend)), &tools_down, None);
+    repinned.cache_expires = Some(1_754_000_000_000);
+    assert_ne!(first, repinned.key("card:session"), "new expiry misses");
+}
+
 /// The input status row's key covers its model, context and flat flag:
 /// a changed figure or a screen-reader pass misses, so neither shares a
 /// cache entry (`docs/tui.md`, "How a TUI extension runs").

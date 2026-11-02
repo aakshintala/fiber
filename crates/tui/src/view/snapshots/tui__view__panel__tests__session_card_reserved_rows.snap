@@ -1,10 +1,12 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
+assertion_line: 194
 expression: "super::super::text(&draw_targets(&app).0)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-                             auto
+   Session status            auto
+
 
 
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
@@ -12,6 +14,7 @@ expression: "super::super::text(&draw_targets(&app).0)"
    then a summary, fresh context
    tokens in / out              —
    cache hits                   —
+   cache resets in              —
    cost                         —
    cost on subscription         —
    speed, last reply            —

@@ -1209,7 +1209,12 @@ impl Screen {
             row.to_owned()
         };
         let mut expected = expected_card(workspace, text, panel);
-        expected.insert(speed_at, speed);
+        let cache_at = card
+            .iter()
+            .position(|row| row.starts_with("cache resets in"))
+            .unwrap_or_else(|| panic!("no cache resets row at {cols} columns: {card:?}"));
+        expected[cache_at] = card[cache_at].to_owned();
+        expected[speed_at] = speed;
         assert_eq!(
             card,
             expected.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -1219,27 +1224,28 @@ impl Screen {
 }
 
 /// The Session card's exact rows at `text` columns, without the speed
-/// row: the title names the working directory with `auto` right-aligned,
-/// the model reads `fake/m` with thinking `high` right-aligned, the
-/// context bar is 17 cells of `▆` with its marker and size, then the
-/// handoff rows; the scripted turn's fixed usage reads
-/// `tokens in / out  10 / 3` with 40% cache hits, the context sits at 0%
-/// with the handoff marker at 70.0k, the cost is still unknown, and one
-/// turn ran (`panel.rs`).
+/// row: the title names the card with `auto` right-aligned, the working
+/// directory on the next row, the model reads `fake/m` with thinking
+/// `high` right-aligned, the context bar is 17 cells of `▆` with its
+/// marker and size, then the handoff rows; the scripted turn's fixed
+/// usage reads `tokens in / out  10 / 3` with 40% cache hits, the
+/// cache-reset countdown, the context sits at 0% with the handoff
+/// marker at 70.0k, the cost is still unknown, and one turn ran
+/// (`panel.rs`).
 fn expected_card(workspace: &str, text: usize, _panel: u16) -> Vec<String> {
-    // The title: the directory cut from the left with `auto`
-    // right-aligned.
-    let room = text - "auto".len() - 1;
-    let name = cut_left_path(workspace, room);
-    let pad = text - name.chars().count() - "auto".len();
-    let mut rows = vec![
-        format!("{name}{}auto", " ".repeat(pad)),
-        format!(
-            "{}{}high",
-            "fake/m",
-            " ".repeat(text - "fake/m".len() - "high".len())
-        ),
-    ];
+    let pad = text - "Session status".len() - "auto".len();
+    let mut rows = vec![format!("Session status{}auto", " ".repeat(pad))];
+    let directory = if workspace.chars().count() <= text {
+        workspace.to_owned()
+    } else {
+        cut_left_path(workspace, text)
+    };
+    rows.push(directory);
+    rows.push(format!(
+        "{}{}high",
+        "fake/m",
+        " ".repeat(text - "fake/m".len() - "high".len())
+    ));
     // The context rows: the 17-cell bar with its marker and size, then
     // the handoff rows. The trigger reads 70.0k.
     let bar_pad = text - 17 - 1 - "13".len();
@@ -1271,8 +1277,10 @@ fn expected_card(workspace: &str, text: usize, _panel: u16) -> Vec<String> {
     rows.extend([
         figure("tokens in / out", "10 / 3"),
         figure("cache hits", "40%"),
+        figure("cache resets in", "—"),
         figure("cost", "unknown"),
         figure("cost on subscription", "$0.00"),
+        figure("speed, last reply", "—"),
         figure("turns", "1"),
     ]);
     rows

@@ -382,17 +382,25 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
-    // The title row holds the working-directory slot from the first
-    // frame, so no row moves when the first status names it.
+    // The title names the card, with the permission mode right-aligned;
+    // the working directory is the first row under it, blank until the
+    // first status names it, so no row moves when it lands
+    // (`docs/tui.md`, "The panel").
+    out.push(title_row(
+        "Session status",
+        vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
+        text,
+    ));
     let workspace = panel
         .status()
         .map(|status| status.workspace.as_str())
         .unwrap_or("");
-    out.push(title_row(
-        workspace,
-        vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
-        text,
-    ));
+    out.push(Row {
+        line: Line::from(workspace.to_owned()),
+        spot: None,
+        tint: None,
+        edge: false,
+    });
     out.push(branch_row(app));
     let model = panel
         .model()
@@ -523,6 +531,41 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             } else {
                 out.push(reserved_row("cache hits", Some(Spot::Usage), text));
             }
+            // "cache resets in": the pinned expiry counted down on the
+            // frame's wall time — a dim dash before the first request,
+            // whole minutes, seconds under the last minute, "expired"
+            // in attention once the lifetime has passed
+            // (`docs/tui.md`, "The panel").
+            match status.cache_expires {
+                None => out.push(reserved_row("cache resets in", Some(Spot::Usage), text)),
+                Some(expiry) => {
+                    let now = app.motion().wall_ms().unwrap_or(0);
+                    // Painted and counting: ask the frame for the
+                    // moment the text next changes (WAKE-RULED).
+                    if let Some(due) = countdown_due_wall(expiry, now) {
+                        app.motion().ask_wall(due);
+                    }
+                    if now >= expiry {
+                        out.push(Row {
+                            line: sides(
+                                vec![Span::styled("cache resets in", style(Role::Muted))],
+                                Span::styled("expired", style(Role::Attention)),
+                                text,
+                            ),
+                            spot: Some(Spot::Usage),
+                            tint: None,
+                            edge: false,
+                        });
+                    } else {
+                        out.push(figure_row(
+                            "cache resets in",
+                            cache_countdown(expiry.saturating_sub(now)),
+                            Some(Spot::Usage),
+                            text,
+                        ));
+                    }
+                }
+            }
             // With a budget the cost row always shows spend against it; a
             // cost still null counts as zero until it settles
             // (`docs/loop.md`, "Spending budget"). A known billed cost
@@ -546,6 +589,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             for label in [
                 "tokens in / out",
                 "cache hits",
+                "cache resets in",
                 "cost",
                 "cost on subscription",
             ] {
@@ -744,6 +788,37 @@ pub(super) fn branch_text(app: &App) -> Option<String> {
             Some(git.branch.as_deref().unwrap_or("detached").to_owned())
         }
     }
+}
+
+/// Time left on the prompt cache, in milliseconds: whole minutes, in
+/// seconds under the last minute (`docs/tui.md`, "The panel"). Unlike
+/// `duration`, minutes never carry their seconds.
+pub(super) fn cache_countdown(remaining_ms: u64) -> String {
+    let secs = remaining_ms / 1000;
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m", secs / 60)
+    }
+}
+
+/// The next wall time the countdown text changes after `now`: the
+/// minute rollover while minutes show, every second under the last
+/// minute with the 60-second crossover first, the expiry itself last;
+/// none once expired (`docs/tui.md`, "The panel"; WAKE-RULED). The
+/// one-millisecond step lands past the boundary the floor keeps, so
+/// the woken frame always reads a new text.
+pub(crate) fn countdown_due_wall(expiry_ms: u64, now_ms: u64) -> Option<u64> {
+    let remaining = expiry_ms.checked_sub(now_ms)?;
+    if remaining == 0 {
+        return None;
+    }
+    let unit = if remaining / 1000 < 60 { 1_000 } else { 60_000 };
+    Some(
+        now_ms
+            .saturating_add(remaining - remaining / unit * unit)
+            .saturating_add(1),
+    )
 }
 
 /// A token count without its trailing `token` word.

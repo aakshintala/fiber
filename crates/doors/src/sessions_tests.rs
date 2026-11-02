@@ -40,6 +40,7 @@ fn status(name: &str) -> SessionStatus {
         step: None,
         git: None,
         context: None,
+        cache_expires: None,
         spend: Usage {
             tokens: Tokens {
                 input: 0,

@@ -1139,6 +1139,7 @@ fn full_status() -> Line {
             "model": "test/model", "delegates": 0, "jobs": 0,
             "clients": 0, "git": {"branch": "main"},
             "context": {"tokens": 268000, "window": 1000000},
+            "cache_expires": 2520000,
         }),
     )
 }
@@ -1188,16 +1189,18 @@ fn status_row_one_lists_every_segment_in_its_roles() {
     // the status line leaves them out ("The narrow layout").
     assert_eq!(
         row.line.to_string(),
-        "git main  \u{2502}  $4.12  \u{2502}  cache 9%  \u{2502}  tools \u{2717} github down  \u{2502}  \u{00b1} 2 files +13 \u{2212}5"
+        "git main  \u{2502}  $4.12  \u{2502}  cache 9% 42m  \u{2502}  tools \u{2717} github down  \u{2502}  \u{00b1} 2 files +13 \u{2212}5"
     );
     // The joiner is dim.
     assert_eq!(style_of(row, "  \u{2502}  "), style(Role::Muted));
     // "git" dim, the branch in secondary, spotted alone.
     assert_eq!(style_of(row, "git"), style(Role::Muted));
     assert_eq!(style_of(row, "main"), style(Role::Secondary));
-    // Dim `cache` with its share, dim `tools` with its error value,
-    // dim `±` with the added and removed totals.
+    // Dim `cache` with its share and the time until it resets, dim
+    // `tools` with its error value, dim `±` with the added and
+    // removed totals.
     assert_eq!(style_of(row, "cache"), style(Role::Muted));
+    assert_eq!(style_of(row, "42m"), ratatui::style::Style::default());
     assert_eq!(style_of(row, "tools"), style(Role::Muted));
     assert_eq!(style_of(row, "\u{2717} github down"), style(Role::Error));
     assert_eq!(style_of(row, "\u{00b1}"), style(Role::Muted));
@@ -1208,11 +1211,49 @@ fn status_row_one_lists_every_segment_in_its_roles() {
         [
             (4, 4, Spot::Branch),
             (13, 5, Spot::Usage),
-            (29, 2, Spot::Usage),
-            (36, 19, Spot::Tools),
-            (60, 16, Spot::ChangedFiles),
+            (29, 6, Spot::Usage),
+            (40, 19, Spot::Tools),
+            (64, 16, Spot::ChangedFiles),
         ]
     );
+}
+
+/// The cache segment shows the time until the cache resets after its
+/// share: minutes, seconds under the last minute, and "expired" in
+/// `attention` once the lifetime has passed (`docs/tui.md`, "The narrow
+/// layout").
+#[test]
+fn the_cache_segment_shows_the_time_until_it_resets() {
+    use crate::theme::{Role, style};
+    let mut app = full_app();
+    let clock = fakes::clock::FakeClock::new();
+    app.set_now(clock.now(), 0);
+    let row = &crate::view::status_rows::status(&app, 160)[0];
+    assert!(
+        row.line.to_string().contains("cache 9% 42m"),
+        "{}",
+        row.line
+    );
+    assert_eq!(style_of(row, "42m"), ratatui::style::Style::default());
+    // Seconds under the last minute.
+    app.set_now(clock.now(), 2_460_001);
+    let row = &crate::view::status_rows::status(&app, 160)[0];
+    assert!(
+        row.line.to_string().contains("cache 9% 59s"),
+        "{}",
+        row.line
+    );
+    // "expired" in attention at and past the expiry.
+    for wall in [2_520_000, 2_520_001] {
+        app.set_now(clock.now(), wall);
+        let row = &crate::view::status_rows::status(&app, 160)[0];
+        assert!(
+            row.line.to_string().contains("cache 9% expired"),
+            "{wall} {}",
+            row.line
+        );
+        assert_eq!(style_of(row, "expired"), style(Role::Attention), "{wall}");
+    }
 }
 
 /// Row 1 cut at 61: the shorter row still ends in `…` keeping its

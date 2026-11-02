@@ -30,7 +30,8 @@ impl App {
     /// The earliest wake the frame asked for, leaving none behind: what
     /// the loop arms the tick with after the draw. The earliest of the
     /// motion wake, a one-shot layout correction, the reconciler's retry
-    /// wake and the notices wake. Animation dues fold into motion first.
+    /// wake and the notices wake. Animation dues fold into motion first,
+    /// as does a painted countdown's one-shot text-boundary ask.
     pub(crate) fn take_wake(&self) -> Option<Instant> {
         self.anim_asks();
         [

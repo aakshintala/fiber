@@ -116,6 +116,7 @@ pub(crate) fn recorded(
         extension: None,
         origin_session_id: None,
         reviewer: None,
+        warming: None,
     };
     Recorded { line, lookable }
 }
@@ -620,6 +621,7 @@ mod pending_tests {
             extension: None,
             origin_session_id: None,
             reviewer: None,
+            warming: None,
         }
     }
 
@@ -985,6 +987,7 @@ mod loop_record_tests {
             extension: None,
             origin_session_id: None,
             reviewer: None,
+            warming: None,
         };
         looped
             .write_usage(

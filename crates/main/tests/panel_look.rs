@@ -17,6 +17,7 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::json;
@@ -390,29 +391,27 @@ fn panel_cards_match_the_doc() {
         assert_eq!(cell.bg, PANEL);
     }
 
-    // The Session title: the directory with `auto` in attention ending
+    // The Session title: "Session status" with `auto` in attention ending
     // one column before the slab's right edge, the text two columns past
     // the slab.
     let title = top + 1;
     let text: String = (slab + 2..right - 1)
         .map(|x| grid.cell(x, title).symbol)
         .collect();
-    let cells = workspace.chars().count();
-    let want = if cells + 5 > 30 {
-        let kept: String = workspace
-            .chars()
-            .rev()
-            .take(24)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        format!("…{kept}")
-    } else {
-        workspace.clone()
-    };
-    assert!(text.starts_with(&want), "{text:?}");
+    assert!(text.trim_start().starts_with("Session status"), "{text:?}");
     assert!(text.trim_end().ends_with("auto"), "{text:?}");
+    let directory: String = (slab + 2..right - 1)
+        .map(|x| grid.cell(x, top + 2).symbol)
+        .collect();
+    assert!(
+        directory.trim().contains(
+            Path::new(&workspace)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(""),
+        ),
+        "{directory:?}"
+    );
     let row = &grid.rows[title as usize];
     let auto = locate(row, "auto");
     assert_eq!(auto, right - 5, "auto ends one past: {row:?}");
@@ -518,7 +517,7 @@ fn narrow_status_rows_match_the_doc() {
     let line: String = (1..100).map(|x| grid.cell(x, first).symbol).collect();
     let line = line.trim_end();
     assert_eq!(
-        line, "▌0 waiting  │  $0.00  │  cache 0%  │  ± 3 files +3 −0",
+        line, "▌0 waiting  │  $0.00  │  cache 0% 59m  │  ± 3 files +3 −0",
         "{line:?}"
     );
     assert!(line.contains("  │  "), "{line:?}");

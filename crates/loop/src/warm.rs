@@ -197,13 +197,16 @@ impl Loop {
             Err(error) => (error.usage().clone(), None),
         };
         let model = &self.model;
-        let recorded = crate::usage::recorded(
+        let mut recorded = crate::usage::recorded(
             usage,
             inline,
             &model.reference,
             model.cost.as_ref(),
             model.subscription,
         );
+        // The warming path is the only setter of the marker the fold
+        // reads to tell a refresh from any other call.
+        recorded.line.warming = Some(true);
         let lookup = self.provider.cost_lookup();
         self.write_usage(recorded, lookup, None, None)?;
         match reply {

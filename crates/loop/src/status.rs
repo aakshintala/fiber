@@ -12,8 +12,8 @@ use std::thread::{Builder, JoinHandle};
 
 use contract::emit::Emit;
 use contract::events::{
-    ContextFill, Event, Git, InputItem, Interaction, SessionState, SessionStatus, Waiting,
-    WaitingKind,
+    CacheLifetime, ContextFill, Event, Git, InputItem, Interaction, PreambleReason, SentTool,
+    SessionState, SessionStatus, Waiting, WaitingKind,
 };
 use contract::shapes::{ContentPart, Origin, Tokens, Usage};
 use contract::{ActionId, Envelope, JobId, SessionId};
@@ -83,6 +83,15 @@ pub(crate) struct Fold {
     /// True once the session accepted `close`: nothing clears it.
     closing: bool,
     context: Option<u64>,
+    /// The latest cache-pinning request's end, as `ts`: none until the
+    /// first qualifying `usage_recorded`.
+    cache_ts: Option<u64>,
+    /// The preamble's cache lifetime; the countdown counts from the
+    /// pinned end through it.
+    lifetime: Option<CacheLifetime>,
+    /// What the latest preamble built with, for telling an unchanged
+    /// resume from one that rebuilt the cache's inputs.
+    preamble_tag: Option<PreambleTag>,
     ledger: Ledger,
     spend: Usage,
     /// Delegates started and not yet finished.
@@ -162,6 +171,7 @@ impl Fold {
                 step: None,
                 git: None,
                 context: None,
+                cache_expires: None,
                 spend: Usage {
                     tokens: Tokens {
                         input: 0,
@@ -180,6 +190,9 @@ impl Fold {
             since: None,
             started: 0,
             calls: 0,
+            cache_ts: None,
+            lifetime: None,
+            preamble_tag: None,
             turns: 0,
             step: None,
             latest: None,
@@ -277,10 +290,26 @@ impl Fold {
                 self.window = Some(built.context_window);
                 // A process that built its preamble no longer waits on an offer.
                 self.pending.retain(|p| p.kind != WaitingKind::Offer);
+                // The countdown counts through the latest preamble's
+                // lifetime. A resume that rebuilt the cache's inputs
+                // starts a cold cache; an unchanged one keeps the old
+                // chain alive, so the pin stays.
+                self.lifetime = Some(built.cache_lifetime);
+                let tag = PreambleTag::of(built);
+                if built.reason == PreambleReason::Resume
+                    && self.preamble_tag.as_ref().is_some_and(|prev| *prev != tag)
+                {
+                    self.cache_ts = None;
+                }
+                self.preamble_tag = Some(tag);
             }
             Event::ModelChanged(changed) => {
                 self.model.clone_from(&changed.after.model);
                 self.thinking.clone_from(&changed.after.thinking);
+                // A vendor holds its cache per account or workspace, so
+                // the new label starts with a cold cache
+                // (`docs/prompt-cache.md`, "Switching model").
+                self.cache_ts = None;
             }
             Event::TurnStarted(started) => {
                 if line.turn_id.is_some() {
@@ -417,8 +446,28 @@ impl Fold {
                 {
                     self.context = Some(crate::handoff::context_tokens(&recorded.tokens));
                 }
+                // The cache pin moves on a conversation request (an
+                // envelope action of the session's own, not an
+                // extension's) or a warming refresh, never on a
+                // correction, a copy, a reviewer's call or a notes
+                // proposal, which carries no action and no marker.
+                let conversation = line.action_id.is_some()
+                    && recorded.extension.is_none()
+                    && recorded.reviewer.is_none();
+                let refresh = recorded.warming == Some(true) && recorded.reviewer.is_none();
+                if !corrected && recorded.origin_session_id.is_none() && (conversation || refresh) {
+                    self.cache_ts = Some(line.ts);
+                }
             }
-            Event::HandoffCompleted(_) => self.context = None,
+            Event::HandoffCompleted(_) => {
+                self.context = None;
+                // The reviewer misses the cache once, as the model does
+                // (`docs/prompt-cache.md`, "Rules for other areas").
+                self.cache_ts = None;
+            }
+            // A reload rebuilds the preamble from the start, so the old
+            // cache entry is dead (`docs/prompt-cache.md`, "Reload").
+            Event::Reloaded(_) => self.cache_ts = None,
             Event::JobStarted(_) => self.refresh_running(),
             // A delegate's end removes it from the status fold, whether
             // its `delegate_finished` or only its `job_completed` was
@@ -471,7 +520,6 @@ impl Fold {
             | Event::ReviewerKept(_)
             | Event::McpServerFailed(_)
             | Event::McpServerReady(_)
-            | Event::Reloaded(_)
             | Event::ExtensionsLoaded(_)
             | Event::ExtensionStateSet(_)
             | Event::ExtensionStateUnset(_)
@@ -575,6 +623,12 @@ impl Fold {
                 .context
                 .zip(self.window.filter(|window| *window > 0))
                 .map(|(tokens, window)| ContextFill { tokens, window }),
+            // The pinned request's end plus the folded lifetime,
+            // saturating: absent until the first qualifying request.
+            cache_expires: self
+                .cache_ts
+                .zip(self.lifetime)
+                .map(|(ts, lifetime)| ts.saturating_add(lifetime_ms(lifetime))),
             spend: self.spend.clone(),
             delegates: u32::try_from(self.delegates.len()).unwrap_or(u32::MAX),
             jobs: u32::try_from(jobs).unwrap_or(u32::MAX),
@@ -606,6 +660,44 @@ fn prompt_of(input: &[InputItem]) -> Option<String> {
             })
             .collect()
     })
+}
+
+/// What a preamble built with that decides whether a resume kept the
+/// cache's chain alive: the settings, the system prompt and the tool
+/// definitions. Anything else (a handoff point, a budget, a window)
+/// leaves the cached prefix alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreambleTag {
+    model: String,
+    thinking: Option<String>,
+    cache_lifetime: CacheLifetime,
+    credential: Option<String>,
+    tool_choice: String,
+    system_prompt: String,
+    tools: Vec<SentTool>,
+}
+
+impl PreambleTag {
+    fn of(built: &contract::events::PreambleBuilt) -> Self {
+        Self {
+            model: built.model.clone(),
+            thinking: built.thinking.clone(),
+            cache_lifetime: built.cache_lifetime,
+            credential: built.credential.clone(),
+            tool_choice: built.tool_choice.clone(),
+            system_prompt: built.system_prompt.clone(),
+            tools: built.tools.clone(),
+        }
+    }
+}
+
+/// A cache lifetime in milliseconds, as `Loop::lifetime` maps it
+/// (`crates/loop/src/warm.rs`).
+fn lifetime_ms(lifetime: CacheLifetime) -> u64 {
+    match lifetime {
+        CacheLifetime::FiveMinutes => 300_000,
+        CacheLifetime::OneHour => 3_600_000,
+    }
 }
 
 /// A tool with no usable subject shows its name alone.
