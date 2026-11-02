@@ -42,14 +42,8 @@ pub(crate) fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8
                     Ok(_) => {
                         buf.push(byte[0]);
                         let marker = markers[at];
-                        if buf.len() >= marker.len()
-                            && let Some(pos) = buf
-                                .windows(marker.len())
-                                .position(|window| window == marker)
-                        {
-                            let end = pos + marker.len();
-                            let chunk = buf[..end].to_vec();
-                            buf.drain(..end);
+                        if buf.len() >= marker.len() && buf[buf.len() - marker.len()..] == *marker {
+                            let chunk = std::mem::take(&mut buf);
                             if done.send(chunk).is_err() {
                                 break;
                             }
