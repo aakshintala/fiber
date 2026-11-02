@@ -2,10 +2,8 @@
 source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
-                                                      ▄▄▄▄▄
-                                                       hi ▐┃
-                                                      ▀▀▀▀▀┃
-                                                 you 00:00 ┃
+                                                      ▀▀▀▀▀
+                                                 you 00:00
                                                            ┃
   • Steering, joins the turn at the next step
   ↳ use the parser  ✕
@@ -13,4 +11,6 @@ expression: screen(&app)
   ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to dr
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › and test it█ message · Enter amends · ⌥X drops · Esc sto
+▌──────────────────────────────────────────────────────────
+▌auto                                    ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

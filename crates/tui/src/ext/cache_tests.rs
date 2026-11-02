@@ -42,9 +42,9 @@ fn decision(call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>) -> Decisi
 }
 
 use crate::ext::{
-    AnswerDisposition, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles,
-    Delegate, DelegatesCard, Failure, Input, Job, JobsCard, LedgerResult, LedgerRow, Prompt,
-    PromptImage, Quota, RawSpan, ReplyText, SessionCard, SessionContext, Spend, StatusRows,
+    AnswerDisposition, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles, Context,
+    Delegate, DelegatesCard, Failure, Input, InputStatus, Job, JobsCard, LedgerResult, LedgerRow,
+    Prompt, PromptImage, Quota, RawSpan, ReplyText, SessionCard, SessionContext, Spend, StatusRows,
     SteeringMessage, SteeringQueue, ThinkingLine, TurnCard, TurnCardState, TurnEnded, WidgetCard,
     WorkingLine, WorkingRetry,
 };
@@ -945,6 +945,19 @@ fn session_card<'a>(
     }
 }
 
+fn input_status<'a>(model: Option<&'a str>, flat: bool) -> Input<'a> {
+    Input::InputStatus(InputStatus {
+        workspace: Some("/w/fiber"),
+        model,
+        thinking: Some("high"),
+        context: Some(Context {
+            tokens: 268_000,
+            window: 1_000_000,
+        }),
+        flat,
+    })
+}
+
 fn status_rows<'a>(
     session: SessionCard<'a>,
     files: &'a [ChangedFile<'a>],
@@ -1053,6 +1066,11 @@ fn each_chrome_slot_caches_by_input_and_width() {
             ),
         ),
         (
+            "input_status",
+            input_status(Some("m"), false),
+            input_status(Some("n"), false),
+        ),
+        (
             "card:session",
             Input::Card(Card::Session(session_card(
                 Some("m"),
@@ -1152,6 +1170,46 @@ fn each_chrome_slot_caches_by_input_and_width() {
         // (`docs/tui.md`, "How a TUI extension runs").
         assert_eq!(calls.get(), before + 3, "{slot} keys the input");
     }
+}
+
+/// The input status row's key covers its model, context and flat flag:
+/// a changed figure or a screen-reader pass misses, so neither shares a
+/// cache entry (`docs/tui.md`, "How a TUI extension runs").
+#[test]
+fn the_input_status_key_covers_its_figures_and_flat() {
+    let base = input_status(Some("m"), false);
+    let Input::InputStatus(status) = &base else {
+        panic!("an input status row");
+    };
+    let same = status.key("input_status");
+    let renamed = InputStatus {
+        model: Some("n"),
+        ..*status
+    }
+    .key("input_status");
+    assert_ne!(same, renamed, "a changed model misses");
+    let rethought = InputStatus {
+        thinking: Some("low"),
+        ..*status
+    }
+    .key("input_status");
+    assert_ne!(same, rethought, "changed thinking misses");
+    let regrown = InputStatus {
+        context: Some(Context {
+            tokens: 100,
+            window: 1_000_000,
+        }),
+        ..*status
+    }
+    .key("input_status");
+    assert_ne!(same, regrown, "changed context misses");
+    let flattened = InputStatus {
+        flat: true,
+        ..*status
+    }
+    .key("input_status");
+    assert_ne!(same, flattened, "a flat pass misses");
+    assert_ne!(same, status.key("status_rows"), "a changed slot misses");
 }
 
 /// The session card's key covers the thinking flag: the same card with

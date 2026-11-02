@@ -205,13 +205,13 @@ fn the_approvals_row_opens_the_waiting_queue() {
 fn the_slash_panel_reserves_no_rows() {
     let mut app = connected();
     app.set_size(80, 24);
-    assert_eq!(app.conversation_height(), 21);
+    assert_eq!(app.conversation_height(), 19);
     // The `/` panel draws over the conversation, reserving nothing,
     // however many rows match (`docs/tui.md`, "Look", "Overlays").
     type_text(&mut app, "/");
-    assert_eq!(app.conversation_height(), 21);
+    assert_eq!(app.conversation_height(), 19);
     type_text(&mut app, "han");
-    assert_eq!(app.conversation_height(), 21);
+    assert_eq!(app.conversation_height(), 19);
 }
 
 #[test]

@@ -2,8 +2,6 @@
 source: crates/tui/src/view/offer_tests.rs
 expression: screen
 ---
-  runs: /bin/echo
-  ( ) approve   (•) skip for this session   ( ) never
 
   MCP server c · declared in .fiber/config.json
   MCP server: c
@@ -17,4 +15,6 @@ A package's TUI files are never installed from a repository.
 ▸ Send · 0 approve, 3 skip, 0 never
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ ›
+▌──────────────────────────────────────────────────────────────────────────────
+▌auto                                                        ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

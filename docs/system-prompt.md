@@ -73,6 +73,15 @@ inside Fiber; it is not Fiber. Its work includes discussing, brainstorming and
 planning with the person, not only changing files. The opening line is adapted
 from pi's (MIT license).
 
+Fiber's text also says when to write to the person during a turn. Before a
+long stretch of work, such as several calls or a slow command, the model says
+in a sentence or two what it is about to do and why. It writes again when it
+finishes a stage, when it finds something that changes the plan, and before
+the next long stretch. The person sees every call as it runs, so the model
+writes about the work, not about each call. This holds in every project
+because it is how Fiber's conversation reads: each such reply also ends a tool
+group (`docs/tui.md`, "Tool groups and the ledger").
+
 Preferences about how to work, such as testing, commit habits and reply style,
 are left to instruction files. Fiber's text states only what holds in every
 project.

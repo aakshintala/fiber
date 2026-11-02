@@ -1263,10 +1263,12 @@ fn the_key_map_scrolls_by_binding_and_searches() {
     assert_eq!(app.keymap_top(), Some(0));
     app.on_key(Key::Down, now());
     assert_eq!(app.keymap_top(), Some(0));
-    // A page moves by the bindings that fit less one.
+    // A page moves by the bindings that fit less one: the smaller
+    // overlay fits one binding from the second, so the focus settles
+    // one row further down.
     app.on_key(Key::PageDown, now());
     let map = app.keymap().expect("open");
-    assert_eq!((map.focus(), map.top()), (2, 1));
+    assert_eq!((map.focus(), map.top()), (2, 2));
     app.on_key(Key::PageUp, now());
     let map = app.keymap().expect("open");
     assert_eq!((map.focus(), map.top()), (1, 1));

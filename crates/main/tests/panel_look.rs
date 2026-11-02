@@ -488,41 +488,206 @@ fn narrow_status_rows_match_the_doc() {
             && grid.contents.contains("1 delegate running")
             && grid.contents.contains("1 job running")
     });
-    // The last two content rows: the session's segments, then the
-    // running counts.
+    // The last two content rows: the running counts, then the segments
+    // row above them. Neither carries a ctx segment: context lives on
+    // the input box's status row (`docs/tui.md`, "The input box").
     let second = (0u16..40)
         .rev()
         .find(|y| grid.rows[*y as usize].contains("1 job running"))
         .unwrap_or_else(|| panic!("a counts row"));
     let first = second - 1;
     assert!(
-        grid.rows[first as usize].contains("ctx"),
-        "the segments row"
+        !grid.rows[first as usize].contains("ctx"),
+        "no ctx on the segments row"
     );
-    // Each status row sits on the panel tint one column in: the middle
-    // of the row carries the tint, past the grip and the cut edge.
+    assert!(
+        !grid.rows[second as usize].contains("ctx"),
+        "no ctx on the counts row"
+    );
+    // Each status row sits on the slab one column in: the status line
+    // sits on the slab (`docs/tui.md`, "The narrow layout"), past the
+    // stripe and the cut edge.
     for y in [first, second] {
         for x in 1..90 {
-            assert_eq!(grid.cell(x, y).bg, PANEL, "tint cell ({x}, {y})");
+            assert_eq!(grid.cell(x, y).bg, SURFACE, "tint cell ({x}, {y})");
         }
     }
-    // The first row runs to the terminal's right edge: cut at 99.
+    // The first row shows its segments whole: short of the terminal's
+    // right edge, so nothing is cut (`docs/tui.md`, "The narrow
+    // layout").
     let line: String = (1..100).map(|x| grid.cell(x, first).symbol).collect();
     let line = line.trim_end();
-    assert_eq!(line.chars().count(), 99, "{line:?}");
+    assert_eq!(
+        line, "▌0 waiting  │  $0.00  │  cache 0%  │  ± 3 files +3 −0",
+        "{line:?}"
+    );
     assert!(line.contains("  │  "), "{line:?}");
     let at = locate(line, "  │  ");
     for x in 1 + at..1 + at + 5 {
         assert!(grid.cell(x, first).dim, "joiner cell ({x}, {first})");
     }
-    let ctx = locate(line, "ctx");
+    // The ctx bar sits on the input box's status row above the status
+    // line: `ctx` with its eight-cell bar (`docs/tui.md`, "The input
+    // box").
+    let status = (0u16..first)
+        .rev()
+        .find(|y| grid.rows[*y as usize].contains("ctx"))
+        .unwrap_or_else(|| panic!("the input box status row"));
+    let bar: String = (1..100).map(|x| grid.cell(x, status).symbol).collect();
+    let bar = bar.trim_end();
+    let ctx = locate(bar, "ctx");
     assert_eq!(
         (0..8)
-            .filter(|n| grid.cell(1 + ctx + 4 + n, first).symbol.as_str() == "▆")
+            .filter(|n| grid.cell(1 + ctx + 4 + n, status).symbol.as_str() == "▆")
             .count(),
         8,
-        "{line:?}"
+        "{bar:?}"
     );
+    let Release {
+        file: release,
+        guard,
+    } = release;
+    std::io::Write::write_all(&mut &release, b"\n").unwrap();
+    guard.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+/// A click at cell (`x`, `y`): the SGR press and release, as the
+/// terminal sends them.
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// The settled narrow run: the scripted turn with the running delegate
+/// and job, so the input box's status row carries the `ctx` segment.
+fn narrow_settled() -> (Setup, ProviderServer, Release, Run, Grid) {
+    let (setup, server, release) = panel_setup();
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(TRUECOLOUR)
+        .collect();
+    let mut run = Run::spawn(&setup, 100, 40, &[], &env);
+    run.ready();
+    run.write(b"go\r");
+    let grid = run.wait_screen("the narrow status rows", |grid| {
+        grid.contents.contains("ctx")
+            && grid.contents.contains("1 delegate running")
+            && grid.contents.contains("1 job running")
+    });
+    (setup, server, release, run, grid)
+}
+
+/// The input box's status row above the kept status lines: the nearest
+/// row above the counts row carrying `ctx`.
+fn status_row(grid: &Grid) -> u16 {
+    let height = grid.rows.len() as u16;
+    let second = (0..height)
+        .rev()
+        .find(|y| grid.rows[*y as usize].contains("1 job running"))
+        .unwrap_or_else(|| panic!("a counts row"));
+    (0..second)
+        .rev()
+        .find(|y| grid.rows[*y as usize].contains("ctx"))
+        .unwrap_or_else(|| panic!("the input box status row"))
+}
+
+/// A narrow width cuts the working directory from the left first: the
+/// row keeps the tail behind an ellipsis with the mode, while the
+/// right side stays whole (`docs/tui.md`, "The input box").
+#[test]
+fn narrow_width_cuts_the_working_directory_first() {
+    let (setup, _server, release) = panel_setup();
+    // The session shows the canonical workspace, symlinks resolved.
+    let workspace = fs::canonicalize(setup.workspace())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(TRUECOLOUR)
+        .collect();
+    // 68 columns: past the exact fit, short of dropping the left side.
+    let mut run = Run::spawn(&setup, 68, 30, &[], &env);
+    run.ready();
+    run.write(b"go\r");
+    let grid = run.wait_screen("the cut status row", |grid| {
+        grid.contents.contains("ctx")
+            && grid.contents.contains("1 delegate running")
+            && grid.contents.contains("1 job running")
+    });
+    let status = status_row(&grid);
+    let row: String = (1..68).map(|x| grid.cell(x, status).symbol).collect();
+    let row = row.trim_end();
+    // The mode and the model stay: the left side is cut, not dropped,
+    // and the right side is whole.
+    assert!(row.contains("auto"), "the mode stays: {row:?}");
+    assert!(
+        row.contains("scripted/s.json"),
+        "the model stays whole: {row:?}"
+    );
+    // Exactly one ellipsis, left of the mode: the working directory is
+    // cut from the left to keep its tail.
+    assert_eq!(
+        row.chars().filter(|cell| *cell == '…').count(),
+        1,
+        "one left cut: {row:?}"
+    );
+    let cut = row
+        .find('…')
+        .unwrap_or_else(|| panic!("a left cut in {row:?}"));
+    assert!(
+        cut < locate(row, "auto") as usize,
+        "the cut opens the directory: {row:?}"
+    );
+    assert!(!row.contains(&workspace), "the head is shed: {row:?}");
+    // The kept tail is the workspace's own end: 68 columns leave room
+    // for its last 8 cells behind the ellipsis.
+    let after = &row[cut + '…'.len_utf8()..];
+    let tail = after
+        .split("  │  ")
+        .next()
+        .unwrap_or_else(|| panic!("a tail in {row:?}"));
+    assert!(!tail.is_empty(), "a tail stays: {row:?}");
+    assert!(
+        workspace.ends_with(tail),
+        "the tail is the workspace's end: {row:?}"
+    );
+    assert_eq!(
+        tail,
+        &workspace[workspace.len() - 8..],
+        "eight cells stay at 68 columns: {row:?}"
+    );
+
+    let Release {
+        file: release,
+        guard,
+    } = release;
+    std::io::Write::write_all(&mut &release, b"\n").unwrap();
+    guard.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+/// Clicking the ctx segment opens the context breakdown: the settled
+/// narrow row proves the target, the click lands on its `ctx` cell,
+/// and the Context view opens (`docs/tui.md`, "The input box").
+#[test]
+fn clicking_ctx_opens_the_context_breakdown() {
+    let (setup, _server, release, mut run, grid) = narrow_settled();
+    assert!(
+        !grid.contents.contains("/context"),
+        "no breakdown before the click"
+    );
+    let status = status_row(&grid);
+    let row: String = (1..100).map(|x| grid.cell(x, status).symbol).collect();
+    let ctx = locate(row.trim_end(), "ctx");
+    click(&mut run, 1 + ctx, status);
+    let grid = run.wait_screen("the open context breakdown", |grid| {
+        grid.contents.contains("Context") && grid.contents.contains("/context")
+    });
+    let top = &grid.rows[0];
+    assert!(top.contains("Context"), "the breakdown title: {top:?}");
+    assert!(top.contains("/context"), "the breakdown command: {top:?}");
+
     let Release {
         file: release,
         guard,

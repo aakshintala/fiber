@@ -35,6 +35,8 @@ pub enum Input<'a> {
     SteeringQueue(SteeringQueue<'a>),
     /// The narrow layout's status rows.
     StatusRows(StatusRows<'a>),
+    /// The input box's status row.
+    InputStatus(InputStatus<'a>),
     /// One panel card's source data.
     Card(Card<'a>),
 }
@@ -44,9 +46,9 @@ mod slots;
 mod turn;
 
 pub use chrome::{
-    BranchName, Card, ChangedFile, ChangedFiles, Delegate, DelegatesCard, Job, JobsCard,
-    QueuedImage, Quota, SessionCard, SessionContext, Spend, StatusRows, SteeringMessage,
-    SteeringQueue, WidgetCard, WorkingLine, WorkingRetry,
+    BranchName, Card, ChangedFile, ChangedFiles, Context, Delegate, DelegatesCard, InputStatus,
+    Job, JobsCard, QueuedImage, Quota, SessionCard, SessionContext, Spend, StatusRows,
+    SteeringMessage, SteeringQueue, WidgetCard, WorkingLine, WorkingRetry,
 };
 
 pub use slots::{

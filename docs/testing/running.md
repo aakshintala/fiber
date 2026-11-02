@@ -103,8 +103,9 @@ line: `tested <sha> = main <base> + head <head>` on a pull request run, where
 the merge commit's parents are main and the pull request head, and
 `tested <sha>` on a push run. The shas are full, so the
 `git merge-base --is-ancestor` check below takes them as written. The first
-failure's text is kept to 6000 characters; longer text is cut and `...` is
-appended. Within one report job a file's title files or comments once; a repeat
+failure's text is kept to 1,000,000 characters; longer text is cut
+and `...[dropped N chars]` is appended. A body longer than GitHub's
+65,536-character limit is written whole across follow-up comments. Within one report job a file's title files or comments once; a repeat
 is skipped, and a repeated title takes its runner and detail from its first
 occurrence in file-name byte order. On a pull request run the report reads
 the failing file from the panic path: when main changed that file since
@@ -140,3 +141,21 @@ passing under repeated runs under load.
 
 Crate-level and cross-crate tests never retry: they are deterministic, so a
 failure there is signal.
+
+## Journey suite
+
+The main journeys in `crates/main/tests/main_journeys.rs` drive the release
+binary, so build it first, then name it and an empty failures file the
+suite appends to rather than creating:
+
+```
+cargo build --release -p main
+: > /tmp/journey-failures.txt
+FIBER_JOURNEY_BIN=$PWD/target/release/fiber \
+FIBER_JOURNEY_FAILURES=/tmp/journey-failures.txt \
+cargo nextest run -p main --test main_journeys
+```
+
+Without the variables the run panics naming the missing one, not how to
+satisfy it. A journey failure does not block a merge (`docs/ci.md`,
+"The journey suite").

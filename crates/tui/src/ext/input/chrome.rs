@@ -234,6 +234,54 @@ pub struct JobsCard<'a> {
     pub flat: bool,
 }
 
+/// The context's size: its tokens with the window they fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Context {
+    /// The context's size in tokens.
+    pub tokens: u64,
+    /// The model's context window.
+    pub window: u64,
+}
+
+/// The input box's status row: the working directory on the left; the
+/// model, the thinking level and the ctx segment right-aligned
+/// (`docs/tui.md`, "The input box"). The permission mode is always
+/// `auto` (`docs/permissions.md`, "One mode"), so the input carries no
+/// mode field and the renderer emits the fixed value. A replacement
+/// draws one line; an empty replacement leaves the row blank with the
+/// rule staying.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InputStatus<'a> {
+    /// The working directory the first status named, if any.
+    pub workspace: Option<&'a str>,
+    /// The running model, if a preamble named one.
+    pub model: Option<&'a str>,
+    /// The thinking level, if a preamble named one.
+    pub thinking: Option<&'a str>,
+    /// The context tokens and window, if a status carried them.
+    pub context: Option<Context>,
+    /// Whether the screen reader drops every style.
+    pub flat: bool,
+}
+
+impl InputStatus<'_> {
+    /// The cache key over the slot and every field.
+    pub(crate) fn key(&self, slot: &str) -> u64 {
+        let mut key = DefaultHasher::new();
+        slot.hash(&mut key);
+        self.workspace.hash(&mut key);
+        self.model.hash(&mut key);
+        self.thinking.hash(&mut key);
+        self.context.is_some().hash(&mut key);
+        if let Some(context) = &self.context {
+            context.tokens.hash(&mut key);
+            context.window.hash(&mut key);
+        }
+        self.flat.hash(&mut key);
+        key.finish()
+    }
+}
+
 /// An extension widget's card: its lines with whether the person opened
 /// it.
 #[derive(Debug, Clone, Copy)]

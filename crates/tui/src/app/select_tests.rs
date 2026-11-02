@@ -254,7 +254,7 @@ fn a_drag_that_returns_to_its_cell_selects_one_cell() {
 #[test]
 fn release_copies_the_unwrapped_text_and_shows_copied() {
     let text = "one two three four five six seven";
-    let mut app = replied(14, 10, text);
+    let mut app = replied(14, 12, text);
     let first = find(&app, "one");
     let last = find(&app, "seven");
     assert!(last.1 >= first.1 + 2, "three rows: {:#?}", rows(&app));
@@ -267,7 +267,7 @@ fn release_copies_the_unwrapped_text_and_shows_copied() {
 fn a_selection_over_paragraphs_keeps_the_blank_line_between() {
     // The blank line after "beta" is outside the selection: a taller
     // screen shows the whole card.
-    let mut app = replied(40, 12, "alpha\n\nbeta\n\ngamma");
+    let mut app = replied(40, 14, "alpha\n\nbeta\n\ngamma");
     let alpha = find(&app, "alpha");
     let beta = find(&app, "beta");
     assert_eq!(
@@ -278,7 +278,7 @@ fn a_selection_over_paragraphs_keeps_the_blank_line_between() {
 
 #[test]
 fn the_highlight_stays_inside_the_area_and_off_new_below() {
-    let mut app = attached(40, 10);
+    let mut app = attached(40, 12);
     prompt(&mut app, " ");
     let text: Vec<String> = (0..20).map(|n| format!("paragraph {n}")).collect();
     reply(&mut app, "a_m", &text.join("\n\n"));
@@ -299,7 +299,7 @@ fn the_highlight_stays_inside_the_area_and_off_new_below() {
 
 #[test]
 fn a_selection_over_a_list_copies_markers_without_hang_indent() {
-    let mut app = replied(14, 10, "- alpha beta gamma\n- delta");
+    let mut app = replied(14, 12, "- alpha beta gamma\n- delta");
     let first = find(&app, "• alpha");
     let last = find(&app, "delta");
     assert_eq!(
@@ -310,7 +310,7 @@ fn a_selection_over_a_list_copies_markers_without_hang_indent() {
 
 #[test]
 fn a_code_selection_copies_without_the_gutter() {
-    let mut app = replied(30, 10, "```\nlet a = 1;\nlet b = 2;\n```");
+    let mut app = replied(30, 12, "```\nlet a = 1;\nlet b = 2;\n```");
     let first = find(&app, "let a = 1;");
     let last = find(&app, "let b = 2;");
     // Whole rows, the header's `copy` excluded: from the gutter of the
@@ -358,7 +358,7 @@ fn a_wrapped_tool_line_keeps_the_space_ratatui_dropped() {
 
 #[test]
 fn a_partial_first_and_last_row_copy_only_their_cells() {
-    let mut app = replied(12, 10, "alpha beta gamma delta");
+    let mut app = replied(12, 12, "alpha beta gamma delta");
     let beta = find(&app, "beta");
     let gamma = find(&app, "gamma");
     assert_eq!(gamma.1, beta.1 + 1, "{:#?}", rows(&app));
@@ -370,7 +370,7 @@ fn a_partial_first_and_last_row_copy_only_their_cells() {
 
 #[test]
 fn a_backwards_drag_copies_the_same_text() {
-    let mut app = replied(12, 10, "alpha beta gamma delta");
+    let mut app = replied(12, 12, "alpha beta gamma delta");
     let beta = find(&app, "beta");
     let gamma = find(&app, "gamma");
     assert_eq!(
@@ -509,7 +509,7 @@ fn laid_out(width: u16, height: u16) -> App {
 #[test]
 fn presses_outside_the_area_click_while_drags_select() {
     // The input box, and the blank rows above a short conversation.
-    let mut app = replied(40, 10, "hello there");
+    let mut app = replied(40, 12, "hello there");
     let area = app.conversation_area();
     assert_eq!(tried(&mut app, (2, area.bottom())), None, "the input box");
     let hello = find(&app, "hello");
@@ -931,7 +931,7 @@ fn load_needed(app: &mut App, lines: &[Line]) {
 
 /// `spanning` open at 40x8 with every needed page loaded, page 0 dropped.
 fn spanning_app(lines: &[Line]) -> App {
-    let mut app = attached(40, 8);
+    let mut app = attached(40, 10);
     for line in lines {
         app.on_line(line.clone());
     }
@@ -1236,7 +1236,7 @@ fn a_selection_starting_after_a_zero_width_character_skips_it() {
 #[test]
 fn a_selection_starting_after_a_wrapped_space_copies_no_space_before_it() {
     // The space the wrap drops has no cell and lies before the selection.
-    let mut app = replied(12, 10, "alpha beta gamma delta");
+    let mut app = replied(12, 12, "alpha beta gamma delta");
     let gamma = find(&app, "gamma");
     let delta = find(&app, "delta");
     assert_eq!(delta.1, gamma.1 + 1, "{:#?}", rows(&app));

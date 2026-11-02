@@ -707,6 +707,12 @@ row, logged-out row or not-installed row matches, the picker shows one dim line,
 "No models match", and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
 Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 
+On a screen too short for every row, the list scrolls in the rows left
+between the count row and the footer, and it always shows at least one
+model with its provider's heading: the session's model when the picker
+opens, the focused model after ↓ or a click. Where even that does not fit,
+the list keeps it and the footer goes first.
+
 After the model sections and their left-out count rows, the choosing picker
 lists each installed provider with provider data but no credential, one row
 per provider in provider-name order. It never lists the scripted provider.
@@ -860,7 +866,13 @@ install still running.
   added. Until that answers, the rows show the Changed files card's figures,
   which sum Fiber's own edits (`docs/tools.md`, "write" and "edit"). Under
   the chosen file, its hunks in the diff format an opened edit uses ("Tool
-  groups and the ledger").
+  groups and the ledger"). On a local terminal, Ctrl+G opens the chosen file
+  in `$VISUAL` or `$EDITOR` with `+N`, where N is the first line of its first
+  hunk, or 1 when there is no hunk. The editor gets the whole screen, as
+  Ctrl+G on the draft does. On return, the view reads the file's diff and
+  numstat again. Its footer says "Ctrl+G edits", dim. On a remote terminal,
+  Ctrl+G opens nothing and shows "Not available in this terminal."; the
+  footer omits the Ctrl+G hint.
 - **The release notes,** `/release-notes`: the running binary's
   changelog section for its own version (`docs/releasing.md`, "The
   changelog"), embedded in the binary at build time, so the view asks
@@ -1124,7 +1136,11 @@ arrived after `sessions` was sent.
 ### Tool groups and the ledger
 
 - **A group is everything between two pieces of assistant text,** thinking
-  included. Collapsed, it is one line: what was done by kind ("Read 34 files,
+  included. A labelled rule inside the card also ends the group: a steering
+  message, the "you answered" rule, or a non-driver message. These land only
+  at a step boundary, so every call before the rule is in the group above it,
+  and the calls after it start a new group below it. The asking call and its
+  count stay in the group above its answers. Collapsed, it is one line: what was done by kind ("Read 34 files,
   searched 84 patterns, edited 24 files +175 −83, ran 9 commands"), how many
   times the model thought, and how long it took. While it runs, the line shows
   the calls in flight. A call the model is still emitting shows its raw
@@ -1255,8 +1271,8 @@ ledger, and when one of its calls asks the person.
 
 ### Thinking
 
-Thinking belongs to the group it starts, since a group runs from one reply to
-the next. The summary line counts it ("thought once") and, while it streams,
+Thinking belongs to the group it starts, since a group runs from one reply, or
+labelled rule, to the next. The summary line counts it ("thought once") and, while it streams,
 ends with "Thinking: <latest heading>". Thinking with no tool call before the
 next reply is one dim italic line, "+ Thought: <first heading> · 22s", or
 "Thinking: <latest heading>" while it streams, and clicking it shows the
@@ -1272,15 +1288,21 @@ Enter during a turn sends `steer`. There is no follow-up queue: a prompt that
 arrives mid-turn is still rejected `busy` (`docs/invocation.md`). A draft left
 in the input box during a turn is untouched until sent.
 
-Queued steering messages sit above the input box, one row each, from the
-`steering_queue` event, so every attached client sees and edits the same
+Queued steering messages sit above the input box in the steering card, one
+entry each, from the `steering_queue` event, so every attached client sees and edits the same
 queue. ⌥↑ and ⌥↓ select a row and load it into the input box, Enter sends
 `steer_drop` then `steer`, and ⌥X sends `steer_drop`. Each also has a mouse target.
 
-The queue is indented two columns under the working line: "• Steering, joins
-the turn at the next step" dim; each message "  ↳ <text>  ✕" dim, or "  ▸ "
-in `attention` and the text in the text colour while it is selected; then
-"⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop" dim. A click
+The steering card sits under the working line and is drawn as a panel card
+("The panel"): a `surface` slab edged ▄ and ▀ in `surface`, with two columns
+of padding on the left and one on the right, and a stripe in `attention` down
+its left edge. Its title row is "Steering" bold in `attention`, with "N queued ·
+joins at the next step" dim, right-aligned. Each message
+follows on its own entry: "↳ " in `attention`, the text in the text colour,
+and a dim "✕" right-aligned. A message too long for the card wraps, its
+continuation lines starting under the text rather than under the ↳. A
+selected message reads "▸ " in `attention` and its text bold. The last row is the key hint, with each key bold and the
+rest dim: "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop". A click
 on a row selects it and a click on its ✕ drops it. While a message is being
 edited, the input box's stripe is `attention` and the box ends, right-aligned
 and dim, "editing a queued message · Enter amends · ⌥X drops · Esc stops".
@@ -2531,7 +2553,7 @@ The roles, in order, with each built-in theme's values:
 | `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` | `#0969da` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` | `#bc4c00` |
 | `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown, a failed login's reason | `#ff5d73` | `#cf222e` |
-| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
+| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", the steering card's title, stripe and marks, notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
 | `added` | lines added: an edited file's `+N`, added lines in a diff | `#73c991` | `#1a7f37` |
 | `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` | `#cf222e` |
 | `code_text` | code with no syntax role | the terminal's foreground | `#1f2328` |
@@ -2549,7 +2571,7 @@ The roles, in order, with each built-in theme's values:
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
 | `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
 | `panel` | the rail's and the panel's regions | `#0c0c11` | `#f6f8fa` |
-| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
+| `surface` | the input box, the panel's cards, the steering card, the search box, a swapped view's top row, overlays, the rail's working cards | `#1a1a22` | `#eaeef2` |
 | `surface_raised` | the card on screen, a hovered card | `#3a3a4a` | `#d0d7de` |
 | `card_retrying` | a rail card in RETRYING | `#262014` | `#ebe5d9` |
 | `card_needs_input` | a rail card in NEEDS INPUT | `#241a10` | `#efe5db` |
@@ -2664,6 +2686,14 @@ every pending image is dropped and nothing more is written.
   keeping its proportions. A click opens it in the system viewer, from a
   copy the terminal writes to `cache/images/` in Fiber home
   (`docs/state.md`).
+- Under its grid an image has a caption, its one line `▣ <file> · W×H`, and a
+  click on either opens the viewer. In the prompt bubble a caption wider than
+  the bubble shortens the file name first and keeps the size.
+- A PNG shows inline as stored. A JPEG or WebP shows inline when the
+  launch names the `fiber` executable to convert it through `fiber image
+  --png`; otherwise, like any other type, it is its one line.
+- A steering message's images are one clickable line each under its text,
+  even where images show inline.
 - The terminal holds the image and moves it with the text, through kitty's
   Unicode placeholders. Fiber keeps no decoded image and sends nothing again
   on a scroll.
@@ -2861,6 +2891,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `working_line` | The working line |
 | `steering_queue` | The queued steering messages |
 | `input_box` | The input box |
+| `input_status` | The input box status row |
 | `status_rows` | The input box's status line |
 | `view:<name>` | A swapped view, built in or one an extension adds |
 | `overlay:<name>` | An overlay an extension adds, drawn over the conversation |

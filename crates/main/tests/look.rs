@@ -909,9 +909,10 @@ fn input_row(screen: &Grid) -> (u16, u16) {
 const BOX_LEFT: u16 = 1;
 /// The edge run's exclusive end: the panel grip's column.
 const BOX_RIGHT: u16 = 126;
-/// The box's rows at 160x48: its ▄ edge, its text, its ▀ edge.
-const EDGE_TOP: u16 = 45;
-const INPUT_ROW: u16 = 46;
+/// The box's rows at 160x48: its ▄ edge, its text, its rule, its
+/// status row, its ▀ edge.
+const EDGE_TOP: u16 = 43;
+const INPUT_ROW: u16 = 44;
 const EDGE_BOTTOM: u16 = 47;
 
 /// The dark theme's surface and accent, and its 256-colour entries.

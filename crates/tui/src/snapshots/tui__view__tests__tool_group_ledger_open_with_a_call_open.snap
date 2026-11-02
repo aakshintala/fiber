@@ -1,15 +1,12 @@
 ---
 source: crates/tui/src/view_tests.rs
-assertion_line: 881
 expression: "sized(&mut app, 60, 16)"
 ---
- ● Read 1 file, edited 1 file +3 −1, ran 1 command,… 12s ▾
-     1 + Thought: Find the test · 4s
        ✓ read     src/a.rs                          1 line
        ✓ edit     src/a.rs                           +3 −1
          -assert!(false)
-         +assert!(true)                                    ┃
-     2 ✗ shell    cargo te…  nonzero_exit: exit status 101 ┃
+         +assert!(true)
+     2 ✗ shell    cargo te…  nonzero_exit: exit status 101
                                                            ┃
  Fixed.                                                    ┃
                                                            ┃
@@ -18,4 +15,6 @@ expression: "sized(&mut app, 60, 16)"
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────────────────────────
+▌auto                                    ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

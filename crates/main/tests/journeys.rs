@@ -305,7 +305,12 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     assert!(shows(&opened, "beta-2"), "beta-2 lists before the filter");
     insta::assert_snapshot!(
         "model_picker_open",
-        grid_text(&opened.rows, opened.cursor, opened.hide_cursor, &ids)
+        fold_fixture_tmp(&grid_text(
+            &opened.rows,
+            opened.cursor,
+            opened.hide_cursor,
+            &ids
+        ))
     );
     // What only the display name carries narrows the list to `alpha-1`.
     run.write(b"opus 5.5");
@@ -320,7 +325,12 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     assert!(!shows(&filtered, "beta-2"), "beta-2 dropped out");
     insta::assert_snapshot!(
         "model_picker_by_name",
-        grid_text(&filtered.rows, filtered.cursor, filtered.hide_cursor, &ids)
+        fold_fixture_tmp(&grid_text(
+            &filtered.rows,
+            filtered.cursor,
+            filtered.hide_cursor,
+            &ids
+        ))
     );
     // Clear the query, find `beta-2` and choose it: the picker closes.
     run.write(b"\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7fbeta");
@@ -357,7 +367,12 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     });
     insta::assert_snapshot!(
         "model_picker_answered_on_beta",
-        grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
+        fold_fixture_tmp(&grid_text(
+            &answered.rows,
+            answered.cursor,
+            answered.hide_cursor,
+            &ids
+        ))
     );
     let requests = server.requests();
     let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
@@ -466,7 +481,12 @@ fn journey_question_form_answered_then_declined() {
     });
     insta::assert_snapshot!(
         "question_form_answered",
-        grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
+        fold_fixture_tmp(&grid_text(
+            &answered.rows,
+            answered.cursor,
+            answered.hide_cursor,
+            &ids
+        ))
     );
     // The session's second form, snapshotted open before Esc declines it.
     let decline_from = run.output().len();
@@ -509,6 +529,82 @@ fn journey_question_form_answered_then_declined() {
 /// with its image line.
 fn pixel_answered(screen: &Grid) -> bool {
     shows(screen, "A pixel.") && shows(screen, "· 1×1")
+}
+
+/// The box row with the fixture's temporary directory folded out: the
+/// directory's length varies by runner and sets the row's pad, so the
+/// fold covers the path and its pad up to the mode in one canonical
+/// form, leaving the row's other cells untouched. Rows without the
+/// fixture path pass through unchanged.
+fn fold_fixture_tmp(text: &str) -> String {
+    const CANON: &str = "[workspace]/w │ auto ";
+    // A path cell stops the walk: the box stripe and a cut marker stay.
+    fn is_path_cell(c: char) -> bool {
+        c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '-' | '_' | '~')
+    }
+    text.lines()
+        .map(|row| {
+            let Some(fh) = row.find("/fh-") else {
+                return row.to_owned();
+            };
+            let mut start = fh;
+            while let Some(c) = row[..start].chars().next_back() {
+                if !is_path_cell(c) {
+                    break;
+                }
+                start -= c.len_utf8();
+            }
+            // The cut marker is runner-varying too (a short fixture path
+            // renders whole): drop it with the path so cut and uncut rows
+            // canonicalize to the same form.
+            let prefix = row[..start].strip_suffix('…').unwrap_or(&row[..start]);
+            let hex = row[fh + 4..]
+                .bytes()
+                .take_while(u8::is_ascii_hexdigit)
+                .count();
+            let end = fh + 4 + hex;
+            if !row[end..].starts_with("/w") {
+                return row.to_owned();
+            }
+            let rest = row[end + 2..].trim_start_matches(' ');
+            let Some(rest) = rest.strip_prefix('│') else {
+                return row.to_owned();
+            };
+            let rest = rest.trim_start_matches(' ');
+            let Some(rest) = rest.strip_prefix("auto") else {
+                return row.to_owned();
+            };
+            let rest = rest.trim_start_matches(' ');
+            format!("{prefix}{CANON}{rest}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn fold_fixture_tmp_canon_is_runner_stable() {
+    let cut = "  …e/aakshintala/.cache/tmp/fh-60e61f8a/w  │  auto  fake/alpha-1  │  ctx rest";
+    let whole = "  /tmp/fh-60e61f8a/w  │  auto  fake/alpha-1  │  ctx rest";
+    let striped = "  ▌/home/u/.cache/tmp/fh-60e61f8a/w  │  auto     fake/m  │  ctx rest";
+    let plain = "  ▌/tmp/fh-60e61f8a/w  │  auto     fake/m  │  ctx rest";
+    assert_eq!(
+        fold_fixture_tmp(cut),
+        "  [workspace]/w │ auto fake/alpha-1  │  ctx rest"
+    );
+    assert_eq!(
+        fold_fixture_tmp(whole),
+        "  [workspace]/w │ auto fake/alpha-1  │  ctx rest"
+    );
+    assert_eq!(
+        fold_fixture_tmp(striped),
+        "  ▌[workspace]/w │ auto fake/m  │  ctx rest"
+    );
+    assert_eq!(
+        fold_fixture_tmp(plain),
+        "  ▌[workspace]/w │ auto fake/m  │  ctx rest"
+    );
+    let other = "  ordinary row without the fixture";
+    assert_eq!(fold_fixture_tmp(other), other);
 }
 
 /// An image pasted from the clipboard, answered, the session closed and
@@ -571,9 +667,18 @@ fn journey_image_paste_answer_close_resume() {
     let answered = run.wait_screen("the closed turn", |screen| {
         pixel_answered(screen) && shows(screen, "▣ completed") && !shows(screen, "Esc to interrupt")
     });
+    // The box row carries the fixture's temporary directory, whose length
+    // varies by runner and sets the row's pad: fold the path and its pad to
+    // one canonical form (the path only, never the row's other cells), so
+    // the snapshot holds on every runner.
     insta::assert_snapshot!(
         "image_paste_answered",
-        grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
+        fold_fixture_tmp(&grid_text(
+            &answered.rows,
+            answered.cursor,
+            answered.hide_cursor,
+            &ids
+        ))
     );
     // The request carries the pasted image as an image part.
     let requests = server.requests();
@@ -695,12 +800,12 @@ fn journey_interrupt_then_retried_answer() {
     });
     insta::assert_snapshot!(
         "interrupt_retry_interrupted",
-        grid_text(
+        fold_fixture_tmp(&grid_text(
             &interrupted.rows,
             interrupted.cursor,
             interrupted.hide_cursor,
             &ids
-        )
+        ))
     );
     // The cancelled response has closed, and the close folded, so the
     // terminal is idle and Enter sends a prompt.
@@ -719,7 +824,12 @@ fn journey_interrupt_then_retried_answer() {
     });
     insta::assert_snapshot!(
         "interrupt_retry_answered",
-        grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
+        fold_fixture_tmp(&grid_text(
+            &answered.rows,
+            answered.cursor,
+            answered.hide_cursor,
+            &ids
+        ))
     );
     // The stalled call, the 500 and its retry make three requests, and
     // the log holds the one failed call: the retry, not the turn, took the

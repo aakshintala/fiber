@@ -1055,6 +1055,42 @@ fn session_spend_drawn(grid: &Grid) -> bool {
     })
 }
 
+/// Whether the session log containing `REPLY` has completed that turn.
+/// The reply alone can reach the screen before its durable completion.
+fn parent_reply_completed(sessions: &std::path::Path) -> bool {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        };
+        let events = support::complete_lines(&text);
+        let Some(reply) = events.iter().position(|event| {
+            event["kind"] == "text_completed" && event["payload"]["text"] == REPLY
+        }) else {
+            continue;
+        };
+        let Some(turn_id) = events[reply]["turn_id"].as_str() else {
+            continue;
+        };
+        if events
+            .iter()
+            .skip(reply + 1)
+            .any(|event| event["kind"] == "turn_completed" && event["turn_id"] == turn_id)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
     grid.rows.iter().enumerate().find_map(|(y, _)| {
         let y = u16::try_from(y).ok()?;
@@ -1072,17 +1108,27 @@ fn panel_card_item_at(grid: &Grid, card: &str, description: &str) -> Option<(u16
 
 #[test]
 fn the_item_views_top_row_closes_them() {
-    let (setup, _hold, command) = running_setup();
+    let (setup, hold, command) = running_setup();
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
-    let grid = run.wait_screen("the parent reply and running panel cards", |grid| {
-        grid.contents.contains(REPLY)
-            && panel_item_at(grid, "review the diff").is_some()
-            && panel_item_at(grid, "Jobs").is_some()
-            && support::session_cost_drawn(grid, 100)
-            && session_spend_drawn(grid)
-    });
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until(
+        "the parent reply's turn completion",
+        setup.deadline,
+        move || parent_reply_completed(&sessions),
+    );
+    let grid = run.wait_screen(
+        "the completed parent reply and running panel cards",
+        |grid| {
+            grid.contents.contains(REPLY)
+                && grid.contents.contains("completed · 2 calls")
+                && panel_item_at(grid, "review the diff").is_some()
+                && panel_item_at(grid, "Jobs").is_some()
+                && support::session_cost_drawn(grid, 100)
+                && session_spend_drawn(grid)
+        },
+    );
     let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
     click(&mut run, x, y);
     run.wait_screen("the expanded Jobs card", |grid| {
@@ -1121,6 +1167,43 @@ fn the_item_views_top_row_closes_them() {
         run.wait_screen(
             "the conversation after clicking the item's top row",
             |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
+        );
+    }
+    // Tear down in the open: kill the run, unlink the FIFO, then close
+    // the release (EOF lets every blocked `head` read and exit) and
+    // re-kill the hold pattern until no holder matches. Dropping the
+    // last writer before a head opens the FIFO strands it there forever
+    // (`docs/testing.md`, "Waits and timeouts"), and the drop's one-shot
+    // watchdog kill only reaps what has exec'd by then. Unlinking first
+    // closes the delayed-start window the ticket names: a head that
+    // starts after the unlink fails its open with ENOENT and exits
+    // within milliseconds, which the temp-dir detector's bounded wait
+    // absorbs, so cleanup may stop at the first zero. The re-kill still
+    // reaps openers caught mid-syscall across the unlink. If cleanup
+    // cannot complete, it panics naming the stragglers; the temp-dir
+    // detector is skipped while unwinding.
+    let pattern = hold.path().display().to_string();
+    drop(run);
+    fs::remove_file(hold.path()).unwrap();
+    drop(hold);
+    let deadline = setup.deadline.cleanup_phase();
+    let mut clean = false;
+    while !deadline.left().is_zero() {
+        if fakes::kill_matching(pattern.as_str()).is_err() {
+            break;
+        }
+        if fakes::matching_exits(
+            pattern.as_str(),
+            fakes::Deadline::after(std::time::Duration::from_millis(100)),
+        ) {
+            clean = true;
+            break;
+        }
+    }
+    if !clean {
+        let stragglers = fakes::matching(pattern.as_str()).unwrap_or_default();
+        panic!(
+            "3875 cleanup: the hold pattern never stayed clear (stragglers: {stragglers:?}); the temp-dir detector is skipped while unwinding"
         );
     }
 }

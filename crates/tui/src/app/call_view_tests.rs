@@ -500,6 +500,30 @@ fn following_many_pages_keeps_the_tail_visible_after_page_out() {
 }
 
 #[test]
+fn a_following_view_stays_at_the_bottom_when_an_edge_page_lands() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    // The head's end edge sits at the second page's first line, so the
+    // second page completes it.
+    let (_id, first) = open_paged(&mut app, json!([[0, 320]]), ACTION);
+    let sends = answer_page(&mut app, &first, &text, 0);
+    let second = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(320))
+        .cloned()
+        .unwrap_or_else(|| panic!("the follow-up asks for 320: {sends:?}"));
+    let _ = answer_page(&mut app, &second, &text, 320);
+    let view = app.call_view().expect("open");
+    assert!(view.follow, "landing the edge page keeps following");
+    let rows = view.rows();
+    assert_eq!(
+        view.list.selected(),
+        rows.len() - 1,
+        "the window stays at the bottom, not re-seated at the marker"
+    );
+}
+
+#[test]
 fn a_failed_page_keeps_held_pages_and_retries_on_scroll() {
     let mut app = attached(80, 24);
     let text = lined_file();

@@ -12,7 +12,6 @@ expression: "checked(rerun(), \"rerun\", 1)"
 
 
 
-
              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
                Reviewer setup                                              ✕
@@ -21,10 +20,10 @@ expression: "checked(rerun(), \"rerun\", 1)"
                Earlier lines
                ✓ [global] my account amogh-dev is mine
                ✓ [per-project] github.com/acme/* are ours
-⋮              New proposals                                                              ⋮
+               New proposals
 ⋮              its git remotes: upstream github.com/acme-labs/fiber                       ⋮
 ⋮              › [per-project]  github.com/acme-labs/* are ours                           ⋮
-
+⋮                                                                                         ⋮
                Tab flip layer · Enter confirm · e edit · x strike · Esc back
 
              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -38,7 +37,8 @@ expression: "checked(rerun(), \"rerun\", 1)"
 
 
 
-
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █
+ ▌───────────────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                                 ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

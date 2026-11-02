@@ -213,12 +213,12 @@ fn exactly_one_row_is_barred() {
 
 #[test]
 fn a_binding_taller_than_the_body_shows_its_top_cut() {
-    // At 40x12 one body row is left while every binding wraps past
+    // At 40x14 one body row is left while every binding wraps past
     // it: the focused binding shows its top rows only, cut at the
     // body's last row, with no ↓ gutter marker.
-    let mut app = attached(40, 12);
+    let mut app = attached(40, 14);
     open(&mut app);
-    let buf = buffer(&app, 40, 12);
+    let buf = buffer(&app, 40, 14);
     let shown = rows(&buf);
     let barred: Vec<&String> = shown.iter().filter(|row| row.starts_with("  › ")).collect();
     assert_eq!(barred.len(), 1, "{shown:?}");

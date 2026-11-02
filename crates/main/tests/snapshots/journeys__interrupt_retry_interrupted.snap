@@ -1,6 +1,7 @@
 ---
 source: crates/main/tests/journeys.rs
-expression: "grid_text(&interrupted.rows, interrupted.cursor, interrupted.hide_cursor,\n&ids)"
+assertion_line: 761
+expression: "fold_fixture_tmp(&grid_text(&interrupted.rows, interrupted.cursor,\ninterrupted.hide_cursor, &ids))"
 ---
 
 
@@ -19,9 +20,7 @@ expression: "grid_text(&interrupted.rows, interrupted.cursor, interrupted.hide_c
 
 ⋮                                                                                         ⋮
 ⋮                                                                                         ⋮
-⋮                                                                                         ⋮
-
-                                                                                ▄▄▄▄▄▄▄▄▄
+⋮                                                                               ▄▄▄▄▄▄▄▄▄ ⋮
                                                                                  say hi
                                                                                 ▀▀▀▀▀▀▀▀▀
                                                                                you HH:MM
@@ -33,5 +32,7 @@ expression: "grid_text(&interrupted.rows, interrupted.cursor, interrupted.hide_c
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    › █
+  ───────────────────────────────────────────────────────────────────────────────────────
+  [workspace]/w │ auto fake/m  │  ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-cursor=(30,5)
+cursor=(28,5)

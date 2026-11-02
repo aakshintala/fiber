@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+state="${REPORT_STATE_DIR:?}"
+if [ "${1:-}" = api ]; then
+  if [ -n "${OPEN_ISSUE_JSON:-}" ]; then
+    printf '%s\n' "$OPEN_ISSUE_JSON"
+  else
+    printf '[]\n'
+  fi
+  exit 0
+fi
+n=$(cat "$state/next")
+echo "$((n + 1))" >"$state/next"
+[ "${1:-}" = issue ] || { echo "stub gh: unexpected call: $*" >&2; exit 1; }
+shift
+op=$1
+shift
+target=""
+body=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --body) body=$2; shift 2 ;;
+    --title | --label | --add-label) shift 2 ;;
+    *) target=$1; shift ;;
+  esac
+done
+case "$op" in
+  create) printf 'https://github.com/x/y/issues/7\n' ;;
+  comment | reopen | edit) ;;
+  *) echo "stub gh: unexpected issue op: $op" >&2; exit 1 ;;
+esac
+printf '%s' "$target" >"$state/target-$(printf '%03d' "$n").txt"
+printf '%s' "$body" >"$state/body-$(printf '%03d' "$n").txt"

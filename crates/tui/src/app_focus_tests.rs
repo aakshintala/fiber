@@ -205,11 +205,16 @@ fn shift_tab_focuses_the_newest_item_and_hides_the_cursor() {
 }
 
 #[test]
-fn shift_tab_with_no_stops_keeps_the_input_box() {
+fn shift_tab_with_only_the_box_row_stop_focuses_it() {
     let mut app = attached(60, 24);
     frame(&mut app);
     assert_eq!(key(&mut app, Key::BackTab), Effect::None);
-    assert_eq!(app.focused(), None);
+    // The box row's ctx segment is the frame's last stop now, so focus
+    // leaves the input box for it.
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Panel(crate::app::panel::Spot::Context))
+    );
 }
 
 #[test]
@@ -254,8 +259,23 @@ fn j_and_down_step_on_k_and_up_step_back_and_the_ends_hold() {
     assert_eq!(app.focused(), ids.get(1).copied());
     key(&mut app, Key::Char('j'));
     assert_eq!(app.focused(), ids.last().copied());
+    // The box row's status segment comes before its ctx segment: both
+    // hold at the bottom past the last group.
     key(&mut app, Key::Down);
-    assert_eq!(app.focused(), ids.last().copied());
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Panel(crate::app::panel::Spot::Status))
+    );
+    key(&mut app, Key::Down);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Panel(crate::app::panel::Spot::Context))
+    );
+    key(&mut app, Key::Down);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Panel(crate::app::panel::Spot::Context))
+    );
 }
 
 #[test]
@@ -439,6 +459,13 @@ fn enter_on_the_badge_opens_the_queue_and_the_next_frame_returns_focus() {
     let stops = frame(&mut app);
     assert!(stops.iter().any(|target| target.id == TargetId::Badge));
     key(&mut app, Key::BackTab);
+    // The box row's ctx segment is the last stop now: walk up to the badge.
+    for _ in 0..12 {
+        if app.focused() == Some(TargetId::Badge) {
+            break;
+        }
+        key(&mut app, Key::Up);
+    }
     assert_eq!(app.focused(), Some(TargetId::Badge));
     assert_eq!(key(&mut app, Key::Enter), Effect::None);
     assert!(app.panel().is_some());
@@ -786,8 +813,9 @@ fn a_wrapped_item_is_revealed_whole() {
 #[test]
 fn a_taller_item_is_revealed_from_its_top() {
     // At width 12 a group line wraps to two rows, taller than the one
-    // conversation row of a 12x2 screen.
-    let mut app = groups(8, 12, 2);
+    // conversation row of a 12x6 screen: the full new box (draft, edges,
+    // rule, status row) takes five rows, the minimum leaving one.
+    let mut app = groups(8, 12, 6);
     assert_eq!(app.conversation_height(), 1);
     key(&mut app, Key::BackTab);
     let first = app.items().first().copied().expect("an item");
@@ -865,6 +893,13 @@ fn pasted() -> App {
     app.on_edit(Edit::Paste(text));
     frame(&mut app);
     key(&mut app, Key::BackTab);
+    // The box row's ctx segment sits below the token: walk up to it.
+    for _ in 0..12 {
+        if app.focused() == Some(TargetId::Token(1)) {
+            break;
+        }
+        key(&mut app, Key::Up);
+    }
     assert_eq!(app.focused(), Some(TargetId::Token(1)));
     app
 }
@@ -1132,6 +1167,10 @@ fn a_turn_is_a_stop_before_its_own_group_lines() {
             ids.first().copied().expect("a group"),
             TargetId::Turn(1),
             ids.get(1).copied().expect("a group"),
+            // The box row's status and ctx segments close the order
+            // now, the directory and the mode first.
+            TargetId::Panel(crate::app::panel::Spot::Status),
+            TargetId::Panel(crate::app::panel::Spot::Context),
         ]
     );
 }

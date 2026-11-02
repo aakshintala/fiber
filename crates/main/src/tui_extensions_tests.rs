@@ -2911,3 +2911,40 @@ fn an_animated_chrome_call_carries_frame_and_now() {
     assert_eq!(lines[0][0].text, format!("3:{NOW}:7")); // docs/tui.md:3121.
     assert!(continues);
 }
+
+/// The input_status table carries the doc's fields: the workspace, the
+/// mode, the model and thinking level, and the context's tokens with
+/// the window they fill (`docs/tui.md`, "Extension seams").
+#[test]
+fn the_input_status_table_holds_the_docs_fields() {
+    let input = Input::InputStatus(tui::ext::InputStatus {
+        workspace: Some("/w/fiber"),
+        model: Some("test/model"),
+        thinking: Some("high"),
+        context: Some(tui::ext::Context {
+            tokens: 268_000,
+            window: 1_000_000,
+        }),
+        flat: false,
+    });
+    assert_eq!(
+        input_value(&input),
+        json!({
+            "workspace": "/w/fiber",
+            "mode": "auto",
+            "model": "test/model",
+            "thinking": "high",
+            "context": {"tokens": 268_000, "window": 1_000_000},
+            "flat": false,
+        }),
+    );
+    // Absent optionals stay absent, never null.
+    let bare = Input::InputStatus(tui::ext::InputStatus {
+        workspace: None,
+        model: None,
+        thinking: None,
+        context: None,
+        flat: true,
+    });
+    assert_eq!(input_value(&bare), json!({"mode": "auto", "flat": true}));
+}

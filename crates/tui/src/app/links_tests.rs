@@ -807,7 +807,7 @@ fn a_focused_link_reserves_its_hint_above_the_new_below_pill() {
     let mut app = App::new(PathBuf::from("/w"));
     assert!(app.on_line(hello()).is_empty());
     app.attach(contract::SessionId(SESSION.to_owned()));
-    app.set_size(40, 11);
+    app.set_size(40, 13);
     app.on_line(line(
         "turn_started",
         json!({"input": [{"type": "message", "source": "driver",
@@ -874,7 +874,7 @@ fn a_focused_link_can_scroll_to_the_conversations_first_row_and_keep_its_hint() 
     use crate::theme::Role;
 
     let url = "http://example.com/a";
-    let mut app = replied(60, 5, "a reply");
+    let mut app = replied(60, 7, "a reply");
     app.set_opener(true);
     app.screen.pages_mut().add_shell(Some(url.to_owned()));
     app.settle();
@@ -916,7 +916,7 @@ fn a_focused_link_filling_its_window_draws_no_hint() {
     // only row: no row below can free the hint's row and no row above
     // can give way, so only the focused look paints (`docs/tui.md`,
     // "Links"). PageUp steps one row in a one-row window.
-    let mut app = replied(60, 4, "[docs](https://example.com/a)");
+    let mut app = replied(60, 6, "[docs](https://example.com/a)");
     app.set_opener(true);
     let mut found = None;
     for _ in 0..10 {

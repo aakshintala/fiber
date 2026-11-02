@@ -305,8 +305,8 @@ fn a_long_summary_wraps_at_40_columns() {
 
 #[test]
 fn a_narrow_view_drops_a_chip_past_its_width() {
-    let app = offered(json!([server("db", false)]), 16, 16);
-    let (_, targets) = draw(&app, 16, 16);
+    let app = offered(json!([server("db", false)]), 16, 18);
+    let (_, targets) = draw(&app, 16, 18);
     // Approve covers 2..13 and draws whole; skip starts at 16, past
     // the width, and never starts later still.
     let approve = Spot::Choice {

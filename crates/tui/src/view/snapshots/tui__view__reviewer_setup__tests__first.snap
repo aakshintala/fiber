@@ -13,7 +13,6 @@ expression: "checked(first(), \"first\", 1)"
 
 
 
-
           ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
             Reviewer setup                                                    ✕
@@ -21,10 +20,10 @@ expression: "checked(first(), \"first\", 1)"
             Topic 4 of 6 · Routine actions
             What routine actions, such as squash-merging your own pull requests
             once CI passes, should the reviewer allow?
-⋮           14 escalations answered allow for `gh pr merge … --squash`                    ⋮
+            14 escalations answered allow for `gh pr merge … --squash`
 ⋮           › [per-project]  squash-merging my own pull requests once CI passes           ⋮
 ⋮                                                                                         ⋮
-            Tab flip layer · Enter confirm · e edit · x strike · Esc back
+⋮           Tab flip layer · Enter confirm · e edit · x strike · Esc back                 ⋮
 
           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
@@ -38,7 +37,8 @@ expression: "checked(first(), \"first\", 1)"
 
 
 
-
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █
+ ▌───────────────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                                 ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

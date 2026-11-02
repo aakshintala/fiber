@@ -17,12 +17,12 @@ expression: "rows.join(\"\\n\")"
 ⋮
 ⋮
 
-
-
  ⠋ review the parser
    fiber · test/model
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █                                      steering goes to ◆ review the parser
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌/w  │  auto                                 test/model  │  ctx ▆▆▆▆▆▆▆▆ — · —
+ ▌0 waiting  │  $0.00  │  cache 0%
+ ▌◆ 1 delegate running
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  0 waiting  │  /w  │  test/model  │  auto  │  $0.00  │  cache 0%
-  ◆ 1 delegate running

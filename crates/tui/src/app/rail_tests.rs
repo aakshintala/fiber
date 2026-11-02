@@ -3012,7 +3012,12 @@ fn shift_tab_with_no_stop_clears_the_rail_leaving_no_focus() {
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     stroke_press(&mut app, shift_tab());
-    assert_eq!(app.focused(), None);
+    // The status row's directory and mode are stops now: the walk
+    // lands on the status segment instead of leaving no focus.
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Panel(crate::app::panel::Spot::Status))
+    );
     assert_eq!(rail_focus(&app), None);
     assert_single_focus(&app);
 }
@@ -3050,7 +3055,12 @@ fn tab_with_no_card_stop_skips_the_rail() {
     app.drawn(&targets);
     stroke_press(&mut app, plain(Code::Tab));
     assert_eq!(rail_focus(&app), None);
-    assert_eq!(app.focused(), Some(panel_stop));
+    // The status row's directory and mode are stops now: Tab skips the
+    // rail and lands on the status segment.
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Panel(crate::app::panel::Spot::Status))
+    );
     assert_single_focus(&app);
 }
 

@@ -1,9 +1,8 @@
 ---
 source: crates/main/tests/journeys.rs
-expression: "grid_text(&answered.rows, answered.cursor, &ids)"
+assertion_line: 368
+expression: "fold_fixture_tmp(&grid_text(&answered.rows, answered.cursor,\nanswered.hide_cursor, &ids))"
 ---
-
-
 
 
 
@@ -17,11 +16,11 @@ expression: "grid_text(&answered.rows, answered.cursor, &ids)"
 
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Hello.
-⋮                                                                                         ⋮
-⋮  ▣ completed · [duration] · 13 tokens                                                                ⋮
-⋮ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ⋮
 
-                                                                                 ▄▄▄▄▄▄▄▄
+   ▣ completed · [duration] · 13 tokens
+⋮ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ⋮
+⋮                                                                                         ⋮
+⋮                                                                                ▄▄▄▄▄▄▄▄ ⋮
                                                                                   again
                                                                                  ▀▀▀▀▀▀▀▀
                                                                                you HH:MM
@@ -33,5 +32,7 @@ expression: "grid_text(&answered.rows, answered.cursor, &ids)"
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    › █
+  ───────────────────────────────────────────────────────────────────────────────────────
+  [workspace]/w │ auto fake/beta-2  │  ctx ▆▆▆▆▆▆▆▆ 13 · 0%
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-cursor=(30,5)
+cursor=(28,5)

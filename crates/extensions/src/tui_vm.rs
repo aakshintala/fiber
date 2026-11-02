@@ -18,7 +18,7 @@ use crate::Error;
 use crate::lua::{Deadline, LOAD_TIMEOUT, MEMORY_CAP, message};
 
 /// The slot names that stand alone (`docs/tui.md`, "The slots").
-pub(crate) const SLOT_NAMES: [&str; 20] = [
+pub(crate) const SLOT_NAMES: [&str; 21] = [
     "layout",
     "home",
     "turn_card",
@@ -35,6 +35,7 @@ pub(crate) const SLOT_NAMES: [&str; 20] = [
     "working_line",
     "steering_queue",
     "input_box",
+    "input_status",
     "status_rows",
     "approval",
     "question_form",

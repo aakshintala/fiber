@@ -9,9 +9,9 @@ expression: "screen(&app, 40, 12)"
                            steering
                            message
 ⋮                          during a turn
-⋮  Shift line_break        Insert a line
-⋮  +Ente                   break
- ↑↓ move · Enter rebind · r reset · Dele
- ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+⋮↑↓ move · Enter rebind · r reset · Dele
+⋮▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
+ ▌─────────────────────────────────────
+ ▌auto               ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

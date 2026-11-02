@@ -1,6 +1,7 @@
 ---
 source: crates/main/tests/journeys.rs
-expression: "grid_text(&answered.rows, answered.cursor, &ids)"
+assertion_line: 472
+expression: "fold_fixture_tmp(&grid_text(&answered.rows, answered.cursor,\nanswered.hide_cursor, &ids))"
 ---
 
 
@@ -28,8 +29,6 @@ expression: "grid_text(&answered.rows, answered.cursor, &ids)"
 ⋮                                                                                                                             ⋮
 ⋮                                                                                                                             ⋮
 ⋮                                                                                                                             ⋮
-
-
                                                                                                                     ▄▄▄▄▄▄▄▄▄
                                                                                                                      run it ▐
                                                                                                                     ▀▀▀▀▀▀▀▀▀
@@ -49,5 +48,7 @@ expression: "grid_text(&answered.rows, answered.cursor, &ids)"
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ › █
+ ▌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ▌[workspace]/w │ auto scripted/s.json  │  ctx ▆▆▆▆▆▆▆▆ — · —
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-cursor=(46,5)
+cursor=(44,5)

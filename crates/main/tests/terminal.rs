@@ -1456,10 +1456,12 @@ fn journey_prompt_answer_approval_resize_quit() {
     // when `turn_started` lines are missed under load. The parked cursor
     // proves the frame drew to its end; tinted padding means `contains`,
     // never `ends_with`.
+    // The resized box is five rows (top edge 25, input 26, rule 27,
+    // status 28, bottom 29), so the parked cursor sits at row 26.
     run.wait_screen("the redrawn grid at the new size", |grid| {
         grid.rows.len() == 30
             && grid.rows.iter().any(|row| row.contains("0% of window"))
-            && grid.cursor == (28, 5)
+            && grid.cursor == (26, 5)
     });
     // Quit: the terminal is restored, with one resume line per live
     // session on the primary screen ("On exit").

@@ -223,6 +223,16 @@ A pull request that changes only docs, in wording taken from an owner ruling
 recorded on its ticket, has no separate reviewer. The orchestrator checks the
 diff against the ruling and says so in the pull request body.
 
+A doc pull request that names a new command, binding, event kind or key in a
+table a test reads ("Rules by path") also updates what those tests pin, so
+that `CI` passes: a count, a list of named but unbuilt entries (as `mcp serve`
+is for `docs/invocation.md`), or a declaration a contract test compares row
+for row. What the binary does stays as it was. Where a declaration would
+change behaviour, such as a key that would start doing something, the test
+lists the entry as not built instead. The build ticket adds the behaviour and
+removes the not-built entry. These test edits still count as a docs-only pull
+request.
+
 The review is posted on the pull request as a comment. Each finding is
 either fixed, and the fix's diff reviewed again, or answered in a reply that
 cites evidence: a test, a doc line, a command's output. A finding that the

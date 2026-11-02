@@ -149,6 +149,14 @@ fn card_edges(grid: &Grid, y: u16, inner: u16) -> (u16, u16) {
 /// Opens the ledger and returns the grid with its gutter, derived from
 /// the group row.
 fn open_ledger(run: &mut Run) -> (Grid, u16) {
+    // Each fixture's one scripted call produces `THOUGHT` or
+    // `FETCH_THOUGHT`; wait for its row before Ctrl+O, which is dropped
+    // when there is no thought to open.
+    run.wait_screen("the scripted call's thought", |grid| {
+        grid.rows
+            .iter()
+            .any(|row| row.contains(THOUGHT) || row.contains(FETCH_THOUGHT))
+    });
     run.write(b"\x0f");
     let grid = run.wait_screen("the open ledger", |grid| {
         grid.rows.iter().any(|row| row.contains("+ Thought: Doing"))
@@ -312,6 +320,21 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
                         );
                     }
                 }
+            }
+            // The status row's model pad varies by runner like the title
+            // pad: the fixture path sets the row's gap, so fold it to one
+            // space, keeping the joiners, the model and the ctx segment
+            // exact. Only the box status row carries auto beside ctx.
+            if row.contains("[workspace]/w")
+                && row.contains("ctx")
+                && row.contains('▆')
+                && let Some(mode) = row.find("auto")
+                && let after = mode + "auto".len()
+                && let pad = row[after..].bytes().take_while(|b| *b == b' ').count()
+                && pad > 1
+                && row[after + pad..].starts_with(|c: char| !c.is_whitespace())
+            {
+                row = format!("{} {}", &row[..after], &row[after + pad..]);
             }
             if let Some(speed) = row.find("speed, last reply") {
                 row = format!("{}speed, last reply            —", &row[..speed]);
@@ -519,6 +542,13 @@ const WHEEL_DOWN: &[u8] = b"\x1b[<65;21;41M";
 /// The thought row's marker: the turn ran one command, so the finished
 /// turn names it once.
 const THOUGHT: &str = "Ran 1 command";
+/// The fetch fixture's one-call thought-row marker.
+const FETCH_THOUGHT: &str = "Called 1 tool, thought once";
+
+/// The first filler line: it stays on screen while the conversation scrolls
+/// toward its thought row, so its downward motion proves a wheel step moved
+/// the rows even while the thought row is still above the viewport.
+const FILLER_FIRST: &str = "F0001";
 
 /// The wheel over a call's view scrolls the view, never the hidden
 /// conversation (`docs/tui.md:576`, "Swapped views"; see #3578): with the
@@ -550,17 +580,35 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     run.turn_finished(from);
     // Scroll the conversation up until its thought row shows: each step
     // must move the rows, so a step that would sit on the top clamp fails
-    // the wait instead of settling short. The marker itself is recorded
-    // after the call opens below.
+    // the wait instead of settling short. While the thought row is still
+    // above the viewport, the first filler row's downward motion proves the
+    // step moved the rows. The marker itself is recorded after the call
+    // opens below.
     let mut scrolled = false;
     for _ in 0..6 {
         let prev = run.screen();
         run.write(WHEEL_UP);
         let grid = run.wait_screen("the thought row scrolling into view", |next| {
-            match (find_row(&prev.rows, THOUGHT), find_row(&next.rows, THOUGHT)) {
-                (None, Some(_)) => true,
-                (Some(before), Some(after)) => after > before,
-                (Some(_), None) | (None, None) => false,
+            match (
+                find_row(&prev.rows, THOUGHT),
+                find_row(&next.rows, THOUGHT),
+                find_row(&prev.rows, FILLER_FIRST),
+                find_row(&next.rows, FILLER_FIRST),
+            ) {
+                // The thought row arrived, or it moved down on screen.
+                (None, Some(_), _, _) => true,
+                (Some(before), Some(after), _, _) if after > before => true,
+                // The thought row left the viewport: fail the wait instead
+                // of masking a focus loss behind filler motion.
+                (Some(_), None, _, _) => false,
+                // Still hidden, but the first filler row moved down, arrived
+                // from above, or left below: each proves the wheel step moved
+                // the rows toward the thought row.
+                (None, None, Some(before), Some(after)) if after > before => true,
+                (None, None, None, Some(_)) | (None, None, Some(_), None) => true,
+                // No movement on screen: fail the wait instead of settling
+                // short at the top clamp.
+                _ => false,
             }
         });
         if find_row(&grid.rows, THOUGHT).is_some() {
@@ -572,22 +620,34 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
         scrolled,
         "the conversation never scrolled its thought row into view"
     );
-    // Open the ledger and the call. The marker is recorded after the call
-    // opens: opening flips the thought row from its collapsed to its
-    // expanded mark, and the expansion lands below it, so the row keeps
-    // its screen row.
+    // Open the ledger and the call. Opening flips the thought row from
+    // its collapsed to its expanded mark, and the expansion lands below
+    // it, so the thought row is still on screen above the opened call.
     let (_grid, gutter) = open_ledger(&mut run);
-    let grid = open_call(&mut run, gutter, "shell", "awk", "exit 0");
-    let top_y = find_row(&grid.rows, THOUGHT).expect("the thought row above the opened call");
-    let top_marker = grid.rows[usize::from(top_y)].clone();
-    // Click the more row of the opened call. The turn is taller than the
-    // screen, so the shared helper's settled wait (which also wants the
-    // completed paint on screen) never lands: the turn already finished
-    // before the ledger opened, so the first grid showing the more row
-    // has its final position.
-    let grid = run.wait_screen("the more row", |grid| {
-        grid.rows.iter().any(|row| row.contains("more lines"))
-    });
+    let opened = open_call(&mut run, gutter, "shell", "awk", "exit 0");
+    find_row(&opened.rows, THOUGHT).expect("the thought row above the opened call");
+    // Reveal the more row of the opened call: the taller input box leaves
+    // no scroll position showing both the thought row and the more row,
+    // so scroll the conversation down until the more row shows. Each step
+    // must move the rows, so a step that would sit on the bottom clamp
+    // fails the wait instead of settling short. The loop threads the last
+    // settled grid through instead of snapshotting a fresh one per step.
+    let grid = {
+        let mut prev = opened;
+        let mut found = None;
+        for _ in 0..6 {
+            run.write(WHEEL_DOWN);
+            let next = run.wait_screen("the more row scrolling into view", |next| {
+                prev.rows != next.rows
+            });
+            if next.rows.iter().any(|row| row.contains("more lines")) {
+                found = Some(next);
+                break;
+            }
+            prev = next;
+        }
+        found.expect("the conversation never scrolled its more row into view")
+    };
     // Dismiss the reviewer notice first: while it is up, the click on the
     // more row below misses, so the view never opens.
     let notice_row = find_row(&grid.rows, "no_model").expect("the reviewer notice");
@@ -597,6 +657,13 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     let grid = run.wait_screen("the dismissed notice", |grid| {
         grid.rows.iter().all(|row| !row.contains("no_model"))
     });
+    // Re-anchor the scroll marker on the call's header after the
+    // dismissal: dropping the notice relayouts the conversation by a
+    // row, so a baseline recorded before it compares two chrome
+    // heights. The header is stable from here across the open, so it
+    // proves the view's wheel left the conversation alone.
+    let top_y = find_row(&grid.rows, "✓ shell").expect("the opened call's header row");
+    let top_marker = grid.rows[usize::from(top_y)].clone();
     let row = find_row(&grid.rows, "more lines").expect("the more row");
     let text = row_text(&grid, row);
     let x = text.find("more lines").unwrap_or(20) as u16 + 1;
@@ -607,18 +674,25 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
             .iter()
             .any(|row| row.contains("── the model's view resumes ──"))
     });
-    // PageUp twice: the ups page past the held tail window, so the tail
-    // pages drop and the window re-anchors to the held head segment,
-    // whose last output rows are 036 and 037 above the end marker. The
-    // marker appears only once its edge pages are held, so it signals the
-    // refetch that fills this segment has landed.
-    run.write(b"\x1b[5~");
-    run.write(b"\x1b[5~");
+    // Two PageUps move from the held tail window toward the call's head.
     let marker = "── end of the model's view ──";
-    let grid = run.wait_screen("the settled paged-up view", |grid| {
-        first_output_number(grid) == Some(36) && grid.rows.iter().any(|row| row.contains(marker))
-    });
-    let settled = first_output_number(&grid).expect("the settled first output number");
+    run.write(b"\x1b[5~");
+    run.write(b"\x1b[5~");
+    // PageUp moves one screen of the view's visible rows
+    // (`docs/tui.md:1814`), not one terminal screen. Here the 48-row
+    // terminal leaves 41 view rows after the five-row input box and the
+    // view's title and footer. From the fixture's start position 120, two
+    // screens, each counting the dim edge marker row
+    // (`docs/tui.md:881-884`), give 120 - 2 * (41 + 1) = 036.
+    // Keep this value independent of the grid being checked.
+    let settled = 36;
+    run.wait_screen(
+        "the paged-up view settles on output 036 with its end marker",
+        |grid| {
+            first_output_number(grid) == Some(settled)
+                && grid.rows.iter().any(|row| row.contains(marker))
+        },
+    );
     // The marker row breaks the output-number/top-row one-to-one. Aim
     // the wheel at the view's fixed interior, not a grid-derived row;
     // page replies cannot change which surface owns this coordinate.

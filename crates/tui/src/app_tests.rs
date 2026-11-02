@@ -801,20 +801,20 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
-    assert_eq!(app.conversation_height(), 9);
+    assert_eq!(app.conversation_height(), 7);
     app.on_key(Key::CtrlC, now);
-    assert_eq!(app.conversation_height(), 8);
+    assert_eq!(app.conversation_height(), 6);
     // A notice takes its row above the working line.
     connect(&mut app);
     app.disconnected();
-    assert_eq!(app.conversation_height(), 7);
+    assert_eq!(app.conversation_height(), 5);
     app.on_key(Key::Char('x'), now);
-    assert_eq!(app.conversation_height(), 8);
+    assert_eq!(app.conversation_height(), 6);
     app.attach(contract::SessionId(S_A.to_owned()));
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
     // Two queued rows with the heading above and the footer below them,
     // above the notice's row.
-    assert_eq!(app.conversation_height(), 4);
+    assert_eq!(app.conversation_height(), 2);
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
@@ -1508,18 +1508,18 @@ fn the_input_box_grows_to_a_third_of_the_screen() {
     let mut app = app();
     app.set_size(60, 12);
     assert_eq!(app.input_height(), 1);
-    assert_eq!(app.conversation_height(), 9);
+    assert_eq!(app.conversation_height(), 7);
     for _ in 0..2 {
         app.on_edit(Edit::ShiftEnter);
     }
     assert_eq!(app.input_height(), 3);
-    assert_eq!(app.conversation_height(), 7);
+    assert_eq!(app.conversation_height(), 5);
     for _ in 0..5 {
         app.on_edit(Edit::ShiftEnter);
     }
     // 12 / 3 rows at most.
     assert_eq!(app.input_height(), 4);
-    assert_eq!(app.conversation_height(), 6);
+    assert_eq!(app.conversation_height(), 4);
     app.set_size(60, 14);
     assert_eq!(app.input_height(), 4);
     app.set_size(60, 15);

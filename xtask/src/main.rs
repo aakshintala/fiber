@@ -20,10 +20,15 @@
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
-//!   as tab-separated lines
+//!   the `unrun` ones in `test = false` targets, and a `planned` line per test
+//!   function in those files, as tab-separated lines
+//! - `narrow-plan --list FILE --filter EXPR`: reads `planned` lines on stdin and the
+//!   `cargo nextest list --message-format json` in FILE, drops tests the list did
+//!   not match, and prints `dropped`, `run` and `filter` lines
 //! - `stress-plan --base REV [--labels L] [--summary FILE]`: the test functions the
-//!   working tree adds or changes against the merge base with REV, as tab-separated lines,
-//!   appending the job-summary block to FILE when given
+//!   working tree adds or changes against the merge base with REV that this runner
+//!   compiles, as tab-separated lines, naming each dropped test, appending the
+//!   job-summary block to FILE when given
 //! - `touched-retries --base REV --list FILE`: whether any test the working tree adds or
 //!   changes passed only on retry, reading the retry list in FILE; exit 1 when one did
 //! - `stress-check --log FILE --count N --tests T`: checks the nextest stress output
@@ -264,14 +269,42 @@ fn run(args: &[String]) -> Result<bool, String> {
         }
         "bug-filter" => {
             let members = workspace_members()?;
-            let (filter, packages) = select::test_filter(rest, &members, &rust_files(&members)?);
+            let sources = rust_files(&members)?;
+            let (filter, packages) = select::test_filter(rest, &members, &sources);
             println!("filter\t{filter}");
             for package in packages {
                 println!("package\t{package}");
             }
+            for path in select::unrun_test_files(rest, &members) {
+                println!("unrun\t{path}");
+            }
+            for test in select::tests_in_files(rest, &members, &sources)? {
+                println!("{}", select::planned_line(&test));
+            }
             Ok(true)
         }
-        "stress-plan" => stress::plan_command(rest),
+        "narrow-plan" => {
+            let list_path = flag(rest, "--list")?;
+            let expression = flag(rest, "--filter")?;
+            let json = read(&list_path)?;
+            let mut body = String::new();
+            std::io::stdin()
+                .read_to_string(&mut body)
+                .map_err(|error| format!("stdin: {error}"))?;
+            let plan = select::narrow_plan(&expression, &body, &json)?;
+            for line in &plan.dropped {
+                println!("dropped\t{line}");
+            }
+            println!("run\t{}", if plan.run { "true" } else { "false" });
+            println!("filter\t{}", plan.filter);
+            Ok(true)
+        }
+        "stress-plan" => {
+            // Only this command asks the selector to list. `touched-retries`
+            // reads the same selector and must not compile the suite again.
+            select::narrow_to_compiled_tests(true);
+            stress::plan_command(rest)
+        }
         "stress-check" => stress::stress_check_command(rest),
         "touched-retries" => stress::touched_retries_command(rest),
         "stress-cost" => stress::cost_command(rest),
@@ -784,38 +817,51 @@ fn relative(path: &Path, root: &str) -> String {
 
 fn workspace_members() -> Result<Members, String> {
     let (root, packages) = packages()?;
+    Ok(members_from(&root, &packages))
+}
+
+/// The workspace members `cargo metadata` describes: its workspace root and
+/// the `packages` it lists. Pure, so a fixture can stand in for the command.
+fn members_from(root: &str, packages: &[Value]) -> Members {
     let dir_of = |package: &Value| {
         relative(
             Path::new(text(package, "manifest_path"))
                 .parent()
                 .unwrap_or(Path::new("")),
-            &root,
+            root,
         )
     };
     let by_dir: BTreeMap<String, &str> = packages
         .iter()
         .map(|p| (dir_of(p), text(p, "name")))
         .collect();
-    Ok(packages
+    packages
         .iter()
         .map(|package| {
             let deps = array(package, "dependencies")
                 .iter()
-                .filter_map(|d| by_dir.get(&relative(Path::new(d.get("path")?.as_str()?), &root)))
+                .filter_map(|d| by_dir.get(&relative(Path::new(d.get("path")?.as_str()?), root)))
                 .map(|name| (*name).to_owned())
                 .collect();
             let library = array(package, "targets")
                 .iter()
                 .any(|t| array(t, "kind").iter().any(|k| k.as_str() == Some("lib")));
+            let unrun_tests = array(package, "targets")
+                .iter()
+                .filter(|t| array(t, "kind").iter().any(|k| k.as_str() == Some("test")))
+                .filter(|t| t.get("test").and_then(Value::as_bool) == Some(false))
+                .map(|t| relative(Path::new(text(t, "src_path")), root))
+                .collect();
             let member = Member {
                 dir: dir_of(package),
                 version: text(package, "version").to_owned(),
                 deps,
                 library,
+                unrun_tests,
             };
             (text(package, "name").to_owned(), member)
         })
-        .collect())
+        .collect()
 }
 
 /// (crate, dependency) for every dependency a workspace Cargo.toml names,
@@ -902,3 +948,7 @@ fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
     }
     Ok(files)
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;

@@ -941,6 +941,7 @@ fn key_of(input: &Input<'_>, slot: &str) -> (u64, bool) {
         Input::WorkingLine(line) => (line.key(slot), line.flat),
         Input::SteeringQueue(queue) => (queue.key(slot), queue.flat),
         Input::StatusRows(rows) => (rows.key(slot), rows.flat),
+        Input::InputStatus(status) => (status.key(slot), status.flat),
         Input::Card(card) => (card.key(slot), card.flat()),
     }
 }

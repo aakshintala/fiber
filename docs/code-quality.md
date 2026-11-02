@@ -182,10 +182,13 @@ shared test support file that a test or an example includes. Some older
 modules still use `#[path]`; a change that splits one moves it to its
 standard path.
 
-Unit tests live in their own file, a `tests.rs` or `<name>_tests.rs`
-included with `#[cfg(test)] mod tests;`, so a file's length is its code. A
-test file, named `tests.rs` or ending in `_tests.rs` or under a crate's
-`tests/` directory, is never counted.
+Unit tests live in their own file, so a file's length is its code. A
+module's own tests are a `tests.rs` or `<name>_tests.rs` included from
+it with `#[cfg(test)] mod tests;`, so they sit in `<name>::tests`. A test
+file named for a feature rather than a module, as below, is declared
+under its own name, `#[cfg(test)] mod <feature>_tests;`, so its tests sit
+in `<feature>_tests`. A test file, named `tests.rs` or ending in
+`_tests.rs` or under a crate's `tests/` directory, is never counted.
 
 A feature joins the app through a registration seam, so features stop
 colliding on one file: a built-in command is one table row; a view's

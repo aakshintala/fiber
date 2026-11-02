@@ -20,7 +20,8 @@ use serde_json::json;
 
 use super::call_view_pages::{Page, Pager, Seg};
 use super::call_view_rows::{
-    Row, RowsInput, Source, build_frame, build_rows, highlight_rows, row_text, shown_height, window,
+    Row, RowsInput, Source, build_frame, build_rows, edge_anchor_row, highlight_rows, row_text,
+    shown_height, window,
 };
 use super::{App, Effect, Target, mint, session_command};
 use crate::keys::Key;
@@ -345,6 +346,16 @@ impl CallView {
         let rows = self.rows();
         let (top, shown) = window(&rows, &self.list, self.below_len(), height);
         self.evict(&rows, top, shown);
+        // The landed page completes a kept edge: park the window two
+        // rows above its end marker, showing the head segment's last
+        // rows, instead of wherever the page steps parked it. Following
+        // and copying own the window while they run.
+        if !self.follow && self.copy.is_none() {
+            let rows = self.rows();
+            if let Some(at) = edge_anchor_row(&self.rows_input(), &rows, offset) {
+                self.list.select(at, rows.len(), shown);
+            }
+        }
     }
 
     /// Fails a fetch: the offset stays missing until scrolled to, the

@@ -8072,16 +8072,50 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     run.write(b"start the scans\r");
     // The session spawns all four delegates first: Enter during the turn
     // would steer it instead of dispatching the command.
+    // The announcement prints when the fourth delegate spawns, before the
+    // turn's completion rows push it off the shorter viewport: catch each
+    // proof on its own frame instead of demanding both on one grid.
     run.wait_screen("the four spawned delegates", |grid| {
-        grid.contents.contains("Started 4 delegates") && grid.contents.contains("completed ·")
+        grid.contents.contains("Started 4 delegates")
+    });
+    run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed ·")
     });
     // The view opens over four running delegates: the gates hold every
     // child, so each row still spins.
     run.write(b"/delegates\r");
     let grid = run.wait_screen("the running delegates", |grid| {
-        delegates_list_header(grid)
-            && grid.contents.contains("◆ scan one")
-            && grid.contents.contains("◆ scan three")
+        delegates_list_header(grid) && grid.contents.contains("◆ scan one")
+    });
+    // The shorter viewport hides the third delegate below the fold: walk
+    // focus down until the viewport follows it into view to prove it
+    // runs, then walk back up the same number of rows to restore the
+    // navigation start for the six Downs below.
+    let mut prev = grid.contents;
+    let mut downs = 0;
+    while downs < 6 && !prev.contains("◆ scan three") {
+        run.write(b"\x1b[B");
+        downs += 1;
+        prev = run
+            .wait_screen("scrolling the delegate list down", |next| {
+                next.contents != prev
+            })
+            .contents;
+    }
+    let grid = run.wait_screen("the third running delegate", |grid| {
+        delegates_list_header(grid) && grid.contents.contains("◆ scan three")
+    });
+    let mut prev = grid.contents;
+    for _ in 0..downs {
+        run.write(b"\x1b[A");
+        prev = run
+            .wait_screen("scrolling the delegate list up", |next| {
+                next.contents != prev
+            })
+            .contents;
+    }
+    let grid = run.wait_screen("the first delegate back on top", |grid| {
+        delegates_list_header(grid) && grid.contents.contains("◆ scan one")
     });
     assert!(grid.contents.contains("Delegates"), "{}", grid.contents);
     assert!(
@@ -8139,6 +8173,13 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // wait names no scan. Both early scans finished leaves no early row
     // still running, so the first running row below is observed, then
     // checked against the late pair.
+    // The reopened list is longer than the shorter viewport, so grow it
+    // before pinning the mixed frame: the small-viewport scroll proof
+    // above already ran, and the replay below grows it anyway.
+    run.resize(120, 32);
+    run.wait_screen("the reopened delegates at replay size", |grid| {
+        delegates_list_header(grid) && grid.rows.len() == 32
+    });
     let grid = run.wait_screen("the partial delegates list", |grid| {
         delegates_list_header(grid)
             && (grid.contents.contains("◆ scan three") || grid.contents.contains("◆ scan four"))

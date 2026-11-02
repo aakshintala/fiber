@@ -13,8 +13,8 @@ A package's TUI files are never
 installed from a repository.
 
 ↑↓ choose an item · ←→ its answer · Send
-answers them all · Esc puts it aside
-  Send · 0 approve, 1 skip, 0 never
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ ›
+▌──────────────────────────────────────
+▌auto                ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

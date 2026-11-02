@@ -359,19 +359,20 @@ fn rail_boxed(grid: &Grid) -> bool {
             }
         }
     }
-    // The input box's border: ┌─┐ above, │ on each side and └─┘ below,
-    // dim on the defaults, with the prompt one column in.
+    // The input box's border: ┌─┐ above, │ on each side and └─┘ three
+    // rows below past its rule and status row, dim on the defaults,
+    // with the prompt one column in.
     let Some((left, row)) = input_side_on(grid) else {
         return false;
     };
-    if row == 0 || row + 1 >= 48 {
+    if row == 0 || row + 3 >= 48 {
         return false;
     }
     let Some(right) = (left + 1..160).find(|&x| grid.cell(x, row - 1).symbol == "┐") else {
         return false;
     };
     for x in left..=right {
-        for (y, corner, fill) in [(row - 1, "┌", "─"), (row + 1, "└", "─")] {
+        for (y, corner, fill) in [(row - 1, "┌", "─"), (row + 3, "└", "─")] {
             let want = if x == left {
                 corner
             } else if x == right {
@@ -508,13 +509,14 @@ fn no_color_boxes_every_surface_on_the_final_frame() {
         }
     }
     // The input box's border on the final frame: ┌─┐ above, │ on each
-    // side and └─┘ below, dim, with the prompt one column in.
+    // side and └─┘ three rows below past its rule and status row, dim,
+    // with the prompt one column in.
     let (left, row) = input_side(&screen);
     let right = (left + 1..160)
         .find(|&x| screen.cell(x, row - 1).symbol == "┐")
         .expect("the input box corner");
     for x in left..=right {
-        for (y, corner, fill) in [(row - 1, "┌", "─"), (row + 1, "└", "─")] {
+        for (y, corner, fill) in [(row - 1, "┌", "─"), (row + 3, "└", "─")] {
             let want = if x == left {
                 corner
             } else if x == right {

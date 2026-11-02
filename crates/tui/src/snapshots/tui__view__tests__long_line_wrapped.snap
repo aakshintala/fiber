@@ -2,15 +2,15 @@
 source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
-
-                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                   wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww ▐
                   wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww ▐
-                  wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww ▐
-                  wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww       ▐
-                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                                 you 00:00
-
+                  wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww ▐┃
+                  wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww       ▐┃
+                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
+                                                 you 00:00 ┃
+                                                           ┃
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
+▌──────────────────────────────────────────────────────────
+▌auto                                    ctx ▆▆▆▆▆▆▆▆ — · —
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

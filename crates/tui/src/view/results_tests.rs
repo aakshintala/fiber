@@ -192,8 +192,8 @@ fn the_view_matches_the_doc() {
     }
     assert!(buf[(0, 3)].modifier.contains(Modifier::REVERSED));
     assert!(buf[(0, 4)].modifier.contains(Modifier::REVERSED));
-    assert_eq!(rows[20], "Enter jumps to the match");
-    assert!(buf[(0, 20)].modifier.contains(Modifier::DIM));
+    assert_eq!(rows[18], "Enter jumps to the match");
+    assert!(buf[(0, 18)].modifier.contains(Modifier::DIM));
 }
 
 #[test]

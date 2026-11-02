@@ -68,7 +68,7 @@ fn dim(name: &str, label: &str, origin: &str) -> LogoutRow {
     }
 }
 
-/// An app on home at 80x24 in `/w`, with `seam`.
+/// An app on home at 80x26 in `/w`, with `seam`.
 fn home(seam: Option<Arc<Fake>>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
@@ -80,7 +80,7 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         ..Default::default()
     });
     app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
-    app.set_size(80, 24);
+    app.set_size(80, 26);
     app
 }
 
@@ -109,7 +109,7 @@ fn store_file(seam: &Fake, rel: &str) {
 
 /// The screen's buffer, for style assertions text cannot see.
 fn rendered(app: &App) -> Buffer {
-    let area = Rect::new(0, 0, 80, 24);
+    let area = Rect::new(0, 0, 80, 26);
     let mut buf = Buffer::empty(area);
     crate::view::render(app, area, &mut buf, None);
     buf
@@ -117,10 +117,10 @@ fn rendered(app: &App) -> Buffer {
 
 /// The screen's rows as text.
 fn screen(app: &App) -> Vec<String> {
-    let area = Rect::new(0, 0, 80, 24);
+    let area = Rect::new(0, 0, 80, 26);
     let mut buf = Buffer::empty(area);
     crate::view::render(app, area, &mut buf, None);
-    (0..24)
+    (0..26)
         .map(|y| {
             (0..80)
                 .map(|x| buf[(x, y)].symbol())
@@ -254,14 +254,14 @@ fn clicking_a_dim_row_neither_selects_nor_confirms_it() {
     // without the negation the live row dims and the dim row shines.
     let buf = rendered(&app);
     let text_at = |y: u16| (0..80).map(|x| buf[(x, y)].symbol()).collect::<String>();
-    let dim_y = (0..24)
+    let dim_y = (0..26)
         .find(|y| text_at(*y).contains("environment variable ACME_KEY"))
         .expect("no dim row");
     assert!(
         (0..80).any(|x| buf[(x, dim_y)].modifier.contains(Modifier::DIM)),
         "the dim row draws with no dimmed cell"
     );
-    let live_y = (0..24)
+    let live_y = (0..26)
         .find(|y| text_at(*y).contains("acme work"))
         .expect("no live row");
     assert!(
