@@ -368,3 +368,64 @@ fn the_maxima_table_rejects_malformed_lines_with_exact_errors() {
         );
     }
 }
+
+#[test]
+fn a_suffixed_wait_name_opens_a_wait() {
+    for code in [
+        "    run.wait_screen_reporting(\"x\", |grid| true);",
+        "    run.wait_screen_leading(\"x\", |grid| true);",
+        "    run.wait_screen2(\"x\", |grid| true);",
+    ] {
+        assert!(opens_wait(&code_part(code, false).0), "code: {code:?}");
+    }
+}
+
+#[test]
+fn a_decoy_wait_prefix_does_not_hide_a_later_wait() {
+    assert!(opens_wait("ab.wait_screened.wait_screen("));
+}
+
+#[test]
+fn a_block_comment_closing_at_the_line_start_releases_the_next_read() {
+    assert_eq!(
+        count_unmarked("    /* open\n*/ let grid = run.screen();\n"),
+        1
+    );
+}
+
+#[test]
+fn a_char_literal_advances_past_its_closing_quote() {
+    assert_eq!(code_part("'a' x", false), ("  x".to_owned(), false));
+    assert_eq!(code_part("'\\n' x", false), ("  x".to_owned(), false));
+}
+
+#[test]
+fn raw_string_forms_advance_past_their_closer() {
+    let cases: &[(&str, Option<&str>)] = &[
+        ("r\"abc\"; tail", Some("; tail")),
+        ("r#\"a\"#; tail", Some("; tail")),
+        ("r##\"ab\"##; tail", Some("; tail")),
+        ("br\"abc\"; tail", Some("; tail")),
+        ("\"abc\"; tail", None),
+        ("run.screen();", None),
+        ("r\"abc", None),
+    ];
+    for (rest, expected) in cases {
+        assert_eq!(strip_raw_string(rest), *expected, "rest: {rest:?}");
+    }
+}
+
+#[test]
+fn a_raw_string_holding_an_escaped_quote_hides_no_wait() {
+    assert_eq!(
+        count_unmarked("    let s = r\"a\\\"; run.wait_screen(\"x\", |grid| grid.contents);\n"),
+        0
+    );
+}
+
+#[test]
+fn char_literal_lengths_count_the_body_and_its_closing_quote() {
+    assert_eq!(char_end("a'"), Some(2));
+    assert_eq!(char_end("\\n'"), Some(3));
+    assert_eq!(char_end("'_x"), None);
+}
