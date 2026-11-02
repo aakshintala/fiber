@@ -365,6 +365,7 @@ fn a_hook_note_completes_the_handoff_with_no_note_request() {
     let next = &requests[1].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("Hook note."));
     assert_eq!(requests[1].previous_end, None);
@@ -728,6 +729,7 @@ fn an_overflow_handoff_hands_the_hook_the_moved_results() {
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("Hook note."));
     assert_eq!(attempt_numbers(&lines), [1, 1, 1]);
@@ -1092,6 +1094,7 @@ fn a_hook_note_runs_session_start_with_reason_handoff() {
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
     assert!(text_of(&next[1]).contains("at handoff"), "{next:?}");
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
     assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("Hook note."));
 }

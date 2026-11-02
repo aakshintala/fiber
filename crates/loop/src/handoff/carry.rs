@@ -220,22 +220,13 @@ impl Carry {
     /// note, a line for the jobs still running and, when tools set the note,
     /// the other calls of that step with their results.
     pub(crate) fn restart(&mut self, done: &HandoffCompleted) -> Vec<Input> {
-        let mut conversation: Vec<Input> = self
-            .input
-            .iter()
-            .cloned()
-            .map(|input| match input {
-                Input::User { text, images } => Input::User {
-                    text: fill(message("handoff-new"), &[("message", text.as_str())]),
-                    images,
-                },
-                other @ Input::Assistant { .. }
-                | other @ Input::Reasoning { .. }
-                | other @ Input::ToolCall { .. }
-                | other @ Input::ToolResult { .. }
-                | other @ Input::ToolSearchResult { .. } => other,
-            })
-            .collect();
+        let mut conversation = self.input.clone();
+        for input in &mut conversation {
+            if let Input::User { text, .. } = input {
+                let labelled = fill(message("handoff-new"), &[("message", text.as_str())]);
+                *text = labelled;
+            }
+        }
         let texts = std::mem::take(&mut self.texts);
         let step = std::mem::take(&mut self.step);
         // The loads move into the resend the next opening sends again: a

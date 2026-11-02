@@ -1949,6 +1949,7 @@ fn a_handoff_runs_session_start_with_reason_handoff() {
     let users = user_messages(&requests[2].body);
     assert_eq!(users.len(), 4);
     assert!(users[0].starts_with("This message is from Fiber"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(
         &users[1..],
         [

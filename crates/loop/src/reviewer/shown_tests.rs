@@ -1583,6 +1583,7 @@ fn person_pairs_reuse_rendered_replies_for_each_occurrence() {
     );
     render_reviewed(&mut reviewed, &person_turn("Seven"), None, Some(Seq(13)));
 
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [
@@ -1611,6 +1612,7 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
         None,
         Some(Seq(14)),
     );
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [(kept(14, 0), "The person: unprompted".into())]
@@ -1629,6 +1631,7 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
     let Input::User { text: person, .. } = &reviewed[2].input else {
         panic!("not a rendered person");
     };
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pair reuses the reviewer-rendered reply.
     assert_eq!(
         Reviewed::person_pairs(&reviewed)[1].1,
         format!("{reply}\n{person}"),
@@ -1648,6 +1651,7 @@ fn a_reply_does_not_cross_a_different_sequence_person() {
     render_reviewed(&mut reviewed, &person_turn("Blue"), None, Some(Seq(11)));
     render_reviewed(&mut reviewed, &person_turn("Green"), None, Some(Seq(12)));
 
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [

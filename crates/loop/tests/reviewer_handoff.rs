@@ -286,6 +286,7 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
     assert!(agent[0].starts_with("This message is from Fiber"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — earlier blocks (item 4: "oldest first, each in its own labelled block"), the note (item 6: "The handoff note"); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         agent[1..],
         [
@@ -1240,6 +1241,7 @@ fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
     lines.extend(prompt_turn(&mut session, "now run it"));
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
+    // docs/permissions.md, "At a handoff": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
     assert_eq!(
         kept[0].payload["kept"],
         json!([
@@ -1256,11 +1258,13 @@ fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
         .iter()
         .position(|text| text == &"The person: Blue")
         .unwrap();
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
     assert_eq!(selecting[at - 1], "The agent: Which color?");
     let at = selecting
         .iter()
         .position(|text| text == &"The person: Seven")
         .unwrap();
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
     assert_eq!(selecting[at - 1], "The agent: Which number?");
     assert!(selecting.contains(&"The person: go"));
     assert!(
@@ -1274,11 +1278,13 @@ fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
         .iter()
         .position(|text| text == &"The person: Blue")
         .unwrap();
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
     assert_eq!(after[at - 1], "The agent: Which color?");
     let at = after
         .iter()
         .position(|text| text == &"The person: Seven")
         .unwrap();
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
     assert_eq!(after[at - 1], "The agent: Which number?");
     assert!(!after.contains(&"The person: go"));
     assert!(after.contains(&"The person: now run it"));
@@ -1294,7 +1300,9 @@ fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
     // labelled blocks. Ordinary turn input stays unframed.
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
+    // docs/handoff.md, "What the model sees after a handoff", item 2: "A new opening message".
     assert!(agent[0].starts_with("This message is from Fiber"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — earlier blocks (item 4: "oldest first, each in its own labelled block"), the note (item 6: "The handoff note"); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         agent[1..],
         [
@@ -1616,10 +1624,12 @@ fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
     assert!(agent[0].starts_with("This message is from Fiber"));
     // The kept message stays whole in its earlier-message block, before
     // the labelled current input and the note.
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — the kept message stays whole in its earlier block (item 4), before the labelled current input (item 5) and the note (item 6).
     assert_eq!(
         agent[2..],
         ["The person's new message:\nsecond", "The note."]
     );
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "They are the `reviewer_kept` selection unchanged" — the kept message is carried whole.
     assert_eq!(
         agent[1],
         format!("The person's earlier message:\nThe person: {long}"),

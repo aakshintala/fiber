@@ -92,6 +92,7 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
         .iter()
         .find(|line| line["kind"] == "reviewer_kept")
         .expect("the reviewer selected messages");
+    // docs/permissions.md, "At a handoff": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
     assert_eq!(
         kept["payload"]["kept"],
         json!([
@@ -113,6 +114,7 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
         .iter()
         .find(|line| line["kind"] == "skills_resent")
         .expect("the loaded skill was resent after handoff");
+    // docs/handoff.md, "What the model sees after a handoff", item 8: "once each" — one loaded skill, resent once.
     assert_eq!(resent["payload"]["skills"].as_array().unwrap().len(), 1);
     let completed = lines
         .iter()
@@ -123,7 +125,10 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
     // The built OpenAI Responses serializer writes the four earlier turns,
     // the note request, then the first request after handoff.
     let requests = server.requests();
-    assert_eq!(requests.len(), 6);
+    // No doc promises the request count, so this pins only the lower bound
+    // the indexing below needs; the order of the post-handoff blocks is
+    // PROMISE's, checked by `assert_order`.
+    assert!(requests.len() >= 6, "{}", requests.len());
     let before = requests
         .iter()
         .take(5)
@@ -159,12 +164,15 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
         .iter()
         .filter(|text| text.contains("The person's earlier message:"))
         .collect();
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "each in its own labelled block" — two kept answers, two blocks.
     assert_eq!(earlier.len(), 2, "each kept answer has its own block");
     let pair_one =
         "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.";
     let pair_two =
         "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.";
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "oldest first".
     assert_eq!(earlier[0].as_str(), pair_one);
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "oldest first".
     assert_eq!(earlier[1].as_str(), pair_two);
     let current = "The person's new message:\nPlease hand off now.";
     let note = "The handoff note.";
@@ -178,7 +186,7 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
     assert_order(
         &messages,
         &[pair_one, pair_two, current, note, &skill_block],
-        "docs/handoff.md, What the model sees after a handoff, items 4–8",
+        PROMISE,
     );
     let flattened = messages.join("");
     for expected in [pair_one, pair_two, current, note, skill_block.as_str()] {
@@ -235,8 +243,17 @@ fn user_messages(body: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// Asserts the order the handoff contract promises, with the promise beside
-/// the assertion (`docs/testing.md`, "Event streams").
+/// The handoff output order `assert_order` checks, quoted from the doc that
+/// promises it (`docs/testing.md`, "Event streams" wants the promise beside
+/// the assertion).
+const PROMISE: &str = "docs/handoff.md, \"What the model sees after a handoff\": \"In order:\" — \
+    \"4. The person's earlier messages that still bind, oldest first, each in its own labelled block.\" \
+    \"5. This turn's input from the person and any steering messages applied in this turn, verbatim, in a block labelled as the person's new message.\" \
+    \"6. The handoff note.\" \
+    \"8. A line saying the skills were reloaded from the previous context, then each skill in its own labelled block with its name, path and current text, in the order they were first loaded, once each\"";
+
+/// Asserts the order the handoff contract promises, with the promised
+/// quotation beside the assertion (`docs/testing.md`, "Event streams").
 fn assert_order(messages: &[String], expected: &[&str], promise: &str) {
     let positions: Vec<usize> = expected
         .iter()

@@ -3198,6 +3198,7 @@ fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
 
     let seen = texts(&conversation);
     assert!(seen[0].contains("new-os"), "{seen:?}");
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         seen[1..],
         ["The person's new message:\none", "the note", "two"]
@@ -3264,6 +3265,7 @@ fn a_crash_between_the_completion_and_the_new_opening_writes_it_at_the_next_turn
     );
     assert!(seen[0].contains("Session log:"), "{seen:?}");
     assert!(!seen[0].contains("old-os"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         seen[1..],
         ["The person's new message:\none", "the note", "two"]
@@ -3660,6 +3662,7 @@ fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() 
         })
         .collect();
     assert!(seen[0].contains("new-os"), "{seen:?}");
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         seen[1..],
         [

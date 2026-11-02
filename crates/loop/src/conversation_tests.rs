@@ -2982,6 +2982,7 @@ mod from_log {
         let seen = texts(&conversation);
         assert_eq!(seen.len(), 5, "{seen:?}");
         assert!(seen[0].contains("new-os"), "{seen:?}");
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — input and steer in new-message blocks (item 5), the note (item 6: "The handoff note"), then the jobs line (item 7).
         assert_eq!(
             seen[1..],
             [
@@ -3008,6 +3009,7 @@ mod from_log {
 
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — input and steer in new-message blocks (item 5), then the note (item 6).
         assert_eq!(
             texts(&conversation)[1..],
             [
@@ -3034,6 +3036,7 @@ mod from_log {
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
         // The first turn's "one" and its steer stay behind in the log.
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
         assert_eq!(
             texts(&conversation)[1..],
             ["The person's new message:\ntwo", "the note"]
@@ -3131,6 +3134,7 @@ mod from_log {
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
         // The first note's text never reaches the second window's note.
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
         assert_eq!(
             texts(&conversation)[1..],
             ["The person's new message:\ntwo", "second note"]
@@ -3195,6 +3199,7 @@ mod from_log {
 
         let seen = texts(&conversation);
         assert!(seen[0].contains("new-os"), "{seen:?}");
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — input and steer in new-message blocks (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
         assert_eq!(
             seen[1..],
             [
@@ -3252,6 +3257,7 @@ mod from_log {
 
         // The first handoff carries the message beside the command's item.
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
         assert_eq!(
             texts(&conversation)[1..],
             ["The person's new message:\none", "the note"]
@@ -3353,6 +3359,7 @@ mod from_log {
 
         let seen = call_ids(&conversation);
         assert!(seen[0].1.contains("new-os"), "{seen:?}");
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6), then the other calls and their results "as one message holding those calls in call order, then one message holding their results in the same order".
         assert_eq!(
             seen[1..],
             [
@@ -3374,6 +3381,7 @@ mod from_log {
         let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
 
         let seen = call_ids(&conversation);
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), then the joined notes (item 6; "their notes are joined in call order").
         assert_eq!(
             seen[1..],
             [
@@ -4202,6 +4210,7 @@ fn a_kept_message_sits_between_the_opening_and_the_carried_input() {
         (9, "opening_message", start_opening()),
         (10, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept message in its earlier block (item 4: "each in its own labelled block"), then the note (item 6: "The handoff note").
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4221,6 +4230,7 @@ fn kept_messages_go_in_oldest_first_order() {
         (15, "opening_message", start_opening()),
         (16, "reviewer_kept", kept_of(&[(6, 0), (12, 0)])),
     ]);
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "The person's earlier messages that still bind, oldest first, each in its own labelled block"; then the note (item 6: "The handoff note").
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4252,6 +4262,7 @@ fn a_kept_message_follows_the_session_start_context() {
         (10, "context_added", start_context("session_start", "ctx")),
         (11, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), kept message in its earlier block (item 4), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4272,6 +4283,7 @@ fn a_context_that_is_not_session_start_leaves_the_kept_spot_alone() {
         (10, "context_added", start_context("before_message", "late")),
         (11, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept message in its earlier block (item 4), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4291,6 +4303,7 @@ fn a_kept_message_of_this_turn_is_not_repeated() {
         (31, "opening_message", start_opening()),
         (32, "reviewer_kept", kept_of(&[(6, 0), (29, 0)])),
     ]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept earlier message (item 4), this turn's input in a new-message block (item 5: a kept message from this turn "appears once, as part of this turn's input"), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4312,6 +4325,7 @@ fn a_parent_message_sharing_a_key_with_this_turn_is_still_kept() {
         (8, "opening_message", start_opening()),
         (9, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept earlier message (item 4), this turn's input in a new-message block (item 5: a kept message from this turn "appears once, as part of this turn's input"), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         [
@@ -4334,6 +4348,7 @@ fn a_second_handoff_in_the_same_turn_does_not_repeat_this_turns_message() {
         (17, "opening_message", start_opening()),
         (18, "reviewer_kept", kept_of(&[(12, 0)])),
     ]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         ["The person's new message:\nB", "NOTE 2"]
@@ -4384,6 +4399,7 @@ fn a_message_in_a_rewind_summary_turn_is_not_kept() {
         (12, "reviewer_kept", kept_of(&[(6, 1), (7, 0)])),
     ]);
     assert_eq!(after_opening(&conversation), ["NOTE"]);
+    // docs/handoff.md, "What the model sees after a handoff", item 4 holds "The person's earlier messages that still bind": the summary turn's message is none of them, so the index stays empty.
     assert!(carry.reviewed.is_empty());
 }
 
@@ -4419,6 +4435,7 @@ fn a_steering_message_outside_a_rewind_summary_is_kept_and_carried() {
     ]);
     // The driver's steering is carried; the extension's is not the
     // person's, so naming it keeps nothing.
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — kept steering message in its earlier block (item 4), then the note (item 6).
     assert_eq!(
         after_opening(&conversation),
         ["The person's earlier message:\nThe person: steered", "NOTE"]
@@ -4442,6 +4459,7 @@ fn a_second_handoff_keeps_only_what_the_first_kept() {
     // B was dropped at the first selection: the second names a message the
     // index no longer holds, and carries nothing.
     assert_eq!(after_opening(&conversation), ["NOTE 2"]);
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "They are the `reviewer_kept` selection unchanged" — the second selection names only the dropped message, so the index keeps nothing.
     assert!(carry.reviewed.is_empty());
 }
 

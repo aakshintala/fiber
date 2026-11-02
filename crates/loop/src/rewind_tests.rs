@@ -1096,6 +1096,7 @@ fn a_handoff_before_the_point_applies_to_the_fork() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message renders first: {conversation:?}"
     );
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\ntwo")
@@ -1136,6 +1137,7 @@ fn a_point_on_the_handoffs_completion_applies_it() {
     assert_eq!(folded.seed, seeded(&["one"]));
     // The carried input and the note, with no opening message: that line
     // is past the point.
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation,
         [
@@ -1388,6 +1390,7 @@ fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message renders first: {conversation:?}"
     );
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\nb-two")
@@ -1482,6 +1485,7 @@ fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the first opening renders first: {conversation:?}"
     );
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[1],
         user_input("The person's new message:\ntwo")
@@ -1571,6 +1575,7 @@ fn a_hook_context_after_the_handoffs_opening_is_inherited() {
         "the opening message renders first: {conversation:?}"
     );
     assert_eq!(conversation[1], user_input("the hook context"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         conversation[2],
         user_input("The person's new message:\ntwo")
@@ -1584,6 +1589,7 @@ fn a_hook_context_after_the_handoffs_opening_is_inherited() {
         matches!(&earlier[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
         "the opening message still renders first: {earlier:?}"
     );
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(earlier[1], user_input("The person's new message:\ntwo"));
     assert_eq!(earlier[2], user_input("the handoff note"));
     assert!(
