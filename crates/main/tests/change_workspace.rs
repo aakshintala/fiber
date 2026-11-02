@@ -213,7 +213,16 @@ impl Hubbed {
             "start",
             json!({"workspace": workspace.to_string_lossy(), "content": [{"type": "text", "text": content}]}),
         ));
-        let ack = until_ack(self.client(), "the start acknowledgement", id);
+        // The admission only proves the start was taken: the test waits
+        // past it for the id-matched answer carrying the session id, so a
+        // bare admission without a result never ends the wait.
+        let ack = wait_for_effect_after_accept(
+            "the start acknowledgement",
+            id,
+            |what, got| self.client().next(what, got),
+            |line| line["payload"].get("result").is_some(),
+        );
+        assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
         let session = ack.last().unwrap()["payload"]["result"]["session_id"]
             .as_str()
             .expect("the start answers with a session id")
@@ -241,7 +250,16 @@ impl Hubbed {
     fn move_to(&self, id: &str, session: &str, target: &Path) -> String {
         self.client()
             .send(&change_workspace(id, session, &target.to_string_lossy()));
-        let ack = until_ack(self.client(), "the move acknowledgement", id);
+        // The admission only proves the move was taken: the test waits
+        // past it for the id-matched answer carrying the child id, so a
+        // bare admission without a result never ends the wait.
+        let ack = wait_for_effect_after_accept(
+            "the move acknowledgement",
+            id,
+            |what, got| self.client().next(what, got),
+            |line| line["payload"].get("result").is_some(),
+        );
+        assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
         ack.last().unwrap()["payload"]["result"]["new_session_id"]
             .as_str()
             .expect("the move answers with a session id")
@@ -461,7 +479,15 @@ fn a_move_before_any_model_turn_starts_the_child_in_the_target() {
         "start",
         json!({"workspace": layout.repo_a}),
     ));
-    let ack = until_ack(client, "the start acknowledgement", "c_start");
+    // The admission only proves the start was taken: the test waits past
+    // it for the id-matched answer carrying the session id.
+    let ack = wait_for_effect_after_accept(
+        "the start acknowledgement",
+        "c_start",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
     let old = ack.last().unwrap()["payload"]["result"]["session_id"]
         .as_str()
         .unwrap()
@@ -1086,7 +1112,15 @@ fn same_workspace_rewind_records_no_project() {
     hubbed
         .client()
         .send(&command("c_rw", Some(&old), "rewind", json!({})));
-    let ack = until_ack(hubbed.client(), "the rewind acknowledgement", "c_rw");
+    // The admission only proves the rewind was taken: the test waits past
+    // it for the id-matched answer carrying the child id.
+    let ack = wait_for_effect_after_accept(
+        "the rewind acknowledgement",
+        "c_rw",
+        |what, got| hubbed.client().next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
     let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
         .as_str()
         .unwrap()
@@ -1129,7 +1163,15 @@ fn a_rewind_to_a_pre_move_point_reads_across_projects() {
         "rewind",
         json!({"from_session_id": old, "seq": point}),
     ));
-    let ack = until_ack(hubbed.client(), "the cross-project rewind", "c_rw");
+    // The admission only proves the rewind was taken: the test waits past
+    // it for the id-matched answer carrying the child id.
+    let ack = wait_for_effect_after_accept(
+        "the cross-project rewind",
+        "c_rw",
+        |what, got| hubbed.client().next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
     let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
         .as_str()
         .unwrap()
@@ -1185,11 +1227,15 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
         "rewind",
         json!({"from_session_id": old, "seq": point}),
     ));
-    let ack = until_ack(
-        hubbed.client(),
+    // The admission only proves the rewind was taken: the test waits past
+    // it for the id-matched answer carrying the child id.
+    let ack = wait_for_effect_after_accept(
         "the cross-project rewind after the workspace moved",
         "c_rw",
+        |what, got| hubbed.client().next(what, got),
+        |line| line["payload"].get("result").is_some(),
     );
+    assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
     let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
         .as_str()
         .unwrap()
@@ -1212,11 +1258,12 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
         .parent()
         .expect("the leaf log lives in its session directory")
         .to_path_buf();
-    let probe_dir = dir.clone();
-    fakes::wait_until(
+    // `fiber_exited` only proves the exit: the delete needs the lock
+    // released after it, so the test waits for the release, not the event.
+    wait_for_lock_released(
+        setup.deadline,
+        &dir,
         &format!("the leaf {next}'s session lock to become available"),
-        setup.deadline.start_wait(),
-        move || matches!(log::try_hold(&probe_dir).unwrap(), log::Hold::Held(_)),
     );
     // The probe drops its temporary guard; the test retains the lock here.
     let log::Hold::Held(leaf_guard) = log::try_hold(&dir).unwrap() else {
@@ -1458,7 +1505,15 @@ fn the_old_worktree_survives_the_move_and_a_later_prune_removes_it() {
         json!({"workspace": layout.repo_a.to_string_lossy(), "worktree": true,
             "content": [{"type": "text", "text": "one"}]}),
     ));
-    let ack = until_ack(client, "the start acknowledgement", "c_start");
+    // The admission only proves the start was taken: the test waits past
+    // it for the id-matched answer carrying the session id.
+    let ack = wait_for_effect_after_accept(
+        "the start acknowledgement",
+        "c_start",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
     let old = ack.last().unwrap()["payload"]["result"]["session_id"]
         .as_str()
         .expect("the start answers with a session id")
