@@ -1635,3 +1635,27 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
         "pair extraction reuses the capped reviewer inputs"
     );
 }
+
+#[test]
+fn a_reply_does_not_cross_a_different_sequence_person() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("Which color?"),
+        None,
+        Some(Seq(10)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("Blue"), None, Some(Seq(11)));
+    render_reviewed(&mut reviewed, &person_turn("Green"), None, Some(Seq(12)));
+
+    assert_eq!(
+        Reviewed::person_pairs(&reviewed),
+        [
+            (
+                kept(11, 0),
+                "The agent: Which color?\nThe person: Blue".into()
+            ),
+            (kept(12, 0), "The person: Green".into())
+        ]
+    );
+}
