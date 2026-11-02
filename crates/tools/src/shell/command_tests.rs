@@ -2720,10 +2720,10 @@ fn a_failed_job_open_preserves_the_guard_on_resume() {
         jobs,
         Arc::clone(&clock),
         &held,
-        super::super::Limit {
-            ms: Some(60_000),
+        Some(super::super::Limit {
+            ms: 60_000,
             monitor: false,
-        },
+        }),
         false,
         &cancel,
         &Recorder::default(),

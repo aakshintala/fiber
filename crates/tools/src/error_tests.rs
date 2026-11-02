@@ -1012,10 +1012,7 @@ fn a_stopped_command_keeps_its_closing_line() {
 #[test]
 fn a_limit_stop_says_what_its_line_says() {
     for monitor in [false, true] {
-        let limit = crate::shell::Limit {
-            ms: Some(1000),
-            monitor,
-        };
+        let limit = crate::shell::Limit { ms: 1000, monitor };
         assert_eq!(limit.stopped().to_string(), limit.line());
     }
 }

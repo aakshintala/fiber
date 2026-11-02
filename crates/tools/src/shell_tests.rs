@@ -694,10 +694,10 @@ fn shell_details_describe_the_command_and_reaped_status() {
     ];
     for (raw, stop, indeterminate, command, expected) in cases {
         let output = super::assemble(
-            super::Limit {
-                ms: Some(1),
+            Some(super::Limit {
+                ms: 1,
                 monitor: false,
-            },
+            }),
             Finished {
                 output: Kept::Whole(Vec::new()),
                 status: raw.map(std::process::ExitStatus::from_raw),
@@ -715,10 +715,10 @@ fn shell_details_describe_the_command_and_reaped_status() {
     }
     let output = from_spawn(
         Err(std::io::Error::other("missing")),
-        super::Limit {
-            ms: Some(1),
+        Some(super::Limit {
+            ms: 1,
             monitor: false,
-        },
+        }),
         "c",
     );
     assert_eq!(output.details, Some(json!({"command":"c"})));
@@ -746,10 +746,10 @@ fn shell_details_keep_the_argument_not_the_search_prelude() {
 fn a_spawn_failure_is_tool_error_with_no_process() {
     let output = from_spawn(
         Err(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")),
-        super::Limit {
-            ms: Some(1),
+        Some(super::Limit {
+            ms: 1,
             monitor: false,
-        },
+        }),
         "c",
     );
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
@@ -1059,10 +1059,10 @@ fn assemble_of_a_spilled_output_has_no_text_and_names_the_file() {
     let spill = Spill::start(artifacts(&dir), vec![b'x'; 20_000]);
     let status = Command::new("true").status().unwrap();
     let output = super::assemble(
-        super::Limit {
-            ms: Some(1),
+        Some(super::Limit {
+            ms: 1,
             monitor: false,
-        },
+        }),
         Finished {
             output: Kept::Spilled(Box::new(spill)),
             status: Some(status),
@@ -1098,10 +1098,10 @@ fn assemble_of_a_failed_spilled_output_keeps_its_error_and_process() {
     let spill = Spill::start(artifacts(&dir), b"partial".to_vec());
     let status = Command::new("sh").args(["-c", "exit 3"]).status().unwrap();
     let output = super::assemble(
-        super::Limit {
-            ms: Some(1),
+        Some(super::Limit {
+            ms: 1,
             monitor: false,
-        },
+        }),
         Finished {
             output: Kept::Spilled(Box::new(spill)),
             status: Some(status),
@@ -1140,10 +1140,10 @@ fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
         capped: false,
         flooded: false,
     };
-    let limit = super::Limit {
-        ms: Some(1),
+    let limit = Some(super::Limit {
+        ms: 1,
         monitor: false,
-    };
+    });
     let line = "It could not move to the background: the jobs are full.";
     let spilled = super::assemble(
         limit,

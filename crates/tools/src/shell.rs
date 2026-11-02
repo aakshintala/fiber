@@ -474,10 +474,12 @@ impl Shell {
             (Some(_), Mode::Terminal { .. }) => command::MovePolicy::Terminal,
             (Some(_), Mode::Monitor) => command::MovePolicy::Monitor,
         };
-        let limit = Limit {
-            ms: parsed.timeout_ms,
+        // `None` only for an `in_background()` call with no `timeout_ms`,
+        // which has no timeout.
+        let limit: Option<Limit> = parsed.timeout_ms.map(|ms| Limit {
+            ms,
             monitor: parsed.mode == Mode::Monitor,
-        };
+        });
         let spill = self.artifacts.clone().map(|dir| spill::Config {
             dir,
             bound: self.bound,
@@ -633,37 +635,33 @@ impl Mode {
 
 /// How long a command may run, and whether it is a monitor's deadline,
 /// which a timeout names as such (`docs/tools.md`, "Background jobs").
-/// `None` is a background call with no `timeout_ms`, which has no timeout:
-/// the drive never stops it, so the stop lines below never run for it.
+/// `None` in place of a limit is a background call with no `timeout_ms`,
+/// which has no timeout: the drive never stops it, so a stop always has a
+/// limit in hand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limit {
-    /// Milliseconds, or no timeout for a background call with none given.
-    pub(crate) ms: Option<u64>,
+    /// Milliseconds.
+    pub(crate) ms: u64,
     /// The limit is a monitor's `timeout_ms`.
     pub(crate) monitor: bool,
 }
 
 impl Limit {
-    /// What a stop at this limit says. A stop needs a deadline, so a
-    /// background call with no timeout never reaches here.
+    /// What a stop at this limit says.
     pub(crate) fn line(self) -> String {
-        let ms = self.ms.expect("a stop needs a deadline");
         if self.monitor {
-            deadline_line(ms)
+            deadline_line(self.ms)
         } else {
-            timeout_line(ms)
+            timeout_line(self.ms)
         }
     }
 
     /// The case a stop at this limit is: the same text as [`Limit::line`].
-    /// A stop needs a deadline, so a background call with no timeout never
-    /// reaches here.
     pub(crate) fn stopped(self) -> ShellError {
-        let ms = self.ms.expect("a stop needs a deadline");
         if self.monitor {
-            ShellError::DeadlinePassed { ms }
+            ShellError::DeadlinePassed { ms: self.ms }
         } else {
-            ShellError::TimedOut { ms }
+            ShellError::TimedOut { ms: self.ms }
         }
     }
 }
@@ -808,7 +806,7 @@ fn is_read_only(effects: &Effects) -> bool {
 /// end-of-call protected-path report into the foreground result.
 pub(crate) fn from_spawn_reported(
     result: Result<Finished, std::io::Error>,
-    limit: Limit,
+    limit: Option<Limit>,
     command: &str,
     report: Option<ProtectedReport>,
 ) -> Output {
@@ -818,7 +816,11 @@ pub(crate) fn from_spawn_reported(
     }
 }
 
-fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit, command: &str) -> Output {
+fn from_spawn(
+    result: Result<Finished, std::io::Error>,
+    limit: Option<Limit>,
+    command: &str,
+) -> Output {
     match result {
         Ok(finished) => assemble(limit, finished, None, Some(command)),
         Err(source) => {
@@ -860,7 +862,7 @@ fn details(command: &str, process: Option<&Process>) -> Value {
 /// structured report lands in `details`, and the contract field rides for
 /// the completion. Absent when no confined transaction ran.
 pub(crate) fn assemble_reported(
-    limit: Limit,
+    limit: Option<Limit>,
     finished: Finished,
     extra: Option<&str>,
     command: Option<&str>,
@@ -894,7 +896,7 @@ pub(crate) fn assemble_reported(
 /// alike. A spilled output carries no text parts: the loop takes its text
 /// from the spill alone.
 pub(crate) fn assemble(
-    limit: Limit,
+    limit: Option<Limit>,
     finished: Finished,
     extra: Option<&str>,
     command: Option<&str>,
@@ -904,7 +906,7 @@ pub(crate) fn assemble(
     output
 }
 
-fn assemble_output(limit: Limit, finished: Finished, extra: Option<&str>) -> Output {
+fn assemble_output(limit: Option<Limit>, finished: Finished, extra: Option<&str>) -> Output {
     let timed_out = finished.stop == Some(StopKind::Timeout);
     if finished.indeterminate {
         let process = process_of(&finished, timed_out);
@@ -917,7 +919,11 @@ fn assemble_output(limit: Limit, finished: Finished, extra: Option<&str>) -> Out
             false,
         );
     }
-    if finished.stop == Some(StopKind::Timeout) {
+    // A stop only happens where its deadline fired, so the stop path has
+    // a `Limit` in hand; without one there is no timeout to report.
+    if finished.stop == Some(StopKind::Timeout)
+        && let Some(limit) = limit
+    {
         let line = limit.line();
         let error = Some(Failure::from(&ToolError::from(limit.stopped())));
         let process = process_of(&finished, true);

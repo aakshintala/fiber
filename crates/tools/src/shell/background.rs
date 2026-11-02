@@ -205,7 +205,7 @@ pub(crate) fn take(
     jobs: Arc<dyn Jobs>,
     clock: Arc<dyn Clock>,
     command: &str,
-    limit: Limit,
+    limit: Option<Limit>,
     terminal: bool,
     cancel: &dyn Cancel,
     emit: &dyn Emit,
@@ -223,7 +223,7 @@ pub(crate) fn take(
         description: description_of(command),
         stop: stop_of(&job_cancel),
         input: moved.take_input(),
-        lines: limit.monitor,
+        lines: limit.is_some_and(|limit| limit.monitor),
     }) {
         Ok(opened) => {
             let mut output = hand_off(
@@ -258,7 +258,7 @@ fn hand_off(
     opened: Opened,
     job_cancel: Token,
     clock: Arc<dyn Clock>,
-    limit: Limit,
+    limit: Option<Limit>,
     terminal: bool,
     cancel: &dyn Cancel,
     start: Option<(&Timing, Instant)>,
@@ -319,11 +319,13 @@ fn hand_off(
     if let Some((timing, started)) = start {
         drop(timing(Op::JobsStart, None, Some(started)));
     }
-    if let Some(sink) = sink {
-        // A monitor always has a deadline, so its receipt names it.
-        let deadline = limit.ms.expect("a monitor has a deadline");
+    // A monitor always has a limit, so the monitor branch holds one and
+    // names its deadline in the receipt.
+    if let Some(sink) = sink
+        && let Some(limit) = limit
+    {
         return with_spill_line(
-            monitor_receipt(&opened.started, &opened.path, &errors, &sink, deadline),
+            monitor_receipt(&opened.started, &opened.path, &errors, &sink, limit.ms),
             spill_line,
         );
     }
@@ -617,7 +619,12 @@ fn description_of(command: &str) -> String {
 
 /// The end maps as the foreground result does (`assemble`); a stop that
 /// was not indeterminate is `cancelled`.
-fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) -> JobCompleted {
+fn to_completed(
+    job_id: JobId,
+    path: &Path,
+    finished: Finished,
+    limit: Option<Limit>,
+) -> JobCompleted {
     to_completed_reported(job_id, path, finished, limit, None)
 }
 
@@ -627,7 +634,7 @@ pub(super) fn to_completed_reported(
     job_id: JobId,
     path: &Path,
     finished: Finished,
-    limit: Limit,
+    limit: Option<Limit>,
     report: Option<ProtectedReport>,
 ) -> JobCompleted {
     let capped = finished.capped;
