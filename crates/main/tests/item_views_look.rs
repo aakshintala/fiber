@@ -193,6 +193,25 @@ fn job_row_index(rows: &[String], command: &str) -> Option<usize> {
     rows.iter().position(|row| row.contains(command))
 }
 
+/// Which read the last grid seen by the item-view-open wait implies, in
+/// words: the job row never drew, it drew somewhere other than the row
+/// clicked, or it is still on the row clicked. Failure-path words only;
+/// the wait's predicate stays exactly as strict. The trailing newline is
+/// the separator the leading wait leaves to its caller.
+fn item_view_open_lead(rows: &[String], command: &str, clicked: u16) -> String {
+    match job_row_index(rows, command) {
+        None => {
+            "the job row is at no y: the job never registered or the panel dropped it\n".to_owned()
+        }
+        Some(y) if y as u16 != clicked => format!(
+            "the job row is at y={y}, not at the y={clicked} that was clicked: the panel reflowed under the click\n"
+        ),
+        Some(y) => format!(
+            "the job row is still at y={y}, the y that was clicked: the click did not open the view\n"
+        ),
+    }
+}
+
 /// The first row containing `needle`, or a panic naming it.
 fn row_with(grid: &Grid, needle: &str) -> u16 {
     grid.rows
@@ -424,6 +443,60 @@ fn job_row_predicate_rejects_the_pre_expansion_grid() {
 }
 
 #[test]
+fn item_view_open_lead_names_the_read_the_last_grid_implies() {
+    let command = "head -n 1 hold #7";
+    let clicked = 20u16;
+    let rows_with_job_at = |y: usize| -> Vec<String> {
+        (0..24)
+            .map(|i| {
+                if i == y {
+                    format!("job j_1 · {command}")
+                } else {
+                    format!("filler row {i}")
+                }
+            })
+            .collect()
+    };
+    let missing = vec!["Jobs  1 running".to_owned(), "Done.".to_owned()];
+    let below = rows_with_job_at(clicked as usize - 1);
+    let at = rows_with_job_at(clicked as usize);
+    let above = rows_with_job_at(clicked as usize + 1);
+
+    let no_row = item_view_open_lead(&missing, command, clicked);
+    let reflowed_below = item_view_open_lead(&below, command, clicked);
+    let still_there = item_view_open_lead(&at, command, clicked);
+    let reflowed_above = item_view_open_lead(&above, command, clicked);
+
+    assert_eq!(
+        no_row,
+        "the job row is at no y: the job never registered or the panel dropped it\n"
+    );
+    assert_eq!(
+        reflowed_below,
+        format!(
+            "the job row is at y={}, not at the y={clicked} that was clicked: the panel reflowed under the click\n",
+            clicked - 1
+        )
+    );
+    assert_eq!(
+        still_there,
+        format!(
+            "the job row is still at y={clicked}, the y that was clicked: the click did not open the view\n"
+        )
+    );
+    assert_eq!(
+        reflowed_above,
+        format!(
+            "the job row is at y={}, not at the y={clicked} that was clicked: the panel reflowed under the click\n",
+            clicked + 1
+        )
+    );
+    assert_ne!(no_row, reflowed_below);
+    assert_ne!(reflowed_below, still_there);
+    assert_ne!(still_there, no_row);
+}
+
+#[test]
 fn fifo_release_written_before_reader_opens_is_read() {
     let setup = Setup::new();
     let fifo = setup.workspace().join("hold");
@@ -478,9 +551,28 @@ fn the_job_pty_view_matches_the_doc() {
         .find(|x| grid.cell(*x, job).symbol != " ")
         .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
     click(&mut run, job_x, job);
-    let grid = run.wait_screen("the item view opens", |grid| {
-        grid.contents.contains("Job  ◆ ")
-    });
+    // The failure report reads the last grid the wait saw, so the next
+    // sighting names which read that state implies instead of timing out
+    // mute. The report runs only when the wait expires; a green run keeps
+    // the same predicate, clicks and assertions.
+    let last: std::cell::RefCell<Option<Grid>> = std::cell::RefCell::new(None);
+    let grid = run.wait_screen_leading(
+        "the item view opens",
+        |grid| {
+            *last.borrow_mut() = Some(grid.clone());
+            grid.contents.contains("Job  ◆ ")
+        },
+        || {
+            let seen = last.borrow();
+            let empty: Vec<String> = Vec::new();
+            let rows: &[String] = if let Some(grid) = &*seen {
+                &grid.rows
+            } else {
+                &empty
+            };
+            item_view_open_lead(rows, &command, job)
+        },
+    );
     // The status row names the job twice: once in the row, once in the
     // stop target. The row is short enough to draw whole: no `…` cuts
     // it, so the finish fold below reads the outcome off the screen.
