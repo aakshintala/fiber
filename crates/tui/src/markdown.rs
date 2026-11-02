@@ -161,8 +161,10 @@ pub(crate) fn render_count(text: &str, width: u16) -> Counted {
 }
 
 /// Whether `text` is a single paragraph of words with no Markdown syntax.
-// A false result only skips the fast path: the Markdown renderer then counts
-// the same rows, so no consumer sees the difference.
+// The skip covers the whole function, the narrowest place cargo-mutants
+// honours one. Only mutants that make it answer false survive, and those just
+// skip the fast path: the Markdown renderer then counts the same rows. A true
+// answer on Markdown miscounts, and the count-only reply tests catch it.
 #[cfg_attr(false, mutants::skip)]
 fn plain_words(text: &str) -> bool {
     !text.is_empty()
