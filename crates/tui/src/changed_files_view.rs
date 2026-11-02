@@ -236,18 +236,38 @@ pub(crate) fn answer(result: Option<&CommandResult>) -> Diff {
     }
 }
 
+/// The first hunk's new-side start over the shown diff `lines`: the `+c`
+/// of the first `@@ -a,b +c,d @@` header, at least 1 (`+0,0` deletes at
+/// the file's start, which no editor takes as a line). Anything else — no
+/// header, an unparsable one, an empty or binary diff — opens at line 1.
+pub(crate) fn first_hunk_line(lines: &[String]) -> u64 {
+    lines.iter().find_map(|line| hunk_start(line)).unwrap_or(1)
+}
+
+/// One `@@ -a,b +c,d @@` header's new-side start, at least 1; None for
+/// any other line, so headers the parse cannot read are skipped.
+fn hunk_start(line: &str) -> Option<u64> {
+    let header = line.strip_prefix("@@ ")?;
+    let new = header.split_whitespace().nth(1)?;
+    let start = new.strip_prefix('+')?;
+    let start = start.split([',', ' ']).next()?;
+    start.parse::<u64>().ok().map(|start| start.max(1))
+}
+
 /// Builds the file list or the selected file's diff frame. The list
 /// rows show `figures` where answered, the card's figures until
 /// then; an untracked path draws its line count with
-/// "· untracked, wholly added" dim.
+/// "· untracked, wholly added" dim. The local editor hint is omitted
+/// on a remote terminal.
 pub(crate) fn frame(
     changes: &BTreeMap<String, (u64, u64)>,
     figures: Option<&ResolvedFigures>,
     chosen: Option<(&str, &Diff)>,
     list: List,
+    remote: bool,
 ) -> Frame {
     if let Some((path, diff)) = chosen {
-        return diff_frame(path, diff, list);
+        return diff_frame(path, diff, list, remote);
     }
     let resolved;
     let figures = match figures {
@@ -300,12 +320,16 @@ pub(crate) fn frame(
             format::count(files, "file", "files")
         )],
         field: None,
-        footer: "↑↓ move · Enter show diff · Esc close".to_owned(),
+        footer: if remote {
+            "↑↓ move · Enter show diff · Esc close".to_owned()
+        } else {
+            "↑↓ move · Enter show diff · Ctrl+G edits · Esc close".to_owned()
+        },
     }
 }
 
 /// The current diff frame, with its file in the title.
-fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
+fn diff_frame(path: &str, diff: &Diff, list: List, remote: bool) -> Frame {
     let (rows, below) = match diff {
         Diff::Reading => (
             vec![vec![("Reading the diff…".to_owned(), None, Ink::Plain)]],
@@ -345,7 +369,11 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
         list,
         below,
         field: None,
-        footer: "↑↓ scroll · ← files · Esc close".to_owned(),
+        footer: if remote {
+            "↑↓ scroll · ← files · Esc close".to_owned()
+        } else {
+            "↑↓ scroll · Ctrl+G edits · ← files · Esc close".to_owned()
+        },
     }
 }
 

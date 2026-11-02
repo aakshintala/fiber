@@ -29,7 +29,7 @@ use crate::swapped::{Frame, List, Spot};
 use crate::tools_view::Tools;
 
 /// What a view says when the terminal was given no seam.
-const UNAVAILABLE: &str = "Not available in this terminal.";
+pub(in crate::app) const UNAVAILABLE: &str = "Not available in this terminal.";
 
 /// A configuration view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -741,11 +741,19 @@ impl App {
                 let file = file
                     .or_else(|| self.remote().map(|remote| remote.local_global_file()))
                     .or_else(|| self.configure_seam().map(|seam| seam.global_file()));
-                file.map_or(Effect::None, Effect::OpenFile)
+                file.map_or(Effect::None, |file| {
+                    Effect::OpenFile(crate::editor::OpenFile {
+                        path: file,
+                        line: None,
+                    })
+                })
             }
             Act::Open(file) => {
                 let Some(remote) = self.remote() else {
-                    return Effect::OpenFile(file);
+                    return Effect::OpenFile(crate::editor::OpenFile {
+                        path: file,
+                        line: None,
+                    });
                 };
                 // With no local workspace only a hub-global file has an
                 // address; a project-scoped file fails on the notice path.
@@ -768,7 +776,10 @@ impl App {
                     Ok(copy) => {
                         let temp = copy.temp.clone();
                         self.config_views.copy = Some(copy);
-                        Effect::OpenFile(temp)
+                        Effect::OpenFile(crate::editor::OpenFile {
+                            path: temp,
+                            line: None,
+                        })
                     }
                     Err(message) => {
                         self.notices.push("io_failed", message);

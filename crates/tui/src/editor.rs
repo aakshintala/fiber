@@ -44,6 +44,17 @@ pub(crate) enum Outcome<T> {
     Stopped(c_int),
 }
 
+/// What [`open`] opens in the editor: a file, at its first changed line
+/// when `line` names one (`docs/tui.md`, "Swapped views").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OpenFile {
+    /// The file to open; the editor creates it when missing.
+    pub(crate) path: PathBuf,
+    /// The first line to show, passed as `+N` ahead of the path. None
+    /// opens at the top, on the command line byte-for-byte as before.
+    pub(crate) line: Option<u64>,
+}
+
 /// The next temporary file's number in this process.
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -105,7 +116,7 @@ fn run_in(
         return failed(err);
     }
     drop(file);
-    match launch(command, &temp.0, clock, "; the draft is unchanged.") {
+    match launch(command, &temp.0, None, clock, "; the draft is unchanged.") {
         Outcome::Done(Ok(())) => {}
         Outcome::Done(Err(message)) => return Outcome::Done(Err(message)),
         Outcome::Stopped(signal) => return Outcome::Stopped(signal),
@@ -130,9 +141,10 @@ fn run_in(
 pub(crate) fn open(
     command: &str,
     path: &Path,
+    line: Option<u64>,
     clock: &Arc<dyn Clock>,
 ) -> Outcome<Result<(), String>> {
-    launch(command, path, clock, ".")
+    launch(command, path, line, clock, ".")
 }
 
 /// Runs `command` on `path` in the foreground and waits for it. A spawn or
@@ -142,6 +154,7 @@ pub(crate) fn open(
 fn launch(
     command: &str,
     path: &Path,
+    line: Option<u64>,
     clock: &Arc<dyn Clock>,
     ended: &str,
 ) -> Outcome<Result<(), String>> {
@@ -156,12 +169,18 @@ fn launch(
     forward.term.swap(false, Ordering::SeqCst);
     forward.hup.swap(false, Ordering::SeqCst);
     // `sh` splits the command, so a value with arguments such as `code -w`
-    // works; the path goes in as `$1`, never through the split. The shell
-    // runs in Fiber's group, as on main: the wait signals the shell pid
-    // alone, never the group.
+    // works; the path goes in as `$1`, never through the split. A line
+    // travels as its own `+N` positional ahead of the path, which stays
+    // positional `$1`; with no line the command line stays byte-for-byte
+    // what it was. The shell runs in Fiber's group, as on main: the wait
+    // signals the shell pid alone, never the group.
+    let script = match line {
+        Some(n) => format!("{command} \"+{n}\" \"$1\""),
+        None => format!("{command} \"$1\""),
+    };
     let mut child = match Command::new("/bin/sh")
         .arg("-c")
-        .arg(format!("{command} \"$1\""))
+        .arg(script)
         .arg("sh")
         .arg(path)
         .spawn()

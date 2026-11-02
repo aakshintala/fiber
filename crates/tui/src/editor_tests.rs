@@ -428,16 +428,16 @@ fn an_unreadable_file_keeps_the_draft_and_says_so() {
 }
 
 impl Fake {
-    /// Runs `open` with the editor on `path`, with one deadline.
+    /// Runs `open` with the editor on `path` at `line`, with one deadline.
     #[track_caller]
-    fn open(&self, path: &Path) -> Result<(), String> {
+    fn open(&self, path: &Path, line: Option<u64>) -> Result<(), String> {
         let command = self.command("", "");
         let path = path.to_path_buf();
         let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let (done, finished) = mpsc::channel();
         std::thread::Builder::new()
             .name("editor-open".to_owned())
-            .spawn(move || done.send(open(&command, &path, &clock)).unwrap_or(()))
+            .spawn(move || done.send(open(&command, &path, line, &clock)).unwrap_or(()))
             .unwrap_or_else(|err| panic!("spawn: {err}"));
         match Deadline::after(DEADLINE).recv(&finished) {
             Ok(Outcome::Done(result)) => result,
@@ -453,7 +453,7 @@ impl Fake {
 fn open_runs_the_command_on_the_path_even_when_it_does_not_exist() {
     let fake = Fake::new("printf 'opened' >> \"$1\"\n");
     let path = fake.temp.path().join("config.json");
-    assert_eq!(fake.open(&path), Ok(()));
+    assert_eq!(fake.open(&path, None), Ok(()));
     assert_eq!(
         std::fs::read_to_string(&path).ok(),
         Some("opened".to_owned())
@@ -467,7 +467,7 @@ fn open_reports_a_failing_editor() {
     let fake = Fake::new("exit 3\n");
     let path = fake.temp.path().join("config.json");
     assert_eq!(
-        fake.open(&path),
+        fake.open(&path, None),
         Err("The editor exited with status 3.".to_owned())
     );
     let fake = Fake::new("kill -INT $$\n");
@@ -476,7 +476,7 @@ fn open_reports_a_failing_editor() {
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("editor-open-signal".to_owned())
-        .spawn(move || done.send(open(&command, &path, &clock)).unwrap_or(()))
+        .spawn(move || done.send(open(&command, &path, None, &clock)).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
         Deadline::after(DEADLINE).recv(&finished).ok(),
@@ -484,6 +484,80 @@ fn open_reports_a_failing_editor() {
             "The editor was ended by signal 2.".to_owned()
         )))
     );
+}
+
+/// The fake editor's argument vector, one argument per line.
+fn argv(fake: &Fake) -> String {
+    std::fs::read_to_string(fake.out("argv")).unwrap_or_else(|err| panic!("argv: {err}"))
+}
+
+#[test]
+fn open_with_a_line_passes_plus_n_ahead_of_the_path() {
+    let fake = Fake::new("printf '%s\\n' \"$@\" > $OUT/argv\n");
+    let path = fake.temp.path().join("config.json");
+    assert_eq!(fake.open(&path, Some(12)), Ok(()));
+    assert_eq!(argv(&fake), format!("+12\n{}\n", path.display()));
+}
+
+#[test]
+fn open_without_a_line_passes_only_the_path() {
+    let fake = Fake::new("printf '%s\\n' \"$@\" > $OUT/argv\n");
+    let path = fake.temp.path().join("config.json");
+    assert_eq!(fake.open(&path, None), Ok(()));
+    assert_eq!(argv(&fake), format!("{}\n", path.display()));
+}
+
+#[test]
+fn open_without_a_line_keeps_a_spaced_and_quoted_path_whole() {
+    let fake = Fake::new("printf '%s\\n' \"$@\" > $OUT/argv\n");
+    let path = fake.temp.path().join("it's \"quoted\".json");
+    assert_eq!(fake.open(&path, None), Ok(()));
+    assert_eq!(argv(&fake), format!("{}\n", path.display()));
+}
+
+#[test]
+fn open_with_a_line_keeps_a_command_with_arguments_working() {
+    let fake = Fake::new("printf '%s\\n' \"$@\" > $OUT/argv\n");
+    let command = fake.command("", " --wait");
+    let path = fake.temp.path().join("config.json");
+    let want = format!("--wait\n+7\n{}\n", path.display());
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-open-args".to_owned())
+        .spawn(move || {
+            done.send(open(&command, &path, Some(7), &clock))
+                .unwrap_or(())
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    assert_eq!(
+        Deadline::after(Duration::from_secs(10))
+            .recv(&finished)
+            .ok(),
+        Some(Outcome::Done(Ok(())))
+    );
+    assert_eq!(argv(&fake), want);
+}
+
+#[test]
+fn open_without_a_line_keeps_a_command_with_arguments_working() {
+    let fake = Fake::new("printf '%s\\n' \"$@\" > $OUT/argv\n");
+    let command = fake.command("", " --wait");
+    let path = fake.temp.path().join("config.json");
+    let want = format!("--wait\n{}\n", path.display());
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("editor-open-args-none".to_owned())
+        .spawn(move || done.send(open(&command, &path, None, &clock)).unwrap_or(()))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    assert_eq!(
+        Deadline::after(Duration::from_secs(10))
+            .recv(&finished)
+            .ok(),
+        Some(Outcome::Done(Ok(())))
+    );
+    assert_eq!(argv(&fake), want);
 }
 
 #[test]

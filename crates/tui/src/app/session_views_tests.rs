@@ -9,7 +9,8 @@ use crate::app::testkit::{
     SESSION, attached, long_turns, now, sent, session_line, session_line_in_turn,
 };
 use crate::app::{App, Effect, SessionView};
-use crate::changed_files_view::{diff_command, ranked};
+use crate::changed_files_view::{diff_command, numstat_command, ranked};
+use crate::editor::OpenFile;
 use crate::home::Launch;
 use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
@@ -2681,4 +2682,287 @@ fn a_refusal_for_another_command_keeps_the_numstat_query_pending() {
     ));
     let shown = screen(&app, 120, 35).0;
     assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+}
+
+/// Opens the Changed files list on `app` holding two changed files.
+fn open_two_files(app: &mut App) {
+    many_changes(app, 2);
+    open_files_from_totals(app, 120, 35);
+}
+
+/// Opens the first file's diff and answers it with `text`.
+fn open_first_diff(app: &mut App, text: &str) {
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(accepted_diff(
+        request["id"].as_str().unwrap_or_default(),
+        text,
+    ));
+}
+
+#[test]
+fn ctrl_g_on_the_file_list_opens_the_selected_row_at_line_one() {
+    let mut app = files_attached(120, 35);
+    open_two_files(&mut app);
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::OpenFile(OpenFile {
+            path: PathBuf::from("/w/src/file-0.rs"),
+            line: Some(1),
+        })
+    );
+}
+
+#[test]
+fn ctrl_g_on_the_diff_opens_the_shown_file_at_its_first_hunk() {
+    let mut app = files_attached(120, 35);
+    open_two_files(&mut app);
+    open_first_diff(
+        &mut app,
+        "diff --git a/src/file-0.rs b/src/file-0.rs\n@@ -1,3 +10,4 @@\n old\n-new\n+new\n@@ -8,2 +20,3 @@\n old\n",
+    );
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::OpenFile(OpenFile {
+            path: PathBuf::from("/w/src/file-0.rs"),
+            line: Some(10),
+        })
+    );
+}
+
+#[test]
+fn ctrl_g_on_a_diff_with_no_hunk_opens_at_line_one() {
+    let mut app = files_attached(120, 35);
+    open_two_files(&mut app);
+    open_first_diff(&mut app, "diff line\n");
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::OpenFile(OpenFile {
+            path: PathBuf::from("/w/src/file-0.rs"),
+            line: Some(1),
+        })
+    );
+}
+
+#[test]
+fn ctrl_g_on_a_rejected_diff_opens_at_line_one() {
+    let mut app = files_attached(120, 35);
+    open_two_files(&mut app);
+    let request = command(app.on_key(Key::Enter, now()));
+    app.on_line(rejected_diff(
+        SESSION,
+        request["id"].as_str().unwrap_or_default(),
+        "session refused",
+    ));
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::OpenFile(OpenFile {
+            path: PathBuf::from("/w/src/file-0.rs"),
+            line: Some(1),
+        })
+    );
+}
+
+#[test]
+fn ctrl_g_on_an_empty_list_opens_nothing() {
+    let mut app = files_attached(120, 35);
+    assert_eq!(
+        app.open_session_view(SessionView::ChangedFiles),
+        Effect::None
+    );
+    assert!(app.session_view_open());
+    assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
+    assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn ctrl_g_on_the_list_while_offline_still_opens_the_local_file() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        panel_cards: vec!["changed_files".to_owned()],
+        ..Default::default()
+    });
+    app.attach(SessionId(SESSION.to_owned()));
+    app.set_size(120, 35);
+    many_changes(&mut app, 1);
+    app.on_click(TargetId::Panel(PanelSpot::ChangedFiles));
+    assert!(app.session_view_open());
+    assert_eq!(
+        app.on_key(Key::CtrlG, now()),
+        Effect::OpenFile(OpenFile {
+            path: PathBuf::from("/w/src/file-0.rs"),
+            line: Some(1),
+        })
+    );
+}
+
+/// A remote-home app with a hub `remote`: no local workspace, so the
+/// Changed files' paths live on the hub.
+fn files_remote() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        panel_cards: vec!["changed_files".to_owned()],
+        ..Default::default()
+    });
+    let router = crate::remote::Router::new();
+    let seam: std::sync::Arc<dyn crate::Configure> =
+        std::sync::Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    app.set_remote(std::sync::Arc::new(crate::remote::Remote::new(
+        seam,
+        "/client".into(),
+        router,
+    )));
+    app.attach(SessionId(SESSION.to_owned()));
+    app.set_size(120, 35);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app
+}
+
+#[test]
+fn ctrl_g_on_a_remote_terminal_shows_the_notice_and_opens_nothing() {
+    let mut app = files_remote();
+    many_changes(&mut app, 1);
+    let effect = app.open_session_view(SessionView::ChangedFiles);
+    assert!(app.session_view_open());
+    drop(effect);
+    assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
+    assert_eq!(
+        app.notices.newest(),
+        Some("Not available in this terminal.")
+    );
+}
+
+/// The workspace path of the first changed file.
+fn first_file() -> PathBuf {
+    PathBuf::from("/w/src/file-0.rs")
+}
+
+/// The shell requests `lines` carry, in order.
+fn shell_requests(lines: &[String]) -> Vec<Value> {
+    lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("shell request JSON: {error}"))
+        })
+        .collect()
+}
+
+#[test]
+fn returning_from_the_editor_resends_the_diff_and_the_numstat_lines() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
+    let lines = app.changed_file_closed(&first_file(), Ok(()));
+    assert_eq!(lines.len(), 2);
+    let requests = shell_requests(&lines);
+    for request in &requests {
+        assert_eq!(request["command"], "shell");
+        assert_eq!(request["session_id"], SESSION);
+        assert_eq!(request["args"]["send"], false);
+    }
+    assert_eq!(
+        requests[0]["args"]["command"],
+        diff_command("src/file-0.rs")
+    );
+    assert_eq!(
+        requests[1]["args"]["command"],
+        numstat_command(&["src/file-0.rs"])
+    );
+    assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn a_failing_editor_return_notices_and_still_resends_both_lines() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
+    let lines = app.changed_file_closed(&first_file(), Err("editor failed".to_owned()));
+    assert_eq!(lines.len(), 2);
+    let requests = shell_requests(&lines);
+    assert_eq!(
+        requests[0]["args"]["command"],
+        diff_command("src/file-0.rs")
+    );
+    assert_eq!(
+        requests[1]["args"]["command"],
+        numstat_command(&["src/file-0.rs"])
+    );
+    assert_eq!(app.notices.newest(), Some("editor failed"));
+}
+
+#[test]
+fn the_resent_requests_fill_the_diff_and_move_the_row_when_they_answer() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    open_first_diff(&mut app, "old hunk\n");
+    let lines = app.changed_file_closed(&first_file(), Ok(()));
+    assert_eq!(lines.len(), 2);
+    let requests = shell_requests(&lines);
+    let ids: Vec<&str> = requests
+        .iter()
+        .map(|request| request["id"].as_str().unwrap_or_default())
+        .collect();
+    app.on_line(accepted_diff(ids[0], "new hunk\n"));
+    app.on_line(accepted_figures(
+        ids[1],
+        "5\t0\tsrc/file-0.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("new hunk"), "{shown}");
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+}
+
+#[test]
+fn returning_with_the_view_closed_sends_nothing() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    open_first_diff(&mut app, "@@ -1 +1 @@\n-old\n+new\n");
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.session_view_open());
+    assert!(app.changed_file_closed(&first_file(), Ok(())).is_empty());
+    assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn returning_for_a_path_outside_the_workspace_sends_nothing() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    assert!(
+        app.changed_file_closed(std::path::Path::new("/elsewhere/f.txt"), Ok(()))
+            .is_empty()
+    );
+    assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn returning_for_an_undecodable_path_sends_nothing() {
+    use std::os::unix::ffi::OsStrExt;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let path = PathBuf::from("/w").join(std::ffi::OsStr::from_bytes(b"\xff.txt"));
+    assert!(app.changed_file_closed(&path, Ok(())).is_empty());
+    assert_eq!(app.notices.newest(), None);
 }
