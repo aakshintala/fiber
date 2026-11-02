@@ -141,12 +141,12 @@ fn ctrl_g_opens_the_file_at_its_first_hunk_and_rereads_on_return() {
         grid.rows[0].contains("Changed files") && find_row(grid, "+call baz(a);").is_some()
     });
     let _ = row_with(&grid, "+call baz(a);");
-    // The script got `+N <path>`, N the first hunk's first line.
+    // The script got `+N <path>`, N the first hunk's first line. The path is
+    // canonicalized, so on macOS `/var` reads `/private/var`
+    // (`crates/main/tests/change_workspace.rs`, the same comparison).
     let recorded = fs::read_to_string(&argv).unwrap_or_else(|error| panic!("argv: {error}"));
-    assert_eq!(
-        recorded,
-        format!("+1\n{}\n", workspace.join("f.txt").display())
-    );
+    let opened = fs::canonicalize(workspace.join("f.txt")).unwrap();
+    assert_eq!(recorded, format!("+1\n{}\n", opened.display()));
     // Back in the list, the row's added count went up by one.
     let list_from = run.output().len();
     run.write(b"\x1b[D");
