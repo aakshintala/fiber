@@ -353,11 +353,10 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
     hub.lock().unwrap().take().unwrap().kill_and_wait();
 }
 
-/// The conversation's person rows. The rail grip `⋮` is drawn on the
-/// same row as `you HH:MM` when that row sits at the grip
-/// (`docs/tui.md`, "Layout"), so the row reads `⋮ you …`. Trimming
-/// whitespace leaves the grip, and the row does not count: the
-/// two-turn assert then fails while the panel says `turns 2` (#3639).
+/// The conversation's person rows, ignoring the scroll-gutter marks: a
+/// settled row can draw wrapped (`⋮ you … ⋮`, like journeys' wrapped
+/// card rows) while still being the turn's `you` row (`docs/tui.md`,
+/// "Turns").
 fn you_rows(contents: &str) -> usize {
     contents
         .lines()
@@ -365,8 +364,8 @@ fn you_rows(contents: &str) -> usize {
         .count()
 }
 
-/// The grip-sharing row from the #3639 screen. Whitespace trimming
-/// leaves the `⋮`, so that count misses a turn that did start.
+/// Pins the grip strip already in `you_rows`. A whitespace trim leaves
+/// a leading `⋮`, so that row would not count; `you_rows` counts it.
 #[test]
 fn you_rows_counts_the_prompt_row_that_wears_the_rail_grip() {
     let gripped = "   ⋮   you 23:16  ⋮";
@@ -463,8 +462,8 @@ fn quota_notice_is_a_fiber_card_entry_in_pty() {
     // frame with one row would fail the count below on the first
     // attempt (`touched-retries` fails a pass on retry). Waiting for
     // both rows makes the returned frame satisfy the assert by
-    // construction. One of the two rows wears the rail grip
-    // (`⋮ you HH:MM`), which a whitespace trim does not count.
+    // construction. The count ignores scroll gutters: macos draws the
+    // first row wrapped (`⋮ you … ⋮`) while it is still the turn's row.
     let shown = run.wait_screen("the second turn's Fiber quota notice", |grid| {
         grid.contents.contains("Fiber")
             && grid.contents.contains("used 90%")
