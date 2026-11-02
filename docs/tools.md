@@ -32,7 +32,7 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   call is judged in"). Any tool may set it; it only makes the call stricter.
   Today only the shell sets it, for its built-in destructive-command guard:
   `rm -r` and `rm -rf`, `git reset --hard`, `git clean`, `git checkout --`
-  and `git restore`, matched best effort by command text in any component of
+  `git restore` and `git push`, matched best effort by command text in any component of
   a multi-part command, whether or not the command parses
   (`docs/permissions.md`, "The destructive-command guard").
   A shell call that ran inside the OS sandbox on Linux or macOS carries

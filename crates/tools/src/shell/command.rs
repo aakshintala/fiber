@@ -480,7 +480,7 @@ fn execute_inner(
                     cause: unavailable.to_string(),
                 }));
             }
-            Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
+            Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace, None) {
                 Ok(prepared) => {
                     return execute_confined(
                         program,
@@ -528,7 +528,11 @@ fn execute_inner(
                     cause: unavailable.to_string(),
                 }));
             }
-            Ok(()) => match super::sandbox::prepare(sandbox_settings, sandbox_workspace) {
+            Ok(()) => match super::sandbox::prepare(
+                sandbox_settings,
+                sandbox_workspace,
+                guard.as_ref().map(|guard| guard.dir.baseline.as_path()),
+            ) {
                 Ok(prepared) => Some(prepared),
                 Err(cause) => {
                     return Err(std::io::Error::other(SandboxApply {

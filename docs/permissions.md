@@ -65,7 +65,7 @@ rather than per call. How the hints map to effects is `docs/mcp.md`
 
 Some shell commands stay reviewed even when confined. The shell keeps a
 built-in list: `rm -r` and `rm -rf`, `git reset --hard`, `git clean`,
-`git checkout --` and `git restore` (`docs/tools.md`, "What a tool
+`git checkout --`, `git restore` and `git push` (`docs/tools.md`, "What a tool
 declares").
 
 Matching is best effort by command text. The shell reads its own command

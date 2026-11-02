@@ -39,6 +39,8 @@ type PendingBaselines = Arc<Mutex<HashMap<PathBuf, Vec<baseline::Entry>>>>;
 #[derive(Debug)]
 pub struct ProtectedPaths {
     home: PathBuf,
+    dir: baseline::StatePaths,
+    workspace: PathBuf,
     pending: PendingBaselines,
 }
 
@@ -58,7 +60,7 @@ pub(crate) struct Begin {
 #[derive(Debug)]
 pub(crate) struct Guard {
     /// The project's state files.
-    dir: baseline::StatePaths,
+    pub(crate) dir: baseline::StatePaths,
     /// The active lock, shared for the call's life.
     active: File,
     /// What a stale baseline left behind, recovered on the way in and
@@ -145,12 +147,17 @@ impl ProtectedPaths {
         home: &Path,
         workspace: &Path,
     ) -> Result<(Arc<Self>, Option<Report>), ProtectedPathsOpenError> {
+        let dir =
+            baseline::state_paths(home, workspace).map_err(ProtectedPathsOpenError::Project)?;
         let handle = Arc::new(Self {
             home: home.to_path_buf(),
+            dir,
+            workspace: workspace
+                .canonicalize()
+                .unwrap_or_else(|_| workspace.to_path_buf()),
             pending: Arc::default(),
         });
-        let dir = baseline::state_paths(&handle.home, workspace)
-            .map_err(ProtectedPathsOpenError::Project)?;
+        let dir = &handle.dir;
         if !dir.dir.exists() {
             // No state yet: no stale baseline can exist, and the first
             // confined call's begin records it. A session that ends
@@ -164,7 +171,7 @@ impl ProtectedPaths {
             }
             return Ok((handle, None));
         }
-        let recovered = recover(&dir).map_err(ProtectedPathsOpenError::Recovery)?;
+        let recovered = recover(dir).map_err(ProtectedPathsOpenError::Recovery)?;
         Ok((handle, recovered))
     }
 
@@ -174,8 +181,24 @@ impl ProtectedPaths {
     /// never runs unprotected.
     #[cfg(any(target_os = "linux", test))]
     pub(crate) fn begin(&self, workspace: &Path) -> Result<Begin, SetupError> {
-        let dir = baseline::state_paths(&self.home, workspace)
-            .map_err(|message| SetupError { message })?;
+        let live = baseline::identity(workspace).map_err(|message| SetupError { message })?;
+        let _key = config::ProjectKey::new(live.path.to_string_lossy().replace('/', "-")).map_err(
+            |source| SetupError {
+                message: source.to_string(),
+            },
+        )?;
+        let expected = self
+            .dir
+            .identity_marker
+            .parent()
+            .and_then(baseline::canonical);
+        if Some(live.path) != expected {
+            return Err(SetupError {
+                message: "the protected-path baseline belongs to another project identity"
+                    .to_owned(),
+            });
+        }
+        let dir = self.dir.clone();
         baseline::create_dir(&dir.dir).map_err(setup)?;
         let baseline_file = baseline::open_lock(&dir.baseline_lock).map_err(setup)?;
         baseline_file.lock().map_err(setup)?;
@@ -269,7 +292,16 @@ impl ProtectedPaths {
     /// no-op. Any other failure fails the tool: the caller reports it, so
     /// the approved write is never silently restored away.
     pub(crate) fn note_approved_write(&self, workspace: &Path, path: &Path) -> Result<(), String> {
-        let dir = baseline::state_paths(&self.home, workspace)?;
+        if workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf())
+            != self.workspace
+        {
+            return Err(
+                "the protected-path baseline belongs to another project identity".to_owned(),
+            );
+        }
+        let dir = &self.dir;
         if !dir.dir.exists() {
             // No state yet: no baseline can hold the path, and the first
             // confined call's begin will snapshot it.
@@ -278,7 +310,7 @@ impl ProtectedPaths {
         let baseline_file =
             baseline::open_lock(&dir.baseline_lock).map_err(|source| source.to_string())?;
         baseline_file.lock().map_err(|source| source.to_string())?;
-        let mut entries = match pending_entries(&self.pending, &dir) {
+        let mut entries = match pending_entries(&self.pending, dir) {
             Some(entries) => entries,
             None => match baseline::read_baseline(&dir.baseline) {
                 Ok(baseline)

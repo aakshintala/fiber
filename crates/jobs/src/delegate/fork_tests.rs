@@ -355,6 +355,13 @@ fn the_calling_action_reaches_the_point() {
 fn a_fork_reads_its_inherited_roots_at_launch() {
     let rig = rig();
     let mut forked = tool(&rig);
+    forked.wiring.sandbox = Arc::new(|| {
+        Ok(vec![
+            "sandbox.enabled=true".into(),
+            "sandbox.allow_write=[\"/fork\"]".into(),
+            "sandbox.deny_read=[]".into(),
+        ])
+    });
     // Read at launch, not at wiring, like a spawn: the fork's point
     // selects its conversation prefix through the launch start, never
     // these roots.
@@ -378,6 +385,14 @@ fn a_fork_reads_its_inherited_roots_at_launch() {
         .recv(&rig.launched)
         .expect("the launcher ran");
     assert_eq!(launched.added, [PathBuf::from("/at-launch")]);
+    assert_eq!(
+        launched.sandbox,
+        [
+            "sandbox.enabled=true",
+            "sandbox.allow_write=[\"/fork\"]",
+            "sandbox.deny_read=[]"
+        ]
+    );
     assert!(
         matches!(launched.start, Start::Fresh(Fresh::Fork { .. })),
         "the point still rides the start"

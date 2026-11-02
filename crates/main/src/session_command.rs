@@ -758,6 +758,7 @@ pub(crate) fn assemble_session(
                 Arc::clone(&jobs),
                 Arc::clone(&clock),
                 resolve,
+                Arc::clone(&sandbox),
             )
             .with_quota(model_quota);
             crate::shutdown::arm(signals, &reads);
@@ -1193,6 +1194,7 @@ pub(crate) fn assemble_session(
                 jobs.clone(),
                 Arc::clone(&clock),
                 resolve,
+                Arc::clone(&sandbox),
             )
             .with_quota(model_quota);
             // Before the log exists: a failure here, such as not finding the running

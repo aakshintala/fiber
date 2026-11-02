@@ -118,6 +118,7 @@ fn delegate_message_refuses_an_extensions_running_and_ended_job_without_contacti
         delegate_started("j_ext"),
     );
     let tool = crate::delegate::DelegateMessage {
+        sandbox: Arc::new(|| Ok(Vec::new())),
         finish: crate::support::clean_finish(),
         depth: 0,
         registry,

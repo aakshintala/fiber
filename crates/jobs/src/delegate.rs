@@ -62,6 +62,8 @@ pub struct DelegateWiring {
     pub workspace: PathBuf,
     /// Reads the parent's added folders at launch, in fold order.
     pub inherited: InheritedRoots,
+    /// Reads the parent's effective sandbox overrides at launch.
+    pub sandbox: SandboxSnapshot,
     /// Resolves the child's `events.jsonl` from its selected workspace and id.
     pub events_for: EventsFor,
     /// The session clock.
@@ -112,6 +114,10 @@ pub type EventsFor = Arc<dyn Fn(&Path, &SessionId) -> PathBuf + Send + Sync>;
 /// selects its conversation prefix through [`ForkPoint`]; it never
 /// narrows these roots.
 pub type InheritedRoots = Arc<dyn Fn() -> Vec<PathBuf> + Send + Sync>;
+
+/// Reads effective sandbox overrides, or the key whose paths cannot be
+/// represented in the child's UTF-8 configuration arguments.
+pub type SandboxSnapshot = Arc<dyn Fn() -> Result<Vec<String>, String> + Send + Sync>;
 
 /// Reads the point a fork continues from: the caller wires the reader,
 /// and the fork only calls it. The
@@ -516,6 +522,15 @@ impl DelegateWiring {
                 let output_path = (self.events_for)(&workspace, &session_id)
                     .to_string_lossy()
                     .into_owned();
+                // Capture before creating a worktree: an unrepresentable
+                // sandbox setting must leave no branch or worktree behind.
+                let sandbox = (self.sandbox)().map_err(|key| JobsError::SpawnFailed {
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("cannot inherit {key}: path is not UTF-8"),
+                    ),
+                })?;
+                let added = (self.inherited)();
                 let created = if isolated {
                     Some((self.create)(&workspace, &session_id)?)
                 } else {
@@ -535,7 +550,6 @@ impl DelegateWiring {
                 // parent's current tail is folded, so additions after
                 // the wiring was built are captured. The fork's point
                 // selects its conversation prefix, never these roots.
-                let added = (self.inherited)();
                 let launched = Launched {
                     depth: self.depth.saturating_add(1),
                     session_id: session_id.clone(),
@@ -546,6 +560,7 @@ impl DelegateWiring {
                         .as_ref()
                         .map_or(workspace.clone(), |record| PathBuf::from(&record.path)),
                     added,
+                    sandbox,
                     worktree,
                     start,
                 };
@@ -743,6 +758,7 @@ pub(crate) mod test_rig {
                 parent: contract::SessionId("s_parent".into()),
                 workspace: self.sessions.parent().unwrap().to_path_buf(),
                 inherited: Arc::new(Vec::new),
+                sandbox: Arc::new(|| Ok(Vec::new())),
                 events_for: Arc::new(move |_, id| sessions.join(&id.0).join("events.jsonl")),
                 clock: Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
                 bound: Duration::from_secs(5),
@@ -783,6 +799,7 @@ pub(crate) mod test_rig {
                 prompt: launched.prompt.clone(),
                 workspace: launched.workspace.clone(),
                 added: launched.added.clone(),
+                sandbox: launched.sandbox.clone(),
                 worktree: launched.worktree.clone(),
                 start: launched.start.clone(),
             });
