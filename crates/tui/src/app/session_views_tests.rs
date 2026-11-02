@@ -3017,7 +3017,7 @@ fn ctrl_g_on_a_remote_terminal_fetches_the_hub_file_and_opens_the_copy() {
 }
 
 #[test]
-fn returning_the_remote_copy_stores_it_and_rereads_in_order() {
+fn returning_the_remote_copy_stores_it_and_rereads() {
     let (app, script) = files_remote_scripted();
     let (app, temp) = open_remote_copy(app, &script, "hub text\n", "v9");
     std::fs::write(&temp, "edited\n").unwrap();
@@ -3031,16 +3031,25 @@ fn returning_the_remote_copy_stores_it_and_rereads_in_order() {
     accept_hub_line(&script, &asked, json!({}));
     let (lines, mut app) = collect(rx, "the workspace write");
     handle.join().unwrap();
+    // `docs/tui.md`, "Changed files": the view reads the file's diff and
+    // numstat again. That promises both requests, in no promised order.
     assert_eq!(lines.len(), 2);
-    let requests = shell_requests(&lines);
-    assert_eq!(
-        requests[0]["args"]["command"],
-        diff_command("src/file-0.rs")
-    );
-    assert_eq!(
-        requests[1]["args"]["command"],
-        numstat_command(&["src/file-0.rs"])
-    );
+    let mut got: Vec<String> = shell_requests(&lines)
+        .iter()
+        .map(|request| {
+            request["args"]["command"]
+                .as_str()
+                .expect("shell request carries a command string")
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        diff_command("src/file-0.rs"),
+        numstat_command(&["src/file-0.rs"]),
+    ];
+    want.sort();
+    assert_eq!(got, want, "the reread sends the diff and the numstat");
     assert_eq!(app.notices.newest(), None);
     // The holder is spent: closing the same copy again sends nothing.
     assert!(app.changed_file_closed(&temp, Ok(())).is_empty());
@@ -3066,16 +3075,25 @@ fn a_hub_side_edit_leaves_the_remote_copy_unwritten_with_the_notice_but_still_re
         app.notices.newest(),
         Some("/w/src/file-0.rs changed since it was read.")
     );
+    // `docs/tui.md`, "Changed files": the view still reads the diff and
+    // numstat again. That promises both requests, in no promised order.
     assert_eq!(lines.len(), 2);
-    let requests = shell_requests(&lines);
-    assert_eq!(
-        requests[0]["args"]["command"],
-        diff_command("src/file-0.rs")
-    );
-    assert_eq!(
-        requests[1]["args"]["command"],
-        numstat_command(&["src/file-0.rs"])
-    );
+    let mut got: Vec<String> = shell_requests(&lines)
+        .iter()
+        .map(|request| {
+            request["args"]["command"]
+                .as_str()
+                .expect("shell request carries a command string")
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        diff_command("src/file-0.rs"),
+        numstat_command(&["src/file-0.rs"]),
+    ];
+    want.sort();
+    assert_eq!(got, want, "the reread sends the diff and the numstat");
 }
 
 #[test]

@@ -1317,10 +1317,10 @@ when that layer has one. `shown` is `unset`, `value`, `redacted` or `union`.
 the client's Fiber home. The hub serves neither `save_keys`, themes nor
 `LoginShow`, which draws a login URL and code on the client.
 
-`read_config`, `write_config`, `read_workspace_file` and `write_workspace_file` are the Ctrl+G commands, not arbitrary file
-access. `read_config` and `write_config`'s `path` must lexically equal the global, project or repository
+`read_config` and `write_config` are the Ctrl+G commands, not arbitrary file
+access. Their `path` must lexically equal the global, project or repository
 `config.json`, the global or project `rules`, or be an absolute path named
-`SKILL.md`. Both configuration commands refuse text over 64 KiB with `too_large`, without cutting
+`SKILL.md`. Both refuse text over 64 KiB with `too_large`, without cutting
 it. Non-UTF-8 files fail `io_failed`, naming the path. Versions are 16-digit
 lowercase hexadecimal content hashes, or `missing`. For configuration and
 rules, the write holds `<path>.lock` across reading, comparing and writing;
@@ -1329,7 +1329,7 @@ it was read. A matching write stores even invalid configuration or rules:
 the client rereads the view to show its error. `read_file` remains limited
 to session artifacts.
 
-`read_workspace_file` and `write_workspace_file` read and write one file under `workspace`, the session's workspace on the hub. The workspace is the only bound: the path is resolved against it with symbolic links included, and a path resolving outside it is rejected `invalid_arguments`, as is a non-regular file or a relative `workspace`. Both refuse text over 10 MiB with `too_large`, without cutting it. Non-UTF-8 files fail `io_failed`, naming the path. Versions are 16-digit lowercase hexadecimal content hashes, or `missing`. The write lands only while the file still has the read version, else `stale_request` with nothing written; a write at `missing` creates the file. No lock file is left in the workspace, so racing matching-version writes last-writer-wins.
+`read_workspace_file` and `write_workspace_file` read and write one file under `workspace`, an absolute path the client names. The Changed files view sends its session's workspace. `path` must resolve, symbolic links included, inside `workspace`, otherwise `invalid_arguments`. A non-regular file or a relative `workspace` is rejected `invalid_arguments`. Both refuse text over 10 MiB with `too_large`, without cutting it. Non-UTF-8 files fail `io_failed`, naming the path. Versions are 16-digit lowercase hexadecimal content hashes, or `missing`. The write lands only while the file still has the read version, else `stale_request` with nothing written; a write at `missing` creates the file. No lock file is left in the workspace, so racing matching-version writes last-writer-wins.
 
 ### Remote clients
 

@@ -112,7 +112,7 @@ fn read_inner(workspace: &Path, path: &Path) -> Result<(String, String), Refused
     }
     let bytes = read_bounded(&resolved, shown)?.unwrap_or_default();
     let text = String::from_utf8(bytes).map_err(|error| unreadable(shown, &error))?;
-    let version = version_of(Some(text.as_bytes()));
+    let version = version_of(text.as_bytes());
     Ok((text, version))
 }
 
@@ -124,6 +124,23 @@ pub fn write(workspace: &Path, path: &Path, text: &str, version: &str) -> Result
     write_inner(workspace, path, text, version).map_err(into_failure)
 }
 
+/// Whether the write target is absent, so a `missing` write creates it.
+/// A non-NotFound stat error after a successful resolve fires only when the
+/// target changes between the two stats (a TOCTOU rename or chmod by another
+/// thread): `resolve` already refuses an unsearchable parent, so no
+/// single-threaded test reaches that arm, and the later metadata and
+/// bounded-read steps still fail closed.
+// Exempt: the non-NotFound error arm changes no behaviour any test observes;
+// it fires only in the TOCTOU race above, which no test seam reaches.
+#[cfg_attr(false, mutants::skip)]
+fn write_target_absent(resolved: &Path, shown: &str) -> Result<bool, Refused> {
+    match fs::symlink_metadata(resolved) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(unreadable(shown, &error)),
+        Ok(_) => Ok(false),
+    }
+}
+
 fn write_inner(workspace: &Path, path: &Path, text: &str, version: &str) -> Result<(), Refused> {
     if text.len() as u64 > LIMIT {
         let shown = path.to_str().unwrap_or("");
@@ -131,19 +148,15 @@ fn write_inner(workspace: &Path, path: &Path, text: &str, version: &str) -> Resu
     }
     let shown = path.to_str().ok_or_else(invalid)?;
     let resolved = resolve(workspace, shown)?;
-    match fs::symlink_metadata(&resolved) {
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            if version != "missing" {
-                return Err(stale(shown));
-            }
-            if let Some(parent) = resolved.parent() {
-                fs::create_dir_all(parent).map_err(|error| unreadable(shown, &error))?;
-            }
-            fs::write(&resolved, text.as_bytes()).map_err(|error| unreadable(shown, &error))?;
-            return Ok(());
+    if write_target_absent(&resolved, shown)? {
+        if version != "missing" {
+            return Err(stale(shown));
         }
-        Err(error) => return Err(unreadable(shown, &error)),
-        Ok(_) => {}
+        if let Some(parent) = resolved.parent() {
+            fs::create_dir_all(parent).map_err(|error| unreadable(shown, &error))?;
+        }
+        fs::write(&resolved, text.as_bytes()).map_err(|error| unreadable(shown, &error))?;
+        return Ok(());
     }
     // A link swapped in for a directory between `resolve` and this
     // metadata, or a target that never resolves, is not a regular file,
@@ -160,7 +173,7 @@ fn write_inner(workspace: &Path, path: &Path, text: &str, version: &str) -> Resu
         Some(current) => current,
         None => return Err(stale(shown)),
     };
-    if version_of(Some(&current)) != version {
+    if version_of(&current) != version {
         return Err(stale(shown));
     }
     fs::write(&resolved, text.as_bytes()).map_err(|error| unreadable(shown, &error))?;
@@ -190,18 +203,14 @@ fn read_bounded(resolved: &Path, shown: &str) -> Result<Option<Vec<u8>>, Refused
     Ok(Some(bytes))
 }
 
-/// The content version: 16-digit lowercase hexadecimal content hash, or
-/// `missing` when the file is absent. `DefaultHasher` builds with fixed
-/// keys, so the hash compares equal across hub restarts.
-fn version_of(bytes: Option<&[u8]>) -> String {
-    match bytes {
-        None => "missing".to_owned(),
-        Some(bytes) => {
-            let mut hasher = DefaultHasher::new();
-            bytes.hash(&mut hasher);
-            format!("{:016x}", hasher.finish())
-        }
-    }
+/// The content version: 16-digit lowercase hexadecimal content hash.
+/// `DefaultHasher` builds with fixed keys, so the hash compares equal
+/// across hub restarts. A missing file answers `missing` separately,
+/// where the read and the write name it.
+fn version_of(bytes: &[u8]) -> String {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// The refusal for a bad shape: the arguments do not fit this command.

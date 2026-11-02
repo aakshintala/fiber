@@ -14,11 +14,11 @@
 //! hub_remote_terminal.rs one, copied: that file is outside this lane's
 //! fence, so this file carries its own copy.
 //!
-//! The editor script records its arguments, prints its start marker, waits
-//! for the test's sentinel, then appends a line to the file it is given:
-//! `$1` is `+N`, `$2` the path. The marker proves the fetch landed, so the
-//! test's hub-side edit lands after it; the sentinel lets that edit land
-//! between the fetch and the write-back, proving the stale path.
+//! The editor script records its arguments, prints its start marker, blocks
+//! reading the test's sentinel FIFO, then appends a line to the file it is
+//! given: `$1` is `+N`, `$2` the path. The marker proves the fetch landed,
+//! so the test's hub-side edit lands after it; the blocked read lets that
+//! edit land between the fetch and the write-back, proving the stale path.
 
 #![allow(
     clippy::unwrap_used,
@@ -29,6 +29,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+#[path = "support/hub_start.rs"]
+mod hub_start;
 mod support;
 
 /// A completed frame's end: synchronized output's close marker, which the
@@ -37,14 +39,11 @@ mod support;
 /// (`docs/testing.md`, "Screens").
 const FRAME_END: &[u8] = b"\x1b[?2026l";
 
-use contract::clock::Clock;
 use serde_json::json;
 use std::fs;
-use std::net::TcpListener;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{ExitStatus, Output};
-use std::time::Duration;
+use std::process::Output;
 use support::pty::{Grid, KITTY_PUSH, Run};
 use support::*;
 
@@ -82,110 +81,12 @@ fn add(setup: &Setup, name: &str, address: &str, code: &str, default: bool) -> O
     )
 }
 
-/// Configures the hub machine's scripted model and serves its hub on
-/// `port`, idling the hub out a second after its last client leaves. The
-/// script lives in the hub workspace (`docs/model-routing.md`, "The
-/// scripted provider").
-fn serve_on(setup: &Setup, port: u16) {
-    write_json(
-        &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"port": port, "idle_exit_ms": 1000}}),
-    );
-}
-
-/// A port nothing holds right now: bound on port 0, read, released.
-fn free_port() -> u16 {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    listener.local_addr().unwrap().port()
-}
-
-/// Hub start attempts `world_with` makes, each on a port from `ports`.
-const PORT_ATTEMPTS: usize = 5;
-/// How long one connect waits before the hub's exit is looked at again.
-/// At the must-succeed floor: a shorter slice fires as a timing assertion
-/// under load instead of the hang guard it is (`docs/testing.md`, "Waits
-/// and timeouts"). The slice only paces the exit check; a hello still
-/// returns its slice at once.
-const HELLO_SLICE: Duration = Duration::from_secs(10);
-/// What a hello wait leaves of the deadline for its report and cleanup.
-const REPORT_MARGIN: Duration = Duration::from_millis(250);
-/// The `hub.log` lines a failure report shows.
-const LOG_TAIL: usize = 20;
-
-/// Whether `log` holds the hub's failure to bind `port`: the line its start
-/// error writes before the hub exits (`127.0.0.1:<port>: <why>`).
-fn port_taken(log: &str, port: u16) -> bool {
-    log.contains(&format!("127.0.0.1:{port}: "))
-}
-
-/// What a hub that did not say hello left behind: its exit `status`
-/// (`None` for a hub still running) and the tail of `hub.log`.
-fn report(setup: &Setup, status: Option<ExitStatus>) -> String {
-    let log = setup.hub_log();
-    let lines: Vec<&str> = log.lines().collect();
-    let tail = lines[lines.len().saturating_sub(LOG_TAIL)..].join("\n");
-    let state = match status {
-        Some(status) => format!("exited ({status})"),
-        None => "was still running".to_owned(),
-    };
-    format!("{state}; hub.log tail (last {LOG_TAIL} lines):\n{tail}")
-}
-
-/// Stops waiting on `process`: snapshots its status, reaps it (killing a
-/// hub still running), and panics with `why` and the report.
-fn give_up(setup: &Setup, mut process: HubProc, why: &str) -> ! {
-    let status = process.child.try_wait().unwrap();
-    match status {
-        Some(_) => drop(process.wait()),
-        None => drop(process.kill_and_wait()),
-    }
-    panic!("{why}: the hub {}", report(setup, status));
-}
-
-/// Waits for the hub's `hub_hello` in slices of [`HELLO_SLICE`], looking at
-/// the hub's exit between them. `Ok` is the hello and the live hub; `Err`
-/// is the status of a hub that exited, already reaped. The deadline is the
-/// test's own, never renewed: a slice ends [`REPORT_MARGIN`] before it, so
-/// the report and the cleanup run first.
-fn await_hello(
-    setup: &Setup,
-    mut process: HubProc,
-) -> Result<(doors::hub::Hub, HubProc), ExitStatus> {
-    loop {
-        let left = setup.deadline.left();
-        if left <= REPORT_MARGIN {
-            give_up(setup, process, "waited for the installed hub's hello");
-        }
-        let until = SystemClock.now() + left.saturating_sub(REPORT_MARGIN).min(HELLO_SLICE);
-        let home = setup.home();
-        let slice = bounded(setup.deadline, "the installed hub's hello", move || {
-            doors::hub::connect_until(&home, &mut || Ok(()), &SystemClock, until, &mut || {})
-        });
-        let error = match slice {
-            Ok(hub) => return Ok((hub, process)),
-            Err(error) => error,
-        };
-        if process.child.try_wait().unwrap().is_some() {
-            return Err(process.wait());
-        }
-        // Only a slice's own end loops; any other error would repeat at once.
-        if !matches!(
-            error.kind(),
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::UnexpectedEof
-        ) {
-            give_up(
-                setup,
-                process,
-                &format!("the installed hub's hello failed with {error}"),
-            );
-        }
-    }
-}
-
 /// The paired world the cases share: `a` serves its hub on a free port,
 /// `b` is paired with it, holds its own git repository with its own
 /// file, and configures its own model. The hub connection is held so the
-/// hub never idles out mid-case.
+/// hub never idles out mid-case. The hub start (port pick, hello wait,
+/// taken-port retry, diagnostics) is the shared `hub_start` helper's, which
+/// adds no wait, poll or retry of this test's own.
 struct World {
     a: Setup,
     b: Setup,
@@ -194,11 +95,6 @@ struct World {
 }
 
 fn world(default: bool) -> World {
-    world_with(default, &mut free_port)
-}
-
-/// [`world`], with the hub's port drawn from `ports`.
-fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
     let a = Setup::new();
     let b = Setup::new();
     // The listed hub must ignore the client's repository scope, so the
@@ -275,8 +171,6 @@ fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
     let row = json!({"session_id":"s_remote", "ts":1, "project":"remote-project", "workspace":a.workspace().display().to_string(), "name":"remote session", "how":"exited"});
     fs::write(a.home().join("recent.jsonl"), format!("{row}\n")).unwrap();
     fs::create_dir_all(a.home().join("projects/remote-project/sessions/s_remote")).unwrap();
-    let mut port = ports();
-    serve_on(&a, port);
     // The hub machine already imported: the first-run offer reads the
     // hub's receipts, and these cases cover the picker and resume
     // flows with the offer down, never the offer itself.
@@ -286,37 +180,28 @@ fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
             &json!({"source": receipt, "imported_at": 1}),
         );
     }
+    // Serves the installed hub with the scripted model (the script lives
+    // in the hub workspace: `docs/model-routing.md`, "The scripted
+    // provider"), idling out a second after its last client leaves.
     // `~/` on the hub expands against the inherited `HOME`, which the
     // harness otherwise points at the setup root: point it at the hub's
     // home, as production has it, so the picker browses the hub's home.
-    // A port another process took between the pick and the hub's bind
-    // fails that hub at once: the next attempt serves on a fresh port.
-    let mut attempt = 1;
-    let (hub, process) = loop {
-        if attempt > 1 {
-            port = ports();
-            serve_on(&a, port);
-        }
-        let logged = a.hub_log().len();
-        let mut serve = a.fiber(&["hub", "serve", "--installed"]);
-        serve.env("HOME", a.home());
-        let process = HubProc::spawn_command(a.deadline, &mut serve);
-        match await_hello(&a, process) {
-            Ok(hello) => break hello,
-            Err(status) => {
-                let log = a.hub_log();
-                let added = log.get(logged..).unwrap_or_default();
-                if attempt < PORT_ATTEMPTS && port_taken(added, port) {
-                    attempt += 1;
-                    continue;
-                }
-                panic!(
-                    "the installed hub's hello on 127.0.0.1:{port}, attempt {attempt} of {PORT_ATTEMPTS}: the hub {}",
-                    report(&a, Some(status))
-                );
-            }
-        }
-    };
+    let served = hub_start::serve_installed(
+        &a,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(
+                &a.home().join("config.json"),
+                &json!({"model": "scripted/s.json", "hub": {"port": port, "idle_exit_ms": 1000}}),
+            );
+            let mut serve = a.fiber(&["hub", "serve", "--installed"]);
+            serve.env("HOME", a.home());
+            serve
+        },
+    );
+    let port = served.port;
+    let (hub, process) = (served.hub, served.process);
     assert_eq!(hub.1.kind, "hub_hello");
     let address = format!("ws://127.0.0.1:{port}");
     let code = run(&a, &["hub", "pair", "laptop"]);
@@ -373,12 +258,16 @@ fn changed_files_editor_remote() {
     let script = world.b.workspace().join("editor.sh");
     let argv = world.b.workspace().join("argv");
     let sentinel = world.b.workspace().join("sentinel");
+    // The sentinel is a FIFO the editor blocks reading (`docs/testing.md`,
+    // "Waits and timeouts"): no sleep or poll. The start marker proves the
+    // fetch landed, so the test's release lands after it; the blocked read
+    // lets the hub-side edit land between the fetch and the write-back.
+    fakes::fifo(&sentinel);
     fs::write(
         &script,
         format!(
-            "printf '%s\\n' \"$@\" >> \"{}\"\nprintf 'fiber-editor-started\\n'\nwhile [ ! -f \"{}\" ]; do sleep 0.1; done\nrm -f \"{}\"\nprintf 'editor line\\n' >> \"$2\"\n",
+            "printf '%s\\n' \"$@\" >> \"{}\"\nprintf 'fiber-editor-started\\n'\nread line < \"{}\"\nprintf 'editor line\\n' >> \"$2\"\n",
             argv.display(),
-            sentinel.display(),
             sentinel.display(),
         ),
     )

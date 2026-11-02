@@ -11,7 +11,7 @@
 )]
 
 use std::fs;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
@@ -55,6 +55,12 @@ impl Temp {
 
 fn code(result: &Result<(String, String), Failure>) -> ErrorCode {
     result.as_ref().unwrap_err().code.clone()
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms).unwrap();
 }
 
 #[test]
@@ -246,5 +252,97 @@ fn versions_are_16_digit_hex_and_stable_across_reads() {
         first
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    );
+}
+
+#[test]
+fn an_unsearchable_component_resolves_unreadable_not_as_a_missing_tail() {
+    // Pins `resolve`'s non-NotFound `symlink_metadata` arm (`unreadable`)
+    // against a mutant that extends the path as a missing tail instead.
+    let temp = Temp::new();
+    let locked = temp.dir.join("locked");
+    fs::create_dir(&locked).unwrap();
+    set_mode(&locked, 0o000);
+    let err = super::resolve(&temp.dir, "locked/child").unwrap_err();
+    let read = temp.read("locked/child");
+    set_mode(&locked, 0o755);
+    assert_eq!(
+        err.code,
+        ErrorCode::IoFailed,
+        "a PermissionDenied component is unreadable, not a missing tail"
+    );
+    assert_eq!(
+        code(&read),
+        ErrorCode::IoFailed,
+        "the public read agrees: no missing answer through an unsearchable dir"
+    );
+}
+
+#[test]
+fn a_symlink_to_an_unreadable_target_reads_unreadable_not_missing() {
+    // Pins `read_inner`'s non-NotFound `metadata` arm (`unreadable`) against
+    // a mutant that answers the file as missing. The link itself resolves
+    // (its parent is searchable), while following it fails PermissionDenied.
+    let temp = Temp::new();
+    let outside = temp.dir.parent().unwrap().join("outside-read");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("secret.txt"), b"secret").unwrap();
+    set_mode(&outside, 0o000);
+    symlink(outside.join("secret.txt"), temp.dir.join("link")).unwrap();
+    let read = temp.read("link");
+    set_mode(&outside, 0o755);
+    assert_eq!(
+        code(&read),
+        ErrorCode::IoFailed,
+        "a PermissionDenied target reads unreadable, not missing"
+    );
+}
+
+#[test]
+fn an_unsearchable_parent_makes_a_write_unreadable_without_creating() {
+    // Pins `write_inner`'s non-NotFound `symlink_metadata` arm
+    // (`unreadable`) against a mutant that takes the create path instead.
+    // The resolve already refuses the unsearchable parent, so nothing is
+    // created either way; the write answers `io_failed`, never `missing`.
+    let temp = Temp::new();
+    let locked = temp.dir.join("locked");
+    fs::create_dir(&locked).unwrap();
+    set_mode(&locked, 0o000);
+    let written = temp.write_text("locked/new.txt", "x", "missing");
+    set_mode(&locked, 0o755);
+    assert_eq!(
+        written.unwrap_err().code,
+        ErrorCode::IoFailed,
+        "a PermissionDenied parent writes unreadable, not created"
+    );
+    assert!(
+        !locked.join("new.txt").exists(),
+        "no create through an unsearchable dir"
+    );
+}
+
+#[test]
+fn read_bounded_answers_missing_for_a_vanished_file() {
+    // Pins `read_bounded`'s NotFound open arm (`Ok(None)`: read-as-missing,
+    // write-as-stale) against mutants that answer `unreadable` instead.
+    let temp = Temp::new();
+    let missing = temp.dir.join("gone.txt");
+    let got = super::read_bounded(&missing, "gone.txt").unwrap();
+    assert_eq!(got, None, "a NotFound open reads as missing");
+}
+
+#[test]
+fn read_bounded_answers_unreadable_for_a_denied_open() {
+    // Pins `read_bounded`'s non-NotFound open arm (`unreadable`) against
+    // mutants that answer `Ok(None)` (read-as-missing) instead.
+    let temp = Temp::new();
+    let path = temp.write("secret.txt", b"secret");
+    set_mode(&path, 0o000);
+    let err = super::read_bounded(&path, "secret.txt").unwrap_err();
+    set_mode(&path, 0o644);
+    assert_eq!(
+        err.code,
+        ErrorCode::IoFailed,
+        "a PermissionDenied open is unreadable, not missing"
     );
 }
