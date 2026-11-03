@@ -35,12 +35,27 @@ pub(crate) fn count_sites(source: &str) -> usize {
 
 /// Occurrences of the six census forms on one line, leftmost
 /// non-overlapping: a match consumes its text, otherwise the scan advances
-/// one character.
+/// one character. Every form opens with `k`, `c`, `.` or `[`, so any other
+/// position advances without trying a form.
 fn count_line(line: &str) -> usize {
     let mut count = 0usize;
     let mut rest = line;
     while !rest.is_empty() {
-        if let Some(after) = match_site(rest) {
+        let starter = rest.as_bytes().first().copied();
+        let matched = if starter == Some(b'k') {
+            match_kind_type(rest)
+        } else if starter == Some(b'c') {
+            match_code_type(rest)
+        } else if starter == Some(b'.') {
+            match_as_str(rest)
+                .or_else(|| match_compare(rest))
+                .or_else(|| match_get(rest))
+        } else if starter == Some(b'[') {
+            match_index(rest)
+        } else {
+            None
+        };
+        if let Some(after) = matched {
             count = count.saturating_add(1);
             rest = after;
         } else {
@@ -54,17 +69,6 @@ fn count_line(line: &str) -> usize {
         }
     }
     count
-}
-
-/// The remainder past a census site at the start of `rest`, if one of the
-/// six forms opens there.
-fn match_site(rest: &str) -> Option<&str> {
-    match_kind_type(rest)
-        .or_else(|| match_code_type(rest))
-        .or_else(|| match_as_str(rest))
-        .or_else(|| match_compare(rest))
-        .or_else(|| match_index(rest))
-        .or_else(|| match_get(rest))
 }
 
 /// `rest` past one of the four names at its start, if it opens with one.
