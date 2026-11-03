@@ -1106,6 +1106,33 @@ impl Session {
         session
     }
 
+    /// As [`Session::windowed`], but the model defers while the loop holds
+    /// no search factory: the provider reports deferral, yet nothing is
+    /// deferred, so the oversize notice says deferral is off
+    /// (`docs/tools.md`, "Size warning").
+    pub(crate) fn deferring_windowed_without_search(
+        script: Vec<Scripted>,
+        tools: Vec<Arc<dyn Tool>>,
+        window: u64,
+    ) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        let provider = deferring(Arc::clone(&scripted));
+        Self::assemble_with(
+            SessionId("s_test".into()),
+            provider,
+            Vec::new(),
+            tools,
+            unpriced(),
+            scripted,
+            Arc::new(TurnCancel::default()),
+            (FakeClock::new(), window),
+            Vec::new(),
+            CacheLifetime::OneHour,
+            None,
+            Vec::new(),
+        )
+    }
+
     /// As [`Session::with_cache_lifetime`], reaching the scripted provider
     /// through what `wrap` makes of it and the session's clock.
     pub(crate) fn wrapped(
