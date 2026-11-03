@@ -24,3 +24,9 @@ crates/tui/src/app.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-
 crates/tui/src/app/home.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/clear.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/session_views.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+xtask/src/models_dev_table.rs	fiber-3971	plan	2026-11-03T09:13:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+providers/anthropic/providers/anthropic.json	fiber-3971	plan	2026-11-03T09:13:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/provider/examples/probe.rs	fiber-3971	plan	2026-11-03T09:13:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/provider/tests/support/probe.rs	fiber-3971	plan	2026-11-03T09:13:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/provider/tests/probe_jig.rs	fiber-3971	plan	2026-11-03T09:13:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/config/tests/provider_deferral.rs	fiber-3971	plan	2026-11-03T09:13:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
