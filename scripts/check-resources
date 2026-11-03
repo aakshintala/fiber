@@ -31,8 +31,10 @@ set -euo pipefail
 PREFLIGHT_TMPDIR_MIN_MIB_LINUX=3746
 # Darwin: not measured; equal to Linux until the macOS figures are harvested
 # from CI (surveyor RULING-3954-1, step 3); see #4027.
-# debt: Darwin TMPDIR floor stays equal to the Linux floor, upgrade trigger:
-# the macOS harvest result replaces PREFLIGHT_TMPDIR_MIN_MIB_DARWIN.
+# debt: Darwin TMPDIR floor stays equal to the Linux floor. Upgrade trigger:
+# a cause for the macOS/Linux `target/` growth gap (12.75 GiB against 23.73 GiB,
+# 2026-11-03 harvest on run 41561973403), not the growth figure itself. Until the
+# gap is explained, a lower Darwin floor would pass a runner that then runs out of disk.
 PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=3746
 # Minimum free `target` space for one gate run, in MiB, on Linux. Peak
 # target growth of the same measured run (cold target, same commit, date
@@ -42,8 +44,10 @@ PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=3746
 PREFLIGHT_TARGET_MIN_MIB_LINUX=54726
 # Darwin: not measured; equal to Linux until the macOS figures are harvested
 # from CI (surveyor RULING-3954-1, step 3); see #4027.
-# debt: Darwin target floor stays equal to the Linux floor, upgrade trigger:
-# the macOS harvest result replaces PREFLIGHT_TARGET_MIN_MIB_DARWIN.
+# debt: Darwin target floor stays equal to the Linux floor. Upgrade trigger:
+# a cause for the macOS/Linux `target/` growth gap (12.75 GiB against 23.73 GiB,
+# 2026-11-03 harvest on run 41561973403), not the growth figure itself. Until the
+# gap is explained, a lower Darwin floor would pass a runner that then runs out of disk.
 PREFLIGHT_TARGET_MIN_MIB_DARWIN=54726
 # The active pair is keyed by platform: `release.yml` gates both Linux and
 # macOS on this script, so one shared pair would leave macOS unmeasured.
