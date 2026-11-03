@@ -37,6 +37,11 @@ pub struct Envelope {
 }
 
 impl Envelope {
+    /// Parse the current discriminator, preserving unfamiliar names exactly.
+    pub fn kind(&self) -> crate::events::EventKind {
+        crate::events::EventKind::from_name(&self.kind)
+    }
+
     /// Whether this line is durable. A line is durable if and only if it
     /// carries `seq` (`docs/events.md`, "Durable and ephemeral").
     pub fn is_durable(&self) -> bool {
@@ -58,6 +63,13 @@ pub struct HubLine {
     pub schema_version: u32,
     /// The kind-specific body.
     pub payload: Map<String, Value>,
+}
+
+impl HubLine {
+    /// Parse the current discriminator, preserving unfamiliar names exactly.
+    pub fn kind(&self) -> crate::HubEventKind {
+        crate::HubEventKind::from(self.kind.clone())
+    }
 }
 
 #[cfg(test)]
