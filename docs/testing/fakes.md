@@ -105,10 +105,6 @@ is a test-only dependency of the crates that use it (`docs/architecture.md`,
 The concrete scenarios each area needs are that area's acceptance criteria,
 written when its implementation tickets are.
 
-A test that subscribes to a session socket reads it continuously until
-`fiber_exited`: a client that stops reading is cut (`docs/invocation.md`,
-"What the hub speaks").
-
 ## Testing an extension
 
 

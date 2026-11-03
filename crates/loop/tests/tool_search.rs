@@ -176,6 +176,7 @@ struct CatalogTool {
     name: &'static str,
     deferred: bool,
     output: Output,
+    description: Option<String>,
 }
 
 impl CatalogTool {
@@ -189,7 +190,17 @@ impl CatalogTool {
                 }],
                 ..Output::default()
             },
+            description: None,
         }
+    }
+
+    /// A tool declared in full with a `description_len`-byte description:
+    /// big enough to push full definitions over 10% of the window.
+    fn full(name: &'static str, description_len: usize) -> Self {
+        let mut tool = Self::deferred(name);
+        tool.deferred = false;
+        tool.description = Some("d".repeat(description_len));
+        tool
     }
 
     /// A tool whose result carries the handoff `note`, ending the context.
@@ -208,7 +219,10 @@ impl Tool for CatalogTool {
     fn definition(&self) -> contract::provider::ToolDefinition {
         contract::provider::ToolDefinition {
             name: self.name.into(),
-            description: format!("The test tool {}.", self.name),
+            description: self
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("The test tool {}.", self.name)),
             input_schema: json!({
                 "type": "object",
                 "properties": {"city": {"type": "string"}},
@@ -1244,6 +1258,7 @@ fn rows_follow_declared_states_and_search_loads_only_deferred_names() {
                         }],
                         ..Output::default()
                     },
+                    description: None,
                 }),
             ),
         ],
@@ -1669,6 +1684,7 @@ fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
                 }],
                 ..Output::default()
             },
+            description: None,
         }
     }
 
@@ -2396,4 +2412,49 @@ fn a_cancelled_search_loads_nothing_and_renders_the_cancel_line() {
             .states("a")
             .contains(&contract::events::ToolState::Loaded)
     );
+}
+
+#[test]
+fn an_oversize_notice_on_a_deferring_model_leaves_the_off_sentence_out() {
+    // The harness window is `fakes::CONTEXT_WINDOW` (1,000,000 tokens), so
+    // the notice needs over 400,000 serialized bytes declared in full: one
+    // 410,000-byte tool, declared in full, trips it (`docs/tools.md`,
+    // "Size warning"). The provider defers and the factory is wired, so
+    // the off sentence stays out.
+    let search = Arc::new(SearchScript::default());
+    let mut harness = Harness::start(
+        vec![Scripted::text("Done.")],
+        vec![("fx".to_owned(), Arc::new(CatalogTool::full("big", 410_000)))],
+        Arc::clone(&search),
+        false,
+        None,
+    );
+    assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
+    let lines = harness.lines();
+    // The full stream as a multiset, so a missing or duplicated
+    // non-notice event fails (`docs/testing.md`, "Event streams").
+    let mut stream: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    stream.sort_unstable();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "notice",
+    ];
+    expected.sort_unstable();
+    assert_eq!(stream, expected);
+    let notices: Vec<&Envelope> = lines.iter().filter(|line| line.kind == "notice").collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].payload["code"], "tool_definitions_large");
+    let text = notices[0].payload["message"].as_str().unwrap();
+    assert!(!text.contains("Deferral is off"), "{text}");
 }

@@ -441,7 +441,7 @@ code: its message gives the count and lists each item.
 | `skill_invalid` | event | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | event | two skills share a name, an MCP server's prompt is named like a skill, an extension's command is named like a skill or prompt template, an MCP server's prompt is named like an extension's command, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | event | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
-| `tool_definitions_large` | event | full tool definitions take more than 10% of the context window |
+| `tool_definitions_large` | event | full tool definitions take more than 10% of the context window; the message names the largest sources and, on a model without deferral, says deferral is off (`docs/tools.md`, "Size warning") |
 | `web_search_unavailable` | event | `web_search` is not declared: several search backends are installed and `web_search.backend` is unset, or it names a backend that is not installed; the message names which (`docs/tools.md`, "Web fetch and web search") |
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
