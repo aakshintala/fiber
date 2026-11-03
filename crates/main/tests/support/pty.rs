@@ -28,6 +28,7 @@ use std::time::Duration;
 
 use fakes::Watchdog;
 use rustix::event::{PollFd, PollFlags, Timespec};
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::pty;
 
 use super::{Deadline, KillGroup, Setup, expired, spawn_watched};
@@ -182,7 +183,13 @@ impl Reader {
                                     break;
                                 }
                             }
-                            Err(err) if err == rustix::io::Errno::INTR => {}
+                            // The click dispatch sets `O_NONBLOCK` on the
+                            // master's file description, which this fd
+                            // shares, so a read racing the dispatch can
+                            // report `AGAIN`: loop as for `INTR`.
+                            Err(err)
+                                if err == rustix::io::Errno::INTR
+                                    || err == rustix::io::Errno::AGAIN => {}
                             Err(_) => {
                                 end(&shared);
                                 wake.send(()).unwrap_or(());
@@ -378,6 +385,87 @@ impl Grid {
             None => panic!("cell ({x}, {y}) is past the grid's edges"),
         }
     }
+
+    /// The first row-major match of `needle` as a terminal-cell column:
+    /// each cell contributes its contents (an empty cell is a space, a
+    /// combining mark stays in its base cell's contents), a wide
+    /// character's continuation cell contributes nothing, and the match
+    /// offset maps back to the starting cell's column. A caller wanting
+    /// another match passes its own closure to `mouse_where`.
+    pub(crate) fn text_at(&self, needle: &str) -> Option<(u16, u16)> {
+        if needle.is_empty() {
+            return None;
+        }
+        let (cols, rows) = self.size();
+        for y in 0..rows {
+            let mut text = String::new();
+            let mut columns: Vec<u16> = Vec::new();
+            for x in 0..cols {
+                let Some(cell) = self.screen.cell(y, x) else {
+                    continue;
+                };
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+                columns.push(x);
+                let contents = cell.contents();
+                if contents.is_empty() {
+                    text.push(' ');
+                } else {
+                    text.push_str(contents);
+                }
+            }
+            if let Some(at) = text.find(needle) {
+                // Map the match's byte offset back to its starting cell:
+                // each entry holds one cell's byte offset in `text`, so
+                // the last start at or before the match is its column.
+                let mut starts: Vec<usize> = Vec::with_capacity(columns.len());
+                let mut bytes = 0usize;
+                for x in 0..cols {
+                    let Some(cell) = self.screen.cell(y, x) else {
+                        continue;
+                    };
+                    if cell.is_wide_continuation() {
+                        continue;
+                    }
+                    starts.push(bytes);
+                    let contents = cell.contents();
+                    if contents.is_empty() {
+                        bytes += 1;
+                    } else {
+                        bytes += contents.len();
+                    }
+                }
+                let position = starts
+                    .iter()
+                    .rposition(|start| *start <= at)
+                    .map(|index| columns[index]);
+                if let Some(column) = position {
+                    return Some((column, y));
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Whether the two grids show the same frame: equal sizes and every cell
+/// equal. The cursor and the alternate-screen flags are not compared: the
+/// click's coordinates depend on cells, and a parked cursor moving does
+/// not move a row. A style-only change counts as a change.
+pub(crate) fn same_frame(a: &Grid, b: &Grid) -> bool {
+    if a.size() != b.size() {
+        return false;
+    }
+    let (cols, rows) = a.size();
+    for y in 0..rows {
+        for x in 0..cols {
+            if a.cell(x, y) != b.cell(x, y) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// What the reader shares with the test: every byte read from the master
@@ -505,16 +593,20 @@ impl Shared {
 /// both write through it, so a reply and typed input never interleave.
 pub(crate) type Writer = Arc<Mutex<fs::File>>;
 
-/// Writes all of `bytes` through `writer` and flushes, on a thread taking
-/// what remains of `deadline.left()`: expiry is a `TimedOut` error, and
-/// the thread is never joined. It never panics, so the reader can hold
-/// the `Shared` lock across it.
-#[track_caller]
-pub(crate) fn write_within(writer: &Writer, bytes: &[u8], deadline: Deadline) -> io::Result<()> {
+/// A write worker `write_registered` did not wait for: its handle and the
+/// receiver for its result. Dropping the handle detaches the worker, as
+/// `write_within`'s workers are detached today.
+type PendingWrite = (thread::JoinHandle<()>, mpsc::Receiver<io::Result<()>>);
+
+/// Spawns today's worker: it takes `Writer`, writes all of `bytes` and
+/// flushes, drops its guard, then sends its result as its last action. It
+/// never panics, so the reader can hold the `Shared` lock across the
+/// spawn.
+fn spawn_write(writer: &Writer, bytes: &[u8]) -> io::Result<PendingWrite> {
     let writer = Arc::clone(writer);
     let bytes = bytes.to_vec();
     let (done, finished) = mpsc::channel();
-    thread::Builder::new()
+    let handle = thread::Builder::new()
         .spawn(move || {
             use std::io::Write;
             let result = (|| {
@@ -525,6 +617,17 @@ pub(crate) fn write_within(writer: &Writer, bytes: &[u8], deadline: Deadline) ->
             done.send(result).unwrap_or(());
         })
         .map_err(io::Error::other)?;
+    Ok((handle, finished))
+}
+
+/// Writes all of `bytes` through `writer` and flushes, on a thread taking
+/// what remains of `deadline.left()`: expiry is a `TimedOut` error, and
+/// the thread is never joined. It never panics, so the reader can hold
+/// the `Shared` lock across it.
+#[track_caller]
+pub(crate) fn write_within(writer: &Writer, bytes: &[u8], deadline: Deadline) -> io::Result<()> {
+    let (handle, finished) = spawn_write(writer, bytes)?;
+    drop(handle);
     match deadline.recv(&finished) {
         Ok(result) => result,
         Err(_) => Err(io::Error::new(
@@ -532,6 +635,108 @@ pub(crate) fn write_within(writer: &Writer, bytes: &[u8], deadline: Deadline) ->
             "waited until the deadline for the terminal write",
         )),
     }
+}
+
+/// The helper's pause point: `Waiting` before each receive on `wakes`
+/// and `Found` after the find and the encode and before the compare,
+/// each carrying the helper's own read of its wait's remainder, and
+/// `Dispatched` after both guards drop, naming whether the frame lock
+/// was still held across the write. The hook runs on the helper's thread
+/// with no lock held.
+pub(crate) enum Pause {
+    /// Before a receive on `wakes`: the absent target, or output held
+    /// behind an open synchronized block.
+    Waiting { wait_left: Duration },
+    /// After the find and the encode, before the compare.
+    Found { wait_left: Duration },
+    /// After both guards drop: whether the frame lock crossed the write.
+    Dispatched { frame_lock_held: bool },
+}
+
+/// The SGR press and release for a click at 0-based `(x, y)`: the
+/// existing wire encoding, not a new one.
+pub(crate) fn click_bytes(point: (u16, u16)) -> Vec<u8> {
+    let (x, y) = point;
+    format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).into_bytes()
+}
+
+/// The SGR press, drag and `<0;` release from `from` to `to`: one write,
+/// so the reports stay ordered. The existing wire encoding, not a new one.
+pub(crate) fn drag_bytes(from: (u16, u16), to: (u16, u16)) -> Vec<u8> {
+    format!(
+        "\x1b[<0;{};{}M\x1b[<32;{};{}M\x1b[<0;{};{}m",
+        from.0 + 1,
+        from.1 + 1,
+        to.0 + 1,
+        to.1 + 1,
+        to.0 + 1,
+        to.1 + 1
+    )
+    .into_bytes()
+}
+
+/// The SGR motion report for a hover at 0-based `(x, y)`: the existing
+/// wire encoding, not a new one.
+pub(crate) fn hover_bytes(point: (u16, u16)) -> Vec<u8> {
+    let (x, y) = point;
+    format!("\x1b[<35;{};{}M", x + 1, y + 1).into_bytes()
+}
+
+/// Writes every byte on the calling thread under a deadline on the
+/// call's own clock, and never panics. The master's saved flags are set
+/// to `O_NONBLOCK` for the write and restored on every path; on `EAGAIN`
+/// the fd is polled for `POLLOUT` with the time the write's deadline has
+/// left, whose expiry is a `TimedOut` error with nothing further written.
+/// A zero budget still makes one non-blocking write attempt, which
+/// succeeds whenever the pty has room for the click's few bytes.
+fn dispatch(file: &fs::File, bytes: &[u8], deadline: Deadline) -> io::Result<()> {
+    use std::os::fd::AsFd as _;
+    let fd = file.as_fd();
+    let saved = fcntl_getfl(fd).map_err(io::Error::from)?;
+    fcntl_setfl(fd, saved | OFlags::NONBLOCK).map_err(io::Error::from)?;
+    let result = (|| {
+        let mut at = 0usize;
+        while at < bytes.len() {
+            let wrote = match rustix::io::write(fd, &bytes[at..]) {
+                Ok(wrote) => wrote,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(rustix::io::Errno::AGAIN) => 0,
+                Err(error) => return Err(io::Error::from(error)),
+            };
+            at += wrote;
+            if wrote > 0 {
+                continue;
+            }
+            // No room: poll for `POLLOUT` with the time the write's
+            // deadline has left, whose expiry ends the write.
+            let left = deadline.left();
+            if left.is_zero() {
+                return Err(io::Error::new(
+                    ErrorKind::TimedOut,
+                    "waited until the deadline for the terminal write",
+                ));
+            }
+            let timeout = Timespec {
+                tv_sec: i64::try_from(left.as_secs()).unwrap_or(i64::MAX),
+                tv_nsec: left.subsec_nanos().into(),
+            };
+            let mut fds = [PollFd::new(&fd, PollFlags::OUT)];
+            match rustix::event::poll(&mut fds, Some(&timeout)) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        ErrorKind::TimedOut,
+                        "waited until the deadline for the terminal write",
+                    ));
+                }
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => {}
+                Err(error) => return Err(io::Error::from(error)),
+            }
+        }
+        Ok(())
+    })();
+    let restore = fcntl_setfl(fd, saved);
+    result.and(restore.map_err(io::Error::from))
 }
 
 /// A capability query Fiber emits (`crates/tui/src/term.rs`,
@@ -624,6 +829,10 @@ pub(crate) struct Run {
     cols: u16,
     rows: u16,
     deadline: Deadline,
+    /// Workers `write_registered` timed out on: a leaf lock, taken only
+    /// to push or drain, never while holding `Shared` or `Writer` and
+    /// never across a receive or a join.
+    pending_writes: Mutex<Vec<PendingWrite>>,
 }
 
 /// What a run drained: the child's exit and every byte read from the
@@ -736,6 +945,7 @@ impl Run {
             cols,
             rows,
             deadline,
+            pending_writes: Mutex::new(Vec::new()),
         }
     }
 
@@ -814,6 +1024,7 @@ impl Run {
             cols,
             rows,
             deadline,
+            pending_writes: Mutex::new(Vec::new()),
         }
     }
 
@@ -838,6 +1049,7 @@ impl Run {
             cols,
             rows,
             deadline,
+            pending_writes: Mutex::new(Vec::new()),
         }
     }
 
@@ -846,7 +1058,28 @@ impl Run {
     /// typing on failure, holding no lock.
     #[track_caller]
     pub(crate) fn write(&mut self, bytes: &[u8]) {
-        write_within(&self.writer, bytes, self.deadline).expect("typing on the terminal");
+        self.write_registered(bytes, self.deadline)
+            .expect("typing on the terminal");
+    }
+
+    /// Writes through today's worker and waits for its send: the one
+    /// off-thread write on `Run`, and `Run::write`'s only path. A send
+    /// received means the worker already wrote, so nothing is registered;
+    /// a timeout registers its handle and receiver under `pending_writes`
+    /// and returns today's `TimedOut` error. The guard is dropped before
+    /// the error returns, so no mutex is poisoned.
+    fn write_registered(&self, bytes: &[u8], deadline: Deadline) -> io::Result<()> {
+        let (handle, finished) = spawn_write(&self.writer, bytes)?;
+        match deadline.recv(&finished) {
+            Ok(result) => result,
+            Err(_) => {
+                self.pending_writes.lock().unwrap().push((handle, finished));
+                Err(io::Error::new(
+                    ErrorKind::TimedOut,
+                    "waited until the deadline for the terminal write",
+                ))
+            }
+        }
     }
 
     /// The shared writer: harness tests own its lock as the pause point
@@ -854,6 +1087,129 @@ impl Run {
     /// (`docs/testing.md`, "Waits and timeouts").
     pub(crate) fn writer(&self) -> Writer {
         Arc::clone(&self.writer)
+    }
+
+    /// Clicks the target `find` locates in the frame the click acts on:
+    /// the frame is re-read after the find, and the click is written only
+    /// when the published grid still equals the found one. A changed frame
+    /// re-finds under the call's one wait; an absent target waits for it
+    /// on `wakes` under the same wait. The click's bytes are on the pty
+    /// before any newer frame is published: every write returns on the
+    /// calling thread before `Shared` is released, and the reader
+    /// publishes only while holding `Shared`.
+    #[track_caller]
+    pub(crate) fn click_where(
+        &mut self,
+        what: &str,
+        find: impl FnMut(&Grid) -> Option<(u16, u16)>,
+    ) {
+        self.mouse_where(what, find, click_bytes);
+    }
+
+    /// Clicks, drags or hovers at the point `find` locates in the frame
+    /// the reports act on, encoded by `encode`: the primitive behind
+    /// [`Run::click_where`]. `find` and `encode` run with no lock held, so
+    /// a panicking encoder leaves both locks usable.
+    #[track_caller]
+    pub(crate) fn mouse_where(
+        &mut self,
+        what: &str,
+        find: impl FnMut(&Grid) -> Option<(u16, u16)>,
+        encode: impl Fn((u16, u16)) -> Vec<u8>,
+    ) {
+        self.mouse_where_paused(what, find, encode, |_| {});
+    }
+
+    /// [`Run::mouse_where`] with the pause point the proof tests own: the
+    /// hook runs on the helper's thread with no lock held, and moves no
+    /// time itself. `Waiting` is called before each receive on `wakes`,
+    /// carrying the helper's own read of its wait's remainder; `Found` is
+    /// called after the find and the encode and before the compare,
+    /// carrying the same; `Dispatched` is called after both guards drop,
+    /// naming whether the frame lock was still held across the write.
+    #[track_caller]
+    pub(crate) fn mouse_where_paused(
+        &mut self,
+        what: &str,
+        mut find: impl FnMut(&Grid) -> Option<(u16, u16)>,
+        encode: impl Fn((u16, u16)) -> Vec<u8>,
+        mut pause: impl FnMut(Pause),
+    ) {
+        let wait = self.deadline.start_wait();
+        let start_left = wait.left();
+        loop {
+            let found_grid = self.screen();
+            let Some(point) = find(&found_grid) else {
+                let ended = self.shared.lock().unwrap().ended;
+                if ended {
+                    panic!(
+                        "the terminal ended while waiting for {what}; screen:\n{}",
+                        found_grid.contents
+                    );
+                }
+                let wait_left = wait.left();
+                pause(Pause::Waiting { wait_left });
+                if wait.recv(&self.wakes).is_err() {
+                    panic!(
+                        "waited until the deadline for {what} (deadline had {start_left:?} left when the wait began); screen:\n{}",
+                        found_grid.contents
+                    );
+                }
+                continue;
+            };
+            let bytes = encode(point);
+            let wait_left = wait.left();
+            pause(Pause::Found { wait_left });
+            let guard = self.shared.lock().unwrap();
+            if guard.ended {
+                let contents = guard.grid.contents.clone();
+                drop(guard);
+                panic!("the terminal ended while waiting for {what}; screen:\n{contents}");
+            }
+            if guard.sync_open {
+                // The reader has read newer output that `publish` holds
+                // off the grid behind the open synchronized block, so the
+                // grid may be superseded: wait for the close, then re-find
+                // from the fresh grid.
+                drop(guard);
+                let wait_left = wait.left();
+                pause(Pause::Waiting { wait_left });
+                if wait.recv(&self.wakes).is_err() {
+                    panic!(
+                        "waited until the deadline for {what} (deadline had {start_left:?} left when the wait began); screen:\n{}",
+                        found_grid.contents
+                    );
+                }
+                continue;
+            }
+            if !same_frame(&found_grid, &guard.grid) {
+                let contents = guard.grid.contents.clone();
+                drop(guard);
+                if wait.left().is_zero() {
+                    panic!(
+                        "waited until the deadline for {what} (deadline had {start_left:?} left when the wait began); screen:\n{contents}",
+                    );
+                }
+                continue;
+            }
+            let writer = match self.writer.try_lock() {
+                Ok(writer) => writer,
+                Err(_) => {
+                    drop(guard);
+                    panic!("the terminal writer is held, so the click was not sent");
+                }
+            };
+            let write = dispatch(&writer, &bytes, wait.within(wait.left() / 2));
+            // A probe guard, if one were ever acquired, is dropped at once.
+            let frame_lock_held = self.shared.try_lock().is_err();
+            drop(writer);
+            drop(guard);
+            pause(Pause::Dispatched { frame_lock_held });
+            match write {
+                Ok(()) => return,
+                Err(error) => panic!("waited until the deadline for {what}: {error}"),
+            }
+        }
     }
 
     /// The terminal child's pid: the tests signal the terminal through
@@ -1587,5 +1943,680 @@ mod tests {
             );
             Ok(())
         });
+    }
+
+    use contract::clock::Clock as _;
+
+    /// The terminal side reading without blocking: raw mode with no
+    /// minimum and no timeout, so a read returns the bytes already in the
+    /// pty buffer at once.
+    fn make_raw(terminal: &fs::File) {
+        let mut attrs = rustix::termios::tcgetattr(terminal).unwrap();
+        attrs.make_raw();
+        attrs.special_codes[rustix::termios::SpecialCodeIndex::VMIN] = 0;
+        attrs.special_codes[rustix::termios::SpecialCodeIndex::VTIME] = 0;
+        rustix::termios::tcsetattr(terminal, rustix::termios::OptionalActions::Now, &attrs)
+            .unwrap();
+    }
+
+    /// Every byte waiting on the terminal side: the click reports the
+    /// helper wrote, already in the pty buffer.
+    fn drain_terminal(mut terminal: &fs::File) -> Vec<u8> {
+        use std::io::Read as _;
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match terminal.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => bytes.extend_from_slice(&chunk[..n]),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("reading the terminal side: {error}"),
+            }
+        }
+        bytes
+    }
+
+    /// A full frame holding `text` at each 0-based row in `rows`: a clear
+    /// followed by each row's positioned write.
+    fn draw(rows: &[(u16, &str)]) -> Vec<u8> {
+        let mut bytes = b"\x1b[H\x1b[J".to_vec();
+        for (y, text) in rows {
+            bytes.extend_from_slice(format!("\x1b[{};1H{text}", y + 1).as_bytes());
+        }
+        bytes
+    }
+
+    /// A caught helper outcome as the channel carries it: `Ok` when the
+    /// helper dispatched, the panic message when it did not.
+    fn panic_text(outcome: std::thread::Result<()>) -> Result<(), String> {
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(payload) => Err(payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|held| (*held).to_owned())
+                })
+                .unwrap_or_else(|| "a non-string panic".to_owned())),
+        }
+    }
+
+    /// Parks the calling thread on the fake clock at the helper's own
+    /// bound instant, then blocks on the test's release: the helper
+    /// waiting on its clock past its own check, not a parked caller
+    /// alone. The test advances by `advance_when_parked` naming the
+    /// reported thread and instant, then releases the hook.
+    fn park_at(
+        clock: &fakes::clock::FakeClock,
+        wait_left: Duration,
+        report: &mpsc::Sender<(thread::ThreadId, std::time::Instant)>,
+        release: &mpsc::Receiver<()>,
+    ) {
+        let expected = clock
+            .now()
+            .checked_add(wait_left)
+            .expect("the park instant");
+        clock.wait_until(Some(expected), &mut |_| {
+            report
+                .send((thread::current().id(), expected))
+                .unwrap_or(());
+            Deadline::after(fakes::deadline::WAIT)
+                .recv(release)
+                .expect("the test releases the parked hook");
+        });
+    }
+
+    /// The acceptance proof: coordinates found in frame A are stale once a
+    /// row is inserted above the target, so the old pattern clicks the
+    /// wrong row while the helper re-finds and clicks the right one. A
+    /// `same_frame` that always compares true sends the stale row; one
+    /// that always compares false never dispatches and fails with the
+    /// helper's named deadline panic.
+    #[test]
+    fn a_click_found_before_a_row_is_inserted_lands_on_the_target_row() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let thread_clock = (*clock).clone();
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let terminal_side = terminal.terminal;
+        make_raw(&terminal_side);
+        let mut run = Run::attach(main, 80, 24, deadline);
+        let frame_a = draw(&[(3, "decoy"), (4, "target")]);
+        let frame_b = draw(&[(4, "decoy"), (5, "target")]);
+        run.shared.lock().unwrap().publish(&frame_a);
+        let stale = run
+            .screen()
+            .text_at("target")
+            .expect("frame A holds the target");
+        assert_eq!(stale, (0, 4), "the control finds the target in frame A");
+        run.shared.lock().unwrap().publish(&frame_b);
+        assert!(
+            run.screen().rows[4].contains("decoy"),
+            "frame B inserted a row above the target"
+        );
+        run.write(&click_bytes(stale));
+        let control = drain_terminal(&terminal_side);
+        assert_eq!(
+            control,
+            click_bytes(stale),
+            "the control sends the stale coordinates"
+        );
+        run.shared.lock().unwrap().publish(&frame_a);
+        assert_eq!(
+            run.screen().text_at("target"),
+            Some((0, 4)),
+            "the reset redraws frame A"
+        );
+        let (outcome_tx, outcome_rx) = mpsc::channel();
+        let (report_tx, report_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let finds = Arc::new(Mutex::new(0usize));
+        let founds = Arc::new(Mutex::new(0usize));
+        let shared = Arc::clone(&run.shared);
+        let thread_finds = Arc::clone(&finds);
+        let thread_founds = Arc::clone(&founds);
+        let terminal_read = terminal_side.try_clone().unwrap();
+        thread::Builder::new()
+            .spawn(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run.mouse_where_paused(
+                        "the target row",
+                        |grid| {
+                            *thread_finds.lock().unwrap() += 1;
+                            grid.text_at("target")
+                        },
+                        click_bytes,
+                        |pause| match pause {
+                            Pause::Found { wait_left } => {
+                                let mut found = thread_founds.lock().unwrap();
+                                *found += 1;
+                                match *found {
+                                    1 => shared.lock().unwrap().publish(&frame_b),
+                                    2 => park_at(&thread_clock, wait_left, &report_tx, &release_rx),
+                                    n => panic!("unexpected Found #{n}: one retry only"),
+                                }
+                            }
+                            Pause::Waiting { .. } | Pause::Dispatched { .. } => {}
+                        },
+                    );
+                }));
+                // Read while the run is alive: dropping it closes the
+                // master, and a slave read past that fails.
+                let clicked = drain_terminal(&terminal_read);
+                outcome_tx
+                    .send((panic_text(outcome), clicked))
+                    .unwrap_or(());
+            })
+            .unwrap();
+        // A helper that returns without parking never reports: skip the
+        // advance and the release, and let the asserts below tell the
+        // stale click from the fresh one.
+        let (outcome, clicked) = match deadline.recv(&report_rx) {
+            Ok((thread, expected)) => {
+                clock.advance_when_parked(
+                    Some(expected),
+                    Some(thread),
+                    fakes::deadline::WAIT,
+                    &deadline,
+                );
+                let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
+                release_tx.send(()).unwrap_or(());
+                done.recv(&outcome_rx).expect("the helper thread's result")
+            }
+            Err(_) => {
+                let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
+                done.recv(&outcome_rx).expect("the helper thread's result")
+            }
+        };
+        outcome.expect("the helper dispatches at the fresh row");
+        assert_eq!(
+            clicked,
+            click_bytes((0, 5)),
+            "the helper clicks the target's row in frame B"
+        );
+        assert_ne!(
+            control, clicked,
+            "the stale row is the decoy's row in frame B"
+        );
+        assert_eq!(
+            *finds.lock().unwrap(),
+            2,
+            "the changed attempt and the settled retry each find"
+        );
+        assert_eq!(
+            *founds.lock().unwrap(),
+            2,
+            "the changed attempt and the settled retry each pause"
+        );
+    }
+
+    /// A style-only change between the find and the click is a change: the
+    /// same text with a different background re-finds once. A frame
+    /// comparison over row text only never retries here. An always-retry
+    /// mutant reaches the third pause and fails with its message, since
+    /// the clock never moves and the wait never expires.
+    #[test]
+    fn a_style_only_change_between_find_and_click_is_a_change() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let terminal_side = terminal.terminal;
+        make_raw(&terminal_side);
+        let mut run = Run::attach(main, 80, 24, deadline);
+        run.shared.lock().unwrap().publish(&draw(&[(4, "target")]));
+        let shared = Arc::clone(&run.shared);
+        let mut finds = 0usize;
+        let mut founds = 0usize;
+        let mut dispatched = 0usize;
+        run.mouse_where_paused(
+            "the styled target",
+            |grid| {
+                finds += 1;
+                grid.text_at("target")
+            },
+            click_bytes,
+            |pause| match pause {
+                Pause::Found { .. } => {
+                    founds += 1;
+                    match founds {
+                        1 => shared
+                            .lock()
+                            .unwrap()
+                            .publish(b"\x1b[5;1H\x1b[44mtarget\x1b[m"),
+                        2 => {}
+                        n => panic!("unexpected Found #{n}: only one retry"),
+                    }
+                }
+                Pause::Dispatched { .. } => dispatched += 1,
+                Pause::Waiting { .. } => {
+                    panic!("the styled target waits for nothing");
+                }
+            },
+        );
+        assert_eq!(finds, 2, "the changed attempt and the retry each find");
+        assert_eq!(founds, 2, "the changed attempt and the retry each pause");
+        assert_eq!(dispatched, 1, "the retry dispatches once");
+        assert_eq!(
+            drain_terminal(&terminal_side),
+            click_bytes((0, 4)),
+            "the retry clicks the found cell"
+        );
+    }
+
+    /// An unchanged frame clicks once without a retry: one find, one
+    /// pause, one dispatch. An always-retry mutant reaches the second
+    /// pause and fails with its message, since the clock never moves and
+    /// the wait never expires.
+    #[test]
+    fn an_unchanged_frame_clicks_once_without_a_retry() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let terminal_side = terminal.terminal;
+        make_raw(&terminal_side);
+        let mut run = Run::attach(main, 80, 24, deadline);
+        run.shared.lock().unwrap().publish(&draw(&[(4, "target")]));
+        let mut finds = 0usize;
+        let mut founds = 0usize;
+        let mut dispatched = 0usize;
+        run.mouse_where_paused(
+            "the settled target",
+            |grid| {
+                finds += 1;
+                grid.text_at("target")
+            },
+            click_bytes,
+            |pause| match pause {
+                Pause::Found { .. } => {
+                    founds += 1;
+                    if founds > 1 {
+                        panic!("unexpected second Found: unchanged frame must click once");
+                    }
+                }
+                Pause::Dispatched { .. } => dispatched += 1,
+                Pause::Waiting { .. } => {
+                    panic!("the settled target waits for nothing");
+                }
+            },
+        );
+        assert_eq!(finds, 1, "the settled frame finds once");
+        assert_eq!(founds, 1, "the settled frame pauses once");
+        assert_eq!(dispatched, 1, "the settled frame dispatches once");
+        assert_eq!(
+            drain_terminal(&terminal_side),
+            click_bytes((0, 4)),
+            "the click lands on the found cell"
+        );
+    }
+
+    /// An absent target panics naming the wait and the last grid: the hook
+    /// parks the helper thread at its own bound instant, the test spends
+    /// the wait through the parked advance, and the helper's receive is
+    /// handed zero. The text finder returns the first row-major match at
+    /// terminal-cell columns, skipping a wide character's continuation
+    /// cell and keeping a combining mark in its base cell.
+    #[test]
+    fn an_absent_target_panics_naming_the_wait_and_the_last_grid() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let thread_clock = (*clock).clone();
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let terminal_side = terminal.terminal;
+        make_raw(&terminal_side);
+        let mut run = Run::attach(main, 80, 24, deadline);
+        run.shared
+            .lock()
+            .unwrap()
+            .publish(&draw(&[(2, "something else")]));
+        let (outcome_tx, outcome_rx) = mpsc::channel();
+        let (report_tx, report_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        thread::Builder::new()
+            .spawn(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run.mouse_where_paused(
+                        "the missing target",
+                        |_| None::<(u16, u16)>,
+                        click_bytes,
+                        |pause| match pause {
+                            Pause::Waiting { wait_left } => {
+                                park_at(&thread_clock, wait_left, &report_tx, &release_rx);
+                            }
+                            Pause::Found { .. } | Pause::Dispatched { .. } => {
+                                panic!("the absent target is never found");
+                            }
+                        },
+                    );
+                }));
+                outcome_tx.send(panic_text(outcome)).unwrap_or(());
+            })
+            .unwrap();
+        let (thread, expected) = deadline
+            .recv(&report_rx)
+            .expect("the helper thread reports its check");
+        clock.advance_when_parked(
+            Some(expected),
+            Some(thread),
+            fakes::deadline::WAIT,
+            &deadline,
+        );
+        let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
+        release_tx.send(()).unwrap_or(());
+        let message = done
+            .recv(&outcome_rx)
+            .expect("the helper thread's result")
+            .expect_err("the absent target panics");
+        assert!(
+            message.starts_with("waited until the deadline for the missing target"),
+            "the panic names the wait: {message:?}"
+        );
+        assert!(
+            message.contains("something else"),
+            "the panic shows the last grid: {message:?}"
+        );
+        let probe_terminal = open(80, 24);
+        let probe_main = fs::File::from(probe_terminal.main);
+        let probe = Run::attach(probe_main, 80, 24, deadline);
+        probe.shared.lock().unwrap().publish(&draw(&[
+            (0, "target here"),
+            (1, "target there"),
+            (2, "界 target"),
+            (3, "é target"),
+        ]));
+        let grid = probe.screen();
+        assert_eq!(
+            grid.text_at("target"),
+            Some((0, 0)),
+            "the finder returns the first row-major match"
+        );
+        assert_eq!(
+            grid.text_at("there"),
+            Some((7, 1)),
+            "the finder searches every row"
+        );
+        assert_eq!(
+            grid.text_at("here"),
+            Some((7, 0)),
+            "the match offset maps back to a column"
+        );
+        let wide = draw(&[(0, "界 target")]);
+        probe.shared.lock().unwrap().publish(&wide);
+        assert_eq!(
+            probe.screen().text_at("target"),
+            Some((3, 0)),
+            "a wide character's continuation cell holds no column"
+        );
+        let combining = draw(&[(0, "é target")]);
+        probe.shared.lock().unwrap().publish(&combining);
+        assert_eq!(
+            probe.screen().text_at("target"),
+            Some((2, 0)),
+            "a combining mark stays in its base cell"
+        );
+        assert_eq!(probe.screen().text_at("absent"), None, "no match is none");
+    }
+
+    /// The click is written while the frame lock is held: the dispatch
+    /// reports the lock crossed the write. Dropping `Shared` before the
+    /// write reports otherwise. An always-retry mutant reaches the second
+    /// pause and fails with its message, since the clock never moves and
+    /// the wait never expires.
+    #[test]
+    fn the_click_is_written_while_the_frame_lock_is_held() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let terminal_side = terminal.terminal;
+        make_raw(&terminal_side);
+        let mut run = Run::attach(main, 80, 24, deadline);
+        run.shared.lock().unwrap().publish(&draw(&[(4, "target")]));
+        let mut founds = 0usize;
+        let mut held = None;
+        run.mouse_where_paused(
+            "the locked target",
+            |grid| grid.text_at("target"),
+            click_bytes,
+            |pause| match pause {
+                Pause::Found { .. } => {
+                    founds += 1;
+                    if founds > 1 {
+                        panic!("unexpected second Found: single dispatch must not retry");
+                    }
+                }
+                Pause::Dispatched { frame_lock_held } => held = Some(frame_lock_held),
+                Pause::Waiting { .. } => {
+                    panic!("the locked target waits for nothing");
+                }
+            },
+        );
+        assert_eq!(held, Some(true), "the frame lock crosses the write");
+        assert_eq!(
+            drain_terminal(&terminal_side),
+            click_bytes((0, 4)),
+            "the click lands on the found cell"
+        );
+    }
+
+    /// A panicking encoder leaves both locks usable: the encode runs with
+    /// no lock held, so its panic poisons neither mutex and writes
+    /// nothing. Encoding under `Shared` poisons it on this path. Any
+    /// mutant that retries instead of propagating the panic reaches the
+    /// second pause and fails with its message, since the clock never
+    /// moves and the wait never expires.
+    #[test]
+    fn a_panicking_encoder_leaves_both_locks_usable() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let terminal_side = terminal.terminal;
+        make_raw(&terminal_side);
+        let mut run = Run::attach(main, 80, 24, deadline);
+        run.shared.lock().unwrap().publish(&draw(&[(4, "target")]));
+        let mut founds = 0usize;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.mouse_where_paused(
+                "the encoding target",
+                |grid| grid.text_at("target"),
+                |_| panic!("encoder"),
+                |pause| match pause {
+                    Pause::Found { .. } => {
+                        founds += 1;
+                        if founds > 1 {
+                            panic!("unexpected second Found: encoder must panic first");
+                        }
+                    }
+                    Pause::Waiting { .. } | Pause::Dispatched { .. } => {
+                        panic!("the encoder panics before any wait or dispatch");
+                    }
+                },
+            );
+        }));
+        let message = panic_text(outcome).expect_err("the encoder panics");
+        assert!(
+            message.contains("encoder"),
+            "the encoder panic propagates: {message:?}"
+        );
+        assert!(run.shared.lock().is_ok(), "the frame lock stays usable");
+        assert!(run.writer().lock().is_ok(), "the writer lock stays usable");
+        assert!(
+            drain_terminal(&terminal_side).is_empty(),
+            "a panicking encode writes nothing"
+        );
+    }
+
+    /// A held writer sends nothing even after it is released: the dispatch
+    /// takes `Writer` only by `try_lock` under `Shared`, so a held writer
+    /// panics having written nothing, and registers no worker. A dispatch
+    /// handing its bytes to a worker would register it instead: the thread
+    /// receives each registered send through the named `ack` deadline and
+    /// joins, and any byte on the wire fails the empty read. Deleting the
+    /// `try_lock` error arm's panic returns normally and fails the held
+    /// message assert.
+    #[test]
+    fn a_held_writer_sends_nothing_even_after_it_is_released() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let thread_clock = (*clock).clone();
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let terminal_side = terminal.terminal;
+        make_raw(&terminal_side);
+        let terminal_read = terminal_side.try_clone().unwrap();
+        let mut run = Run::attach(main, 80, 24, deadline);
+        let frame_a = draw(&[(4, "target")]);
+        let frame_b = draw(&[(5, "target")]);
+        run.shared.lock().unwrap().publish(&frame_a);
+        let (outcome_tx, outcome_rx) = mpsc::channel();
+        let (report_tx, report_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let helper = thread::Builder::new()
+            .spawn(move || {
+                let writer = run.writer();
+                let held = writer.lock().unwrap();
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run.mouse_where_paused(
+                        "the held target",
+                        |grid| grid.text_at("target"),
+                        click_bytes,
+                        |pause| match pause {
+                            Pause::Found { wait_left } => {
+                                park_at(&thread_clock, wait_left, &report_tx, &release_rx);
+                            }
+                            Pause::Waiting { .. } | Pause::Dispatched { .. } => {
+                                panic!("the held writer neither waits nor dispatches");
+                            }
+                        },
+                    );
+                }));
+                drop(held);
+                run.shared.lock().unwrap().publish(&frame_b);
+                let ack = deadline.start_wait();
+                let taken = std::mem::take(&mut *run.pending_writes.lock().unwrap());
+                let registered = taken.len();
+                for (handle, finished) in taken {
+                    ack.recv(&finished)
+                        .expect("waited until the deadline for the registered worker's write")
+                        .expect("the registered worker's write succeeds");
+                    handle.join().expect("the registered worker joins");
+                }
+                let read = drain_terminal(&terminal_read);
+                outcome_tx
+                    .send((run, panic_text(outcome), registered, read))
+                    .unwrap_or(());
+            })
+            .unwrap();
+        let (thread, expected) = deadline
+            .recv(&report_rx)
+            .expect("the helper thread reports its check");
+        clock.advance_when_parked(
+            Some(expected),
+            Some(thread),
+            fakes::deadline::WAIT,
+            &deadline,
+        );
+        let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
+        release_tx.send(()).unwrap_or(());
+        let (run, outcome, registered, read) =
+            done.recv(&outcome_rx).expect("the helper thread's result");
+        helper.join().expect("the helper thread joins");
+        assert!(read.is_empty(), "a held writer sends nothing");
+        assert_eq!(registered, 0, "the helper starts no worker");
+        let message = outcome.expect_err("the held writer panics");
+        assert!(
+            message.contains("terminal writer is held"),
+            "the panic names the held writer: {message:?}"
+        );
+        assert!(run.shared.lock().is_ok(), "the frame lock stays usable");
+        assert!(run.writer().lock().is_ok(), "the writer lock stays usable");
+    }
+
+    /// An open synchronized frame waits for its close, then re-finds: the
+    /// first find sees frame A while newer output sits behind the open
+    /// block, so the helper waits for the close and dispatches at the
+    /// target's row in frame B. A dispatch comparing the grid without
+    /// waiting for the close clicks the decoy's row in B.
+    #[test]
+    fn an_open_synchronized_frame_waits_for_its_close_then_refinds() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let terminal_side = terminal.terminal;
+        make_raw(&terminal_side);
+        let mut terminal_writer = terminal_side.try_clone().unwrap();
+        let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
+        let mut run = Run::attach(main, 80, 24, deadline);
+        let frame_a = draw(&[(3, "decoy"), (4, "target")]);
+        let frame_b = draw(&[(4, "decoy"), (5, "target")]);
+        run.shared.lock().unwrap().publish(&frame_a);
+        let (outcome_tx, outcome_rx) = mpsc::channel();
+        let finds = Arc::new(Mutex::new(0usize));
+        let founds = Arc::new(Mutex::new(0usize));
+        let shared = Arc::clone(&run.shared);
+        let thread_finds = Arc::clone(&finds);
+        let thread_founds = Arc::clone(&founds);
+        let terminal_read = terminal_side.try_clone().unwrap();
+        thread::Builder::new()
+            .spawn(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run.mouse_where_paused(
+                        "the synced target",
+                        |grid| {
+                            *thread_finds.lock().unwrap() += 1;
+                            grid.text_at("target")
+                        },
+                        click_bytes,
+                        |pause| match pause {
+                            Pause::Found { .. } => {
+                                let mut found = thread_founds.lock().unwrap();
+                                *found += 1;
+                                if *found == 1 {
+                                    let mut redraw = SYNC_BEGIN.to_vec();
+                                    redraw.extend_from_slice(&frame_b);
+                                    shared.lock().unwrap().publish(&redraw);
+                                }
+                            }
+                            Pause::Waiting { .. } => {
+                                use std::io::Write as _;
+                                terminal_writer.write_all(SYNC_END).unwrap();
+                            }
+                            Pause::Dispatched { .. } => {}
+                        },
+                    );
+                }));
+                // Read while the run is alive: dropping it closes the
+                // master, and a slave read past that fails.
+                let clicked = drain_terminal(&terminal_read);
+                outcome_tx
+                    .send((panic_text(outcome), clicked))
+                    .unwrap_or(());
+            })
+            .unwrap();
+        let (outcome, clicked) = done.recv(&outcome_rx).expect("the helper thread's result");
+        outcome.expect("the helper dispatches after the close");
+        assert_eq!(
+            clicked,
+            click_bytes((0, 5)),
+            "the helper clicks the target's row in frame B"
+        );
+        assert_eq!(
+            *finds.lock().unwrap(),
+            2,
+            "the open-block attempt and the fresh attempt each find"
+        );
+        assert_eq!(
+            *founds.lock().unwrap(),
+            2,
+            "the open-block attempt and the fresh attempt each pause"
+        );
     }
 }
