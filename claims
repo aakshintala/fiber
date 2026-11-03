@@ -1,6 +1,3 @@
-crates/tui/src/screen.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
-crates/tui/src/screen_tests.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
-crates/main/tests/wheel_garble.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/outbox.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/answer.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/answer_tests.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
