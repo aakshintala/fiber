@@ -464,10 +464,11 @@ impl PlatformWatch {
             tv_sec: timeout.as_secs().min(i64::MAX as u64).cast_signed(),
             tv_nsec: timeout.subsec_nanos() as _,
         };
-        // The park itself is the wait: a woken fd, a signal and an
-        // expired wait all end it, and the reread decides correctness;
-        // the count only reports how this park ended.
-        let fired = rustix::event::poll(&mut fds, Some(&spec)).unwrap_or(0);
+        // The park itself is the wait: a woken fd and an expired wait end
+        // it, and the reread decides correctness; the count only reports
+        // how this park ended. A park failure is the wait's error, never
+        // an expiry: only a zero count maps to `Expired`.
+        let fired = rustix::event::poll(&mut fds, Some(&spec))?;
         // Drain the queued change reports so the next wait parks instead
         // of spinning on a still-readable descriptor.
         let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 512];
@@ -551,7 +552,9 @@ impl PlatformWatch {
         // and `events` is a stack array the kernel fills with at most one
         // event.
         let fired = unsafe { kevent(&self.queue, &[], &mut events, Some(timeout)) }?;
-        Ok(if fired > 0 {
+        // `kevent` reports through the buffer: the initialized prefix
+        // holds the events, so its length is the count.
+        Ok(if !fired.0.is_empty() {
             ParkExit::Event
         } else {
             ParkExit::Expired
@@ -3231,7 +3234,6 @@ pub(crate) fn wait_for_watched_line(
 ) {
     watch
         .wait_until(deadline, what, ready)
-        .map(|_| ())
         .unwrap_or_else(|error| panic!("{error}"));
 }
 
@@ -3391,21 +3393,14 @@ fn held_wait_passes_after_release<R: Send + 'static>(
     match Deadline::after(inner * OUTER_BUDGET_FACTOR) // ruling: #4075
         .recv(&done)
     {
-        Ok(Ok(result)) => {
+        Ok(outcome) => {
             // The report arrived, so the waiter ended and the join returns
             // at once; a waiter panic re-raises with its own text.
             match waiter.join() {
                 Ok(()) => {}
                 Err(payload) => std::panic::resume_unwind(payload),
             }
-            result
-        }
-        Ok(Err(text)) => {
-            match waiter.join() {
-                Ok(()) => {}
-                Err(payload) => std::panic::resume_unwind(payload),
-            }
-            panic!("the waiter for {what} panicked: {text}");
+            outcome.unwrap_or_else(|text| panic!("the waiter for {what} panicked: {text}"))
         }
         Err(mpsc::RecvTimeoutError::Timeout) if waiter.is_finished() => {
             panic!(
