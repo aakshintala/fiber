@@ -1877,8 +1877,10 @@ fn a_detached_call_runs_unconfined_with_the_sandbox_on_and_takes_no_protected_pa
             .is_none(),
         "an unconfined call takes no protected-path transaction"
     );
-    assert!(marker_ok.exists(), "the allowed detached call ran");
     let pgid = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    // The script touches the marker before it writes the ready line the
+    // wait above took, so the marker exists once the wait returns.
+    assert!(marker_ok.exists(), "the allowed detached call ran");
     assert!(
         fakes::group_alive(pgid),
         "the detached child outlives the run"

@@ -3856,6 +3856,12 @@ fn a_detached_call_reaches_the_reviewer_even_when_a_standing_allow_covers_shell(
     );
     let done = completed_call(&run);
     assert_eq!(done["payload"]["status"], "completed");
+    let marker_wait = marker.clone();
+    fakes::wait_until(
+        "the detached command touched its marker",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || marker_wait.exists(),
+    );
     assert!(marker.exists(), "the reviewed call ran");
     let (pid, log) = detach_receipt(&completion_text(done));
     assert!(pid > 1, "the receipt names the process id");
@@ -3864,6 +3870,12 @@ fn a_detached_call_reaches_the_reviewer_even_when_a_standing_allow_covers_shell(
         .map(|entry| entry.unwrap().path())
         .collect();
     assert_eq!(logs, vec![log.clone()], "one call writes one log");
+    let log_wait = log.clone();
+    fakes::wait_until(
+        "the detached command wrote its log",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || fs::read_to_string(&log_wait).is_ok_and(|text| text == "ran\n"),
+    );
     assert_eq!(fs::read_to_string(&log).unwrap(), "ran\n");
 }
 
