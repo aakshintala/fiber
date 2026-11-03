@@ -5,6 +5,7 @@
 //! never reaches the loop's state, taking the app and the tick as explicit
 //! borrowed arguments instead.
 
+use contract::HubEventKind;
 use std::collections::VecDeque;
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
@@ -409,7 +410,7 @@ impl Connection {
                 Input::Hub(Line::Session(line)) if link::answers(&line, id) => {
                     return link::history_answer(&line).map(Answer::Lines);
                 }
-                Input::Hub(Line::Hub(line)) if line.kind == "stream_reopened" => {
+                Input::Hub(Line::Hub(line)) if line.kind() == HubEventKind::StreamReopened => {
                     if let Some(session) = line
                         .payload
                         .get("session_id")

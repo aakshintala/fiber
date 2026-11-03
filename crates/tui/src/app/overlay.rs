@@ -3,6 +3,7 @@
 //! the pass folds into, swapped in at its end (`docs/tui.md`, "History
 //! and paging").
 
+use contract::events::EventKind;
 use contract::{Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
@@ -135,7 +136,7 @@ impl Tail {
     /// Only the point parses, so a fuller line still crosses.
     fn forked_from(&self) -> Option<contract::shapes::Point> {
         let first = self.lines.first()?;
-        if first.kind != "session_started" || first.seq != Some(Seq(0)) {
+        if first.kind() != EventKind::SessionStarted || first.seq != Some(Seq(0)) {
             return None;
         }
         first
@@ -266,7 +267,7 @@ impl Tail {
         }
         self.lines
             .iter()
-            .position(|line| line.kind == "turn_started")
+            .position(|line| line.kind() == EventKind::TurnStarted)
             .and_then(|at| self.lines.get(at..))
     }
 

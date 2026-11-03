@@ -5,6 +5,7 @@
 //! cursor and the send state live in sibling modules; the parent coordinates
 //! them through the methods below.
 
+use contract::events::EventKind;
 use std::time::{Duration, Instant};
 
 use contract::events::{InputItem, ToolCallRequested, ToolCallStarted, TurnStarted};
@@ -264,7 +265,7 @@ impl Fold {
     /// `session_started`; `None` at the chain root or without one.
     fn forked_from(&self) -> Option<Point> {
         let first = self.lines.first()?;
-        if first.kind != "session_started" || first.seq != Some(Seq(0)) {
+        if first.kind() != EventKind::SessionStarted || first.seq != Some(Seq(0)) {
             return None;
         }
         first
@@ -321,8 +322,8 @@ impl Fold {
         self.names.clear();
         for line in &self.lines {
             let seq = line.seq.map(|seq| seq.0).unwrap_or(u64::MAX);
-            match line.kind.as_str() {
-                "turn_started" => {
+            match line.kind() {
+                EventKind::TurnStarted => {
                     if let Some(building) = current.take() {
                         turns.push(finish(building, &started, &completed));
                     }
@@ -339,7 +340,7 @@ impl Fold {
                         end: None,
                     });
                 }
-                "step_started" => {
+                EventKind::StepStarted => {
                     if let Some(building) = current.as_mut()
                         && building.session == line.session_id
                     {
@@ -349,7 +350,7 @@ impl Fold {
                         });
                     }
                 }
-                "text_completed" => {
+                EventKind::TextCompleted => {
                     if let Some(building) = current.as_mut()
                         && building.session == line.session_id
                         && let Some(step) = building.steps.last_mut()
@@ -361,7 +362,7 @@ impl Fold {
                         step.text.push_str(text);
                     }
                 }
-                "tool_call_requested" => {
+                EventKind::ToolCallRequested => {
                     if let Some(requested) = read!(line, ToolCallRequested)
                         && let Some(action) = line.action_id.clone()
                     {
@@ -372,7 +373,7 @@ impl Fold {
                         ));
                     }
                 }
-                "tool_call_started" => {
+                EventKind::ToolCallStarted => {
                     started.push((line.session_id.clone(), line.action_id.clone(), seq));
                     if let Some(call) = read!(line, ToolCallStarted) {
                         self.calls.push(CallRec {
@@ -384,17 +385,81 @@ impl Fold {
                         });
                     }
                 }
-                "tool_call_completed" => {
+                EventKind::ToolCallCompleted => {
                     completed.push((line.session_id.clone(), line.action_id.clone(), seq));
                 }
-                "turn_completed" => {
+                EventKind::TurnCompleted => {
                     if let Some(building) = current.as_mut()
                         && building.session == line.session_id
                     {
                         building.end = Some(seq);
                     }
                 }
-                _ => {}
+                EventKind::FiberStarted
+                | EventKind::FiberExited
+                | EventKind::SessionStarted
+                | EventKind::Rewound
+                | EventKind::Moved
+                | EventKind::SteeringApplied
+                | EventKind::SteeringQueue
+                | EventKind::ShellCommand
+                | EventKind::DirectoryAdded
+                | EventKind::SessionNamed
+                | EventKind::Clients
+                | EventKind::SessionStatus
+                | EventKind::ContextAdded
+                | EventKind::AssistantMessageStarted
+                | EventKind::AssistantMessageDelta
+                | EventKind::AssistantMessageCompleted
+                | EventKind::ToolCallArgumentsDelta
+                | EventKind::ReasoningStarted
+                | EventKind::ReasoningDelta
+                | EventKind::ReasoningCompleted
+                | EventKind::ToolCallDelta
+                | EventKind::PermissionRequested
+                | EventKind::PermissionResolved
+                | EventKind::InteractionRequested
+                | EventKind::InteractionResolved
+                | EventKind::RepositoryCodeOffered
+                | EventKind::RepositoryCodeResolved
+                | EventKind::UsageRecorded
+                | EventKind::QuotaNoticed
+                | EventKind::QuotaRearmed
+                | EventKind::RetryScheduled
+                | EventKind::Notice
+                | EventKind::PreambleBuilt
+                | EventKind::ModelChanged
+                | EventKind::OpeningMessage
+                | EventKind::InstructionFile
+                | EventKind::DateChanged
+                | EventKind::SkillsChanged
+                | EventKind::HandoffStarted
+                | EventKind::HandoffCompleted
+                | EventKind::SkillsResent
+                | EventKind::ContextNudged
+                | EventKind::ReviewerKept
+                | EventKind::McpServerFailed
+                | EventKind::McpServerReady
+                | EventKind::Reloaded
+                | EventKind::ExtensionsLoaded
+                | EventKind::ExtensionStateSet
+                | EventKind::ExtensionStateUnset
+                | EventKind::ExtensionUi
+                | EventKind::ExtensionMessage
+                | EventKind::ExtensionLog
+                | EventKind::ExtensionExec
+                | EventKind::ExtensionHello
+                | EventKind::ExtensionRequest
+                | EventKind::JobStarted
+                | EventKind::DelegateStarted
+                | EventKind::JobDelta
+                | EventKind::JobLine
+                | EventKind::DelegateFinished
+                | EventKind::JobCompleted
+                | EventKind::JobsPendingNotified
+                | EventKind::CommandAccepted
+                | EventKind::CommandRejected
+                | EventKind::Unknown(_) => {}
             }
         }
         if let Some(building) = current.take() {

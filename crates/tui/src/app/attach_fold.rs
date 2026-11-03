@@ -4,6 +4,8 @@
 //! transitions with their landing, and the pass boundaries that open
 //! and close them.
 
+use contract::HubEventKind;
+use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandResult};
 use contract::{Envelope, Seq, SessionId};
 use serde_json::Value;
@@ -497,7 +499,7 @@ impl App {
                 {
                     self.mark_landing();
                 }
-                if line.kind == "command_accepted"
+                if line.kind() == EventKind::CommandAccepted
                     && let Some(accepted) = read!(line, CommandAccepted)
                 {
                     if let Some(CommandResult::Subscribe { last_seq }) = accepted.result {
@@ -521,13 +523,15 @@ impl App {
                 };
                 let session = SessionId(session.to_owned());
                 if matches!(
-                    line.kind.as_str(),
-                    "stream_reopened" | "stream_closed" | "session_left"
+                    line.kind(),
+                    HubEventKind::StreamReopened
+                        | HubEventKind::StreamClosed
+                        | HubEventKind::SessionLeft
                 ) {
                     self.reviewer_setup_stream_lost(&session);
                 }
-                match line.kind.as_str() {
-                    "stream_reopened" => {
+                match line.kind() {
+                    HubEventKind::StreamReopened => {
                         // The cause ended for this session: its notice goes.
                         self.notices.clear_code("stream_closed", &session.0);
                         self.passes.retain(|(held, _)| held != &session);
@@ -559,7 +563,7 @@ impl App {
                             }
                         }
                     }
-                    "stream_closed" => {
+                    HubEventKind::StreamClosed => {
                         self.passes.retain(|(held, pass)| {
                             held != &session || matches!(pass, Pass::Pending)
                         });
@@ -570,7 +574,7 @@ impl App {
                             self.keep_pass(&session);
                         }
                     }
-                    "session_left" => {
+                    HubEventKind::SessionLeft => {
                         self.passes.retain(|(held, pass)| {
                             held != &session || matches!(pass, Pass::Pending)
                         });
@@ -581,7 +585,12 @@ impl App {
                             self.keep_pass(&session);
                         }
                     }
-                    _ => {}
+                    HubEventKind::HubHello
+                    | HubEventKind::Attention
+                    | HubEventKind::DeviceChanged
+                    | HubEventKind::CommandAccepted
+                    | HubEventKind::CommandRejected
+                    | HubEventKind::Unknown(_) => {}
                 }
             }
         }
