@@ -1082,6 +1082,7 @@ fn listed_exit_reports_expiry_with_no_listing_yet() {
             .contains("deadline expired waiting for exit"),
         "{err}"
     );
+    assert!(err.to_string().starts_with("first listing: "), "{err}");
     drop(never);
 }
 
@@ -1101,7 +1102,7 @@ fn listed_exit_names_a_held_holder_when_the_exit_budget_is_spent() {
             move || {
                 calls += 1;
                 if calls == 1 {
-                    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&released) {
+                    match released.recv() {
                         Ok(()) => Ok(vec![pid]),
                         Err(_) => Err(io::Error::other("the listing was never released")),
                     }
