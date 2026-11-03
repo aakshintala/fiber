@@ -97,7 +97,7 @@ fn classify_reports_bus_error_linker_death_as_resource_exhaustion() {
     let dir = TempDir::new("xtask-check-resources");
     dir.write(
         "build.log",
-        "collect2: fatal error: ld terminated with signal 7 [Bus error]\n",
+        "collect2: fatal error: ld terminated with signal 7 [Bus error]\nerror: linking with `cc` failed: exit code: 1\n",
     );
     let log = dir.path().join("build.log");
     let output = Command::new(script())

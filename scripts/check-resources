@@ -212,14 +212,16 @@ classify() {
     echo "$prog: cannot read $1" >&2
     exit 2
   fi
-  # The compiler-driver shapes need no marker: test code never prints them.
-  # The `signal: N, SIG...` shapes need a cargo build-failure marker, since
-  # a killed test child can print such a line while nextest wraps the step.
+  # Every shape needs a cargo build-failure marker, because classify reads
+  # the whole gate log and test output can contain any of these shapes,
+  # including this script's own test data. A killed test child can print
+  # such a line while nextest wraps the step, so without a marker the match
+  # may be some other program's output rather than cargo reporting the kill.
   classify_clean=$(sed $'s/\033\\[[0-9;]*m//g' "$1")
   classify_shape=
-  if printf '%s\n' "$classify_clean" | grep -qF 'terminated with signal 7'; then
+  if printf '%s\n' "$classify_clean" | grep -qF 'terminated with signal 7' && has_marker; then
     classify_shape='terminated with signal 7'
-  elif printf '%s\n' "$classify_clean" | grep -qF 'terminated with signal 9'; then
+  elif printf '%s\n' "$classify_clean" | grep -qF 'terminated with signal 9' && has_marker; then
     classify_shape='terminated with signal 9'
   elif printf '%s\n' "$classify_clean" | grep -qF 'signal: 9, SIGKILL' && has_marker; then
     classify_shape='signal: 9, SIGKILL'
