@@ -1154,7 +1154,3 @@ fn with_process(text: String, error: Option<Failure>, process: Process) -> Outpu
 #[cfg(test)]
 #[path = "shell_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "shell/detached_tests.rs"]
-mod detached_tests;

@@ -1918,10 +1918,10 @@ fn a_detached_call_runs_unconfined_with_the_sandbox_on_and_takes_no_protected_pa
                     let path = entry.unwrap().path();
                     if path.is_dir() {
                         stack.push(path);
-                    } else if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                        if ["baseline.json", "baseline.lock", "active.lock"].contains(&name) {
-                            recorded.push(path);
-                        }
+                    } else if let Some(name) = path.file_name().and_then(|name| name.to_str())
+                        && ["baseline.json", "baseline.lock", "active.lock"].contains(&name)
+                    {
+                        recorded.push(path);
                     }
                 }
             }

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use fakes::children::Ready;
 
-use super::detached::{create_log, launch, receipt};
+use super::{create_log, launch, receipt};
 
 /// The Fiber pid the log names: fixed, so a stale file from an earlier
 /// process with a reused pid is just another collision.
@@ -83,6 +83,25 @@ fn create_log_fails_past_the_cap_without_an_extra_attempt() {
 }
 
 #[test]
+fn create_log_returns_a_non_collision_open_error_at_once() {
+    let dir = fakes::TempDir::new("fiber-detached-open-error");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let next = AtomicU64::new(0);
+    let failed = create_log(dir.path(), FIBER_PID, &next).unwrap_err();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        failed.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "a refused open is no name collision"
+    );
+    assert_eq!(
+        next.load(Ordering::SeqCst),
+        1,
+        "a non-collision error returns at once instead of retrying as a collision"
+    );
+}
+
+#[test]
 fn create_log_creates_a_private_directory() {
     let root = fakes::TempDir::new("fiber-detached-new-dir");
     let dir = root.path().join("detached");
@@ -126,7 +145,7 @@ fn launch_streams_both_outputs_to_the_log_and_reports_the_child() {
     let started = launch(
         dir.path(),
         FIBER_PID,
-        super::shell_program(),
+        super::super::shell_program(),
         &command,
         dir.path(),
     )
@@ -169,7 +188,7 @@ fn launch_leaves_a_group_no_shutdown_list_holds() {
     let started = launch(
         dir.path(),
         FIBER_PID,
-        super::shell_program(),
+        super::super::shell_program(),
         &command,
         dir.path(),
     )
@@ -217,7 +236,7 @@ fn launch_fails_when_the_directory_is_a_regular_file() {
     let failed = launch(
         &taken,
         FIBER_PID,
-        super::shell_program(),
+        super::super::shell_program(),
         "true",
         dir.path(),
     );
@@ -246,7 +265,7 @@ fn launch_with_a_non_utf8_directory_fails_before_spawn() {
     let failed = launch(
         &bad,
         FIBER_PID,
-        super::shell_program(),
+        super::super::shell_program(),
         &command,
         dir.path(),
     );
@@ -262,7 +281,7 @@ fn launch_with_a_non_utf8_directory_fails_before_spawn() {
 
 #[test]
 fn receipt_names_the_pid_and_the_log_path() {
-    let started = super::detached::Started {
+    let started = super::Started {
         pid: 48213,
         log: std::path::PathBuf::from("/home/a/.fiber/detached/d_48200_0.log"),
     };

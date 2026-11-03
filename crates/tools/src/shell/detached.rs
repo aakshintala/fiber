@@ -18,7 +18,7 @@ use super::spawn::scrub_env;
 /// earlier process that reused the Fiber pid collide, and the person owns
 /// deleting them, so 100 consecutive collisions fail the call instead of
 /// scanning without bound.
-pub(super) const LOG_ATTEMPTS: u64 = 100;
+const LOG_ATTEMPTS: u64 = 100;
 
 /// The process-wide detached log sequence: one counter per process, so two
 /// shells in one process never share a value. `create_log` takes its
@@ -77,17 +77,16 @@ pub(super) fn launch(
         }
     };
     let pid = child.id();
-    match std::thread::Builder::new()
+    if std::thread::Builder::new()
         .name("detached-reaper".to_owned())
         .spawn(move || {
             let _reaped = child.wait();
-        }) {
-        Ok(_) => {}
-        Err(_) => {
-            // No thread owns the child: it runs on, and stays a zombie
-            // until Fiber exits and init reaps it. The command itself
-            // started, so the receipt still goes back.
-        }
+        })
+        .is_err()
+    {
+        // No thread owns the child: it runs on, and stays a zombie
+        // until Fiber exits and init reaps it. The command itself
+        // started, so the receipt still goes back.
     }
     Ok(Started { pid, log: path })
 }
@@ -97,11 +96,7 @@ pub(super) fn launch(
 /// `create_new`, so two concurrent calls never share a file. The directory
 /// is mode 0700 and each file mode 0600; a directory that already exists
 /// keeps its mode.
-pub(super) fn create_log(
-    dir: &Path,
-    fiber_pid: u32,
-    next: &AtomicU64,
-) -> io::Result<(File, PathBuf)> {
+fn create_log(dir: &Path, fiber_pid: u32, next: &AtomicU64) -> io::Result<(File, PathBuf)> {
     DirBuilder::new().mode(0o700).recursive(true).create(dir)?;
     for _ in 0..LOG_ATTEMPTS {
         let n = next.fetch_add(1, Ordering::Relaxed);
@@ -136,3 +131,7 @@ pub(super) fn receipt(started: &Started) -> String {
         started.log.display()
     )
 }
+
+#[cfg(test)]
+#[path = "detached_tests.rs"]
+mod tests;
