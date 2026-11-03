@@ -282,7 +282,7 @@ fn an_elicitation_raises_one_interaction_per_field_and_the_server_gets_the_answe
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe_client(setup.deadline, &client);
+    subscribe_client(Deadline::after(std::time::Duration::from_secs(10)), &client);
     prompt(setup.deadline, &client);
     // The call's id rides on the envelope, not the payload.
     let call = client

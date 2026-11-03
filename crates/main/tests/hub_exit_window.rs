@@ -240,19 +240,35 @@ impl World {
             session: Some(self.id.clone()),
         };
         last.send(&close_as("c_finish", &self.id));
-        // Consumed in order, so nothing before the close's answer is kept:
-        // the fold's replayed exits stay behind, and the exit waited for
-        // follows the close.
-        let mut closed = until(&last, "the close acknowledgement", |line| {
-            is_answer(line, "c_finish")
-        });
-        let ack = closed.pop().expect("the acknowledgement ends the wait");
-        assert_eq!(ack["kind"], "command_accepted", "{ack}");
-        until_after(
+        // Both signals are collected as a set: no doc orders the close
+        // acknowledgement against `fiber_exited` (`docs/testing.md`,
+        // "Event streams"), so the wait ends when both have arrived,
+        // whichever comes first. One `until_after` bounds the whole wait
+        // (`docs/testing.md`, "Waits and timeouts"), and the replay bound
+        // in `since` keeps the fold's replayed exits from ending it.
+        let mut saw_ack = false;
+        let mut saw_exited = false;
+        let both = until_after(
             &last,
             &since,
-            "the session's exit after the close",
-            |line| line["kind"] == "fiber_exited",
+            "the close acknowledgement and the close-caused exit",
+            |line| {
+                if is_answer(line, "c_finish") {
+                    saw_ack = true;
+                }
+                if line["kind"] == "fiber_exited" {
+                    saw_exited = true;
+                }
+                saw_ack && saw_exited
+            },
+        );
+        let ack = answers(&both, "c_finish")
+            .pop()
+            .expect("the close acknowledgement arrives");
+        assert_eq!(ack["kind"], "command_accepted", "{ack}");
+        assert!(
+            both.iter().any(|line| line["kind"] == "fiber_exited"),
+            "the close-caused exit arrives: {both:?}"
         );
     }
 

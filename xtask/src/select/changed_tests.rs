@@ -326,7 +326,7 @@ fn resolve(
     Ok(Some(FileTests::Functions(tests)))
 }
 
-pub(crate) fn test_name_matches(test: &str, function: &str) -> bool {
+fn test_name_matches(test: &str, function: &str) -> bool {
     test == function || test.ends_with(&format!("::{function}"))
 }
 
