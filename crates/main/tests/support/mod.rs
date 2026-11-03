@@ -933,6 +933,35 @@ pub(crate) fn session_log_tail(dir: &Path) -> String {
     lines[start..].join("\n")
 }
 
+/// The session-log tails a failure report shows: one `session <name>:`
+/// block per session directory under `sessions`, sorted by name, each
+/// holding that session's [`session_log_tail`]. A missing or unreadable
+/// directory reads as empty, and a stray non-directory entry is skipped;
+/// an empty block means "unreadable or absent", never evidence of an
+/// absent job. It never panics, so it is safe on a failing run's path.
+pub(crate) fn session_logs_tail(sessions: &Path) -> String {
+    let Ok(entries) = fs::read_dir(sessions) else {
+        return String::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        if entry.path().is_dir() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    names.sort();
+    names
+        .iter()
+        .map(|name| {
+            format!(
+                "session {name}:\n{}",
+                session_log_tail(&sessions.join(name))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Asserts a session-socket timeout dump: the received lines before the
 /// stderr section, the stderr snapshot section, then the session-log tail
 /// holding a `session_started` line. The three acceptance tests share it.
@@ -2430,6 +2459,30 @@ fn session_log_tail_keeps_only_complete_lines() {
     let tail = session_log_tail(&file);
     assert!(!tail.contains("{\"n\":40"), "{tail}");
     assert!(tail.contains("{\"n\":39}"), "{tail}");
+}
+
+#[test]
+fn session_logs_tail_names_each_session_in_sorted_order() {
+    // `read_dir` order is the filesystem's, so the assertion pins the
+    // sorted output the function promises, not the listing order: the
+    // folders are created out of sorted order on purpose.
+    let sessions = fakes::TempDir::new("diag-tails");
+    for (name, log) in [
+        ("s_b", "{\"b\":0}\n{\"b\":1}\n"),
+        ("s_a", "{\"a\":0}\n{\"a\":1"),
+    ] {
+        let dir = sessions.path().join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("events.jsonl"), log).unwrap();
+    }
+    // A stray non-directory entry is skipped without a panic and does
+    // not appear in the report.
+    fs::write(sessions.path().join("stray"), "x").unwrap();
+    assert_eq!(
+        session_logs_tail(sessions.path()),
+        "session s_a:\n{\"a\":0}\nsession s_b:\n{\"b\":0}\n{\"b\":1}"
+    );
+    assert_eq!(session_logs_tail(&sessions.path().join("missing")), "");
 }
 
 #[test]
