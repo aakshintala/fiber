@@ -338,27 +338,6 @@ EOF
     # counts. Occurrence detection and the per-file comparison live in
     # `cargo xtask stale-wait-ratchet`.
     cargo xtask stale-wait-ratchet <<'EOF'
-crates/main/tests/change_workspace.rs 1
-crates/main/tests/delegates.rs 4
-crates/main/tests/driver_shell_sent.rs 1
-crates/main/tests/extension_ask.rs 1
-crates/main/tests/extension_diagnostics.rs 1
-crates/main/tests/hub_delegate_resume.rs 2
-crates/main/tests/hub_exit_window.rs 1
-crates/main/tests/hub_restart_feed.rs 3
-crates/main/tests/hub_resume.rs 1
-crates/main/tests/hub_service.rs 1
-crates/main/tests/hub_start_overrides.rs 2
-crates/main/tests/hub_start_worktree.rs 2
-crates/main/tests/hub_status.rs 1
-crates/main/tests/mcp_elicit.rs 1
-crates/main/tests/model_switch.rs 1
-crates/main/tests/propose_notes.rs 1
-crates/main/tests/rewind.rs 1
-crates/main/tests/scripted.rs 3
-crates/main/tests/sessions.rs 1
-crates/main/tests/startup_timing.rs 1
-crates/main/tests/tool_timing.rs 1
 EOF
     # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
     # ships shellcheck, so a missing one fails rather than skips.

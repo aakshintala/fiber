@@ -1201,28 +1201,10 @@ pub(crate) fn recv(client: &Socket, what: &str) -> Value {
     }
 }
 
-/// The next socket line that is not an `attention` hub line: a turn can
-/// end between a command and its acknowledgement. Every line takes one
-/// wait started at entry, like [`recv`].
-pub(crate) fn recv_reply(client: &Socket, what: &str) -> Value {
-    let wait = client.deadline.start_wait();
-    let mut got = Vec::new();
-    loop {
-        match client.next_through(&wait, what, &got) {
-            Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {
-                got.push(line);
-            }
-            Some(line) => return line,
-            None => panic!("the socket closed while waiting for {what}"),
-        }
-    }
-}
-
 /// The answer to command `id`: the line whose `payload.command_id` is `id`.
 /// `docs/invocation.md` orders no other line against it, so a feed line may
 /// come first: lines before it stay for the caller's next [`recv`] or
-/// [`until`], in order, except `attention` lines, which [`recv_reply`] drops
-/// too.
+/// [`until`], in order, except `attention` lines, which are dropped too.
 #[track_caller]
 pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
     let wait = client.deadline.start_wait();
