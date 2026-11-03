@@ -326,6 +326,10 @@ fn touched_against(base: &str, profile: &str) -> Result<(Members, Vec<TestRef>),
     Ok((members, touched))
 }
 
+pub(crate) fn stress_config(_filter: &str) -> String {
+    String::new()
+}
+
 pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     let base = crate::flag(args, "--base")?;
     let labels = crate::optional(args, "--labels").unwrap_or_default();
