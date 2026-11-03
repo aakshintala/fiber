@@ -2937,3 +2937,56 @@ fn trim_count_flags_pin_the_blanks() {
         ]
     );
 }
+
+/// The clamp: an end past the total stops at the total, even at the
+/// widest `usize`.
+#[test]
+fn rows_for_clamps_an_end_past_the_total() {
+    let view = layout_fixture_a();
+    let shown = items(&view);
+    let total = shown.len() + view.installs.len();
+    assert_eq!(
+        rows_for(&view, &shown, 0, usize::MAX),
+        rows_for(&view, &shown, 0, total)
+    );
+    assert_eq!(rows_for(&view, &shown, 0, usize::MAX), 16);
+    assert_eq!(
+        rows_for(&view, &shown, 4, usize::MAX),
+        rows_for(&view, &shown, 4, total)
+    );
+}
+
+/// A scope-mode model that is also session-only draws two rows: the
+/// walk counts the parts the display emits, never the third-row flag.
+#[test]
+fn scope_mode_with_session_only_stays_two_rows() {
+    let both = layout_view(
+        vec![SectionSpec {
+            provider: "acme",
+            models: vec![
+                plain("m1"),
+                ModelSpec {
+                    id: "m2",
+                    session_only: true,
+                    mark: Some(true),
+                },
+            ],
+            counts: 0,
+        }],
+        0,
+        vec![],
+        Some(3),
+    );
+    let shown = items(&both);
+    assert_eq!(
+        rows_for(&both, &shown, 1, 2),
+        2,
+        "the second model takes its two rows only"
+    );
+    assert_eq!(rows_for(&both, &shown, 0, 2), 5);
+    assert_eq!(
+        display_rows(&both, false).rows.len(),
+        5,
+        "the heading, two plain rows and two scope rows"
+    );
+}
