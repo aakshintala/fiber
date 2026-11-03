@@ -69,7 +69,7 @@ a 20-thousand-token one fit the same ceiling.
 | Log bytes, 429-call turn | the turn's content plus 2 KiB per tool call | Linux x86_64 | exact | — | — | — | — | — |
 | Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked | 16 ms | 12 ms | 13 ms | 55 % | 9 % |
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked | 7 ms | 8 ms | 11 ms | 18 % | 8 % |
-| Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | — | — |
+| Terminal to its first frame, attaching | 50 ms | Linux x86_64 | picked | 50 ms | 50 ms | 50 ms | 18 % | 21 % |
 | Terminal attaching, to the end of the opening pass | 841 ms (1 MiB); 5,570 ms (10 MiB) | Linux x86_64 | measured | — | — | — | — | — |
 | Terminal attaching, fold per MiB of session log | 138 ms per MiB | Linux x86_64 | measured | — | — | 138 ms | — | 69 % |
 | Terminal, attaching a 10 MiB session | 45,512 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
@@ -158,7 +158,7 @@ plain-number samples of the fast class's stored files
 (`xtask/tests/class_data/9v45-session-list.json`). `scripts/class-data`
 regenerates that file from the `benchmarks-<sha>` artifacts of `main`
 runs; entries whose artifacts have expired, and entries from non-main runs,
-stay in the committed file by hand.
+stay in the committed file by hand. The attaching first-frame row's two tolerance cells are not pinned by a test. They were measured on 2026-11-03 from the stored `main` artifacts of the window since #3572 (2026-10-30 07:47 UTC) up to `715eef36c`, over the 26 9V45 and 51 7763 stored files carrying `terminal_attach_ms`, and #4061 records the run ids and the arithmetic.
 
 The busy-or-resumed ceiling holds on three workloads:
 
