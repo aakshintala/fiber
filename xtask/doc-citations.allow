@@ -1,0 +1,791 @@
+# Code citations still allowed a line number or a missing heading.
+# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.
+crates/bench/examples/bench/attach_tests.rs	1	docs/performance.md:184-185,223-227
+crates/bench/examples/bench/attach_tests.rs	2	docs/performance.md:231-237
+crates/bench/examples/bench/attach_tests.rs	1	docs/performance.md:74,77,227-229
+crates/bench/examples/bench/attach_tests.rs	2	docs/state.md:423-453
+crates/bench/examples/bench/attach_tests.rs	2	docs/state.md:446-448,453
+crates/bench/examples/bench/debug_tests.rs	2	docs/state.md:423-453
+crates/bench/examples/bench/debug_tests.rs	1	docs/state.md:432-435
+crates/cli/src/approve.rs	1	docs/extensions.md`, "Approving outside a session"
+crates/cli/src/debug_writer.rs	1	docs/state.md`, "Diagnostic logs"
+crates/cli/src/extension/approve.rs	1	docs/state.md`, "Extension data"
+crates/cli/src/extension_tests.rs	1	docs/state.md, "Diagnostic logs"
+crates/cli/src/feedback.rs	1	docs/state.md`, "Diagnostic\n/// logs"
+crates/cli/src/login.rs	1	docs/invocation.md`, "Fiber itself"
+crates/cli/src/login_secret_tests.rs	1	docs/invocation.md`, "Fiber\n//! itself"
+crates/cli/src/models.rs	1	docs/errors.md`, "Notices"
+crates/cli/src/models_tests.rs	2	docs/errors.md`, "Notices"
+crates/cli/src/prune_tests.rs	1	docs/invocation.md:1415
+crates/cli/src/prune_tests.rs	1	docs/invocation.md:1418-1420
+crates/cli/src/prune_tests.rs	1	docs/invocation.md:1474-1476
+crates/cli/src/prune_tests.rs	2	docs/invocation.md:1475-1476
+crates/cli/src/prune_tests.rs	1	docs/invocation.md:1479-1480
+crates/cli/src/prune_tests.rs	1	docs/invocation.md:1479-1483
+crates/cli/src/prune_tests.rs	1	docs/invocation.md:1479-1484
+crates/cli/src/prune_tests.rs	1	docs/invocation.md:1480-1483
+crates/cli/src/release_tests.rs	1	docs/state.md, "Diagnostic logs"
+crates/cli/src/sessions_list_tests.rs	5	docs/invocation.md:115
+crates/cli/src/sessions_tests.rs	2	docs/events.md:56-57
+crates/cli/src/sessions_tests.rs	1	docs/invocation.md:1415
+crates/cli/src/sessions_tests.rs	1	docs/invocation.md:1418-1420
+crates/cli/src/sessions_tests.rs	2	docs/invocation.md:1421-1424
+crates/cli/src/sessions_tests.rs	1	docs/invocation.md:1421-1426
+crates/cli/src/sessions_tests.rs	1	docs/invocation.md:1424-1426
+crates/cli/src/setup.rs	1	docs/configuration.md`, "Importing another agent's setup"
+crates/cli/src/setup.rs	1	docs/user/install.md`, "Setup"
+crates/cli/src/setup_tests.rs	1	docs/testing/fakes.md`, "Re-running a test"
+crates/cli/src/setup_tests.rs	1	docs/user/install.md`, "Setup"
+crates/cli/src/stop.rs	1	docs/invocation.md`, "Stopping\n//! everything"
+crates/cli/src/update_tests.rs	1	docs/state.md, "Diagnostic logs"
+crates/config/src/cache.rs	1	docs/state.md`, "Cache"
+crates/config/src/keys_tests.rs	1	docs/model-routing.md:1015-16
+crates/config/src/mcp_tokens.rs	1	docs/state.md`, "Credentials"
+crates/config/src/write/notes.rs	1	docs/architecture.md, "Boundaries between modules"
+crates/config/tests/model_cache.rs	1	docs/state.md`,\n//! "Cache"
+crates/contract/src/diag.rs	1	docs/state.md`,\n/// "Diagnostic logs"
+crates/contract/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
+crates/contract/src/diag_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/contract/src/events/context.rs	1	docs/errors.md`, "Notices"
+crates/contract/src/events_tests.rs	1	docs/events.md:1121
+crates/contract/src/inbox.rs	1	docs/invocation.md`, "Shell"
+crates/doors/src/artifact_tests.rs	5	docs/invocation.md:462
+crates/doors/src/isolation/timing_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/doors/src/notes.rs	1	docs/testing/mutants.md, "Code is written\n/// so a mutant fails fast"
+crates/doors/src/pasted.rs	1	docs/invocation.md`,\n//! "Commands"
+crates/doors/src/prompt_history.rs	1	docs/state.md`, "Prompt history"
+crates/doors/src/session.rs	1	docs/invocation.md`, "Shell"
+crates/doors/src/session.rs	1	docs/state.md`, "Prompt\n    /// history"
+crates/doors/src/session.rs	1	docs/state.md`, "Prompt history"
+crates/doors/src/shell.rs	1	docs/invocation.md`, "Shell"
+crates/doors/src/socket.rs	3	docs/state.md`, "Sockets"
+crates/doors/src/socket_timing_tests.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/doors/tests/socket.rs	5	docs/invocation.md:462
+crates/extensions/src/case/call_tests.rs	1	docs/extensions.md:211
+crates/extensions/src/case/run_tests.rs	3	docs/extensions.md:753-759
+crates/extensions/src/hooks.rs	1	docs/errors.md`, "Notices"
+crates/extensions/src/hooks/before.rs	1	docs/errors.md`, "Notices"
+crates/extensions/src/hooks/before_tests.rs	1	docs/errors.md`,\n/// "Notices"
+crates/extensions/src/hooks/lifecycle.rs	1	docs/errors.md`, "Notices"
+crates/extensions/src/hooks/lifecycle_tests.rs	1	docs/errors.md`,\n/// "Notices"
+crates/extensions/src/hooks/repository_tests.rs	2	docs/invocation.md:1160
+crates/extensions/src/hooks_tests.rs	3	docs/invocation.md:1160
+crates/extensions/src/host.rs	2	docs/extensions.md`, "A host call suspends the\n/// code that made it"
+crates/extensions/src/host/admission.rs	1	docs/state.md`, "Diagnostic logs"
+crates/extensions/src/host/ask.rs	1	docs/extensions.md`, "A host call suspends the code\n/// that made it"
+crates/extensions/src/host/delegate.rs	1	docs/extensions.md`, "A host call suspends the code that made it"
+crates/extensions/src/host/drive.rs	1	docs/extensions.md`, "A host call\n/// suspends the code that made it"
+crates/extensions/src/host/model.rs	1	docs/extensions.md`, "A host call suspends the\n/// code that made it"
+crates/extensions/src/host/tool.rs	1	docs/extensions.md`, "A host call suspends the\n/// code that made it"
+crates/extensions/src/installed.rs	1	docs/state.md`, "Extension\n/// data"
+crates/extensions/src/manage.rs	1	docs/extensions.md`,\n/// "Pinning"
+crates/extensions/src/manage.rs	1	docs/extensions.md`, "Updating"
+crates/extensions/src/prepare_tests.rs	5	docs/state.md, "Diagnostic logs"
+crates/extensions/src/process_tests.rs	1	docs/extensions.md:209
+crates/extensions/src/process_tests.rs	1	docs/extensions.md:211
+crates/extensions/src/process_tests.rs	6	docs/extensions.md:222
+crates/extensions/src/process_tests.rs	1	docs/extensions.md:31, 354
+crates/extensions/src/process_tests.rs	3	docs/invocation.md:368
+crates/extensions/src/process_tests.rs	2	docs/state.md, "Diagnostic logs"
+crates/extensions/src/providers.rs	1	docs/errors.md`,\n        // "Notices"
+crates/extensions/src/providers.rs	1	docs/model-routing.md`, "Model lists"
+crates/extensions/src/release_tests.rs	4	docs/state.md, "Diagnostic logs"
+crates/extensions/src/repository/declared.rs	1	docs/extensions.md`, "Pinning"
+crates/extensions/src/repository/hooks.rs	1	docs/extensions.md`, "Pinning"
+crates/extensions/src/repository/project.rs	1	docs/errors.md`, "Notices"
+crates/extensions/src/repository/servers.rs	1	docs/extensions.md`,\n//! "Pinning"
+crates/extensions/src/repository/store.rs	1	docs/extensions.md`, "Pinning"
+crates/extensions/src/repository/store_tests.rs	1	docs/state.md, "Diagnostic logs"
+crates/extensions/src/resolve_tests.rs	1	docs/extensions.md:1782, 1797, 1805-1807
+crates/extensions/src/resolve_tests.rs	1	docs/extensions.md:1782, 1805-1807
+crates/extensions/src/resolve_tests.rs	1	docs/extensions.md:1784-1785, 1805-1807
+crates/extensions/src/resolve_tests.rs	2	docs/extensions.md:1797, 1805-1807
+crates/extensions/src/resolve_tests.rs	3	docs/extensions.md:1805-1807
+crates/extensions/src/timing_tests.rs	8	docs/state.md, "Diagnostic logs"
+crates/extensions/src/timing_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/extensions/src/tui_vm_tests.rs	1	docs/extensions.md:1507-1509
+crates/extensions/src/tui_vm_tests.rs	13	docs/extensions.md:1526-1530
+crates/extensions/src/tui_vm_tests.rs	1	docs/tui.md:3060-3062
+crates/extensions/src/update_tests.rs	1	docs/state.md, "Diagnostic logs"
+crates/extensions/tests/lazy_commands.rs	2	docs/extensions.md:1356-57
+crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:1360-61
+crates/extensions/tests/lazy_commands.rs	3	docs/extensions.md:1375-79
+crates/extensions/tests/lazy_commands.rs	3	docs/extensions.md:1377-80
+crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:1379
+crates/extensions/tests/lazy_commands.rs	2	docs/extensions.md:1381-83
+crates/extensions/tests/lazy_commands.rs	4	docs/extensions.md:1520-22
+crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:313-16
+crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:70-71
+crates/extensions/tests/lua_provider.rs	1	docs/extensions.md`,\n/// "A host call suspends the code that made it"
+crates/extensions/tests/pinned_copy.rs	1	docs/extensions.md`, "Pinning"
+crates/extensions/tests/pinned_depends.rs	1	docs/extensions.md`, "Pinning"
+crates/extensions/tests/process_activation.rs	1	docs/extensions.md:246
+crates/extensions/tests/provider_diagnostics.rs	9	docs/state.md, "Diagnostic logs"
+crates/extensions/tests/provider_diagnostics.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/extensions/tests/release.rs	1	docs/state.md, "Diagnostic logs"
+crates/fakes/src/hold.rs	1	docs/testing.md:297-299
+crates/fakes/src/hold_tests.rs	1	docs/testing.md:297-299
+crates/fakes/src/jig_start.rs	1	docs/testing.md`:289
+crates/hub/src/closed_tests.rs	1	docs/invocation.md:1147
+crates/hub/src/closed_tests.rs	1	docs/invocation.md:1148
+crates/hub/src/closed_tests.rs	1	docs/invocation.md:1196
+crates/hub/src/closed_tests.rs	1	docs/invocation.md:467
+crates/hub/src/connection.rs	1	docs/invocation.md`, "`rewind`\n    /// starts a new session process"
+crates/hub/src/devices.rs	1	docs/state.md`, "Paired devices"
+crates/hub/src/diag.rs	1	docs/state.md`, "Bounds"
+crates/hub/src/diag.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/hub/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/hub/src/environment/capture.rs	1	docs/invocation.md`, "The\n/// capture has 10 seconds"
+crates/hub/src/environment/capture_tests.rs	1	docs/testing.md`, "A test on a large value"
+crates/hub/src/error.rs	1	docs/state.md`, "Sockets"
+crates/hub/src/lib.rs	1	docs/invocation.md`, "`rewind` starts a new session\n    /// process"
+crates/hub/src/lib_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/hub/src/listen.rs	2	docs/state.md`, "Sockets"
+crates/hub/src/listen_tests.rs	1	docs/state.md`, "Sockets"
+crates/hub/src/port_pairing_tests.rs	1	docs/events.md:1388
+crates/hub/src/port_tests.rs	1	docs/events.md:1389
+crates/hub/src/port_tests.rs	1	docs/invocation.md`, "The terminal and the\n                // hub"
+crates/hub/src/prompt_history.rs	1	docs/state.md`, "Prompt\n//! history"
+crates/hub/src/recent.rs	1	docs/state.md`, "Recently\n//! exited sessions"
+crates/hub/src/relay/ack.rs	1	docs/events.md`:1308
+crates/hub/src/relay/ack.rs	1	docs/testing.md`, "a test of how much work something does counts the\n/// work"
+crates/hub/src/relay_tests.rs	1	docs/code-quality/lints.md:20-22
+crates/hub/src/relay_tests.rs	11	docs/invocation.md:1106
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1134-1161
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1136-1161
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1141
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1141-1142
+crates/hub/src/relay_tests.rs	3	docs/invocation.md:1142
+crates/hub/src/relay_tests.rs	5	docs/invocation.md:1145
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1147
+crates/hub/src/relay_tests.rs	4	docs/invocation.md:1148
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1149
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1150
+crates/hub/src/relay_tests.rs	2	docs/invocation.md:1151
+crates/hub/src/relay_tests.rs	4	docs/invocation.md:1152
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1153
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1154
+crates/hub/src/relay_tests.rs	2	docs/invocation.md:1155
+crates/hub/src/relay_tests.rs	3	docs/invocation.md:1156
+crates/hub/src/relay_tests.rs	5	docs/invocation.md:1157
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1158
+crates/hub/src/relay_tests.rs	2	docs/invocation.md:1159
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1160
+crates/hub/src/relay_tests.rs	2	docs/invocation.md:1161
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1176
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:1177
+crates/hub/src/relay_tests.rs	2	docs/invocation.md:1179
+crates/hub/src/relay_tests.rs	2	docs/invocation.md:1183
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:467
+crates/hub/src/relay_tests.rs	1	docs/invocation.md:568
+crates/hub/src/resume_tests.rs	2	docs/invocation.md:1148
+crates/hub/src/resume_tests.rs	1	docs/invocation.md:1157
+crates/hub/src/resume_tests.rs	1	docs/invocation.md:368
+crates/hub/src/resume_tests.rs	1	docs/invocation.md:374-376
+crates/hub/src/resume_tests.rs	2	docs/invocation.md:473
+crates/hub/src/resume_tests.rs	1	docs/invocation.md:710
+crates/hub/src/retire.rs	1	docs/invocation.md:1107-1112
+crates/hub/src/rewind.rs	1	docs/invocation.md`, "`rewind` starts a new session process"
+crates/hub/src/rewind_tests.rs	1	docs/invocation.md:1106
+crates/hub/src/rewind_tests.rs	1	docs/invocation.md:1154
+crates/hub/src/rewind_tests.rs	1	docs/invocation.md:1157
+crates/hub/src/rewind_tests.rs	6	docs/invocation.md:1179
+crates/hub/src/rewind_tests.rs	1	docs/invocation.md`, "Change\n        // workspace"
+crates/hub/src/rewind_tests.rs	9	docs/invocation.md`, "Change workspace"
+crates/hub/src/rewind_tests.rs	1	docs/testing.md`, "Races are forced"
+crates/hub/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/log/src/artifact.rs	1	docs/code-quality.md`,\n//! "When more than one mechanism can enforce a rule, the strongest wins"
+crates/log/src/diag.rs	1	docs/state.md:306
+crates/log/src/diag.rs	1	docs/state.md`, "Bounds"
+crates/log/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
+crates/log/src/diag/memory.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/log/src/diag/memory_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/log/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/log/src/export.rs	1	docs/invocation.md`, "Exporting a session"
+crates/log/src/resolve.rs	1	docs/events.md`,\n/// "A directory is a session ..."
+crates/log/src/search.rs	1	docs/state.md`, "A slug\n    /// can collide"
+crates/log/src/write.rs	2	docs/events.md`, "Conventions"
+crates/log/src/write.rs	1	docs/testing.md`, "a test of how much work something does counts the\n/// work"
+crates/loop/src/before_message.rs	2	docs/state.md`, "Prompt history"
+crates/loop/src/before_message_tests.rs	2	docs/errors.md`, "Notices"
+crates/loop/src/before_tool_tests.rs	1	docs/errors.md`,\n    // "Notices"
+crates/loop/src/calls.rs	2	docs/extensions.md`, "after_tool"
+crates/loop/src/calls.rs	1	docs/tui.md`, "/rules"
+crates/loop/src/calls_tests.rs	1	docs/events.md, "tool_call_completed"
+crates/loop/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
+crates/loop/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/loop/src/handoff.rs	1	docs/errors.md`, "Notices"
+crates/loop/src/hooks.rs	1	docs/events.md`, "Conventions"
+crates/loop/src/hooks_tests.rs	2	docs/errors.md`, "Notices"
+crates/loop/src/lib.rs	1	docs/state.md`, "Prompt history"
+crates/loop/src/lifecycle.rs	1	docs/invocation.md`, "What is written"
+crates/loop/src/lifecycle_tests.rs	6	docs/errors.md`, "Notices"
+crates/loop/src/media.rs	1	docs/performance.md`, "Memory follows the context window"
+crates/loop/src/offer.rs	2	docs/extensions.md`, "Offering"
+crates/loop/src/reload_tests.rs	1	docs/errors.md`, "Notices"
+crates/loop/src/resume.rs	1	docs/extensions.md`, "`before_tool`"
+crates/loop/src/status.rs	1	docs/prompt-cache.md`, "Reload"
+crates/loop/src/status_tests.rs	11	docs/events.md, "session_status"
+crates/loop/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/loop/src/tool_timing_tests.rs	1	docs/permissions.md`, "What is recorded"
+crates/loop/src/tool_timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/loop/src/turn.rs	1	docs/errors.md`, "Notices"
+crates/loop/tests/approved_code.rs	1	docs/extensions.md`, "Offering"
+crates/loop/tests/change_workspace.rs	1	docs/events.md:1606
+crates/loop/tests/changes.rs	1	docs/errors.md`,\n    // "Notices"
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/configuration.md:79-81
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	102	docs/invocation.md:1159-1160
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:109-138
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:187-190
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:536-539
+crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	30	docs/testing.md:46-48
+crates/loop/tests/inner_calls.rs	1	docs/extensions.md`, "When an extension calls a tool"
+crates/loop/tests/invariants.rs	1	docs/invocation.md`, "A prompt arriving\n    /// mid-turn is rejected `busy`"
+crates/loop/tests/skills_resent.rs	1	docs/errors.md`, "Notices"
+crates/loop/tests/status.rs	4	docs/events.md, "session_status"
+crates/main/src/cli.rs	1	docs/invocation.md`, "Sessions"
+crates/main/src/cli.rs	1	docs/invocation.md`, "`rewind`\n    /// starts a new session process"
+crates/main/src/configure/remote_tests.rs	2	docs/invocation.md:1160
+crates/main/src/continue_session.rs	1	docs/invocation.md`, "`start`\n//! `continues`"
+crates/main/src/delegates.rs	1	docs/architecture.md`, "Lock order"
+crates/main/src/main.rs	2	docs/state.md`, "Diagnostic logs"
+crates/main/src/parts.rs	1	docs/errors.md`, "Sandbox"
+crates/main/src/rewind.rs	1	docs/invocation.md`, "Change\n//! workspace"
+crates/main/src/rewind.rs	1	docs/invocation.md`, "Change workspace"
+crates/main/src/rewind.rs	1	docs/invocation.md`, "`rewind` starts a new session process"
+crates/main/src/session_command.rs	1	docs/state.md`, "Recently exited sessions"
+crates/main/src/startup_log.rs	1	docs/state.md`, "Diagnostic\n/// logs"
+crates/main/src/startup_log.rs	1	docs/state.md`, "Diagnostic logs"
+crates/main/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/main/src/tui_extensions_tests.rs	1	docs/extensions.md:1526
+crates/main/src/tui_extensions_tests.rs	1	docs/extensions.md:1529-1530
+crates/main/src/tui_extensions_tests.rs	3	docs/tui.md:1233
+crates/main/src/tui_extensions_tests.rs	7	docs/tui.md:2678
+crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:2754
+crates/main/src/tui_extensions_tests.rs	3	docs/tui.md:2757
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2877-2878,2754
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2891
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2899-2901,2905-2906
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2905-2906,2928
+crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:2919,2923-2924,2928,2754
+crates/main/src/tui_extensions_tests.rs	6	docs/tui.md:2923
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2934
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2940
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2946-2947
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2953-2956
+crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3024-3027
+crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3027-3029
+crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3044-3049
+crates/main/src/tui_extensions_tests.rs	3	docs/tui.md:3049
+crates/main/src/tui_extensions_tests.rs	3	docs/tui.md:3050-3052
+crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3059-3062
+crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3060-3062
+crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:3063-3064
+crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3063-3064, 3069
+crates/main/src/tui_extensions_tests.rs	4	docs/tui.md:3121
+crates/main/tests/alloc_stats.rs	2	docs/state.md:306
+crates/main/tests/alloc_stats.rs	1	docs/state.md:345-355
+crates/main/tests/alloc_stats.rs	1	docs/state.md`, "Diagnostic logs"
+crates/main/tests/approve.rs	1	docs/extensions.md`, "Approving\n//! outside a session"
+crates/main/tests/ask.rs	1	docs/errors.md`, "Notices"
+crates/main/tests/at_path_search.rs	1	docs/tui.md`,\n//! "File search"
+crates/main/tests/call_view.rs	1	docs/tui.md:1814
+crates/main/tests/call_view.rs	1	docs/tui.md:576
+crates/main/tests/call_view.rs	1	docs/tui.md:881-884
+crates/main/tests/change_workspace.rs	1	docs/invocation.md,\n    // "Deleting a session"
+crates/main/tests/change_workspace.rs	1	docs/invocation.md, "Deleting a session"
+crates/main/tests/change_workspace.rs	2	docs/invocation.md`, "Change workspace"
+crates/main/tests/changed_files_editor.rs	1	docs/testing/screens.md`, "A pointer event…"
+crates/main/tests/changed_files_remote.rs	1	docs/testing/screens.md`, "A pointer event…"
+crates/main/tests/changed_files_remote.rs	1	docs/tui.md`, "Changed files"
+crates/main/tests/clear.rs	1	docs/tui.md:1932
+crates/main/tests/clear.rs	1	docs/tui.md:1936
+crates/main/tests/clear.rs	1	docs/tui.md:1943
+crates/main/tests/clear.rs	2	docs/tui.md:1954
+crates/main/tests/continue_session.rs	1	docs/invocation.md`, "`start` `continues`"
+crates/main/tests/delegates.rs	1	docs/delegates.md:123
+crates/main/tests/delegates.rs	2	docs/delegates.md:168-171
+crates/main/tests/delegates.rs	2	docs/events.md, "extension_ui"
+crates/main/tests/delegates.rs	3	docs/events.md, "fiber_started"
+crates/main/tests/delegates.rs	3	docs/events.md, "usage_recorded"
+crates/main/tests/delegates.rs	2	docs/events.md:1319
+crates/main/tests/delegates.rs	2	docs/events.md:1333
+crates/main/tests/delegates.rs	3	docs/events.md:1354
+crates/main/tests/delegates.rs	2	docs/events.md:285-286
+crates/main/tests/delegates.rs	2	docs/events.md:296
+crates/main/tests/delegates.rs	2	docs/events.md:339
+crates/main/tests/delegates.rs	1	docs/testing.md:95
+crates/main/tests/delegates.rs	1	docs/tui.md, "Every\n    // delegate"
+crates/main/tests/delete.rs	1	docs/testing.md:95
+crates/main/tests/diagnostics.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/diagnostics.rs	3	docs/state.md`, "Diagnostic logs"
+crates/main/tests/extension_case.rs	1	docs/extensions.md:753-759
+crates/main/tests/extension_case.rs	1	docs/testing.md:110-16
+crates/main/tests/extension_commands.rs	1	docs/events.md:116
+crates/main/tests/extension_diagnostics.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/extension_diagnostics.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/extension_export.rs	1	docs/events.md:116
+crates/main/tests/extension_export.rs	2	docs/events.md:1367
+crates/main/tests/extension_export.rs	1	docs/events.md:360
+crates/main/tests/extension_export.rs	1	docs/events.md:389
+crates/main/tests/extension_export.rs	1	docs/events.md:629-635
+crates/main/tests/extension_export.rs	1	docs/invocation.md:452
+crates/main/tests/extension_export.rs	3	docs/testing.md:74-75
+crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:1356-57
+crates/main/tests/extension_lazy_commands.rs	2	docs/extensions.md:1375-79
+crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:1377-80
+crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:1379
+crates/main/tests/extension_lazy_commands.rs	2	docs/extensions.md:1381-83
+crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:313-16
+crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:70-71
+crates/main/tests/feed.rs	1	docs/state.md`, "Recently exited\n//! sessions"
+crates/main/tests/hooks.rs	1	docs/errors.md`, "Notices"
+crates/main/tests/hooks_entries.rs	2	docs/errors.md:85-91
+crates/main/tests/hooks_entries.rs	1	docs/errors.md`, "Notices"
+crates/main/tests/hooks_entries.rs	1	docs/events.md:1154-1155
+crates/main/tests/hooks_entries.rs	1	docs/events.md:116
+crates/main/tests/hooks_entries.rs	1	docs/events.md:1163-1168
+crates/main/tests/hooks_entries.rs	1	docs/events.md:582-586
+crates/main/tests/hooks_entries.rs	1	docs/testing.md:95
+crates/main/tests/hub_prune.rs	1	docs/errors.md:95
+crates/main/tests/hub_prune.rs	3	docs/invocation.md:1268-1270
+crates/main/tests/hub_prune.rs	1	docs/invocation.md:1418-1420
+crates/main/tests/hub_prune.rs	1	docs/invocation.md:1421-1426
+crates/main/tests/hub_prune.rs	1	docs/invocation.md:1474-1476
+crates/main/tests/hub_prune.rs	1	docs/invocation.md:1475-1476
+crates/main/tests/hub_prune.rs	1	docs/invocation.md:1479-1483
+crates/main/tests/hub_prune.rs	1	docs/invocation.md:1483-1484
+crates/main/tests/hub_prune.rs	1	docs/invocation.md:1484-1485
+crates/main/tests/hub_remote_config.rs	2	docs/invocation.md:1160
+crates/main/tests/hub_start_overrides.rs	1	docs/events.md:285-286
+crates/main/tests/hub_start_overrides.rs	1	docs/events.md:296
+crates/main/tests/hub_start_overrides.rs	1	docs/events.md:339
+crates/main/tests/hub_start_overrides.rs	1	docs/testing.md:109-111
+crates/main/tests/hub_start_overrides.rs	1	docs/testing.md:95
+crates/main/tests/hub_start_worktree.rs	1	docs/events.md:285-286
+crates/main/tests/hub_start_worktree.rs	1	docs/events.md:296
+crates/main/tests/hub_start_worktree.rs	1	docs/events.md:339
+crates/main/tests/hub_start_worktree.rs	1	docs/testing.md:109-111
+crates/main/tests/hub_start_worktree.rs	1	docs/testing.md:95
+crates/main/tests/hub_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/hub_timing.rs	1	docs/testing.md:95
+crates/main/tests/jobs_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/log_search_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/loop_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/main_journeys.rs	1	docs/errors.md`,\n            // "Notices"
+crates/main/tests/main_journeys.rs	1	docs/errors.md`, "Notices"
+crates/main/tests/main_journeys.rs	1	docs/extensions.md:1797, 1805-1807
+crates/main/tests/main_journeys.rs	1	docs/extensions.md:1798-1799
+crates/main/tests/main_journeys.rs	1	docs/releasing.md`, "Install\n/// steps"
+crates/main/tests/main_journeys.rs	1	docs/tui.md:710-714
+crates/main/tests/mcp_login.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/mcp_remote.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/mcp_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/model_picker_keys.rs	2	docs/state.md, "Diagnostic logs"
+crates/main/tests/model_switch.rs	16	docs/events.md, "clients"
+crates/main/tests/pinned_call_row.rs	1	docs/tui.md`, "Pinned\n//! call"
+crates/main/tests/process_extensions.rs	2	docs/extensions.md:209
+crates/main/tests/process_extensions.rs	2	docs/extensions.md:211
+crates/main/tests/process_extensions.rs	2	docs/extensions.md:222
+crates/main/tests/process_extensions.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/provider_diagnostics.rs	2	docs/state.md, "Diagnostic logs"
+crates/main/tests/provider_diagnostics.rs	1	docs/state.md`, "Diagnostic logs"
+crates/main/tests/quota_fetch_session.rs	1	docs/tui.md`,\n/// "The quota view"
+crates/main/tests/rail_focus.rs	1	docs/tui.md:254-255
+crates/main/tests/repository_hooks.rs	1	docs/extensions.md`, "Pinning"
+crates/main/tests/repository_servers.rs	1	docs/testing.md:95
+crates/main/tests/resume.rs	1	docs/events.md`,\n    // "Only the window a consumer actually needs is parsed"
+crates/main/tests/rewind.rs	1	docs/invocation.md`, "`rewind` starts a new session process"
+crates/main/tests/rewind.rs	1	docs/invocation.md`, "`sessions [--all]`"
+crates/main/tests/sandbox.rs	1	docs/events.md:683
+crates/main/tests/sandbox.rs	1	docs/events.md:697-701
+crates/main/tests/sandbox.rs	1	docs/events.md`, "Ephemeral"
+crates/main/tests/sandbox.rs	2	docs/sandbox.md:102-106
+crates/main/tests/sandbox.rs	2	docs/sandbox.md:64-73
+crates/main/tests/session_command.rs	2	docs/events.md:1333
+crates/main/tests/session_command.rs	1	docs/events.md:285-286
+crates/main/tests/session_command.rs	1	docs/events.md:296
+crates/main/tests/session_command.rs	1	docs/events.md:339
+crates/main/tests/session_command.rs	1	docs/testing.md:95
+crates/main/tests/shutdown.rs	1	docs/invocation.md`,\n    // "Three signals, one path"
+crates/main/tests/shutdown.rs	1	docs/invocation.md`, "What\n    // happens, all at once"
+crates/main/tests/shutdown.rs	1	docs/invocation.md`, "What\n    // is written"
+crates/main/tests/shutdown.rs	3	docs/invocation.md`, "What is written"
+crates/main/tests/slash_aliases.rs	1	docs/tools.md:562-568,575-577
+crates/main/tests/slash_aliases.rs	1	docs/tui.md:1970,1997
+crates/main/tests/slash_aliases.rs	1	docs/tui.md:1974,1997
+crates/main/tests/slash_aliases.rs	1	docs/tui.md:1978,1993
+crates/main/tests/slash_aliases.rs	1	docs/tui.md:1985,1993
+crates/main/tests/slash_aliases.rs	3	docs/tui.md:1990-1993,1997
+crates/main/tests/slash_aliases.rs	1	docs/tui.md:2130-2132
+crates/main/tests/slash_aliases.rs	1	docs/tui.md:604
+crates/main/tests/socket.rs	1	docs/events.md:1174-1175
+crates/main/tests/socket.rs	1	docs/events.md:285-286
+crates/main/tests/socket.rs	1	docs/events.md:534-535
+crates/main/tests/socket.rs	1	docs/events.md:549-551
+crates/main/tests/socket.rs	2	docs/events.md:583-586
+crates/main/tests/socket.rs	1	docs/events.md:984-985
+crates/main/tests/socket.rs	1	docs/events.md`,\n    // "`usage_recorded`): the turn makes two model calls, the held call's\n    // reply and the closing text reply, as the two requests asserted below\n    // against the provider server show.\n    assert_eq!(\n        lines\n            .iter()\n            .filter(|line| line["
+crates/main/tests/socket.rs	3	docs/events.md`, "`steering_queue"
+crates/main/tests/socket.rs	1	docs/loop.md:136-137
+crates/main/tests/socket.rs	1	docs/loop.md:22-23
+crates/main/tests/socket.rs	1	docs/loop.md:24-26
+crates/main/tests/socket.rs	1	docs/loop.md:33
+crates/main/tests/socket.rs	1	docs/loop.md:36-37
+crates/main/tests/socket.rs	1	docs/loop.md:43-51
+crates/main/tests/socket.rs	1	docs/permissions.md:638-640
+crates/main/tests/socket.rs	1	docs/testing.md:109-111
+crates/main/tests/socket.rs	1	docs/testing.md:95
+crates/main/tests/startup_log.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/startup_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/main/tests/stop.rs	2	docs/state.md`, "Sockets"
+crates/main/tests/stream_closed_notice.rs	1	docs/events.md`, "session_status"
+crates/main/tests/support/mod.rs	1	docs/state.md`,\n/// "Sockets"
+crates/main/tests/support/pty.rs	1	docs/testing.md`,\n        // "Races are forced, not waited for"
+crates/main/tests/swapped_panels_look.rs	1	docs/tui.md:905-908
+crates/main/tests/swapped_panels_look.rs	1	docs/tui.md:909-910
+crates/main/tests/terminal.rs	1	docs/configuration.md:119
+crates/main/tests/terminal.rs	3	docs/invocation.md:115
+crates/main/tests/terminal.rs	2	docs/invocation.md:1268-1270
+crates/main/tests/terminal.rs	1	docs/invocation.md:291
+crates/main/tests/terminal.rs	1	docs/invocation.md`, "Three signals, one\n/// path"
+crates/main/tests/terminal_overrides.rs	1	docs/invocation.md`, "Sessions"
+crates/main/tests/tool_search.rs	1	docs/testing.md:95
+crates/main/tests/tool_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/tools.rs	1	docs/state.md, "Diagnostic logs"
+crates/main/tests/tui_extensions.rs	1	docs/tui.md:1233
+crates/main/tests/tui_extensions.rs	1	docs/tui.md:2678
+crates/main/tests/tui_extensions.rs	2	docs/tui.md:2734
+crates/main/tests/tui_extensions.rs	2	docs/tui.md:2740
+crates/main/tests/tui_extensions.rs	1	docs/tui.md:2757
+crates/main/tests/tui_extensions.rs	1	docs/tui.md:3007
+crates/main/tests/tui_timing_tests.rs	1	docs/state.md:428-429
+crates/main/tests/tui_timing_tests.rs	1	docs/state.md:430-432
+crates/main/tests/tui_timing_tests.rs	1	docs/state.md:432-435
+crates/main/tests/tui_timing_tests.rs	1	docs/state.md:435-440
+crates/main/tests/tui_timing_tests.rs	1	docs/state.md:438-440
+crates/main/tests/tui_timing_tests.rs	2	docs/state.md`, "Diagnostic\n/// logs"
+crates/main/tests/tui_timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/main/tests/update.rs	1	docs/extensions.md:1797, 1805-1807
+crates/main/tests/update.rs	2	docs/extensions.md:1798-1799
+crates/main/tests/update.rs	1	docs/extensions.md:1805-1807
+crates/main/tests/watchers.rs	3	docs/extensions.md:1651-1657
+crates/main/tests/working_line_look.rs	1	docs/tui.md:1296-1306
+crates/main/tests/working_line_look.rs	2	docs/tui.md:1299-1300
+crates/main/tests/working_line_look.rs	1	docs/tui.md:3048
+crates/main/tests/worktree_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/mcp/src/cache.rs	1	docs/state.md`, "Cache"
+crates/mcp/src/http_tests.rs	7	docs/state.md, "Diagnostic logs"
+crates/mcp/src/login_tests.rs	1	docs/state.md, "Diagnostic logs"
+crates/mcp/src/start_tests.rs	1	docs/mcp.md:82
+crates/mcp/src/sync/tests.rs	1	docs/mcp.md`, "Each death\n    // is recorded as `mcp_server_failed`"
+crates/mcp/src/timing_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
+crates/net/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
+crates/provider/src/anthropic_messages.rs	1	research/provider-harvest/anthropic-messages.md`, "Prompt-cache\n/// markers"
+crates/provider/src/anthropic_messages.rs	1	research/provider-harvest/anthropic-messages.md`, "TTL values"
+crates/provider/src/call_tests.rs	2	docs/state.md, "Diagnostic logs"
+crates/tools/src/error/web_fetch.rs	1	docs/errors.md`, "web_fetch"
+crates/tools/src/shell/command.rs	1	docs/code-quality.md, "Unsafe"
+crates/tools/src/shell/sandbox/sandbox_tests.rs	4	docs/sandbox.md:94-100
+crates/tools/src/shell/sandbox/sandbox_tests.rs	1	docs/testing.md`, "No time-based\n    // assertions"
+crates/tools/src/shell/sandbox/sandbox_tests.rs	1	docs/testing.md`, "No time-based assertions"
+crates/tools/src/web_fetch_tests.rs	9	docs/state.md, "Diagnostic logs"
+crates/tools/tests/shell.rs	1	docs/events.md:683
+crates/tools/tests/shell.rs	1	docs/events.md:697-701
+crates/tools/tests/shell.rs	1	docs/sandbox.md:100-102
+crates/tools/tests/shell.rs	2	docs/sandbox.md:64-73
+crates/tui/src/app.rs	1	docs/invocation.md`, "Sessions"
+crates/tui/src/app.rs	1	docs/testing.md`, "a test of how much work something does counts\n/// the work"
+crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1974,1997
+crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1991,1997
+crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1993,1997
+crates/tui/src/app/aliases_tests.rs	7	docs/tui.md:1997
+crates/tui/src/app/aliases_tests.rs	7	docs/tui.md:2006
+crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:604
+crates/tui/src/app/call_view_tests.rs	2	docs/tui.md:576
+crates/tui/src/app/clear_tests.rs	12	docs/tui.md:2148
+crates/tui/src/app/clear_tests.rs	2	docs/tui.md:268
+crates/tui/src/app/commands_tests.rs	1	docs/tui.md:268
+crates/tui/src/app/completion_tests.rs	1	docs/tui.md:1971
+crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is\n//! reached on its own connection"
+crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is reached on\n    /// its own connection"
+crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is reached on its own\n            // connection"
+crates/tui/src/app/exit_alias_tests.rs	1	docs/tui.md:1956,1965
+crates/tui/src/app/exit_alias_tests.rs	2	docs/tui.md:1956,1965,1974
+crates/tui/src/app/home.rs	2	docs/invocation.md`, "Sessions"
+crates/tui/src/app/home/open_at_tests.rs	1	docs/invocation.md:1044
+crates/tui/src/app/home/open_at_tests.rs	7	docs/tui.md:268
+crates/tui/src/app/home/scoped_page_tests.rs	8	docs/invocation.md:1102
+crates/tui/src/app/home/scoped_page_tests.rs	1	docs/tui.md:233-234
+crates/tui/src/app/home/scoped_page_tests.rs	2	docs/tui.md:254-255
+crates/tui/src/app/home/scoped_page_tests.rs	11	docs/tui.md:268
+crates/tui/src/app/home/workspace_tests.rs	1	docs/tui.md`, "The workspace picker"
+crates/tui/src/app/home_tests.rs	29	docs/invocation.md:1102
+crates/tui/src/app/home_tests.rs	8	docs/tui.md:233-234
+crates/tui/src/app/home_tests.rs	1	docs/tui.md:242
+crates/tui/src/app/home_tests.rs	13	docs/tui.md:254-255
+crates/tui/src/app/home_tests.rs	52	docs/tui.md:268
+crates/tui/src/app/home_tests.rs	1	docs/tui.md`, "Key map"
+crates/tui/src/app/hub_version_tests.rs	1	docs/testing.md`, "A test asserts an order\n/// or a count only where a doc promises it"
+crates/tui/src/app/items/output_tests.rs	1	docs/events.md:697-701
+crates/tui/src/app/items_tests.rs	1	docs/events.md:699-701
+crates/tui/src/app/items_tests.rs	1	docs/tui.md:2734
+crates/tui/src/app/items_tests.rs	10	docs/tui.md:576
+crates/tui/src/app/keyboard_screen_tests.rs	1	docs/tui.md:589
+crates/tui/src/app/keyboard_screen_tests.rs	1	docs/tui.md`, "Key map"
+crates/tui/src/app/keyboard_tests.rs	16	docs/tui.md:2953-2966
+crates/tui/src/app/keyboard_tests.rs	2	docs/tui.md:3050-3053
+crates/tui/src/app/links_tests.rs	1	docs/tui.md:2100
+crates/tui/src/app/model_picker_tests.rs	1	docs/errors.md`, "Notices"
+crates/tui/src/app/model_picker_tests.rs	4	docs/tui.md:576
+crates/tui/src/app/moving_tests.rs	1	docs/tui.md:1280
+crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3016
+crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3020
+crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3023
+crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3025
+crates/tui/src/app/offer_tests.rs	5	docs/tui.md:576
+crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2430-2431
+crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2430-2436
+crates/tui/src/app/overlay_tests.rs	2	docs/tui.md:2431-2434
+crates/tui/src/app/overlay_tests.rs	7	docs/tui.md:2432-2434
+crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2439-2440
+crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2440-2442
+crates/tui/src/app/overlay_tests.rs	9	docs/tui.md:2445-2446
+crates/tui/src/app/overlay_tests.rs	3	docs/tui.md:2446-2448
+crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2449-2450
+crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2458-2459
+crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2470-2473
+crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2474-2475
+crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2484-2489
+crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2484-2493
+crates/tui/src/app/overlay_tests.rs	3	docs/tui.md:2492-2493
+crates/tui/src/app/panel/quota_tests.rs	1	docs/tui.md:268
+crates/tui/src/app/rail_tests.rs	1	docs/testing.md`, "A test asserts an order or a count only where\n    // a doc promises it"
+crates/tui/src/app/rail_tests.rs	2	docs/tui.md:1936
+crates/tui/src/app/rail_tests.rs	1	docs/tui.md:251
+crates/tui/src/app/rail_tests.rs	2	docs/tui.md:362
+crates/tui/src/app/reconnect_tests.rs	2	docs/tui.md:268
+crates/tui/src/app/results_tests.rs	1	docs/tui.md:576
+crates/tui/src/app/rewind_tests.rs	2	docs/tui.md:576
+crates/tui/src/app/screen_tests.rs	2	docs/tui.md`,\n    // "Pinned call"
+crates/tui/src/app/screen_tests.rs	1	docs/tui.md`, "Pinned call"
+crates/tui/src/app/session_views_tests.rs	4	docs/tui.md:830
+crates/tui/src/app/session_views_tests.rs	2	docs/tui.md`, "Changed files"
+crates/tui/src/app_focus.rs	1	docs/errors.md`, "Notices"
+crates/tui/src/app_focus_tests.rs	1	docs/errors.md`, "Notices"
+crates/tui/src/app_tests.rs	2	docs/tui.md:1296-1306
+crates/tui/src/app_tests.rs	1	docs/tui.md:444-447
+crates/tui/src/changed_files_view_tests.rs	1	docs/tui.md:830
+crates/tui/src/event_loop.rs	1	docs/invocation.md`, "Three signals, one path"
+crates/tui/src/event_loop/attach_tests.rs	1	docs/state.md`,\n/// "Diagnostic logs"
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2426-2440
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2428-2430
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2430-2431
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2431-2434
+crates/tui/src/event_loop/attach_tests.rs	3	docs/tui.md:2432-2434
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2438
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2443-2445
+crates/tui/src/event_loop/attach_tests.rs	4	docs/tui.md:2445-2446
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2446-2448
+crates/tui/src/event_loop/attach_tests.rs	2	docs/tui.md:2449-2450
+crates/tui/src/event_loop/attach_tests.rs	2	docs/tui.md:2451
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2484-2489
+crates/tui/src/event_loop/attach_tests.rs	2	docs/tui.md:2484-2493
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2492-2493
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2659
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2734
+crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2757
+crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2525-2528
+crates/tui/src/event_loop/kitty_writer_tests.rs	13	docs/tui.md:2529
+crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2529-2530
+crates/tui/src/event_loop/kitty_writer_tests.rs	4	docs/tui.md:2529-2532
+crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2530-2531
+crates/tui/src/event_loop/kitty_writer_tests.rs	3	docs/tui.md:2531-2532
+crates/tui/src/event_loop/kitty_writer_tests.rs	2	docs/tui.md:2532-2534
+crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2534-2535
+crates/tui/src/event_loop/kitty_writer_tests.rs	3	docs/tui.md:2548-2551
+crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2550-2551
+crates/tui/src/event_loop_loop_tests.rs	1	docs/tui.md:2438
+crates/tui/src/event_loop_loop_tests.rs	2	docs/tui.md:2446-2448
+crates/tui/src/event_loop_loop_tests.rs	1	docs/tui.md:2529
+crates/tui/src/event_loop_loop_tests.rs	1	docs/tui.md:2529-2532
+crates/tui/src/event_loop_mouse_tests.rs	3	docs/tui.md:1296-1306
+crates/tui/src/event_loop_mouse_tests.rs	3	docs/tui.md:1301-1302
+crates/tui/src/event_loop_mouse_tests.rs	6	docs/tui.md:3048
+crates/tui/src/event_loop_tests.rs	4	docs/invocation.md:1102
+crates/tui/src/event_loop_tests.rs	1	docs/invocation.md`,\n/// "Exit codes"
+crates/tui/src/event_loop_tests.rs	3	docs/state.md:432-435
+crates/tui/src/event_loop_tests.rs	4	docs/tui.md:268
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:2682
+crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2683
+crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2684
+crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2688
+crates/tui/src/ext/cache_tests.rs	3	docs/tui.md:2745
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:2772
+crates/tui/src/ext/cache_tests.rs	3	docs/tui.md:2924
+crates/tui/src/ext/cache_tests.rs	7	docs/tui.md:2977
+crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2980
+crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2983
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:2985
+crates/tui/src/ext/cache_tests.rs	15	docs/tui.md:2989
+crates/tui/src/ext/cache_tests.rs	7	docs/tui.md:2991
+crates/tui/src/ext/cache_tests.rs	4	docs/tui.md:2992
+crates/tui/src/ext/cache_tests.rs	4	docs/tui.md:2993
+crates/tui/src/ext/cache_tests.rs	6	docs/tui.md:2994
+crates/tui/src/ext/cache_tests.rs	4	docs/tui.md:3013
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3016
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3017
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3018
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3019
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3020
+crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:3021
+crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3022
+crates/tui/src/ext_tests.rs	2	docs/tui.md:2996
+crates/tui/src/history.rs	1	docs/state.md`, "Prompt\n//! history"
+crates/tui/src/home.rs	1	docs/invocation.md`, "Sessions"
+crates/tui/src/home_tests.rs	10	docs/invocation.md:1102
+crates/tui/src/home_tests.rs	5	docs/tui.md:233-234
+crates/tui/src/home_tests.rs	5	docs/tui.md:254-255
+crates/tui/src/home_tests.rs	15	docs/tui.md:268
+crates/tui/src/home_view_tests.rs	1	docs/tui.md:254-255
+crates/tui/src/home_view_tests.rs	1	docs/tui.md:268
+crates/tui/src/keyset_tests.rs	2	docs/tui.md:1941-1954
+crates/tui/src/login_view_tests.rs	5	docs/tui.md:576
+crates/tui/src/logout_view_tests.rs	5	docs/tui.md:576
+crates/tui/src/mcp_view_tests.rs	2	docs/tui.md:576
+crates/tui/src/model_picker_tests.rs	13	docs/tui.md:661-668
+crates/tui/src/notices_tests.rs	1	docs/tui.md:1204
+crates/tui/src/offer_tests.rs	4	docs/tui.md:576
+crates/tui/src/rebind_tests.rs	13	docs/tui.md:2100
+crates/tui/src/rebind_tests.rs	1	docs/tui.md:2109
+crates/tui/src/rebind_tests.rs	3	docs/tui.md:576
+crates/tui/src/rebind_tests.rs	3	docs/tui.md:589
+crates/tui/src/rebind_view_tests.rs	1	docs/tui.md:2100
+crates/tui/src/release_notes.rs	2	docs/tui.md`, "Markdown in replies"
+crates/tui/src/remote/decode_tests.rs	1	docs/invocation.md:1160
+crates/tui/src/remote_tests.rs	2	docs/invocation.md:1160
+crates/tui/src/rows_tests.rs	1	docs/tui.md:3001
+crates/tui/src/rules_view_tests.rs	2	docs/tui.md:576
+crates/tui/src/settings_view_tests.rs	3	docs/tui.md:576
+crates/tui/src/skills_view_tests.rs	1	docs/invocation.md:474
+crates/tui/src/skills_view_tests.rs	2	docs/tui.md:576
+crates/tui/src/skills_view_tests.rs	1	docs/tui.md:885-888
+crates/tui/src/skills_view_tests.rs	1	docs/tui.md:886-888
+crates/tui/src/skills_view_tests.rs	3	docs/tui.md:892-901
+crates/tui/src/skills_view_tests.rs	2	docs/tui.md:895
+crates/tui/src/skills_view_tests.rs	5	docs/tui.md:899-901
+crates/tui/src/skills_view_tests.rs	2	docs/tui.md:901-902
+crates/tui/src/slash_tests.rs	1	docs/tui.md:1940-1993
+crates/tui/src/slash_tests.rs	1	docs/tui.md:1940-1997
+crates/tui/src/slash_tests.rs	1	docs/tui.md:1978,1993
+crates/tui/src/slash_tests.rs	1	docs/tui.md:1990-1993
+crates/tui/src/slash_tests.rs	1	docs/tui.md:2006
+crates/tui/src/steering_tests.rs	5	docs/tui.md:3048
+crates/tui/src/steering_tests.rs	1	docs/tui.md:3050
+crates/tui/src/swapped_tests.rs	8	docs/tui.md:576
+crates/tui/src/timing.rs	1	docs/state.md`, "Diagnostic logs"
+crates/tui/src/timing_tests.rs	1	docs/state.md:428-429
+crates/tui/src/timing_tests.rs	3	docs/state.md:430-432
+crates/tui/src/timing_tests.rs	1	docs/state.md:431-435
+crates/tui/src/timing_tests.rs	5	docs/state.md:432-435
+crates/tui/src/timing_tests.rs	4	docs/state.md:435-440
+crates/tui/src/timing_tests.rs	4	docs/state.md:438-440
+crates/tui/src/timing_tests.rs	2	docs/state.md:441-443
+crates/tui/src/timing_tests.rs	4	docs/state.md:444-446,453
+crates/tui/src/timing_tests.rs	3	docs/state.md:446-448,453
+crates/tui/src/timing_tests.rs	4	docs/state.md:448-450,453
+crates/tui/src/timing_tests.rs	4	docs/state.md:450-454
+crates/tui/src/timing_tests.rs	4	docs/state.md`, "Diagnostic logs"
+crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1130-1132
+crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1130-1135
+crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1134-1135
+crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1136-1141
+crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1142-1144
+crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1145-1146
+crates/tui/src/tools_view_tests.rs	2	docs/tui.md:576
+crates/tui/src/turn/group_tests.rs	1	docs/events.md:697-701
+crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1130-1132
+crates/tui/src/turn/group_tests.rs	4	docs/tui.md:1130-1135
+crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1131-1132
+crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1132-1134
+crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1136-1138
+crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1136-1141
+crates/tui/src/turn/group_tests.rs	5	docs/tui.md:1142-1144
+crates/tui/src/turn_tests.rs	1	docs/events.md:697-701
+crates/tui/src/view/clear_tests.rs	1	docs/tui.md:1957
+crates/tui/src/view/completions_tests.rs	1	docs/tui.md:1682
+crates/tui/src/view/completions_tests.rs	2	docs/tui.md:1974,1997
+crates/tui/src/view/conversation.rs	1	docs/tui.md`,\n    // "Pinned call"
+crates/tui/src/view/conversation.rs	2	docs/tui.md`, "Pinned call"
+crates/tui/src/view/model_picker_tests.rs	6	docs/tui.md:589
+crates/tui/src/view/model_picker_tests.rs	2	docs/tui.md:642-644
+crates/tui/src/view/model_picker_tests.rs	10	docs/tui.md:661-668
+crates/tui/src/view/model_picker_tests.rs	1	docs/tui.md:669-714
+crates/tui/src/view/model_picker_tests.rs	1	docs/tui.md:691-693
+crates/tui/src/view/model_picker_tests.rs	1	docs/tui.md:706-709
+crates/tui/src/view/model_picker_tests.rs	6	docs/tui.md:710-714
+crates/tui/src/view/model_picker_tests.rs	1	docs/tui.md:740-742
+crates/tui/src/view/notice_rows_tests.rs	1	docs/tui.md:2740
+crates/tui/src/view/notice_rows_tests.rs	1	docs/tui.md:3017
+crates/tui/src/view/notice_rows_tests.rs	1	docs/tui.md:3023
+crates/tui/src/view/rail_tests.rs	1	docs/invocation.md:1102
+crates/tui/src/view/rail_tests.rs	1	docs/tui.md:268
+crates/tui/src/view/rail_tests.rs	1	docs/tui.md:332-335
+crates/tui/src/view/steering_queue_tests.rs	8	docs/tui.md:1296-1306
+crates/tui/src/view/steering_queue_tests.rs	1	docs/tui.md:1301-1302
+crates/tui/src/view/steering_queue_tests.rs	6	docs/tui.md:2891
+crates/tui/src/view/steering_queue_tests.rs	4	docs/tui.md:2893
+crates/tui/src/view/steering_queue_tests.rs	4	docs/tui.md:3042-3044
+crates/tui/src/view/steering_queue_tests.rs	2	docs/tui.md:3044
+crates/tui/src/view/steering_queue_tests.rs	6	docs/tui.md:3048
+crates/tui/src/view/steering_queue_tests.rs	1	docs/tui.md:3121
+crates/tui/src/view/steering_queue_tests.rs	6	docs/tui.md:444-447
+crates/tui/src/view/working_line_tests.rs	2	docs/tui.md:2872-2878
+crates/tui/src/view/working_line_tests.rs	4	docs/tui.md:2880
+crates/tui/src/view/working_line_tests.rs	2	docs/tui.md:2880-2883
+crates/tui/src/view/working_line_tests.rs	4	docs/tui.md:3044
+crates/tui/src/view/working_line_tests.rs	1	docs/tui.md:3121
+crates/tui/src/view_tests.rs	1	docs/tui.md:1553
+crates/tui/src/view_tests.rs	2	docs/tui.md:2962
+crates/tui/src/view_tests.rs	5	docs/tui.md:2968
+crates/tui/src/view_tests.rs	4	docs/tui.md:2970
+crates/tui/src/view_tests.rs	1	docs/tui.md:2971
+crates/tui/src/view_tests.rs	1	docs/tui.md:2972
+crates/tui/src/view_tests.rs	4	docs/tui.md:2974
+crates/tui/src/view_tests.rs	1	docs/tui.md:2984
+crates/tui/src/view_tests.rs	1	docs/tui.md`,\n    // "Pinned call"
+crates/tui/src/view_tests.rs	3	docs/tui.md`, "Pinned call"
+scripts/cache-prune	1	docs/ci.md, "The backstop"
+scripts/class-data	2	docs/performance.md, "The class columns"
+scripts/test-journey-report	10	docs/ci.md:459-461
+scripts/test-journey-report	10	docs/testing.md:114-120
+xtask/src/bench/attach.rs	3	docs/performance.md:184-185
+xtask/src/bench/judge.rs	2	docs/performance.md:184-185
+xtask/src/bench_tests.rs	4	docs/performance.md:184-185
+xtask/src/bench_tests.rs	4	docs/performance.md:302-306
+xtask/src/bench_tests.rs	2	docs/performance.md:308
+xtask/src/bench_tests.rs	1	docs/performance.md:326-330,334-335
+xtask/src/bench_tests.rs	2	docs/performance.md:326-330,334-335,336-339
+xtask/src/bench_tests.rs	1	docs/performance.md:326-330,338-339
+xtask/src/bench_tests.rs	1	docs/performance.md:326-332,334-335
+xtask/src/bench_tests.rs	1	docs/performance.md:330-332,334-335,338-339
+xtask/src/bench_tests.rs	1	docs/performance.md:336-339
+xtask/src/bench_tests.rs	1	docs/performance.md:72,184-185,223-227,303-310
+xtask/src/bench_tests.rs	1	docs/performance.md:72,184-185,303-307
+xtask/src/bench_tests.rs	1	docs/performance.md:72,303-310
+xtask/src/bench_tests.rs	1	docs/performance.md:72,308-310
+xtask/src/bench_tests.rs	1	docs/performance.md:72,326-328
+xtask/src/bench_tests.rs	1	docs/performance.md:73,184-185,223-227,309-310
+xtask/src/bench_tests.rs	1	docs/performance.md:73,184-185,309-310
+xtask/src/bench_tests.rs	2	docs/performance.md:73,309-310
+xtask/src/bench_tests.rs	2	docs/performance.md` line 274
+xtask/src/must_succeed_tests.rs	1	docs/ci.md`, "On Linux x86_64 alone"
+xtask/src/rules.rs	1	docs/dependencies.md`, "Crates\n/// used only by the image child"
+xtask/src/rules_tests.rs	2	docs/architecture.md:6
+xtask/src/rules_tests.rs	4	docs/architecture.md:7
+xtask/src/rules_tests.rs	2	docs/architecture.md:8
+xtask/src/screen_ratchet_tests.rs	1	docs/testing/screens.md:84
+xtask/src/screen_ratchet_tests.rs	1	docs/testing/screens.md:86
+xtask/src/select/plan_tests.rs	1	docs/ci.md:120
+xtask/tests/cache_prune.rs	1	docs/ci.md`, "The backstop"
+xtask/tests/release_size.rs	1	docs/ci.md`, "Release build and\n//! size"

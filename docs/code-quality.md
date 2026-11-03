@@ -259,6 +259,7 @@ Only what no tool can:
   streams"); every pointer input follows a readiness signal, not a grid
   match (`docs/testing/screens.md`); every fake's signal is sent after the
   state it announces
+- A citation in code names the doc file and a quoted heading, never a line number.
 - the Spec review of a build pull request checks every doc line its ticket
   lists has its test (`docs/workflow.md`, "Review")
 

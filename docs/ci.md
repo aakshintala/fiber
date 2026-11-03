@@ -427,6 +427,7 @@ network (`docs/testing.md`).
 - a relative Markdown link, or its `#anchor`, does not resolve
 - a section citation, such as `` (`docs/workflow.md`, "The gate") ``, names a
   heading the file does not have, including a citation broken across lines
+- a citation in code under `crates/`, `xtask/` or `scripts/` gives a line number (`docs/<file>.md:<n>`, `docs/<file>.md line <n>`) instead of the file and a quoted heading, or quotes a heading its file lacks, and `xtask/doc-citations.allow` does not list it
 - a backticked path under `docs/`, `crates/`, `scripts/`, `research/` or
   `.github/` does not exist. A path with a placeholder in it, such as
   `docs/<area>.md`, is not checked.
@@ -434,6 +435,8 @@ network (`docs/testing.md`).
   report jobs is missing from the verdict job's `needs`, or the report
   jobs named in "The merge gate" differ from the check's own list
   (`cargo xtask ci-needs`)
+
+`xtask/doc-citations.allow` lists, per file, each such citation still allowed and how many times. A citation beyond its count fails, and so does an entry whose citation the code no longer holds, so the list only shrinks. `cargo xtask doc-citations --print` prints it. The check reads every text file under those three directories.
 
 It runs in the selection job on every pull request, not only docs-only
 ones, because the change that breaks a citation is usually a code change

@@ -318,6 +318,23 @@ fn any_text_file_under_the_three_roots_is_scanned() {
 }
 
 #[test]
+fn a_multibyte_character_before_a_cite_does_not_panic() {
+    let failures = run(
+        &[(
+            "crates/a/src/x.rs",
+            &format!("// \u{2503}\u{2503} {DOC}:4\n"),
+        )],
+        None,
+    );
+    assert_eq!(failures.len(), 1);
+    assert!(
+        failures[0].starts_with("crates/a/src/x.rs:1: unlisted cite "),
+        "{}",
+        failures[0]
+    );
+}
+
+#[test]
 fn only_the_table_itself_is_exempt() {
     let content = format!("// {DOC}:4\n");
     let table = format!("crates/a/src/x.rs\t1\t{DOC}:4\n");

@@ -221,6 +221,14 @@ struct Found {
     kind: CiteKind,
 }
 
+fn next_boundary(text: &str, i: usize) -> usize {
+    let mut j = i + 1;
+    while j < text.len() && !text.is_char_boundary(j) {
+        j += 1;
+    }
+    j
+}
+
 fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
     let _ = file;
     let bytes = blanked.as_bytes();
@@ -232,7 +240,7 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
         } else if blanked[i..].starts_with("research/") {
             9
         } else {
-            i += 1;
+            i = next_boundary(blanked, i);
             continue;
         };
         let mut p = i + prefix_len;
@@ -240,7 +248,7 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
             p += 1;
         }
         if p == i + prefix_len || !blanked[p..].starts_with(".md") {
-            i += 1;
+            i = next_boundary(blanked, i);
             continue;
         }
         let target = blanked[i..p + 3].to_owned();
@@ -268,7 +276,7 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
                 i = end;
                 continue;
             }
-            i += 1;
+            i = next_boundary(blanked, i);
             continue;
         }
         if tail + 6 <= blanked.len() && blanked[tail..].starts_with(" line ") {
@@ -290,7 +298,7 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
                 i = end;
                 continue;
             }
-            i += 1;
+            i = next_boundary(blanked, i);
             continue;
         }
         if tail < bytes.len() && bytes[tail] == b',' {
@@ -306,7 +314,7 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
                 continue;
             }
         }
-        i += 1;
+        i = next_boundary(blanked, i);
     }
     out
 }
