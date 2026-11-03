@@ -28,7 +28,7 @@ use crate::connection::{Accept, serve_counted};
 use crate::fake::{FakeStarter, Handshake, failure};
 use crate::start::START_DEADLINE;
 use crate::{Started, Starter};
-use fakes::Deadline;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 /// One named deadline per wait: a resume answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -315,17 +315,17 @@ fn await_bind_skips_a_live_keeper_but_not_unlocked_keeper_text() {
         if busy {
             assert!(temp.clock.await_parked(
                 temp.clock.origin() + crate::start::START_POLL,
-                Deadline::after(DEADLINE)
+                Deadline::after(MUST_SUCCEED_WITHIN)
             ));
             *support::lock(&started.0) = Some(failure(ErrorCode::SessionHeld, "held by keeper"));
             temp.clock.advance_when_parked(
                 Some(temp.clock.origin() + crate::start::START_POLL),
                 Some(worker.thread().id()),
                 crate::start::START_POLL,
-                &Deadline::after(DEADLINE),
+                &Deadline::after(MUST_SUCCEED_WITHIN),
             );
             assert!(matches!(
-                Deadline::after(DEADLINE).recv_or_fail(&rx, "keeper bind refused"),
+                Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "keeper bind refused"),
                 crate::start::Bind::Exited
             ));
             assert_eq!(
@@ -334,7 +334,7 @@ fn await_bind_skips_a_live_keeper_but_not_unlocked_keeper_text() {
             );
         } else {
             assert!(matches!(
-                Deadline::after(DEADLINE).recv_or_fail(&rx, "stale keeper permits bind"),
+                Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "stale keeper permits bind"),
                 crate::start::Bind::Connected(_)
             ));
             assert!(listener.accept().is_ok());

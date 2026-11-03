@@ -10,7 +10,7 @@ use contract::events::{
     SessionStatus, TextDelta,
 };
 use contract::shapes::{Tokens, Usage};
-use fakes::Deadline;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 const DEADLINE: Duration = Duration::from_secs(10);
 
 fn check_holder(work: impl FnOnce() + Send + 'static) {
@@ -19,7 +19,7 @@ fn check_holder(work: impl FnOnce() + Send + 'static) {
         work();
         done.send(()).unwrap();
     });
-    Deadline::after(DEADLINE).recv_or_fail(&result, "holder query");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&result, "holder query");
 }
 
 #[test]
