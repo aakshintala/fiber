@@ -107,6 +107,43 @@ fn configure_fx(setup: &Setup, dir: &Path) {
     setup.configure_with(&json!({"fx": fx_server(dir)}), &json!({}));
 }
 
+/// The verbatim count rule the multiset calls cite
+/// (`docs/testing.md`, "Event streams").
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+
+/// A big fixture tool: its 42,000-byte description alone passes 10% of the
+/// 100,000-token `provider_with_deferral` window (`docs/tools.md`, "Size
+/// warning": the threshold is 40,000 serialized bytes at four bytes a
+/// token).
+fn big_tool() -> Value {
+    json!({
+        "name": "big",
+        "description": "x".repeat(42_000),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+        },
+        "annotations": {"readOnlyHint": true, "openWorldHint": false},
+    })
+}
+
+/// Runs `fiber ask` on the `[big_tool(), echo_tool()]` fixture with the
+/// model's data setting `deferred_tools` as `deferred` says: without
+/// deferral everything stays full; with it `big` is exempted while `echo`
+/// stays deferred, keeping the native search declared.
+fn oversize_run(setup: &Setup, dir: &Path, server: &ProviderServer, deferred: bool) -> StdoutRun {
+    setup.provider_with_deferral(server, deferred);
+    if deferred {
+        setup.configure_with(
+            &json!({"fx": fx_server(dir)}),
+            &json!({"mcp__fx__big": {"deferred": false}}),
+        );
+    } else {
+        configure_fx(setup, dir);
+    }
+    setup.run(&["ask", "hi"])
+}
+
 /// A finished `tool_search_call` for `query`, as the provider's reply.
 fn search_call(query: &str) -> Value {
     json!({"type": "response.output_item.done", "item": {
@@ -350,6 +387,82 @@ fn an_echo_deferral_key_sends_echo_whole_with_no_search() {
         .find(|line| line["kind"] == "preamble_built")
         .unwrap();
     assert!(!sent_deferred(built, "mcp__fx__echo"));
+}
+
+/// Deferral off: a model without `deferred_tools` gets the oversize notice
+/// with the deferral-off sentence, and declares no native search
+/// (`docs/tools.md`, "Size warning").
+#[test]
+fn an_oversize_notice_says_deferral_is_off_for_a_model_without_deferred_tools() {
+    let setup = Setup::new_with_mcp_fixture();
+    let _guard = setup.guard();
+    let dir = setup.fixture(&json!([big_tool(), echo_tool()]), &[]);
+    let server = ProviderServer::start([hello()]).unwrap();
+    let run = oversize_run(&setup, &dir, &server, false);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.push("notice");
+    support::assert_kinds_multiset(&run.lines, &expected, &[], None, COUNT_DOC);
+    let notices: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["payload"]["code"], "tool_definitions_large");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("Tool definitions declared in full are about "),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("Deferral is off for this model, so every tool is declared in full."),
+        "{message}"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let tools = request_tools(&requests[0].body);
+    assert!(!has_native_search(&tools), "{tools:?}");
+}
+
+/// Deferral on: a model with `deferred_tools` gets the oversize notice
+/// without the deferral-off sentence, and declares the native search with
+/// `echo` still deferred (`docs/tools.md`, "Size warning").
+#[test]
+fn an_oversize_notice_leaves_the_off_sentence_out_for_a_model_with_deferred_tools() {
+    let setup = Setup::new_with_mcp_fixture();
+    let _guard = setup.guard();
+    let dir = setup.fixture(&json!([big_tool(), echo_tool()]), &[]);
+    let server = ProviderServer::start([hello()]).unwrap();
+    let run = oversize_run(&setup, &dir, &server, true);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.push("notice");
+    support::assert_kinds_multiset(&run.lines, &expected, &[], None, COUNT_DOC);
+    let notices: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["payload"]["code"], "tool_definitions_large");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("Tool definitions declared in full are about "),
+        "{message}"
+    );
+    assert!(!message.contains("Deferral is off"), "{message}");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let tools = request_tools(&requests[0].body);
+    assert!(has_native_search(&tools), "{tools:?}");
+    assert_eq!(
+        function_entry(&tools, "mcp__fx__echo")["defer_loading"],
+        json!(true),
+        "{tools:?}"
+    );
 }
 
 /// (e) `tools."tool_search".deferred` has no effect: the ask logs one
