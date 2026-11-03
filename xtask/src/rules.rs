@@ -924,6 +924,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/hub/src/rejoin.rs", "fn rejoin_pass|root:hub.home|scope:for candidate in candidates::let Ok ( stream ) = UnixStream : : connect ( hub . home . join ( run ) . join ( & session ) ) else", "join:run", "#1720"),
     source_allowance!("crates/hub/src/relay.rs", "fn route|root:hub.home", "join:run", "#1720"),
     source_allowance!("crates/hub/src/resume.rs", "fn reach|root:hub.home", "join:run", "#1720"),
+    source_allowance!("crates/hub/src/resume.rs", "fn connect_live|root:hub.home", "join:run", "#3890"),
     source_allowance!("crates/hub/src/resume.rs", "fn find_log|root:home", "join:projects", "#1720"),
     source_allowance!("crates/hub/src/retire.rs", "fn held_by_exiting|root:hub.home", "join:run", "#2054"),
     source_allowance!("crates/hub/src/rewind.rs", "fn reach|root:hub.home", "join:run", "#1720"),
