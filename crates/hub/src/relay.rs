@@ -755,7 +755,7 @@ pub(crate) fn route(
     let opened = if exited {
         crate::resume::resume_exited(hub, &sid, credential.as_deref())
     } else {
-        UnixStream::connect(hub.home.join("run").join(session))
+        crate::resume::connect_live(hub, &contract::SessionId(session.to_owned()))
             .or_else(|_| crate::resume::resume(hub, &sid, credential.as_deref()))
     };
     let stream = match opened {

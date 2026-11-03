@@ -112,7 +112,7 @@ fn reach_locked(
     _admitted: crate::connection::Admitted<'_>,
 ) -> Result<UnixStream, crate::connection::Refused> {
     let socket = hub.home.join("run").join(&next.0);
-    if let Ok(stream) = UnixStream::connect(&socket) {
+    if let Ok(stream) = crate::resume::connect_live(hub, next) {
         return Ok(stream);
     }
     if crate::recent::lookup_logged(&hub.home, next).is_some() {
@@ -173,7 +173,9 @@ fn reach_locked(
             });
         }
     };
-    match start::await_bind(hub, &socket, started.as_ref()) {
+    match start::await_bind(hub, &socket, started.as_ref(), &|| {
+        log::find_session(&hub.home, next).is_some_and(|(_, dir)| crate::resume::keeper_holds(&dir))
+    }) {
         Bind::Connected(stream) => {
             hub.diag.line(
                 Severity::Info,
@@ -261,8 +263,7 @@ pub(crate) fn retry_after_exit(
     let held = lock(&guard);
     if !hub.claim_retry(next) {
         drop(held);
-        let socket = hub.home.join("run").join(&next.0);
-        return UnixStream::connect(&socket).ok();
+        return crate::resume::connect_live(hub, next).ok();
     }
     let Ok(admitted) = hub.admit() else {
         return None;

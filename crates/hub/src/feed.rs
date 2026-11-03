@@ -109,6 +109,7 @@ struct State {
     /// Sessions whose status named a parent, while their socket is in
     /// `run/`: never connected again.
     delegates: BTreeSet<String>,
+    directories: BTreeMap<String, Option<(String, PathBuf)>>,
     fanout: Fanout,
     /// Summary reader threads and disconnected writers parked for
     /// joining, joined at stop or once done.
@@ -179,7 +180,11 @@ impl Feed {
     /// which scans `run/` at once and every [`RUN_SCAN`] after.
     pub(crate) fn start(self: &Arc<Self>) {
         for row in recent::seeds(&self.home) {
-            if UnixStream::connect(self.socket(&row.session_id.0)).is_ok() {
+            let found = self.directory(&row.session_id.0);
+            if self
+                .connect_session(&row.session_id.0, found.as_ref())
+                .is_ok()
+            {
                 continue;
             }
             let Some(payload) = row.status.clone() else {
@@ -401,6 +406,7 @@ impl Feed {
         let (fresh, done, ended) = {
             let mut state = lock(&self.state);
             state.delegates.retain(|id| names.contains(id));
+            state.directories.retain(|id, _| names.contains(id));
             let (done, live) = std::mem::take(&mut state.threads)
                 .into_iter()
                 .partition(JoinHandle::is_finished);
@@ -419,20 +425,41 @@ impl Feed {
         }
     }
 
+    fn directory(&self, id: &str) -> Option<(String, PathBuf)> {
+        if let Some(found) = lock(&self.state).directories.get(id) {
+            return found.clone();
+        }
+        let found = recent::lookup(&self.home, &SessionId(id.to_owned()));
+        lock(&self.state)
+            .directories
+            .insert(id.to_owned(), found.clone());
+        found
+    }
+
+    fn connect_session(
+        &self,
+        id: &str,
+        found: Option<&(String, PathBuf)>,
+    ) -> std::io::Result<UnixStream> {
+        crate::resume::guarded_connect(&self.socket(id), &|| {
+            found.is_some_and(|(_, dir)| crate::resume::keeper_holds(dir))
+        })
+    }
+
     /// Subscribes `summary` to session `id` and follows it on a thread. A
     /// connect that fails is not a crash: the next scan tries again.
     fn follow(self: &Arc<Self>, id: String) {
-        let Ok(stream) = UnixStream::connect(self.socket(&id)) else {
+        let found = self.directory(&id);
+        let Ok(stream) = self.connect_session(&id, found.as_ref()) else {
             return;
         };
         // Where the log ended once connected: any earlier run's exit
         // line is already before that point, and the followed run's
         // `fiber_exited` or `rewound`, if it writes one, comes after.
-        // After the connect so a stale socket costs no directory scan,
-        // and before any write, so the followed run's exit cannot land
+        // Before any write, so the followed run's exit cannot land
         // before it. The end of the last complete line, never the raw
         // length: a resumed writer truncates a torn tail.
-        let found = recent::lookup(&self.home, &SessionId(id.clone())).map(|(project, dir)| {
+        let found = found.map(|(project, dir)| {
             let from = log::complete_len_of(&dir);
             (project, dir, from)
         });

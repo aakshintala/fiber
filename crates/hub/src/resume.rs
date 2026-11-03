@@ -160,6 +160,33 @@ fn parent_run_open(home: &Path, parent: &SessionId, job: &JobId) -> bool {
     false
 }
 
+/// Whether a live keeper, rather than a session, holds the log.
+pub(crate) fn keeper_holds(dir: &Path) -> bool {
+    log::lock_label(dir).is_some_and(|label| label.starts_with("keeper "))
+}
+
+/// Connects only to a session, never a keeper's crashed-session socket.
+pub(crate) fn connect_live(hub: &Hub, session: &SessionId) -> std::io::Result<UnixStream> {
+    let found = crate::recent::lookup_logged(&hub.home, session);
+    guarded_connect(&hub.home.join("run").join(&session.0), &|| {
+        found.as_ref().is_some_and(|(_, dir)| keeper_holds(dir))
+    })
+}
+
+pub(super) fn guarded_connect(
+    socket: &Path,
+    kept: &dyn Fn() -> bool,
+) -> std::io::Result<UnixStream> {
+    if kept() {
+        return Err(std::io::ErrorKind::ConnectionRefused.into());
+    }
+    let stream = UnixStream::connect(socket)?;
+    if kept() {
+        return Err(std::io::ErrorKind::ConnectionRefused.into());
+    }
+    Ok(stream)
+}
+
 /// One pass of [`reach`]: an answer, or a wait for the exiting process,
 /// with the `session_held` message its resume failed with, if any.
 enum Step {
@@ -224,13 +251,13 @@ fn attempt(
     credential: Option<&str>,
     trusted: bool,
 ) -> Step {
-    if let Ok(stream) = UnixStream::connect(socket) {
+    let found = crate::recent::lookup_logged(&hub.home, session);
+    let kept = || found.as_ref().is_some_and(|(_, dir)| keeper_holds(dir));
+    if let Ok(stream) = guarded_connect(socket, &kept) {
         if trusted {
             return Step::Done(Ok(stream));
         }
-        // One lookup per pass, shared by both predicates: a refused
-        // connect resumes without one.
-        let found = crate::recent::lookup_logged(&hub.home, session);
+        // The live-holder probe and both predicates share one lookup.
         if found.as_ref().is_none_or(|(_, dir)| !exited_in(dir)) {
             return Step::Done(Ok(stream));
         }
@@ -242,7 +269,7 @@ fn attempt(
         // The exiting process still answers on its socket.
         return Step::Wait(None);
     }
-    let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, session) else {
+    let Some((_, dir)) = found.as_ref() else {
         return Step::Done(Err(not_found(session)));
     };
     let recorded = match log::started_first(&dir) {
@@ -315,60 +342,62 @@ fn attempt(
         }
         Err(error) => return Step::Done(Err(io_failed(hub, session, &format!("{error}.")))),
     };
-    Step::Done(match start::await_bind(hub, socket, started.as_ref()) {
-        Bind::Connected(stream) => {
-            hub.diag.line(
-                Severity::Info,
-                Some(session),
-                "session_resumed",
-                "Session resumed for local.",
-            );
-            Ok(stream)
-        }
-        Bind::Exited => {
-            let failure = started.exited();
-            // The exiting process still holds the lock: wait it out.
-            if let Some(failure) = &failure
-                && failure.code == ErrorCode::SessionHeld
-                && exited_in(&dir)
-            {
-                return Step::Wait(Some(failure.message.clone()));
+    Step::Done(
+        match start::await_bind(hub, socket, started.as_ref(), &kept) {
+            Bind::Connected(stream) => {
+                hub.diag.line(
+                    Severity::Info,
+                    Some(session),
+                    "session_resumed",
+                    "Session resumed for local.",
+                );
+                Ok(stream)
             }
-            // The process lost the session to another that bound first,
-            // such as a resume another starter made: that one is running,
-            // so the command is passed to it.
-            match UnixStream::connect(socket) {
-                Ok(stream) => Ok(stream),
-                Err(_) => Err(match failure {
-                    Some(failure) => {
-                        hub.diag.line(
-                            Severity::Warn,
-                            Some(session),
-                            &start::code_name(&failure.code),
-                            &format!("Session {} exited before it resumed.", session.0),
-                        );
-                        Refused {
-                            code: failure.code,
-                            message: failure.message,
+            Bind::Exited => {
+                let failure = started.exited();
+                // The exiting process still holds the lock: wait it out.
+                if let Some(failure) = &failure
+                    && failure.code == ErrorCode::SessionHeld
+                    && exited_in(&dir)
+                {
+                    return Step::Wait(Some(failure.message.clone()));
+                }
+                // The process lost the session to another that bound first,
+                // such as a resume another starter made: that one is running,
+                // so the command is passed to it.
+                match guarded_connect(socket, &kept) {
+                    Ok(stream) => Ok(stream),
+                    Err(_) => Err(match failure {
+                        Some(failure) => {
+                            hub.diag.line(
+                                Severity::Warn,
+                                Some(session),
+                                &start::code_name(&failure.code),
+                                &format!("Session {} exited before it resumed.", session.0),
+                            );
+                            Refused {
+                                code: failure.code,
+                                message: failure.message,
+                            }
                         }
-                    }
-                    None => io_failed(hub, session, "it exited."),
-                }),
+                        None => io_failed(hub, session, "it exited."),
+                    }),
+                }
             }
-        }
-        Bind::TimedOut => {
-            started.kill();
-            Err(io_failed(hub, session, "it did not bind its socket."))
-        }
-        Bind::Failed(detail) => {
-            started.kill();
-            Err(io_failed(hub, session, &detail))
-        }
-        Bind::Stopping => {
-            started.kill();
-            Err(crate::connection::stopping())
-        }
-    })
+            Bind::TimedOut => {
+                started.kill();
+                Err(io_failed(hub, session, "it did not bind its socket."))
+            }
+            Bind::Failed(detail) => {
+                started.kill();
+                Err(io_failed(hub, session, &detail))
+            }
+            Bind::Stopping => {
+                started.kill();
+                Err(crate::connection::stopping())
+            }
+        },
+    )
 }
 
 /// The rejection for a session the hub cannot find: `session_not_found`.

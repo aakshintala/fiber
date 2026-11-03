@@ -1126,7 +1126,41 @@ fn join_returns_only_after_the_joined_thread_ends() {
 }
 
 #[test]
-fn a_stale_socket_costs_no_directory_scan() {
+fn a_keeper_socket_keeps_a_crashed_feed_entry_at_scan_and_start() {
+    use std::os::unix::net::UnixListener;
+    for started in [false, true] {
+        let temp = Temp::new();
+        let (feed, clock) = new_feed(&temp.dir);
+        let id = temp.session(1, "p", "turn_completed");
+        temp.append(&row(1, "p", "crashed", Some("idle")));
+        let dir = log::session_dir(&temp.dir, "p", &SessionId(id.clone()));
+        let _held = log::try_hold(&dir).unwrap();
+        fs::write(dir.join("session.lock"), "keeper 4242\n").unwrap();
+        let listener = UnixListener::bind(temp.dir.join("run").join(&id)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        if started {
+            start(&feed, &clock);
+        } else {
+            let payload = serde_json::from_value(status("n", "/w", "idle", None)).unwrap();
+            let line = Arc::from(status_line(&id, &status("n", "/w", "idle", None)).into_bytes());
+            lock(&feed.state).entries.insert(
+                id.clone(),
+                Entry::Left(Status { line, payload }, Left::Crashed),
+            );
+            feed.scan();
+        }
+        assert_eq!(entry_of(&feed, &id), Some("crashed"));
+        assert!(lock(&feed.state).tracked.is_empty());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        stop_within(&feed);
+    }
+}
+
+#[test]
+fn a_stale_socket_costs_one_directory_lookup_across_three_scans() {
     use std::os::unix::net::UnixListener;
 
     let temp = Temp::new();
@@ -1138,8 +1172,8 @@ fn a_stale_socket_costs_no_directory_scan() {
     }
     assert_eq!(
         crate::recent::LOOKUPS.load(Ordering::SeqCst),
-        0,
-        "the lookup runs only after the connect succeeds"
+        1,
+        "the directory is cached even when the socket refuses"
     );
     stop_within(&feed);
 }

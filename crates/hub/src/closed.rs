@@ -76,7 +76,7 @@ fn running(hub: &Hub, session: &str) -> bool {
     let id = SessionId(session.to_owned());
     !crate::resume::exited(&hub.home, &id)
         && crate::rewind::continued(&hub.home, &id).is_none()
-        && UnixStream::connect(hub.home.join("run").join(session)).is_ok()
+        && crate::resume::connect_live(hub, &contract::SessionId(session.to_owned())).is_ok()
 }
 
 /// The `stream_closed` payload: the session, and nothing else.
