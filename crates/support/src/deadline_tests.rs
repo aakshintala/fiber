@@ -19,10 +19,6 @@ use super::{BUDGET, CLEANUP, Deadline, WAIT, WAITS};
 /// must-succeed floor, with the base's one-second slack kept below.
 const SPAN: Duration = Duration::from_secs(10);
 
-/// The bound the `within` tests derive: the must-succeed floor, so
-/// `cargo xtask must-succeed` does not flag it, as `SPAN` is not flagged.
-const DERIVED: Duration = Duration::from_secs(10);
-
 /// A fake clock that lives as long as the test process, as a deadline's
 /// clock must.
 fn fake_clock() -> &'static Arc<FakeClock> {
@@ -363,13 +359,13 @@ fn recv_or_fail_says_the_sender_hung_up() {
 fn within_keeps_the_fake_clock_and_never_waits_on_the_wall_clock() {
     let clock = fake_clock();
     let root = Deadline::on(&**clock);
-    let child = root.within(DERIVED);
-    assert_eq!(child.left(), DERIVED);
+    let child = root.within(SPAN);
+    assert_eq!(child.left(), SPAN);
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(DERIVED);
+    clock.advance(SPAN);
     assert_eq!(child.left(), Duration::ZERO);
     // The sender stays alive, so the receive below can only time out, never
     // disconnect.
@@ -388,7 +384,7 @@ fn within_is_capped_by_what_the_parent_has_left() {
     )]
     clock.advance(Duration::from_secs(85));
     assert_eq!(root.left(), Duration::from_secs(5));
-    let child = root.within(DERIVED);
+    let child = root.within(SPAN);
     assert_eq!(child.left(), Duration::from_secs(5));
     assert_eq!(child.cleanup(), Duration::from_secs(5));
     #[allow(
@@ -413,13 +409,13 @@ fn within_starts_fresh_and_forgets_a_started_wait() {
     )]
     clock.advance(Duration::from_secs(20));
     assert_eq!(parent.left(), Duration::from_secs(20));
-    let child = parent.within(DERIVED);
-    assert_eq!(child.left(), DERIVED);
+    let child = parent.within(SPAN);
+    assert_eq!(child.left(), SPAN);
     #[allow(
         clippy::disallowed_methods,
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
-    clock.advance(DERIVED);
+    clock.advance(SPAN);
     assert_eq!(child.left(), Duration::ZERO);
 }
 
@@ -432,7 +428,7 @@ fn within_a_spent_root_is_a_zero_bound() {
         reason = "no code under test waits on the clock (ruling 6179406086)"
     )]
     clock.advance(Duration::from_secs(91));
-    let child = root.within(DERIVED);
+    let child = root.within(SPAN);
     assert_eq!(child.left(), Duration::ZERO);
     assert_eq!(child.cleanup(), Duration::ZERO);
     assert_eq!(root.cleanup(), Duration::from_secs(9));
