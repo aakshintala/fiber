@@ -17,3 +17,6 @@ crates/loop/tests/preamble.rs	fiber-4039	plan	2026-11-03T06:05:36Z	roundhouse-70
 crates/loop/tests/support/mod.rs	fiber-4039	plan	2026-11-03T06:05:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/docs/4039-deferral-off-notice	
 crates/loop/tests/tool_search.rs	fiber-4039	plan	2026-11-03T06:05:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/docs/4039-deferral-off-notice	
 crates/main/tests/tool_search.rs	fiber-4039	plan	2026-11-03T06:05:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/docs/4039-deferral-off-notice	
+crates/tui/src/screen.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/screen_tests.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/main/tests/wheel_garble.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
