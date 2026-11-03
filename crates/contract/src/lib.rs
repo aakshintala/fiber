@@ -28,6 +28,7 @@ mod ids;
 pub mod images;
 pub mod inbox;
 pub mod jobs;
+pub mod keeper;
 pub mod mcp_remote;
 pub mod mcp_tokens;
 pub mod model;
