@@ -1514,16 +1514,26 @@ fn subscribe_direct_returns_last_seq_and_keeps_the_replay() {
 
 #[test]
 fn subscribe_direct_returns_no_bound_on_an_empty_log() {
-    let client = replay_peer(vec![
+    // The peer reads the subscribe line before answering, so it is still
+    // alive when the send takes the socket timeout: a peer that only
+    // writes can exit first, and on macOS the send then fails with
+    // `EINVAL` instead of reaching the acknowledgement.
+    let (client, sent) = subscribe_peer(vec![
         "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_sub\"}}\n",
     ]);
     let sub = subscribe_direct(&client);
+    let sent = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&sent)
+        .expect("the peer read the subscribe line");
+    let sent: Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["id"], "c_sub", "{sent}");
     assert_eq!(sub.last_seq, None);
 }
 
 #[test]
 fn subscribe_direct_panics_on_a_rejected_subscribe() {
-    let client = replay_peer(vec![
+    // As above: the peer reads first, so the send cannot race its exit.
+    let (client, _sent) = subscribe_peer(vec![
         "{\"kind\":\"command_rejected\",\"payload\":{\"command_id\":\"c_sub\",\"code\":\"gone\"}}\n",
     ]);
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
