@@ -1087,6 +1087,46 @@ fn listed_exit_reports_expiry_with_no_listing_yet() {
 }
 
 #[test]
+fn a_stalled_first_listing_fails_naming_the_listing_inside_the_callers_wait() {
+    // The outer wait is made before the listing thread starts, so with
+    // equal bounds the outer wait wins the race and the failure names no
+    // step; the listing's own budget must expire first instead.
+    let outer = Deadline::after(MUST_SUCCEED_WITHIN);
+    let (never, unanswered) = mpsc::channel::<()>();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || {
+        let result = listed_exit(
+            move || match unanswered.recv() {
+                Ok(()) | Err(_) => {
+                    Err::<Vec<u32>, _>(io::Error::other("the listing never answered"))
+                }
+            },
+            MUST_SUCCEED_WITHIN,
+        );
+        match answered.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let result = match outer.recv(&answer) {
+        Ok(result) => result,
+        Err(_) => panic!("the caller's wait expired before the listing step named itself"),
+    };
+    let err = result.expect_err("a stalled first listing must fail");
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    let text = err.to_string();
+    assert!(text.starts_with("first listing: "), "{text}");
+    assert!(text.contains("deadline expired waiting for exit"), "{text}");
+    drop(never);
+}
+
+#[test]
+fn listing_budgets_nest_by_halves() {
+    use super::{LISTING_WITHIN, PGREP_WITHIN};
+    assert_eq!(PGREP_WITHIN * 2, LISTING_WITHIN);
+    assert_eq!(LISTING_WITHIN * 2, MUST_SUCCEED_WITHIN);
+}
+
+#[test]
 fn listed_exit_names_a_held_holder_when_the_exit_budget_is_spent() {
     // A spent exit budget still leaves the holder listing its own
     // budget: the first listing blocks on a test-owned channel, and the
