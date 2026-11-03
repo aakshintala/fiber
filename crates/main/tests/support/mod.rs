@@ -3244,6 +3244,12 @@ fn run_kinds_sets_aside_independently_triggered_lines() {
     );
 }
 
+/// How many inner budgets the released wait's outer receive allows: the
+/// outer bound outlasts an inner wait that restarts its own clock, so the
+/// inner wait expires first and the failure names the step that stalled
+/// (`docs/testing.md`, "Waits and timeouts").
+const OUTER_BUDGET_FACTOR: u32 = 3;
+
 /// A held file between a signal and its removal: the writer signals, then
 /// blocks until the test releases it, then removes the state.
 struct PausedRemoval {
@@ -3452,7 +3458,7 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
     assert!(old.is_err(), "the old wait must fail while held");
     let (release_tx, release) = mpsc::channel::<()>();
     let logged = log.clone();
-    thread::spawn(move || {
+    let writer = thread::spawn(move || {
         release.recv().unwrap_or(());
         let mut file = fs::OpenOptions::new().append(true).open(&logged).unwrap();
         file.write_all(b"state\n").unwrap();
@@ -3461,7 +3467,7 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
     let (done_tx, done) = mpsc::channel::<()>();
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let waited = std::sync::Arc::clone(&watch);
-    thread::spawn(move || {
+    let waiter = thread::spawn(move || {
         entered_tx.send(()).unwrap_or(());
         wait_for_watched_line(&waited, deadline, "the state line", |text| {
             text.contains("state")
@@ -3474,9 +3480,37 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
         .recv(&entered)
         .expect("the waiter entered its wait");
     release_tx.send(()).unwrap_or(());
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    // The released wait's report arrives first, under three times the inner
+    // budget, so a stalled wait fails naming the inner step: the inner
+    // deadline expires before this outer one.
+    match Deadline::after(fakes::MUST_SUCCEED_WITHIN * OUTER_BUDGET_FACTOR) // ruling: #4075
         .recv(&done)
-        .expect("the wait answers once released");
+    {
+        Ok(()) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) if waiter.is_finished() => {
+            panic!(
+                "the waiter outlived three times its budget waiting for the state line: the waiter finished but sent no report"
+            );
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!(
+                "the waiter outlived three times its budget waiting for the state line: the waiter is still running at the outer timeout"
+            );
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the waiter thread ended without reporting the state line");
+        }
+    }
+    // Both threads ended once their report arrived, so each join returns at
+    // once; a waiter panic re-raises with its own text on this thread.
+    match waiter.join() {
+        Ok(()) => {}
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+    match writer.join() {
+        Ok(()) => {}
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
     // The landed line stays visible to a later wait on the same watch.
     wait_for_watched_line(
         &watch,
