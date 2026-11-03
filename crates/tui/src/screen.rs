@@ -9,7 +9,7 @@
 //! to the terminal is painted with the look's colours.
 
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
-use ratatui::buffer::{Buffer, Cell};
+use ratatui::buffer::{Buffer, Cell, CellWidth};
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::style::Style;
 use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -437,6 +437,57 @@ impl<B: Backend> TtySized<B> {
     }
 }
 
+/// Whether `cell` is a wide cell holding a variation selector: the diff
+/// yields the cell after one of these as its own item, and a terminal
+/// giving the emoji two columns would print that trailing item one column
+/// right, since its cursor sits past the emoji's second column.
+fn holds_variation_selector(cell: &Cell) -> bool {
+    cell.symbol().cell_width() > 1 && cell.symbol().contains('\u{FE0F}')
+}
+
+/// The diff's cells with each wide variation-selector cell's adjacent
+/// trailing cell yielded before it: the trailing cell at the next column
+/// of the same row lands first, then the emoji. `ratatui-crossterm`
+/// emits a cursor move whenever a cell is not at the last column plus
+/// one on the same row, so the reordered run still moves before each of
+/// the three cells and draws the frame on one- and two-column terminals
+/// alike. Cells that are not such a pair keep their order.
+struct Reordered<'b, 'a, I>
+where
+    I: Iterator<Item = (u16, u16, &'a Cell)>,
+{
+    src: &'b mut std::iter::Peekable<I>,
+    pending: Option<(u16, u16, &'a Cell)>,
+}
+
+impl<'b, 'a, I> Iterator for Reordered<'b, 'a, I>
+where
+    I: Iterator<Item = (u16, u16, &'a Cell)>,
+{
+    type Item = (u16, u16, &'a Cell);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(pair) = self.pending.take() {
+            return Some(pair);
+        }
+        let (_, _, cell) = self.src.peek()?;
+        if !holds_variation_selector(cell) {
+            return self.src.next();
+        }
+        let (x, y, emoji) = self.src.next()?;
+        let trailing = self.src.peek().is_some_and(|(next_x, next_y, _)| {
+            *next_y == y && x.checked_add(1).is_some_and(|after| after == *next_x)
+        });
+        if trailing {
+            let pair = self.src.next()?;
+            self.pending = Some((x, y, emoji));
+            Some(pair)
+        } else {
+            Some((x, y, emoji))
+        }
+    }
+}
+
 impl<B: Backend> Backend for TtySized<B> {
     type Error = B::Error;
 
@@ -449,7 +500,14 @@ impl<B: Backend> Backend for TtySized<B> {
             self.touched = true;
         }
         self.open_block()?;
-        self.inner.draw(content)
+        // The whole run reaches the inner backend in one call: the
+        // reordered trailing cell lands first, then the emoji, each on
+        // its own cursor move, which draws the frame on one- and
+        // two-column terminals alike.
+        self.inner.draw(Reordered {
+            src: &mut content,
+            pending: None,
+        })
     }
 
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
