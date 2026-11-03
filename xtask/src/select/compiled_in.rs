@@ -100,6 +100,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-zen.json", "config"),
     ("providers/openrouter/providers/openrouter.json", "config"),
     ("providers/vertex/providers/vertex.json", "config"),
+    ("docs/tools.md", "config"),
     ("providers/opencode/providers/opencode-go.json", "provider"),
     ("providers/anthropic/providers/anthropic.json", "xtask"),
     ("providers/bedrock/providers/bedrock.json", "xtask"),

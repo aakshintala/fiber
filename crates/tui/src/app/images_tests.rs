@@ -15,6 +15,61 @@ use crate::mouse::{self, TargetId};
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 
+#[test]
+fn image_fetch_answer_reaches_its_handler_and_settles_its_tag() {
+    use crate::app::Waiting;
+    for accepted in [false, true] {
+        let mut app = app();
+        started_with_image(&mut app, "picture.png");
+        let request: Value = serde_json::from_str(&click(&mut app)).unwrap();
+        let id = request["id"].as_str().unwrap();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::ImageFetch));
+        if accepted {
+            accept(&mut app, id, json!({"data":"bytes"}));
+            let views = app.take_image_views();
+            assert_eq!(views[0].data, "bytes");
+        } else {
+            app.on_line(crate::app::commands::commands_testkit::hub_line(
+                "command_rejected",
+                json!({"command_id":id,"code":"io_failed","message":"image refused"}),
+            ));
+            assert_eq!(
+                app.notice(),
+                Some("Could not open picture.png: image refused.")
+            );
+        }
+        assert_eq!(app.outbox.waiting(id), None);
+    }
+}
+
+#[test]
+fn a_display_image_second_answer_takes_the_untagged_path() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "picture.png");
+    let image = image_id(&app, SESSION, "picture.png");
+    app.images_drawn(&drawn(image));
+    let out = app.take_image_out();
+    let request: Value = serde_json::from_str(&out.display[0]).unwrap();
+    let id = request["id"].as_str().unwrap();
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::Waiting::ImageDisplay)
+    );
+    accept(
+        &mut app,
+        id,
+        json!({"data":"bytes", "mime_type":"image/png"}),
+    );
+    assert_eq!(app.outbox.waiting(id), None);
+    assert!(!app.take_image_out().items.is_empty());
+    accept(
+        &mut app,
+        id,
+        json!({"data":"different", "mime_type":"image/png"}),
+    );
+    assert!(app.take_image_out().items.is_empty());
+}
+
 /// The Kitty bytes `out` queues, in order: each image's transmit chunks
 /// then its place.
 fn kitty_bytes(out: &crate::image::Out) -> Vec<u8> {

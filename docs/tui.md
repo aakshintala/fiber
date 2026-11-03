@@ -3439,6 +3439,10 @@ CPU and time to first frame. The design keeps to them this way:
 - **A frame redraws only the rows that changed.**
 - **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.
 
+### Wide variation-selector cells
+
+A cell holding a variation selector (for example `⚠️`) that measures two columns is written with its trailing cell first, then the cell itself. `ratatui-crossterm` moves the cursor whenever a cell is not at the last column plus one on the same row, so the reordered pair still moves before each cell and draws the frame on terminals giving the emoji one cell and on those giving it two alike. Cells that are not such a pair keep their order.
+
 
 ## Configuration
 

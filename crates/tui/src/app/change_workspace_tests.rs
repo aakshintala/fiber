@@ -63,6 +63,77 @@ fn reject(id: &Value, code: &str, message: &str) -> Line {
 }
 
 #[test]
+fn a_duplicate_command_refusal_keeps_the_change_workspace_tag_and_the_first_accept_still_attaches()
+{
+    use crate::app::outbox::Waiting;
+    for hub in [false, true] {
+        let mut app = attached();
+        let request = send_cd(&mut app, "../other");
+        let id = request["id"].as_str().unwrap();
+        let tag = Waiting::ChangeWorkspace(SessionId(SESSION.to_owned()));
+        assert_eq!(app.outbox.waiting(id), Some(tag.clone()));
+        let refusal = if hub {
+            hub_line(
+                "command_rejected",
+                json!({"command_id":id,"code":"duplicate_command","message":"duplicate"}),
+            )
+        } else {
+            reject(&request["id"], "duplicate_command", "duplicate")
+        };
+        app.on_line(refusal);
+        assert_eq!(app.outbox.waiting(id), Some(tag));
+        app.on_line(accept(&request["id"], NEW));
+        assert_eq!(app.session(), Some(&SessionId(NEW.to_owned())));
+        assert_eq!(app.outbox.waiting(id), None);
+    }
+}
+
+#[test]
+fn any_other_refusal_drops_it() {
+    for hub in [false, true] {
+        let mut app = attached();
+        let request = send_cd(&mut app, "../other");
+        let id = request["id"].as_str().unwrap();
+        let refusal = if hub {
+            hub_line(
+                "command_rejected",
+                json!({"command_id":id,"code":"busy","message":"busy"}),
+            )
+        } else {
+            reject(&request["id"], "busy", "busy")
+        };
+        app.on_line(refusal);
+        assert_eq!(app.outbox.waiting(id), None);
+        app.on_line(accept(&request["id"], NEW));
+        assert_eq!(app.session(), Some(&SessionId(SESSION.to_owned())));
+    }
+}
+
+#[test]
+fn change_workspace_tag_is_gone_after_lost_line() {
+    let mut app = attached();
+    let request = send_cd(&mut app, "../other");
+    let id = request["id"].as_str().unwrap();
+    app.write_failed(&[request.to_string()]);
+    assert_eq!(app.outbox.waiting(id), None);
+    assert_eq!(app.session(), Some(&SessionId(SESSION.to_owned())));
+}
+
+#[test]
+fn change_workspace_answer_from_another_session_takes_its_tag_without_attaching() {
+    let mut app = attached();
+    let request = send_cd(&mut app, "../other");
+    let id = request["id"].as_str().unwrap();
+    app.on_line(from(
+        OTHER,
+        "command_accepted",
+        json!({"command_id":id,"result":{"new_session_id":NEW}}),
+    ));
+    assert_eq!(app.outbox.waiting(id), None);
+    assert_eq!(app.session(), Some(&SessionId(SESSION.to_owned())));
+}
+
+#[test]
 fn cd_sends_the_path_unchanged_as_a_json_string() {
     let mut app = attached();
     let line = send_cd(&mut app, "../other");

@@ -466,18 +466,22 @@ impl App {
 
     /// Discards the late answer of a history wait ended by a reopening.
     pub(crate) fn abandon_history(&mut self, id: String) {
-        self.abandoned_history.insert(id);
+        self.outbox.wait(&id, super::outbox::Waiting::Abandoned);
     }
 
     /// Updates pass boundaries before any view consumes the line. Returns
     /// true only for an abandoned answer, which must fold nowhere.
-    pub(super) fn pass_line(&mut self, line: &Line) -> bool {
+    pub(super) fn pass_line(
+        &mut self,
+        line: &Line,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> bool {
         match line {
             Line::Session(line) => {
-                if matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
-                    && let Some(id) = line.payload.get("command_id").and_then(Value::as_str)
-                    && self.abandoned_history.remove(id)
+                if let Some(answer) = answer
+                    && answer.waiting == Some(super::outbox::Waiting::Abandoned)
                 {
+                    self.outbox.settled(answer.id);
                     return true;
                 }
                 let waited = line
