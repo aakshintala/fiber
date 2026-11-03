@@ -97,6 +97,23 @@ grep -Fq '"file": "main aaaaaaaa"' "$tmp/llist.json" || fail "listing output los
 grep -Fq '"samples": [32.0004, 32.0005, 32.0003, 32.0006, 32.0002]' "$tmp/llist.json" || fail "listing output lost full precision"
 grep -Fq '"cpu": "AMD EPYC 9V45 96-Core Processor"' "$tmp/llist.json" || fail "listing output lost the head's cpu"
 
+# The shared extraction filter rounds only the session_list row: a
+# four-decimal sample rounds to three decimals on the session_list row
+# and stays full precision on the listing row, so flipping the filter's
+# $id branch fails one of the two greps below.
+roundtrip=$tmp/roundtrip
+round_full="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+one_head "$roundtrip" "$round_full"
+printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.84444, 25.8, 25.4, 25.0, 26.1], "sessions_list_ms": [25.84444, 32.0004, 32.0005, 32.0003, 32.0002]}}\n' >"$roundtrip/benchmarks-$round_full/head.json"
+if ! scripts/class-data fast "$session_row" none "$roundtrip" >"$tmp/roundtrip-session.json" 2>"$err"; then
+  echo "scripts/test-class-data: class-data fast session_list over the rounding fixture failed:" >&2; cat "$err" >&2; exit 1
+fi
+grep -Fq '"samples": [25.844, 25.8, 25.4, 25, 26.1]' "$tmp/roundtrip-session.json" || fail "session_list output did not round the four-decimal sample"
+if ! scripts/class-data fast "$listing_row" none "$roundtrip" >"$tmp/roundtrip-listing.json" 2>"$err"; then
+  echo "scripts/test-class-data: class-data fast listing over the rounding fixture failed:" >&2; cat "$err" >&2; exit 1
+fi
+grep -Fq '"samples": [25.84444, 32.0004, 32.0005, 32.0003, 32.0002]' "$tmp/roundtrip-listing.json" || fail "listing output rounded the four-decimal sample"
+
 # A fixture value for the session_list row exits 2, as does the bare id.
 rc=0
 scripts/class-data fast "$session_row" "10 MiB" "$slist" >/dev/null 2>"$err" || rc=$?

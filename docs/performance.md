@@ -336,8 +336,8 @@ range: a model's class is the slowest cluster its stored runs reach. Within
 a model the frames_64 medians span 1.77% on 7763 and 7.34% on 9V45; the 9V74
 fast VM is 22.80% faster than its own slowest VM (29.54% slower by the
 opposite denominator). Across the 11 absolute timing rows the gated models'
-max/min median spreads range from 3.22% to 55.83%: session start spans 8.47%
-on 7763 and 54.37% on 9V45, listing spans 12.43% and 20.71% respectively, so
+max/min median spreads range from 3.22% to 81.05%: session start spans 8.47%
+on 7763 and 54.37% on 9V45, listing spans 73.30% and 81.05% respectively, so
 each row carries its own tolerance in the table. Budgeted numeric memory-row
 medians across these files vary by about 1.0% to 7.0% depending on workload:
 busy peak RSS spans 1.31% and web_fetch peak RSS 6.98%. An ordinary timing gate fails

@@ -96,13 +96,7 @@ fi
 extract='(.metrics[$id] // []) as $vals
   | if ($vals | type) != "array" then error("\($id): not an array")
     elif ([$vals[] | select(type != "number" or isnan or ((isfinite | not)) or . < 0)] | length) > 0 then error("\($id): not a finite number at or above zero")
-    else [$vals[] | ((. * 1000 | round) / 1000 | tostring)] | join(", ")
-    end'
-# shellcheck disable=SC2016 # $id expands in jq, not the shell.
-extract_full='(.metrics[$id] // []) as $vals
-  | if ($vals | type) != "array" then error("\($id): not an array")
-    elif ([$vals[] | select(type != "number" or isnan or ((isfinite | not)) or . < 0)] | length) > 0 then error("\($id): not a finite number at or above zero")
-    else [$vals[] | tostring] | join(", ")
+    else [$vals[] | (if $id == "session_list_ms" then (. * 1000 | round) / 1000 else . end | tostring)] | join(", ")
     end'
 
 lines=$(mktemp)
@@ -118,7 +112,7 @@ trap cleanup EXIT
 # outside the admitted set, or no samples for the row. A head.json that
 # cannot be read is a read failure. A session_list_ms or sessions_list_ms
 # sample that is not a plain finite number at or above zero fails the run
-# instead of emitting; the extraction filters above already encode that.
+# instead of emitting; the extraction filter above already encodes that.
 emit() {
   local name=$1 head=$2
   case $name in
@@ -135,11 +129,7 @@ emit() {
   local raw_cpu
   raw_cpu=$(jq -r '.cpu // ""' "$head") || return 1
   local samples
-  if [ "$metric" = "sessions_list_ms" ]; then
-    samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" "$extract_full" "$head") || return 1
-  else
-    samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" "$extract" "$head") || return 1
-  fi
+  samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" "$extract" "$head") || return 1
   if [ -z "$samples" ]; then
     return 0
   fi
