@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::io::{Read as _, Seek as _, SeekFrom};
 
-use contract::events::{Event, InputItem, JobCompleted, Outcome};
+use contract::events::{Event, EventKind, InputItem, JobCompleted, Outcome};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{Envelope, ErrorCode};
 
@@ -13,36 +13,34 @@ pub(crate) fn collect(lines: &[Envelope]) -> Result<Vec<JobCompleted>, Error> {
     let mut owned = HashSet::new();
     let mut kept = Vec::new();
     for line in lines {
-        match line.kind.as_str() {
-            "job_started" => {
-                if line
-                    .payload
-                    .get("extension")
-                    .is_some_and(|value| !value.is_null())
-                    && let Some(id) = line.payload.get("job_id").and_then(|value| value.as_str())
-                {
-                    owned.insert(id.to_owned());
-                }
-            }
-            "turn_started" | "fiber_exited" | "rewound" | "moved" => kept.clear(),
-            "job_completed"
-                if line.turn_id.is_none()
-                    && ["output_tail", "notice", "changed_by"]
-                        .iter()
-                        .all(|key| !line.payload.contains_key(*key)) =>
-            {
-                if let Some(Event::JobCompleted(completed)) =
-                    Event::from_envelope(line).map_err(Error::Unreadable)?
-                    && !owned.contains(&completed.job_id.0)
-                    && completed
-                        .error
-                        .as_ref()
-                        .is_none_or(|error| error.code != ErrorCode::Orphaned)
-                {
-                    kept.push(completed);
-                }
-            }
-            _ => {}
+        let kind = EventKind::from_name(&line.kind);
+        if kind == EventKind::JobStarted
+            && line
+                .payload
+                .get("extension")
+                .is_some_and(|value| !value.is_null())
+            && let Some(id) = line.payload.get("job_id").and_then(|value| value.as_str())
+        {
+            owned.insert(id.to_owned());
+        } else if matches!(
+            kind,
+            EventKind::TurnStarted | EventKind::FiberExited | EventKind::Rewound | EventKind::Moved
+        ) {
+            kept.clear();
+        } else if kind == EventKind::JobCompleted
+            && line.turn_id.is_none()
+            && ["output_tail", "notice", "changed_by"]
+                .iter()
+                .all(|key| !line.payload.contains_key(*key))
+            && let Some(Event::JobCompleted(completed)) =
+                Event::from_envelope(line).map_err(Error::Unreadable)?
+            && !owned.contains(&completed.job_id.0)
+            && completed
+                .error
+                .as_ref()
+                .is_none_or(|error| error.code != ErrorCode::Orphaned)
+        {
+            kept.push(completed);
         }
     }
     Ok(kept)

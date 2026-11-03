@@ -13,6 +13,7 @@ use std::time::Instant;
 use base64::Engine as _;
 use contract::SessionId;
 use contract::clock::{Clock, Wake};
+use contract::events::EventKind;
 use contract::keeper::{Exit, FromKeeper, Spawn, Stream, ToKeeper};
 use jobs::keeper::{Step, Supervisor};
 use log::Log;
@@ -126,7 +127,9 @@ impl Runtime {
                                 .map_err(|error| io::Error::other(error.to_string()))?;
                             *lock(&self.logged) = completed
                                 .into_iter()
-                                .filter(|line| line.kind == "job_completed")
+                                .filter(|line| {
+                                    EventKind::from_name(&line.kind) == EventKind::JobCompleted
+                                })
                                 .filter_map(|line| {
                                     line.payload
                                         .get("job_id")
