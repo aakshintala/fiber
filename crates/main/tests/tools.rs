@@ -3742,3 +3742,227 @@ fn zero_timeout_is_rejected_and_starts_nothing() {
         "a rejected call started a job"
     );
 }
+
+/// The model's text of a tool completion: every text part joined.
+fn completion_text(completed: &Value) -> String {
+    completed["payload"]["content"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a completion carries content: {completed}"))
+        .iter()
+        .filter_map(|part| part["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// The pid and log path a detached receipt names.
+fn detach_receipt(text: &str) -> (u32, PathBuf) {
+    let rest = text
+        .strip_prefix("Started detached. PID ")
+        .unwrap_or_else(|| panic!("a detached receipt: {text}"));
+    let (pid, rest) = rest
+        .split_once(". Output: ")
+        .unwrap_or_else(|| panic!("a detached receipt names its output: {text}"));
+    let path = rest
+        .strip_suffix(". Fiber will not stop it.\n")
+        .unwrap_or_else(|| panic!("a detached receipt ends: {text}"));
+    (
+        pid.parse()
+            .unwrap_or_else(|_| panic!("a numeric pid: {text}")),
+        PathBuf::from(path),
+    )
+}
+
+#[test]
+fn a_detached_call_reaches_the_reviewer_even_when_a_standing_allow_covers_shell() {
+    let setup = Setup::new_with_started_deadline();
+    let marker = setup.workspace().join("detached-marker");
+    let script = setup.workspace().join("detach-allow.sh");
+    fs::write(&script, format!("touch {}\necho ran\n", marker.display())).unwrap();
+    let command = format!("sh {}", script.display());
+    let arguments = json!({"command": command, "detach": true});
+    // A standing rule allows the exact command, as
+    // `a_background_shell_job_is_waited_for_before_ask_exits` does.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": command})
+        ),
+    )
+    .unwrap();
+
+    // Without a reviewer the call is denied: a standing allow never covers
+    // a process that outlives the session.
+    let server = ProviderServer::start([
+        stream(&[function_call("detached_1", "shell", &arguments)]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    let watchdog = Watchdog::matching(script.to_str().unwrap());
+    let run = setup.run(&["ask", "start the detached command"]);
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        !run.kinds().contains(&"tool_call_started"),
+        "a denied call never starts"
+    );
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "no_reviewer");
+    assert_ne!(resolved["payload"]["decided_by"], "standing_rule");
+    assert_eq!(completed_call(&run)["payload"]["status"], "denied");
+    assert!(!marker.exists(), "the denied call never ran");
+    assert!(
+        !setup.home().join("detached").exists(),
+        "a call that never ran writes no log"
+    );
+
+    // With a reviewer that allows, the same call runs, decided by the reviewer.
+    let server = ProviderServer::start([
+        stream(&[function_call("detached_2", "shell", &arguments)]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    with_reviewer(&setup);
+    let watchdog = Watchdog::matching(script.to_str().unwrap());
+    let run = setup.run(&["ask", "start the detached command again"]);
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    let started = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started")
+        .unwrap();
+    assert_eq!(started["payload"]["always_reviewed"], json!(true));
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "a detached call is reviewed as an unconfined call"
+    );
+    let done = completed_call(&run);
+    assert_eq!(done["payload"]["status"], "completed");
+    assert!(marker.exists(), "the reviewed call ran");
+    let (pid, log) = detach_receipt(&completion_text(done));
+    assert!(pid > 1, "the receipt names the process id");
+    let logs: Vec<PathBuf> = fs::read_dir(setup.home().join("detached"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(logs, vec![log.clone()], "one call writes one log");
+    assert_eq!(fs::read_to_string(&log).unwrap(), "ran\n");
+}
+
+#[test]
+fn a_detached_command_outlives_the_session_and_the_receipt_names_its_pid_and_log() {
+    let setup = Setup::new_with_started_deadline();
+    let ready = fakes::children::Ready::new(&setup.workspace());
+    let script = setup.workspace().join("detach-survive.sh");
+    fs::write(
+        &script,
+        format!(
+            "echo first\necho $$ > {}\nexec sleep 60\n",
+            ready.path().display()
+        ),
+    )
+    .unwrap();
+    let command = format!("sh {}", script.display());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "detached_1",
+            "shell",
+            &json!({"command": command, "detach": true}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    with_reviewer(&setup);
+    let watchdog = Watchdog::matching(script.to_str().unwrap());
+    let run = setup.run(&["ask", "start the detached command"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The run itself proves the detached child holds no pipe fiber waits
+    // on: `run` returns only after fiber's own group emptied.
+    let done = completed_call(&run);
+    assert_eq!(done["payload"]["status"], "completed");
+    let (pid, log) = detach_receipt(&completion_text(done));
+    let pgid = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    assert_eq!(pid, pgid, "the receipt's pid is the child's group");
+    assert!(
+        fakes::group_alive(pgid),
+        "the detached command is still alive after its session shut down"
+    );
+    assert_eq!(fs::read_to_string(&log).unwrap(), "first\n");
+    assert!(
+        !run.kinds().contains(&"job_started"),
+        "a detached call is not a job"
+    );
+    assert!(
+        !run.kinds().contains(&"job_completed"),
+        "a detached call sends no completion notice"
+    );
+    assert!(fakes::kill_group(pid, "KILL").unwrap());
+    assert!(
+        fakes::group_empties(pid, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the group empties once the reaper thread reaps the child"
+    );
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn a_timeouts_receipt_names_the_process_group() {
+    let setup = Setup::new_with_started_deadline();
+    let script = setup.workspace().join("detach-timeout.sh");
+    fs::write(&script, "sleep 60\n").unwrap();
+    let command = format!("sh {}", script.display());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "timeout_1",
+            "shell",
+            &json!({"command": command, "timeout_ms": 1}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    // A standing rule allows the command; no reviewer is configured.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": command})
+        ),
+    )
+    .unwrap();
+    let watchdog = Watchdog::matching(script.to_str().unwrap());
+    // The 1 ms deadline fires at once under the product's own clock; the
+    // run's wall deadline is the guard, and the test waits on no timer.
+    let run = setup.run(&["ask", "run the slow command"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let done = completed_call(&run);
+    assert_eq!(done["payload"]["status"], "failed");
+    assert_eq!(done["payload"]["error"]["code"], "timeout");
+    let text = completion_text(done);
+    assert!(
+        text.contains("Fiber stopped the whole process group."),
+        "the timeout's receipt names the group: {text}"
+    );
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}

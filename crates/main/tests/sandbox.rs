@@ -1772,3 +1772,163 @@ fn delegates_inherit_a_run_override_and_refreshed_denials() {
     let (status, _, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "{stderr}");
 }
+
+/// A detached call with the sandbox on runs outside it and takes no
+/// protected-path transaction (`docs/tools.md`, "Background jobs"). The
+/// control is `a_confined_call_restores_the_protected_path_it_changed`,
+/// which creates the baseline and lock files this call must not.
+#[test]
+fn a_detached_call_runs_unconfined_with_the_sandbox_on_and_takes_no_protected_path_transaction() {
+    use fakes::ProviderServer;
+    use serde_json::{Value, json};
+    use support::{function_call, hello, stream, text_reply};
+
+    let setup = Setup::new_with_sandbox_root();
+    let workspace = setup.root.path().join("w");
+    let marker_ok = workspace.join("detached-ok-ran");
+    let marker_bad = workspace.join("detached-bad-ran");
+    let script_ok = workspace.join("detach-ok.sh");
+    let script_bad = workspace.join("detach-bad.sh");
+    let ready = fakes::children::Ready::new(&workspace);
+    fs::write(
+        &script_ok,
+        format!(
+            "touch {}\necho $$ > {}\nexec sleep 60\n",
+            marker_ok.display(),
+            ready.path().display()
+        ),
+    )
+    .unwrap();
+    fs::write(&script_bad, format!("touch {}\n", marker_bad.display())).unwrap();
+    let command_ok = format!("sh {}", script_ok.display());
+    let command_bad = format!("sh {}", script_bad.display());
+
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "detached_ok",
+            "shell",
+            &json!({"command": command_ok, "detach": true}),
+        )]),
+        text_reply("allow"),
+        stream(&[function_call(
+            "detached_bad",
+            "shell",
+            &json!({"command": command_bad, "detach": true, "unconfined": false}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("config.json"),
+        serde_json::to_string(&json!({
+            "model": "fake/m",
+            "reviewer": {"model": "fake/m"},
+            "sandbox": {"enabled": true},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // Standing rules allow both commands; the first still reaches the
+    // reviewer, since a standing allow never covers a detached call, and
+    // the second is rejected at call time before it can run.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": command_ok}),
+            json!({"decision": "allow", "tool": "shell", "prefix": command_bad}),
+        ),
+    )
+    .unwrap();
+    let watchdog_ok = fakes::Watchdog::matching(script_ok.to_str().unwrap());
+    let watchdog_bad = fakes::Watchdog::matching(script_bad.to_str().unwrap());
+    let run = setup.fiber_run(&["ask", "start the detached command, then the bad one"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<Value> = run
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    assert!(!lines.is_empty(), "the session writes event lines");
+    let completed_ok = lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_completed"
+                && line["payload"]["details"]["command"] == command_ok
+        })
+        .unwrap_or_else(|| panic!("a completion for the detached call"));
+    assert_eq!(completed_ok["payload"]["status"], "completed");
+    let action = completed_ok["action_id"]
+        .as_str()
+        .expect("a completion names its call");
+    let started = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
+        .unwrap_or_else(|| panic!("a start for the detached call"));
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "the detached call runs outside the sandbox"
+    );
+    assert!(
+        completed_ok["payload"]["details"]
+            .get("protected_paths")
+            .is_none(),
+        "an unconfined call takes no protected-path transaction"
+    );
+    assert!(marker_ok.exists(), "the allowed detached call ran");
+    let pgid = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    assert!(
+        fakes::group_alive(pgid),
+        "the detached child outlives the run"
+    );
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    assert!(
+        fakes::group_empties(pgid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the reaper thread reaps the killed child"
+    );
+    watchdog_ok.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+
+    // The second call is rejected before it runs: it fails with
+    // `invalid_arguments`, and its script never starts. A rejected call
+    // carries no `details`, so the completion is found by its failure.
+    let completed_bad = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed" && line["payload"]["status"] == "failed")
+        .unwrap_or_else(|| panic!("a completion for the rejected call"));
+    assert_eq!(
+        completed_bad["payload"]["error"]["code"],
+        "invalid_arguments"
+    );
+    assert!(!marker_bad.exists(), "a rejected call started its command");
+    watchdog_bad.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+
+    // No baseline or lock file under the project's `protected-paths/`
+    // (`crates/tools/src/shell/sandbox/protected/baseline.rs`,
+    // `state_paths`): nothing transacted, so nothing was recorded.
+    #[cfg(target_os = "linux")]
+    {
+        let mut recorded: Vec<std::path::PathBuf> = Vec::new();
+        let projects = setup.home().join("projects");
+        if projects.exists() {
+            let mut stack = vec![projects];
+            while let Some(dir) = stack.pop() {
+                for entry in fs::read_dir(&dir).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                        if ["baseline.json", "baseline.lock", "active.lock"].contains(&name) {
+                            recorded.push(path);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            recorded.is_empty(),
+            "a detached call records no baseline or lock: {recorded:?}"
+        );
+    }
+}
