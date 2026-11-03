@@ -16,7 +16,7 @@ use crate::app::{App, Effect};
 use crate::catalogue::{Catalogue, LeftOutGroup, LeftOutModel, ModelEntry, Price};
 use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::model_picker::{
-    Fresh, InstallRow, LoggedOutRow, ModelRow, PickerView, Progress, Section,
+    Fresh, InstallRow, LeftOutRow, LoggedOutRow, ModelRow, PickerView, Progress, Section,
 };
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
@@ -2411,5 +2411,529 @@ fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
     assert!(
         nearest_row >= top && nearest_row < end,
         "the clamp lands inside the new window"
+    );
+}
+
+/// One model in a `layout_view` section: its id, whether it draws the
+/// session-only third row, and the checklist mark (`Some` only there).
+struct ModelSpec {
+    id: &'static str,
+    session_only: bool,
+    mark: Option<bool>,
+}
+
+/// A plain choosing model with no third row and no checklist mark.
+fn plain(id: &'static str) -> ModelSpec {
+    ModelSpec {
+        id,
+        session_only: false,
+        mark: None,
+    }
+}
+
+/// A `layout_view` section: its provider, its models, and how many
+/// count rows stand after its heading and before its models.
+struct SectionSpec {
+    provider: &'static str,
+    models: Vec<ModelSpec>,
+    counts: usize,
+}
+
+/// One section with plain models and `counts` count rows.
+fn sec(provider: &'static str, ids: &[&'static str], counts: usize) -> SectionSpec {
+    SectionSpec {
+        provider,
+        models: ids.iter().map(|id| plain(id)).collect(),
+        counts,
+    }
+}
+
+/// A picker view built from a spec, with layout indexes assigned in
+/// item order from 2: each section's counts, then its models, then the
+/// logged-out rows, then the installs. `installs` holds one flag per
+/// install: whether it failed and so draws its error row.
+fn layout_view(
+    sections: Vec<SectionSpec>,
+    logged_out: usize,
+    installs: Vec<bool>,
+    focused: Option<usize>,
+) -> PickerView {
+    let mut at = 2;
+    let mut out = Vec::new();
+    for section in &sections {
+        let mut models = Vec::new();
+        let mut left_out = Vec::new();
+        for n in 0..section.counts {
+            left_out.push(LeftOutRow {
+                at,
+                text: format!("{} count {n}", section.provider),
+            });
+            at += 1;
+        }
+        for model in &section.models {
+            models.push(ModelRow {
+                at,
+                id: model.id.to_owned(),
+                hits: vec![false; model.id.len()],
+                roles: Vec::new(),
+                current: false,
+                scoped: false,
+                price: None,
+                cost: None,
+                levels: Vec::new(),
+                saved: None,
+                chip: None,
+                mark: model.mark,
+                session_only: model.session_only,
+            });
+            at += 1;
+        }
+        out.push(Section {
+            provider: section.provider.to_owned(),
+            state: Fresh::Unknown,
+            models,
+            left_out,
+        });
+    }
+    let mut logged = Vec::new();
+    for n in 0..logged_out {
+        let provider = format!("logged{n}");
+        logged.push(LoggedOutRow {
+            at,
+            hits: vec![false; provider.len()],
+            provider,
+            hint: None,
+        });
+        at += 1;
+    }
+    let mut not_installed = Vec::new();
+    for (n, failed) in installs.iter().enumerate() {
+        let provider = format!("install{n}");
+        not_installed.push(InstallRow {
+            at,
+            hits: vec![false; provider.len()],
+            provider,
+            progress: failed.then(|| Progress::Failed("boom".to_owned())),
+        });
+        at += 1;
+    }
+    PickerView {
+        filter: String::new(),
+        count: String::new(),
+        toggle: None,
+        buttons_at: 1,
+        sections: out,
+        no_match: false,
+        status: Vec::new(),
+        footer: Vec::new(),
+        refresh: true,
+        spinner: String::new(),
+        focused,
+        top: 0,
+        logged_out: logged,
+        installs: not_installed,
+        outcomes: Vec::new(),
+    }
+}
+
+/// Fixture A: sections `acme[m1, m2]` and `zeta[z1]`, logged-out rows
+/// `L1` and `L2`, installs `I1` (failed) and `I2`. Items 0..=4 are the
+/// models and logged-out rows, installs are 5 and 6, and the full
+/// range walks 16 rows. Layout indexes run from 2 in item order, so
+/// `m1` is 2, `m2` is 3, `z1` is 4, `L1` is 5, `L2` is 6, `I1` is 7
+/// and `I2` is 8.
+fn layout_fixture_a() -> PickerView {
+    layout_view(
+        vec![sec("acme", &["m1", "m2"], 0), sec("zeta", &["z1"], 0)],
+        2,
+        vec![true, false],
+        Some(4),
+    )
+}
+
+/// The prediction and the renderer agree by construction: the full
+/// range walks exactly the rows the display emits, and every item and
+/// install takes exactly one start offset.
+#[test]
+fn rows_for_the_full_range_matches_the_displayed_rows() {
+    let session_only = ModelSpec {
+        id: "m1",
+        session_only: true,
+        mark: None,
+    };
+    let scope_mode = ModelSpec {
+        id: "m1",
+        session_only: false,
+        mark: Some(true),
+    };
+    let mixes: Vec<(&str, PickerView)> = vec![
+        ("empty", layout_view(vec![], 0, vec![], None)),
+        (
+            "one model",
+            layout_view(vec![sec("acme", &["m1"], 0)], 0, vec![], Some(2)),
+        ),
+        (
+            "two models one section",
+            layout_view(vec![sec("acme", &["m1", "m2"], 0)], 0, vec![], Some(2)),
+        ),
+        (
+            "two sections",
+            layout_view(
+                vec![sec("acme", &["m1"], 0), sec("zeta", &["z1"], 0)],
+                0,
+                vec![],
+                Some(2),
+            ),
+        ),
+        (
+            "section with count then model",
+            layout_view(vec![sec("acme", &["m1"], 1)], 0, vec![], Some(3)),
+        ),
+        (
+            "count only",
+            layout_view(vec![sec("acme", &[], 1)], 0, vec![], None),
+        ),
+        (
+            "models and one logged-out",
+            layout_view(vec![sec("acme", &["m1", "m2"], 0)], 1, vec![], Some(2)),
+        ),
+        (
+            "two logged-out only",
+            layout_view(vec![], 2, vec![], Some(2)),
+        ),
+        (
+            "models, logged-out and installs",
+            layout_view(
+                vec![sec("acme", &["m1", "m2"], 0), sec("zeta", &["z1"], 0)],
+                2,
+                vec![true, false],
+                Some(4),
+            ),
+        ),
+        (
+            "two installs only",
+            layout_view(vec![], 0, vec![false, false], Some(2)),
+        ),
+        (
+            "logged-out and installs, no models",
+            layout_view(vec![], 1, vec![false], Some(2)),
+        ),
+        (
+            "scope-mode model",
+            layout_view(
+                vec![SectionSpec {
+                    provider: "acme",
+                    models: vec![scope_mode],
+                    counts: 0,
+                }],
+                0,
+                vec![],
+                Some(2),
+            ),
+        ),
+        (
+            "session-only model",
+            layout_view(
+                vec![SectionSpec {
+                    provider: "acme",
+                    models: vec![session_only],
+                    counts: 0,
+                }],
+                0,
+                vec![],
+                Some(2),
+            ),
+        ),
+    ];
+    for (label, view) in &mixes {
+        let shown = items(view);
+        let total = shown.len() + view.installs.len();
+        let display = display_rows(view, false);
+        assert_eq!(
+            rows_for(view, &shown, 0, total),
+            display.rows.len(),
+            "{label}: the full range walks the displayed rows"
+        );
+        assert_eq!(
+            display.item_starts.len(),
+            total,
+            "{label}: every item and install takes one start"
+        );
+    }
+    for (label, view) in [
+        (
+            "choosing",
+            choosing(160, 48).model_picker_view().expect("open"),
+        ),
+        (
+            "choosing_left_out",
+            choosing_left_out(160, 48)
+                .model_picker_view()
+                .expect("open"),
+        ),
+    ] {
+        let shown = items(&view);
+        let total = shown.len() + view.installs.len();
+        let display = display_rows(&view, false);
+        assert_eq!(
+            rows_for(&view, &shown, 0, total),
+            display.rows.len(),
+            "{label}: the full range walks the displayed rows"
+        );
+        assert_eq!(
+            display.item_starts.len(),
+            total,
+            "{label}: every item and install takes one start"
+        );
+    }
+}
+
+/// Every window rule priced by value on fixture A: a heading opens a
+/// section with a blank only mid-window, the logged-out and install
+/// groups open with a blank only when an in-window row precedes them,
+/// and a window starting inside a section continues it with no heading.
+#[test]
+fn rows_for_counts_each_window_rule_by_value() {
+    let view = layout_fixture_a();
+    let shown = items(&view);
+    let cases = [
+        ((0, 0), 0, "empty at the start"),
+        ((0, 1), 3, "heading at the window start takes no blank"),
+        ((1, 2), 2, "a continued section takes its model rows only"),
+        (
+            (2, 3),
+            3,
+            "a new section at the window start takes no blank",
+        ),
+        (
+            (1, 3),
+            6,
+            "a new section mid-window takes blank and heading",
+        ),
+        (
+            (2, 4),
+            5,
+            "a group preceded by an in-window item takes a blank",
+        ),
+        (
+            (3, 4),
+            1,
+            "the group start at the window start takes no blank",
+        ),
+        ((3, 5), 2, "two logged-out rows take two rows"),
+        ((4, 5), 1, "a mid-group row takes no blank"),
+        (
+            (5, 6),
+            2,
+            "a failed install at the window start takes two rows",
+        ),
+        ((6, 7), 1, "an install without an error takes one row"),
+        ((5, 7), 3, "two installs take three rows"),
+        (
+            (4, 6),
+            4,
+            "a logged-out row and a failed install take four rows",
+        ),
+        ((0, 7), 16, "the full range walks sixteen rows"),
+        ((3, 3), 0, "an empty range walks no rows"),
+        ((7, 7), 0, "an empty range at the total walks no rows"),
+        ((5, 3), 0, "an inverted range walks no rows"),
+        ((9, 12), 0, "a range past the total walks no rows"),
+        ((0, 8), 16, "an end past the total stops at the total"),
+        ((6, 100), 1, "a far end past the total stops at the total"),
+        (
+            (0, 6),
+            15,
+            "the range ending one before the total drops one row",
+        ),
+        ((0, 7), 16, "the range ending at the total walks every row"),
+        (
+            (0, 8),
+            16,
+            "the range ending past the total walks every row",
+        ),
+    ];
+    for ((start, end), expected, label) in cases {
+        assert_eq!(
+            rows_for(&view, &shown, start, end),
+            expected,
+            "{label}: rows_for({start}, {end})"
+        );
+    }
+}
+
+/// One model variant each: a session-only choice takes a third row, a
+/// scope-mode model takes two whatever its third-row flag says, and a
+/// count takes one under its heading.
+#[test]
+fn rows_for_prices_one_model_variant_each() {
+    let session_only = layout_view(
+        vec![SectionSpec {
+            provider: "acme",
+            models: vec![ModelSpec {
+                id: "m1",
+                session_only: true,
+                mark: None,
+            }],
+            counts: 0,
+        }],
+        0,
+        vec![],
+        Some(2),
+    );
+    let shown = items(&session_only);
+    assert_eq!(rows_for(&session_only, &shown, 0, 1), 4);
+    assert_eq!(
+        display_rows(&session_only, false).rows.len(),
+        4,
+        "a session-only model draws its third row"
+    );
+    let scope_mode = layout_view(
+        vec![SectionSpec {
+            provider: "acme",
+            models: vec![ModelSpec {
+                id: "m1",
+                session_only: false,
+                mark: Some(true),
+            }],
+            counts: 0,
+        }],
+        0,
+        vec![],
+        Some(2),
+    );
+    let shown = items(&scope_mode);
+    assert_eq!(rows_for(&scope_mode, &shown, 0, 1), 3);
+    assert_eq!(
+        display_rows(&scope_mode, false).rows.len(),
+        3,
+        "a scope-mode model draws two rows"
+    );
+    let count_only = layout_view(vec![sec("acme", &[], 1)], 0, vec![], None);
+    let shown = items(&count_only);
+    assert_eq!(rows_for(&count_only, &shown, 0, 1), 2);
+    let count_then_model = layout_view(vec![sec("acme", &["m1"], 1)], 0, vec![], Some(3));
+    let shown = items(&count_then_model);
+    assert_eq!(
+        rows_for(&count_then_model, &shown, 1, 2),
+        2,
+        "a model continuing its section takes its rows only"
+    );
+}
+
+/// The group offsets on fixture A: headed items start at their blank
+/// or heading, while the first logged-out and install rows start after
+/// their blank, so the scroll top reads past it.
+#[test]
+fn item_starts_pin_the_group_offsets() {
+    let view = layout_fixture_a();
+    let display = display_rows(&view, false);
+    assert_eq!(display.item_starts, vec![0, 3, 5, 10, 11, 13, 15]);
+}
+
+/// The window caps one row below, at, and above what fits, and a short
+/// fit keeps the focused item whole.
+#[test]
+fn window_caps_at_cap_minus_one_cap_and_cap_plus_one() {
+    let view = layout_fixture_a();
+    assert_eq!(window(&view, 4), (2, 3));
+    assert_eq!(window(&view, 5), (2, 4));
+    assert_eq!(window(&view, 6), (1, 3));
+    assert_eq!(window(&view, 0), (2, 3));
+    let mut view = layout_fixture_a();
+    // `L1` is layout index 5.
+    view.focused = Some(5);
+    assert_eq!(window(&view, 1), (3, 4));
+    assert_eq!(window(&view, 2), (3, 5));
+    assert_eq!(window(&view, 3), (3, 5));
+    // `I1` is layout index 7: a failed install is two rows.
+    view.focused = Some(7);
+    assert_eq!(window(&view, 1), (5, 6));
+    assert_eq!(window(&view, 2), (5, 6));
+    assert_eq!(window(&view, 3), (5, 7));
+    let empty = layout_view(vec![], 0, vec![], None);
+    assert_eq!(window(&empty, 0), (0, 0));
+    assert_eq!(window(&empty, 5), (0, 0));
+    let tall = layout_view(
+        vec![SectionSpec {
+            provider: "acme",
+            models: vec![ModelSpec {
+                id: "m1",
+                session_only: true,
+                mark: None,
+            }],
+            counts: 0,
+        }],
+        0,
+        vec![],
+        Some(2),
+    );
+    assert_eq!(window(&tall, 0), (0, 1));
+}
+
+/// Every display row's trim flag and focus: no fixture-A blank trims,
+/// while a count-headed section trims its blank, its heading and its
+/// count row. Focus is the row's own layout index.
+#[test]
+fn trim_count_flags_pin_the_blanks() {
+    let view = layout_fixture_a();
+    let display = display_rows(&view, false);
+    let focus: Vec<Option<usize>> = display.rows.iter().map(|row| row.focus).collect();
+    assert_eq!(
+        focus,
+        vec![
+            None,
+            Some(2),
+            None,
+            Some(3),
+            None,
+            None,
+            None,
+            Some(4),
+            None,
+            None,
+            Some(5),
+            Some(6),
+            None,
+            Some(7),
+            None,
+            Some(8),
+        ]
+    );
+    assert!(
+        display.rows.iter().all(|row| !row.trim_count),
+        "no fixture-A blank trims"
+    );
+    let app = choosing_left_out(160, 48);
+    let view = app.model_picker_view().expect("open");
+    let display = display_rows(&view, false);
+    let focus: Vec<Option<usize>> = display.rows.iter().map(|row| row.focus).collect();
+    assert_eq!(
+        focus,
+        vec![
+            None,
+            None,
+            Some(4),
+            None,
+            Some(5),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(9),
+            None,
+            Some(10),
+            None,
+        ]
+    );
+    let trim: Vec<bool> = display.rows.iter().map(|row| row.trim_count).collect();
+    assert_eq!(
+        trim,
+        vec![
+            true, true, false, false, false, false, true, true, true, false, false, false, false,
+            false, false,
+        ]
     );
 }
