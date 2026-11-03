@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The self-test for scripts/check-resources (issue #3954). A fixture `df`
-# on PATH prints POSIX `df -Pk` text and logs its arguments, so the
-# preflight cases pin the parsing, the two constants and the shared-sum rule
+# on PATH prints POSIX `df -Pk` text and logs its arguments, and a fixture
+# `uname` answers `uname -s` from FIX_UNAME_S, so the preflight cases pin
+# the parsing, the platform-keyed constant pairs and the shared-sum rule
 # without touching a real disk. A fixture `cargo` and a fixture
 # `shellcheck` stand in for the toolchain in the throwaway repos where the
 # `scripts/check` wiring cases run. No wait, no clock, no signal, no
@@ -21,16 +22,27 @@ fail() {
 check_resources=$top/scripts/check-resources
 [ -x "$check_resources" ] || fail "scripts/check-resources is not executable"
 
-# The constants live in the script; the cases below read them, so a
-# measurement update moves every boundary with it.
-tmp_min=$(sed -n 's/^PREFLIGHT_TMPDIR_MIN_MIB=//p' "$check_resources")
-tgt_min=$(sed -n 's/^PREFLIGHT_TARGET_MIN_MIB=//p' "$check_resources")
+# The Linux constants live in the script; the cases below read them, so a
+# measurement update moves every boundary with it. The shipped Darwin pair
+# equals the Linux pair until the macOS figures are harvested (see #4027).
+tmp_min=$(sed -n 's/^PREFLIGHT_TMPDIR_MIN_MIB_LINUX=//p' "$check_resources")
+tgt_min=$(sed -n 's/^PREFLIGHT_TARGET_MIN_MIB_LINUX=//p' "$check_resources")
+darwin_tmp_min=$(sed -n 's/^PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=//p' "$check_resources")
+darwin_tgt_min=$(sed -n 's/^PREFLIGHT_TARGET_MIN_MIB_DARWIN=//p' "$check_resources")
 case $tmp_min in
-  '' | *[!0-9]*) fail "PREFLIGHT_TMPDIR_MIN_MIB is not a plain number" ;;
+  '' | *[!0-9]*) fail "PREFLIGHT_TMPDIR_MIN_MIB_LINUX is not a plain number" ;;
 esac
 case $tgt_min in
-  '' | *[!0-9]*) fail "PREFLIGHT_TARGET_MIN_MIB is not a plain number" ;;
+  '' | *[!0-9]*) fail "PREFLIGHT_TARGET_MIN_MIB_LINUX is not a plain number" ;;
 esac
+case $darwin_tmp_min in
+  '' | *[!0-9]*) fail "PREFLIGHT_TMPDIR_MIN_MIB_DARWIN is not a plain number" ;;
+esac
+case $darwin_tgt_min in
+  '' | *[!0-9]*) fail "PREFLIGHT_TARGET_MIN_MIB_DARWIN is not a plain number" ;;
+esac
+[ "$darwin_tmp_min" = "$tmp_min" ] || fail "shipped Darwin TMPDIR floor differs from Linux without a macOS harvest"
+[ "$darwin_tgt_min" = "$tgt_min" ] || fail "shipped Darwin target floor differs from Linux without a macOS harvest"
 
 mkdir -p "$tmp/bin"
 df_log=$tmp/df-args.txt
@@ -76,6 +88,15 @@ printf 'Filesystem  1024-blocks  Used Available Capacity Mounted on\n'
 printf '%s  200000000  100000000  %s  50%%  %s\n' "$dev" "$avail" "$mnt"
 EOF
 chmod 755 "$tmp/bin/df"
+
+# Fixture uname: answers `uname -s` from FIX_UNAME_S, defaulting to Linux,
+# so the platform cases select the pair without touching the real kernel
+# name. It sits first on PATH like the fixture `df`.
+cat >"$tmp/bin/uname" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${FIX_UNAME_S-Linux}"
+EOF
+chmod 755 "$tmp/bin/uname"
 
 # Fixture cargo for the wiring cases: logs every call; `xtask select`
 # reports an empty docs selection or fails with FIX_SELECT_STDERR at 101;
@@ -343,6 +364,54 @@ else
   chmod 700 "$tmp/locked"
   unset FIX_DF_TMPDIR FIX_DF_TMP_KIB FIX_DF_TGT_KIB
 fi
+
+# --- platform ---
+# `uname -s` selects the active pair: Linux keeps the measured pair, Darwin
+# its own, any other value falls back to Linux. The shipped Darwin pair
+# equals the Linux pair until the macOS harvest (pinned above), so these
+# cases patch a copy of the script to a distinct Darwin pair: the patched
+# names are the platform-specific constants read above, and the shipped
+# script takes no environment override. Free space between the Linux floor
+# and the patched Darwin floor refuses under Darwin and passes under Linux
+# or an unknown kernel name, so a swapped pair fails.
+patched=$tmp/check-resources-darwin
+darwin_tmp=$((tmp_min + 500))
+darwin_tgt=$((tgt_min + 500))
+sed -e "s/^PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=.*/PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=$darwin_tmp/" -e "s/^PREFLIGHT_TARGET_MIN_MIB_DARWIN=.*/PREFLIGHT_TARGET_MIN_MIB_DARWIN=$darwin_tgt/" "$check_resources" >"$patched"
+chmod 755 "$patched"
+grep -qF "PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=$darwin_tmp" "$patched" || fail "patched copy holds no distinct Darwin TMPDIR floor"
+grep -qF "PREFLIGHT_TARGET_MIN_MIB_DARWIN=$darwin_tgt" "$patched" || fail "patched copy holds no distinct Darwin target floor"
+export FIX_DF_TMPDIR=$tmp/scratch
+export FIX_DF_TMP_KIB=$(((tmp_min + 100) * 1024))
+export FIX_DF_TGT_KIB=$(((tgt_min + 100) * 1024))
+
+# Darwin with free space between the floors: exit 75 naming the Darwin pair.
+rc=0
+FIX_UNAME_S=Darwin TMPDIR=$tmp/scratch CARGO_TARGET_DIR=$tmp/target "$patched" preflight >"$out" 2>"$err" || rc=$?
+[ "$rc" -eq 75 ] || { cat "$out" "$err" >&2; fail "Darwin between-floors exited $rc, want 75"; }
+grep -qF "the gate needs $darwin_tmp MiB (PREFLIGHT_TMPDIR_MIN_MIB)" "$out" || { cat "$out" >&2; fail "Darwin refusal names no Darwin TMPDIR floor"; }
+grep -qF "the gate needs $darwin_tgt MiB (PREFLIGHT_TARGET_MIN_MIB)" "$out" || { cat "$out" >&2; fail "Darwin refusal names no Darwin target floor"; }
+
+# Linux with the same figures: exit 0 naming the Linux pair.
+rc=0
+FIX_UNAME_S=Linux TMPDIR=$tmp/scratch CARGO_TARGET_DIR=$tmp/target "$patched" preflight >"$out" 2>"$err" || rc=$?
+[ "$rc" -eq 0 ] || { cat "$out" "$err" >&2; fail "Linux between-floors exited $rc, want 0"; }
+grep -qF "(need $tmp_min and $tgt_min)" "$out" || { cat "$out" >&2; fail "Linux report names no Linux pair"; }
+
+# An unknown kernel name falls back to the Linux pair: exit 0.
+rc=0
+FIX_UNAME_S=FreeBSD TMPDIR=$tmp/scratch CARGO_TARGET_DIR=$tmp/target "$patched" preflight >"$out" 2>"$err" || rc=$?
+[ "$rc" -eq 0 ] || { cat "$out" "$err" >&2; fail "unknown uname exited $rc, want 0"; }
+grep -qF "(need $tmp_min and $tgt_min)" "$out" || { cat "$out" >&2; fail "unknown uname used no Linux pair"; }
+
+# Darwin with plenty over the Darwin floors: exit 0 naming the Darwin pair.
+export FIX_DF_TMP_KIB=$(((darwin_tmp + 50) * 1024))
+export FIX_DF_TGT_KIB=$(((darwin_tgt + 50) * 1024))
+rc=0
+FIX_UNAME_S=Darwin TMPDIR=$tmp/scratch CARGO_TARGET_DIR=$tmp/target "$patched" preflight >"$out" 2>"$err" || rc=$?
+[ "$rc" -eq 0 ] || { cat "$out" "$err" >&2; fail "Darwin plenty exited $rc, want 0"; }
+grep -qF "(need $darwin_tmp and $darwin_tgt)" "$out" || { cat "$out" >&2; fail "Darwin report names no Darwin pair"; }
+unset FIX_DF_TMPDIR FIX_DF_TMP_KIB FIX_DF_TGT_KIB
 
 # --- classify ---
 

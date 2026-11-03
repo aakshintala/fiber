@@ -22,19 +22,42 @@
 # mount point.
 set -euo pipefail
 
-# Minimum free scratch space for one gate run, in MiB. Peak TMPDIR growth
-# of a full `scripts/check --base origin/main` run on main, measured cold on
-# Linux x86_64 (origin/main 137f1c8c47c2688db62ba959a6968f638506e3e1,
-# 2026-11-02, private empty TMPDIR, `CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0`):
-# 1916936 KiB, rounded up to 1873 MiB and doubled. Both platforms use this
-# constant; it was not measured twice and macOS was not measured.
-PREFLIGHT_TMPDIR_MIN_MIB=3746
-# Minimum free `target` space for one gate run, in MiB. Peak target growth
-# of the same measured run (cold target, same commit, date and environment
-# as above): 28019224 KiB, rounded up to 27363 MiB and doubled. Both
-# platforms use this constant; only `CARGO_TARGET_DIR` is read (the repo's
-# `.cargo/config.toml` sets no target directory).
-PREFLIGHT_TARGET_MIN_MIB=54726
+# Minimum free scratch space for one gate run, in MiB, on Linux. Peak
+# TMPDIR growth of a full `scripts/check --base origin/main` run on main,
+# measured cold on Linux x86_64 (origin/main
+# 137f1c8c47c2688db62ba959a6968f638506e3e1, 2026-11-02, private empty
+# TMPDIR, `CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0`): 1916936 KiB, rounded
+# up to 1873 MiB and doubled.
+PREFLIGHT_TMPDIR_MIN_MIB_LINUX=3746
+# Darwin: not measured; equal to Linux until the macOS figures are harvested
+# from CI (surveyor RULING-3954-1, step 3); see #4027.
+# debt: Darwin TMPDIR floor stays equal to the Linux floor, upgrade trigger:
+# the macOS harvest result replaces PREFLIGHT_TMPDIR_MIN_MIB_DARWIN.
+PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=3746
+# Minimum free `target` space for one gate run, in MiB, on Linux. Peak
+# target growth of the same measured run (cold target, same commit, date
+# and environment as above): 28019224 KiB, rounded up to 27363 MiB and
+# doubled. Only `CARGO_TARGET_DIR` is read (the repo's `.cargo/config.toml`
+# sets no target directory).
+PREFLIGHT_TARGET_MIN_MIB_LINUX=54726
+# Darwin: not measured; equal to Linux until the macOS figures are harvested
+# from CI (surveyor RULING-3954-1, step 3); see #4027.
+# debt: Darwin target floor stays equal to the Linux floor, upgrade trigger:
+# the macOS harvest result replaces PREFLIGHT_TARGET_MIN_MIB_DARWIN.
+PREFLIGHT_TARGET_MIN_MIB_DARWIN=54726
+# The active pair is keyed by platform: `release.yml` gates both Linux and
+# macOS on this script, so one shared pair would leave macOS unmeasured.
+# Any other `uname -s` value keeps the Linux pair.
+case $(uname -s) in
+  Darwin)
+    PREFLIGHT_TMPDIR_MIN_MIB=$PREFLIGHT_TMPDIR_MIN_MIB_DARWIN
+    PREFLIGHT_TARGET_MIN_MIB=$PREFLIGHT_TARGET_MIN_MIB_DARWIN
+    ;;
+  Linux | *)
+    PREFLIGHT_TMPDIR_MIN_MIB=$PREFLIGHT_TMPDIR_MIN_MIB_LINUX
+    PREFLIGHT_TARGET_MIN_MIB=$PREFLIGHT_TARGET_MIN_MIB_LINUX
+    ;;
+esac
 EX_TEMPFAIL=75
 
 prog=scripts/check-resources
