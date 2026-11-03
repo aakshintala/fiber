@@ -620,6 +620,14 @@ impl App {
         out
     }
 
+    /// Test-only `home_answer` without a prebuilt answer: builds the
+    /// answer from the outbox, as `on_line_inner` does.
+    #[cfg(test)]
+    pub(super) fn home_line(&mut self, line: &Line) -> Option<Vec<String>> {
+        let answer = super::answer::Answer::of(line, &self.outbox);
+        self.home_answer(line, answer.as_ref())
+    }
+
     /// Folds one hub line into the session list, with the lines to send;
     /// `None` means `on_line` dispatches the unconsumed line to its hub or session handler. A hub `session_left` and
     /// every `session_status` fold into the rows; the answers to `feed`
@@ -629,7 +637,11 @@ impl App {
     /// until the last subscribe's acknowledgement. `attention` and other
     /// hub lines pass through untouched, and a status still reaches the
     /// conversation below.
-    pub(super) fn home_line(&mut self, line: &Line) -> Option<Vec<String>> {
+    pub(super) fn home_answer(
+        &mut self,
+        line: &Line,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> Option<Vec<String>> {
         self.home.as_ref()?;
         match line {
             Line::Hub(hub) => match hub.kind.as_str() {
@@ -672,8 +684,61 @@ impl App {
                     Some(lines)
                 }
                 "command_accepted" | "command_rejected" => {
-                    let id = hub.payload.get("command_id").and_then(Value::as_str)?;
-                    let accepted = hub.kind.as_str() == "command_accepted";
+                    let answer = answer?;
+                    let id = answer.id;
+                    let accepted = answer.accepted;
+                    match &answer.waiting {
+                        Some(super::outbox::Waiting::Dismiss(session)) => {
+                            return self.rail_answered(id, session, accepted, answer.payload);
+                        }
+                        Some(super::Waiting::Sessions) => {
+                            if accepted {
+                                self.sessions_accepted(
+                                    id,
+                                    answer.payload.get("result").unwrap_or(&Value::Null),
+                                );
+                            } else {
+                                self.sessions_rejected(id);
+                            }
+                            return Some(Vec::new());
+                        }
+                        Some(super::Waiting::ClearStart) => {
+                            if accepted {
+                                return None;
+                            }
+                            // Settlement removes the generic entry, but home still
+                            // observes this start's refusal after its owner does.
+                            let start =
+                                matches!(self.outbox.pending.get(id), Some((Kind::Start, _)));
+                            let code = super::hub_code(answer.payload);
+                            let message =
+                                super::hub_string(answer.payload, "message").unwrap_or_default();
+                            let consumed = if self.intercept_hooks_offer(id, &code, &message) {
+                                true
+                            } else {
+                                self.clear_rejected(id, &code, &message)
+                            };
+                            if start
+                                && let Some(message) =
+                                    answer.payload.get("message").and_then(Value::as_str)
+                                && let Some(home) = self.home.as_mut()
+                            {
+                                home.blockers = message.lines().map(str::to_owned).collect();
+                            }
+                            return consumed.then(Vec::new);
+                        }
+                        Some(super::Waiting::Fork) => return None,
+                        Some(super::Waiting::RewindHistory) => return None,
+                        Some(super::Waiting::RewindSend) => return None,
+                        Some(super::Waiting::ChangeWorkspace(_)) => return None,
+                        Some(super::Waiting::ClearClose) => return None,
+                        Some(super::Waiting::History) => return None,
+                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                            return None;
+                        }
+                        Some(super::Waiting::Abandoned) => return None,
+                        None => {}
+                    }
                     // The picker's `directories` answers fold in first,
                     // while home exists: an id the open picker sent is
                     // consumed here, any other id falls through untouched.
@@ -698,9 +763,6 @@ impl App {
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &hub.payload));
                     }
-                    if let Some(lines) = self.rail_answered(id, accepted, &hub.payload) {
-                        return Some(lines);
-                    }
                     // A rejected `start` is home's blocker text, above the
                     // box until the next `start` goes out. Reading
                     // `pending` first, this branch returns `None`; `on_line`
@@ -718,15 +780,6 @@ impl App {
                     // other command owners and before generic session asks.
                     if let Some(lines) = self.recent_answer(id, accepted, &hub.payload) {
                         return Some(lines);
-                    }
-                    if accepted {
-                        let result = hub.payload.get("result");
-                        let result = result.unwrap_or(&serde_json::Value::Null);
-                        if self.sessions_accepted(id, result) {
-                            return Some(Vec::new());
-                        }
-                    } else if self.sessions_rejected(id) {
-                        return Some(Vec::new());
                     }
                     None
                 }
@@ -808,8 +861,9 @@ impl App {
                     envelope.kind.as_str(),
                     "command_accepted" | "command_rejected"
                 ) {
-                    let accepted = envelope.kind == "command_accepted";
-                    let id = envelope.payload.get("command_id").and_then(Value::as_str)?;
+                    let answer = answer?;
+                    let accepted = answer.accepted;
+                    let id = answer.id;
                     if let Some(lines) = self.subscribe_answer(id, accepted, &envelope.payload) {
                         return if accepted {
                             self.subscribe_accepted(&envelope.session_id, id)
