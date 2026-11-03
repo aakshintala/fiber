@@ -242,19 +242,23 @@ impl Loop {
         let written = Event::PreambleBuilt(event.clone());
         self.log.append(&written, None, None)?;
         self.summary.observe(&written, None);
-        let large = prompt::definitions_notice(&event);
+        // Deferral is off unless the loop holds a search factory and the
+        // provider defers (`docs/tools.md`, "Deferral is a property of
+        // the model"): the notice and the request rendering below read
+        // the same value, so they cannot disagree.
+        let deferring = self.tool_search.is_some() && self.provider.defers();
+        let large = prompt::definitions_notice(&event, deferring);
         // The effective deferred set the requests render logged searches
         // against (`docs/tools.md`, "Tool search"): `None` is a model
         // without deferral, `Some(D)` the deferred names, empty or not.
-        let deferred: Option<BTreeSet<String>> =
-            (self.tool_search.is_some() && self.provider.defers()).then(|| {
-                event
-                    .tools
-                    .iter()
-                    .filter(|tool| tool.deferred)
-                    .map(|tool| tool.name.clone())
-                    .collect()
-            });
+        let deferred: Option<BTreeSet<String>> = deferring.then(|| {
+            event
+                .tools
+                .iter()
+                .filter(|tool| tool.deferred)
+                .map(|tool| tool.name.clone())
+                .collect()
+        });
         let mut search = None;
         if let Some((tool, definition)) = built {
             let name = definition.name.clone();
