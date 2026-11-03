@@ -29,7 +29,35 @@ scan_leaks=0
 # processes owned by the user with ppid 1 that started after this time.
 check_start=$(date +%s)
 export FIBER_CHECK_START=$check_start
-trap 'rc=$?; if [ $rc -eq 0 ]; then rm -f "$log"; fi; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else [ -n "$log" ] && [ -s "$log" ] && echo "scripts/check: full output in $log"; if [ -n "$resource_cause" ]; then echo "scripts/check: FAIL (exit $rc): $resource_cause"; else echo "scripts/check: FAIL (exit $rc)"; fi; fi; exit $rc' EXIT
+# SCRATCH HARVEST ONLY: never merge.
+harvest_pid=
+harvest_file=
+harvest_tmp_dir=${TMPDIR:-/tmp}
+harvest_free_tmp_start=0
+harvest_free_target_start=0
+harvest_target_dir=
+harvest_free_mib() {
+  d=$1
+  while [ ! -d "$d" ] && [ "$d" != / ] && [ "$d" != . ]; do d=$(dirname "$d"); done
+  df -Pk "$d" 2>/dev/null | awk 'NR==2 {print int($4/1024)}' || true
+}
+harvest_report() {
+  [ -n "$harvest_file" ] || return 0
+  if [ -n "$harvest_pid" ]; then kill "$harvest_pid" 2>/dev/null || true; fi
+  harvest_line=$(awk -v rc="$1" -v os="$(uname -s)" -v arch="$(uname -m)" \
+    -v ft="$harvest_free_tmp_start" -v fg="$harvest_free_target_start" \
+    -v et="$(harvest_free_mib "$harvest_tmp_dir")" -v eg="$(harvest_free_mib "$harvest_target_dir")" '
+    NR == 1 { t0 = $2; s0 = $3; tp = $2; sp = $3 }
+    { if ($2 > tp) tp = $2; if ($3 > sp) sp = $3; n++ }
+    END {
+      printf "HARVEST3954 os=%s arch=%s free_tmp_mib_start=%s free_target_mib_start=%s target_start_kib=%d target_peak_kib=%d target_peak_growth_kib=%d tmpdir_start_kib=%d tmpdir_peak_kib=%d tmpdir_peak_growth_kib=%d samples=%d free_tmp_mib_end=%s free_target_mib_end=%s exit=%s\n",
+        os, arch, ft, fg, t0, tp, tp - t0, s0, sp, sp - s0, n, et, eg, rc
+    }' "$harvest_file" || true)
+  echo "$harvest_line" >&2
+  echo "$harvest_line"
+}
+
+trap 'rc=$?; harvest_report "$rc"; if [ $rc -eq 0 ]; then rm -f "$log"; fi; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else [ -n "$log" ] && [ -s "$log" ] && echo "scripts/check: full output in $log"; if [ -n "$resource_cause" ]; then echo "scripts/check: FAIL (exit $rc): $resource_cause"; else echo "scripts/check: FAIL (exit $rc)"; fi; fi; exit $rc' EXIT
 cd "$(git rev-parse --show-toplevel)"
 
 base=origin/main
@@ -75,6 +103,23 @@ step_failed() {
 # refusal exits here, so no build step ran. On exit 75 the refusal sentence
 # becomes the FAIL line's cause; any other preflight failure keeps its code.
 if pre=$(scripts/check-resources preflight); then echo "== preflight: $pre"; else pre_rc=$?; [ "$pre_rc" -ne 75 ] || resource_cause=$pre; exit "$pre_rc"; fi
+
+# SCRATCH HARVEST ONLY: never merge.
+harvest_target_dir=${CARGO_TARGET_DIR:-$(pwd)/target}
+harvest_file=${RUNNER_TEMP:-${TMPDIR:-/tmp}}/harvest3954.$$
+harvest_free_tmp_start=$(harvest_free_mib "$harvest_tmp_dir")
+harvest_free_target_start=$(harvest_free_mib "$harvest_target_dir")
+: >"$harvest_file"
+(
+  while :; do
+    t=$(du -sk "$harvest_target_dir" 2>/dev/null | awk '{print $1}' || true)
+    s=$(du -sk "$harvest_tmp_dir" 2>/dev/null | awk '{print $1}' || true)
+    echo "$(date +%s) ${t:-0} ${s:-0}" >>"$harvest_file"
+    sleep 5
+  done
+) >/dev/null 2>&1 &
+harvest_pid=$!
+
 
 log=$(mktemp)
 
