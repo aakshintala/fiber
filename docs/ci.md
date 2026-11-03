@@ -215,14 +215,23 @@ function in a target whose `Cargo.toml` declares `test = false` is not one:
 only an explicit `--test <name>` builds such a target, so a plain filter
 matches nothing in it, and a diff whose touched test functions are all in
 such targets skips the run. The plan is then intersected with
-`cargo nextest list` on the runner, using the same filter and packages
-the run uses. A touched test the runner does not compile, such as
+`cargo nextest list` on the runner. The plan writes the filter to
+`$RUNNER_TEMP/stress.toml`, which the run step passes by path with
+`--tool-config-file`; the filter text does not travel in an environment
+variable or command-line argument. Linux caps each argument and environment
+string at 128 KiB (`MAX_ARG_STRLEN`). The run step annotates an
+`Argument list too long` failure as `Stress run could not start`. The
+always-run cost step annotates a failed run step that never wrote its start
+marker as `Stress step did not start`; no test ran. A touched test the runner
+does not compile, such as
 `cfg(target_os = "macos")` on this Linux x86_64 job, is dropped from the
 plan, named in the job output and not stressed. It still runs in the
 macOS `scripts/check` leg. A plan left empty by that intersection skips
 the run. A run whose
 filter matches no test, or whose iteration runs fewer tests than the plan
-names, fails the job. The count is read from the linked issue's labels. The job is in `ci`'s `needs`,
+names, fails the job. The count is read from linked issue labels and controls
+runs per test. The job has no cap on its test set: the plan's selected tests
+bound how many tests it runs. The job is in `ci`'s `needs`,
 so one failure stops the merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched
 test still gets nextest's one retry but a pass on that retry fails the
