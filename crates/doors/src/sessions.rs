@@ -51,6 +51,7 @@ pub fn session_entries(home: &Path) -> io::Result<Vec<SessionId>> {
 
 /// The account's session sockets, queried afresh on each call.
 pub struct SessionSockets {
+    home: PathBuf,
     run: PathBuf,
     clock: Arc<dyn Clock>,
 }
@@ -59,6 +60,7 @@ impl SessionSockets {
     /// Uses Fiber home's run directory and the supplied deadline clock.
     pub fn new(home: &Path, clock: Arc<dyn Clock>) -> Self {
         Self {
+            home: home.to_owned(),
             run: config::run_dir(home),
             clock,
         }
@@ -115,6 +117,15 @@ impl SessionSockets {
             }
             if self.clock.now() >= cutoff {
                 break;
+            }
+            let dir = log::find_session(&self.home, &SessionId(name.clone())).map(|(_, dir)| dir);
+            let keeper_holds = || {
+                dir.as_deref()
+                    .and_then(log::lock_label)
+                    .is_some_and(|label| label.starts_with("keeper "))
+            };
+            if keeper_holds() {
+                continue;
             }
             let path = self.run.join(&name);
             let fd = crate::hub::nonblocking_socket().map_err(|e| io_error(&path, e))?;

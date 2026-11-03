@@ -31,7 +31,7 @@ pub fn check_socket_path(home: &Path, file_name: &str) -> Result<(), SessionErro
 /// live: fail `session_held` and leave it alone; a refusal, a missing path,
 /// or a regular file is removed before binding. Any other error
 /// may hide a live session, so the path stays and this fails `io_failed`.
-pub(crate) fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), SessionError> {
+pub fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), SessionError> {
     let name = dir.file_name().unwrap_or_default();
     // One length check for every session socket: doctor reuses it, so the
     // report names the same cause a session start would fail with.
