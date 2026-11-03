@@ -5,7 +5,8 @@
 //! (`docs/testing.md`); these tests run that script on supplied inputs.
 
 use std::os::unix::fs::PermissionsExt as _;
-use std::process::Command;
+use std::os::unix::process::CommandExt as _;
+use std::process::{Command, Stdio};
 
 use fakes::TempDir;
 
@@ -44,13 +45,19 @@ fn preflight_refuses_when_df_reports_too_little_space() {
     let dir = TempDir::new("xtask-check-resources");
     let (scratch, target) = scratch_and_target(&dir);
     let path = df_path(&dir, 0);
-    let output = Command::new(script())
+    let child = Command::new(script())
         .arg("preflight")
         .env("PATH", &path)
         .env("TMPDIR", &scratch)
         .env("CARGO_TARGET_DIR", &target)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
         .unwrap();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = fakes::wait_output(child, "preflight with too little space");
     assert_eq!(output.status.code(), Some(75));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -76,13 +83,19 @@ fn preflight_passes_when_df_reports_generous_space() {
     let dir = TempDir::new("xtask-check-resources");
     let (scratch, target) = scratch_and_target(&dir);
     let path = df_path(&dir, 100_000_000);
-    let output = Command::new(script())
+    let child = Command::new(script())
         .arg("preflight")
         .env("PATH", &path)
         .env("TMPDIR", &scratch)
         .env("CARGO_TARGET_DIR", &target)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
         .unwrap();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = fakes::wait_output(child, "preflight with generous space");
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -100,10 +113,16 @@ fn classify_reports_bus_error_linker_death_as_resource_exhaustion() {
         "collect2: fatal error: ld terminated with signal 7 [Bus error]\nerror: linking with `cc` failed: exit code: 1\n",
     );
     let log = dir.path().join("build.log");
-    let output = Command::new(script())
+    let child = Command::new(script())
         .args(["classify", &log.to_string_lossy()])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
         .unwrap();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = fakes::wait_output(child, "classify a bus-error linker death");
     assert_eq!(output.status.code(), Some(75));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
@@ -120,10 +139,16 @@ fn classify_guard_bare_killed_compiler_shape_from_test_output_is_ignored() {
         "collect2: fatal error: ld terminated with signal 7\n",
     );
     let log = dir.path().join("bare-signal.log");
-    let output = Command::new(script())
+    let child = Command::new(script())
         .args(["classify", &log.to_string_lossy()])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
         .unwrap();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = fakes::wait_output(child, "classify a bare killed-compiler shape");
     assert_eq!(
         output.status.code(),
         Some(0),
