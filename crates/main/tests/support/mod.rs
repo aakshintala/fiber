@@ -380,6 +380,16 @@ impl Setup {
     }
 }
 
+/// How the last park inside a wait ended. `NeverParked` means a reread
+/// satisfied `ready` before any park ran.
+// No `#[must_use]`: both existing callers drop this in statement position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParkExit {
+    NeverParked,
+    Event,
+    Expired,
+}
+
 /// A `hub.log` wait that wakes on a native file-change notification
 /// (Linux inotify, macOS kqueue, through `rustix`): registered before
 /// the event-producing command, it rereads the snapshot after
@@ -481,16 +491,44 @@ struct PlatformWatch {
 
 #[cfg(target_os = "macos")]
 impl PlatformWatch {
+    // Mutants run on Linux, where this is not compiled; the macOS test job runs it.
+    #[cfg_attr(false, mutants::skip)]
+    #[allow(
+        unsafe_code,
+        reason = "kqueue registration for hub.log writes on macOS: the registered vnode fd is the watch's own open file, alive for every wait, and the event buffer is an empty stack array the kernel writes nothing into"
+    )]
     fn register(log: &Path) -> io::Result<Self> {
-        use rustix::event::kqueue::kqueue;
+        use rustix::event::kqueue::{Event, EventFilter, EventFlags, VnodeEvents, kevent, kqueue};
         let file = rustix::fs::open(
             log,
             rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::empty(),
         )?;
         let queue = kqueue()?;
-        // The first wait registers and parks atomically, so no change
-        // between registration and the first wait is lost.
+        // Registration adds the vnode `WRITE` kevent itself, so a write
+        // after this returns queues an event: a reread after registration
+        // plus a `wait_once` cannot miss it.
+        let change = Event::new(
+            EventFilter::Vnode {
+                vnode: std::os::unix::io::AsRawFd::as_raw_fd(&file),
+                flags: VnodeEvents::WRITE,
+            },
+            EventFlags::ADD | EventFlags::CLEAR,
+            std::ptr::null_mut(),
+        );
+        let mut registered: [std::mem::MaybeUninit<Event>; 0] = [];
+        // SAFETY: `file` stays open for the watch's lifetime, so the
+        // registered vnode fd is valid; `registered` is an empty stack
+        // array the kernel fills with no event, the zero timeout returns
+        // at once, and the null udata is never dereferenced.
+        unsafe {
+            kevent(
+                &queue,
+                std::slice::from_ref(&change),
+                &mut registered,
+                Some(Duration::ZERO),
+            )
+        }?;
         Ok(Self { queue, file })
     }
 
@@ -500,30 +538,20 @@ impl PlatformWatch {
         unsafe_code,
         reason = "kqueue waits for hub.log writes on macOS: the registered vnode fd is the watch's own open file, alive for every wait, and the event buffer is a stack array the kernel writes only within its length"
     )]
-    fn wait_once(&self, timeout: Duration) -> io::Result<()> {
-        use rustix::event::kqueue::{Event, EventFilter, EventFlags, VnodeEvents, kevent};
-        let change = Event::new(
-            EventFilter::Vnode {
-                vnode: std::os::unix::io::AsRawFd::as_raw_fd(&self.file),
-                flags: VnodeEvents::WRITE,
-            },
-            EventFlags::ADD | EventFlags::CLEAR,
-            std::ptr::null_mut(),
-        );
+    fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
+        use rustix::event::kqueue::{Event, kevent};
         let mut events = [std::mem::MaybeUninit::<Event>::uninit(); 1];
-        // SAFETY: `self.file` stays open for the watch's lifetime, so the
-        // registered vnode fd is valid for every wait; `events` is a stack
-        // array the kernel fills with at most one event, and the null
-        // udata is never dereferenced.
-        let _ = unsafe {
-            kevent(
-                &self.queue,
-                std::slice::from_ref(&change),
-                &mut events,
-                Some(timeout),
-            )
-        }?;
-        Ok(())
+        // SAFETY: registration added the vnode `WRITE` kevent in
+        // `register`, and `self.file` stays open for the watch's lifetime,
+        // so the knote is valid for every wait; the change list is empty,
+        // and `events` is a stack array the kernel fills with at most one
+        // event.
+        let fired = unsafe { kevent(&self.queue, &[], &mut events, Some(timeout)) }?;
+        Ok(if fired > 0 {
+            ParkExit::Event
+        } else {
+            ParkExit::Expired
+        })
     }
 }
 
@@ -3647,4 +3675,40 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reaped)
         .expect("the reaper cleared the exited child");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn platform_watch_catches_write_before_first_wait() {
+    let dir = fakes::TempDir::new("watch-pre-write");
+    let log = dir.path().join("hub.log");
+    fs::write(&log, "signal\n").unwrap();
+    // Registration precedes the first wait, so the write below lands after
+    // registration and before any wait: the queued event must end the park.
+    let watch = PlatformWatch::register(&log).expect("registering the log watch");
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&log)
+        .unwrap()
+        .write_all(b"state\n")
+        .unwrap();
+    let (done_tx, done) = mpsc::channel::<ParkExit>();
+    thread::spawn(move || {
+        let exit = watch
+            .wait_once(fakes::MUST_SUCCEED_WITHIN)
+            .expect("the parked wait");
+        done_tx.send(exit).unwrap_or(());
+    });
+    // The verdict comes from `ParkExit`, never from elapsed time: 20 s is a
+    // hang guard under `docs/testing.md:13`, not a timing assertion.
+    let exit = Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2) // ruling: #4075
+        .recv_or_fail(
+            &done,
+            "the wait returns for a write made before the first wait",
+        );
+    assert_ne!(
+        exit,
+        ParkExit::Expired,
+        "the released wait ended by expiry: a lost wake"
+    );
 }
