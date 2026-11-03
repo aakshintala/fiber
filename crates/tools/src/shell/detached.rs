@@ -60,7 +60,7 @@ pub(super) fn launch(
     cmd.stdout(log).stderr(err);
     scrub_env(&mut cmd);
     support::group::detach(&mut cmd, false);
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(source) => {
             let _removed = std::fs::remove_file(&path);
@@ -94,7 +94,6 @@ fn create_log(dir: &Path, fiber_pid: u32, next: &AtomicU64) -> io::Result<(File,
         let n = next.fetch_add(1, Ordering::Relaxed);
         let path = dir.join(format!("d_{fiber_pid}_{n}.log"));
         match OpenOptions::new()
-            .write(true)
             .create_new(true)
             .append(true)
             .mode(0o600)
