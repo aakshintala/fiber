@@ -13,9 +13,9 @@ pub(super) fn send_term(stop: Stop<'_>, sent: bool, seen_empty: bool) -> bool {
         return sent;
     }
     match stop {
-        Stop::Group(pgid) => {
-            let _ = support::group::signal(pgid, Signal::TERM);
-        }
+        Stop::Group(pgid) => match support::group::signal(pgid, Signal::TERM) {
+            Ok(()) | Err(_) => {}
+        },
         Stop::Host(hosted) => {
             hosted.host.stop(&hosted.id);
         }
