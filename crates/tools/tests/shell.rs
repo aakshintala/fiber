@@ -541,7 +541,9 @@ fn a_timeout_is_not_stopped_until_the_deadline() {
     );
     let output = join(running);
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
-    assert!(text(&output).contains("Timed out after 1000 ms and stopped."));
+    assert!(
+        text(&output).contains("Timed out after 1000 ms; Fiber stopped the whole process group.")
+    );
     assert!(output.process.unwrap().timed_out);
     assert!(!group_alive(pgid));
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
@@ -617,7 +619,9 @@ fn a_cancel_after_the_timeout_fired_stays_a_timeout() {
     let output = join(running);
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(output.process.as_ref().unwrap().timed_out);
-    assert!(text(&output).contains("Timed out after 1000 ms and stopped."));
+    assert!(
+        text(&output).contains("Timed out after 1000 ms; Fiber stopped the whole process group.")
+    );
     assert!(!text(&output).contains("Cancelled"));
     assert!(!group_alive(pgid));
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
@@ -1422,7 +1426,9 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
         .expect("the timeout");
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(output.process.as_ref().unwrap().timed_out);
-    assert!(text(&output).contains("Timed out after 30000 ms and stopped."));
+    assert!(
+        text(&output).contains("Timed out after 30000 ms; Fiber stopped the whole process group.")
+    );
     assert!(output.jobs.is_empty());
     assert!(jobs.started().is_empty());
     assert!(!group_alive(pgid));

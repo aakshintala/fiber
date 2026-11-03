@@ -421,6 +421,47 @@ fn deliver_to_sends_each_later_end_whose_claim_holds() {
     assert_eq!((notice.claim.0)(), Some(Vec::new()), "the claim holds");
 }
 
+/// The end notice follows the id leaving the list: the notice is sent
+/// under the lock that marks the job ended, so `running` never drops a
+/// job whose notice is not yet in the inbox
+/// (`crates/fakes/src/jobs.rs:393`). The fake keeps the order the
+/// registry keeps: a job listed before its first output is the nearest
+/// of the paragraph's examples (`docs/testing/fakes.md`, "Fakes"). The
+/// test's receive pairs with the end's send (a channel), and the
+/// `running` call after it takes the lock the end's critical section
+/// also holds for the push, so the call cannot land inside that
+/// section: the id is already gone when the notice arrives.
+#[test]
+fn the_end_notice_follows_the_id_leaving_the_list() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let opened = jobs
+        .open(opening("echo hi", Stop(Box::new(|| {}))))
+        .unwrap();
+    let id = opened.started.job_id.clone();
+    let (tx, rx) = mpsc::channel();
+    jobs.deliver_to(tx);
+    let done = completed(&id.0, Outcome::Completed);
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            (opened.end.0)(done);
+        });
+        let delivery =
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "the end to send its notice");
+        let contract::inbox::Delivery::Job(notice) = delivery else {
+            panic!("the end sent {delivery:?}");
+        };
+        assert_eq!(
+            notice.completed.job_id, id,
+            "the notice names the ended job"
+        );
+        assert!(
+            !Jobs::running(jobs.as_ref()).contains(&id),
+            "the id left the list before its notice arrived"
+        );
+    });
+}
+
 #[test]
 fn a_monitors_lines_are_recorded_in_order_and_reach_the_inbox_before_its_end() {
     let dir = fakes_temp();

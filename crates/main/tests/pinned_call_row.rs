@@ -302,16 +302,25 @@ const UP: &[u8] = b"\x1b[<64;21;11M";
 /// One wheel step down at 160x48.
 const DOWN: &[u8] = b"\x1b[<65;21;40M";
 
-/// Wheels up one step at a time until the pin shows.
-fn wheel_to_pin(run: &mut Run) -> Grid {
-    wheel(run, "one step up", true, 12, pinned)
+/// Wheels up one step at a time until the pin shows: `from` is the grid
+/// the wait after the last input returned, so the first check never
+/// reads a frame older than that input.
+fn wheel_to_pin(run: &mut Run, from: &Grid) -> Grid {
+    wheel(run, from, "one step up", true, 12, pinned)
 }
 
 /// Wheels one step at a time until `pred` holds or `cap` steps have run.
 /// Each wait proves this step moved an anchor in the wheel's direction,
 /// or that its goal has appeared.
-fn wheel(run: &mut Run, step: &str, up: bool, cap: usize, pred: impl Fn(&Grid) -> bool) -> Grid {
-    let mut grid = run.screen();
+fn wheel(
+    run: &mut Run,
+    from: &Grid,
+    step: &str,
+    up: bool,
+    cap: usize,
+    pred: impl Fn(&Grid) -> bool,
+) -> Grid {
+    let mut grid = from.clone();
     for _ in 0..cap {
         if pred(&grid) {
             return grid;
@@ -379,10 +388,10 @@ fn the_pin_stays_over_the_opened_content_while_scrolling() {
     let setup = Setup::new();
     script(&setup);
     let mut run = started(&setup);
-    opened(&mut run);
+    let opened_grid = opened(&mut run);
     // Twelve wheel-ups move the top into the opened output: the call
     // row scrolls off, and its pin stays on row 0.
-    let grid = wheel_to_pin(&mut run);
+    let grid = wheel_to_pin(&mut run, &opened_grid);
     let _pin = assert_pinned(&grid, "notes.txt");
     // The input box keeps its row: the pin never overlaps it.
     assert!(grid.contents.contains("›"), "the input box draws");
@@ -396,12 +405,13 @@ fn paging_up_pins_the_same_lead_row_with_its_tint() {
     let setup = Setup::new();
     script(&setup);
     let mut run = started(&setup);
-    opened(&mut run);
+    let opened_grid = opened(&mut run);
     // A different path to the same wheel assertion: one page up lands
     // near the opened output, then wheeling down settles the top
     // inside it.
     run.write(b"\x1b[5~");
-    let grid = wheel(&mut run, "one step down", false, 10, pinned);
+    let up = run.wait_screen("one page up", |grid| grid.rows != opened_grid.rows);
+    let grid = wheel(&mut run, &up, "one step down", false, 10, pinned);
     let _pin = assert_pinned(&grid, "notes.txt");
     run.write(b"\x03\x03\r");
     let finished = run.wait();
@@ -413,8 +423,8 @@ fn clicking_the_pin_closes_the_call_and_lands_its_row_on_top() {
     let setup = Setup::new();
     script(&setup);
     let mut run = started(&setup);
-    opened(&mut run);
-    let grid = wheel_to_pin(&mut run);
+    let opened_grid = opened(&mut run);
+    let grid = wheel_to_pin(&mut run, &opened_grid);
     // A click on the pin's cells closes the call: its row lands on the
     // top row under the ledger's summary pin.
     let pin = assert_pinned(&grid, "notes.txt");
@@ -463,15 +473,22 @@ fn wheeling_past_the_call_clears_the_pin_and_wheeling_back_restores_it() {
     let setup = Setup::new();
     script(&setup);
     let mut run = started(&setup);
-    opened(&mut run);
-    let pin_grid = wheel_to_pin(&mut run);
+    let opened_grid = opened(&mut run);
+    let pin_grid = wheel_to_pin(&mut run, &opened_grid);
     assert!(
         pinned(&pin_grid),
         "the wheel reaches the pin before following"
     );
     // Wheeling to the bottom follows again: the call row draws once,
     // on its own row, and row 0 is the window's own first row.
-    let grid = wheel(&mut run, "one step down", false, 20, followed_bottom);
+    let grid = wheel(
+        &mut run,
+        &pin_grid,
+        "one step down",
+        false,
+        20,
+        followed_bottom,
+    );
     assert!(
         followed_bottom(&grid),
         "the wheel reaches the followed bottom"
@@ -481,7 +498,7 @@ fn wheeling_past_the_call_clears_the_pin_and_wheeling_back_restores_it() {
         "the call row scrolled off with no pin over it"
     );
     // Wheeling back up past the call pins it again.
-    let grid = wheel_to_pin(&mut run);
+    let grid = wheel_to_pin(&mut run, &grid);
     let _pin = assert_pinned(&grid, "notes.txt");
     run.write(b"\x03\x03\r");
     let finished = run.wait();
@@ -569,8 +586,8 @@ fn opened_ledger(run: &mut Run) -> Grid {
 }
 
 /// Wheels up until `pred` holds, or panics with `what` after the cap.
-fn wheel_until(run: &mut Run, what: &str, pred: impl Fn(&Grid) -> bool) -> Grid {
-    let grid = wheel(run, "one step up", true, 80, &pred);
+fn wheel_until(run: &mut Run, from: &Grid, what: &str, pred: impl Fn(&Grid) -> bool) -> Grid {
+    let grid = wheel(run, from, "one step up", true, 80, &pred);
     assert!(pred(&grid), "{what} never showed");
     grid
 }
@@ -595,14 +612,14 @@ fn the_group_line_pins_while_no_call_is_opened() {
     let setup = Setup::new();
     script_group(&setup);
     let mut run = started(&setup);
-    opened_ledger(&mut run);
+    let bottom = opened_ledger(&mut run);
     // Wheel up until the open ledger's group line pins over a ledger row.
-    let grid = wheel_until(&mut run, "the pinned group line", |grid| {
+    let first = wheel_until(&mut run, &bottom, "the pinned group line", |grid| {
         pin_row_for(grid, "Read 30 files", |row| row.contains('✓')).is_some()
     });
-    let pin = assert_group_pinned(&grid, "Read 30 files");
+    let pin = assert_group_pinned(&first, "Read 30 files");
     // The pin persists as the top moves deeper into the ledger.
-    let grid = wheel(&mut run, "one step up", true, 3, |_| false);
+    let grid = wheel(&mut run, &first, "one step up", true, 3, |_| false);
     assert_group_pinned(&grid, "Read 30 files");
     // A click on the pin closes the ledger: its rows are gone and the
     // summary shows closed.
@@ -629,9 +646,9 @@ fn the_call_row_wins_over_the_group_line_inside_an_open_ledger() {
     let setup = Setup::new();
     script(&setup);
     let mut run = started(&setup);
-    opened(&mut run);
+    let opened_grid = opened(&mut run);
     // The pin is the call's row, not the open ledger's group line.
-    let grid = wheel_to_pin(&mut run);
+    let grid = wheel_to_pin(&mut run, &opened_grid);
     let pin = assert_pinned(&grid, "notes.txt");
     assert!(
         !row_text(&grid, pin).contains('▾') && !row_text(&grid, pin).contains('▸'),
@@ -687,16 +704,16 @@ fn wheeling_up_pins_each_opened_call_in_turn() {
         });
     }
     run.write(b"\x1b[F");
-    run.wait_screen("the followed bottom", |grid| {
+    let bottom = run.wait_screen("the followed bottom", |grid| {
         grid.rows.iter().any(|row| row.contains("T0060"))
     });
     // Wheeling up pins the later call first, then the earlier one: each
     // pin is its own call's row over its own covered output.
-    let grid = wheel_until(&mut run, "the bravo.txt pin", |grid| {
+    let grid = wheel_until(&mut run, &bottom, "the bravo.txt pin", |grid| {
         pin_row_for(grid, "bravo.txt", covered_proves_pin).is_some()
     });
     assert_pinned(&grid, "bravo.txt");
-    let grid = wheel_until(&mut run, "the alpha.txt pin", |grid| {
+    let grid = wheel_until(&mut run, &grid, "the alpha.txt pin", |grid| {
         pin_row_for(grid, "alpha.txt", covered_proves_pin).is_some()
     });
     assert_pinned(&grid, "alpha.txt");
@@ -710,8 +727,8 @@ fn search_lands_the_current_match_on_the_row_under_the_pin() {
     let setup = Setup::new();
     script(&setup);
     let mut run = started(&setup);
-    opened(&mut run);
-    let grid = wheel_to_pin(&mut run);
+    let opened_grid = opened(&mut run);
+    let grid = wheel_to_pin(&mut run, &opened_grid);
     let _pin = assert_pinned(&grid, "notes.txt");
     // A search for a shown output line above the top lands its match
     // under the pin, with the pin staying.

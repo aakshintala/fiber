@@ -46,6 +46,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   crashes/<id>-<ms>.txt           one report per panic (docs/code-quality.md)
   logs/hub.log, logs/hub.log.1    the hub's diagnostic log and its previous file
   logs/<kind>-<id>.log            one other process's diagnostic log
+  detached/d_<pid>_<n>.log        one output log per detached shell command, mode 0600, kept until the person deletes it (docs/tools.md, "Background jobs")
 ```
 
 ## Override
@@ -522,6 +523,12 @@ in it; a hook that fails in a session, for example, is a `notice` or
 or a configuration value, with one exception: an `extension_log` line is the
 extension's own text, and Fiber records it as given. A failed hook is named
 with its code, never its content.
+
+**Detached logs.** `detached/` holds one output log per detached shell
+command (`docs/tools.md`, "Background jobs"), named `d_<pid>_<n>.log` from
+0 up in a directory mode 0700, each file mode 0600. The person owns
+deleting them: Fiber never removes a log, and a session's deletion or
+pruning never touches them.
 
 **What feedback reads.** `fiber feedback` and `/feedback` copy content-free
 lines from `logs/` and `crashes/` into the Diagnostics section of the report

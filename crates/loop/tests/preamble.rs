@@ -598,6 +598,48 @@ fn definitions_over_ten_percent_of_the_window_write_tool_definitions_large() {
     let text = notice["message"].as_str().unwrap();
     assert!(text.contains("builtin"), "{text}");
     assert!(text.contains("tools.disabled"), "{text}");
+    assert!(
+        text.contains("Deferral is off for this model, so every tool is declared in full."),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_oversize_notice_on_a_deferring_model_without_a_search_factory_says_deferral_is_off() {
+    // The provider defers but the loop holds no search factory, so nothing
+    // is deferred and the notice says deferral is off (`docs/tools.md`,
+    // "Size warning"). The window is one token under 2.5 x the definitions'
+    // bytes, as above, so the notice fires.
+    let bytes = definition_bytes(two_tools());
+    let mut session = Session::deferring_windowed_without_search(
+        vec![Scripted::text("Done.")],
+        two_tools(),
+        (bytes * 10).div_ceil(4) - 1,
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The full stream as a multiset, so a missing or duplicated
+    // non-notice event fails (`docs/testing.md`, "Event streams").
+    let mut stream = kinds(&lines);
+    stream.sort_unstable();
+    let mut expected = TURN_KINDS.to_vec();
+    expected.push("notice");
+    expected.sort_unstable();
+    assert_eq!(stream, expected);
+    let notices: Vec<Value> = lines
+        .into_iter()
+        .filter(|line| line.kind == "notice")
+        .map(|line| Value::Object(line.payload))
+        .collect();
+    assert_eq!(notices.len(), 1);
+    let notice = notices.first().unwrap();
+    assert_eq!(notice["code"], "tool_definitions_large");
+    let text = notice["message"].as_str().unwrap();
+    assert!(
+        text.ends_with("Deferral is off for this model, so every tool is declared in full."),
+        "{text}"
+    );
 }
 
 #[test]
