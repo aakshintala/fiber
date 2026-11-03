@@ -122,6 +122,12 @@ struct FakeJobs {
     /// the loop writes it, forcing the interleaving where the loop parks
     /// with the job still listed.
     stopped: Mutex<Vec<JobId>>,
+    /// Test-only pause point, set by one test: when present, `transition`
+    /// signals the test the instant it holds the `ids` lock, then waits for
+    /// the test's release before dropping the id. One seam, one field: the
+    /// sender fires inside the critical section and the receiver gates it.
+    /// `None` everywhere else, so other tests never pause here.
+    entered: Mutex<Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl FakeJobs {
@@ -133,6 +139,7 @@ impl FakeJobs {
             inbox: Mutex::new(None),
             log: Arc::clone(log),
             stopped: Mutex::new(Vec::new()),
+            entered: Mutex::new(None),
         });
         (jobs, rx)
     }
@@ -166,6 +173,19 @@ impl FakeJobs {
     fn transition(&self, id: &str, status: Outcome, error: Option<Failure>) {
         {
             let mut running = self.ids.lock().unwrap();
+            // First inside the critical section: the test's whole negative
+            // window sits inside the held lock. This must not move back
+            // above the lock: fired before acquisition it would mean only
+            // "about to take the lock". The send cannot block (capacity 1,
+            // `try_send`), so a slow test cannot deadlock the held lock; a
+            // failed send is the test's failure, never swallowed.
+            if let Some((entered, release)) = self.entered.lock().unwrap().as_ref() {
+                entered
+                    .try_send(())
+                    .expect("the entered signal fires once per held end");
+                fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv_or_fail(release, "the test to release the held end");
+            }
             running.retain(|listed| listed.0 != id);
             let inbox = self.inbox.lock().unwrap().clone().expect("deliver_to ran");
             inbox
@@ -277,6 +297,59 @@ fn a_held_end_waits_for_the_tests_release() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the released end ends");
+}
+
+/// An end never shows its notice while the id is still listed: the entered
+/// signal fires inside the critical section, immediately after the `ids`
+/// lock is acquired and before the id is dropped, so the whole negative
+/// window below sits inside the held lock. The signal must not move back
+/// above the lock: fired before acquisition it would mean only "about to
+/// take the lock", and the window would open before the claimed state
+/// holds. The window is a real 200 ms bound on the wall clock
+/// (`fakes::Deadline` sets a deadline without advancing virtual time);
+/// the entered signal is what makes a short window sound, because the test
+/// knows the end holds the lock before the window opens. A transition that
+/// sent its notice outside the lock, or before the lock was taken, shows
+/// the notice inside the window and fails.
+#[test]
+fn an_end_never_shows_its_notice_while_the_id_is_still_listed() {
+    let session = Session::new(vec![Scripted::text("Done.")], None);
+    let (jobs, _stops) = FakeJobs::new(&["j_1"], &session.log);
+    let (tx, rx) = mpsc::channel();
+    jobs.deliver_to(tx);
+    let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::channel();
+    *jobs.entered.lock().unwrap() = Some((entered_tx, release_rx));
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            jobs.end("j_1", Outcome::Cancelled, None);
+        });
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the end to take the ids lock");
+        match fakes::Deadline::after(std::time::Duration::from_millis(200)).recv(&rx) {
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            unexpected => {
+                panic!("the notice arrived while the id was still listed: {unexpected:?}")
+            }
+        }
+        release_tx
+            .send(())
+            .expect("the held end waits for the release");
+        let delivery = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&rx, "the end to send its notice after the release");
+        let Delivery::Job(notice) = delivery else {
+            panic!("the end sent {delivery:?}");
+        };
+        assert_eq!(
+            notice.completed.job_id,
+            JobId("j_1".into()),
+            "the notice names the ended job"
+        );
+        assert!(
+            jobs.running().is_empty(),
+            "the id left the list before its notice arrived"
+        );
+    });
 }
 
 /// A tool that sends `change_workspace` to the inbox from inside a turn,
