@@ -1,8 +1,3 @@
-GRANT-3743-2-18d592e4b	fiber-3743	grant	2026-11-02T19:07:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/3743-config-views-seam-required	
-crates/tui/src/app/config_views.rs	fiber-3743	grant	2026-11-02T19:07:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/3743-config-views-seam-required	
-crates/tui/src/app/config_views/credential.rs	fiber-3743	grant	2026-11-02T19:08:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/3743-config-views-seam-required	
-crates/tui/src/lib.rs	fiber-3743	grant	2026-11-02T19:08:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/3743-config-views-seam-required	
-crates/tui/src/configure_fake.rs	fiber-3743	grant	2026-11-02T19:08:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/test/3743-config-views-seam-required	
 crates/main/tests/link_look.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/links.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app_focus.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
