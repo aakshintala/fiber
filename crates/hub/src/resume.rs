@@ -272,7 +272,7 @@ fn attempt(
     let Some((_, dir)) = found.as_ref() else {
         return Step::Done(Err(not_found(session)));
     };
-    let recorded = match log::started_first(&dir) {
+    let recorded = match log::started_first(dir) {
         Ok(view) => {
             let Some(workspace) = view.workspace else {
                 hub.diag.line(
@@ -358,7 +358,7 @@ fn attempt(
                 // The exiting process still holds the lock: wait it out.
                 if let Some(failure) = &failure
                     && failure.code == ErrorCode::SessionHeld
-                    && exited_in(&dir)
+                    && exited_in(dir)
                 {
                     return Step::Wait(Some(failure.message.clone()));
                 }
