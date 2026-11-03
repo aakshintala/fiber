@@ -947,8 +947,10 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
-    # The slowest passing run of the last 25 took 3.5 min; 10 minutes covers twice it.
-    timeout-minutes: 10
+    # Linux leg of run 41604713733 (2026-11-03) took 8m19s; 17 minutes is
+    # twice that, matching bug_red_macos. Interim until the cold-run
+    # measurement (#4082 follow-up).
+    timeout-minutes: 17
     outputs:
       status: ${{ steps.red.outputs.status }}
     env:
@@ -996,6 +998,8 @@ jobs:
     env:
       LINUX_STATUS: ${{ needs.bug_red_linux.outputs.status }}
       MACOS_STATUS: ${{ needs.bug_red_macos.outputs.status }}
+      LINUX_RESULT: ${{ needs.bug_red_linux.result }}
+      MACOS_RESULT: ${{ needs.bug_red_macos.result }}
     steps:
       - *checkout-full
       - run: scripts/bug-red --collect "$LINUX_STATUS" "$MACOS_STATUS"
