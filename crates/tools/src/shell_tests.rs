@@ -55,13 +55,14 @@ fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::to
 fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
-        "run_in_background": null, "tty": null, "monitor": null, "unconfined": null}));
+        "run_in_background": null, "tty": null, "monitor": null, "unconfined": null, "detach": null}));
     let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
     assert_eq!(parsed.command, "ls");
     assert_eq!(parsed.mode, Mode::Foreground);
     assert_eq!(parsed.workdir, dir.path());
     assert_eq!(parsed.timeout_ms, Some(600_000));
     assert!(!parsed.unconfined);
+    assert!(!parsed.detach);
     let tool = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     assert!(tool.effects(&arguments).is_ok());
     let schema = tool.definition().input_schema;
@@ -1553,4 +1554,358 @@ fn one_ms_is_accepted_on_every_mode() {
         let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
         assert_eq!(parsed.timeout_ms, Some(1), "{overrides}");
     }
+}
+
+fn detached_arguments(command: &str) -> Map<String, Value> {
+    let mut arguments = args(command);
+    arguments.insert("detach".into(), json!(true));
+    arguments
+}
+
+fn detach_error(arguments: &Map<String, Value>, dir: &Path) -> ShellError {
+    match parse(arguments, dir, 600_000) {
+        Ok(parsed) => panic!("a bad detach combination parsed: {}", parsed.command),
+        Err(error) => error,
+    }
+}
+
+#[test]
+fn detach_with_another_background_form_fails_as_detach_alone() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-alone");
+    for key in ["run_in_background", "tty", "monitor"] {
+        let mut arguments = detached_arguments("echo hi");
+        arguments.insert(key.into(), json!(true));
+        let failed = detach_error(&arguments, dir.path());
+        assert!(matches!(failed, ShellError::DetachAlone), "{key}: {failed}");
+    }
+}
+
+#[test]
+fn detach_with_monitor_and_tty_still_fails_as_monitor_alone() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-monitor-pair");
+    let mut arguments = detached_arguments("echo hi");
+    arguments.insert("monitor".into(), json!(true));
+    arguments.insert("tty".into(), json!(true));
+    let failed = detach_error(&arguments, dir.path());
+    assert!(matches!(failed, ShellError::MonitorAlone), "{failed}");
+}
+
+#[test]
+fn detach_with_any_timeout_ms_fails_as_detach_timeout() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-timeout");
+    for ms in [0, 1, 1000] {
+        let mut arguments = detached_arguments("echo hi");
+        arguments.insert("timeout_ms".into(), json!(ms));
+        let failed = detach_error(&arguments, dir.path());
+        assert!(
+            matches!(failed, ShellError::DetachTimeout),
+            "{ms}: {failed}"
+        );
+    }
+}
+
+#[test]
+fn detach_without_a_timeout_ms_parses_without_a_timeout() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-no-timeout");
+    for given in [None, Some(Value::Null)] {
+        let mut arguments = detached_arguments("echo hi");
+        if let Some(timeout) = given {
+            arguments.insert("timeout_ms".into(), timeout);
+        }
+        let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+        assert!(parsed.detach);
+        assert_eq!(parsed.timeout_ms, None);
+        assert!(parsed.unconfined, "detach implies unconfined");
+    }
+}
+
+#[test]
+fn detach_with_unconfined_false_fails_as_detach_confined() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-confined");
+    let mut arguments = detached_arguments("echo hi");
+    arguments.insert("unconfined".into(), json!(false));
+    let failed = detach_error(&arguments, dir.path());
+    assert!(matches!(failed, ShellError::DetachConfined), "{failed}");
+}
+
+#[test]
+fn detach_with_unconfined_true_or_absent_parses_unconfined() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-unconfined");
+    for given in [None, Some(Value::Null), Some(json!(true))] {
+        let mut arguments = detached_arguments("echo hi");
+        if let Some(unconfined) = given {
+            arguments.insert("unconfined".into(), unconfined);
+        }
+        let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+        assert!(parsed.detach);
+        assert!(parsed.unconfined);
+    }
+}
+
+#[test]
+fn absent_detach_parses_as_an_ordinary_call() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-absent");
+    for given in [None, Some(Value::Null), Some(json!(false))] {
+        let mut arguments = args("echo hi");
+        if let Some(detach) = given {
+            arguments.insert("detach".into(), detach);
+        }
+        let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+        assert!(!parsed.detach);
+        assert_eq!(parsed.timeout_ms, Some(600_000));
+        assert!(!parsed.unconfined);
+    }
+}
+
+#[test]
+fn a_detached_call_is_always_reviewed_and_never_confined() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-reviewed");
+    let workspace = dir.path().to_path_buf();
+    let (_home, sandbox) = sandbox_handle_for_test();
+    let shell = Shell::new(workspace, FakeClock::new()).with_sandbox(sandbox);
+    let declared = shell.effects(&detached_arguments("echo hi")).unwrap();
+    assert!(declared.always_reviewed, "a detached call is reviewed");
+    assert!(
+        !declared.declared.confined,
+        "a detached call takes no protected-path transaction"
+    );
+}
+
+#[test]
+fn a_detached_read_only_command_is_still_reviewed() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-reads");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let declared = shell.effects(&detached_arguments("ls")).unwrap();
+    assert!(
+        declared.always_reviewed,
+        "review comes from detach, not the classifier"
+    );
+    let mut arguments = args("ls");
+    arguments.insert("detach".into(), json!(false));
+    let plain = shell.effects(&arguments).unwrap();
+    assert!(
+        !plain.always_reviewed,
+        "the same command without detach keeps its fast path"
+    );
+}
+
+#[test]
+fn an_invalid_detached_call_is_not_always_reviewed() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-invalid");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let mut arguments = detached_arguments("echo hi");
+    arguments.insert("unconfined".into(), json!(false));
+    let declared = shell.effects(&arguments).unwrap();
+    assert!(
+        !declared.always_reviewed,
+        "a call parse rejects never runs, so the closed default stays"
+    );
+}
+
+fn detached_pid(text: &str) -> u32 {
+    text.strip_prefix("Started detached. PID ")
+        .and_then(|rest| rest.split('.').next())
+        .and_then(|pid| pid.parse().ok())
+        .unwrap()
+}
+
+fn stand_down_group(pid: u32, watchdog: fakes::Watchdog) {
+    assert!(fakes::kill_group(pid, "KILL").unwrap());
+    assert!(
+        fakes::group_empties(pid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the reaper thread reaped the child, leaving no zombie"
+    );
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn a_detached_call_without_a_detached_directory_is_unavailable() {
+    let dir = fakes::TempDir::new("fiber-shell-detach-no-dir");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let output = shell.run(
+        &detached_arguments("echo hi"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert_eq!(
+        text(&output),
+        "Detached commands are not available in this session.\n"
+    );
+    assert!(output.process.is_none(), "an unavailable call never starts");
+}
+
+#[test]
+fn a_detached_sleep_is_not_a_bare_wait_and_needs_no_jobs() {
+    let dir = fakes::TempDir::new("fiber-shell-detached-sleep");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_detached(dir.path().join("detached"));
+    let waiting = shell.run(&args("sleep 60"), &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&waiting), Some(ErrorCode::InvalidArguments));
+    assert!(text(&waiting).contains("waits with `sleep`"), "{waiting:?}");
+    let output = shell.run(
+        &detached_arguments("sleep 60"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(
+        output.error.is_none(),
+        "detach skips the bare-wait check: {:?}",
+        output.error
+    );
+    assert_eq!(output.details, Some(json!({"command": "sleep 60"})));
+    assert!(output.process.is_none());
+    let pid = detached_pid(&text(&output));
+    stand_down_group(pid, fakes::Watchdog::group(pid));
+}
+
+#[test]
+fn a_detached_call_with_the_sandbox_on_runs_unconfined() {
+    let dir = fakes::TempDir::new("fiber-shell-detached-sandbox");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (_home, sandbox) = sandbox_handle_for_test();
+    let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_sandbox(sandbox)
+        .with_detached(dir.path().join("detached"));
+    // No jobs: a detached call is not a job, so the check passes with none.
+    // No workdir either: the call runs in the shell's workspace.
+    let ready = fakes::children::Ready::new(dir.path());
+    let command = format!(
+        "echo launched; echo $$ > {}; exec sleep 60",
+        ready.path().display()
+    );
+    let arguments = detached_arguments(&command);
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert!(
+        output.error.is_none(),
+        "the call launches unconfined: {:?}",
+        output.error
+    );
+    let receipt = text(&output);
+    assert!(receipt.starts_with("Started detached. PID "), "{receipt}");
+    assert!(receipt.contains("Fiber will not stop it."), "{receipt}");
+    assert_eq!(output.details, Some(json!({"command": command})));
+    assert!(output.process.is_none());
+    assert!(output.protected_paths.is_none());
+    assert!(
+        output
+            .details
+            .as_ref()
+            .unwrap()
+            .get("protected_paths")
+            .is_none(),
+        "an unconfined call takes no protected-path transaction"
+    );
+    let pid = detached_pid(&receipt);
+    // The log write precedes the ready line in program order, so reading
+    // the ready line first makes the log read exact.
+    assert_eq!(
+        ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        vec![pid]
+    );
+    let logs: Vec<_> = std::fs::read_dir(dir.path().join("detached"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(logs.len(), 1, "one call writes one log");
+    assert_eq!(std::fs::read_to_string(&logs[0]).unwrap(), "launched\n");
+    stand_down_group(pid, fakes::Watchdog::group(pid));
+}
+
+fn listed_files(root: &Path) -> Vec<(std::path::PathBuf, u64)> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(relative) = path.strip_prefix(root) {
+                files.push((
+                    relative.to_path_buf(),
+                    entry.metadata().map(|meta| meta.len()).unwrap_or(0),
+                ));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn a_detached_call_takes_no_protected_path_transaction() {
+    let dir = fakes::TempDir::new("fiber-shell-detached-unprotected");
+    let workspace = dir.path().join("workspace");
+    let fiber_home = dir.path().join("fiber-home");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (protection, _) =
+        super::sandbox::protected::ProtectedPaths::open(&fiber_home, &workspace).unwrap();
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(super::sandbox::Settings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: fiber_home.clone(),
+    }));
+    let shell = Shell::new(workspace.clone(), FakeClock::new())
+        .with_sandbox(sandbox)
+        .with_detached(dir.path().join("detached"))
+        .with_protection(protection);
+    let before = listed_files(&fiber_home);
+    // No workdir: the call runs in the shell's workspace.
+    let command = "echo ran; exec sleep 60".to_owned();
+    let arguments = detached_arguments(&command);
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert!(output.error.is_none(), "the call runs: {:?}", output.error);
+    assert!(output.protected_paths.is_none());
+    assert!(
+        output
+            .details
+            .as_ref()
+            .unwrap()
+            .get("protected_paths")
+            .is_none(),
+        "no confined transaction ran, so no report lands in the details"
+    );
+    assert_eq!(
+        listed_files(&fiber_home),
+        before,
+        "the protection handle's state is unchanged"
+    );
+    let pid = detached_pid(&text(&output));
+    stand_down_group(pid, fakes::Watchdog::group(pid));
+}
+
+#[test]
+fn the_shell_schema_names_detach_last() {
+    let tool = shell();
+    assert_eq!(
+        tool.definition().input_schema["required"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        "detach"
+    );
+    assert_eq!(
+        tool.definition().input_schema["properties"]["detach"]["type"],
+        json!(["boolean", "null"])
+    );
+    assert_eq!(
+        tool.definition().input_schema["properties"]["detach"]["description"],
+        json!(
+            "Start the command in its own session, outside the OS sandbox, and return its process ID and output-log path at once. \
+             Fiber never stops it, and it is not a job. It is always reviewed. It takes no `timeout_ms` and cannot be combined with \
+             `run_in_background`, `tty` or `monitor`."
+        )
+    );
+    assert!(
+        tool.definition()
+            .description
+            .contains("A call with `detach` set starts a command that outlives the session."),
+        "the tool description names the outliving command"
+    );
 }

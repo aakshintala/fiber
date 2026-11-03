@@ -50,6 +50,15 @@ pub(super) fn launch(
     command: &str,
     workdir: &Path,
 ) -> Result<Started, io::Error> {
+    // The file name is always UTF-8, so only the directory can refuse
+    // this: a log with no path the model can read fails before spawn, so
+    // no process starts without a path for the receipt.
+    if dir.to_str().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("detached log directory is not UTF-8: {}", dir.display()),
+        ));
+    }
     let (log, path) = create_log(dir, fiber_pid, &NEXT)?;
     let mut cmd = Command::new(program);
     cmd.arg("-c")
@@ -88,7 +97,11 @@ pub(super) fn launch(
 /// `create_new`, so two concurrent calls never share a file. The directory
 /// is mode 0700 and each file mode 0600; a directory that already exists
 /// keeps its mode.
-fn create_log(dir: &Path, fiber_pid: u32, next: &AtomicU64) -> io::Result<(File, PathBuf)> {
+pub(super) fn create_log(
+    dir: &Path,
+    fiber_pid: u32,
+    next: &AtomicU64,
+) -> io::Result<(File, PathBuf)> {
     DirBuilder::new().mode(0o700).recursive(true).create(dir)?;
     for _ in 0..LOG_ATTEMPTS {
         let n = next.fetch_add(1, Ordering::Relaxed);
