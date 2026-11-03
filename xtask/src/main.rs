@@ -25,7 +25,7 @@
 //! - `narrow-plan --list FILE --filter EXPR`: reads `planned` lines on stdin and the
 //!   `cargo nextest list --message-format json` in FILE, drops tests the list did
 //!   not match, and prints `dropped`, `run` and `filter` lines
-//! - `stress-plan --base REV [--labels L] [--summary FILE]`: the test functions the
+//! - `stress-plan --base REV [--labels L] [--summary FILE] [--filter-file PATH]`: the test functions the
 //!   working tree adds or changes against the merge base with REV that this runner
 //!   compiles, as tab-separated lines, naming each dropped test, appending the
 //!   job-summary block to FILE when given
