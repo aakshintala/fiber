@@ -2986,7 +2986,8 @@ fn keeper_completions_join_one_turn_as_a_single_fiber_message() {
             assert!(looped.turn().unwrap().is_some());
             done.send(looped).unwrap();
         });
-        looped = Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "keeper delivery turn");
+        looped =
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "keeper delivery turn");
     }
     let turns: Vec<_> = history
         .new_lines()
