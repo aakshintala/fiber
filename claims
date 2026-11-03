@@ -17,3 +17,5 @@ crates/main/tests/support/mod.rs	fiber-4030	plan	2026-11-03T00:15:58Z	roundhouse
 scripts/leak-scan	fiber-4038	plan	2026-11-03T00:16:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/fix/4038-leak-scan-sccache	
 docs/testing/running.md	fiber-4038	plan	2026-11-03T00:16:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/fix/4038-leak-scan-sccache	
 scripts/test-leak-scan	fiber-4038	plan	2026-11-03T00:16:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/fix/4038-leak-scan-sccache	
+crates/tui/src/view/model_picker.rs	fiber-3809	plan	2026-11-03T01:31:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/refactor/3809-model-picker-one-walk	
+crates/tui/src/view/model_picker_tests.rs	fiber-3809	plan	2026-11-03T01:31:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/refactor/3809-model-picker-one-walk	
