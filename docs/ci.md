@@ -253,6 +253,7 @@ On Linux x86_64 alone:
   (`cargo xtask crate-edges`)
 - no crate enables serde_json's `preserve_order` feature in any crate linked into a workspace binary or test, over every target and feature; build-dependency edges are excluded (`cargo xtask
   preserve-order`), so prompt bytes stay cacheable (`docs/prompt-cache.md`)
+- string-typed closed-set sites stay capped per production file under `crates/` (`cargo xtask census-ratchet`): a file whose count rises above its inline maximum in `scripts/check` fails, a file missing from the list holds none, and lowering a count never fails; `cargo xtask census-ratchet --print` prints the current per-file counts
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in
   `research/tui-prototype`, when the diff touches it. The prototype is not a
   workspace member, so the checks above never reach it; it has its own
@@ -376,7 +377,7 @@ request's head and at its base commit (`scripts/release-size`). The base
 binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
-under 25 MiB and runs the benchmarks that gate each pull request, the rows the selection above chooses (the 10-busy-turns workload only when the selection chooses it),
+under 26 MiB and runs the benchmarks that gate each pull request, the rows the selection above chooses (the 10-busy-turns workload only when the selection chooses it),
 (`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The head and base
 binaries run only the timing benchmarks the selection chooses, in the same job on the same runner, so a
 timing comparison never crosses runners: one harness process alternates head and base timings,

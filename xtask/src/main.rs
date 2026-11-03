@@ -86,6 +86,11 @@
 //!   `crates/main/tests/` outside `support/` holds more unmarked `.screen()`
 //!   call lines than its maximum (0 when absent)
 //!   (`docs/testing/screens.md`, "Screens")
+//! - `census-ratchet [--print]`: reads the inline per-file maxima from stdin
+//!   as one `<path> <maximum>` per line, and fails when a production file
+//!   under `crates/` holds more string-typed closed-set sites than its
+//!   maximum (0 when absent); with `--print` it prints the current per-file
+//!   counts instead and reads no stdin
 //! - `stale-wait-ratchet`: reads the inline per-file maxima from stdin as one
 //!   `<path> <maximum>` per line, and fails when a file under
 //!   `crates/main/tests/` outside `support/` holds more stale-wait
@@ -104,6 +109,7 @@
 
 mod bench;
 mod budget_bounds;
+mod census_ratchet;
 mod ci_needs;
 mod docs;
 mod flake_report;
@@ -392,6 +398,24 @@ fn run(args: &[String]) -> Result<bool, String> {
                 &screen_ratchet::check(&rust_files(&workspace_members()?)?, &maxima),
                 "ok",
             )
+        }
+        "census-ratchet" => {
+            let files = rust_files(&workspace_members()?)?;
+            if rest.iter().any(|arg| arg.as_str() == "--print") {
+                print!("{}", census_ratchet::table(&files));
+                Ok(true)
+            } else {
+                let mut input = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut input)
+                    .map_err(|e| format!("stdin: {e}"))?;
+                let maxima = screen_ratchet::parse_maxima(&input)?;
+                report(
+                    "census-ratchet",
+                    &census_ratchet::check(&files, &maxima),
+                    "ok",
+                )
+            }
         }
         "stale-wait-ratchet" => {
             let mut input = String::new();

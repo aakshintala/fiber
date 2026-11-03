@@ -1883,6 +1883,27 @@ fn kinds_ratchet_passes_at_both_caps_and_fails_above_them() {
 }
 
 #[test]
+fn census_ratchet_passes_at_the_maxima_and_fails_above_it() {
+    let dir = workspace();
+    // One site in a production file; the test file's site stays out of scope.
+    dir.write("crates/a/src/lib.rs", "struct A { kind: String }\n");
+    dir.write("crates/a/tests/t.rs", "struct A { kind: String }\n");
+    let (code, table) = xtask(&dir, &["census-ratchet", "--print"], &[], "");
+    assert_eq!((code, table.as_str()), (0, "crates/a/src/lib.rs 1\n"));
+    let (code, out) = xtask(&dir, &["census-ratchet"], &[], table.as_str());
+    assert_eq!((code, out.as_str()), (0, "census-ratchet: ok\n"));
+    let (code, out) = xtask(&dir, &["census-ratchet"], &[], "crates/a/src/lib.rs 5\n");
+    assert_eq!((code, out.as_str()), (0, "census-ratchet: ok\n"));
+    // A file absent from the table holds none.
+    let (code, out) = xtask(&dir, &["census-ratchet"], &[], "");
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("crates/a/src/lib.rs holds 1 string-typed closed-set sites (maximum 0)"),
+        "{out}"
+    );
+}
+
+#[test]
 fn stale_wait_ratchet_fails_an_unlisted_site_and_passes_at_its_maximum() {
     // The ticket's acceptance ("The doc line, the shared helper and the
     // check, with a test that the check fails on a new `recv_reply`."): a

@@ -23,6 +23,7 @@ use crate::tool_util::{cancelled_before, errored};
 mod background;
 
 mod command;
+mod detached;
 mod drive;
 mod moved;
 mod process_group;
@@ -120,6 +121,10 @@ pub struct Shell {
     /// Linux spawns take their guard from it. Unconfined and read-only
     /// calls take none.
     protection: Option<Arc<ProtectedPaths>>,
+    /// Where a detached call writes its output log (`docs/tools.md`,
+    /// "Background jobs"). `None` in a session that offers no detached
+    /// commands, such as the driver shell.
+    detached: Option<PathBuf>,
 }
 
 impl Shell {
@@ -146,6 +151,7 @@ impl Shell {
             },
             spill_wrap: None,
             protection: None,
+            detached: None,
         }
     }
 
@@ -239,6 +245,17 @@ impl Shell {
         }
     }
 
+    /// Writes a detached call's output log under `dir`
+    /// (`docs/tools.md`, "Background jobs"). A shell without it rejects a
+    /// detached call as unavailable.
+    #[must_use]
+    pub fn with_detached(self, dir: PathBuf) -> Self {
+        Self {
+            detached: Some(dir),
+            ..self
+        }
+    }
+
     /// The current sandbox settings. `effects` declares a call confined
     /// only when the platform can apply them; a call declared confined then
     /// fails closed if the policy becomes unavailable before spawn
@@ -267,7 +284,8 @@ impl Tool for Shell {
                  until `jobs stop`, or until the session shuts down. Any other call with no \
                  `timeout_ms` defaults to 600000, or to 300000 for a monitor. `timeout_ms` is at least 1. \
                  A monitor's maximum is 1800000, or 600000 in a non-interactive run. Standard output \
-                 and standard error are one stream, except in a monitor, whose standard error goes to its own file."
+                 and standard error are one stream, except in a monitor, whose standard error goes to its own file. \
+                 A call with `detach` set starts a command that outlives the session."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -300,9 +318,13 @@ impl Tool for Shell {
                     "unconfined": {
                         "type": ["boolean", "null"],
                         "description": "Leave the OS sandbox for this call. Reviewed exactly as with the sandbox off."
+                    },
+                    "detach": {
+                        "type": ["boolean", "null"],
+                        "description": "Start the command in its own session, outside the OS sandbox, and return its process ID and output-log path at once. Fiber never stops it, and it is not a job. It is always reviewed. It takes no `timeout_ms` and cannot be combined with `run_in_background`, `tty` or `monitor`."
                     }
                 },
-                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "unconfined"],
+                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "unconfined", "detach"],
                 "additionalProperties": false
             }),
             deferred: false, hosted: None,
@@ -316,6 +338,9 @@ impl Tool for Shell {
         // A call `parse` rejects never runs. The closed default keeps a bad
         // `timeout_ms` or `workdir` off the read-only fast path.
         let mut unconfined = false;
+        // A detached call is always reviewed, however read-only its
+        // command classifies as.
+        let mut detach = false;
         // The destructive-command guard reads the raw command text before
         // the parser runs, so a form the parser rejects still declares
         // review (`docs/tools.md`, "What a tool declares").
@@ -326,11 +351,19 @@ impl Tool for Shell {
         let mut effects = match parse(arguments, &self.workspace, self.max_timeout_ms) {
             Ok(parsed) => {
                 unconfined = parsed.unconfined;
+                detach = parsed.detach;
                 let entries = support::lock(&self.read_only);
                 classify(&parsed.command, &self.workspace, &parsed.workdir, &entries)
             }
             Err(_) => classify::executes(None, None),
         };
+        // A detached call is reviewed however read-only it classifies as:
+        // its effects function returns `always_reviewed`
+        // (`docs/permissions.md`, "Effects"). A call `parse` rejects never
+        // runs, so the closed default stays for a bad combination.
+        if detach {
+            effects.always_reviewed = true;
+        }
         effects.review_when_confined = guard;
         // An unavailable sandbox does not mark the call confined: it stays
         // on the reviewed path. An explicit `unconfined: true` skips the
@@ -457,7 +490,7 @@ impl Shell {
         if parsed.mode != Mode::Foreground && self.jobs.is_none() {
             return errored(ShellError::NoJobs);
         }
-        if !parsed.mode.in_background() && bare_wait(&parsed.command) {
+        if !parsed.detach && !parsed.mode.in_background() && bare_wait(&parsed.command) {
             return errored(ShellError::BareWait);
         }
         // The functions reach only the model's own command line: `classify`
@@ -467,6 +500,33 @@ impl Shell {
             None => parsed.command.clone(),
         };
         let program = shell_program();
+        // A detached call starts in its own session and returns the receipt
+        // at once. It never reaches the sandbox, the protection guard or the
+        // job list below: it is not confined, not a job, and never stopped.
+        if parsed.detach {
+            let Some(dir) = self.detached.as_deref() else {
+                return errored(ShellError::NoDetach);
+            };
+            return match detached::launch(
+                dir,
+                std::process::id(),
+                program,
+                &command,
+                &parsed.workdir,
+            ) {
+                Ok(started) => {
+                    let mut output = Output {
+                        content: vec![ContentPart::Text {
+                            text: detached::receipt(&started),
+                        }],
+                        ..Output::default()
+                    };
+                    output.details = Some(details(&parsed.command, None));
+                    output
+                }
+                Err(source) => errored(ShellError::NotStarted { source }),
+            };
+        }
         let policy = match (&self.jobs, parsed.mode) {
             (None, _) => command::MovePolicy::Stay,
             (Some(_), Mode::Foreground) => command::MovePolicy::Foreground,
@@ -580,6 +640,7 @@ struct Args {
     tty: Option<bool>,
     monitor: Option<bool>,
     unconfined: Option<bool>,
+    detach: Option<bool>,
 }
 
 struct Parsed {
@@ -593,6 +654,9 @@ struct Parsed {
     /// `unconfined: true` sets it. Omitted, null and false follow the
     /// session's sandbox setting; any other JSON type fails `parse`.
     unconfined: bool,
+    /// Whether the command starts detached: its own session that outlives
+    /// the session, with no timeout. `unconfined` is true when `detach` is.
+    detach: bool,
 }
 
 /// Whether the call leaves the OS sandbox: only a literal
@@ -675,7 +739,8 @@ fn parse(
     let command = args.command;
     let workdir = workdir(args.workdir.as_deref(), workspace)?;
     let given_timeout = args.timeout_ms;
-    let unconfined = args.unconfined.unwrap_or(false);
+    let detach = args.detach.unwrap_or(false);
+    let unconfined = args.unconfined.unwrap_or(false) || detach;
     let run_in_background = args.run_in_background.unwrap_or(false);
     let tty = args.tty.unwrap_or(false);
     let monitor = args.monitor.unwrap_or(false);
@@ -686,10 +751,24 @@ fn parse(
         (false, false, true) => Mode::Background,
         (false, false, false) => Mode::Foreground,
     };
+    // A detached call is its own mode: it takes no `timeout_ms` and no
+    // other background form, so each combination fails as its own case,
+    // with the `monitor` pair still reading as `MonitorAlone` above.
+    if detach && (run_in_background || tty || monitor) {
+        return Err(ShellError::DetachAlone);
+    }
+    if detach && given_timeout.is_some() {
+        return Err(ShellError::DetachTimeout);
+    }
+    if detach && args.unconfined == Some(false) {
+        return Err(ShellError::DetachConfined);
+    }
     if given_timeout == Some(0) {
         return Err(ShellError::TimeoutTooSmall);
     }
-    let timeout_ms = if mode == Mode::Monitor {
+    let timeout_ms = if detach {
+        None
+    } else if mode == Mode::Monitor {
         let timeout = given_timeout.unwrap_or(DEFAULT_DEADLINE_MS);
         if timeout > max_timeout_ms {
             return Err(ShellError::DeadlineTooLong {
@@ -709,6 +788,7 @@ fn parse(
         timeout_ms,
         mode,
         unconfined,
+        detach,
     })
 }
 
@@ -1041,7 +1121,7 @@ pub(crate) fn killed_line(name: &str) -> String {
 }
 
 pub(crate) fn timeout_line(timeout_ms: u64) -> String {
-    format!("Timed out after {timeout_ms} ms and stopped.")
+    format!("Timed out after {timeout_ms} ms; Fiber stopped the whole process group.")
 }
 
 /// What a monitor stopped at its deadline says (`docs/tools.md`,
