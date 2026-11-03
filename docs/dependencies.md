@@ -61,7 +61,7 @@ whole process, which
 Fiber's own `unsafe` code are `docs/code-quality.md`.
 
 Binary size is recorded, not gated per crate. CI fails a stripped release
-binary of 25 MiB (26,214,400 bytes) or more (`scripts/release-size`). The cap
+binary of 26 MiB (27,262,976 bytes) or more (`scripts/release-size`). The cap
 is a point to weigh, not a refusal: a change that would cross it, a crate or
 Fiber's own code, is admitted when what it buys is worth its size, and the pull
 request raises the cap and says why. The change's binary size is the evidence
