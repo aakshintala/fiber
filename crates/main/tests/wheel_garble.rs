@@ -221,6 +221,7 @@ fn scrolling_back_down_leaves_the_screen_a_full_repaint_would_draw() {
     // settled: the grid wait just above and no input since
     let scrolled = run.output().len();
     let from = run.output().len();
+    // The resize stays at the spawn size (100 by 30): the replay parses the whole stream at that size.
     run.resize(100, 30);
     let clear = run.wait_bytes(from, b"\x1b[J", "the resize's clear");
     let redraw = run.wait_bytes(clear, b"\x1b[?2026l", "the redraw's end");
