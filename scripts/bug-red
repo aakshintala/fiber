@@ -10,6 +10,9 @@
 # Usage: scripts/bug-red BASE [HEAD]
 #        scripts/bug-red --report BASE HEAD
 #        scripts/bug-red --collect LINUX_STATUS MACOS_STATUS
+#        (with optional LINUX_RESULT and MACOS_RESULT in the environment:
+#        each leg's needs.<job>.result, naming a leg that ended with no
+#        status, such as a cancelled leg)
 # A pull request that changes only docs passes at once, with a message
 # saying so: the doc was wrong and the code was right, so no test can show
 # the bug. A red commit whose only test files belong to `test = false`
@@ -29,6 +32,24 @@ if [ "${1-}" = --collect ]; then
   [ "$#" -eq 3 ] || { echo "usage: scripts/bug-red --collect LINUX_STATUS MACOS_STATUS" >&2; exit 2; }
   linux_status=$2
   macos_status=$3
+  # A leg that ended with no status, such as a cancelled leg, is named
+  # with its job result before any other check, so the message keeps the
+  # cause instead of reporting a protocol fault. A leg with no result
+  # keeps the old missing-or-invalid path below.
+  linux_result=${LINUX_RESULT-}
+  macos_result=${MACOS_RESULT-}
+  empty_leg=false
+  if [ -z "$linux_status" ] && [ -n "$linux_result" ]; then
+    echo "bug-red: linux leg ended $linux_result with no result (linux=$linux_status, macos=$macos_status)"
+    empty_leg=true
+  fi
+  if [ -z "$macos_status" ] && [ -n "$macos_result" ]; then
+    echo "bug-red: macos leg ended $macos_result with no result (linux=$linux_status, macos=$macos_status)"
+    empty_leg=true
+  fi
+  if [ "$empty_leg" = true ]; then
+    exit 1
+  fi
   if [ "$linux_status" = docs ] || [ "$macos_status" = docs ]; then
     if [ "$linux_status" = docs ] && [ "$macos_status" = docs ]; then
       echo "bug-red: both legs confirm the pull request changes only docs"
