@@ -197,9 +197,10 @@ run, which can lose its report, and a later test run reports the flake
 again. No other test retries.
 
 A test the pull request adds or changes runs 30 times under the `stress`
-profile, which never retries; 100 times when the pull request fixes a
-flaky test. One failure fails the run. The retry above applies only to
-tests the pull request did not touch.
+profile, which never retries. When the pull request fixes a flaky test,
+each test the linked flake issue names runs 100 times, in every binary
+that compiles it. One failure fails the run. The retry above applies only
+to tests the pull request did not touch.
 
 The `stress` job runs on a ready pull request on Linux x86_64 beside the
 test jobs and builds from the same restored cache. The tests it runs are
@@ -230,12 +231,28 @@ macOS `scripts/check` leg. A plan left empty by that intersection skips
 the run. A run whose
 filter matches no test, or whose iteration runs a different number of tests
 than the plan names, fails the job. The count is read from the linked issue's
-labels and sets the runs per test. Nothing caps the test set: the job stresses
+labels, which decide whether the pull request fixes a flaky test. Which tests
+run 100 times is decided by the names: each test the linked flake issue names
+runs 100 times and every other selected test runs 30; when the issue names no
+test, every selected test runs 100 times. Nothing caps the test set: the job stresses
 every test the plan selects. The job is in `ci`'s `needs`,
 so one failure stops the merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched
 test still gets nextest's one retry but a pass on that retry fails the
 test job (`cargo xtask touched-retries`).
+
+Names are the test ids on the linked issue's marker lines, the body and the
+comments together: the filer's "The test `...` passed after a retry" sentence
+names one test per sighting, normalised past the binary prefix. The plan step
+writes the body and each comment to a file and `stress-plan` reads the names
+from it, matching each against the tests the plan selected; a name that
+matches no selected test runs nowhere and is reported as unmatched in the
+plan output. With names and a flaky-test fix the plan runs twice, `--only
+named` and `--only rest`, writing one filter file per group; the run step
+executes one nextest invocation per non-empty group, each with its own count
+and its own check, skipping an empty group and naming it in the summary. A
+heading per group carries its count, and the single aggregate cost step keeps
+the job envelope.
 
 The Linux x86_64 full-suite run uploads its JUnit XML as the `junit`
 artifact, kept 7 days. It holds only XML this run wrote: the full-suite
