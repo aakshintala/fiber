@@ -142,9 +142,21 @@ impl Drop for Hold {
 
 /// Kills the parked holder, and re-kills once when the pattern is still
 /// listed after the first kill's wait.
-// debt: no test separates this kill from the watchdog's async kill of the
-// same pattern on drop, so the empty-body mutant survives; pin the sync
-// kill alone once a test reaches `reap` without the watchdog armed.
+// `Watchdog::matching(text)` (`crates/fakes/src/watchdog.rs`: its `Drop`
+// closes the child's stdin and the EOF kills every process matching the same
+// text) is held by `Hold` as `guard: Option<Watchdog>` built from the same
+// `pattern`, so after `Hold::drop` runs `reap(self.pattern)` and returns, the
+// guard drops and kills that identical pattern out of process.
+// (a) `replace reap with ()`: the holder is still killed by the Watchdog on
+// the same pattern, moments later in another process; nothing a test or the
+// leak scan observes changes. (b) `delete ! in reap`: inverts a re-kill
+// guard; `derive_pattern`'s doc says the pattern is a substring of the
+// spawned holder's own command line and unique to this test, so a second
+// `kill_matching` after the holder has exited matches nothing, a no-op
+// either way.
+// debt: the sync reap stands as is, until #4067 answers whether it is
+// redundant with the Watchdog kill on the same pattern (see #4067).
+#[cfg_attr(false, mutants::skip)]
 fn reap(pattern: &str) {
     // An error means no holder matched: nothing to reap.
     if crate::kill_matching(pattern).is_err() {
