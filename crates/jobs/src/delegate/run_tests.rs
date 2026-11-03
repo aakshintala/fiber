@@ -885,7 +885,8 @@ fn the_folded_signal_comes_after_on_line_returns() {
         s.spawn(move || {
             let mut on_line = |_line: &Envelope| {
                 entered_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
+                Deadline::after(MUST_SUCCEED_WITHIN)
+                    .recv_or_fail(&release_rx, "the test to release on_line");
             };
             watching
                 .watch(&SessionId("s_child".into()), None, &mut on_line)

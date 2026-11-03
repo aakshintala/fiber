@@ -142,11 +142,9 @@ impl Drop for Hold {
 
 /// Kills the parked holder, and re-kills once when the pattern is still
 /// listed after the first kill's wait.
-// Exempt: the watchdog kills the same pattern asynchronously, so no
-// deterministic test separates this kill from the watchdog's; the unlink
-// before it stays covered by `drop_unlinks_the_fifo_so_late_starters_fail_open`.
-// (`docs/testing/mutants.md`, "Proving a test bites").
-#[cfg_attr(false, mutants::skip)]
+// debt: no test separates this kill from the watchdog's async kill of the
+// same pattern on drop, so the empty-body mutant survives; pin the sync
+// kill alone once a test reaches `reap` without the watchdog armed.
 fn reap(pattern: &str) {
     // An error means no holder matched: nothing to reap.
     if crate::kill_matching(pattern).is_err() {

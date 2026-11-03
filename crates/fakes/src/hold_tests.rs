@@ -236,7 +236,7 @@ fn the_watchdog_pattern_is_the_pid_scoped_hold_fragment_otherwise() {
 }
 
 #[test]
-fn the_watchdog_pattern_is_the_path_wins_over_the_fragment() {
+fn the_embedded_path_wins_over_the_hold_fragment() {
     let dir = TempDir::new("fiber-hold-pattern-both");
     let path = dir.path().join("hold");
     let command = format!("head -n 1 {} #123", path.display());
