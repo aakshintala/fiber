@@ -105,14 +105,14 @@ fn hub_start_with_overrides_runs_the_session_with_them_as_dash_c() {
         })
         .to_string(),
     );
-    let started = recv_reply(&client, "the start acknowledgement");
+    let started = recv_answer(&client, "c_start", "the start acknowledgement");
     assert_eq!(started["kind"], "command_accepted", "{started}");
     let id = started["payload"]["result"]["session_id"]
         .as_str()
         .expect("the start answers with a session id")
         .to_owned();
 
-    subscribe(&client, &id);
+    let sub = subscribe(&client, &id);
     let mut stream = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -132,7 +132,7 @@ fn hub_start_with_overrides_runs_the_session_with_them_as_dash_c() {
     );
 
     client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
-    let tail = until(&client, "fiber_exited", |line| {
+    let tail = until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     stream.extend(tail);
@@ -178,7 +178,7 @@ fn hub_start_with_a_malformed_override_rejects_with_the_session_sentence() {
             })
             .to_string(),
         );
-        let rejected = recv_reply(&client, "the start rejection");
+        let rejected = recv_answer(&client, id, "the start rejection");
         assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
         assert_eq!(rejected["payload"]["command_id"], id);
         assert_eq!(rejected["payload"]["code"], "usage");

@@ -617,7 +617,7 @@ fn send(client: &support::Socket, line: &Value) {
     client.send(&line.to_string());
 }
 
-fn subscribe(id: &str, session: &str) -> Value {
+fn subscribe_line(id: &str, session: &str) -> Value {
     command(id, session, "subscribe", json!({"level": "full"}))
 }
 
@@ -652,10 +652,14 @@ fn echo_call() -> fakes::Response {
 
 /// Waits for the relayed `fiber_exited`, then for the session process to
 /// be gone, over the shared [`support`] socket and deadline helpers.
-fn until_exited(client: &support::Socket, setup: &Setup) -> Vec<Value> {
-    let lines = support::until(client, "fiber_exited", |line| {
-        line["kind"] == "fiber_exited"
-    });
+/// A subscription bounds the exit wait past the fold.
+fn until_exited(
+    client: &support::Socket,
+    setup: &Setup,
+    since: &support::Subscribed,
+) -> Vec<Value> {
+    let exited = |line: &Value| line["kind"] == "fiber_exited";
+    let lines = support::until_after_reopen(client, since, "fiber_exited", exited);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     fakes::try_matching_exits(&workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the session process to exit: {err}")
@@ -714,10 +718,11 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
         .as_str()
         .unwrap()
         .to_owned();
-    send(&client, &subscribe("c_sub", &id));
-    support::until(&client, "the subscribe acknowledgement", |line| {
+    send(&client, &subscribe_line("c_sub", &id));
+    let acked = support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
+    let sub = support::Subscribed::from_ack(Some(&id), acked.last().unwrap().clone());
     let asked = support::until(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
@@ -744,7 +749,7 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
         "the allowed call ran: {done:?}"
     );
     send(&client, &close(&id));
-    until_exited(&client, &setup);
+    until_exited(&client, &setup, &sub);
     guard.wait_gone();
     drop(client);
     // Two stages, one permission order holding both, one run.
@@ -809,10 +814,11 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
         .as_str()
         .unwrap()
         .to_owned();
-    send(&client, &subscribe("c_sub", &id));
-    support::until(&client, "the subscribe acknowledgement", |line| {
+    send(&client, &subscribe_line("c_sub", &id));
+    let acked = support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
+    let sub = support::Subscribed::from_ack(Some(&id), acked.last().unwrap().clone());
     server.release();
     let asked = support::until(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
@@ -821,7 +827,7 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
         .as_str()
         .unwrap()
         .to_owned();
-    let exited = until_exited(&client, &setup);
+    let exited = until_exited(&client, &setup, &sub);
     assert_eq!(
         exited.last().unwrap()["payload"]["suspended_on"],
         request.as_str()
@@ -869,7 +875,7 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
         "the allowed call ran: {resumed:?}"
     );
     send(&client, &close(&id));
-    until_exited(&client, &setup);
+    until_exited(&client, &setup, &sub);
     guard.wait_gone();
     drop(client);
     // Two segments, one per process, under the same request id.
@@ -942,10 +948,11 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
         .as_str()
         .unwrap()
         .to_owned();
-    send(&client, &subscribe("c_sub", &id));
-    support::until(&client, "the subscribe acknowledgement", |line| {
+    send(&client, &subscribe_line("c_sub", &id));
+    let acked = support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
+    let sub = support::Subscribed::from_ack(Some(&id), acked.last().unwrap().clone());
     server.release();
     let asked = support::until(&client, "interaction_requested", |line| {
         line["kind"] == "interaction_requested"
@@ -954,7 +961,7 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
         .as_str()
         .unwrap()
         .to_owned();
-    let exited = until_exited(&client, &setup);
+    let exited = until_exited(&client, &setup, &sub);
     assert_eq!(
         exited.last().unwrap()["payload"]["suspended_on"],
         request.as_str()
@@ -997,7 +1004,7 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
         "the answered call ran again: {done:?}"
     );
     send(&client, &close(&id));
-    until_exited(&client, &setup);
+    until_exited(&client, &setup, &sub);
     guard.wait_gone();
     drop(client);
     // No second permission order; the resumed run is timed.

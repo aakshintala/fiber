@@ -1236,28 +1236,10 @@ pub(crate) fn recv(client: &Socket, what: &str) -> Value {
     }
 }
 
-/// The next socket line that is not an `attention` hub line: a turn can
-/// end between a command and its acknowledgement. Every line takes one
-/// wait started at entry, like [`recv`].
-pub(crate) fn recv_reply(client: &Socket, what: &str) -> Value {
-    let wait = client.deadline.start_wait();
-    let mut got = Vec::new();
-    loop {
-        match client.next_through(&wait, what, &got) {
-            Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {
-                got.push(line);
-            }
-            Some(line) => return line,
-            None => panic!("the socket closed while waiting for {what}"),
-        }
-    }
-}
-
 /// The answer to command `id`: the line whose `payload.command_id` is `id`.
 /// `docs/invocation.md` orders no other line against it, so a feed line may
 /// come first: lines before it stay for the caller's next [`recv`] or
-/// [`until`], in order, except `attention` lines, which [`recv_reply`] drops
-/// too.
+/// [`until`], in order, except `attention` lines, which are dropped too.
 #[track_caller]
 pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
     let wait = client.deadline.start_wait();
@@ -1378,6 +1360,16 @@ fn accepted(ack: Value, session: Option<String>) -> Subscribed {
     }
 }
 
+impl Subscribed {
+    /// The subscription a hand-sent subscribe's accepted acknowledgement
+    /// carries: the bound for waits after a subscribe the caller sent and
+    /// read itself instead of through [`subscribe`]. The caller checked
+    /// the acknowledgement; only its `result.last_seq` is read here.
+    pub(crate) fn from_ack(session: Option<&str>, ack: Value) -> Subscribed {
+        accepted(ack, session.map(str::to_owned))
+    }
+}
+
 /// Subscribes `full` on a fake session socket, waiting for the
 /// acknowledgement under the caller's deadline alone.
 #[track_caller]
@@ -1412,6 +1404,58 @@ pub(crate) fn until_after(
     done: impl FnMut(&Value) -> bool,
 ) -> Vec<Value> {
     until_matching(client, since, what, done, false)
+}
+
+/// Collects socket lines until `done`, like [`until_after`], and follows a
+/// reopened stream by rebinding its replay bound to `stream_reopened`'s
+/// `payload.last_seq`. The reopen line itself does not reach `done`.
+#[track_caller]
+pub(crate) fn until_after_reopen(
+    client: &Socket,
+    since: &Subscribed,
+    what: &str,
+    mut done: impl FnMut(&Value) -> bool,
+) -> Vec<Value> {
+    let wait = client.start_wait();
+    let mut bound = since.last_seq;
+    let mut lines = Vec::new();
+    loop {
+        let line = match client.next_through(&wait, what, &lines) {
+            Some(line) => line,
+            None => match &client.diag {
+                Some(diag) => panic!("{}", diag.report_closed(what, &lines)),
+                None => panic!("the socket closed while waiting for {what}; got {lines:?}"),
+            },
+        };
+        let reopens_since = line["kind"] == "stream_reopened"
+            && since
+                .session
+                .as_deref()
+                .is_some_and(|session| line["payload"]["session_id"].as_str() == Some(session));
+        if reopens_since {
+            bound =
+                Some(line["payload"]["last_seq"].as_u64().unwrap_or_else(|| {
+                    panic!("stream_reopened line has no payload.last_seq: {line}")
+                }));
+        }
+        let replayed = !reopens_since
+            && bound.is_some_and(|bound| {
+                line.get("seq")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|seq| seq <= bound)
+                    && match &since.session {
+                        Some(session) => {
+                            line.get("session_id").and_then(Value::as_str) == Some(session)
+                        }
+                        None => true,
+                    }
+            });
+        let stop = !reopens_since && !replayed && done(&line);
+        lines.push(line);
+        if stop {
+            return lines;
+        }
+    }
 }
 
 /// Collects socket lines until `done`, every line through one wait started
@@ -1624,6 +1668,24 @@ fn subscribe_names_the_session_and_returns_its_last_seq() {
 }
 
 #[test]
+fn from_ack_bounds_a_hand_sent_subscribe_with_and_without_last_seq() {
+    let ack: Value = serde_json::from_str(
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_x\",\"result\":{\"last_seq\":7}}}",
+    )
+    .unwrap();
+    let sub = Subscribed::from_ack(Some("s_1"), ack);
+    assert_eq!(sub.last_seq, Some(7));
+    assert_eq!(sub.session, Some("s_1".to_owned()));
+    let ack: Value = serde_json::from_str(
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_x\"}}",
+    )
+    .unwrap();
+    let sub = Subscribed::from_ack(None, ack);
+    assert_eq!(sub.last_seq, None);
+    assert!(sub.session.is_none());
+}
+
+#[test]
 fn subscribe_as_sends_the_caller_command_id() {
     let (client, sent) = subscribe_peer(vec![
         "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_watch\"}}\n",
@@ -1822,6 +1884,78 @@ fn until_after_passes_a_new_fold_for_another_session() {
     });
     assert_eq!(*seen.lock().unwrap(), ["stream_reopened", "fiber_exited"]);
     assert_eq!(lines.len(), 2);
+}
+
+#[test]
+fn until_after_reopen_without_reopen_matches_until_after() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":5}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":6}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let seen = Mutex::new(Vec::new());
+    let lines = until_after_reopen(&client, &since, "the live exit", |line| {
+        seen.lock()
+            .unwrap()
+            .push(line.get("seq").and_then(Value::as_u64));
+        line["kind"] == "fiber_exited" && line["seq"] == 6
+    });
+    assert_eq!(*seen.lock().unwrap(), [Some(6)]);
+    assert_eq!(lines.len(), 2);
+}
+
+#[test]
+fn until_after_reopen_skips_the_new_fold_and_waits_for_a_live_line() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":5}\n",
+        "{\"kind\":\"stream_reopened\",\"payload\":{\"session_id\":\"s_1\",\"last_seq\":14}}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":13}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":14}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":15}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let seen = Mutex::new(Vec::new());
+    let lines = until_after_reopen(&client, &since, "the live exit", |line| {
+        seen.lock()
+            .unwrap()
+            .push(line.get("seq").and_then(Value::as_u64));
+        line["kind"] == "fiber_exited" && line["seq"] == 15
+    });
+    assert_eq!(*seen.lock().unwrap(), [Some(15)]);
+    assert_eq!(lines.len(), 5);
+}
+
+#[test]
+fn until_after_reopen_ignores_another_sessions_reopen() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"stream_reopened\",\"payload\":{\"session_id\":\"s_2\",\"last_seq\":14}}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":6}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let seen = Mutex::new(Vec::new());
+    let lines = until_after_reopen(&client, &since, "the live exit", |line| {
+        seen.lock()
+            .unwrap()
+            .push(line.get("kind").and_then(Value::as_str).unwrap().to_owned());
+        line["kind"] == "fiber_exited" && line["seq"] == 6
+    });
+    assert_eq!(*seen.lock().unwrap(), ["stream_reopened", "fiber_exited"]);
+    assert_eq!(lines.len(), 2);
+}
+
+#[test]
+fn until_after_reopen_names_a_reopen_line_without_last_seq() {
+    let reopen = json!({"kind":"stream_reopened","payload":{"session_id":"s_1"}});
+    let client = replay_peer(vec![
+        "{\"kind\":\"stream_reopened\",\"payload\":{\"session_id\":\"s_1\"}}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        until_after_reopen(&client, &since, "the live exit", |_| true);
+    }))
+    .unwrap_err();
+    let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.contains(&reopen.to_string()), "{message}");
 }
 
 /// The `hub.log` lines a startup-failure report shows, matching the

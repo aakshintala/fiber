@@ -23,7 +23,7 @@ use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
     Running, SessionGuard, Setup, Socket, close_session, connect_hub, expired, function_call,
-    hello, recv, recv_answer, session_dir, start_session, stream, until,
+    hello, recv, recv_answer, session_dir, start_session, stream, subscribe_direct, until,
 };
 
 #[track_caller]
@@ -350,15 +350,6 @@ fn user_texts(server: &ProviderServer) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Subscribes `direct` at `full`: the session socket takes no `session_id`.
-#[track_caller]
-fn subscribe_full(direct: &Socket) {
-    direct.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let sub = recv(direct, "the subscribe acknowledgement");
-    assert_eq!(sub["kind"], "command_accepted", "{sub}");
-    assert_eq!(sub["payload"]["command_id"], "c_sub");
-}
-
 /// The hub's session over, the direct socket closed, the hub killed and
 /// every session gone.
 #[track_caller]
@@ -390,7 +381,7 @@ fn driver_shell_sent_joins_the_next_turn() {
     let session = start_session(&client, &workspace, "first");
     drop(client);
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
-    subscribe_full(&direct);
+    subscribe_direct(&direct);
     until(&direct, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -439,7 +430,7 @@ fn driver_shell_sent_during_a_turn_joins_the_next_turn_only() {
     let session = start_session(&client, &workspace, "first");
     drop(client);
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
-    subscribe_full(&direct);
+    subscribe_direct(&direct);
     assert!(
         server.await_requests(1, setup.deadline),
         "the held turn was requested"
