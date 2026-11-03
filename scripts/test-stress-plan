@@ -124,7 +124,11 @@ expect_ghout() {
 }
 
 expect_absent() {
-  grep -qF "$2" "$1/ghout" && fail "$1: $2 should be absent" || true
+  if grep -qF "$2" "$1/ghout"; then
+    fail "$1: $2 should be absent"
+  else
+    true
+  fi
 }
 
 expect_file() {
@@ -165,7 +169,11 @@ done
 [ -n "$rest_dispatch" ] || fail "two-call: no --only rest dispatch"
 issue_path_named=$(flag_value "$named_dispatch" --issue-text)
 issue_path_rest=$(flag_value "$rest_dispatch" --issue-text)
-[ -n "$issue_path_named" ] && [ "$issue_path_named" = "$issue_path_rest" ] || fail "two-call: both dispatches share one --issue-text file"
+if [ -n "$issue_path_named" ] && [ "$issue_path_named" = "$issue_path_rest" ]; then
+  true
+else
+  fail "two-call: both dispatches share one --issue-text file"
+fi
 expect_file "$dir" "temp/stress-issue.txt" "$(printf '%s\n%s' "$fixture_body" "$comment_marker")"
 expect_ghout "$dir" "run=true"
 expect_ghout "$dir" "count=100"
@@ -186,7 +194,11 @@ expect_exit one-call-labels "$code" 0
 [ "$(find "$dir/calls" -type f | wc -l | tr -d ' ')" = 2 ] || fail "one-call-labels: want 2 xtask calls, got fewer"
 single_dispatch=$(flag_value "$dir/calls/1" --issue-text || true)
 [ -n "$single_dispatch" ] || fail "one-call-labels: the single dispatch passes --issue-text"
-grep -qF -- '--only' "$dir/calls/1" && fail "one-call-labels: the single dispatch passes --only" || true
+if grep -qF -- '--only' "$dir/calls/1"; then
+  fail "one-call-labels: the single dispatch passes --only"
+else
+  true
+fi
 expect_ghout "$dir" "run=true"
 expect_ghout "$dir" "count=30"
 expect_ghout "$dir" "tests=2"
@@ -199,7 +211,11 @@ code=$(run_step "$dir" PR_BODY='no ticket here' STUB_NUMBER='' STUB_LABELS='' ST
 expect_exit one-call-empty "$code" 0
 [ "$(find "$dir/calls" -type f | wc -l | tr -d ' ')" = 2 ] || fail "one-call-empty: want 2 xtask calls, got fewer"
 [ ! -s "$dir/temp/stress-issue.txt" ] || fail "one-call-empty: the issue-text file is not empty"
-grep -qF -- '--only' "$dir/calls/1" && fail "one-call-empty: the single dispatch passes --only" || true
+if grep -qF -- '--only' "$dir/calls/1"; then
+  fail "one-call-empty: the single dispatch passes --only"
+else
+  true
+fi
 expect_ghout "$dir" "run=true"
 expect_ghout "$dir" "tests=2"
 
