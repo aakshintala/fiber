@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, Write as _};
 use std::os::unix::fs::FileTypeExt as _;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc;
 use std::thread;
 
 use super::*;
@@ -314,65 +314,72 @@ fn a_job_command_with_the_search_prelude_shows_its_hold_fragment_only_if_bash_ke
         Exec,
         Retained,
     }
-    let form = Arc::new(Mutex::new(None::<Form>));
-    crate::wait_until(
-        "the prelude job to exec or keep its shell",
-        // 4 * MUST_SUCCEED_WITHIN, as a literal: `budget-bounds` reads
-        // only a literal duration or a complete symbolic path.
-        Deadline::after(std::time::Duration::from_secs(40)),
-        {
-            let form = Arc::clone(&form);
-            let fragment = fragment.clone();
-            move || {
-                let with = match crate::matching(&fragment) {
-                    Ok(with) => with,
-                    Err(_) => return false,
-                };
-                let table = match ps_table() {
-                    Some(table) => table,
-                    None => return false,
-                };
-                // `heads` holds only children of the shell, so a concurrent
-                // job's `head` in another test process cannot satisfy the
-                // Retained arm below: a sibling is never this shell's child.
-                // Children whose command line still carries the fragment are
-                // forked copies not yet exec'd, not parked holders.
-                let heads: Vec<u32> = table
-                    .iter()
-                    .filter(|(_, ppid, args)| {
-                        *ppid == pid && args.contains("head -n 1 hold") && !args.contains(&fragment)
-                    })
-                    .map(|(row, _, _)| *row)
-                    .collect();
-                if with.contains(&pid) {
-                    // The shell still carries the whole `-c` string and has
-                    // forked a parked `head` child.
-                    if !heads.is_empty() {
-                        *form.lock().unwrap() = Some(Form::Retained);
-                        return true;
-                    }
-                    return false;
+    // The classification poll runs on the test thread, not in `wait_until`:
+    // each poll makes at most two listing calls (`matching`'s pgrep and
+    // `ps_table`'s ps, each bounded by MUST_SUCCEED_WITHIN), and a blocking
+    // predicate would outlive `wait_until`'s outer wait (`wait_until.rs`).
+    // 4 * MUST_SUCCEED_WITHIN, as a literal: `budget-bounds` reads
+    // only a literal duration or a complete symbolic path.
+    let deadline = Deadline::after(std::time::Duration::from_secs(40));
+    let bound = deadline.left();
+    // `ps_table` rebuilds each line with `split_whitespace` and `join`,
+    // which drops the fragment's trailing space; the rebuilt comparison
+    // uses the trimmed form. `matching` keeps the spaced fragment: pgrep
+    // sees the argv unmodified.
+    let bare = fragment.trim_end();
+    let form: Form = loop {
+        let with = match crate::matching(&fragment) {
+            Ok(with) => with,
+            Err(_) => {
+                if deadline.left().is_zero() {
+                    panic!("waited {bound:?} for the prelude job to exec or keep its shell");
                 }
-                // The fragment left the shell's own command line while the
-                // child lives: bash exec'd the last line, so the child is
-                // the `head` itself. The child's own row carries the
-                // positive evidence, so a scan that simply missed the shell
-                // cannot report the exec form.
-                let own = table.iter().find(|(row, _, _)| *row == pid);
-                if crate::pid_alive(pid)
-                    && matches!(own, Some((_, _, args)) if args.contains("head -n 1 hold") && !args.contains(&fragment))
-                {
-                    *form.lock().unwrap() = Some(Form::Exec);
-                    return true;
-                }
-                false
+                thread::yield_now();
+                continue;
             }
-        },
-    );
-    let form = form
-        .lock()
-        .unwrap()
-        .expect("the wait above records a form before it ends");
+        };
+        let table = match ps_table() {
+            Some(table) => table,
+            None => {
+                if deadline.left().is_zero() {
+                    panic!("waited {bound:?} for the prelude job to exec or keep its shell");
+                }
+                thread::yield_now();
+                continue;
+            }
+        };
+        // `heads` holds only children of the shell, so a concurrent
+        // job's `head` in another test process cannot satisfy the
+        // Retained arm below: a sibling is never this shell's child.
+        // Children whose command line still carries the fragment are
+        // forked copies not yet exec'd, not parked holders.
+        let has_head = table.iter().any(|(_, ppid, args)| {
+            *ppid == pid && args.contains("head -n 1 hold") && !args.contains(bare)
+        });
+        if with.contains(&pid) {
+            // The shell still carries the whole `-c` string and has
+            // forked a parked `head` child.
+            if has_head {
+                break Form::Retained;
+            }
+        } else {
+            // The fragment left the shell's own command line while the
+            // child lives: bash exec'd the last line, so the child is
+            // the `head` itself. The child's own row carries the
+            // positive evidence, so a scan that simply missed the shell
+            // cannot report the exec form.
+            let own = table.iter().find(|(row, _, _)| *row == pid);
+            if crate::pid_alive(pid)
+                && matches!(own, Some((_, _, args)) if args.contains("head -n 1 hold") && !args.contains(bare))
+            {
+                break Form::Exec;
+            }
+        }
+        if deadline.left().is_zero() {
+            panic!("waited {bound:?} for the prelude job to exec or keep its shell");
+        }
+        thread::yield_now();
+    };
     assert!(
         crate::pid_alive(pid),
         "the shell lives once classified, so the form names a live job"
