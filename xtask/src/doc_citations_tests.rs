@@ -3,6 +3,7 @@ use fakes::TempDir;
 
 const DOC: &str = "docs/target.md";
 const GONE: &str = "docs/gone.md";
+const SUB: &str = "docs/sub.md";
 const RESEARCH: &str = "research/notes.md";
 const TARGET: &str = "intro\nmore intro\n## The gate\ntext\ntext\ntext\ntext\ntext\n## `unsafe`\ntext\ntext\ntext\ntext\ntext\n```\n## Not a heading\n```\ntext\ntext\ntext\n";
 const RESEARCH_MD: &str = "# Notes\n\n## Findings\n";
@@ -637,4 +638,117 @@ fn the_printed_table_round_trips() {
     assert!(!printed.contains("The gate"));
     dir.write(ALLOW, &printed);
     assert_eq!(super::check(dir.path()).unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn a_directory_allow_table_is_an_error() {
+    let dir = TempDir::new("xtask-doc-citations-dir-allow");
+    std::fs::create_dir_all(dir.path().join(ALLOW)).unwrap();
+    let err = check(dir.path()).expect_err("a directory allow table must return Err");
+    assert!(err.contains(ALLOW), "{err}");
+}
+
+#[test]
+fn a_bare_dot_md_path_is_not_a_cite() {
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// docs/.md:3\n")], None),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_truncated_cite_at_end_of_text_is_quiet() {
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// docs/")], None),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// docs/x")], None),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_cite_target_that_is_a_directory_is_an_error() {
+    let dir = TempDir::new("xtask-doc-citations-dir-target");
+    dir.write("docs/target.md", TARGET);
+    std::fs::create_dir_all(dir.path().join(SUB)).unwrap();
+    dir.write("crates/a/src/x.rs", &format!("// {SUB}:3\n"));
+    let err = check(dir.path()).expect_err("a directory cite target must return Err");
+    assert!(err.contains(SUB), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_source_file_is_an_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("xtask-doc-citations-unreadable");
+    dir.write("docs/target.md", TARGET);
+    dir.write("crates/a/src/x.rs", &format!("// {DOC}:4\n"));
+    let path = dir.path().join("crates/a/src/x.rs");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_to_string(&path).is_ok() {
+        return; // running privileged (root): nothing is unreadable.
+    }
+    let err = check(dir.path()).expect_err("an unreadable source file must return Err");
+    assert!(err.contains("crates/a/src/x.rs"), "{err}");
+}
+
+#[test]
+fn a_backslash_path_round_trips_through_the_table() {
+    assert_eq!(escape("a\\b"), "a\\\\b");
+    let dir = TempDir::new("xtask-doc-citations-backslash");
+    dir.write("docs/target.md", TARGET);
+    dir.write("crates/a\\b.rs", &format!("// {DOC}:4\n"));
+    let printed = super::table(dir.path()).unwrap();
+    assert!(printed.contains("crates/a\\\\b.rs\t1\t"), "{printed:?}");
+    dir.write(ALLOW, &printed);
+    assert_eq!(super::check(dir.path()).unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn a_carriage_return_path_prints_escaped() {
+    assert_eq!(escape("a\rb"), "a\\rb");
+    let dir = TempDir::new("xtask-doc-citations-cr");
+    dir.write("docs/target.md", TARGET);
+    dir.write("crates/a\rb.rs", &format!("// {DOC}:4\n"));
+    let printed = super::table(dir.path()).unwrap();
+    assert!(printed.contains("crates/a\\rb.rs\t1\t"), "{printed:?}");
+    assert!(!printed.contains('\r'), "{printed:?}");
+}
+
+#[test]
+fn an_allow_line_with_a_carriage_return_unescapes() {
+    assert_eq!(unescape("a\\rb"), Some("a\rb".to_owned()));
+    let dir = TempDir::new("xtask-doc-citations-cr-allow");
+    dir.write("docs/target.md", TARGET);
+    dir.write("crates/a\rb.rs", &format!("// {DOC}:4\n"));
+    dir.write(ALLOW, &format!("crates/a\\rb.rs\t1\t{DOC}:4\n"));
+    assert_eq!(super::check(dir.path()).unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn a_comma_span_returns_its_length_and_first_line() {
+    let (done, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(parse_span("1,2")).unwrap();
+    });
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&rx, "parse_span(\"1,2\") to return"),
+        Some((3, 1))
+    );
+}
+
+#[test]
+fn a_multibyte_char_advances_past_its_bytes() {
+    let (done, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(next_boundary("é", 0)).unwrap();
+    });
+    assert_eq!(
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&rx, "next_boundary(\"é\", 0) to return"),
+        2
+    );
 }

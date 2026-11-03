@@ -452,6 +452,10 @@ pub(crate) fn table(root: &Path) -> Result<String, String> {
 
 /// Failures in path then source order, then stale and bad table lines in
 /// table order. A missing table is the empty table.
+// Exempt: when found == allowed_count, occurrences.iter().skip(allowed_count)
+// yields nothing, so replacing > with >= reports the same failures for every
+// input (`docs/testing/mutants.md`, "Proving a test bites").
+#[cfg_attr(false, mutants::skip)]
 pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
     let failing = collect_failing(root)?;
     let (entries, bad) = read_table(root)?;
