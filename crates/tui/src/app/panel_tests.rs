@@ -1885,3 +1885,25 @@ fn panel_refused_runs_after_rejected_for_a_shell_id() {
     assert!(app.panel_state.asked.is_none());
     assert!(returned.is_empty());
 }
+
+/// The generic refusal settles before the panel's: `rejected` still sees
+/// the panel's asked id, which `panel_refused` clears next. Reversing the
+/// two calls in `on_hub` settles the panel first, so the snapshot reads
+/// false and this fails.
+#[test]
+fn generic_refusal_settles_before_the_panels_for_a_shell_id() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let lines = ack(&mut app, &out);
+    let shell_id = branch_query(&lines);
+    app.outbox.pending.insert(
+        shell_id.clone(),
+        (crate::app::Kind::Shell, crate::input::Draft::default()),
+    );
+    let _ = app.on_line(refused(&shell_id));
+    assert!(
+        app.rejected_saw_panel_asked,
+        "rejected runs before panel_refused: the generic refusal must still see the panel's asked id"
+    );
+    assert!(app.panel_state.asked.is_none());
+}

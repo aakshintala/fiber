@@ -358,6 +358,12 @@ pub(crate) struct App {
     status_rows: status_rows::StatusRowsState,
     /// The attached session's folded panel data (`docs/tui.md`, "The panel").
     panel_state: panel::PanelState,
+    /// Test-only order seam: the last `rejected` call's snapshot of
+    /// whether the panel still held its asked id, so a test pins the
+    /// generic refusal settling before the panel's. Non-test builds
+    /// carry no field.
+    #[cfg(test)]
+    pub(crate) rejected_saw_panel_asked: bool,
     /// Each delegate's latest `session_status`, by session: what the
     /// Delegates card draws while its `summary` subscription lives
     /// (`docs/tui.md`, "The panel").
@@ -473,6 +479,8 @@ impl App {
             drag: drag::DragState::default(),
             status_rows: status_rows::StatusRowsState::default(),
             panel_state: panel::PanelState::default(),
+            #[cfg(test)]
+            rejected_saw_panel_asked: false,
             delegate_rows: HashMap::new(),
             rail_state: rail::RailState::default(),
             select: select::Selection::default(),
@@ -1705,6 +1713,12 @@ impl App {
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
     fn rejected(&mut self, id: &str, code: &str, message: String) {
+        // Order seam: the panel's refusal clears `asked` next, so the
+        // generic refusal still seeing it proves it settled first.
+        #[cfg(test)]
+        {
+            self.rejected_saw_panel_asked = self.panel_state.asked_is(id);
+        }
         // A refused `model` command drops the writes its acceptance
         // would have made.
         self.model_picker_rejected(id);

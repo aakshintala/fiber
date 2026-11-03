@@ -631,6 +631,13 @@ impl PanelState {
         std::mem::replace(&mut self.again, false)
     }
 
+    /// Whether the panel still holds the branch query `id`: the
+    /// test-only order seam reads it, so a test pins the generic
+    /// refusal settling before the panel's clears it.
+    pub(super) fn asked_is(&self, id: &str) -> bool {
+        self.asked.as_deref() == Some(id)
+    }
+
     /// A rejection of the branch query leaves the row out, with no notice:
     /// it behaves as a typed command's rejection does, minus the notice a
     /// person typed for. Returns whether another query goes out now.
