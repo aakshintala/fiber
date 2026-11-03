@@ -12,8 +12,6 @@ crates/extensions/src/lua/schedule_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z
 crates/loop/src/tool_timing_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
 crates/jobs/src/delegate/run_tests.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
 crates/main/tests/login.rs	fiber-3978	plan	2026-11-02T23:52:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/test/3978-fake-order	
-crates/main/tests/item_views_look.rs	fiber-4030	plan	2026-11-03T00:15:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
-crates/main/tests/support/mod.rs	fiber-4030	plan	2026-11-03T00:15:58Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 scripts/leak-scan	fiber-4038	plan	2026-11-03T00:16:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/fix/4038-leak-scan-sccache	
 docs/testing/running.md	fiber-4038	plan	2026-11-03T00:16:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/fix/4038-leak-scan-sccache	
 scripts/test-leak-scan	fiber-4038	plan	2026-11-03T00:16:43Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/fix/4038-leak-scan-sccache	
