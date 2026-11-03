@@ -1,4 +1,4 @@
-//! One parked holder on a FIFO, reaped on every path by the drop below
+//! One parked holder on a FIFO, cleaned up on every path by the drop below
 //! (`docs/testing/running.md`, "Running tests").
 //!
 //! Every free-FIFO site builds this helper from the shell command string
@@ -9,15 +9,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// A parked holder: the FIFO it blocks on, the read+write release handle
-/// keeping the FIFO alive, the watchdog guard that kills the holder when
-/// the test dies, and the watchdog pattern the drop reaps on every path.
+/// keeping the FIFO alive, and the watchdog guard that kills the holder
+/// when the test dies.
 ///
 /// Field order is load-bearing: Rust drops struct fields in declaration
 /// order, so the FIFO path drops first, then the release handle closes
 /// (giving a blocked holder EOF), and only then the guard drops and its
 /// kill reaps the holder. Keep this order: dropping the guard before the
-/// handle closes reaps a process never asked to leave. The pattern drops
-/// last; it is a `String` and drops no resource.
+/// handle closes reaps a process never asked to leave.
 ///
 /// The handle and the guard sit behind `Option` because the helper
 /// implements `Drop`, and a `Drop` type cannot move its fields out:
@@ -26,7 +25,6 @@ pub struct Hold {
     path: PathBuf,
     release: Option<fs::File>,
     guard: Option<crate::Watchdog>,
-    pattern: String,
 }
 
 impl Hold {
@@ -81,7 +79,6 @@ impl Hold {
             path: path.to_path_buf(),
             release: Some(release),
             guard: Some(guard),
-            pattern: pattern.to_owned(),
         }
     }
 
@@ -120,15 +117,16 @@ impl Hold {
 }
 
 impl Drop for Hold {
-    /// Reaps the parked holder on every path, not only when the test dies
-    /// (`docs/testing/running.md`, "Running tests"): a holder whose FIFO
-    /// was never written would otherwise outlive the test, and the leak
-    /// scan fails the run on macOS where the orphan survives.
+    /// Cleans up the parked holder on every path, not only when the test
+    /// dies (`docs/testing/running.md`, "Running tests"): a holder whose
+    /// FIFO was never written would otherwise outlive the test, and the
+    /// leak scan fails the run on macOS where the orphan survives.
     ///
     /// Unlink first so a holder that has not opened the FIFO yet fails its
-    /// open with ENOENT and exits, closing the delayed-start window the
-    /// one-shot kill below can miss. A stood-down helper took its handle
-    /// and disarmed its guard, so there is nothing to reap. Best-effort only:
+    /// open with ENOENT and exits. A stood-down helper took its handle
+    /// and disarmed its guard, so there is nothing to clean up. The fields
+    /// then drop in declaration order: the handle closes (giving a blocked
+    /// holder EOF), and the guard's kill reaps the holder. Best-effort only:
     /// a drop that panics while unwinding would abort the test process,
     /// so a straggler stays the temp-dir detector's to report, as before.
     fn drop(&mut self) {
@@ -136,37 +134,6 @@ impl Drop for Hold {
             return;
         }
         drop(fs::remove_file(&self.path));
-        reap(self.pattern.as_str());
-    }
-}
-
-/// Kills the parked holder, and re-kills once when the pattern is still
-/// listed after the first kill's wait.
-// debt: the sync reap stands as is, until #4067 answers whether it is
-// redundant with the Watchdog kill on the same pattern (see #4067).
-// Exempt: `Hold` holds `guard: Option<Watchdog>` built from the same
-// `pattern` (`Watchdog::matching`, whose `Drop` closes the child's stdin and
-// the EOF kills every process matching the same text), so after `Hold::drop`
-// runs `reap(self.pattern)` and returns, the guard drops and kills that
-// identical pattern out of process. `replace reap with ()` still leaves the
-// holder killed by the Watchdog on the same pattern, moments later in another
-// process; `delete ! in reap` inverts a re-kill guard, and `derive_pattern`'s
-// doc says the pattern is a substring of the spawned holder's own command
-// line and unique to this test, so a second `kill_matching` after the holder
-// has exited matches nothing, a no-op either way. Both change nothing a
-// consumer sees, and no test or the leak scan can pin the difference
-// (`docs/testing/mutants.md`, "Proving a test bites").
-#[cfg_attr(false, mutants::skip)]
-fn reap(pattern: &str) {
-    // An error means no holder matched: nothing to reap.
-    if crate::kill_matching(pattern).is_err() {
-        return;
-    }
-    if !crate::matching_exits(
-        pattern,
-        crate::Deadline::after(std::time::Duration::from_millis(100)),
-    ) {
-        drop(crate::kill_matching(pattern));
     }
 }
 
