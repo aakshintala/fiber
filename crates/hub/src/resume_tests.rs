@@ -284,7 +284,11 @@ impl Started for BindStarted {
 #[test]
 fn await_bind_skips_a_live_keeper_but_not_unlocked_keeper_text() {
     for busy in [true, false] {
-        let temp = Temp::new();
+        let mut temp = Temp::new();
+        // The bind wait parks on `hub.clock.sleep(START_POLL)`: a parking
+        // clock is the contract, since an advancing clock would move time
+        // without parking and `await_parked` could never match.
+        temp.clock = fakes::clock::FakeClock::with_sleep(support::clock::Sleep::Waits);
         temp.recorded();
         let dir = temp.events(SID).parent().unwrap().to_path_buf();
         let guard = log::try_hold(&dir).unwrap();
