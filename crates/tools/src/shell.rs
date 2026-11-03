@@ -267,7 +267,8 @@ impl Tool for Shell {
                  until `jobs stop`, or until the session shuts down. Any other call with no \
                  `timeout_ms` defaults to 600000, or to 300000 for a monitor. `timeout_ms` is at least 1. \
                  A monitor's maximum is 1800000, or 600000 in a non-interactive run. Standard output \
-                 and standard error are one stream, except in a monitor, whose standard error goes to its own file."
+                 and standard error are one stream, except in a monitor, whose standard error goes to its own file. \
+                 A call with `detach` set starts a command that outlives the session."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -300,9 +301,13 @@ impl Tool for Shell {
                     "unconfined": {
                         "type": ["boolean", "null"],
                         "description": "Leave the OS sandbox for this call. Reviewed exactly as with the sandbox off."
+                    },
+                    "detach": {
+                        "type": ["boolean", "null"],
+                        "description": "Start the command in its own session, outside the OS sandbox, and return its process ID and output-log path at once. Fiber never stops it, and it is not a job. It is always reviewed. It takes no `timeout_ms` and cannot be combined with `run_in_background`, `tty` or `monitor`."
                     }
                 },
-                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "unconfined"],
+                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "unconfined", "detach"],
                 "additionalProperties": false
             }),
             deferred: false, hosted: None,

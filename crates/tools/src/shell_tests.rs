@@ -74,7 +74,8 @@ fn nullable_optional_arguments_parse_as_absent() {
             "run_in_background",
             "tty",
             "monitor",
-            "unconfined"
+            "unconfined",
+            "detach"
         ])
     );
     for (key, kind) in [
