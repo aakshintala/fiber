@@ -38,6 +38,18 @@ pub(crate) enum ShellError {
         "`timeout_ms` must be at least 1. Leave `timeout_ms` out of a background call that should run until stopped."
     )]
     TimeoutTooSmall,
+    /// `detach` is combined with `run_in_background`, `tty` or `monitor`.
+    #[error("`detach` cannot be combined with `run_in_background`, `tty` or `monitor`.")]
+    DetachAlone,
+    /// `detach` is combined with a `timeout_ms`.
+    #[error("`detach` takes no `timeout_ms`: Fiber never stops a detached command.")]
+    DetachTimeout,
+    /// `detach` is combined with `unconfined: false`.
+    #[error("`detach` runs unconfined: leave `unconfined` out or give true.")]
+    DetachConfined,
+    /// A detached call was made in a session with no detached log directory.
+    #[error("Detached commands are not available in this session.")]
+    NoDetach,
     /// A background mode was asked for in a session with no jobs.
     #[error("Background jobs are not available in this session.")]
     NoJobs,
@@ -114,7 +126,11 @@ impl ShellError {
             | Self::MonitorAlone
             | Self::DeadlineTooLong { .. }
             | Self::TimeoutTooSmall
+            | Self::DetachAlone
+            | Self::DetachTimeout
+            | Self::DetachConfined
             | Self::NoJobs
+            | Self::NoDetach
             | Self::BareWait => ErrorCode::InvalidArguments,
             Self::NotStarted { .. } | Self::NotReaped | Self::SandboxApply { .. } => {
                 ErrorCode::ToolError

@@ -1738,7 +1738,7 @@ fn feedback_renders_the_prompt_then_the_written_report() {
 fn credential_app() -> (App, std::sync::Arc<crate::configure_fake::Fake>) {
     let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]));
     let mut app = attached();
-    app.set_configure(Some(seam.clone()));
+    app.set_configure(seam.clone());
     app.set_size(80, 24);
     (app, seam)
 }
@@ -1895,22 +1895,17 @@ fn credential_latest_save_wins_and_a_late_acceptance_after_home_saves_once() {
 
 #[test]
 fn credential_missing_seam_and_missing_provider_warn_without_saving() {
-    for seam_present in [false, true] {
-        let (mut app, seam) = credential_app();
-        if !seam_present {
-            app.set_configure(None);
-        }
-        credential_open(&mut app);
-        let lines = sent(app.on_key(Key::Enter, now()));
-        assert_eq!(lines.len(), 1);
-        credential_accept(&mut app, &lines[0]["id"], None);
-        assert!(credential_notice(
-            &app,
-            "io_failed",
-            "Saving is not available; the switch is for this session only."
-        ));
-        assert!(seam.writes().is_empty());
-    }
+    let (mut app, seam) = credential_app();
+    credential_open(&mut app);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    credential_accept(&mut app, &lines[0]["id"], None);
+    assert!(credential_notice(
+        &app,
+        "io_failed",
+        "Saving is not available; the switch is for this session only."
+    ));
+    assert!(seam.writes().is_empty());
 }
 
 #[test]
@@ -2006,25 +2001,18 @@ fn credential_rejected_query_restores_draft_and_picker_rejection_shows_message()
 
 #[test]
 fn credential_shortcut_without_seam_and_failed_write_show_notices() {
-    for seam_present in [false, true] {
-        let (mut app, seam) = credential_app();
-        if seam_present {
-            *seam.refuse.lock().unwrap() = Some("disk full".to_owned());
-        } else {
-            app.set_configure(None);
-        }
-        let query = sent(enter(&mut app, "/credential work"));
-        let lines = credential_answer(&mut app, &query[0]["id"], Some("home"));
-        assert_eq!(lines.len(), 1);
-        let switch: Value = serde_json::from_str(&lines[0]).unwrap();
-        credential_accept(&mut app, &switch["id"], Some("fake"));
-        let text = if seam_present {
-            "Saving providers.\"fake\".credential failed: disk full"
-        } else {
-            "Saving is not available; the switch is for this session only."
-        };
-        assert!(credential_notice(&app, "io_failed", text));
-    }
+    let (mut app, seam) = credential_app();
+    *seam.refuse.lock().unwrap() = Some("disk full".to_owned());
+    let query = sent(enter(&mut app, "/credential work"));
+    let lines = credential_answer(&mut app, &query[0]["id"], Some("home"));
+    assert_eq!(lines.len(), 1);
+    let switch: Value = serde_json::from_str(&lines[0]).unwrap();
+    credential_accept(&mut app, &switch["id"], Some("fake"));
+    assert!(credential_notice(
+        &app,
+        "io_failed",
+        "Saving providers.\"fake\".credential failed: disk full"
+    ));
 }
 
 #[test]

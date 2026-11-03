@@ -69,17 +69,14 @@ impl App {
     /// `/reviewer-setup`: reads both layers' notes for the attached
     /// session's project and opens on topic 1's question. With no session
     /// a notice says so; with the link down nothing opens and the draft
-    /// stays; with no seam, no row for the session or a failed read, one
-    /// notice and nothing opens.
+    /// stays; with no row for the session or a failed read, one notice
+    /// and nothing opens.
     pub(super) fn open_reviewer_setup(&mut self) -> Effect {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
         self.draft.clear();
-        let Some(seam) = self.configure_seam() else {
-            self.push_notice("io_failed", UNAVAILABLE.to_owned());
-            return Effect::None;
-        };
+        let seam = self.configure_seam();
         let workspace = match self.reviewer_binding(&session) {
             Ok(workspace) => workspace,
             Err(why) => {
@@ -181,8 +178,8 @@ impl App {
             return;
         }
         let session = envelope.session_id.clone();
-        let (Some(seam), Ok(workspace)) = (self.configure_seam(), self.reviewer_binding(&session))
-        else {
+        let seam = self.configure_seam();
+        let Ok(workspace) = self.reviewer_binding(&session) else {
             return;
         };
         let Ok(notes) = seam.reviewer_notes(&workspace) else {
@@ -220,12 +217,12 @@ impl App {
                 Effect::None
             }
             Act::Save { global, project } => {
-                let result = match (self.configure_seam(), self.bound_workspace()) {
-                    (Some(seam), Some(workspace)) => {
-                        seam.save_reviewer_notes(&workspace, global, project)
-                    }
-                    _ => Err(unavailable()),
+                let Some(workspace) = self.bound_workspace() else {
+                    return Effect::None;
                 };
+                let result = self
+                    .configure_seam()
+                    .save_reviewer_notes(&workspace, global, project);
                 self.finish_save(result)
             }
             Act::Reread => {
@@ -267,9 +264,9 @@ impl App {
     }
 
     fn read_notes(&self) -> Result<ReviewerNotes, ConfigureError> {
-        match (self.configure_seam(), self.bound_workspace()) {
-            (Some(seam), Some(workspace)) => seam.reviewer_notes(&workspace),
-            _ => Err(unavailable()),
+        match self.bound_workspace() {
+            Some(workspace) => self.configure_seam().reviewer_notes(&workspace),
+            None => Err(unavailable()),
         }
     }
 

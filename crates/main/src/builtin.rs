@@ -160,6 +160,7 @@ pub(crate) fn builtin_timed(
         .with_artifacts(artifacts.to_path_buf())
         .with_read_only(shell_read_only)
         .with_sandbox(sandbox)
+        .with_detached(home.join("detached"))
         .non_interactive();
     // Confined Linux spawns take their end-of-call guard from the session's
     // shared handle; the driver shell below never runs confined, so it

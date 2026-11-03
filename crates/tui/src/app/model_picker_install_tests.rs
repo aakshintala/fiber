@@ -27,7 +27,7 @@ fn now() -> std::time::Instant {
 
 /// A local home at "/w", 100x30, with `seam` and a catalogue of one model
 /// and `openai` and `zeta` not installed.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -38,7 +38,7 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         ..Default::default()
     });
     app.set_size(100, 30);
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app.on_models(Ok(catalogue(&["acme/m1"], &["openai", "zeta"])));
     app
 }
@@ -110,7 +110,7 @@ fn job(app: &mut App) -> InstallStart {
 #[test]
 fn enter_on_a_focused_row_starts_one_job_and_the_row_reads_installing() {
     let fake = fake();
-    let mut app = home(Some(Arc::clone(&fake)));
+    let mut app = home(Arc::clone(&fake));
     on_first_row(&mut app);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(app.model_picker_open(), "the picker stays open");
@@ -127,7 +127,7 @@ fn enter_on_a_focused_row_starts_one_job_and_the_row_reads_installing() {
 
 #[test]
 fn a_second_choice_while_one_installs_starts_nothing() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
     let _ = job(&mut app);
@@ -137,14 +137,13 @@ fn a_second_choice_while_one_installs_starts_nothing() {
     let _ = app.model_picker_click(Spot::Cell(zeta, 0));
     assert!(app.take_install_start().is_none());
     // The choice is dropped before any check can fail the other row.
-    app.set_configure(None);
     let _ = app.model_picker_click(Spot::Cell(zeta, 0));
     assert!(!screen(&app).contains("✗"), "{}", screen(&app));
 }
 
 #[test]
 fn a_click_on_the_name_starts_the_job_and_a_click_elsewhere_only_focuses() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     open(&mut app);
     let zeta = row_at(&app, 1);
     let _ = app.model_picker_click(Spot::Row(zeta));
@@ -159,7 +158,7 @@ fn a_click_on_the_name_starts_the_job_and_a_click_elsewhere_only_focuses() {
 
 #[test]
 fn the_session_only_key_and_the_arrows_do_nothing_on_a_row() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     on_first_row(&mut app);
     assert_eq!(app.model_picker_session_only(), Effect::None);
     assert_eq!(app.model_picker_edit(&Edit::Left), Some(Effect::None));
@@ -173,7 +172,7 @@ fn the_session_only_key_and_the_arrows_do_nothing_on_a_row() {
 #[test]
 fn enter_with_nothing_focused_installs_nothing() {
     // No model shown and an empty query: nothing is focused.
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_models(Ok(catalogue(&[], &["openai"])));
     open(&mut app);
     assert_eq!(app.model_picker.focus(), None);
@@ -181,7 +180,7 @@ fn enter_with_nothing_focused_installs_nothing() {
     assert!(app.take_install_start().is_none());
     assert!(app.model_picker_open());
     // A query that hides every model but matches a row focuses nothing.
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     open(&mut app);
     let _ = app.on_key(Key::Char('z'), now());
     let _ = app.on_key(Key::Enter, now());
@@ -191,7 +190,7 @@ fn enter_with_nothing_focused_installs_nothing() {
 
 #[test]
 fn a_success_drops_the_row_draws_the_outcome_asks_one_refresh_and_lists_the_models() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
     let _ = job(&mut app);
@@ -232,7 +231,7 @@ fn a_success_drops_the_row_draws_the_outcome_asks_one_refresh_and_lists_the_mode
 
 #[test]
 fn a_failure_keeps_the_row_with_its_error_and_a_retry_runs_a_fresh_job() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
     let _ = job(&mut app);
@@ -266,7 +265,7 @@ fn a_failure_keeps_the_row_with_its_error_and_a_retry_runs_a_fresh_job() {
 
 #[test]
 fn a_result_that_lands_with_the_picker_closed_is_a_notice_and_still_asks_the_refresh() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
     let _ = job(&mut app);
@@ -317,7 +316,7 @@ fn a_result_that_lands_with_the_picker_closed_is_a_notice_and_still_asks_the_ref
 
 #[test]
 fn a_failure_that_lands_with_the_picker_closed_is_a_notice_under_its_own_code() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
     let _ = job(&mut app);
@@ -339,7 +338,7 @@ fn a_failure_that_lands_with_the_picker_closed_is_a_notice_under_its_own_code() 
 
 #[test]
 fn an_install_still_runs_when_the_picker_closes_and_reopens() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
     let _ = job(&mut app);
@@ -356,7 +355,7 @@ fn an_install_still_runs_when_the_picker_closes_and_reopens() {
 #[test]
 fn the_other_modes_list_no_rows() {
     for mode in [Mode::Scope, Mode::Thinking] {
-        let mut app = home(Some(fake()));
+        let mut app = home(fake());
         let _ = app.open_model_picker(mode);
         let view = app.model_picker_view().unwrap();
         assert!(view.installs.is_empty(), "{mode:?}");
@@ -375,7 +374,7 @@ fn a_scope_hides_the_new_providers_models_until_show_all() {
             .flat_map(|section| section.models.iter().map(|model| model.id.clone()))
             .collect()
     };
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_models(Ok(catalogue(&["acme/other"], &["openai"])));
     app.model_picker.scoped = vec!["acme/other".to_owned()];
     on_first_row(&mut app);
@@ -387,7 +386,7 @@ fn a_scope_hides_the_new_providers_models_until_show_all() {
     let _ = app.on_key(Key::Tab, now());
     assert_eq!(listed(&app), ["other", "gpt"]);
 
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_models(Ok(catalogue(&["acme/other"], &["openai"])));
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
@@ -398,25 +397,11 @@ fn a_scope_hides_the_new_providers_models_until_show_all() {
 }
 
 #[test]
-fn with_no_seam_the_row_fails_at_once() {
-    let mut app = home(None);
-    on_first_row(&mut app);
-    let _ = app.on_key(Key::Enter, now());
-    assert!(app.take_install_start().is_none());
-    let text = screen(&app);
-    assert!(
-        text.contains("✗ Installing is not available in this terminal."),
-        "{text}"
-    );
-    assert!(text.contains("openai · not installed"), "{text}");
-}
-
-#[test]
 fn with_no_workspace_on_a_local_terminal_the_row_fails_at_once() {
     let mut app = App::new(None);
     app.set_home(Launch::default());
     app.set_size(100, 30);
-    app.set_configure(Some(fake() as Arc<dyn Configure>));
+    app.set_configure(fake() as Arc<dyn Configure>);
     app.on_models(Ok(catalogue(&["acme/m1"], &["openai"])));
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
@@ -495,7 +480,7 @@ fn remote_case_in(
             });
         }
         app.set_size(100, 30);
-        app.set_configure(Some(Arc::clone(&remote) as Arc<dyn Configure>));
+        app.set_configure(Arc::clone(&remote) as Arc<dyn Configure>);
         app.set_remote(remote);
         app.on_models(Ok(catalogue(&["acme/m1"], &["openai"])));
         test(app);
@@ -620,7 +605,7 @@ fn while_a_remote_install_runs_the_config_views_are_refused_and_ask_nothing() {
 #[test]
 fn a_local_install_leaves_the_config_views_open() {
     let fake = fake();
-    let mut app = home(Some(Arc::clone(&fake)));
+    let mut app = home(Arc::clone(&fake));
     on_first_row(&mut app);
     let _ = app.on_key(Key::Enter, now());
     let _ = job(&mut app);
@@ -633,7 +618,7 @@ fn a_local_install_leaves_the_config_views_open() {
 #[test]
 fn the_spinner_asks_for_a_frame_only_while_an_install_shows() {
     let clock = fakes::clock::FakeClock::new();
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.set_now(contract::clock::Clock::now(&*clock), 0);
     open(&mut app);
     let _ = screen(&app);

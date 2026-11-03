@@ -188,9 +188,7 @@ impl App {
         {
             return false;
         }
-        let Some(seam) = self.configure_seam() else {
-            return false;
-        };
+        let seam = self.configure_seam();
         let Some(line) = self.outbox.start_line(id) else {
             return false;
         };
@@ -281,9 +279,7 @@ impl App {
     }
 
     /// Enter in the hooks install offer: the install runs on a worker,
-    /// and its answer retries the refused start. With no seam the
-    /// install cannot run, so the offer closes on the failure naming
-    /// the install command instead.
+    /// and its answer retries the refused start.
     fn commit_hooks_offer(&mut self) -> Effect {
         // Enter commits only what the offer shows: while the names are
         // still on the worker there is nothing to install yet, so it
@@ -294,14 +290,7 @@ impl App {
             }
             _ => return Effect::None,
         };
-        let Some(seam) = self.configure_seam() else {
-            let error = crate::configure::ConfigureError {
-                code: ErrorCode::IoFailed,
-                message: "Installing is not available in this terminal.".to_owned(),
-            };
-            self.fail_hooks_install(error);
-            return Effect::None;
-        };
+        let seam = self.configure_seam();
         // A remote without a hub link fails at once, with no job: the
         // worker would only repeat the hub's own refusal to route.
         if self.remote().is_some() && !self.outbox.is_up() {
