@@ -60,6 +60,109 @@ fn line_of(text: &str, offset: usize) -> usize {
         + 1
 }
 
+fn escape(field: &str) -> String {
+    let mut out = String::with_capacity(field.len());
+    for c in field.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn unescape(field: &str) -> Option<String> {
+    let mut out = String::with_capacity(field.len());
+    let mut chars = field.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('\\') => out.push('\\'),
+                Some('t') => out.push('\t'),
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                _ => return None,
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
+}
+
+struct TableEntry {
+    line_no: usize,
+    path: String,
+    citation: String,
+    count: usize,
+}
+
+fn read_table(root: &Path) -> Result<(Vec<TableEntry>, Vec<String>), String> {
+    let text = match fs::read_to_string(root.join(ALLOW)) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        Err(e) => return Err(format!("{}: {e}", root.join(ALLOW).display())),
+    };
+    let mut entries = Vec::new();
+    let mut bad = Vec::new();
+    let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (index, line) in text.lines().enumerate() {
+        let line_no = index + 1;
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        let (raw_path, raw_count, raw_cite) = match parts.as_slice() {
+            [a, b, c] => (*a, *b, *c),
+            _ => {
+                bad.push(format!(
+                    "{ALLOW}:{line_no}: expected <path>, a tab, a count, a tab, then the citation"
+                ));
+                continue;
+            }
+        };
+        let (path, citation) = match (unescape(raw_path), unescape(raw_cite)) {
+            (Some(p), Some(c)) => (p, c),
+            _ => {
+                bad.push(format!(
+                    "{ALLOW}:{line_no}: expected <path>, a tab, a count, a tab, then the citation"
+                ));
+                continue;
+            }
+        };
+        let count: usize = match raw_count.parse() {
+            Ok(n) if n >= 1 => n,
+            _ => {
+                bad.push(format!(
+                    "{ALLOW}:{line_no}: expected <path>, a tab, a count, a tab, then the citation"
+                ));
+                continue;
+            }
+        };
+        if seen.contains_key(&(path.clone(), citation.clone())) {
+            bad.push(format!(
+                "{ALLOW}:{line_no}: {}: \"{}\" listed twice",
+                escape(&path),
+                escape(&citation)
+            ));
+            continue;
+        }
+        seen.insert((path.clone(), citation.clone()), line_no);
+        entries.push(TableEntry {
+            line_no,
+            path,
+            citation,
+            count,
+        });
+    }
+    Ok((entries, bad))
+}
+
 fn parse_digits(bytes: &[u8], mut pos: usize) -> Option<(usize, usize)> {
     let start = pos;
     let mut value: usize = 0;
@@ -226,10 +329,13 @@ fn walk_files(root: &Path, out: &mut Vec<String>) -> Result<(), String> {
                     stack.push(path);
                 } else if file_type.is_file() {
                     let rel = path.strip_prefix(root).map_err(|e| e.to_string())?;
-                    let rel_str = rel
-                        .to_str()
+                    rel.to_str()
                         .ok_or_else(|| format!("{}: file name is not UTF-8", path.display()))?;
-                    let rel_slash = rel_str.replace('\\', "/");
+                    let rel_slash = rel
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/");
                     if rel_slash == ALLOW {
                         continue;
                     }
@@ -285,7 +391,8 @@ fn heading_names(
         .map(|index| index.names().to_vec()))
 }
 
-/// Failures in path then source order. A missing table is the empty table.
+/// Failures in path then source order, then stale and bad table lines in
+/// table order. A missing table is the empty table.
 pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
     let mut files = Vec::new();
     walk_files(root, &mut files)?;
@@ -309,8 +416,8 @@ pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
         }
     }
     found_all.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    let mut failures = Vec::new();
-    for (file, _, line, key, kind) in &found_all {
+    let mut failing: Vec<(String, usize, usize, String, String)> = Vec::new();
+    for (file, offset, line, key, kind) in &found_all {
         match kind {
             CiteKind::Line { target, line_no } => {
                 let reason = match heading_above(root, &mut cached, target, *line_no)? {
@@ -320,7 +427,7 @@ pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
                     }
                     Some(heading) => format!("use \"{target}, \"{heading}\"\""),
                 };
-                failures.push(format!("{file}:{line}: unlisted cite \"{key}\": {reason}"));
+                failing.push((file.clone(), *offset, *line, key.clone(), reason));
             }
             CiteKind::Heading { target, heading } => {
                 let found = heading_names(root, &mut cached, target)?;
@@ -328,11 +435,58 @@ pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
                     crate::docs::heading_failure(target, heading, found.as_deref())
                 {
                     let reason = message.split(": ").last().unwrap_or(&message).to_owned();
-                    failures.push(format!("{file}:{line}: unlisted cite \"{key}\": {reason}"));
+                    failing.push((file.clone(), *offset, *line, key.clone(), reason));
                 }
             }
         }
     }
+    let (entries, bad) = read_table(root)?;
+    let mut by_pair: BTreeMap<(String, String), Vec<(usize, usize, String)>> = BTreeMap::new();
+    for (file, offset, line, key, reason) in &failing {
+        by_pair
+            .entry((file.clone(), key.clone()))
+            .or_default()
+            .push((*offset, *line, reason.clone()));
+    }
+    let mut allowed: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for entry in &entries {
+        allowed.insert((entry.path.clone(), entry.citation.clone()), entry.count);
+    }
+    let mut sources: Vec<(String, usize, String)> = Vec::new();
+    for ((file, key), occurrences) in &by_pair {
+        let found = occurrences.len();
+        let allowed_count = allowed
+            .get(&(file.clone(), key.clone()))
+            .copied()
+            .unwrap_or(0);
+        if found > allowed_count {
+            for (offset, line, reason) in occurrences.iter().skip(allowed_count) {
+                sources.push((
+                    file.clone(),
+                    *offset,
+                    format!("{file}:{line}: unlisted cite \"{key}\": {reason}"),
+                ));
+            }
+        }
+    }
+    sources.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut failures: Vec<String> = sources.into_iter().map(|(_, _, line)| line).collect();
+    for entry in &entries {
+        let found = by_pair
+            .get(&(entry.path.clone(), entry.citation.clone()))
+            .map(|v| v.len())
+            .unwrap_or(0);
+        if found < entry.count {
+            failures.push(format!(
+                "{ALLOW}:{}: stale: {}: \"{}\" allowed {}, found {found}: lower or delete the entry",
+                entry.line_no,
+                escape(&entry.path),
+                escape(&entry.citation),
+                entry.count,
+            ));
+        }
+    }
+    failures.extend(bad);
     Ok(failures)
 }
 

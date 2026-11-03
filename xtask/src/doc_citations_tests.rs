@@ -320,13 +320,14 @@ fn any_text_file_under_the_three_roots_is_scanned() {
 #[test]
 fn only_the_table_itself_is_exempt() {
     let content = format!("// {DOC}:4\n");
+    let table = format!("crates/a/src/x.rs\t1\t{DOC}:4\n");
     let failures = run(
         &[
-            ("xtask/doc-citations.allow", content.as_str()),
             ("xtask/src/docs_tests.rs", content.as_str()),
             ("xtask/doc-citations.allow.bak", content.as_str()),
+            ("crates/a/src/x.rs", content.as_str()),
         ],
-        None,
+        Some(&table),
     );
     assert_eq!(failures.len(), 2);
     assert!(
@@ -338,5 +339,241 @@ fn only_the_table_itself_is_exempt() {
         failures[1].starts_with("xtask/src/docs_tests.rs:1:"),
         "{}",
         failures[1]
+    );
+}
+
+#[test]
+fn a_pair_allowed_twice_passes_at_two_and_fails_the_third() {
+    let q = '"';
+    let cite = format!("// {DOC}:4\n");
+    let entry = format!("crates/a/src/x.rs\t2\t{DOC}:4\n");
+    assert_eq!(
+        run(
+            &[("crates/a/src/x.rs", &format!("{cite}{cite}"))],
+            Some(&entry)
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        run(
+            &[("crates/a/src/x.rs", &format!("{cite}{cite}{cite}"))],
+            Some(&entry)
+        ),
+        [format!(
+            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}:4{q}: use {q}{DOC}, {q}The gate{q}{q}"
+        )]
+    );
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", &cite)], Some(&entry)),
+        [format!(
+            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 2, found 1: lower or delete the entry"
+        )]
+    );
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&entry)),
+        [format!(
+            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 2, found 0: lower or delete the entry"
+        )]
+    );
+}
+
+#[test]
+fn a_new_text_cannot_take_a_deleted_texts_slot() {
+    let q = '"';
+    let entry = format!("crates/a/src/x.rs\t1\t{DOC}:4\n");
+    let failures = run(
+        &[("crates/a/src/x.rs", &format!("// {DOC}:9\n"))],
+        Some(&entry),
+    );
+    assert_eq!(
+        failures,
+        [
+            format!(
+                "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:9{q}: use {q}{DOC}, {q}`unsafe`{q}{q}"
+            ),
+            format!(
+                "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 1, found 0: lower or delete the entry"
+            ),
+        ]
+    );
+}
+
+#[test]
+fn the_same_text_in_two_files_is_two_pairs() {
+    let cite = format!("// {DOC}:4\n");
+    let table = format!("crates/a/src/x.rs\t1\t{DOC}:4\ncrates/b/src/y.rs\t1\t{DOC}:4\n");
+    assert_eq!(
+        run(
+            &[("crates/a/src/x.rs", &cite), ("crates/b/src/y.rs", &cite)],
+            Some(&table)
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_listed_text_in_another_file_does_not_cover_this_one() {
+    let entry = format!("crates/a/src/x.rs\t1\t{DOC}:4\n");
+    let cite = format!("// {DOC}:4\n");
+    let failures = run(
+        &[("crates/a/src/x.rs", &cite), ("crates/b/src/y.rs", &cite)],
+        Some(&entry),
+    );
+    assert_eq!(failures.len(), 1);
+    assert!(
+        failures[0].starts_with("crates/b/src/y.rs:1: unlisted cite "),
+        "{}",
+        failures[0]
+    );
+}
+
+#[test]
+fn an_entry_for_a_missing_file_is_stale() {
+    let q = '"';
+    let entry = format!("crates/gone/src/x.rs\t1\t{DOC}:4\n");
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&entry)),
+        [format!(
+            "{ALLOW}:1: stale: crates/gone/src/x.rs: {q}{DOC}:4{q} allowed 1, found 0: lower or delete the entry"
+        )]
+    );
+}
+
+#[test]
+fn a_resolved_heading_entry_is_stale() {
+    let q = '"';
+    let entry = format!("crates/a/src/x.rs\t1\t{DOC}, {q}The gate{q}\n");
+    let failures = run(
+        &[(
+            "crates/a/src/x.rs",
+            &format!("// ({DOC}, {q}The gate{q})\n"),
+        )],
+        Some(&entry),
+    );
+    assert_eq!(
+        failures,
+        [format!(
+            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}, {q}The gate{q}{q} allowed 1, found 0: lower or delete the entry"
+        )]
+    );
+}
+
+#[test]
+fn the_key_is_the_exact_source_spelling() {
+    let q = '"';
+    let entry = format!("crates/a/src/x.rs\t1\t{DOC}`, {q}Missing{q}\n");
+    let failures = run(
+        &[("crates/a/src/x.rs", &format!("// ({DOC}, {q}Missing{q})\n"))],
+        Some(&entry),
+    );
+    assert_eq!(failures.len(), 2);
+    assert!(
+        failures[0].starts_with("crates/a/src/x.rs:1: unlisted cite "),
+        "{}",
+        failures[0]
+    );
+    assert!(
+        failures[0].contains(&format!("{DOC}, {q}Missing{q}")),
+        "{}",
+        failures[0]
+    );
+    assert!(
+        failures[1].starts_with(&format!("{ALLOW}:1: stale:")),
+        "{}",
+        failures[1]
+    );
+    let entry2 = format!("crates/a/src/x.rs\t1\t{DOC}, {q}Not  a heading{q}\n");
+    let failures2 = run(
+        &[(
+            "crates/a/src/x.rs",
+            &format!("// ({DOC}, {q}Not a heading{q})\n"),
+        )],
+        Some(&entry2),
+    );
+    assert_eq!(failures2.len(), 2);
+    assert!(
+        failures2[0].starts_with("crates/a/src/x.rs:1: unlisted cite "),
+        "{}",
+        failures2[0]
+    );
+    assert!(
+        failures2[1].starts_with(&format!("{ALLOW}:1: stale:")),
+        "{}",
+        failures2[1]
+    );
+}
+
+#[test]
+fn table_fields_unescape_losslessly() {
+    let q = '"';
+    let table = format!("crates/a\\tb.rs\t1\t{DOC}:12\n");
+    assert_eq!(
+        run(
+            &[("crates/a\tb.rs", &format!("// {DOC}:12\n"))],
+            Some(&table)
+        ),
+        Vec::<String>::new()
+    );
+    let table2 = format!("crates/a\\\\b.rs\t1\t{DOC}:12\n");
+    assert_eq!(
+        run(
+            &[("crates/a\\b.rs", &format!("// {DOC}:12\n"))],
+            Some(&table2)
+        ),
+        Vec::<String>::new()
+    );
+    let broken = format!("// {DOC},\n// {q}Missing{q}\n");
+    let table3 = format!("crates/a/src/x.rs\t1\t{DOC},\\n// {q}Missing{q}\n");
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", &broken)], Some(&table3)),
+        Vec::<String>::new()
+    );
+    let bad_x = format!("crates/a/src/x.rs\t1\t{DOC}:4\\x\n");
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&bad_x)),
+        [format!(
+            "{ALLOW}:1: expected <path>, a tab, a count, a tab, then the citation"
+        )]
+    );
+    let bad_trail = format!("crates/a/src/x.rs\t1\t{DOC}:4\\\n");
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&bad_trail)),
+        [format!(
+            "{ALLOW}:1: expected <path>, a tab, a count, a tab, then the citation"
+        )]
+    );
+}
+
+#[test]
+fn a_bad_table_line_fails() {
+    let table = format!(
+        "# header\n\nonly-one-field\na\tb\tc\td\ncrates/a/src/x.rs\tnotnum\t{DOC}:4\ncrates/a/src/x.rs\t0\t{DOC}:4\n"
+    );
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&table)),
+        [
+            format!("{ALLOW}:3: expected <path>, a tab, a count, a tab, then the citation"),
+            format!("{ALLOW}:4: expected <path>, a tab, a count, a tab, then the citation"),
+            format!("{ALLOW}:5: expected <path>, a tab, a count, a tab, then the citation"),
+            format!("{ALLOW}:6: expected <path>, a tab, a count, a tab, then the citation"),
+        ]
+    );
+    let q = '"';
+    let dup_table = format!("crates/a/src/x.rs\t1\t{DOC}:4\ncrates/a/src/x.rs\t1\t{DOC}:4\n");
+    assert_eq!(
+        run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&dup_table)),
+        [
+            format!(
+                "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 1, found 0: lower or delete the entry"
+            ),
+            format!("{ALLOW}:2: crates/a/src/x.rs: {q}{DOC}:4{q} listed twice"),
+        ]
+    );
+    assert_eq!(
+        run(
+            &[("crates/a/src/x.rs", "// nothing\n")],
+            Some("# only\n# header\n")
+        ),
+        Vec::<String>::new()
     );
 }
