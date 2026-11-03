@@ -594,7 +594,7 @@ fn cannot_tell() {
                 format!("probe: {protocol} probe-model"),
                 "load: fail (inconclusive: the model made no tool call)".to_owned(),
                 "cache: fail (not established: load did not complete)".to_owned(),
-                format!("probe: cannot tell (the model made no tool call)"),
+                "probe: cannot tell (the model made no tool call)".to_owned(),
             ]
         );
         assert_eq!(count, 2);

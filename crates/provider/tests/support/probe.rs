@@ -376,7 +376,7 @@ pub(crate) fn after_load_request(reference: &str, first: &Reply) -> ModelRequest
 
 /// Whether `name` is a calendar tool the probe declared.
 fn is_calendar(name: &str) -> bool {
-    CALENDAR.iter().any(|known| *known == name)
+    CALENDAR.contains(&name)
 }
 
 /// Checks one reply's tool calls against the call rule with `loaded` tools
