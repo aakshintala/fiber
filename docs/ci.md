@@ -222,16 +222,16 @@ variable or command-line argument. Linux caps each argument and environment
 string at 128 KiB (`MAX_ARG_STRLEN`). The run step annotates an
 `Argument list too long` failure as `Stress run could not start`. The
 always-run cost step annotates a failed run step that never wrote its start
-marker as `Stress step did not start`; no test ran. A touched test the runner
+marker as `Stress step did not start`; no test ran. Both are job failures and stop the merge like any other; the annotation says only why no test result exists. A touched test the runner
 does not compile, such as
 `cfg(target_os = "macos")` on this Linux x86_64 job, is dropped from the
 plan, named in the job output and not stressed. It still runs in the
 macOS `scripts/check` leg. A plan left empty by that intersection skips
 the run. A run whose
-filter matches no test, or whose iteration runs fewer tests than the plan
-names, fails the job. The count is read from linked issue labels and controls
-runs per test. The job has no cap on its test set: the plan's selected tests
-bound how many tests it runs. The job is in `ci`'s `needs`,
+filter matches no test, or whose iteration runs a different number of tests
+than the plan names, fails the job. The count is read from the linked issue's
+labels and sets the runs per test. Nothing caps the test set: the job stresses
+every test the plan selects. The job is in `ci`'s `needs`,
 so one failure stops the merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched
 test still gets nextest's one retry but a pass on that retry fails the
