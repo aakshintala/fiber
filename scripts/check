@@ -174,7 +174,7 @@ crates/main/tests/release_notes.rs 5
 crates/main/tests/reviewer_setup.rs 15
 crates/main/tests/search_look.rs 91
 crates/main/tests/slash_aliases.rs 8
-crates/main/tests/steer_drawn.rs 18
+crates/main/tests/steer_drawn.rs 11
 crates/main/tests/stream_closed_notice.rs 13
 crates/main/tests/swapped_panels_look.rs 50
 crates/main/tests/terminal.rs 24

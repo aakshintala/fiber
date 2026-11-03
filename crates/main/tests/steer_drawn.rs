@@ -121,120 +121,6 @@ fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
     panic!("{needle:?} on row {y}")
 }
 
-/// The first row holding `needle`, or `None` when no row holds it: the
-/// wait's own check, so absence is false, never a panic.
-fn row_with_opt(grid: &Grid, needle: &str) -> Option<u16> {
-    grid.rows
-        .iter()
-        .position(|row| row.contains(needle))
-        .and_then(|pos| u16::try_from(pos).ok())
-}
-
-/// The column where `needle` starts on `y`, matching the cells one by
-/// one so a wide cell before it changes nothing, or `None` when no
-/// column holds it: the wait's own check, so absence is false, never
-/// a panic.
-fn col_at_opt(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
-    let (cols, _) = grid.size();
-    let want: Vec<char> = needle.chars().collect();
-    for x in 0..cols {
-        let mut ok = !want.is_empty();
-        for (dx, want) in want.iter().enumerate() {
-            let xi = x.saturating_add(u16::try_from(dx).unwrap_or(u16::MAX));
-            if xi >= cols || grid.cell(xi, y).symbol != want.to_string() {
-                ok = false;
-                break;
-            }
-        }
-        if ok {
-            return Some(x);
-        }
-    }
-    None
-}
-
-/// Whether the steer card's rule has landed: the label bold in
-/// attention, the dim separator, every dash in rule, and the steered
-/// text bold on the row below. Every absence is false, never a panic,
-/// so a partial redraw can't satisfy a wait on it
-/// (`docs/testing/screens.md`, "Screens").
-fn rule_drawn(grid: &Grid) -> bool {
-    let (cols, _) = grid.size();
-    let Some(y) = row_with_opt(grid, "steer") else {
-        return false;
-    };
-    let Some(x) = col_at_opt(grid, y, "steer") else {
-        return false;
-    };
-    for dx in 0..5u16 {
-        let Some(xi) = x.checked_add(dx) else {
-            return false;
-        };
-        if xi >= cols {
-            return false;
-        }
-        let cell = grid.cell(xi, y);
-        if cell.fg != ATTENTION || !cell.bold {
-            return false;
-        }
-    }
-    let mut dashes = x.saturating_add(5);
-    while dashes < cols && grid.cell(dashes, y).symbol != "─" {
-        dashes = dashes.saturating_add(1);
-    }
-    if dashes >= cols {
-        return false;
-    }
-    let mut dx = 5u16;
-    while x.saturating_add(dx) < dashes {
-        let Some(xi) = x.checked_add(dx) else {
-            return false;
-        };
-        if !grid.cell(xi, y).dim {
-            return false;
-        }
-        let Some(next) = dx.checked_add(1) else {
-            return false;
-        };
-        dx = next;
-    }
-    let mut dash = dashes;
-    while dash < cols {
-        let cell = grid.cell(dash, y);
-        if cell.symbol != "─" {
-            break;
-        }
-        if cell.fg != RULE {
-            return false;
-        }
-        let Some(next) = dash.checked_add(1) else {
-            return false;
-        };
-        dash = next;
-    }
-    let Some(below) = y.checked_add(1) else {
-        return false;
-    };
-    if row_with_opt(grid, "use x") != Some(below) {
-        return false;
-    }
-    let Some(tx) = col_at_opt(grid, below, "use x") else {
-        return false;
-    };
-    for dx in 0..5u16 {
-        let Some(xi) = tx.checked_add(dx) else {
-            return false;
-        };
-        if xi >= cols {
-            return false;
-        }
-        if !grid.cell(xi, below).bold {
-            return false;
-        }
-    }
-    true
-}
-
 #[test]
 fn a_steer_draws_its_queue_row_then_its_card_rule() {
     let setup = support::Setup::new();
@@ -300,7 +186,139 @@ fn a_steer_draws_its_queue_row_then_its_card_rule() {
     // the dim separator, the dashes in rule to the edge, and the steered
     // text bold directly under it. The time is never read: only the
     // separator's dim span between the label and the dashes.
-    let grid = run.wait_screen("the steer card rule", rule_drawn);
+    let grid = run.wait_screen("the steer card rule", |grid| {
+        let (cols, _) = grid.size();
+        let Some(pos) = grid.rows.iter().position(|row| row.contains("steer")) else {
+            return false;
+        };
+        let Ok(y) = u16::try_from(pos) else {
+            return false;
+        };
+        let want = ['s', 't', 'e', 'e', 'r'];
+        let mut at = None;
+        let mut x = 0u16;
+        while x < cols {
+            let mut ok = true;
+            for (dx, glyph) in want.iter().enumerate() {
+                let Some(xi) = x.checked_add(u16::try_from(dx).unwrap_or(u16::MAX)) else {
+                    ok = false;
+                    break;
+                };
+                if xi >= cols || grid.cell(xi, y).symbol != glyph.to_string() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                at = Some(x);
+                break;
+            }
+            let Some(next) = x.checked_add(1) else {
+                break;
+            };
+            x = next;
+        }
+        let Some(x) = at else {
+            return false;
+        };
+        for dx in 0..5u16 {
+            let Some(xi) = x.checked_add(dx) else {
+                return false;
+            };
+            if xi >= cols {
+                return false;
+            }
+            let cell = grid.cell(xi, y);
+            if cell.fg != ATTENTION || !cell.bold {
+                return false;
+            }
+        }
+        let mut dashes = x.saturating_add(5);
+        while dashes < cols && grid.cell(dashes, y).symbol != "─" {
+            dashes = dashes.saturating_add(1);
+        }
+        if dashes >= cols {
+            return false;
+        }
+        let mut dx = 5u16;
+        while x.saturating_add(dx) < dashes {
+            let Some(xi) = x.checked_add(dx) else {
+                return false;
+            };
+            if !grid.cell(xi, y).dim {
+                return false;
+            }
+            let Some(next) = dx.checked_add(1) else {
+                return false;
+            };
+            dx = next;
+        }
+        let mut dash = dashes;
+        while dash < cols {
+            let cell = grid.cell(dash, y);
+            if cell.symbol != "─" {
+                break;
+            }
+            if cell.fg != RULE {
+                return false;
+            }
+            let Some(next) = dash.checked_add(1) else {
+                return false;
+            };
+            dash = next;
+        }
+        let Some(below) = y.checked_add(1) else {
+            return false;
+        };
+        let Some(tpos) = grid.rows.iter().position(|row| row.contains("use x")) else {
+            return false;
+        };
+        let Ok(text) = u16::try_from(tpos) else {
+            return false;
+        };
+        if text != below {
+            return false;
+        }
+        let want_text = ['u', 's', 'e', ' ', 'x'];
+        let mut found = None;
+        let mut tx = 0u16;
+        while tx < cols {
+            let mut ok = true;
+            for (dx, glyph) in want_text.iter().enumerate() {
+                let Some(xi) = tx.checked_add(u16::try_from(dx).unwrap_or(u16::MAX)) else {
+                    ok = false;
+                    break;
+                };
+                if xi >= cols || grid.cell(xi, below).symbol != glyph.to_string() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                found = Some(tx);
+                break;
+            }
+            let Some(next) = tx.checked_add(1) else {
+                break;
+            };
+            tx = next;
+        }
+        let Some(tx) = found else {
+            return false;
+        };
+        for dx in 0..5u16 {
+            let Some(xi) = tx.checked_add(dx) else {
+                return false;
+            };
+            if xi >= cols {
+                return false;
+            }
+            if !grid.cell(xi, below).bold {
+                return false;
+            }
+        }
+        true
+    });
     let y = row_with(&grid, "steer");
     let x = col_at(&grid, y, "steer");
     for dx in 0..5u16 {
