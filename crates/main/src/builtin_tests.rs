@@ -1270,6 +1270,7 @@ fn builtin_tools_carry_the_protection_handle_to_files_and_shell() {
             fiber_home: fiber_home.clone(),
         })),
         Some(Arc::clone(&handle)),
+        std::collections::BTreeMap::new(),
     )
     .unwrap();
     let tool = |name: &str| {
@@ -1356,6 +1357,7 @@ fn the_model_shell_marks_confined_when_on_and_available() {
         Default::default(),
         sandbox,
         None,
+        std::collections::BTreeMap::new(),
     )
     .unwrap();
     let shell = tools

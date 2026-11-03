@@ -193,6 +193,25 @@ fn job_row_index(rows: &[String], command: &str) -> Option<usize> {
     rows.iter().position(|row| row.contains(command))
 }
 
+/// Which read the last grid seen by the item-view-open wait implies, in
+/// words: the job row never drew, it drew somewhere other than the row
+/// clicked, or it is still on the row clicked. Failure-path words only;
+/// it runs only on expiry. The trailing newline is the separator the
+/// leading wait leaves to its caller.
+fn item_view_open_lead(rows: &[String], command: &str, clicked: u16) -> String {
+    match job_row_index(rows, command) {
+        None => {
+            "the job row is at no y: the job never registered or the panel dropped it\n".to_owned()
+        }
+        Some(y) if y as u16 != clicked => format!(
+            "the job row is at y={y}, not at the y={clicked} that was clicked: the panel reflowed under the click\n"
+        ),
+        Some(y) => format!(
+            "the job row is still at y={y}, the y that was clicked: the click did not open the view\n"
+        ),
+    }
+}
+
 /// The first row containing `needle`, or a panic naming it.
 fn row_with(grid: &Grid, needle: &str) -> u16 {
     grid.rows
@@ -424,6 +443,57 @@ fn job_row_predicate_rejects_the_pre_expansion_grid() {
 }
 
 #[test]
+fn item_view_open_lead_names_the_read_the_last_grid_implies() {
+    let command = "head -n 1 hold #7";
+    let clicked = 20u16;
+    let rows_with_job_at = |y: usize| -> Vec<String> {
+        (0..24)
+            .map(|i| {
+                if i == y {
+                    format!("job j_1 · {command}")
+                } else {
+                    format!("filler row {i}")
+                }
+            })
+            .collect()
+    };
+    let missing = vec!["Jobs  1 running".to_owned(), "Done.".to_owned()];
+    let below = rows_with_job_at(clicked as usize - 1);
+    let at = rows_with_job_at(clicked as usize);
+    let above = rows_with_job_at(clicked as usize + 1);
+
+    let no_row = item_view_open_lead(&missing, command, clicked);
+    let reflowed_below = item_view_open_lead(&below, command, clicked);
+    let still_there = item_view_open_lead(&at, command, clicked);
+    let reflowed_above = item_view_open_lead(&above, command, clicked);
+
+    assert_eq!(
+        no_row,
+        "the job row is at no y: the job never registered or the panel dropped it\n"
+    );
+    assert_eq!(
+        reflowed_below,
+        format!(
+            "the job row is at y={}, not at the y={clicked} that was clicked: the panel reflowed under the click\n",
+            clicked - 1
+        )
+    );
+    assert_eq!(
+        still_there,
+        format!(
+            "the job row is still at y={clicked}, the y that was clicked: the click did not open the view\n"
+        )
+    );
+    assert_eq!(
+        reflowed_above,
+        format!(
+            "the job row is at y={}, not at the y={clicked} that was clicked: the panel reflowed under the click\n",
+            clicked + 1
+        )
+    );
+}
+
+#[test]
 fn fifo_release_written_before_reader_opens_is_read() {
     let setup = Setup::new();
     let fifo = setup.workspace().join("hold");
@@ -462,11 +532,22 @@ fn the_job_pty_view_matches_the_doc() {
     // completion — not `turn_finished` — is the readiness signal here.
     // No session event lands between the two clicks; only the first
     // click's own expansion changes the screen.
-    let grid = run.wait_screen("the tty job starts", |grid| {
-        grid.contents.contains("Jobs")
-            && grid.contents.contains("Done.")
-            && grid.contents.contains("completed")
-    });
+    // A frame with "READY", no Jobs card and a collapsed "Ran 1 command"
+    // means either the shell call opened no job or the job ended before
+    // step 2; the event path cannot lose a job that opened. The
+    // session-log tail shows which: `job_started` shows the job opened;
+    // `job_completed` carries `process.exit_code`, `process.signal` and
+    // `error.code` in the raw lines.
+    let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    let grid = run.wait_screen_reporting(
+        "the tty job starts",
+        |grid| {
+            grid.contents.contains("Jobs")
+                && grid.contents.contains("Done.")
+                && grid.contents.contains("completed")
+        },
+        || support::session_logs_tail(&sessions_dir),
+    );
     let title = row_with(&grid, "Jobs");
     click(&mut run, col_at(&grid, title, "Jobs"), title);
     let grid = run.wait_screen("the job row draws", |grid| {
@@ -478,9 +559,17 @@ fn the_job_pty_view_matches_the_doc() {
         .find(|x| grid.cell(*x, job).symbol != " ")
         .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
     click(&mut run, job_x, job);
-    let grid = run.wait_screen("the item view opens", |grid| {
-        grid.contents.contains("Job  ◆ ")
-    });
+    // The lead reads the last grid the wait saw and names which read it
+    // implies; it runs only on expiry.
+    let last: std::cell::RefCell<Option<Vec<String>>> = std::cell::RefCell::new(None);
+    let grid = run.wait_screen_leading(
+        "the item view opens",
+        |grid| {
+            *last.borrow_mut() = Some(grid.rows.clone());
+            grid.contents.contains("Job  ◆ ")
+        },
+        || item_view_open_lead(last.borrow().as_deref().unwrap_or(&[]), &command, job),
+    );
     // The status row names the job twice: once in the row, once in the
     // stop target. The row is short enough to draw whole: no `…` cuts
     // it, so the finish fold below reads the outcome off the screen.

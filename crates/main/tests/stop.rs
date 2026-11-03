@@ -77,6 +77,9 @@ fn stop_stops_the_session_and_the_hub_and_the_session_resumes() {
         !hub.wait().success(),
         "the stopped hub exits as SIGTERM does"
     );
+    // The stop's print proves its exchange closed (`docs/invocation.md`,
+    // "Commands and flags"), so the sockets are asserted at once: the
+    // print IS the proof.
     assert!(
         UnixStream::connect(setup.hub_socket()).is_err(),
         "the hub socket is gone"
@@ -121,9 +124,12 @@ fn a_bare_stop_leaves_the_session_socket_accepting() {
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
-    assert!(
-        !setup.session_socket(&session).exists(),
-        "the closed session unlinked its socket"
+    // The close ending the socket only proves the peer went away: the
+    // session unlinks its path at exit (`docs/state.md`, "Sockets"), after.
+    wait_for_path_gone(
+        setup.deadline,
+        &setup.session_socket(&session),
+        "the closed session to unlink its socket",
     );
     guard.wait_gone();
 }
@@ -161,6 +167,9 @@ fn stop_with_a_dead_hub_starts_one_to_stop_the_orphaned_session() {
         String::from_utf8_lossy(&output.stdout),
         "Stopped 1 sessions and the hub.\n"
     );
+    // The stop's print proves its exchange closed (`docs/invocation.md`,
+    // "Commands and flags"), so the socket is asserted at once: the print
+    // IS the proof.
     assert!(
         UnixStream::connect(setup.session_socket(&session)).is_err(),
         "the session socket is gone"

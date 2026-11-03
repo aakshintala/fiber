@@ -25,7 +25,7 @@ use support::write_record;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Output, spawn_watched};
+use support::{Deadline, KillGroup, Output, spawn_watched, wait_for_refresh_exit};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
@@ -488,14 +488,14 @@ fn a_failed_openrouter_refresh_keeps_the_cached_list() {
 
     // The second run returns without waiting: the failed refresh leaves
     // the cache as it was, once the detached child has exited.
-    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
+    wait_for_refresh_exit(setup.deadline, &setup.refresh_pattern());
     assert_eq!(std::fs::read(&file).unwrap(), cached);
     assert_eq!(server.requests().len(), 2);
 
     let third = setup.fiber(&["models", "--json"]);
     assert_eq!(third.code, Some(0), "stderr: {}", third.stderr);
     assert_eq!(third.stdout, first.stdout);
-    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
+    wait_for_refresh_exit(setup.deadline, &setup.refresh_pattern());
     refresh_guard.stand_down(setup.deadline.cleanup_phase());
 }
 
@@ -569,23 +569,6 @@ fn models_lists_every_first_party_model_and_drops_none() {
     }
     expected.sort_by_key(|reference| reference.split('/').next().unwrap_or("").to_owned());
     assert_eq!(listed_ids(&run), expected);
-}
-
-/// Waits until this test's refresh child is gone, under the test's
-/// [`Deadline`]: the detached child exits after it rewrites the cache, and
-/// a rewritten cache alone never proves it did. On expiry it kills the
-/// child and its group, checks they are gone before the cleanup deadline,
-/// and fails.
-#[track_caller]
-fn await_refresh_exit(deadline: Deadline, pattern: &str) {
-    if fakes::matching_exits(pattern, deadline) {
-        return;
-    }
-    support::kill_matching(deadline, pattern).unwrap();
-    fakes::try_matching_exits(pattern, deadline.cleanup_phase()).unwrap_or_else(|err| {
-        panic!("the refresh child outlived SIGKILL past the cleanup deadline: {err}")
-    });
-    panic!("waited until the deadline for the refresh child to exit");
 }
 
 #[test]
@@ -695,7 +678,7 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     server.release();
     // The list is fresh on the next run, once the detached child has
     // rewritten the cache and exited.
-    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
+    wait_for_refresh_exit(setup.deadline, &setup.refresh_pattern());
     assert!(
         std::fs::read(&file).unwrap() != old,
         "the refresh child exited without rewriting {}",
@@ -718,7 +701,7 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     // for it under the deadline, then stand its watchdog down. Dropping
     // the guard without an exit would kill it instead of checking it,
     // and a timeout above drops it, so no run leaves one behind.
-    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
+    wait_for_refresh_exit(setup.deadline, &setup.refresh_pattern());
     refresh_guard.stand_down(setup.deadline.cleanup_phase());
 }
 

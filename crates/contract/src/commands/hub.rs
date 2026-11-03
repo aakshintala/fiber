@@ -67,6 +67,10 @@ pub enum HubCommand {
     ReadConfig(ReadConfig),
     /// Writes a configuration view's file.
     WriteConfig(WriteConfig),
+    /// Reads one workspace file.
+    ReadWorkspaceFile(ReadWorkspaceFile),
+    /// Writes one workspace file.
+    WriteWorkspaceFile(WriteWorkspaceFile),
     /// Answers with the hub's version, clients and environment.
     Status(NoArgs),
     /// Rebuilds the hub's environment.
@@ -336,6 +340,30 @@ pub struct WriteConfig {
     /// The workspace, an absolute path.
     pub workspace: String,
     /// The configuration view's file.
+    pub path: String,
+    /// The new text.
+    pub text: String,
+    /// The version the file still has for the write to land.
+    pub version: String,
+}
+
+/// The `args` of `read_workspace_file`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadWorkspaceFile {
+    /// The workspace, an absolute path: the session's workspace on the hub.
+    pub workspace: String,
+    /// The file resolved against the workspace.
+    pub path: String,
+}
+
+/// The `args` of `write_workspace_file`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WriteWorkspaceFile {
+    /// The workspace, an absolute path.
+    pub workspace: String,
+    /// The file resolved against the workspace.
     pub path: String,
     /// The new text.
     pub text: String,

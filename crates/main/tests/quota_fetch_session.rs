@@ -99,6 +99,51 @@ fn configure(setup: &Setup, model: &str) {
     );
 }
 
+/// The test Lua provider with its quota fetch on its own server: the
+/// turn's models, token and model calls flow, while the quota response
+/// stays held until the test releases it. That parks Fiber itself between
+/// the turn and the quota record.
+fn install_split_provider(setup: &Setup, flow_url: &str, quota_url: &str) {
+    let source = setup.root.path().join("luasrc");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "test-ext", "version": "0.1.0", "fiber": "0.1.0", "api": 1,
+                "providers": {"test": [format!("{flow_url}/v1")]}}),
+    );
+    fs::create_dir_all(source.join("providers")).unwrap();
+    fs::write(
+        source.join("providers/test.lua"),
+        format!(
+            "fiber.provider(\"test\", {{\n\
+               models = {{ timeout = 60000, run = function()\n\
+                 local r = host.http({{ url = \"{flow_url}/lua-models\" }})\n\
+                 return {{{{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{flow_url}/v1\", context_window = 100000 }}}}\n\
+               end }},\n\
+               credential = {{ timeout = 60000, run = function()\n\
+                 local r = host.http({{ method = \"POST\", url = \"{flow_url}/lua-token\" }})\n\
+                 return {{ token = \"tok\", expires_at = 1893456000 }}\n\
+               end }},\n\
+               quota = {{ timeout = 60000, run = function(q)\n\
+                 local r = host.http({{ url = \"{quota_url}/lua-quota\" }})\n\
+                 return {{ windows = {{ {{ name = \"w\", used_percent = tonumber(r.body) or 1, resets_at = 1893456000 }} }} }}\n\
+               end }},\n\
+               sign = {{ timeout = 60000, run = function(request) return {{}} end }},\n\
+             }})\n"
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
 /// The held-open session's diagnostic file, parsed: a trailing fragment
 /// without its newline is still being written, so it is dropped.
 fn session_lines(setup: &Setup, id: &str) -> Vec<Value> {
@@ -126,6 +171,17 @@ fn a_model_call_through_an_open_session_fetches_lua_quota() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, "hi");
+    // The watch registers before the turn that starts the detached quota
+    // fetch: the file wait covers the session creating its log, and the
+    // reread after registration covers a record landing before the wait.
+    let quota_watch = watch_log(
+        &setup
+            .home()
+            .join("logs")
+            .join(format!("session-{session}.log")),
+        setup.deadline,
+        "the quota http_request record in the session log",
+    );
     subscribe(&client, &session);
     until(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -149,26 +205,111 @@ fn a_model_call_through_an_open_session_fetches_lua_quota() {
         seen = server.requests().len();
     }
     // The fetch thread writes the record synchronously before it stores
-    // the fetch, so once the fetch ends the line is in the session's
-    // file: poll the file to the test's one deadline, with no sleep, and
-    // expiry fails naming the missing record.
-    let quota = loop {
-        if let Some(quota) = session_lines(&setup, &session)
-            .into_iter()
-            .find(|line| line["code"] == "http_request" && line["data"]["purpose"] == "quota")
-        {
-            break quota;
-        }
-        assert!(
-            !setup.deadline.left().is_zero(),
-            "waited until the deadline for the quota http_request record in the session log"
-        );
-        std::thread::yield_now();
-    };
+    // the fetch, so the record's landing proves the fetch ended. The watch
+    // registered before the turn that started the fetch.
+    wait_for_watched_line(
+        &quota_watch,
+        setup.deadline,
+        "the quota http_request record in the session log",
+        |text| {
+            complete_lines(text)
+                .into_iter()
+                .any(|line| line["code"] == "http_request" && line["data"]["purpose"] == "quota")
+        },
+    );
+    let quota = session_lines(&setup, &session)
+        .into_iter()
+        .find(|line| line["code"] == "http_request" && line["data"]["purpose"] == "quota")
+        .expect("the waited-for quota record is in the session log");
     assert_eq!(quota["message"], "An HTTP request ended.");
     assert_eq!(quota["data"]["provider"], "test");
     assert_eq!(quota["data"]["purpose"], "quota");
     assert_eq!(quota["data"]["attempt"], 1);
+    assert_eq!(quota["data"]["status"], 200);
+    drop(client);
+    // SIGKILL the hub: the session keeps running on its own socket.
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill_and_wait();
+    let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
+    close_session(&direct);
+    drop(direct);
+    guard.wait_gone();
+}
+
+#[test]
+fn quota_record_wait_proves_the_parked_fetch_ended() {
+    let flow = start_routed();
+    let quota_server = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+    quota_server.hold();
+    let setup = Setup::new();
+    install_split_provider(&setup, &flow.url(), &quota_server.url());
+    config::store_credential(
+        &setup.home(),
+        "test",
+        "default",
+        &config::Secret::new("k-test".into()),
+    )
+    .unwrap();
+    configure(&setup, "test/m1");
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let session = start_session(&client, &workspace, "hi");
+    let log_path = setup
+        .home()
+        .join("logs")
+        .join(format!("session-{session}.log"));
+    // The watch registers before the turn that starts the detached quota
+    // fetch: the file wait covers the session creating its log, and the
+    // reread after registration covers a record landing before the wait.
+    let quota_watch = watch_log(
+        &log_path,
+        setup.deadline,
+        "the quota http_request record in the session log",
+    );
+    subscribe(&client, &session);
+    until(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // The fetch parked on its held response: its request reached the quota
+    // server, so Fiber itself is paused between the turn and the record.
+    assert!(
+        quota_server.await_requests(1, setup.deadline),
+        "the detached quota fetch parked on its held response"
+    );
+    // The old wait reads the log once right after the turn and asserts the
+    // record is there: with the fetch parked, it is not.
+    let old = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let text = fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(
+            complete_lines(&text).into_iter().any(|line| {
+                line["code"] == "http_request" && line["data"]["purpose"] == "quota"
+            }),
+            "the quota record is already there"
+        );
+    }));
+    assert!(
+        old.is_err(),
+        "the old read-once must fail while the fetch is parked"
+    );
+    quota_server.release();
+    // The release ends the parked fetch, and the fetch thread writes its
+    // record synchronously before storing it: the wait proves it landed.
+    wait_for_watched_line(
+        &quota_watch,
+        setup.deadline,
+        "the quota http_request record in the session log",
+        |text| {
+            complete_lines(text)
+                .into_iter()
+                .any(|line| line["code"] == "http_request" && line["data"]["purpose"] == "quota")
+        },
+    );
+    let quota = session_lines(&setup, &session)
+        .into_iter()
+        .find(|line| line["code"] == "http_request" && line["data"]["purpose"] == "quota")
+        .expect("the waited-for quota record is in the session log");
     assert_eq!(quota["data"]["status"], 200);
     drop(client);
     // SIGKILL the hub: the session keeps running on its own socket.

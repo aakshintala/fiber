@@ -18,7 +18,7 @@ use matching::{Applied, Block, MatchError, Report};
 
 use crate::error::{EditError, FileError};
 use crate::files::{
-    Inspected, Shared, declare, effects_error, hash_bytes, inspect, path_text, resolve,
+    Inspected, Shared, attach_seen, declare, effects_error, hash_bytes, inspect, path_text, resolve,
 };
 use crate::tool_util::errored;
 use crate::write::line_changes;
@@ -214,7 +214,11 @@ fn written(path: &Path, old: &str, applied: &Applied) -> Output {
         content: vec![ContentPart::Text {
             text: lines.join("\n"),
         }],
-        details: Some(json!({ "diff": diff })),
+        details: attach_seen(
+            Some(json!({ "diff": diff })),
+            path,
+            hash_bytes(&applied.bytes),
+        ),
         changes: Some(vec![FileChange {
             path: shown,
             added,

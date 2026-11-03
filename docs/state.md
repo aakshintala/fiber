@@ -46,6 +46,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   crashes/<id>-<ms>.txt           one report per panic (docs/code-quality.md)
   logs/hub.log, logs/hub.log.1    the hub's diagnostic log and its previous file
   logs/<kind>-<id>.log            one other process's diagnostic log
+  detached/d_<pid>_<n>.log        one output log per detached shell command, mode 0600, kept until the person deletes it (docs/tools.md, "Background jobs")
 ```
 
 ## Override
@@ -523,6 +524,12 @@ or a configuration value, with one exception: an `extension_log` line is the
 extension's own text, and Fiber records it as given. A failed hook is named
 with its code, never its content.
 
+**Detached logs.** `detached/` holds one output log per detached shell
+command (`docs/tools.md`, "Background jobs"), named `d_<pid>_<n>.log` from
+0 up in a directory mode 0700, each file mode 0600. The person owns
+deleting them: Fiber never removes a log, and a session's deletion or
+pruning never touches them.
+
 **What feedback reads.** `fiber feedback` and `/feedback` copy content-free
 lines from `logs/` and `crashes/` into the Diagnostics section of the report
 file, on the person's machine; the issue link never carries them. For the
@@ -592,10 +599,13 @@ other file in `credentials/` (`docs/permissions.md`, "Credentials").
 **Recently exited sessions.** `recent.jsonl` at the top of Fiber home: one
 JSON line per session that exited, appended by the session itself as it
 exits. Its keys are `session_id`, `ts`, `project` (the project's key), `workspace`,
-`name`, `how` and `status`, the session's last `session_status`, which says
-what it stopped on and carries `parent` for a delegate. A session whose
+`name`, `how`, `status`, the session's last `session_status`, which says
+what it stopped on and carries `parent` for a delegate, and `archived`, true on
+an archived session's row and absent otherwise. A session whose
 process died cannot append, so the hub appends its row when it sees the
-crash (`docs/invocation.md`, "The hub"). A session
+crash (`docs/invocation.md`, "The hub"). Archiving a session appends its
+row again with `archived` true, and its next exit appends one without it; a
+session's newest row is its state (`docs/invocation.md`, "Archiving"). A session
 appends whether or not a hub is running, and nothing rewrites it, so an
 append is never lost to a rewrite. Deleting a session leaves its row, and
 every reader skips a row whose session directory is gone. The hub reads its tail at start and keeps

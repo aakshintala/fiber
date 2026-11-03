@@ -3,8 +3,8 @@
 //! root first, then the own log. A resume folds the whole chain, so a
 //! resumed rewound session keeps its history.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 use contract::events::{
     CallStatus, Control, DecidedBy, Decision, Event, ModelSettings, Outcome, SkillLoad,
@@ -81,6 +81,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         ledger: crate::usage::Ledger::default(),
         grants: Vec::new(),
         added: Vec::new(),
+        seen_files: BTreeMap::new(),
         known_hosts: crate::known_hosts::KnownHosts::default(),
         session_blocks: 0,
         // The reviewer's input follows the session's handoffs
@@ -182,6 +183,17 @@ struct Pass {
     summary: bool,
 }
 
+/// The reserved `details.file_seen` on a completed file-tool call
+/// (`docs/events.md`, `tool_call_completed`): the resolved path and the
+/// whole file's content hash. A missing or malformed object is none, so
+/// legacy lines and corrupt values create no record and erase none.
+fn file_seen(details: &Option<Value>) -> Option<(PathBuf, u64)> {
+    let seen = details.as_ref()?.get("file_seen")?;
+    let path = seen.get("path")?.as_str()?;
+    let hash = seen.get("hash")?.as_u64()?;
+    Some((PathBuf::from(path), hash))
+}
+
 /// Folds one line of segment `pass.index` into `resumed`: the workspace
 /// from the own segment's `session_started`, the model, the credential
 /// label and the thinking, the session-wide state, and the handoff
@@ -233,10 +245,14 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             }
         }
     }
-    // Results without host lists or file changes cannot affect known hosts.
+    // Results without host lists, file changes or client details cannot
+    // affect known hosts or the seen-files fold below: a file tool's
+    // details-only completion carries the reserved `file_seen` record, so
+    // it folds.
     if line.kind == "tool_call_completed"
         && !line.payload.contains_key("hosts_surfaced")
         && !line.payload.contains_key("changes")
+        && !line.payload.contains_key("details")
     {
         return Ok(());
     }
@@ -276,6 +292,26 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         }
     }
     pass.running.fold_jobs(&event);
+    // A completed handoff starts a new context: what the old one saw is
+    // forgotten, as the live loop forgets it (`docs/tools.md`, "Stale
+    // files"). Any other handoff outcome keeps the record.
+    if let Event::HandoffCompleted(done) = &event
+        && done.outcome == Outcome::Completed
+    {
+        resumed.seen_files.clear();
+    }
+    // Only a well-formed `file_seen` on a completed call creates a record:
+    // the last hash-bearing entry for a path wins, and a missing or
+    // malformed legacy entry creates nothing and erases nothing. Disk
+    // bytes are never inspected or hashed here; `write` compares the
+    // folded hash against the current bytes and reports `StaleChanged` on
+    // a mismatch (`docs/tools.md`, "Stale files").
+    if let Event::ToolCallCompleted(completed) = &event
+        && completed.status == CallStatus::Completed
+        && let Some((path, hash)) = file_seen(&completed.details)
+    {
+        resumed.seen_files.insert(path, hash);
+    }
     if let Event::SessionStarted(started) = &event {
         // A move starts a new workspace: grants, added folders and
         // repository-code offers folded before it belong to the old run,
@@ -371,7 +407,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
                 extension_jobs: pass.running.extension_jobs.clone(),
                 session_log: pass.running.session_log.clone(),
                 skills: pass.running.skills.clone(),
-                person: pass.running.person.clone(),
+                reviewed: pass.running.reviewed.clone(),
                 ..Carry::default()
             };
             pass.starts
@@ -403,14 +439,12 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         // next `turn_started`.
         pass.starts.retain(|started, _| Some(started) == turn);
     }
-    // The person's messages the reviewer still holds, recorded after the
-    // chain so a `turn_started`'s snapshot holds them as they were before
-    // that line: the resume rebuild renders the line again from the seed.
+    // Observe after `turn_started` snapshots the state from before that
+    // line: the resume rebuild renders the line again from the seed. The
+    // shared summary gate also covers recovery after a process start.
     if !summary {
-        crate::conversation::record_persons(&mut pass.running, &event, line.seq);
-    }
-    if let Event::ReviewerKept(kept) = &event {
-        pass.running.prune(&kept.kept);
+        pass.running
+            .observe_reviewed(&event, line.action_id.as_ref(), line.seq, false);
     }
     Ok(())
 }

@@ -1269,6 +1269,7 @@ fn wired(
                     fiber_home: home.clone(),
                 })),
                 None,
+                std::collections::BTreeMap::new(),
             )
             .expect("the session builds")
         },
@@ -1393,6 +1394,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
                     fiber_home: home.clone(),
                 })),
                 None,
+                std::collections::BTreeMap::new(),
             )
             .unwrap()
         },

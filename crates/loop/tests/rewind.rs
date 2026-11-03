@@ -3492,7 +3492,11 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
         user_text(&a_second.conversation[0]).starts_with("This message is from Fiber"),
         "the opening message renders first"
     );
-    assert_eq!(user_text(&a_second.conversation[1]), "hi");
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(
+        user_text(&a_second.conversation[1]),
+        "The person's new message:\nhi"
+    );
     assert_eq!(user_text(&a_second.conversation[2]), "The note.");
     assert!(
         matches!(&a_second.conversation[3], Input::Assistant { text, .. } if text == "Done."),

@@ -86,6 +86,7 @@ pub(crate) fn builtin(
         Default::default(),
         sandbox,
         None,
+        std::collections::BTreeMap::new(),
     )
 }
 
@@ -129,8 +130,10 @@ pub(crate) fn builtin_timed(
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
     protection: Option<Arc<tools::ProtectedPaths>>,
+    seen: std::collections::BTreeMap<PathBuf, u64>,
 ) -> Result<SessionTools, Failure> {
-    let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
+    let mut files =
+        tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks)).with_seen(seen);
     // A successful write or edit advances the baseline its path landed in,
     // so the call's end restores to the approved content.
     if let Some(protection) = &protection {
@@ -157,6 +160,7 @@ pub(crate) fn builtin_timed(
         .with_artifacts(artifacts.to_path_buf())
         .with_read_only(shell_read_only)
         .with_sandbox(sandbox)
+        .with_detached(home.join("detached"))
         .non_interactive();
     // Confined Linux spawns take their end-of-call guard from the session's
     // shared handle; the driver shell below never runs confined, so it

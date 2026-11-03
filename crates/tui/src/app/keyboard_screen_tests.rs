@@ -61,16 +61,16 @@ fn launch() -> Launch {
 }
 
 /// An app on home at 80x24 with `seam`.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(launch());
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app.set_size(80, 24);
     app
 }
 
 /// An app with home state, attached, at 80x24, with `seam`.
-fn homed(seam: Option<Arc<Fake>>) -> App {
+fn homed(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.attach(contract::SessionId(SESSION.to_owned()));
     app
@@ -136,9 +136,9 @@ fn slash_keys_opens_the_screen_with_the_draft_cleared() {
     for attached in [false, true] {
         let fake = Arc::new(Fake::new(Vec::new()));
         let mut app = if attached {
-            homed(Some(Arc::clone(&fake)))
+            homed(Arc::clone(&fake))
         } else {
-            home(Some(Arc::clone(&fake)))
+            home(Arc::clone(&fake))
         };
         slash_keys(&mut app);
         assert!(app.keys_screen_open());
@@ -149,7 +149,7 @@ fn slash_keys_opens_the_screen_with_the_draft_cleared() {
 #[test]
 fn opening_keys_closes_the_key_map_and_the_picker() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     assert_eq!(app.on_key(Key::F1, now()), Effect::None);
     assert!(app.keymap_top().is_some());
     assert_eq!(app.open_keys(), Effect::None);
@@ -167,7 +167,7 @@ fn opening_keys_closes_the_key_map_and_the_picker() {
 #[test]
 fn rebinding_new_session_saves_one_edit_then_answers_the_new_key() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     down(&mut app, 5);
     assert_eq!(tap(&mut app, "enter"), Effect::None);
@@ -190,7 +190,7 @@ fn rebinding_new_session_saves_one_edit_then_answers_the_new_key() {
 #[test]
 fn a_swap_saves_both_edits_in_one_call() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     assert_eq!(tap(&mut app, "enter"), Effect::None);
     assert_eq!(tap(&mut app, "ctrl+o"), Effect::None);
@@ -213,7 +213,7 @@ fn a_swap_saves_both_edits_in_one_call() {
 #[test]
 fn reset_saves_no_entry_for_the_defaults() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     keyed(&mut app, &[("copy_focused", json!(["c"]))]);
     slash_keys(&mut app);
     down(&mut app, 21);
@@ -230,7 +230,7 @@ fn reset_saves_no_entry_for_the_defaults() {
 #[test]
 fn delete_unbinds_and_the_key_goes_dead() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     down(&mut app, 17);
     assert_eq!(tap(&mut app, "delete"), Effect::None);
@@ -256,7 +256,7 @@ fn delete_unbinds_and_the_key_goes_dead() {
 #[test]
 fn capturing_an_action_own_key_saves_nothing() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     down(&mut app, 5);
     assert_eq!(tap(&mut app, "enter"), Effect::None);
@@ -270,7 +270,7 @@ fn a_refused_save_keeps_the_old_keyset_on_screen() {
     if let Ok(mut refuse) = fake.refuse.lock() {
         *refuse = Some("disk full".to_owned());
     }
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     down(&mut app, 5);
     assert_eq!(tap(&mut app, "enter"), Effect::None);
@@ -288,7 +288,7 @@ fn a_refused_save_keeps_the_old_keyset_on_screen() {
 
 #[test]
 fn without_a_seam_a_rebind_applies_for_the_run() {
-    let mut app = homed(None);
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     slash_keys(&mut app);
     down(&mut app, 5);
     assert_eq!(tap(&mut app, "enter"), Effect::None);
@@ -301,7 +301,7 @@ fn without_a_seam_a_rebind_applies_for_the_run() {
 #[test]
 fn the_screen_takes_the_application_keys_ahead_of_the_draft() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     for name in ["ctrl+o", "f1", "alt+p"] {
         assert_eq!(tap(&mut app, name), Effect::None, "{name}");
@@ -315,11 +315,11 @@ fn the_screen_takes_the_application_keys_ahead_of_the_draft() {
 #[test]
 fn esc_on_a_busy_session_closes_the_screen_sending_no_cancel() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut live_app = homed(Some(Arc::clone(&fake)));
+    let mut live_app = homed(Arc::clone(&fake));
     live_app.on_line(hello());
     live_app.on_line(started());
     assert!(matches!(live_app.on_key(Key::Esc, now()), Effect::Send(_)));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     app.on_line(hello());
     app.on_line(started());
     slash_keys(&mut app);
@@ -332,7 +332,7 @@ fn esc_on_a_busy_session_closes_the_screen_sending_no_cancel() {
 fn ctrl_c_twice_within_the_window_quits_with_the_screen_open() {
     let clock = fakes::clock::FakeClock::new();
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     assert!(app.keys_screen_open());
     assert_eq!(tap_at(&mut app, "ctrl+c", clock.now()), Effect::None);
@@ -353,7 +353,7 @@ fn ctrl_c_twice_within_the_window_quits_with_the_screen_open() {
 #[test]
 fn with_the_quit_question_open_a_key_goes_to_the_question() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     app.on_line(live(contract::SessionId(SESSION.to_owned())));
     slash_keys(&mut app);
     down(&mut app, 5);
@@ -370,7 +370,7 @@ fn with_the_quit_question_open_a_key_goes_to_the_question() {
 #[test]
 fn a_paste_while_the_screen_is_open_leaves_the_draft_empty() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     assert_eq!(app.on_edit(Edit::Paste("hello".to_owned())), Effect::None);
     assert_eq!(app.draft(), "");
@@ -379,7 +379,7 @@ fn a_paste_while_the_screen_is_open_leaves_the_draft_empty() {
 #[test]
 fn esc_closes_the_notice_overlay_ahead_of_the_screen() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     app.notices.push("extension_failed", "first".to_owned());
     app.open_more_notices();
@@ -394,7 +394,7 @@ fn esc_closes_the_notice_overlay_ahead_of_the_screen() {
 #[test]
 fn the_report_above_the_screen_takes_the_strokes_first() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     app.open_import_report(None, Default::default(), Vec::new());
     assert_eq!(app.top_surface(), crate::app::Surface::Report);
@@ -413,7 +413,7 @@ fn the_report_above_the_screen_takes_the_strokes_first() {
 #[test]
 fn a_letter_over_the_overlay_is_neither_captured_nor_typed() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     down(&mut app, 5);
     assert_eq!(tap(&mut app, "enter"), Effect::None);
@@ -439,7 +439,7 @@ fn a_letter_over_the_overlay_is_neither_captured_nor_typed() {
 fn ctrl_c_with_the_notice_overlay_open_still_clears_then_quits() {
     let clock = fakes::clock::FakeClock::new();
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut app = homed(Some(Arc::clone(&fake)));
+    let mut app = homed(Arc::clone(&fake));
     slash_keys(&mut app);
     app.notices.push("extension_failed", "first".to_owned());
     app.open_more_notices();
@@ -477,7 +477,7 @@ fn wheel(col: u16, row: u16, down: bool) -> crate::keys::Mouse {
 /// the selection three actions down, and the wheel steps the window under it.
 #[test]
 fn wheel_over_keys_steps_browse_not_the_conversation() {
-    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     // Scroll first, while the wheel still reaches the conversation: the
     // screen covers it once open.
     app.on_wheel(&wheel(10, 5, false));
@@ -523,7 +523,7 @@ fn wheel_over_keys_steps_browse_not_the_conversation() {
 /// drawn area.
 #[test]
 fn wheel_over_keymap_leaves_a_scrolled_conversation() {
-    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
     assert_eq!(app.on_key(Key::F1, now()), Effect::None);
@@ -552,7 +552,7 @@ fn wheel_over_keymap_leaves_a_scrolled_conversation() {
 fn wheel_over_a_notice_over_keys_moves_neither_list_nor_conversation() {
     use crate::app::Surface;
     use crate::app::top::tests::open;
-    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
     app.open_keys();
@@ -605,7 +605,7 @@ fn wheel_over_a_notice_over_keys_moves_neither_list_nor_conversation() {
 /// the first visible line, and back up keeps it.
 #[test]
 fn keys_screen_wheel_shifts_browse_three_display_lines() {
-    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     app.open_keys();
     let grown = crate::rebind::heights(app.keys(), 80);
     assert!(
@@ -634,7 +634,7 @@ fn keys_screen_wheel_shifts_browse_three_display_lines() {
 /// router's recorded slab owns the swallow, not the wrapper.
 #[test]
 fn keys_screen_wheel_through_an_open_notice_scrolls() {
-    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     app.open_keys();
     app.notices.push("extension_failed", "first".to_owned());
     app.open_more_notices();
@@ -652,7 +652,7 @@ fn keys_screen_wheel_through_an_open_notice_scrolls() {
 /// per display line with its join while open.
 #[test]
 fn keys_frame_is_some_with_the_keys_content_while_open() {
-    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     assert!(app.keys_frame(24).is_none());
     app.open_keys();
     let frame = app.keys_frame(24).expect("the screen is open");
@@ -669,10 +669,10 @@ fn keys_frame_is_some_with_the_keys_content_while_open() {
 /// every row into a line per character.
 #[test]
 fn keys_width_mirrors_the_area_the_frame_draws() {
-    let mut app = home(None);
+    let mut app = home(Arc::new(Fake::new(Vec::new())));
     app.open_keys();
     assert_eq!(app.keys_width(), 80);
-    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     app.open_keys();
     assert_eq!(app.keys_width(), usize::from(app.column_width()));
 }
@@ -683,7 +683,7 @@ fn keys_width_mirrors_the_area_the_frame_draws() {
 #[test]
 fn keys_screen_click_selects_a_row_and_closes_on_the_cross() {
     use crate::swapped::Spot;
-    let mut app = homed(Some(Arc::new(Fake::new(Vec::new()))));
+    let mut app = homed(Arc::new(Fake::new(Vec::new())));
     app.open_keys();
     let at = first_line(&app, 5);
     assert_eq!(app.keys_screen_click(Spot::Row(at)), Effect::None);

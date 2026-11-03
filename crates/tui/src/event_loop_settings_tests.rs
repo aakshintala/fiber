@@ -57,7 +57,7 @@ fn ctrl_g_opens_the_rows_file_and_reads_the_rows_again() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
     lp.var = Box::new(move |name| (name == "EDITOR").then(|| command.clone()));
     lp.app
-        .set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
+        .set_configure(Arc::clone(&seam) as Arc<dyn Configure>);
     let code = fakes::within("the loop", Deadline::after(DEADLINE), move || {
         feed(&mut lp, inputs(&["\x07"]))
     });
@@ -75,7 +75,7 @@ fn ctrl_g_opens_the_rows_file_and_reads_the_rows_again() {
 fn ctrl_g_with_no_editor_says_so() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.app
-        .set_configure(Some(Arc::new(Fake::new(Vec::new())) as Arc<dyn Configure>));
+        .set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn Configure>);
     let lp = fakes::within("the loop", Deadline::after(DEADLINE), move || {
         feed(&mut lp, inputs(&["\x07"]));
         lp
@@ -90,7 +90,7 @@ fn a_theme_choice_repaints_the_next_frame() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.var = Box::new(|name| (name == "COLORTERM").then(|| "truecolor".to_owned()));
     lp.app
-        .set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
+        .set_configure(Arc::clone(&seam) as Arc<dyn Configure>);
     // Enter opens the choices on `auto`; two Downs reach `light`.
     let lp = fakes::within("the loop", Deadline::after(DEADLINE), move || {
         feed(&mut lp, inputs(&["\r", "\x1b[B", "\x1b[B", "\r"]));
@@ -117,7 +117,7 @@ fn a_bad_theme_file_follows_the_terminal_with_its_notice() {
     let seam = theme_seam();
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.app
-        .set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
+        .set_configure(Arc::clone(&seam) as Arc<dyn Configure>);
     // `solar` is the fourth choice; the seam cannot read its file.
     let lp = fakes::within("the loop", Deadline::after(DEADLINE), move || {
         feed(&mut lp, inputs(&["\r", "\x1b[B", "\x1b[B", "\x1b[B", "\r"]));

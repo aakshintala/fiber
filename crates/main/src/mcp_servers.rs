@@ -366,6 +366,7 @@ pub(crate) fn session_tools(
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
     protection: Option<Arc<tools::ProtectedPaths>>,
+    seen: BTreeMap<PathBuf, u64>,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -394,6 +395,7 @@ pub(crate) fn session_tools(
         shell_read_only,
         sandbox,
         protection,
+        seen,
     )?;
     let (prepared, started) = pending.take_started()?;
     // The pending start settles repository approval and server startup

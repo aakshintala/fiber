@@ -287,7 +287,8 @@ fn a_context_exactly_at_the_trigger_hands_off() {
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
     assert_eq!(requests[2].previous_end, None);
     // The note request has the same preamble, key and tools.
@@ -482,7 +483,8 @@ fn a_new_turn_may_hand_off_after_a_failed_one() {
     let requests = session.requests();
     let carried = &requests.last().unwrap().conversation;
     assert!(is_opening(&carried[0]));
-    assert_eq!(carried[1], user("again"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(carried[1], user("The person's new message:\nagain"));
     assert_eq!(carried[2], user("Second note."));
 }
 
@@ -1110,7 +1112,8 @@ fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
     // The request after the handoff starts from the note.
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
-    assert_eq!(next[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
     assert_eq!(requests[2].previous_end, None);
     // No line is written for the instruction, or for the command.
@@ -1225,7 +1228,11 @@ fn a_handoff_held_at_the_end_of_the_turn_continues_the_turn() {
     assert_eq!(requests.len(), 3);
     // The note request holds the reply the turn had just ended on.
     assert_eq!(text_of(&requests[1].conversation[2]), "Hello.");
-    assert_eq!(requests[2].conversation[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(
+        requests[2].conversation[1],
+        user("The person's new message:\nhi")
+    );
     assert_eq!(requests[2].conversation[2], user("The note."));
 }
 
@@ -1420,7 +1427,11 @@ fn a_prompt_in_the_drain_of_a_handoff_is_carried_and_answered_after_it() {
         // The note request holds the prompt, and the answer is asked from
         // the note after it.
         assert_eq!(requests[0].conversation[1], user("hi"));
-        assert_eq!(requests[1].conversation[1], user("hi"));
+        // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+        assert_eq!(
+            requests[1].conversation[1],
+            user("The person's new message:\nhi")
+        );
         assert_eq!(requests[1].conversation[2], user("The note."));
     }
 }
@@ -1646,7 +1657,8 @@ fn a_call_that_sets_control_handoff_restarts_the_context_from_its_note() {
     let next = &requests[1].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("Tool note."));
     assert_eq!(requests[1].previous_end, None);
 }
@@ -1983,7 +1995,8 @@ fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
     let next = &requests[3].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
     assert_eq!(requests[3].previous_end, None);
     assert_eq!(attempt_numbers(&lines), [1, 1, 1, 1]);
@@ -2217,10 +2230,12 @@ fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation
     let asked = &requests[2].conversation;
     assert_eq!(asked[..asked.len() - 1], requests[1].conversation[..]);
     assert!(text_of(asked.last().unwrap()).starts_with("Fiber is about to restart"));
-    // The steer is carried verbatim.
+    // The carried input and steer are labelled as the person's new message.
     let next = &requests[3].conversation;
-    assert_eq!(next[1], user("hi"));
-    assert_eq!(next[2], user("and more"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[2], user("The person's new message:\nand more"));
     assert_eq!(next[3], user("The note."));
 }
 
@@ -2674,7 +2689,8 @@ fn a_tool_handoff_in_a_step_that_already_handed_off_is_an_ordinary_result() {
     let next = &requests[3].conversation;
     assert_eq!(next.len(), 5);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
     assert!(matches!(&next[3], Input::ToolCall { action_id, .. } if action_id.0 == wrapup));
     assert!(matches!(
@@ -2953,7 +2969,8 @@ fn a_person_handoff_runs_session_start_with_reason_handoff() {
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
     assert_eq!(next[1], user("at handoff"));
-    assert_eq!(next[2], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("The note."));
 }
 
@@ -2990,7 +3007,8 @@ fn an_automatic_handoff_runs_session_start_with_reason_handoff() {
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
     assert_eq!(next[1], user("at handoff"));
-    assert_eq!(next[2], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("The note."));
 }
 
@@ -3027,7 +3045,8 @@ fn a_tool_handoff_runs_session_start_with_reason_handoff() {
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
     assert_eq!(next[1], user("at handoff"));
-    assert_eq!(next[2], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("Tool note."));
 }
 
@@ -3222,7 +3241,8 @@ fn a_non_blocking_session_start_failure_drops_its_context_with_a_notice() {
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("hi"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
 }
 

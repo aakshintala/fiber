@@ -280,15 +280,20 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
         1
     );
 
-    // The agent's first request after the handoff holds the same kept
-    // message word for word, between the opening and the note, and not the
-    // dropped one.
+    // The agent's first request after the handoff holds the kept message
+    // in its earlier-message block, between the opening and the note, and
+    // not the dropped one.
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
     assert!(agent[0].starts_with("This message is from Fiber"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — earlier blocks (item 4: "oldest first, each in its own labelled block"), the note (item 6: "The handoff note"); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         agent[1..],
-        ["never push to main", "The note.", "now run it"]
+        [
+            "The person's earlier message:\nThe person: never push to main",
+            "The note.",
+            "now run it"
+        ]
     );
 }
 
@@ -1214,12 +1219,13 @@ fn a_tool_call_between_the_text_and_the_message_hides_the_reply() {
 }
 
 #[test]
-fn a_handoff_keeps_the_pair_and_drops_the_calls() {
+fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
-            Scripted::text("Delete the 3 stale branches?"),
-            Scripted::text("On it."),
+            Scripted::text("Which color?"),
+            Scripted::text("Which number?"),
+            Scripted::text("Noted."),
             Scripted::text("The note."),
             calls_reply("", &[("shell", paris())]),
             Scripted::text("Done."),
@@ -1227,44 +1233,60 @@ fn a_handoff_keeps_the_pair_and_drops_the_calls() {
         None,
         vec![tool as Arc<dyn Tool>],
     );
-    let reviewer = session.reviewer(vec![Scripted::text("1, 2"), Scripted::text("allow")]);
+    let reviewer = session.reviewer(vec![Scripted::text("2, 3"), Scripted::text("allow")]);
     let mut lines = prompt_turn(&mut session, "go");
-    lines.extend(prompt_turn(&mut session, "yes"));
+    lines.extend(prompt_turn(&mut session, "Blue"));
+    lines.extend(prompt_turn(&mut session, "Seven"));
     lines.extend(handoff_turn(&mut session, "c_h"));
     lines.extend(prompt_turn(&mut session, "now run it"));
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
+    // docs/permissions.md, "At a handoff": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
     assert_eq!(
         kept[0].payload["kept"],
         json!([
-            {"seq": turn_started_seq(&lines, "go"), "item": 0},
-            {"seq": turn_started_seq(&lines, "yes"), "item": 0}
+            {"seq": turn_started_seq(&lines, "Blue"), "item": 0},
+            {"seq": turn_started_seq(&lines, "Seven"), "item": 0}
         ])
     );
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 2);
-    // The selection holds the kept pair with the reply directly before
-    // its message, and no pre-handoff call.
+    // The selection keeps two distinct reply/message pairs, and no
+    // pre-handoff call.
     let selecting = texts(&requests[0]);
     let at = selecting
         .iter()
-        .position(|text| text == &"The person: yes")
+        .position(|text| text == &"The person: Blue")
         .unwrap();
-    assert_eq!(selecting[at - 1], "The agent: Delete the 3 stale branches?");
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
+    assert_eq!(selecting[at - 1], "The agent: Which color?");
+    let at = selecting
+        .iter()
+        .position(|text| text == &"The person: Seven")
+        .unwrap();
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
+    assert_eq!(selecting[at - 1], "The agent: Which number?");
     assert!(selecting.contains(&"The person: go"));
     assert!(
         !selecting.iter().any(|text| text.starts_with("Tool call: ")),
         "no pre-handoff call reaches the selection: {selecting:?}"
     );
-    // The post-handoff review holds the kept pair too, then the new call
-    // as the only tool call.
+    // The post-handoff review keeps those pairs and the new call, but not
+    // the dropped message.
     let after = texts(&requests[1]);
     let at = after
         .iter()
-        .position(|text| text == &"The person: yes")
+        .position(|text| text == &"The person: Blue")
         .unwrap();
-    assert_eq!(after[at - 1], "The agent: Delete the 3 stale branches?");
-    assert!(after.contains(&"The person: go"));
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
+    assert_eq!(after[at - 1], "The agent: Which color?");
+    let at = after
+        .iter()
+        .position(|text| text == &"The person: Seven")
+        .unwrap();
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
+    assert_eq!(after[at - 1], "The agent: Which number?");
+    assert!(!after.contains(&"The person: go"));
     assert!(after.contains(&"The person: now run it"));
     assert_eq!(
         after
@@ -1272,6 +1294,23 @@ fn a_handoff_keeps_the_pair_and_drops_the_calls() {
             .filter(|text| text.starts_with("Tool call: "))
             .count(),
         1
+    );
+
+    // Kept messages carry their reviewer-rendered replies in separate,
+    // labelled blocks. Ordinary turn input stays unframed.
+    let first = noted_request(&session, "The note.");
+    let agent = user_texts(&first);
+    // docs/handoff.md, "What the model sees after a handoff", item 2: "A new opening message".
+    assert!(agent[0].starts_with("This message is from Fiber"));
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — earlier blocks (item 4: "oldest first, each in its own labelled block"), the note (item 6: "The handoff note"); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    assert_eq!(
+        agent[1..],
+        [
+            "The person's earlier message:\nThe agent: Which color?\nThe person: Blue",
+            "The person's earlier message:\nThe agent: Which number?\nThe person: Seven",
+            "The note.",
+            "now run it"
+        ]
     );
 }
 
@@ -1583,11 +1622,17 @@ fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
     assert!(agent[0].starts_with("This message is from Fiber"));
-    // The kept message is carried whole, before the turn's input and the
-    // note.
-    assert_eq!(agent[2..], ["second", "The note."]);
-    assert!(
-        agent[1] == long,
+    // The kept message stays whole in its earlier-message block, before
+    // the labelled current input and the note.
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — the kept message stays whole in its earlier block (item 4), before the labelled current input (item 5) and the note (item 6).
+    assert_eq!(
+        agent[2..],
+        ["The person's new message:\nsecond", "The note."]
+    );
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "They are the `reviewer_kept` selection unchanged" — the kept message is carried whole.
+    assert_eq!(
+        agent[1],
+        format!("The person's earlier message:\nThe person: {long}"),
         "the kept message is carried whole: {} bytes of {}",
         agent[1].len(),
         long.len()
