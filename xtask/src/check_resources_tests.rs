@@ -96,6 +96,22 @@ fn preflight_refuses_when_df_reports_too_little_space() {
         stdout.contains("the code is untested."),
         "refusal holds no untested line: {stdout}"
     );
+    assert!(
+        stdout.contains("TMPDIR="),
+        "refusal names no TMPDIR: {stdout}"
+    );
+    assert!(
+        stdout.contains("0 MiB free"),
+        "refusal names no free space value: {stdout}"
+    );
+    assert!(
+        stdout.contains("58472 MiB"),
+        "refusal names no threshold value: {stdout}"
+    );
+    assert!(
+        stdout.contains("set TMPDIR="),
+        "refusal names no fix text: {stdout}"
+    );
 }
 
 #[test]
@@ -141,6 +157,69 @@ fn classify_reports_bus_error_linker_death_as_resource_exhaustion() {
         "classify a bus-error linker death",
     );
     assert_eq!(output.status.code(), Some(75));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.as_ref(),
+        "the build was killed for lack of resources (matched \"terminated with signal 7\"); the code is unproven, not broken; rerun once the machine has memory.\n"
+    );
+}
+
+#[test]
+fn classify_ordinary_link_error_keeps_its_own_code() {
+    let dir = TempDir::new("xtask-check-resources");
+    dir.write(
+        "ordinary-link.log",
+        "error: linking with `cc` failed: exit code: 1\n",
+    );
+    let log = dir.path().join("ordinary-link.log");
+    let log = log.to_string_lossy().into_owned();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = run_check_resources(
+        &["classify", log.as_str()],
+        &[],
+        "classify an ordinary link error",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "ordinary link error refused: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).is_empty(),
+        "ordinary link error printed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn classify_large_log_still_matches() {
+    let dir = TempDir::new("xtask-check-resources");
+    // The marker comes first so the old `printf | grep -q` pipeline had to
+    // match early and then push more than 100 KiB through the pipe: under
+    // `pipefail` the writer took SIGPIPE and the match was lost. The filler
+    // still sits before the signal line, with no newlines of its own.
+    let filler = "x".repeat(110 * 1024);
+    let content = format!(
+        "error: linking with `cc` failed: exit code: 1\n{filler}\ncollect2: fatal error: ld terminated with signal 7 [Bus error]\n"
+    );
+    dir.write("large.log", &content);
+    let log = dir.path().join("large.log");
+    let log = log.to_string_lossy().into_owned();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = run_check_resources(
+        &["classify", log.as_str()],
+        &[],
+        "classify a large log with a bus-error linker death",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(75),
+        "large log with bus-error linker death not refused: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
         stdout.as_ref(),
