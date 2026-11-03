@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# The self-test for the stress plan step (.github/workflows/ci.yml, stress
+# job; docs/ci.md, "On every pull request that changes code"). It runs the
+# "Find the touched tests" step cut from the workflow file, with a stub `gh`
+# answering the issue lookup and a stub `cargo` recording the stress-plan
+# dispatch and answering canned per-group outputs. Cases: the two-call split
+# (test-only labels, the body naming one test plus a fenced decoy and an
+# unclosed-fence marker line that names nothing, and a second-sighting
+# comment), the one-call run (labels without test-only), the no-number run
+# (an empty issue-text file), and a failed issue-text lookup, which fails
+# the step. Nothing reaches the GitHub API or a toolchain.
+#
+# Usage: scripts/test-stress-plan
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-stress-plan: $1" >&2
+  exit 1
+}
+
+# The step is the one named below: its `run: |` block, every line indented
+# past the `run:` key. No YAML parser: the name is unique in ci.yml.
+awk '
+  index($0, "- name: Find the touched tests") { armed = 1; next }
+  armed && !started && $0 ~ /^ *run: \|$/ { started = 1; match($0, /[^ ]/); indent = RSTART - 1; next }
+  started {
+    if ($0 ~ /^ *$/) { print ""; next }
+    match($0, /[^ ]/)
+    if (RSTART - 1 <= indent) exit
+    print
+  }
+' .github/workflows/ci.yml >"$tmp/step.sh"
+grep -Fq 'cargo xtask stress-plan' "$tmp/step.sh" || fail "the plan step was not found in .github/workflows/ci.yml"
+
+# Stub `gh`: answers the label lookup with STUB_LABELS (newline-joined)
+# and the issue-text lookup with STUB_BODY then STUB_COMMENT, exactly as
+# `gh issue view --json body,comments --jq '.body, (.comments[].body)'`
+# returns them (raw bodies, one after another). STUB_LABELS_FAIL and
+# STUB_BODY_FAIL fail the matching lookup instead.
+cat >"$tmp/stub.sh" <<'EOF'
+gh() {
+  [ "$1" = issue ] && [ "$2" = view ] || { echo "stub gh: unexpected call: $*" >&2; return 1; }
+  shift 2
+  case "$*" in
+    *"--json labels"*)
+      if [ -n "${STUB_LABELS_FAIL:-}" ]; then return 1; fi
+      printf '%s\n' "$STUB_LABELS"
+      ;;
+    *"--json body,comments"*)
+      if [ -n "${STUB_BODY_FAIL:-}" ]; then return 1; fi
+      printf '%s\n' "$STUB_BODY"
+      if [ -n "${STUB_COMMENT:-}" ]; then printf '%s\n' "$STUB_COMMENT"; fi
+      ;;
+    *) echo "stub gh: unexpected issue view call: $*" >&2; return 1 ;;
+  esac
+}
+# Stub `cargo`: records every `cargo xtask` call's arguments, one per line
+# in $STUB_CALLS/<n>; answers `ticket` with STUB_NUMBER; answers
+# `stress-plan` with canned per-group outputs honouring --only (named at
+# 100, rest at 30, no --only as the single group) and appends one summary
+# marker per call when --summary is passed.
+cargo() {
+  [ "$1" = xtask ] || { echo "stub cargo: unexpected call: $*" >&2; return 1; }
+  shift
+  n=$(find "$STUB_CALLS" -type f | wc -l | tr -d ' ')
+  printf '%s\n' "$@" >"$STUB_CALLS/$n"
+  case "$1" in
+    ticket) printf '%s\n' "$STUB_NUMBER" ;;
+    stress-plan)
+      only=single
+      summary=""
+      prev=""
+      for arg in "$@"; do
+        if [ "$prev" = --summary ]; then summary=$arg; fi
+        if [ "$prev" = --only ]; then only=$arg; fi
+        prev=$arg
+      done
+      case $only in
+        named)
+          printf 'run\ttrue\ncount\t100\nfilter\t(binary_id(x) & test(=a::b::c))\npackage\tmain@0.0.0\ntest\tx a::b::c\n'
+          ;;
+        rest)
+          printf 'run\ttrue\ncount\t30\nfilter\t(binary_id(y) & test(=d::e::f))\npackage\tmain@0.0.0\ntest\ty d::e::f\n'
+          ;;
+        *)
+          printf 'run\ttrue\ncount\t30\nfilter\t(binary_id(x) & test(=a::b::c) | binary_id(y) & test(=d::e::f))\npackage\tmain@0.0.0\ntest\tx a::b::c\ntest\ty d::e::f\n'
+          ;;
+      esac
+      if [ -n "$summary" ]; then printf 'summary for --only %s\n' "$only" >>"$summary"; fi
+      ;;
+    *) echo "stub cargo: unexpected xtask call: $*" >&2; return 1 ;;
+  esac
+}
+EOF
+cat "$tmp/stub.sh" "$tmp/step.sh" >"$tmp/run.sh"
+
+# run_step DIR [VAR=value ...]: runs the extracted plan step with the
+# sandbox environment and prints its exit code. PR_BODY, STUB_NUMBER,
+# STUB_LABELS, STUB_BODY and STUB_COMMENT arrive as VAR=value arguments.
+run_step() {
+  dir=$1
+  shift
+  mkdir -p "$dir/temp" "$dir/calls"
+  code=0
+  env -i PATH="$PATH" HOME="$dir" BASE=main RUNNER_TEMP="$dir/temp" \
+    GITHUB_OUTPUT="$dir/ghout" GITHUB_STEP_SUMMARY="$dir/summary" \
+    GH_TOKEN=test STUB_CALLS="$dir/calls" \
+    "$@" \
+    bash --noprofile --norc -eo pipefail "$tmp/run.sh" >"$dir/out" 2>"$dir/err" || code=$?
+  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$dir: the step printed to stderr"; }
+  echo "$code"
+}
+
+expect_exit() {
+  [ "$2" = "$3" ] || fail "$1: want exit $3, got $2"
+}
+
+expect_ghout() {
+  grep -qxF "$2" "$1/ghout" || fail "$1: $2 is not among the plan outputs"
+}
+
+expect_absent() {
+  grep -qF "$2" "$1/ghout" && fail "$1: $2 should be absent" || true
+}
+
+expect_file() {
+  printf '%s\n' "$3" | cmp -s - "$1/$2" || fail "$1: $2 differs"
+}
+
+# The value of the flag's argument in the dispatch FILE: the line after
+# the flag's own line. Empty when the dispatch passes no such flag.
+flag_value() {
+  grep -A1 -Fx -- "$2" "$1" | tail -n 1 || true
+}
+
+body_marker="The test \`b fold::tests::second\` passed after a retry on linux."
+body_tested='tested deadbeef'
+fence='```'
+decoy="failure text quoting \`other::t\`"
+trapped="The test \`sneaky::inside\` passed after a retry on linux."
+comment_marker="The test \`b other::sight\` passed after a retry on linux."
+fixture_body=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s' "$body_marker" "$body_tested" "$fence" "$decoy" "$fence" "$fence" "$trapped")
+
+# Two calls: test-only labels with named tests in the body and a
+# second-sighting comment. Both dispatches share one --issue-text file
+# holding the body then the comment, and the outputs split per group.
+dir=$tmp/two-call
+code=$(run_step "$dir" PR_BODY='Fixes #4102' STUB_NUMBER=4102 STUB_LABELS='test-only' STUB_BODY="$fixture_body" STUB_COMMENT="$comment_marker")
+expect_exit two-call "$code" 0
+[ "$(find "$dir/calls" -type f | wc -l | tr -d ' ')" = 3 ] || fail "two-call: want 3 xtask calls, got fewer"
+named_dispatch=""
+rest_dispatch=""
+for f in "$dir"/calls/*; do
+  [ -f "$f" ] || continue
+  case $(flag_value "$f" --only || true) in
+    named) [ -z "$named_dispatch" ] || fail "two-call: duplicate named dispatch"; named_dispatch=$f ;;
+    rest) [ -z "$rest_dispatch" ] || fail "two-call: duplicate rest dispatch"; rest_dispatch=$f ;;
+  esac
+done
+[ -n "$named_dispatch" ] || fail "two-call: no --only named dispatch"
+[ -n "$rest_dispatch" ] || fail "two-call: no --only rest dispatch"
+issue_path_named=$(flag_value "$named_dispatch" --issue-text)
+issue_path_rest=$(flag_value "$rest_dispatch" --issue-text)
+[ -n "$issue_path_named" ] && [ "$issue_path_named" = "$issue_path_rest" ] || fail "two-call: both dispatches share one --issue-text file"
+expect_file "$dir" "temp/stress-issue.txt" "$(printf '%s\n%s' "$fixture_body" "$comment_marker")"
+expect_ghout "$dir" "run=true"
+expect_ghout "$dir" "count=100"
+expect_ghout "$dir" "tests=2"
+expect_ghout "$dir" "run_named=true"
+expect_ghout "$dir" "run_rest=true"
+expect_ghout "$dir" "count_named=100"
+expect_ghout "$dir" "count_rest=30"
+expect_ghout "$dir" "tests_named=1"
+expect_ghout "$dir" "tests_rest=1"
+grep -qF 'summary for --only named' "$dir/summary" || fail "two-call: the named call appends no summary"
+grep -qF 'summary for --only rest' "$dir/summary" || fail "two-call: the rest call appends no summary"
+
+# One call: labels without test-only plan the single group, with no --only.
+dir=$tmp/one-call-labels
+code=$(run_step "$dir" PR_BODY='Fixes #4102' STUB_NUMBER=4102 STUB_LABELS='bug' STUB_BODY="$fixture_body" STUB_COMMENT="$comment_marker")
+expect_exit one-call-labels "$code" 0
+[ "$(find "$dir/calls" -type f | wc -l | tr -d ' ')" = 2 ] || fail "one-call-labels: want 2 xtask calls, got fewer"
+single_dispatch=$(flag_value "$dir/calls/1" --issue-text || true)
+[ -n "$single_dispatch" ] || fail "one-call-labels: the single dispatch passes --issue-text"
+grep -qF -- '--only' "$dir/calls/1" && fail "one-call-labels: the single dispatch passes --only" || true
+expect_ghout "$dir" "run=true"
+expect_ghout "$dir" "count=30"
+expect_ghout "$dir" "tests=2"
+expect_absent "$dir" "run_named="
+
+# One call: no issue number leaves the issue-text file empty, so the plan
+# is the single group however the labels read.
+dir=$tmp/one-call-empty
+code=$(run_step "$dir" PR_BODY='no ticket here' STUB_NUMBER='' STUB_LABELS='' STUB_BODY="$fixture_body" STUB_COMMENT="$comment_marker")
+expect_exit one-call-empty "$code" 0
+[ "$(find "$dir/calls" -type f | wc -l | tr -d ' ')" = 2 ] || fail "one-call-empty: want 2 xtask calls, got fewer"
+[ ! -s "$dir/temp/stress-issue.txt" ] || fail "one-call-empty: the issue-text file is not empty"
+grep -qF -- '--only' "$dir/calls/1" && fail "one-call-empty: the single dispatch passes --only" || true
+expect_ghout "$dir" "run=true"
+expect_ghout "$dir" "tests=2"
+
+# A failed issue-text lookup fails the step rather than skipping the run.
+dir=$tmp/lookup-fails
+code=$(run_step "$dir" PR_BODY='Fixes #4102' STUB_NUMBER=4102 STUB_LABELS='test-only' STUB_BODY="$fixture_body" STUB_COMMENT="$comment_marker" STUB_BODY_FAIL=1)
+[ "$code" != 0 ] || fail "lookup-fails: the step succeeded after a failed lookup"
