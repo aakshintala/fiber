@@ -47,7 +47,7 @@ reads the user's processes reparented to init that started after
 `bash` or `sleep` is listed in a warning that says it may belong to another
 run, without changing the exit status. Neither case sends a signal. An
 orphan that is neither is still invisible on macOS: it is caught by the
-test's own reap above, not the scan.
+test's own cleanup above, not the scan.
 
 The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
 

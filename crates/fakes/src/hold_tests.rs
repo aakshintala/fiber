@@ -20,7 +20,7 @@ use crate::{MUST_SUCCEED_WITHIN, TempDir};
 
 /// The drop unlinks the FIFO: a holder that has not opened it yet
 /// fails its open with ENOENT and exits instead of parking on the
-/// FIFO forever past the test. The reap of a parked holder stays
+/// FIFO forever past the test. The kill of a parked holder stays
 /// pinned by `drop_reaps_a_parked_holder`.
 #[test]
 fn drop_unlinks_the_fifo_so_late_starters_fail_open() {
@@ -108,10 +108,10 @@ fn a_release_written_before_the_reader_opens_is_read() {
 /// holder: the parent-death cleanup path, which is the leak this
 /// helper closes. The pre-drop guard pins the test against vacuity:
 /// `try_matching_exits` passes when nothing matches, so without a
-/// live match on the holder's own pid the reap below would prove
-/// nothing. The test does not pin the drop's own synchronous kill:
-/// the watchdog kills the same pattern asynchronously, so no
-/// ordering edge separates the two.
+/// live match on the holder's own pid the kill below would prove
+/// nothing. The drop unlinks the FIFO and returns; the guard's kill
+/// reaps the holder asynchronously, so the test waits for the holder
+/// to exit instead of asserting it is already gone.
 #[test]
 fn drop_reaps_a_parked_holder() {
     let dir = TempDir::new("fiber-hold-reap");
