@@ -1,10 +1,6 @@
-crates/main/tests/link_look.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/app/links.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/app_focus.rs	fiber-3855	plan	2026-11-02T21:25:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/view/model_picker.rs	fiber-3809	plan	2026-11-03T01:31:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/refactor/3809-model-picker-one-walk	
 crates/tui/src/view/model_picker_tests.rs	fiber-3809	plan	2026-11-03T01:31:56Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/refactor/3809-model-picker-one-walk	
 crates/main/tests/socket.rs	fiber-3851	plan	2026-11-03T03:17:25Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tests/3851-socket-event-order	
-crates/main/tests/link_look.rs,crates/tui/src/app/links.rs,crates/tui/src/app_focus.rs,crates/tui/src/app/links_tests.rs,crates/tui/src/app_focus_tests.rs	fiber-3855	plan	2026-11-03T03:17:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/bug/3855-hover-keeps-focus-lift	
 crates/tui/src/screen.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/screen_tests.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/main/tests/wheel_garble.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
