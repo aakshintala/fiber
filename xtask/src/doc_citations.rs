@@ -9,13 +9,17 @@ pub(crate) const ALLOW: &str = "xtask/doc-citations.allow";
 
 const ROOTS: [&str; 3] = ["crates", "xtask", "scripts"];
 
+fn byte_at(bytes: &[u8], pos: usize) -> Option<u8> {
+    bytes.get(pos).copied()
+}
+
 fn is_path_char(b: u8) -> bool {
     matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'/' | b'-')
 }
 
-fn is_digit(b: u8) -> bool {
-    matches!(b, b'0'..=b'9')
-}
+type PairKey = (String, String);
+type Occurrence = (usize, usize, String);
+type Failing = (String, usize, usize, String, String);
 
 /// Blank comment markers so a cite split across lines reads as prose.
 /// On every line whose first non-blank text is `///`, `//!`, `//` or `#`,
@@ -27,9 +31,7 @@ fn blank_markers(text: &str) -> String {
         let had_newline = line.len() != body.len();
         let trimmed = body.trim_start();
         let indent = body.len() - trimmed.len();
-        let marker_len = if trimmed.starts_with("///") {
-            3
-        } else if trimmed.starts_with("//!") {
+        let marker_len = if trimmed.starts_with("///") || trimmed.starts_with("//!") {
             3
         } else if trimmed.starts_with("//") {
             2
@@ -166,11 +168,9 @@ fn read_table(root: &Path) -> Result<(Vec<TableEntry>, Vec<String>), String> {
 fn parse_digits(bytes: &[u8], mut pos: usize) -> Option<(usize, usize)> {
     let mut value: usize = 0;
     let mut any = false;
-    while pos < bytes.len() && is_digit(bytes[pos]) {
+    while let Some(d) = byte_at(bytes, pos).filter(u8::is_ascii_digit) {
         any = true;
-        value = value
-            .saturating_mul(10)
-            .saturating_add((bytes[pos] - b'0') as usize);
+        value = value.saturating_mul(10).saturating_add((d - b'0') as usize);
         pos += 1;
     }
     if any { Some((pos, value)) } else { None }
@@ -178,9 +178,9 @@ fn parse_digits(bytes: &[u8], mut pos: usize) -> Option<(usize, usize)> {
 
 fn parse_part(bytes: &[u8], pos: usize) -> Option<(usize, usize)> {
     let (mut pos, first) = parse_digits(bytes, pos)?;
-    if pos < bytes.len() && bytes[pos] == b'-' {
+    if byte_at(bytes, pos) == Some(b'-') {
         let after_dash = pos + 1;
-        if after_dash < bytes.len() && is_digit(bytes[after_dash]) {
+        if byte_at(bytes, after_dash).is_some_and(|b| b.is_ascii_digit()) {
             let (end, _) = parse_digits(bytes, after_dash)?;
             pos = end;
         }
@@ -193,14 +193,14 @@ fn parse_span(text: &str) -> Option<(usize, usize)> {
     let bytes = text.as_bytes();
     let (mut pos, first) = parse_part(bytes, 0)?;
     loop {
-        if pos >= bytes.len() || bytes[pos] != b',' {
+        if byte_at(bytes, pos) != Some(b',') {
             break;
         }
         let mut next = pos + 1;
-        if next < bytes.len() && bytes[next] == b' ' {
+        if byte_at(bytes, next) == Some(b' ') {
             next += 1;
         }
-        if next >= bytes.len() || !is_digit(bytes[next]) {
+        if !byte_at(bytes, next).is_some_and(|b| b.is_ascii_digit()) {
             break;
         }
         let (end, _) = parse_part(bytes, next)?;
@@ -244,7 +244,7 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
             continue;
         };
         let mut p = i + prefix_len;
-        while p < bytes.len() && is_path_char(bytes[p]) {
+        while byte_at(bytes, p).is_some_and(is_path_char) {
             p += 1;
         }
         if p == i + prefix_len || !blanked[p..].starts_with(".md") {
@@ -254,13 +254,16 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
         let target = blanked[i..p + 3].to_owned();
         let path_end = p + 3;
         let mut tail = path_end;
-        if tail < bytes.len() && bytes[tail] == b'`' {
+        if byte_at(bytes, tail) == Some(b'`') {
             tail += 1;
         }
         if tail < blanked.len() && blanked[tail..].starts_with(':') {
             let after = tail + 1;
             if after < blanked.len()
-                && is_digit(blanked.as_bytes()[after])
+                && blanked
+                    .as_bytes()
+                    .get(after)
+                    .is_some_and(u8::is_ascii_digit)
                 && let Some((span_len, first)) = parse_span(&blanked[after..])
             {
                 let end = after + span_len;
@@ -282,7 +285,10 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
         if tail + 6 <= blanked.len() && blanked[tail..].starts_with(" line ") {
             let after = tail + 6;
             if after < blanked.len()
-                && is_digit(blanked.as_bytes()[after])
+                && blanked
+                    .as_bytes()
+                    .get(after)
+                    .is_some_and(u8::is_ascii_digit)
                 && let Some((span_len, first)) = parse_span(&blanked[after..])
             {
                 let end = after + span_len;
@@ -301,18 +307,18 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
             i = next_boundary(blanked, i);
             continue;
         }
-        if tail < bytes.len() && bytes[tail] == b',' {
-            if let Some((heading, len)) = crate::docs::cited_heading(&blanked[tail..]) {
-                let end = tail + len;
-                out.push(Found {
-                    offset: i,
-                    line: line_of(blanked, i),
-                    key: original[i..end].to_owned(),
-                    kind: CiteKind::Heading { target, heading },
-                });
-                i = end;
-                continue;
-            }
+        if byte_at(bytes, tail) == Some(b',')
+            && let Some((heading, len)) = crate::docs::cited_heading(&blanked[tail..])
+        {
+            let end = tail + len;
+            out.push(Found {
+                offset: i,
+                line: line_of(blanked, i),
+                key: original[i..end].to_owned(),
+                kind: CiteKind::Heading { target, heading },
+            });
+            i = end;
+            continue;
         }
         i = next_boundary(blanked, i);
     }
@@ -400,7 +406,7 @@ fn heading_names(
         .map(|index| index.names().to_vec()))
 }
 
-fn collect_failing(root: &Path) -> Result<Vec<(String, usize, usize, String, String)>, String> {
+fn collect_failing(root: &Path) -> Result<Vec<Failing>, String> {
     let mut files = Vec::new();
     walk_files(root, &mut files)?;
     let mut cached: BTreeMap<String, Option<crate::docs::HeadingIndex>> = BTreeMap::new();
@@ -469,7 +475,7 @@ pub(crate) fn table(root: &Path) -> Result<String, String> {
 pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
     let failing = collect_failing(root)?;
     let (entries, bad) = read_table(root)?;
-    let mut by_pair: BTreeMap<(String, String), Vec<(usize, usize, String)>> = BTreeMap::new();
+    let mut by_pair: BTreeMap<PairKey, Vec<Occurrence>> = BTreeMap::new();
     for (file, offset, line, key, reason) in &failing {
         by_pair
             .entry((file.clone(), key.clone()))
