@@ -414,24 +414,28 @@ impl HubLogWatch {
 
     /// Blocks until `ready` holds for a reread of the log, or the wait
     /// started at entry expires: each wake rereads and re-parks under the
-    /// wait's remainder, and expiry fails naming `what`.
+    /// wait's remainder, and expiry fails naming `what`. Reports how the
+    /// last park ended: a reread that satisfies `ready` before any park ran
+    /// reports `NeverParked`, and a park that ran to its bound without a
+    /// signal reports `Expired` even though the wait itself succeeded.
     pub(crate) fn wait_until(
         &self,
         deadline: Deadline,
         what: &str,
         ready: impl Fn(&str) -> bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<ParkExit> {
         let wait = deadline.start_wait();
+        let mut last = ParkExit::NeverParked;
         loop {
             let text = fs::read_to_string(&self.log).unwrap_or_default();
             if ready(&text) {
-                return Ok(());
+                return Ok(last);
             }
             let left = wait.left();
             if left.is_zero() {
                 return Err(timed_out(what));
             }
-            self.watch.wait_once(left)?;
+            last = self.watch.wait_once(left)?;
         }
     }
 }
@@ -451,7 +455,7 @@ impl PlatformWatch {
         Ok(Self { notify })
     }
 
-    fn wait_once(&self, timeout: Duration) -> io::Result<()> {
+    fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
         let mut fds = [rustix::event::PollFd::new(
             &self.notify,
             rustix::event::PollFlags::IN,
@@ -461,13 +465,9 @@ impl PlatformWatch {
             tv_nsec: timeout.subsec_nanos() as _,
         };
         // The park itself is the wait: a woken fd, a signal and an
-        // expired wait all end it, and the reread decides, so the count
-        // is unused.
-        #[allow(
-            clippy::let_underscore_must_use,
-            reason = "a woken fd and an expired wait both end the park: the count is unused"
-        )]
-        let _ = rustix::event::poll(&mut fds, Some(&spec));
+        // expired wait all end it, and the reread decides correctness;
+        // the count only reports how this park ended.
+        let fired = rustix::event::poll(&mut fds, Some(&spec)).unwrap_or(0);
         // Drain the queued change reports so the next wait parks instead
         // of spinning on a still-readable descriptor.
         let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 512];
@@ -479,7 +479,11 @@ impl PlatformWatch {
                 Err(error) => return Err(error.into()),
             }
         }
-        Ok(())
+        Ok(if fired > 0 {
+            ParkExit::Event
+        } else {
+            ParkExit::Expired
+        })
     }
 }
 
@@ -3227,6 +3231,7 @@ pub(crate) fn wait_for_watched_line(
 ) {
     watch
         .wait_until(deadline, what, ready)
+        .map(|_| ())
         .unwrap_or_else(|error| panic!("{error}"));
 }
 
@@ -3590,15 +3595,22 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
         file.write_all(b"state\n").unwrap();
     });
     let waited = std::sync::Arc::clone(&watch);
-    held_wait_passes_after_release(
+    let exit = held_wait_passes_after_release(
         "the state line",
         fakes::MUST_SUCCEED_WITHIN,
         move |deadline| {
-            wait_for_watched_line(&waited, deadline, "the state line", |text| {
-                text.contains("state")
-            });
+            waited
+                .wait_until(deadline, "the state line", |text| text.contains("state"))
+                .unwrap_or_else(|error| panic!("{error}"))
         },
         move || release_tx.send(()).unwrap_or(()),
+    );
+    // A lost wake does not fail the wait: the loop rereads after expiry and
+    // returns `Ok`. `Ok` plus a last park that expired IS the lost wake.
+    assert_ne!(
+        exit,
+        ParkExit::Expired,
+        "the released wait ended by expiry: a lost wake"
     );
     // The writer ended once its append landed, so the join returns at once;
     // a writer panic re-raises with its own text on this thread.
