@@ -13,6 +13,7 @@ alloc-stats = ["log/alloc-stats"]
 dhat-heap = ["dep:dhat"]
 
 [dependencies]
+base64.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 cli = { path = "../cli" }

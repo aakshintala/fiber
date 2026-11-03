@@ -310,7 +310,8 @@ impl Runtime {
                         &process.cv,
                         state,
                         |state| state.seq != seen,
-                    );
+                    )
+                    .unwrap_or_else(|| lock(&process.state));
                 }
                 state.ended = true;
                 state.seq = state.seq.wrapping_add(1);
@@ -425,7 +426,8 @@ impl Runtime {
             let seen = state.seq;
             state = support::clock::park(&*self.clock, until, None, &process.cv, state, |state| {
                 state.seq != seen
-            });
+            })
+            .unwrap_or_else(|| lock(&process.state));
         }
     }
 
