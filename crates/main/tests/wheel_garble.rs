@@ -95,7 +95,7 @@ fn wide(bytes: &[u8]) -> Vec<u8> {
 fn replay(bytes: &[u8]) -> vt100::Screen {
     let mut parser = vt100::Parser::new(30, 100, 0);
     parser.process(&wide(bytes));
-    // settled: the replayed bytes end at a frame boundary taken after the grid wait
+    // settled: the caller passes bytes ending at a 2026l frame boundary its grid wait shows, no input since
     parser.screen().clone()
 }
 
@@ -104,7 +104,7 @@ fn replay(bytes: &[u8]) -> vt100::Screen {
 /// `Grid::of`), so the repaint skipping a blank the frame holds still
 /// matches a scrolled frame that once wrote it.
 fn shown(cell: &vt100::Cell) -> &str {
-    // settled: the replayed cell comes from bytes ending at a frame boundary taken after the grid wait
+    // settled: the caller passes a cell from bytes ending at a 2026l frame boundary its grid wait shows, no input since
     let contents = cell.contents();
     if contents.is_empty() { " " } else { contents }
 }
@@ -113,9 +113,9 @@ fn shown(cell: &vt100::Cell) -> &str {
 /// trailing-trimmed row text first, then every cell's shown contents and
 /// wide continuation, naming the first differing row, column and both rows.
 fn assert_same_grid(scrolled: &vt100::Screen, repainted: &vt100::Screen) {
-    // settled: the replayed bytes end at a frame boundary taken after the grid wait
+    // settled: the caller passes bytes ending at a 2026l frame boundary its grid wait shows, no input since
     let left: Vec<String> = scrolled.rows(0, 100).collect();
-    // settled: the replayed bytes end at a frame boundary taken after the grid wait
+    // settled: the caller passes bytes ending at a 2026l frame boundary its grid wait shows, no input since
     let right: Vec<String> = repainted.rows(0, 100).collect();
     for y in 0..30u16 {
         let left_row = left.get(usize::from(y)).cloned().unwrap_or_default();
@@ -124,12 +124,12 @@ fn assert_same_grid(scrolled: &vt100::Screen, repainted: &vt100::Screen) {
         // a cell the repaint skips still draws the same row.
         assert_eq!(left_row.trim_end(), right_row.trim_end(), "row {y} differs");
         for x in 0..100u16 {
-            // settled: the replayed bytes end at a frame boundary taken after the grid wait
+            // settled: the caller passes bytes ending at a 2026l frame boundary its grid wait shows, no input since
             let before = scrolled.cell(y, x).unwrap();
-            // settled: the replayed bytes end at a frame boundary taken after the grid wait
+            // settled: the caller passes bytes ending at a 2026l frame boundary its grid wait shows, no input since
             let after = repainted.cell(y, x).unwrap();
             let same_contents = shown(before) == shown(after);
-            // settled: the replayed bytes end at a frame boundary taken after the grid wait
+            // settled: the caller passes bytes ending at a 2026l frame boundary its grid wait shows, no input since
             let same_wide = before.is_wide_continuation() == after.is_wide_continuation();
             assert!(
                 same_contents && same_wide,
@@ -177,6 +177,9 @@ fn scrolling_back_down_leaves_the_screen_a_full_repaint_would_draw() {
     });
     // settled: the finished-turn wait just above, after the turn's last output (its title), no input since
     let b = item_number(&end.rows[0]).unwrap();
+    // Test precondition, not a product count: 40 ups of 3 rows need b - 120 to exist,
+    // and the nine special rows after N0190 need the top at or below N0185 to stay in view.
+    // reply() builds 200 items for a 30-row screen, as wheel_scroll's first >= 90 guards its 90 rows.
     assert!(b > 130, "top row holds N{b:04}, too few rows above");
     assert!(
         b <= 185,
@@ -188,19 +191,25 @@ fn scrolling_back_down_leaves_the_screen_a_full_repaint_would_draw() {
         |grid| {
             grid.rows
                 .first()
+                // 3 rows a step (docs/tui.md, "Turns").
                 .is_some_and(|row| item_number(row) == Some(b - 120))
         },
     );
+    let down39 = run.output().len();
     run.write("\x1b[<65;21;11M".repeat(39).as_bytes());
+    run.wait_bytes(down39, b"\x1b[?2026l", "the wheel-downs' frame end");
     run.wait_screen(
         &format!("top row N{:04} after 39 wheel-downs", b - 3),
         |grid| {
             grid.rows
                 .first()
+                // 3 rows a step (docs/tui.md, "Turns").
                 .is_some_and(|row| item_number(row) == Some(b - 3))
         },
     );
+    let down1 = run.output().len();
     run.write(b"\x1b[<65;21;11M");
+    run.wait_bytes(down1, b"\x1b[?2026l", "the wheel-down's frame end");
     run.wait_screen(&format!("the bottom again, top row N{b:04}"), |grid| {
         grid.rows
             .first()
@@ -213,8 +222,17 @@ fn scrolling_back_down_leaves_the_screen_a_full_repaint_would_draw() {
     run.resize(100, 30);
     let clear = run.wait_bytes(from, b"\x1b[J", "the resize's clear");
     let redraw = run.wait_bytes(clear, b"\x1b[?2026l", "the redraw's end");
+    // The redraw paints the same bottom frame, so the top row and Done.
+    // still show: the grid wait below sees the redraw's effect.
+    run.wait_screen(&format!("the repainted bottom, top row N{b:04}"), |grid| {
+        grid.rows
+            .first()
+            .is_some_and(|row| item_number(row) == Some(b))
+            && grid.contents.contains("Done.")
+    });
+    // settled: the redraw's end marker above, shown by the grid wait just above, no input since
     let repainted = run.output()[..redraw].to_vec();
-    // settled: the replayed bytes end at a frame boundary taken after the grid wait
+    // settled: scrolled bytes end at the bottom-again frame the grid wait showed; repainted bytes end at the redraw's end marker the repainted-bottom wait shows
     assert_same_grid(&replay(&run.output()[..scrolled]), &replay(&repainted));
     run.write(b"\x03\x03\r");
     let finished = run.wait();
