@@ -164,7 +164,6 @@ fn read_table(root: &Path) -> Result<(Vec<TableEntry>, Vec<String>), String> {
 }
 
 fn parse_digits(bytes: &[u8], mut pos: usize) -> Option<(usize, usize)> {
-    let start = pos;
     let mut value: usize = 0;
     let mut any = false;
     while pos < bytes.len() && is_digit(bytes[pos]) {
@@ -348,6 +347,8 @@ fn walk_files(root: &Path, out: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+const HEADER: &str = "# Code citations still allowed a line number or a missing heading.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
+
 fn cached_index(
     root: &Path,
     cache: &mut BTreeMap<String, Option<crate::docs::HeadingIndex>>,
@@ -391,9 +392,7 @@ fn heading_names(
         .map(|index| index.names().to_vec()))
 }
 
-/// Failures in path then source order, then stale and bad table lines in
-/// table order. A missing table is the empty table.
-pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
+fn collect_failing(root: &Path) -> Result<Vec<(String, usize, usize, String, String)>, String> {
     let mut files = Vec::new();
     walk_files(root, &mut files)?;
     let mut cached: BTreeMap<String, Option<crate::docs::HeadingIndex>> = BTreeMap::new();
@@ -440,6 +439,27 @@ pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
             }
         }
     }
+    Ok(failing)
+}
+
+/// The printed allow table over every failing pair, ignoring any table.
+pub(crate) fn table(root: &Path) -> Result<String, String> {
+    let failing = collect_failing(root)?;
+    let mut by_pair: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (file, _, _, key, _) in &failing {
+        *by_pair.entry((file.clone(), key.clone())).or_default() += 1;
+    }
+    let mut out = String::from(HEADER);
+    for ((file, key), count) in &by_pair {
+        out.push_str(&format!("{}\t{count}\t{}\n", escape(file), escape(key)));
+    }
+    Ok(out)
+}
+
+/// Failures in path then source order, then stale and bad table lines in
+/// table order. A missing table is the empty table.
+pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
+    let failing = collect_failing(root)?;
     let (entries, bad) = read_table(root)?;
     let mut by_pair: BTreeMap<(String, String), Vec<(usize, usize, String)>> = BTreeMap::new();
     for (file, offset, line, key, reason) in &failing {

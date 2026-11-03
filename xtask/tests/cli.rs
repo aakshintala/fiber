@@ -1369,6 +1369,96 @@ fn the_docs_check_fails_a_broken_link() {
 }
 
 #[test]
+fn the_printed_table_round_trips_odd_names() {
+    let dir = workspace();
+    let q = '"';
+    let doc = "docs/code-quality.md";
+    dir.write(
+        "crates/tab\tname.rs",
+        &format!("// {doc},\n// {q}Missing heading here{q}\n"),
+    );
+    let (code, out) = xtask(&dir, &["doc-citations", "--print"], &[], "");
+    assert_eq!(code, 0, "{out}");
+    let mut lines = out.lines();
+    let first = lines.next().unwrap_or("");
+    let second = lines.next().unwrap_or("");
+    assert!(first.starts_with('#'), "{out}");
+    assert!(second.starts_with('#'), "{out}");
+    let mut entries = 0;
+    for line in lines {
+        assert_eq!(line.split('\t').count(), 3, "{line}");
+        entries += 1;
+    }
+    assert_eq!(entries, 1);
+    assert!(out.contains("\\t"), "{out}");
+    assert!(out.contains("\\n"), "{out}");
+    dir.write("xtask/doc-citations.allow", &out);
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+}
+
+#[test]
+fn the_docs_check_fails_a_line_number_cite_in_code() {
+    let dir = workspace();
+    let doc = "docs/x.md";
+    dir.write("crates/b/src/cite.rs", &format!("// {doc}:{}\n", 7));
+    dir.write("docs/x.md", "# X\n\n## Y\nt\nt\nt\nt\nt\nt\nt\n");
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (
+            1,
+            format!(
+                "check-docs: crates/b/src/cite.rs:1: unlisted cite \"{doc}:7\": use \"{doc}, \"Y\"\"\n"
+            )
+        )
+    );
+    dir.write(
+        "xtask/doc-citations.allow",
+        &format!("crates/b/src/cite.rs\t1\t{doc}:7\n"),
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    dir.write(
+        "xtask/doc-citations.allow",
+        &format!("crates/b/src/cite.rs\t2\t{doc}:7\n"),
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (
+            1,
+            format!(
+                "check-docs: xtask/doc-citations.allow:1: stale: crates/b/src/cite.rs: \"{doc}:7\" allowed 2, found 1: lower or delete the entry\n"
+            )
+        )
+    );
+}
+
+#[test]
+fn doc_citations_print_lists_the_table() {
+    let dir = workspace();
+    let doc = "docs/x.md";
+    dir.write("crates/b/src/cite.rs", &format!("// {doc}:{}\n", 7));
+    dir.write("docs/x.md", "# X\n\n## Y\nt\nt\nt\nt\nt\nt\nt\n");
+    dir.write("xtask/doc-citations.allow", "bad table\n");
+    let header = "# Code citations still allowed a line number or a missing heading.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
+    assert_eq!(
+        xtask(&dir, &["doc-citations", "--print"], &[], ""),
+        (0, format!("{header}crates/b/src/cite.rs\t1\t{doc}:7\n"))
+    );
+    assert_eq!(
+        xtask(&dir, &["doc-citations"], &[], ""),
+        (
+            2,
+            "xtask: usage: cargo xtask doc-citations --print\n".to_owned()
+        )
+    );
+}
+
+#[test]
 fn a_check_without_its_doc_is_an_error() {
     let dir = workspace();
     std::fs::remove_file(dir.path().join("docs/code-quality.md")).unwrap();

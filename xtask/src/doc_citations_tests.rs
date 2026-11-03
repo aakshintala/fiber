@@ -577,3 +577,27 @@ fn a_bad_table_line_fails() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn the_printed_table_round_trips() {
+    let q = '"';
+    let dir = TempDir::new("xtask-doc-citations-table");
+    dir.write("docs/target.md", TARGET);
+    dir.write("crates/b/src/y.rs", &format!("// {DOC}:4\n"));
+    dir.write(
+        "crates/a/src/x.rs",
+        &format!("// {DOC}:9\n// ({DOC}, {q}Missing{q})\n// ({DOC}, {q}The gate{q})\n// {DOC}:9\n"),
+    );
+    let printed = super::table(dir.path()).unwrap();
+    let header = "# Code citations still allowed a line number or a missing heading.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
+    let missing = format!("{DOC}, {q}Missing{q}");
+    assert_eq!(
+        printed,
+        format!(
+            "{header}crates/a/src/x.rs\t1\t{missing}\ncrates/a/src/x.rs\t2\t{DOC}:9\ncrates/b/src/y.rs\t1\t{DOC}:4\n"
+        )
+    );
+    assert!(!printed.contains("The gate"));
+    dir.write(ALLOW, &printed);
+    assert_eq!(super::check(dir.path()).unwrap(), Vec::<String>::new());
+}
