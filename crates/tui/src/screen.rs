@@ -9,7 +9,7 @@
 //! to the terminal is painted with the look's colours.
 
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
-use ratatui::buffer::{Buffer, Cell};
+use ratatui::buffer::{Buffer, Cell, CellWidth};
 use ratatui::layout::{Position, Rect, Size};
 use ratatui::style::Style;
 use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -437,6 +437,39 @@ impl<B: Backend> TtySized<B> {
     }
 }
 
+/// Whether `cell` is a wide cell holding a variation selector: the diff
+/// yields the cell after one of these as its own item, and a terminal
+/// giving the emoji two columns would print that trailing item one column
+/// right, since its cursor sits past the emoji's second column.
+fn holds_variation_selector(cell: &Cell) -> bool {
+    cell.symbol().cell_width() > 1 && cell.symbol().contains('\u{FE0F}')
+}
+
+/// The cells of one inner draw call that hold no wide variation-selector
+/// cell: consecutive diff items up to (but not including) the next one, so
+/// a run of ordinary cells still reaches the inner backend in one call.
+struct PlainRun<'b, 'a, I>
+where
+    I: Iterator<Item = (u16, u16, &'a Cell)>,
+{
+    src: &'b mut std::iter::Peekable<I>,
+}
+
+impl<'b, 'a, I> Iterator for PlainRun<'b, 'a, I>
+where
+    I: Iterator<Item = (u16, u16, &'a Cell)>,
+{
+    type Item = (u16, u16, &'a Cell);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.src.peek() {
+            None => None,
+            Some((_, _, cell)) if holds_variation_selector(cell) => None,
+            Some(_) => self.src.next(),
+        }
+    }
+}
+
 impl<B: Backend> Backend for TtySized<B> {
     type Error = B::Error;
 
@@ -449,7 +482,32 @@ impl<B: Backend> Backend for TtySized<B> {
             self.touched = true;
         }
         self.open_block()?;
-        self.inner.draw(content)
+        if content.peek().is_none() {
+            return self.inner.draw(content);
+        }
+        while content.peek().is_some() {
+            let wide = content
+                .peek()
+                .is_some_and(|(_, _, cell)| holds_variation_selector(cell));
+            if wide {
+                if let Some((x, y, emoji)) = content.next() {
+                    // The trailing cell lands first, on its own move: after
+                    // the emoji it would print one column right on a
+                    // two-column terminal, and dropping it would leave a
+                    // stale letter on a one-column one.
+                    let trailing = content.peek().is_some_and(|(next_x, next_y, _)| {
+                        *next_y == y && x.checked_add(1).is_some_and(|after| after == *next_x)
+                    });
+                    if trailing && let Some(pair) = content.next() {
+                        self.inner.draw(std::iter::once(pair))?;
+                    }
+                    self.inner.draw(std::iter::once((x, y, emoji)))?;
+                }
+            } else {
+                self.inner.draw(PlainRun { src: &mut content })?;
+            }
+        }
+        Ok(())
     }
 
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
