@@ -73,28 +73,6 @@ await_orphan() {
   printf '%s' "$found"
 }
 
-# Wait up to 10 s for PID $1 to exec into the basename $2, polling
-# read-only. A bash -c fixture carries the nonce from fork but shows its
-# argv0 only after the exec; the scan reads the live command line, so a
-# pre-exec shell would misreport the name under test.
-await_basename() {
-  local target=$1
-  local want=$2
-  local tries=0 cmd word base
-  while [ "$tries" -lt 50 ]; do
-    cmd=$(env -u FIBER_CHECK_RUN ps -o command= -p "$target" 2>/dev/null || true)
-    cmd=${cmd#"${cmd%%[![:space:]]*}"}
-    word=${cmd%% *}
-    base=${word##*/}
-    if [ "$base" = "$want" ]; then
-      return 0
-    fi
-    tries=$((tries + 1))
-    sleep 0.2
-  done
-  return 1
-}
-
 # Touch the stop file, reap the fixtures this shell spawned, and require
 # every given PID gone within 10 s. A PID still listed is reported with
 # its PID and command, and the test fails; nothing is signalled. Orphaned
@@ -260,12 +238,45 @@ leaker1=
 leaker2=
 leaker5=
 rm -f "$stop"
-FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" STOP="$stop" bash -c 'exec -a sccache python3 -c "import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ[\"STOP\"]; end = time.time() + 120; exec(\"while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)\")"' &
+# The server fixtures below are real executable files, compiled here, so
+# the name the scan reads is a property of the file. A faked argv0 does
+# not survive: `exec -a sccache python3` re-execs on macOS through
+# Python.app, which replaces argv with the framework path, so the scan
+# reads basename `Python` and counts a leak. A shell fixture is no good
+# either: macOS ps withholds its environment, so the nonce scan cannot
+# see it at all. Each fixture ignores SIGTERM like the others, polls the
+# stop file every 50 ms with nanosleep (no child process: a `sleep`
+# child would carry the nonce under basename `sleep` and scan as a
+# leak), and exits after 120 s on its own. A file named `sccache` has
+# that basename from the first instant, so there is nothing to wait for.
+cat >"$tmp/fixture.c" <<'EOF'
+#include <signal.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+int main(void) {
+    signal(SIGTERM, SIG_IGN);
+    const char *stop = getenv("STOP");
+    time_t end = time(NULL) + 120;
+    struct timespec wait;
+    wait.tv_sec = 0;
+    wait.tv_nsec = 50000000;
+    for (;;) {
+        if (stop != NULL && access(stop, F_OK) == 0) {
+            break;
+        }
+        if (time(NULL) >= end) {
+            break;
+        }
+        nanosleep(&wait, NULL);
+    }
+    return 0;
+}
+EOF
+cc -O2 -o "$tmp/sccache" "$tmp/fixture.c"
+FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" STOP="$stop" "$tmp/sccache" &
 leaker8=$!
-if ! await_basename "$leaker8" sccache; then
-  echo "scripts/test-leak-scan: sccache fixture $leaker8 never took argv0 sccache: $(pid_command "$leaker8")" >&2
-  exit 1
-fi
 # Alone, the server warns and the scan stays green.
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   :
@@ -316,14 +327,12 @@ stop_and_require_gone "$leaker1" "$leaker8"
 leaker1=
 leaker8=
 rm -f "$stop"
-# An argv0 that merely contains the name is still a leak: sccache-not as
-# the basename first, then a path through a directory named sccache.
-FIBER_CHECK_RUN=$n STOP="$stop" bash -c 'exec -a sccache-not python3 -c "import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ[\"STOP\"]; end = time.time() + 120; exec(\"while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)\")"' &
+rm -f "$tmp/sccache"
+# A name that merely contains the server's is still a leak: sccache-not
+# as the basename first, then a path through a directory named sccache.
+cc -O2 -o "$tmp/sccache-not" "$tmp/fixture.c"
+FIBER_CHECK_RUN=$n STOP="$stop" "$tmp/sccache-not" &
 leaker1=$!
-if ! await_basename "$leaker1" sccache-not; then
-  echo "scripts/test-leak-scan: sccache-not fixture $leaker1 never took its argv0: $(pid_command "$leaker1")" >&2
-  exit 1
-fi
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with sccache-not leaker $leaker1 alive" >&2
   exit 1
@@ -341,12 +350,10 @@ fi
 stop_and_require_gone "$leaker1"
 leaker1=
 rm -f "$stop"
-FIBER_CHECK_RUN=$n STOP="$stop" bash -c 'exec -a /tmp/sccache/leaker python3 -c "import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ[\"STOP\"]; end = time.time() + 120; exec(\"while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)\")"' &
+mkdir -p "$tmp/sccache"
+cc -O2 -o "$tmp/sccache/leaker" "$tmp/fixture.c"
+FIBER_CHECK_RUN=$n STOP="$stop" "$tmp/sccache/leaker" &
 leaker1=$!
-if ! await_basename "$leaker1" leaker; then
-  echo "scripts/test-leak-scan: sccache-path fixture $leaker1 never took its argv0: $(pid_command "$leaker1")" >&2
-  exit 1
-fi
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with sccache-path leaker $leaker1 alive" >&2
   exit 1
