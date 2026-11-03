@@ -447,10 +447,11 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     run.wait_screen("the approval panel", |grid| {
         grid.contents.contains("asked by the project rule echo hi")
     });
-    run.wait_screen("the approval choices", |grid| {
+    let grid = run.wait_screen("the approval choices", |grid| {
         grid.contents.contains("Allow once")
+            && grid.contents.contains("asked 4 questions")
+            && grid.contents.contains("shell echo hi")
     });
-    let grid = run.screen();
     let rows = grid.rows;
     // The approval panel shows the shell's arguments for review, so the
     // shell's JSON is expected there; the `ask_user` call's JSON must
@@ -1353,7 +1354,7 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     // before snapshotting, never a torn frame. A conversation border also
     // ends in `▀`, so the check pins the edge to the panel: one blank column,
     // then the edge.
-    run.wait_screen("the card drawn whole", |grid| {
+    let whole = run.wait_screen("the card drawn whole", |grid| {
         let n = usize::from(panel);
         let (width, _) = grid.size();
         let Some(left) = width.checked_sub(panel) else {
@@ -1369,7 +1370,7 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     });
     // The card below is the conversation screen before quitting: the
     // primary screen after it holds the resume lines, not the card.
-    let card = Screen::from_rows(run.screen().rows, 160);
+    let card = Screen::from_rows(whole.rows, 160);
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |grid| {
         !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")

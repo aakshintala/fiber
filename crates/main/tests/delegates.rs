@@ -4099,6 +4099,20 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         });
         grandchild_exit_tx.send(lines).unwrap();
     });
+    // Pump the child's socket through the stop, as with the grandchild
+    // above: a client that stops reading is cut (docs/invocation.md,
+    // "What the hub speaks").
+    child_socket.set_diag(support::Diag::new(
+        Arc::clone(&running.stderr_snapshot),
+        sessions_in(&setup.home(), &setup.workspace()).join(&live_child),
+    ));
+    let (child_exit_tx, child_exit_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let lines = support::until(&child_socket, "the stopped child exits", |line| {
+            line["kind"] == "fiber_exited"
+        });
+        child_exit_tx.send(lines).unwrap();
+    });
     child.release();
     // The crossing copy trips the budget while the root waits: the wait
     // ends, the next request is refused, and the turn ends failed.
@@ -4123,17 +4137,10 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     assert_eq!(copies[0]["payload"]["cost"], 100.0);
     let root_started = one(&before, "delegate_started");
     let child_id = root_started["delegate_session_id"].as_str().unwrap();
-    // A close here panics with the dump: the child's own log directory,
-    // the same one read below, plus the root session's stderr snapshot.
-    child_socket.set_diag(support::Diag::new(
-        Arc::clone(&running.stderr_snapshot),
-        sessions_in(&setup.home(), &setup.workspace()).join(child_id),
-    ));
-    observed_child.extend(support::until(
-        &child_socket,
-        "the stopped child exits",
-        |line| line["kind"] == "fiber_exited",
-    ));
+    let stopped_child = setup
+        .deadline
+        .recv_or_fail(&child_exit_rx, "the stopped child exits");
+    observed_child.extend(stopped_child);
     let observed_grandchild = setup
         .deadline
         .recv_or_fail(&grandchild_exit_rx, "the stopped grandchild exits");
@@ -7862,22 +7869,21 @@ fn row_focused(grid: &Grid, needle: &str) -> bool {
 /// panel's first stop, and Down walks the panel's stops top to bottom.
 fn focus_row(run: &mut Run, needle: &str) {
     run.write(b"\t");
-    run.wait_screen("the panel takes focus", |grid| {
+    let mut grid = run.wait_screen("the panel takes focus", |grid| {
         !focused_rows(grid).is_empty()
     });
     for _ in 0..60 {
-        let grid = run.screen();
         if row_focused(&grid, needle) {
             return;
         }
         let before = focused_rows(&grid);
         // Down steps to the next stop, holding at the panel's end.
         run.write(b"\x1b[B");
-        run.wait_screen("focus steps down", |grid| {
+        grid = run.wait_screen("focus steps down", |grid| {
             row_focused(grid, needle) || focused_rows(grid) != before
         });
     }
-    panic!("{needle:?} never took focus in\n{}", run.screen().contents);
+    panic!("{needle:?} never took focus in\n{}", grid.contents);
 }
 
 /// Quits the terminal: two interrupts and Enter, then the exit.

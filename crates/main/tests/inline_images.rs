@@ -69,22 +69,34 @@ fn click_text(run: &mut Run, grid: &Grid, text: &str) {
     click(run, col, row);
 }
 
-/// Scrolls one step at a time until `done` holds on a complete frame.
-fn wheel_until(run: &mut Run, up: bool, what: &str, done: impl Fn(&Grid) -> bool) -> Grid {
+/// Scrolls one step at a time until `done` holds on a complete frame:
+/// `from` is the grid the wait after the last input returned, so the
+/// first check never reads a frame older than that input. Each step
+/// keeps the scroll frame's raw pacing, then proves the step moved the
+/// rows or reached the goal; a clamped step fails its wait instead of
+/// burning the remaining steps.
+fn wheel_until(
+    run: &mut Run,
+    from: Grid,
+    up: bool,
+    what: &str,
+    done: impl Fn(&Grid) -> bool,
+) -> Grid {
     let event: &[u8] = if up {
         b"\x1b[<64;51;16M"
     } else {
         b"\x1b[<65;51;16M"
     };
-    let mut grid = run.screen();
+    let mut grid = from;
     for _ in 0..40 {
         if done(&grid) {
             return grid;
         }
-        let from = run.output().len();
+        let prev = grid.rows.clone();
+        let offset = run.output().len();
         run.write(event);
-        run.wait_bytes(from, FRAME_END, "the scroll frame");
-        grid = run.screen();
+        run.wait_bytes(offset, FRAME_END, "the scroll frame");
+        grid = run.wait_screen("the scroll step", |next| next.rows != prev || done(next));
     }
     panic!(
         "did not reach {what} after 40 wheel steps; grid:\n{}",
@@ -170,8 +182,9 @@ fn terminal(setup: &Setup, env: &[(&str, &str)]) -> Run {
 
 /// The started turn finished: approval allowed, the turn done. The
 /// done signal is the turn's completed row, which the follow keeps in
-/// view no matter how long the turn's tail grows.
-fn started(run: &mut Run) {
+/// view no matter how long the turn's tail grows. Returns that
+/// completed grid, so wheel loops start from a waited frame.
+fn started(run: &mut Run) -> Grid {
     let mut from = run.ready();
     run.write(b"go\r");
     loop {
@@ -186,6 +199,9 @@ fn started(run: &mut Run) {
         run.write(b"\r");
     }
     run.turn_finished(from);
+    run.wait_screen("the completed turn", |grid| {
+        grid.contents.contains("▣ completed")
+    })
 }
 
 /// The session directories under the workspace, oldest first.
@@ -349,7 +365,7 @@ fn an_inline_image_transmits_once_then_deletes_on_session_change() {
             ("FIBER_TEST_VIEW_MARKER", marker_value.as_str()),
         ],
     );
-    started(&mut run);
+    let completed = started(&mut run);
     let sessions = sessions(&setup);
     assert_eq!(sessions.len(), 1, "one session ran");
     let (path, width, height) = image_size(&setup, &sessions[0].join("events.jsonl"));
@@ -357,23 +373,23 @@ fn an_inline_image_transmits_once_then_deletes_on_session_change() {
 
     // The turn-finished signal lands with the call off-screen. Scroll
     // until its row is visible on a completed frame, then click it.
-    let grid = wheel_until(&mut run, true, "the ledger call", |grid| {
+    let grid = wheel_until(&mut run, completed, true, "the ledger call", |grid| {
         grid.rows.iter().any(|row| row.contains("Read 1 file"))
     });
     let from = open_call(&mut run, &grid, "Read 1 file");
     // The opened call emits its placeholder grid before its caption.
     let placeholder = run.wait_bytes(from, PLACEHOLDER, "the placeholder grid");
     run.wait_bytes(placeholder, FRAME_END, "the inline image frame");
-    run.wait_screen("the inline grid", |grid| grid.contents.contains(&caption));
+    let inline = run.wait_screen("the inline grid", |grid| grid.contents.contains(&caption));
 
     // Scroll away and back, then resize. Each input follows the prior
     // frame's end; each redraw still places the image without a second
     // transmit.
-    wheel_until(&mut run, false, "the scrolled-away grid", |grid| {
+    let away = wheel_until(&mut run, inline, false, "the scrolled-away grid", |grid| {
         !grid.contents.contains(&caption)
     });
     let from = run.output().len();
-    wheel_until(&mut run, true, "the followed grid", |grid| {
+    wheel_until(&mut run, away, true, "the followed grid", |grid| {
         grid.contents.contains(&caption)
     });
     let placeholder = run.wait_bytes(from, PLACEHOLDER, "the followed grid");
@@ -511,7 +527,7 @@ fn the_same_image_stays_one_line_with_the_flag_off() {
     let setup = Setup::new();
     script(&setup, false);
     let mut run = terminal(&setup, &[]);
-    started(&mut run);
+    let completed = started(&mut run);
     // The one clickable line names the file and size, with no
     // placeholders and no transmit.
     let sessions = sessions(&setup);
@@ -521,7 +537,7 @@ fn the_same_image_stays_one_line_with_the_flag_off() {
     // The opened call draws the image as one line, without placeholders.
     // The turn-finished signal permits scrolling back to its off-screen row.
     let from = run.output().len();
-    let grid = wheel_until(&mut run, true, "the ledger call", |grid| {
+    let grid = wheel_until(&mut run, completed, true, "the ledger call", |grid| {
         grid.rows.iter().any(|row| row.contains("Read 1 file"))
     });
     open_call(&mut run, &grid, "Read 1 file");
