@@ -177,7 +177,10 @@ touches, before any other.
 ## The pull request
 
 The body says `Resolves #<ticket>` for an unsplit ticket or the last part
-of a split ticket. Earlier parts say `Part of #<ticket>`. Every pull request
+of a split ticket. Earlier parts say `Part of #<ticket>`. A pull request that
+advances a ticket without resolving it, such as a diagnostic, says
+`Refs #<ticket>`; the ticket stays open, and the red-commit rule below does
+not apply. Every pull request
 also says `Doc friction: none` or links each `needs-owner` issue it raised
 ("When a doc should change").
 
