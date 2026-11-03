@@ -30,3 +30,9 @@ crates/tui/src/window/images.rs	fiber-3982	plan	2026-11-03T22:59:52Z	roundhouse-
 crates/tui/src/pages.rs	fiber-3982	plan	2026-11-03T22:59:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/pages_tests.rs	fiber-3982	plan	2026-11-03T22:59:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 scripts/check	fiber-3982	plan	2026-11-03T22:59:52Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/support/pty.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+xtask/src/screen_ratchet.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+xtask/src/screen_ratchet_tests.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+xtask/src/main.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+docs/testing/screens.md	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+.config/nextest.toml	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
