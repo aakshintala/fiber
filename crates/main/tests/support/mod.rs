@@ -1330,7 +1330,6 @@ pub(crate) fn subscribe_client(deadline: Deadline, client: &fakes::Client) -> Su
     }) else {
         panic!("no subscribe acknowledgement arrived before the deadline");
     };
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
     accepted(ack, None)
 }
 

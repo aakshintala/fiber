@@ -18,15 +18,22 @@ use std::collections::BTreeMap;
 
 use crate::rules::RustFile;
 
+// debt: the scope constants, the scope test and the sort-then-compare loop
+// repeat screen_ratchet's; a third ratchet that scopes by path prefix moves
+// both into one shared helper.
+
 /// Files in scope: Rust files under `crates/main/tests/`, outside `support/`.
 const SCOPE_PREFIX: &str = "crates/main/tests/";
 /// The driver and its helpers live here; the rule does not apply to them.
 const SUPPORT_PREFIX: &str = "crates/main/tests/support/";
 /// Suffix of the files the ratchet scans.
 const RUST_SUFFIX: &str = ".rs";
-/// The stale acknowledgement the shared `recv_answer` replaced.
+/// A wait that can answer from the fold's replay instead of the live
+/// stream: it takes the next line whatever it is, where `recv_answer`
+/// matches by command id.
 const REPLY: &str = "recv_reply";
-/// The local subscribe copies the shared helpers replaced, under either name.
+/// A subscribe that replays the log without sharing its `last_seq` bound,
+/// under either name: a later wait cannot tell replay from live.
 const SUBSCRIBE: &str = "fn subscribe(";
 const SUBSCRIBE_FULL: &str = "fn subscribe_full(";
 

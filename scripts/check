@@ -190,15 +190,15 @@ EOF
     cargo xtask kinds-ratchet --max 238 --support-max 36
     echo "== stale-wait ratchet"
     # A stale wait answers from the fold's replay instead of the live
-    # stream, so each file under crates/main/tests/ holds at most its
-    # inline maximum of stale-wait occurrences: a `recv_reply` use, a
-    # `fn subscribe(` or a `fn subscribe_full(` definition, each counting
-    # even inside a string literal or a block comment, while a line whose
-    # trimmed start is a `//` comment never counts. The shared helpers
-    # replaced them (see #3664): `recv_reply` has 0 uses, and no local
-    # `fn subscribe` remains in `crates/main/tests/`. A file missing from
-    # the list holds none. Occurrence detection and the per-file comparison
-    # live in `cargo xtask stale-wait-ratchet`.
+    # stream. Each file under crates/main/tests/ holds at most its inline
+    # maximum of stale-wait occurrences — a `recv_reply` use, a
+    # `fn subscribe(` or a `fn subscribe_full(` definition — and the table
+    # pins the existing sites until Part 2 converts them and empties it:
+    # a new occurrence fails, and so does a file the table does not name.
+    # Each occurrence counts even inside a string literal or a block
+    # comment, while a line whose trimmed start is a `//` comment never
+    # counts. Occurrence detection and the per-file comparison live in
+    # `cargo xtask stale-wait-ratchet`.
     cargo xtask stale-wait-ratchet <<'EOF'
 crates/main/tests/change_workspace.rs 1
 crates/main/tests/delegates.rs 4
