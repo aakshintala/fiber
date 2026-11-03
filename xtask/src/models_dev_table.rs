@@ -89,8 +89,12 @@ const MEDIUM_HIGH_XHIGH: &[&str] = &["medium", "high", "xhigh"];
 const HIGH_ONLY: &[&str] = &["high"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH: &[&str] = &["off", "minimal", "low", "medium", "high"];
 
-/// The compat layer of an Anthropic model that takes a token budget.
-const THINKING_BUDGET: &str = r#"{"compat":{"thinking_budget":true}}"#;
+/// The layer a probed model carries: deferral works through its provider.
+const DEFERRED: &str = r#"{"deferred_tools":true}"#;
+
+/// The compat layer of a probed Anthropic model that takes a token budget.
+const THINKING_BUDGET_DEFERRED: &str =
+    r#"{"compat":{"thinking_budget":true},"deferred_tools":true}"#;
 
 /// Anthropic's models, all on `anthropic-messages` with its search tool.
 const ANTHROPIC: Package = Package {
@@ -109,12 +113,22 @@ const ANTHROPIC: Package = Package {
         r#"{"web_search":"web_search_20250305"}"#,
     )],
     by_model: &[
-        ("claude-haiku-4-5", THINKING_BUDGET),
-        ("claude-haiku-4-5-20251001", THINKING_BUDGET),
-        ("claude-opus-4-5", THINKING_BUDGET),
-        ("claude-opus-4-5-20251101", THINKING_BUDGET),
-        ("claude-sonnet-4-5", THINKING_BUDGET),
-        ("claude-sonnet-4-5-20250929", THINKING_BUDGET),
+        ("claude-haiku-4-5", THINKING_BUDGET_DEFERRED),
+        ("claude-haiku-4-5-20251001", THINKING_BUDGET_DEFERRED),
+        ("claude-opus-4-5", THINKING_BUDGET_DEFERRED),
+        ("claude-opus-4-5-20251101", THINKING_BUDGET_DEFERRED),
+        ("claude-sonnet-4-5", THINKING_BUDGET_DEFERRED),
+        ("claude-sonnet-4-5-20250929", THINKING_BUDGET_DEFERRED),
+        ("claude-fable-5", DEFERRED),
+        ("claude-fable-5-1", DEFERRED),
+        ("claude-haiku-5-5", DEFERRED),
+        ("claude-opus-4-6", DEFERRED),
+        ("claude-opus-4-7", DEFERRED),
+        ("claude-opus-4-8", DEFERRED),
+        ("claude-opus-5-5", DEFERRED),
+        ("claude-sonnet-4-6", DEFERRED),
+        ("claude-sonnet-5", DEFERRED),
+        ("claude-sonnet-5-5", DEFERRED),
     ],
     thinking: &[
         ("claude-fable-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
@@ -214,6 +228,9 @@ const GEMINI: Package = Package {
 /// a refused model declares none.
 const OPENAI_SEARCH: &str = r#"{"web_search":"web_search"}"#;
 
+/// The hosted search of a probed OpenAI model: search stays, deferral works.
+const OPENAI_SEARCH_DEFERRED: &str = r#"{"web_search":"web_search","deferred_tools":true}"#;
+
 /// OpenAI's models, all on `openai-responses` with `store: false`.
 const OPENAI: Package = Package {
     path: "providers/openai/providers/openai.json",
@@ -243,18 +260,18 @@ const OPENAI: Package = Package {
         ("gpt-5.2", OPENAI_SEARCH),
         ("gpt-5.2-pro", OPENAI_SEARCH),
         ("gpt-5.3-codex", OPENAI_SEARCH),
-        ("gpt-5.4", OPENAI_SEARCH),
-        ("gpt-5.4-mini", OPENAI_SEARCH),
+        ("gpt-5.4", OPENAI_SEARCH_DEFERRED),
+        ("gpt-5.4-mini", OPENAI_SEARCH_DEFERRED),
         ("gpt-5.4-nano", OPENAI_SEARCH),
         ("gpt-5.4-pro", OPENAI_SEARCH),
-        ("gpt-5.5", OPENAI_SEARCH),
+        ("gpt-5.5", OPENAI_SEARCH_DEFERRED),
         ("gpt-5.5-pro", OPENAI_SEARCH),
-        ("gpt-5.6-luna", OPENAI_SEARCH),
-        ("gpt-5.6-sol", OPENAI_SEARCH),
-        ("gpt-5.6-terra", OPENAI_SEARCH),
+        ("gpt-5.6-luna", OPENAI_SEARCH_DEFERRED),
+        ("gpt-5.6-sol", OPENAI_SEARCH_DEFERRED),
+        ("gpt-5.6-terra", OPENAI_SEARCH_DEFERRED),
         ("gpt-6-astra", OPENAI_SEARCH),
-        ("gpt-6-luna", OPENAI_SEARCH),
-        ("gpt-6-sol", OPENAI_SEARCH),
+        ("gpt-6-luna", OPENAI_SEARCH_DEFERRED),
+        ("gpt-6-sol", OPENAI_SEARCH_DEFERRED),
         ("gpt-6.1-sol", OPENAI_SEARCH),
         ("o3", OPENAI_SEARCH),
         ("o4-mini", OPENAI_SEARCH),
