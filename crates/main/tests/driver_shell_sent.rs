@@ -133,22 +133,12 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
     assert_ne!(fixture[SIZE - 1], b'\n');
     let input = setup.workspace().join("input.bin");
     fs::write(&input, &fixture).unwrap();
-    let marker = setup.workspace().join("shell.done");
     let script = setup.workspace().join("print.sh");
-    fs::write(
-        &script,
-        format!(
-            "cat {} && touch {}\n",
-            shell_quote(&input),
-            shell_quote(&marker)
-        ),
-    )
-    .unwrap();
+    fs::write(&script, format!("cat {}\n", shell_quote(&input))).unwrap();
 
     let server = ProviderServer::start([
-        // The turn's first step returns at once: the sent shell already
-        // ended while the provider was held, so every drain after release
-        // takes the delivery.
+        // A pending approval lets the loop drain shell deliveries without
+        // ending the turn (docs/testing.md, "Waits and timeouts").
         stream(&[function_call(
             "call_1",
             "shell",
@@ -162,23 +152,39 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "true"})
+            json!({"decision": "ask", "tool": "shell", "prefix": "true"})
         ),
     )
     .unwrap();
     server.hold();
-    let running = start(&setup, &["ask", "go"]);
-    let session_id = session_of(&running);
+    // Unlike a headless ask, a session can wait for an approval.
+    let session_id = "s_0000000000003890";
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let running = start(
+        &setup,
+        &[
+            "session",
+            "--id",
+            session_id,
+            "--workspace",
+            &workspace,
+            "--prompt",
+            "go",
+        ],
+    );
     assert!(
         server.await_requests(1, running.deadline),
         "the held tool call was requested"
     );
 
-    let client = Socket::connect(setup.deadline, &setup.session_socket(&session_id));
-    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let sub = recv(&client, "the subscribe acknowledgement");
-    assert_eq!(sub["kind"], "command_accepted", "{sub}");
-    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    let client = Socket::connect(setup.deadline, &setup.session_socket(session_id));
+    let sub = support::subscribe_direct(&client);
+    // Deliver only the tool request; later provider replies remain held.
+    server.release_one();
+    let asked = support::until_after(&client, &sub, "the pending approval", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().unwrap()["payload"]["request_id"].clone();
 
     let shell_command = format!("/bin/sh {}", shell_quote(&script));
     let line = json!({
@@ -188,23 +194,17 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
     })
     .to_string();
     client.send(&line);
-    // The shell ends before the held turn is released: the marker runs
-    // last in its command, so the delivery is waiting when the drain runs.
-    loop {
-        if marker.exists() {
-            break;
-        }
-        if setup.deadline.left().is_zero() {
-            panic!("waited until the deadline for the sent shell to end");
-        }
-        std::thread::yield_now();
-    }
-    // The loop takes the inbox at a step boundary: release the held turn
-    // so the drain runs, then wait for the line it writes.
-    server.release();
-    let lines = until(&client, "the shell_command line", |line| {
-        line["kind"] == "shell_command"
+    // A live shell_command proves the output was drained, shaped and
+    // delivered. A replay or the script's exit cannot release the turn.
+    let lines = support::until_after(&client, &sub, "the live shell delivery", |line| {
+        line["kind"] == "shell_command" && line["payload"]["command"] == shell_command
     });
+    server.release();
+    client.send(
+        &json!({"id":"c_approve", "command":"reply",
+            "args":{"request_id":request, "decision":"allow"}})
+        .to_string(),
+    );
     let logged = lines.last().unwrap();
     assert_eq!(logged["payload"]["command"], shell_command.as_str());
     assert_eq!(logged["payload"]["process"]["exit_code"], 0);
@@ -235,7 +235,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
         "a sent shell answers with no result: {ack}"
     );
 
-    let dir = session_dir(&setup, &session_id);
+    let dir = session_dir(&setup, session_id);
     let saved = fs::read(dir.join(artifact)).unwrap();
     assert_eq!(saved, file_bytes, "the artifact holds every byte");
     assert_eq!(saved[0], b'A');
@@ -257,6 +257,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
         "the only artifact is the driver's"
     );
 
+    close_session(&client);
     drop(client);
     exit_cleanly(running);
 }
