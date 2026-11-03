@@ -1444,6 +1444,37 @@ fn answers_for_another_command_are_skipped() {
 }
 
 #[test]
+fn keeper_published_during_connect_closes_before_any_protocol_bytes() {
+    let home = Home::new();
+    let sessions = home.temp.path().join("projects/p/sessions");
+    let clock = home.clock.clone();
+    drop(log::Log::create(&sessions, SessionId(ID.into()), clock.clone()).unwrap());
+    let dir = sessions.join(ID);
+    let (stream, mut peer) = UnixStream::pair().unwrap();
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let mut keeper = None;
+        let connection = guarded_connect(Some(&dir), || {
+            keeper = Some(
+                log::Log::open_as(&sessions, SessionId(ID.into()), clock, "keeper 4242").unwrap(),
+            );
+            Ok(stream)
+        });
+        let refused = connection.as_ref().err().map(io::Error::kind);
+        drop(connection);
+        done.send((refused, keeper)).unwrap();
+    });
+    let (refused, _keeper) =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "post-connect keeper check");
+    assert_eq!(refused, Some(io::ErrorKind::ConnectionRefused));
+    peer.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut bytes = Vec::new();
+    peer.read_to_end(&mut bytes).unwrap();
+    assert!(bytes.is_empty());
+}
+
+#[test]
 fn a_keeper_held_socket_is_not_a_running_session() {
     let home = Home::new();
     let sessions = home.temp.path().join("projects/p/sessions");

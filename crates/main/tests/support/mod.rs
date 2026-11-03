@@ -245,6 +245,25 @@ pub(crate) struct Setup {
     pub(crate) deadline: Deadline,
 }
 
+/// Keeper argv has no workspace: reap only ids recorded in this test's home.
+/// Setup owns this fallback for invocations with no SessionGuard and for
+/// workspaces nested below the test root. Run before the home is removed.
+pub(crate) struct Keepers(pub(crate) PathBuf);
+
+impl Drop for Keepers {
+    fn drop(&mut self) {
+        for session in log::started_sessions(&self.0) {
+            kill_matching_detached(&format!("keeper --id {}", session.id.0));
+        }
+    }
+}
+
+impl Drop for Setup {
+    fn drop(&mut self) {
+        drop(Keepers(self.home()));
+    }
+}
+
 impl Setup {
     /// Starts the test's deadline before any setup work.
     pub(crate) fn new() -> Self {
@@ -2070,6 +2089,11 @@ impl Drop for SessionGuard {
             match self.deadline.cleanup_phase().recv(&finished) {
                 Ok(_) | Err(_) => {}
             }
+        }
+        // Setup places ordinary workspaces beside h. Its own drop also
+        // covers nested/custom workspaces without changing arm's interface.
+        if let Some(root) = Path::new(&self.workspace).parent() {
+            drop(Keepers(root.join("h")));
         }
     }
 }

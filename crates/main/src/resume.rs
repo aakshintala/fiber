@@ -114,6 +114,54 @@ pub(crate) struct Resuming {
     pub(crate) credential: Option<String>,
 }
 
+#[cfg(test)]
+thread_local! {
+    static BEFORE_RESUME_OPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn before_resume_open(hook: impl FnOnce() + 'static) {
+    BEFORE_RESUME_OPEN.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+}
+
+fn keeper_held(dir: &Path, id: &SessionId) -> Option<log::Error> {
+    log::lock_label(dir)
+        .filter(|label| label.starts_with("keeper "))
+        .map(|holder| log::Error::Held {
+            session: id.0.clone(),
+            holder,
+        })
+}
+
+fn open_or_attach(
+    sessions: &Path,
+    id: SessionId,
+    clock: Arc<dyn contract::clock::Clock>,
+    attach: impl FnOnce(log::Error) -> i32,
+) -> Result<Log, i32> {
+    let dir = log::SessionDir::new(sessions, &id);
+    if let Some(error) = keeper_held(dir.path(), &id) {
+        return Err(ask_failed(failed(error.code(), error)));
+    }
+    #[cfg(test)]
+    BEFORE_RESUME_OPEN.with(|cell| {
+        if let Some(hook) = cell.borrow_mut().take() {
+            hook();
+        }
+    });
+    match Log::open(sessions, id.clone(), clock) {
+        Ok(log) => Ok(log),
+        Err(error @ log::Error::Held { .. }) => {
+            if let Some(keeper) = keeper_held(dir.path(), &id) {
+                Err(ask_failed(failed(keeper.code(), keeper)))
+            } else {
+                Err(attach(error))
+            }
+        }
+        Err(error) => Err(ask_failed(failed(error.code(), error))),
+    }
+}
+
 pub(crate) fn ask_resume(
     resuming: Resuming,
     overrides: Vec<String>,
@@ -154,23 +202,26 @@ pub(crate) fn ask_resume(
     // A held lock means a live session: attach to it instead of opening a
     // second writer (`docs/invocation.md`, "Processes"). Its failure
     // already names the holder, which attach takes as its refusal.
-    let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
-        Ok(log) => Arc::new(log),
-        Err(e @ log::Error::Held { .. }) => {
-            return match doors::attach(
+    let log =
+        match open_or_attach(
+            &sessions,
+            id.clone(),
+            Arc::clone(&clock),
+            |e| match doors::attach(
                 &home,
                 &id,
                 resuming.credential.as_deref(),
-                prompt,
+                prompt.clone(),
                 &mut io::stdout(),
                 failed(e.code(), e),
             ) {
                 Ok(code) => code,
                 Err(e) => ask_failed(Failure::from(e)),
-            };
-        }
-        Err(e) => return ask_failed(failed(e.code(), e)),
-    };
+            },
+        ) {
+            Ok(log) => Arc::new(log),
+            Err(code) => return code,
+        };
     let dir = log::SessionDir::new(&sessions, &id);
     resume_session(
         log,

@@ -20,6 +20,7 @@ mod continue_session;
 mod delegates;
 mod handoff;
 mod hub_command;
+mod keeper;
 mod keeper_child;
 mod late_emit;
 mod launch;
