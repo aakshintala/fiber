@@ -200,6 +200,7 @@ preflight() {
 
 # has_marker: the log names a cargo build failure, so a `signal: N, SIG...`
 # line in it is cargo reporting the kill, not some other program's output.
+# debt: a killed cargo with no marker in its log returns 0. Upgrade trigger: a sighting of a killed cargo with no marker in a real log.
 has_marker() {
   printf '%s\n' "$classify_clean" | grep -qF -e 'error: could not compile' -e 'error: linking with' -e 'error: failed to run custom build command'
 }

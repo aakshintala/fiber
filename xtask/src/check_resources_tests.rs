@@ -113,7 +113,7 @@ fn classify_reports_bus_error_linker_death_as_resource_exhaustion() {
 }
 
 #[test]
-fn classify_ignores_bare_linker_signal_without_build_marker() {
+fn classify_guard_bare_killed_compiler_shape_from_test_output_is_ignored() {
     let dir = TempDir::new("xtask-check-resources");
     dir.write(
         "bare-signal.log",
