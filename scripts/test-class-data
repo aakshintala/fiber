@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The offline self-test for scripts/class-data (#2446): usage errors,
 # unknown classes and unknown rows exit 2; the session_list row over a
-# hand-written fixture emits its plain-number samples; and an artifact
+# hand-written fixture emits its plain-number samples and the listing row
+# emits full precision; every entry carries the head's cpu; and an artifact
 # whose CPU is outside the class stays out of the output.
 # No network: a shadow gh on the PATH fails the test if the script calls it.
 set -euo pipefail
@@ -62,6 +63,7 @@ scripts/class-data fast "$row" "1 MiB" "$fixture" >/dev/null 2>"$err" || rc=$?
 # head.json files, never the committed 9v45-session-list.json. The
 # session_list row takes the fixture "none" and emits plain numbers.
 session_row="\`session_list\`, waiting for every running session's status"
+listing_row="Listing 1,000 sessions in one project, warm cache"
 
 # one_head builds a single-live-head fixture: $1 is the dir, $2 the full
 # sha; the caller writes benchmarks-$2/head.json next.
@@ -75,14 +77,25 @@ slist=$tmp/slist
 # The head below is written by hand, plain numbers only.
 fast_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 one_head "$slist" "$fast_a"
-printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1]}}\n' >"$slist/benchmarks-$fast_a/head.json"
+printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1], "sessions_list_ms": [32.0004, 32.0005, 32.0003, 32.0006, 32.0002]}}\n' >"$slist/benchmarks-$fast_a/head.json"
 
 # The accepted row+none pair emits the fixture's plain numbers.
 if ! scripts/class-data fast "$session_row" none "$slist" >"$tmp/slist.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data fast session_list none failed:" >&2; cat "$err" >&2; exit 1
 fi
 [ "$(grep -c '"file"' "$tmp/slist.json" || true)" -eq 1 ] || fail "session_list output has no single entry:"
-grep -Fq '"file": "main aaaaaaaa", "samples": [25.8, 25.4, 25, 26, 26.1]' "$tmp/slist.json" || fail "session_list output lost the head's samples"
+grep -Fq '"file": "main aaaaaaaa"' "$tmp/slist.json" || fail "session_list output lost the head's file"
+grep -Fq '"samples": [25.8, 25.4, 25, 26, 26.1]' "$tmp/slist.json" || fail "session_list output lost the head's samples"
+grep -Fq '"cpu": "AMD EPYC 9V45 96-Core Processor"' "$tmp/slist.json" || fail "session_list output lost the head's cpu"
+
+# The listing row takes the same none fixture and emits full precision.
+if ! scripts/class-data fast "$listing_row" none "$slist" >"$tmp/llist.json" 2>"$err"; then
+  echo "scripts/test-class-data: class-data fast listing none failed:" >&2; cat "$err" >&2; exit 1
+fi
+[ "$(grep -c '"file"' "$tmp/llist.json" || true)" -eq 1 ] || fail "listing output has no single entry:"
+grep -Fq '"file": "main aaaaaaaa"' "$tmp/llist.json" || fail "listing output lost the head's file"
+grep -Fq '"samples": [32.0004, 32.0005, 32.0003, 32.0006, 32.0002]' "$tmp/llist.json" || fail "listing output lost full precision"
+grep -Fq '"cpu": "AMD EPYC 9V45 96-Core Processor"' "$tmp/llist.json" || fail "listing output lost the head's cpu"
 
 # A fixture value for the session_list row exits 2, as does the bare id.
 rc=0
@@ -91,12 +104,19 @@ scripts/class-data fast "$session_row" "10 MiB" "$slist" >/dev/null 2>"$err" || 
 rc=0
 scripts/class-data fast "session_list" none "$slist" >/dev/null 2>"$err" || rc=$?
 [ "$rc" -eq 2 ] || fail "bare session_list row exited $rc, want 2"
+rc=0
+scripts/class-data fast "$listing_row" "10 MiB" "$slist" >/dev/null 2>"$err" || rc=$?
+[ "$rc" -eq 2 ] || fail "listing with a fixture exited $rc, want 2"
+rc=0
+scripts/class-data fast "sessions_list" none "$slist" >/dev/null 2>"$err" || rc=$?
+[ "$rc" -eq 2 ] || fail "bare sessions_list row exited $rc, want 2"
 
 # A mixed-CPU session_list fixture: the fast, 7763 and 9V74 heads carry
 # session_list samples (plus inert attach samples the script never reads),
 # plus an expired fast head and an other-branch fast head. The fast
 # session_list output holds only the fast head; the slow output holds both
-# slow CPUs; the middle output is empty.
+# slow CPUs; the middle output is empty. The same heads carry
+# sessions_list_ms samples, so the listing row routes the same way.
 smixed=$tmp/smixed
 mkdir -p "$smixed"
 fast_full="cccccccccccccccccccccccccccccccccccccccc"
@@ -105,11 +125,11 @@ nine_full="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 gone2_full="ffffffffffffffffffffffffffffffffffffffff"
 branch_full="1212121212121212121212121212121212121212"
 mkdir -p "$smixed/benchmarks-$fast_full" "$smixed/benchmarks-$slow_full" "$smixed/benchmarks-$nine_full" "$smixed/benchmarks-$gone2_full" "$smixed/benchmarks-$branch_full"
-printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1], "terminal_attach_ms": [{"fixture": "10 MiB", "log_bytes": 10490016, "ms": 88.0}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 88.5}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 88.2}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 87.9}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 88.4}]}}\n' >"$smixed/benchmarks-$fast_full/head.json"
-printf '{"cpu": "AMD EPYC 7763 64-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [30.2, 30.0, 30.5, 30.1, 30.3], "terminal_attach_ms": [{"fixture": "10 MiB", "log_bytes": 10490016, "ms": 98.0}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 98.5}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 98.2}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 97.9}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 98.4}]}}\n' >"$smixed/benchmarks-$slow_full/head.json"
-printf '{"cpu": "AMD EPYC 9V74 80-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [28.4, 28.0, 28.6, 28.2, 28.5], "terminal_attach_ms": [{"fixture": "10 MiB", "log_bytes": 10490016, "ms": 95.0}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 95.5}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 95.2}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 94.9}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 95.4}]}}\n' >"$smixed/benchmarks-$nine_full/head.json"
-printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1]}}\n' >"$smixed/benchmarks-$gone2_full/head.json"
-printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1]}}\n' >"$smixed/benchmarks-$branch_full/head.json"
+printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1], "sessions_list_ms": [27.556629, 27.4, 27.5, 27.6, 27.7], "terminal_attach_ms": [{"fixture": "10 MiB", "log_bytes": 10490016, "ms": 88.0}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 88.5}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 88.2}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 87.9}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 88.4}]}}\n' >"$smixed/benchmarks-$fast_full/head.json"
+printf '{"cpu": "AMD EPYC 7763 64-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [30.2, 30.0, 30.5, 30.1, 30.3], "sessions_list_ms": [30.123456, 30.4, 30.1, 30.2, 30.3], "terminal_attach_ms": [{"fixture": "10 MiB", "log_bytes": 10490016, "ms": 98.0}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 98.5}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 98.2}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 97.9}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 98.4}]}}\n' >"$smixed/benchmarks-$slow_full/head.json"
+printf '{"cpu": "AMD EPYC 9V74 80-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [28.4, 28.0, 28.6, 28.2, 28.5], "sessions_list_ms": [28.654321, 28.4, 28.1, 28.2, 28.3], "terminal_attach_ms": [{"fixture": "10 MiB", "log_bytes": 10490016, "ms": 95.0}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 95.5}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 95.2}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 94.9}, {"fixture": "10 MiB", "log_bytes": 10490016, "ms": 95.4}]}}\n' >"$smixed/benchmarks-$nine_full/head.json"
+printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1], "sessions_list_ms": [27.556629, 27.4, 27.5, 27.6, 27.7]}}\n' >"$smixed/benchmarks-$gone2_full/head.json"
+printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1], "sessions_list_ms": [27.556629, 27.4, 27.5, 27.6, 27.7]}}\n' >"$smixed/benchmarks-$branch_full/head.json"
 jq -n --arg fast "$fast_full" --arg slow "$slow_full" --arg nine "$nine_full" --arg gone "$gone2_full" --arg branch "$branch_full" '{total_count: 5, artifacts: [{name: ("benchmarks-" + $fast), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}, {name: ("benchmarks-" + $slow), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}, {name: ("benchmarks-" + $nine), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}, {name: ("benchmarks-" + $gone), expired: true, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}, {name: ("benchmarks-" + $branch), expired: false, workflow_run: {head_branch: "other", head_repository_id: 7, repository_id: 7}}]}' >"$smixed/listing.json"
 if ! scripts/class-data fast "$session_row" none "$smixed" >"$tmp/sfast.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data fast session_list over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
@@ -117,6 +137,7 @@ fi
 [ "$(grep -c '"file"' "$tmp/sfast.json" || true)" -eq 1 ] || fail "fast session_list output over the mixed fixture has no single entry"
 grep -Fq '"file": "main cccccccc"' "$tmp/sfast.json" || fail "fast session_list output lost the fast head"
 grep -Fq '"samples": [25.8, 25.4, 25, 26, 26.1]' "$tmp/sfast.json" || fail "fast session_list output lost the plain-number formatting"
+grep -Fq '"cpu": "AMD EPYC 9V45 96-Core Processor"' "$tmp/sfast.json" || fail "fast session_list output lost the fast cpu"
 grep -Fq "dddddddd" "$tmp/sfast.json" && fail "fast session_list output holds the 7763 head"
 grep -Fq "eeeeeeee" "$tmp/sfast.json" && fail "fast session_list output holds the 9V74 head"
 if ! scripts/class-data slow "$session_row" none "$smixed" >"$tmp/sslow.json" 2>"$err"; then
@@ -125,10 +146,37 @@ fi
 [ "$(grep -c '"file"' "$tmp/sslow.json" || true)" -eq 2 ] || fail "slow session_list output over the mixed fixture has no two entries"
 grep -Fq '"file": "main dddddddd"' "$tmp/sslow.json" || fail "slow session_list output lost the 7763 head"
 grep -Fq '"file": "main eeeeeeee"' "$tmp/sslow.json" || fail "slow session_list output lost the 9V74 head"
+grep -Fq '"cpu": "AMD EPYC 7763 64-Core Processor"' "$tmp/sslow.json" || fail "slow session_list output lost the 7763 cpu"
+grep -Fq '"cpu": "AMD EPYC 9V74 80-Core Processor"' "$tmp/sslow.json" || fail "slow session_list output lost the 9V74 cpu"
 if ! scripts/class-data middle "$session_row" none "$smixed" >"$tmp/smiddle.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data middle session_list over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
 fi
 [ "$(grep -c '"file"' "$tmp/smiddle.json" || true)" -eq 0 ] || fail "middle session_list output over the mixed fixture is not empty"
+
+# The listing row routes the same heads the same way, with full precision.
+if ! scripts/class-data fast "$listing_row" none "$smixed" >"$tmp/lfast.json" 2>"$err"; then
+  echo "scripts/test-class-data: class-data fast listing over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
+fi
+[ "$(grep -c '"file"' "$tmp/lfast.json" || true)" -eq 1 ] || fail "fast listing output over the mixed fixture has no single entry"
+grep -Fq '"file": "main cccccccc"' "$tmp/lfast.json" || fail "fast listing output lost the fast head"
+grep -Fq '"samples": [27.556629, 27.4, 27.5, 27.6, 27.7]' "$tmp/lfast.json" || fail "fast listing output lost full precision"
+grep -Fq '"cpu": "AMD EPYC 9V45 96-Core Processor"' "$tmp/lfast.json" || fail "fast listing output lost the fast cpu"
+grep -Fq "dddddddd" "$tmp/lfast.json" && fail "fast listing output holds the 7763 head"
+grep -Fq "eeeeeeee" "$tmp/lfast.json" && fail "fast listing output holds the 9V74 head"
+if ! scripts/class-data slow "$listing_row" none "$smixed" >"$tmp/lslow.json" 2>"$err"; then
+  echo "scripts/test-class-data: class-data slow listing over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
+fi
+[ "$(grep -c '"file"' "$tmp/lslow.json" || true)" -eq 2 ] || fail "slow listing output over the mixed fixture has no two entries"
+grep -Fq '"file": "main dddddddd"' "$tmp/lslow.json" || fail "slow listing output lost the 7763 head"
+grep -Fq '"file": "main eeeeeeee"' "$tmp/lslow.json" || fail "slow listing output lost the 9V74 head"
+grep -Fq '"cpu": "AMD EPYC 7763 64-Core Processor"' "$tmp/lslow.json" || fail "slow listing output lost the 7763 cpu"
+grep -Fq '"cpu": "AMD EPYC 9V74 80-Core Processor"' "$tmp/lslow.json" || fail "slow listing output lost the 9V74 cpu"
+grep -Fq '"samples": [30.123456, 30.4, 30.1, 30.2, 30.3]' "$tmp/lslow.json" || fail "slow listing output lost the 7763 samples"
+grep -Fq '"samples": [28.654321, 28.4, 28.1, 28.2, 28.3]' "$tmp/lslow.json" || fail "slow listing output lost the 9V74 samples"
+if ! scripts/class-data middle "$listing_row" none "$smixed" >"$tmp/lmiddle.json" 2>"$err"; then
+  echo "scripts/test-class-data: class-data middle listing over the mixed fixture failed:" >&2; cat "$err" >&2; exit 1
+fi
+[ "$(grep -c '"file"' "$tmp/lmiddle.json" || true)" -eq 0 ] || fail "middle listing output over the mixed fixture is not empty"
 
 # A session_list head without the metric contributes no entry.
 nometric=$tmp/nometric
