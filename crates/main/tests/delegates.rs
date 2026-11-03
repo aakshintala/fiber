@@ -1232,13 +1232,8 @@ impl Running {
 #[track_caller]
 fn subscribe(client: &support::Socket) {
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    loop {
-        let line = support::recv_reply(client, "the subscribe acknowledgement");
-        if line["kind"] == "command_accepted" {
-            assert_eq!(line["payload"]["command_id"], "c_sub", "{line}");
-            return;
-        }
-    }
+    let line = support::recv_answer(client, "c_sub", "the subscribe acknowledgement");
+    assert_eq!(line["kind"], "command_accepted", "{line}");
 }
 
 /// Sends `close` with `now` and reads its accept, past whatever the
@@ -1246,14 +1241,8 @@ fn subscribe(client: &support::Socket) {
 #[track_caller]
 fn close_now(client: &support::Socket) {
     client.send(r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#);
-    loop {
-        let line = support::recv_reply(client, "the close accept");
-        if line["kind"] == "command_accepted"
-            && line["payload"].get("command_id") == Some(&json!("c_close_now"))
-        {
-            return;
-        }
-    }
+    let line = support::recv_answer(client, "c_close_now", "the close accept");
+    assert_eq!(line["kind"], "command_accepted", "{line}");
 }
 
 /// The parent's log lines once `fiber ask` exits.
@@ -5373,7 +5362,7 @@ struct FeedWatch {
 fn watch_feed(setup: &support::Setup, hub: &Arc<Mutex<Option<support::HubProc>>>) -> FeedWatch {
     let (client, _) = support::connect_hub(setup, hub);
     client.send(r#"{"id":"c_feed","command":"feed"}"#);
-    let ack = support::recv_reply(&client, "the feed acknowledgement");
+    let ack = support::recv_answer(&client, "c_feed", "the feed acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     assert_eq!(ack["payload"]["command_id"], "c_feed");
     let (each_tx, each) = mpsc::channel();

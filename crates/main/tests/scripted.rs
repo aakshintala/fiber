@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
-    HubProc, Run, SessionGuard, Setup, connect_hub, hello, kinds, recv_reply, run_to_exit,
+    HubProc, Run, SessionGuard, Setup, connect_hub, hello, kinds, recv_answer, run_to_exit,
     subscribe, until, write_json,
 };
 
@@ -688,7 +688,7 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
         })
         .to_string(),
     );
-    let started = recv_reply(&client, "the start acknowledgement");
+    let started = recv_answer(&client, "c_start", "the start acknowledgement");
     assert_eq!(started["kind"], "command_accepted", "{started}");
     let id = started["payload"]["result"]["session_id"]
         .as_str()
@@ -770,7 +770,7 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
         })
         .to_string(),
     );
-    let started = recv_reply(&client, "the start acknowledgement");
+    let started = recv_answer(&client, "c_start", "the start acknowledgement");
     assert_eq!(started["kind"], "command_accepted", "{started}");
     let id = started["payload"]["result"]["session_id"]
         .as_str()

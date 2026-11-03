@@ -308,13 +308,12 @@ fn a_summary_subscription_through_the_hub_follows_a_delegate_into_its_resumed_ru
     hub.send(&format!(
         "{{\"id\":\"c_sub\",\"session_id\":\"{delegate}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}"
     ));
-    let ack = support::recv_reply(&hub, "the subscribe acknowledgement");
+    let ack = support::recv_answer(&hub, "c_sub", "the subscribe acknowledgement");
     assert_eq!(ack["kind"], "command_accepted");
     assert_eq!(ack["payload"]["command_id"], "c_sub");
     let mut status = None;
     let mut e1 = None;
-    while status.is_none() || e1.is_none() {
-        let line = support::recv_reply(&hub, "the delegate's summary lines");
+    support::until(&hub, "the delegate's summary lines", |line| {
         let for_delegate =
             line.get("session_id").and_then(Value::as_str) == Some(delegate.as_str());
         if line["kind"] == "session_status"
@@ -326,7 +325,8 @@ fn a_summary_subscription_through_the_hub_follows_a_delegate_into_its_resumed_ru
         if line["kind"] == "extensions_loaded" && for_delegate && e1.is_none() {
             e1 = line["seq"].as_u64();
         }
-    }
+        status.is_some() && e1.is_some()
+    });
     assert!(status.is_some(), "the hub knew the delegate");
     let e1 = e1.expect("the summary delivered the run's extensions_loaded");
     // Run 1 ends only after the parent's own turns ended, so its finish

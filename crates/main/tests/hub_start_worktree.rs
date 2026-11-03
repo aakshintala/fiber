@@ -24,7 +24,7 @@ use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{
     Deadline, HubProc, SessionGuard, Setup, Socket, assert_one_continued_log, complete_lines,
-    connect_hub, function_call, git, recv_reply, run_to_exit, session_dir, stream, subscribe,
+    connect_hub, function_call, git, recv_answer, run_to_exit, session_dir, stream, subscribe,
     until,
 };
 
@@ -72,7 +72,7 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
         })
         .to_string(),
     );
-    let started = recv_reply(&client, "the start acknowledgement");
+    let started = recv_answer(&client, "c_start", "the start acknowledgement");
     assert_eq!(started["kind"], "command_accepted", "{started}");
     let id = started["payload"]["result"]["session_id"]
         .as_str()

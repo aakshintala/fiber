@@ -362,7 +362,7 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (watch, _) = support::connect_hub(&setup, &hub);
     watch.send(r#"{"id":"c_feed","command":"feed"}"#);
-    let ack = support::recv_reply(&watch, "the feed acknowledgement");
+    let ack = support::recv_answer(&watch, "c_feed", "the feed acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = support::SessionGuard::arm(Deadline::start(), &workspace);
