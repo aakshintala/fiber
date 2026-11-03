@@ -124,8 +124,10 @@ impl HeadingIndex {
     }
 }
 
-/// The one parse of a doc; both the Markdown path and the code scan query
-/// this index, so a cited doc is read and parsed once.
+/// The shared parse of a doc; both the Markdown path and the code scan query
+/// this index. The code scan caches one index per target for the run, so a
+/// cited doc is read and parsed once there; `check_file` builds one per
+/// citation it checks.
 pub(crate) fn heading_index(markdown: &str) -> HeadingIndex {
     let parsed = parse(markdown);
     let mut names = Vec::with_capacity(parsed.headings.len());

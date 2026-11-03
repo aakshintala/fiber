@@ -436,7 +436,7 @@ network (`docs/testing.md`).
   jobs named in "The merge gate" differ from the check's own list
   (`cargo xtask ci-needs`)
 
-`xtask/doc-citations.allow` lists, per file, each such citation still allowed and how many times. A citation beyond its count fails, and so does an entry whose citation the code no longer holds, so the list only shrinks. `cargo xtask doc-citations --print` prints it. The check reads every text file under those three directories.
+`xtask/doc-citations.allow` lists, per file, each such citation still allowed and how many times. A citation beyond its count fails, and so does an entry whose citation the code no longer holds, so the list only shrinks. `cargo xtask doc-citations --print` prints it. The check reads every text file under those three directories except the allow table itself, whose own entries would otherwise read as citations.
 
 It runs in the selection job on every pull request, not only docs-only
 ones, because the change that breaks a citation is usually a code change

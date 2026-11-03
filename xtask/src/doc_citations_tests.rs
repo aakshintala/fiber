@@ -125,6 +125,19 @@ fn the_three_spellings_and_the_span_are_reported_as_written() {
 }
 
 #[test]
+fn line_suffix_reads_both_prefixes() {
+    assert_eq!(line_suffix("docs/a.md:12", 9), Some((12, 12)));
+    assert_eq!(line_suffix("docs/a.md:74,77", 9), Some((15, 74)));
+    assert_eq!(line_suffix("docs/a.md line 7", 9), Some((16, 7)));
+    assert_eq!(line_suffix("docs/a.md: x", 9), None);
+    assert_eq!(line_suffix("docs/a.md: line 7", 9), None);
+    assert_eq!(line_suffix("docs/a.md line x", 9), None);
+    assert_eq!(line_suffix("docs/a.md", 9), None);
+    assert_eq!(line_suffix("docs/a.md, \"H\"", 9), None);
+    assert_eq!(line_suffix("docs/a.md:12", 99), None);
+}
+
+#[test]
 fn two_cites_on_one_line_each() {
     let failures = run(
         &[("crates/a/src/x.rs", &format!("// {DOC}:4 {DOC}:9\n"))],

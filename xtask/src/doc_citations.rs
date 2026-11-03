@@ -229,8 +229,25 @@ fn next_boundary(text: &str, i: usize) -> usize {
     j
 }
 
-fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
-    let _ = file;
+/// After a `.md` path, a `:N…` or ` line N…` suffix: the offset past the
+/// span and its first line number, or `None` when neither follows. A matched
+/// prefix that carries no span ends the search, as the two arms did before.
+fn line_suffix(blanked: &str, tail: usize) -> Option<(usize, usize)> {
+    let tail_text = blanked.get(tail..)?;
+    for prefix in [":", " line "] {
+        if let Some(rest) = tail_text.strip_prefix(prefix) {
+            if rest.as_bytes().first().is_some_and(u8::is_ascii_digit)
+                && let Some((span_len, first)) = parse_span(rest)
+            {
+                return Some((tail + prefix.len() + span_len, first));
+            }
+            return None;
+        }
+    }
+    None
+}
+
+fn find_cites(original: &str, blanked: &str) -> Vec<Found> {
     let bytes = blanked.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -257,54 +274,17 @@ fn find_cites(file: &str, original: &str, blanked: &str) -> Vec<Found> {
         if byte_at(bytes, tail) == Some(b'`') {
             tail += 1;
         }
-        if tail < blanked.len() && blanked[tail..].starts_with(':') {
-            let after = tail + 1;
-            if after < blanked.len()
-                && blanked
-                    .as_bytes()
-                    .get(after)
-                    .is_some_and(u8::is_ascii_digit)
-                && let Some((span_len, first)) = parse_span(&blanked[after..])
-            {
-                let end = after + span_len;
-                out.push(Found {
-                    offset: i,
-                    line: line_of(blanked, i),
-                    key: original[i..end].to_owned(),
-                    kind: CiteKind::Line {
-                        target,
-                        line_no: first,
-                    },
-                });
-                i = end;
-                continue;
-            }
-            i = next_boundary(blanked, i);
-            continue;
-        }
-        if tail + 6 <= blanked.len() && blanked[tail..].starts_with(" line ") {
-            let after = tail + 6;
-            if after < blanked.len()
-                && blanked
-                    .as_bytes()
-                    .get(after)
-                    .is_some_and(u8::is_ascii_digit)
-                && let Some((span_len, first)) = parse_span(&blanked[after..])
-            {
-                let end = after + span_len;
-                out.push(Found {
-                    offset: i,
-                    line: line_of(blanked, i),
-                    key: original[i..end].to_owned(),
-                    kind: CiteKind::Line {
-                        target,
-                        line_no: first,
-                    },
-                });
-                i = end;
-                continue;
-            }
-            i = next_boundary(blanked, i);
+        if let Some((end, first)) = line_suffix(blanked, tail) {
+            out.push(Found {
+                offset: i,
+                line: line_of(blanked, i),
+                key: original[i..end].to_owned(),
+                kind: CiteKind::Line {
+                    target,
+                    line_no: first,
+                },
+            });
+            i = end;
             continue;
         }
         if byte_at(bytes, tail) == Some(b',')
@@ -418,7 +398,7 @@ fn collect_failing(root: &Path) -> Result<Vec<Failing>, String> {
             Err(e) => return Err(format!("{}: {e}", root.join(file).display())),
         };
         let blanked = blank_markers(&text);
-        for found in find_cites(file, &text, &blanked) {
+        for found in find_cites(&text, &blanked) {
             found_all.push((
                 file.clone(),
                 found.offset,
