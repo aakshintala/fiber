@@ -279,6 +279,48 @@ fn a_held_end_waits_for_the_tests_release() {
         .expect("the released end ends");
 }
 
+/// An end never shows its notice while the id is still listed: the held
+/// `ids` lock is what makes the order observable. The end takes `ids`
+/// first, so with the guard held it parks before it can drop the id or
+/// send; the negative receive below must time out, and only after the
+/// guard drops does the notice arrive and the list read empty. The
+/// negative window is a hang guard, not a sleep: the test never sleeps
+/// to get a correct result (`docs/testing.md`, "Waits and timeouts").
+#[test]
+fn an_end_never_shows_its_notice_while_the_id_is_still_listed() {
+    let session = Session::new(vec![Scripted::text("Done.")], None);
+    let (jobs, _stops) = FakeJobs::new(&["j_1"], &session.log);
+    let (tx, rx) = mpsc::channel();
+    jobs.deliver_to(tx);
+    let guard = jobs.ids.lock().unwrap();
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            jobs.end("j_1", Outcome::Cancelled, None);
+        });
+        match fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&rx) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            unexpected => {
+                panic!("the notice arrived while the id was still listed: {unexpected:?}")
+            }
+        }
+        drop(guard);
+        let delivery = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&rx, "the end to send its notice after the guard drops");
+        let Delivery::Job(notice) = delivery else {
+            panic!("the end sent {delivery:?}");
+        };
+        assert_eq!(
+            notice.completed.job_id,
+            JobId("j_1".into()),
+            "the notice names the ended job"
+        );
+        assert!(
+            jobs.running().is_empty(),
+            "the id left the list before its notice arrived"
+        );
+    });
+}
+
 /// A tool that sends `change_workspace` to the inbox from inside a turn,
 /// capturing its answer: the move lands while the turn runs.
 struct SendMove {
