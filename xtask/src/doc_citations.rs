@@ -461,6 +461,8 @@ pub(crate) fn table(root: &Path) -> Result<String, String> {
 // Exempt: when found == allowed_count, occurrences.iter().skip(allowed_count)
 // yields nothing, so replacing > with >= reports the same failures for every
 // input (`docs/testing/mutants.md`, "Proving a test bites").
+// Mutant 476:18 (> to >=) is the only mutant the mutant map lists inside
+// check(); this function-level skip covers no other mutant.
 #[cfg_attr(false, mutants::skip)]
 pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
     let failing = collect_failing(root)?;
