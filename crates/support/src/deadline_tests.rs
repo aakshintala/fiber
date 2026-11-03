@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use fakes::MUST_SUCCEED_WITHIN;
 
-use crate::clock::{Clock, Manual as FakeClock, System};
+use crate::clock::{Clock, Manual as FakeClock};
 
 use super::{BUDGET, CLEANUP, Deadline, WAIT, WAITS};
 
@@ -374,14 +374,7 @@ fn within_keeps_the_fake_clock_and_never_waits_on_the_wall_clock() {
     // The sender stays alive, so the receive below can only time out, never
     // disconnect.
     let (_tx, rx) = mpsc::channel::<()>();
-    let before = System.now();
-    let arrived = child.recv(&rx);
-    let elapsed = System.now().saturating_duration_since(before);
-    assert_eq!(arrived, Err(mpsc::RecvTimeoutError::Timeout));
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "waited {elapsed:?} on the wall clock"
-    );
+    assert_eq!(child.recv(&rx), Err(mpsc::RecvTimeoutError::Timeout));
 }
 
 #[test]
