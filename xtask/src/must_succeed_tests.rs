@@ -134,6 +134,9 @@ fn a_deadline_after_a_name_an_expression_or_a_bound_at_the_floor_is_not_flagged(
     ));
 }
 
+/// `docs/ci.md`, "On every pull request that changes code", promises the
+/// check "reports each site by file path, then line": the exact-output
+/// assertion below pins that path-then-line form for `.within`.
 #[test]
 fn a_deadline_within_a_short_literal_is_flagged() {
     assert!(flagged("fn a() { root.within(Duration::from_secs(1)); }"));
