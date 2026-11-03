@@ -574,24 +574,34 @@ jobs:
         id: run
         if: steps.plan.outputs.run == 'true'
         env:
-          FILTER: ${{ steps.plan.outputs.filter }}
+          FILTER_FILE: ${{ runner.temp }}/stress.toml
           COUNT: ${{ steps.plan.outputs.count }}
           TESTS: ${{ steps.plan.outputs.tests }}
           PACKAGES: ${{ steps.plan.outputs.packages }}
         run: |
+          : > "$RUNNER_TEMP/stress-started"
           package_args=()
           while IFS= read -r package; do
             if [ -n "$package" ]; then
               package_args+=(-p "$package")
             fi
           done <<<"$PACKAGES"
+          if [ -s "$FILTER_FILE" ] && grep -q '^default-filter = ' "$FILTER_FILE"; then
+            :
+          else
+            echo "::error title=Stress filter missing::the plan's filter file is empty or has no default-filter"
+            exit 1
+          fi
           run_log=/dev/shm/stress-run.log
-          # Fail an empty filter or stress output whose iteration/test counts differ from the plan.
-          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=fail; } 2>&1 | tee "$run_log"; then
+          # Fail a missing filter config or stress output whose iteration/test counts differ from the plan.
+          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" --tool-config-file "fiber-stress:$FILTER_FILE" --stress-count "$COUNT" --no-tests=fail; } 2>&1 | tee "$run_log"; then
             :
           else
             status=$?
             echo
+            if grep -sFq 'Argument list too long' "$run_log"; then
+              echo "::error title=Stress run could not start::an argument or environment string over 128 KiB (MAX_ARG_STRLEN) reached the run"
+            fi
             if grep -sFq 'No space left on device' "$run_log"; then
               echo "::error title=Runner out of disk::Stress run did not complete: the runner ran out of disk; no test result"
             fi
