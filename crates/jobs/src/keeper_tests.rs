@@ -32,7 +32,7 @@ fn shutdown_stops_every_process_without_holding_the_log() {
 #[test]
 fn crash_holds_before_stopping_only_tool_calls() {
     let mut sup = mixed();
-    // docs/events.md, "One writer at a time": acquire before writing.
+    // docs/events.md, "Writing": one writer at a time, enforced by a lock file: acquire before writing.
     assert_eq!(
         sup.lifeline_eof(),
         vec![Step::HoldLog, Step::Stop { id: "call".into() }]
