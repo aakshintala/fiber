@@ -182,6 +182,8 @@ fn a_steer_draws_its_queue_row_then_its_card_rule() {
     // The release lets the turn land: the step boundary applies the steer
     // and the second request answers.
     run.turn_finished(from);
+    // debt: this wait predicate repeats the row lookup and the `"steer"` / `"use x"` cell searches that the asserts below and `col_at` also do, because a helper's grid reads sit outside the wait span and the screen ratchet bills them as bare reads (steer_drawn.rs would rise from 11 to 18 with no ruling to raise it).
+    // Upgrade trigger: the ratchet counts reads inside a registered wait helper's body (WAIT_HELPERS in xtask/src/screen_ratchet.rs gains a helper that takes the predicate), after which this predicate becomes one `fn rule_drawn(grid: &Grid) -> bool` on `Option`-returning `row_with`/`col_at`.
     // The card rule where the steer landed: the label bold in attention,
     // the dim separator, the dashes in rule to the edge, and the steered
     // text bold directly under it. The time is never read: only the
