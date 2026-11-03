@@ -313,7 +313,9 @@ fn a_job_command_with_the_search_prelude_shows_its_hold_fragment_only_if_bash_ke
     let form = Arc::new(Mutex::new(None::<Form>));
     crate::wait_until(
         "the prelude job to exec or keep its shell",
-        Deadline::after(MUST_SUCCEED_WITHIN * 4),
+        // 4 * MUST_SUCCEED_WITHIN, as a literal: `budget-bounds` reads
+        // only a literal duration or a complete symbolic path.
+        Deadline::after(std::time::Duration::from_secs(40)),
         {
             let form = Arc::clone(&form);
             let fragment = fragment.clone();
