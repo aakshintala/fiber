@@ -76,7 +76,7 @@ a 20-thousand-token one fit the same ceiling.
 | Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
-| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |
+| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 72 ms | 34 ms | 109 ms | 82 % | 74 % |
 | `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |
 | Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | — | — | — | — | — |
 | `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
@@ -133,11 +133,11 @@ Basis says where a number came from:
 The class columns hold the timing gates per runner speed class, keyed by CPU
 model strings matched case-insensitively. A model's class is the slowest
 cluster its stored runs reach. The fast class is `AMD EPYC 9V45 96-Core
-Processor` (29 stored files, gates); the middle class is `Intel(R) Xeon(R)
-Platinum 8370C CPU @ 2.80GHz` (2 stored files, advisory); the slow class is
-`AMD EPYC 7763 64-Core Processor` (13 stored files, gates) and `AMD EPYC 9V74
-80-Core Processor` (4 stored files, advisory). `INTEL(R) XEON(R) PLATINUM 8573C`
-(1 stored file) has no class, and any other model, an empty string or a missing
+Processor`, which gates; the middle class is `Intel(R) Xeon(R)
+Platinum 8370C CPU @ 2.80GHz`, which stays advisory; the slow class is
+`AMD EPYC 7763 64-Core Processor`, which gates, and `AMD EPYC 9V74
+80-Core Processor`, which stays advisory. `INTEL(R) XEON(R) PLATINUM 8573C`
+has no class, and any other model, an empty string or a missing
 CPU is unknown: all stay advisory, and the comment says why. A model gates
 only with at least 5 stored files; turning another model on later is a pull
 request that adds its rows. Rows that are not absolute timings carry `—` in these
@@ -155,10 +155,16 @@ The class cells are recorded ceilings; a row whose recorded ceiling is under 2 m
 "When a budget is exceeded" says. The fast
 session_list ceiling and tolerance are pinned by a test against the
 plain-number samples of the fast class's stored files
-(`xtask/tests/class_data/9v45-session-list.json`). `scripts/class-data`
-regenerates that file from the `benchmarks-<sha>` artifacts of `main`
+(`xtask/tests/class_data/9v45-session-list.json`). The listing fast and slow
+cells and their tolerances are pinned by a test against the full-precision
+samples of the class's stored files
+(`xtask/tests/class_data/9v45-sessions-list.json` and
+`xtask/tests/class_data/slow-sessions-list.json`); each entry carries the
+run's CPU model string as `cpu`, and the slow tolerance uses the 7763-cpu
+medians only, so the advisory 9V74 never widens it. `scripts/class-data`
+regenerates these files from the `benchmarks-<sha>` artifacts of `main`
 runs; entries whose artifacts have expired, and entries from non-main runs,
-stay in the committed file by hand. The attaching first-frame row's two tolerance cells are not pinned by a test. They were measured on 2026-11-03 from the stored `main` artifacts of the window since #3572 (2026-10-30 07:47 UTC) up to `715eef36c`, over the 26 9V45 and 51 7763 stored files carrying `terminal_attach_ms`, and #4061 records the run ids and the arithmetic.
+stay in the committed files by hand. The attaching first-frame row's two tolerance cells are not pinned by a test. They were measured on 2026-11-03 from the stored `main` artifacts of the window since #3572 (2026-10-30 07:47 UTC) up to `715eef36c`, over the 26 9V45 and 51 7763 stored files carrying `terminal_attach_ms`, and #4061 records the run ids and the arithmetic.
 
 The busy-or-resumed ceiling holds on three workloads:
 
@@ -330,8 +336,8 @@ range: a model's class is the slowest cluster its stored runs reach. Within
 a model the frames_64 medians span 1.77% on 7763 and 7.34% on 9V45; the 9V74
 fast VM is 22.80% faster than its own slowest VM (29.54% slower by the
 opposite denominator). Across the 11 absolute timing rows the gated models'
-max/min median spreads range from 3.22% to 55.83%: session start spans 8.47%
-on 7763 and 54.37% on 9V45, listing spans 12.43% and 20.71% respectively, so
+max/min median spreads range from 3.22% to 81.05%: session start spans 8.47%
+on 7763 and 54.37% on 9V45, listing spans 73.30% and 81.05% respectively, so
 each row carries its own tolerance in the table. Budgeted numeric memory-row
 medians across these files vary by about 1.0% to 7.0% depending on workload:
 busy peak RSS spans 1.31% and web_fetch peak RSS 6.98%. An ordinary timing gate fails
