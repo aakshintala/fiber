@@ -185,7 +185,9 @@ fn scrolling_back_down_leaves_the_screen_a_full_repaint_would_draw() {
         b <= 185,
         "top row holds N{b:04}, the screen must hold run rows above N0191"
     );
+    let ups = run.output().len();
     run.write("\x1b[<64;21;11M".repeat(40).as_bytes());
+    run.wait_bytes(ups, b"\x1b[?2026l", "the wheel-ups' frame end");
     run.wait_screen(
         &format!("top row N{:04} after 40 wheel-ups of 3 rows", b - 120),
         |grid| {
