@@ -3272,6 +3272,125 @@ fn pause_before_removal(path: PathBuf) -> PausedRemoval {
 }
 
 #[test]
+fn held_wait_reports_the_inner_wait_when_the_waiter_panics() {
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        held_wait_passes_after_release(
+            "the inner step",
+            fakes::MUST_SUCCEED_WITHIN,
+            |_: Deadline| -> () {
+                panic!("the inner boom");
+            },
+            || {},
+        );
+    }))
+    .expect_err("the helper must fail when the waiter panics");
+    let text = failure
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("the helper re-raises a panic text");
+    assert!(
+        text.contains("the inner step"),
+        "the failure names the inner wait: {text}"
+    );
+    assert!(
+        text.contains("the inner boom"),
+        "the failure carries the waiter panic: {text}"
+    );
+}
+
+#[test]
+fn held_wait_returns_the_released_wait_result() {
+    let result =
+        held_wait_passes_after_release("the inner step", fakes::MUST_SUCCEED_WITHIN, |_| 7, || {});
+    assert_eq!(result, 7, "the helper returns the waiter's value");
+}
+
+#[test]
+fn held_wait_outer_bound_is_three_inner_budgets() {
+    assert_eq!(OUTER_BUDGET_FACTOR, 3);
+}
+
+/// Runs a held-then-released wait once, for the four
+/// `*_fails_fast_while_held_and_passes_after_release` tests: the waiter
+/// signals `entered`, the test runs `release`, and the released wait's
+/// report arrives first, under `inner * OUTER_BUDGET_FACTOR`, so a stall
+/// fails naming `what`, the waiter's own step, with whether the waiter is
+/// still running. The inner deadline is made before the waiter spawns, so
+/// it expires first. A waiter panic is caught on the waiter thread and
+/// re-raised here, so the failure names `what`. The waiter is joined only
+/// after its report arrived, so no join is unbounded (`docs/testing.md`,
+/// "Waits and timeouts").
+#[track_caller]
+fn held_wait_passes_after_release<R: Send + 'static>(
+    what: &str,
+    inner: Duration,
+    waiter: impl FnOnce(Deadline) -> R + Send + 'static,
+    release: impl FnOnce(),
+) -> R {
+    let what = what.to_owned();
+    let (entered_tx, entered) = mpsc::channel::<()>();
+    let (done_tx, done) = mpsc::channel::<Result<R, String>>();
+    let deadline = Deadline::after(inner);
+    let thread_what = what.clone();
+    let waiter = thread::spawn(move || {
+        entered_tx.send(()).unwrap_or(());
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waiter(deadline)));
+        done_tx
+            .send(outcome.map_err(|payload| {
+                if let Some(text) = payload.downcast_ref::<&str>() {
+                    (*text).to_owned()
+                } else if let Some(text) = payload.downcast_ref::<String>() {
+                    text.clone()
+                } else {
+                    format!("the waiter for {thread_what} panicked with a non-string payload")
+                }
+            }))
+            .unwrap_or(());
+    });
+    // The waiter signals it entered before the release goes out, so the wait
+    // below answers the release, never a thread that never ran.
+    Deadline::after(inner)
+        .recv(&entered)
+        .expect("the waiter entered its wait");
+    release();
+    // The released wait's report arrives first, under the outer bound, so a
+    // stall fails naming the inner step: the inner deadline expires first.
+    match Deadline::after(inner * OUTER_BUDGET_FACTOR) // ruling: #4075
+        .recv(&done)
+    {
+        Ok(Ok(result)) => {
+            // The report arrived, so the waiter ended and the join returns
+            // at once; a waiter panic re-raises with its own text.
+            match waiter.join() {
+                Ok(()) => {}
+                Err(payload) => std::panic::resume_unwind(payload),
+            }
+            result
+        }
+        Ok(Err(text)) => {
+            match waiter.join() {
+                Ok(()) => {}
+                Err(payload) => std::panic::resume_unwind(payload),
+            }
+            panic!("the waiter for {what} panicked: {text}");
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) if waiter.is_finished() => {
+            panic!(
+                "the waiter outlived three times its budget waiting for {what}: the waiter finished but sent no report"
+            );
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!(
+                "the waiter outlived three times its budget waiting for {what}: the waiter is still running at the outer timeout"
+            );
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the waiter thread ended without reporting {what}");
+        }
+    }
+}
+
+#[test]
 fn path_gone_fails_fast_while_held_and_passes_after_release() {
     let dir = fakes::TempDir::new("wait-path-gone");
     let path = dir.path().join("gone");
@@ -3283,23 +3402,13 @@ fn path_gone_fails_fast_while_held_and_passes_after_release() {
     }));
     assert!(held.is_err(), "the bare assertion must fail while held");
     let paused = pause_before_removal(path.clone());
-    let (entered_tx, entered) = mpsc::channel::<()>();
-    let (done_tx, done) = mpsc::channel::<()>();
-    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
-    thread::spawn(move || {
-        entered_tx.send(()).unwrap_or(());
-        wait_for_path_gone(deadline, &path, "the held path to go");
-        done_tx.send(()).unwrap_or(());
-    });
-    // The waiter signals it entered before the release goes out, so the
-    // wait below answers the release, never a thread that never ran.
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&entered)
-        .expect("the waiter entered its wait");
-    paused.release.send(()).unwrap_or(());
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&done)
-        .expect("the wait answers once released");
+    let release = paused.release.clone();
+    held_wait_passes_after_release(
+        "the held path to go",
+        fakes::MUST_SUCCEED_WITHIN,
+        move |deadline| wait_for_path_gone(deadline, &path, "the held path to go"),
+        move || release.send(()).unwrap_or(()),
+    );
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&paused.removed)
         .expect("the remover finished removing the path");
@@ -3322,24 +3431,13 @@ fn lock_released_fails_fast_while_held_and_passes_after_release() {
         );
     }));
     assert!(held.is_err(), "the bare probe must fail while held");
-    let (entered_tx, entered) = mpsc::channel::<()>();
-    let (done_tx, done) = mpsc::channel::<()>();
-    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let waited = dir.path().to_path_buf();
-    thread::spawn(move || {
-        entered_tx.send(()).unwrap_or(());
-        wait_for_lock_released(deadline, &waited, "the held session lock");
-        done_tx.send(()).unwrap_or(());
-    });
-    // The waiter signals it entered while the lock is still held, so the
-    // wait below answers the release, never a thread that never ran.
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&entered)
-        .expect("the waiter entered its wait");
-    drop(held_guard);
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&done)
-        .expect("the wait answers once released");
+    held_wait_passes_after_release(
+        "the held session lock",
+        fakes::MUST_SUCCEED_WITHIN,
+        move |deadline| wait_for_lock_released(deadline, &waited, "the held session lock"),
+        move || drop(held_guard),
+    );
 }
 
 #[test]
@@ -3463,50 +3561,19 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
         let mut file = fs::OpenOptions::new().append(true).open(&logged).unwrap();
         file.write_all(b"state\n").unwrap();
     });
-    let (entered_tx, entered) = mpsc::channel::<()>();
-    let (done_tx, done) = mpsc::channel::<()>();
-    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let waited = std::sync::Arc::clone(&watch);
-    let waiter = thread::spawn(move || {
-        entered_tx.send(()).unwrap_or(());
-        wait_for_watched_line(&waited, deadline, "the state line", |text| {
-            text.contains("state")
-        });
-        done_tx.send(()).unwrap_or(());
-    });
-    // The waiter signals it entered while the writer is still held, so the
-    // wait below answers the release, never a thread that never ran.
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&entered)
-        .expect("the waiter entered its wait");
-    release_tx.send(()).unwrap_or(());
-    // The released wait's report arrives first, under three times the inner
-    // budget, so a stalled wait fails naming the inner step: the inner
-    // deadline expires before this outer one.
-    match Deadline::after(fakes::MUST_SUCCEED_WITHIN * OUTER_BUDGET_FACTOR) // ruling: #4075
-        .recv(&done)
-    {
-        Ok(()) => {}
-        Err(mpsc::RecvTimeoutError::Timeout) if waiter.is_finished() => {
-            panic!(
-                "the waiter outlived three times its budget waiting for the state line: the waiter finished but sent no report"
-            );
-        }
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            panic!(
-                "the waiter outlived three times its budget waiting for the state line: the waiter is still running at the outer timeout"
-            );
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("the waiter thread ended without reporting the state line");
-        }
-    }
-    // Both threads ended once their report arrived, so each join returns at
-    // once; a waiter panic re-raises with its own text on this thread.
-    match waiter.join() {
-        Ok(()) => {}
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+    held_wait_passes_after_release(
+        "the state line",
+        fakes::MUST_SUCCEED_WITHIN,
+        move |deadline| {
+            wait_for_watched_line(&waited, deadline, "the state line", |text| {
+                text.contains("state")
+            });
+        },
+        move || release_tx.send(()).unwrap_or(()),
+    );
+    // The writer ended once its append landed, so the join returns at once;
+    // a writer panic re-raises with its own text on this thread.
     match writer.join() {
         Ok(()) => {}
         Err(payload) => std::panic::resume_unwind(payload),
@@ -3562,30 +3629,21 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
         );
     }));
     assert!(old.is_err(), "the old wait must fail while held");
-    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
-    let (entered_tx, entered) = mpsc::channel::<()>();
-    let (done_tx, done) = mpsc::channel::<()>();
     let waited = pattern.clone();
-    thread::spawn(move || {
-        entered_tx.send(()).unwrap_or(());
-        wait_for_refresh_exit(deadline, &waited);
-        done_tx.send(()).unwrap_or(());
-    });
-    // The waiter signals it entered while the child is still parked, so the
-    // wait below answers the release, never a thread that never ran.
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&entered)
-        .expect("the waiter entered its wait");
     // The release is opening the write end and closing it at once: the
     // parked read sees end of file, the child exits, and the reaper
     // clears it. The close happens before the wait below, never after.
-    fs::OpenOptions::new()
-        .write(true)
-        .open(&fifo)
-        .expect("the held child opened its FIFO for read");
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&done)
-        .expect("the wait answers once released");
+    held_wait_passes_after_release(
+        &pattern,
+        fakes::MUST_SUCCEED_WITHIN,
+        move |deadline| wait_for_refresh_exit(deadline, &waited),
+        move || {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&fifo)
+                .expect("the held child opened its FIFO for read");
+        },
+    );
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reaped)
         .expect("the reaper cleared the exited child");
