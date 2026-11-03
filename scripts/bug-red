@@ -176,13 +176,17 @@ while IFS=$'\t' read -r -a fields; do
   fi
 done <<<"$plan"
 
+# Build the red commit into the checkout's absolute top-level target/ so
+# the list and run below reuse the job's restored dependency tree instead
+# of compiling registry dependencies fresh inside the worktree.
+target_dir=$(git rev-parse --show-toplevel)/target
 # The red commit is what this leg compiles. Listing there, with the same
 # packages and filter, names the tests this platform built. A planned test
 # missing from that list is compiled out: say so, drop it from the filter,
 # and an empty remainder is the no-match result.
 planned=$(sed -n '/^planned\t/p' <<<"$plan")
 if [ -n "$planned" ]; then
-  (cd "$tree" && cargo nextest list --message-format json --color never --no-pager "${package_args[@]}" -E "$filter") >"$list"
+  (cd "$tree" && CARGO_TARGET_DIR="$target_dir" cargo nextest list --message-format json --color never --no-pager "${package_args[@]}" -E "$filter") >"$list"
   narrowed=$(printf '%s\n' "$planned" | cargo xtask narrow-plan --list "$list" --filter "$filter")
   sed -n 's/^dropped\t/bug-red: dropping /p' <<<"$narrowed"
   if [ "$(sed -n 's/^run\t//p' <<<"$narrowed")" != true ]; then
@@ -196,7 +200,7 @@ fi
 
 echo "bug-red: running $filter at $red"
 status=0
-(cd "$tree" && cargo nextest run --no-fail-fast "${package_args[@]}" -E "$filter") || status=$?
+(cd "$tree" && CARGO_TARGET_DIR="$target_dir" cargo nextest run --no-fail-fast "${package_args[@]}" -E "$filter") || status=$?
 
 # nextest-metadata's exit codes: 100 when a test failed, 101 when the build
 # failed and 4 when no test matched. Only a failed test shows the bug.
