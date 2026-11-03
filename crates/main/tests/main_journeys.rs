@@ -2116,13 +2116,16 @@ struct TerminalBytes {
     line_end: &'static [u8],
     /// The bytes that delete to the start of the line.
     delete_to_line_start: &'static [u8],
-    /// The bytes that delete one word back.
-    delete_word: &'static [u8],
+    /// The bytes that delete one word back, when the terminal has a
+    /// default; `None` when it has none (Ghostty).
+    delete_word: Option<&'static [u8]>,
 }
 
 /// Ghostty's #3751/#3754 bytes: Super+Left/Right arrive as Ctrl+A/Ctrl+E
-/// and Super+Backspace as Ctrl+U, while Option+Backspace arrives as
-/// `ESC 0x7f`. The bug reports state no Ghostty version.
+/// and Super+Backspace as Ctrl+U. No `delete_word` default: Option+Backspace
+/// is plain `0x7f` since 1.2 (PR #7320, discussion #9560) and `ESC 0x7f` is
+/// a user keybind (1.2 removed the builtin, discussion #8677). The bug
+/// reports state no Ghostty version.
 const GHOSTTY_BYTES: TerminalBytes = TerminalBytes {
     terminal: "Ghostty",
     provenance: "bug reports #3751 and #3754; versions unknown (reports state none)",
@@ -2131,7 +2134,7 @@ const GHOSTTY_BYTES: TerminalBytes = TerminalBytes {
     delete_to_line_start: include_bytes!(
         "fixtures/terminal_bytes/ghostty_delete_to_line_start.bin"
     ),
-    delete_word: include_bytes!("fixtures/terminal_bytes/ghostty_delete_word.bin"),
+    delete_word: None,
 };
 
 /// iTerm2's factory default bytes: with no profile key mapping for
@@ -2145,7 +2148,9 @@ const ITERM2_BYTES: TerminalBytes = TerminalBytes {
     line_start: include_bytes!("fixtures/terminal_bytes/iterm2_line_start.bin"),
     line_end: include_bytes!("fixtures/terminal_bytes/iterm2_line_end.bin"),
     delete_to_line_start: include_bytes!("fixtures/terminal_bytes/iterm2_delete_to_line_start.bin"),
-    delete_word: include_bytes!("fixtures/terminal_bytes/iterm2_delete_word.bin"),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/iterm2_delete_word.bin"
+    )),
 };
 
 /// Terminal.app's default bytes: it declares `xterm-256color` and forwards
@@ -2160,7 +2165,9 @@ const TERMINAL_APP_BYTES: TerminalBytes = TerminalBytes {
     delete_to_line_start: include_bytes!(
         "fixtures/terminal_bytes/terminal_app_delete_to_line_start.bin"
     ),
-    delete_word: include_bytes!("fixtures/terminal_bytes/terminal_app_delete_word.bin"),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/terminal_app_delete_word.bin"
+    )),
 };
 
 /// Linux terminals' default bytes (xterm, the reference X terminal): 7-bit
@@ -2172,7 +2179,9 @@ const LINUX_BYTES: TerminalBytes = TerminalBytes {
     line_start: include_bytes!("fixtures/terminal_bytes/linux_line_start.bin"),
     line_end: include_bytes!("fixtures/terminal_bytes/linux_line_end.bin"),
     delete_to_line_start: include_bytes!("fixtures/terminal_bytes/linux_delete_to_line_start.bin"),
-    delete_word: include_bytes!("fixtures/terminal_bytes/linux_delete_word.bin"),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/linux_delete_word.bin"
+    )),
 };
 
 /// Every tabled terminal: one entry per terminal the ticket names. New
@@ -2261,8 +2270,7 @@ fn line_start_end_bytes_journey(entry: &TerminalBytes) {
     // A two-line draft with the cursor at its end.
     run.write(b"qx\x0ajz");
     run.wait_screen("the two-line draft", |grid| {
-        grid.rows.iter().any(|row| row.contains("qx"))
-            && grid.rows.iter().any(|row| row.contains("jz"))
+        shows(grid, "qx") && shows(grid, "jz")
     });
     // The entry's bytes move to the start of the cursor's line: typing
     // lands before it, not at the draft's start.
@@ -2270,16 +2278,13 @@ fn line_start_end_bytes_journey(entry: &TerminalBytes) {
     start.push(b'X');
     run.write(&start);
     run.wait_screen("the line-start edit", |grid| {
-        grid.rows.iter().any(|row| row.contains("Xjz"))
-            && !grid.rows.iter().any(|row| row.contains("Xqx"))
+        shows(grid, "Xjz") && !shows(grid, "Xqx")
     });
     // The entry's bytes move to the end of the cursor's line.
     let mut end = entry.line_end.to_vec();
     end.push(b'Y');
     run.write(&end);
-    run.wait_screen("the line-end edit", |grid| {
-        grid.rows.iter().any(|row| row.contains("XjzY"))
-    });
+    run.wait_screen("the line-end edit", |grid| shows(grid, "XjzY"));
     // From the first line, the end bytes stay on it instead of jumping
     // to the draft's end.
     let mut first = b"\x1b[A".to_vec();
@@ -2287,7 +2292,7 @@ fn line_start_end_bytes_journey(entry: &TerminalBytes) {
     first.push(b'Q');
     run.write(&first);
     run.wait_screen("the first line's end", |grid| {
-        grid.rows.iter().any(|row| row.contains("qxQ"))
+        shows(grid, "qxQ")
             && !grid
                 .rows
                 .iter()
@@ -2297,9 +2302,7 @@ fn line_start_end_bytes_journey(entry: &TerminalBytes) {
     // One Ctrl+C clears the draft, and the usual sequence quits from
     // the empty box.
     run.write(b"\x03");
-    run.wait_screen("the cleared draft", |grid| {
-        !grid.rows.iter().any(|row| row.contains("XjzY"))
-    });
+    run.wait_screen("the cleared draft", |grid| !shows(grid, "XjzY"));
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored terminal", |grid| {
         !grid.alternate_screen && !grid.hide_cursor
@@ -2333,7 +2336,8 @@ fn delete_to_line_start_bytes_journey(entry: &TerminalBytes) {
 }
 
 /// The delete-word bytes on a question form's words row (#3754): "one
-/// two" typed, the entry's bytes cut "two" while "one" stays.
+/// two" typed, the entry's bytes cut "two" while "one" stays. The entry
+/// must have a word-delete byte; Ghostty has none, so it has no test.
 fn delete_word_bytes_journey(entry: &TerminalBytes) {
     let setup = Setup::new();
     write_json(
@@ -2350,7 +2354,10 @@ fn delete_word_bytes_journey(entry: &TerminalBytes) {
     open_words_row(&mut run);
     run.write(b"one two");
     run.wait_screen("the typed words row", |grid| shows(grid, "✎ one two"));
-    run.write(entry.delete_word);
+    let delete_word = entry
+        .delete_word
+        .expect("tabled terminal has a word-delete byte");
+    run.write(delete_word);
     run.wait_screen("the cut words row", |grid| {
         shows(grid, "✎ one") && !shows(grid, "one two")
     });
@@ -2396,15 +2403,9 @@ fn terminal_bytes_ghostty_delete_to_line_start() {
     );
 }
 
-/// Ghostty's #3754 word bytes through the decoder: Option+Backspace
-/// arrives as `ESC 0x7f` and cuts the words row back to "one".
-#[test]
-fn terminal_bytes_ghostty_delete_word() {
-    run_journey(
-        "terminal_bytes_ghostty_delete_word",
-        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&GHOSTTY_BYTES)),
-    );
-}
+// Ghostty has no `delete_word` default to feed: Option+Backspace is plain
+// `0x7f` since 1.2 and `ESC 0x7f` is a user keybind, so the word row is
+// covered for iTerm2, Terminal.app and Linux only.
 
 /// iTerm2's factory line bytes through the decoder: Ctrl+A/Ctrl+E pass
 /// through unmapped and move on the cursor's line.

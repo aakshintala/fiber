@@ -14,7 +14,6 @@ version.
 | Ghostty | line_start | `ghostty_line_start.bin` (`\x01`) | Recorded in #3751: `ghostty +list-keybinds --default` maps `super+arrow_left` to `text:\x01` | unknown |
 | Ghostty | line_end | `ghostty_line_end.bin` (`\x05`) | Recorded in #3751: `ghostty +list-keybinds --default` maps `super+arrow_right` to `text:\x05` | unknown |
 | Ghostty | delete_to_line_start | `ghostty_delete_to_line_start.bin` (`\x15`) | Recorded in #3754: `ghostty +list-keybinds --default` maps `super+backspace` to `text:\x15` | unknown |
-| Ghostty | delete_word | `ghostty_delete_word.bin` (`ESC \x7f`) | #3754's test step presses Option+Backspace; `ESC 0x7f` is Alt+Backspace per `crates/tui/src/keys.rs` (`alt_stroke`) | unknown |
 | iTerm2 | line_start | `iterm2_line_start.bin` (`\x01`) | Ctrl+A: the readline `beginning-of-line (C-a)` default (GNU Bash manual, Commands For Moving); `001 SOH` per `man ascii(7)`; passes through unmapped (factory global keymap has no plain Ctrl+letter entries) | unknown (iTerm2 docs and app state no single version) |
 | iTerm2 | line_end | `iterm2_line_end.bin` (`\x05`) | Ctrl+E: the readline `end-of-line (C-e)` default (GNU Bash manual, Commands For Moving); `005 ENQ` per `man ascii(7)`; passes through unmapped (same keymap) | unknown (iTerm2 docs and app state no single version) |
 | iTerm2 | delete_to_line_start | `iterm2_delete_to_line_start.bin` (`\x15`) | Ctrl+U: the readline `unix-line-discard (C-u)` default (GNU Bash manual, Commands For Killing); `025 NAK` per `man ascii(7)`; passes through unmapped (same keymap) | unknown (iTerm2 docs and app state no single version) |
@@ -27,6 +26,14 @@ version.
 | Linux | line_end | `linux_line_end.bin` (`\x05`) | Ctrl+E: the readline `end-of-line (C-e)` default (GNU Bash manual, Commands For Moving); `005 ENQ` per `man ascii(7)` (Linux man-pages 6.19); same forwarding | Linux man-pages 6.19 (2025-10-05) for the C0 table; readline and xterm docs state no single version |
 | Linux | delete_to_line_start | `linux_delete_to_line_start.bin` (`\x15`) | Ctrl+U: the readline `unix-line-discard (C-u)` default (GNU Bash manual, Commands For Killing); `025 NAK` per `man ascii(7)` (Linux man-pages 6.19); same forwarding | Linux man-pages 6.19 (2025-10-05) for the C0 table; readline and xterm docs state no single version |
 | Linux | delete_word | `linux_delete_word.bin` (`\x17`) | Ctrl+W: the readline `unix-word-rubout (C-w)` default (GNU Bash manual, Commands For Killing); `027 ETB` per `man ascii(7)` (Linux man-pages 6.19); same forwarding | Linux man-pages 6.19 (2025-10-05) for the C0 table; readline and xterm docs state no single version |
+
+Omitted: Ghostty `delete_word` has no entry. #3754 records only
+`super+backspace=text:\x15`; its Option+Backspace step records no bytes.
+Ghostty >= 1.2 sends Option+Backspace as plain `0x7f` (`text:\x7f`) by
+default (PR #7320, discussion #9560), and `ESC 0x7f`
+(`text:\x1b\x7f`) is a user keybind; 1.2 removed the builtin
+opt+backspace word delete (discussion #8677: only one character deleted
+after). No Ghostty default states `ESC \x7f`, so no fixture.
 
 ## Source notes
 
