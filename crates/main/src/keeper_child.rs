@@ -70,11 +70,27 @@ struct Runtime {
     logged: Mutex<HashSet<String>>,
     done: mpsc::Sender<io::Result<()>>,
 }
+// A session may die with starts queued or replies unread. Losing its
+// control transport must not bypass the lifeline's crash/shutdown decision.
+fn disconnected(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+    )
+}
+
 impl Runtime {
     fn send(&self, line: FromKeeper) -> io::Result<()> {
-        let mut out = lock(&self.out);
-        serde_json::to_writer(&mut *out, &line)?;
-        out.write_all(b"\n")
+        let mut bytes = serde_json::to_vec(&line)?;
+        bytes.push(b'\n');
+        match lock(&self.out).write_all(&bytes) {
+            Err(error) if disconnected(&error) => Ok(()),
+            result => result,
+        }
     }
 
     fn decide(&self, choose: impl FnOnce(&mut Supervisor) -> Vec<Step>) -> io::Result<()> {
@@ -433,7 +449,11 @@ impl Runtime {
 
     fn control(self: &Arc<Self>, control: UnixStream) -> io::Result<()> {
         for line in BufReader::new(control).lines() {
-            let line = line?;
+            let line = match line {
+                Ok(line) => line,
+                Err(error) if disconnected(&error) => break,
+                Err(error) => return Err(error),
+            };
             let request: ToKeeper = serde_json::from_str(&line)?;
             match request {
                 ToKeeper::Start(spec) => self.start(spec)?,

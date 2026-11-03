@@ -8,6 +8,42 @@ use contract::keeper::{FromKeeper, HostStdin, Spawn, ToKeeper};
 use fakes::Deadline;
 
 #[test]
+fn keeper_disconnected_started_reply_does_not_abort_control_drain() {
+    // A session can die with a Start already queued. BrokenPipe while
+    // answering that Start must not bypass lifeline_eof and abandon its jobs.
+    let (client, control) = UnixStream::pair().expect("control");
+    client
+        .shutdown(std::net::Shutdown::Read)
+        .expect("session stopped reading");
+    let home = fakes::TempDir::new("keeper-disconnected-reply");
+    let (done, _) = mpsc::channel();
+    let runtime = super::Runtime {
+        home: home.path().to_path_buf(),
+        id: SessionId("s_0123456789abcdef".into()),
+        clock: fakes::clock::FakeClock::new(),
+        out: std::sync::Mutex::new(control),
+        log: std::sync::Mutex::new(None),
+        supervisor: std::sync::Mutex::new(jobs::keeper::Supervisor::new()),
+        processes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+        logged: std::sync::Mutex::new(std::collections::HashSet::new()),
+        done,
+    };
+    let (send, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        send.send(runtime.send(FromKeeper::Started {
+            id: "queued".into(),
+            pgid: 4242,
+        }))
+        .expect("reply result");
+    });
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&result, "reply to gone session")
+            .is_ok()
+    );
+}
+
+#[test]
 fn keeper_start_output_and_exit_are_ordered_and_shutdown_does_not_take_a_log() {
     let home = fakes::TempDir::new("fiber-keeper-child");
     let (life, mut lifeline) = std::io::pipe().expect("lifeline");
