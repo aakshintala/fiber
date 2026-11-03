@@ -624,9 +624,11 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     // above the viewport, the first filler row's downward motion proves the
     // step moved the rows. The marker itself is recorded after the call
     // opens below.
+    let mut prev = run.wait_screen("the conversation before the wheel", |grid| {
+        find_row(&grid.rows, "F0800").is_some() && find_row(&grid.rows, THOUGHT).is_none()
+    });
     let mut scrolled = false;
     for _ in 0..6 {
-        let prev = run.screen();
         run.write(WHEEL_UP);
         let grid = run.wait_screen("the thought row scrolling into view", |next| {
             match (
@@ -655,6 +657,7 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
             scrolled = true;
             break;
         }
+        prev = grid;
     }
     assert!(
         scrolled,

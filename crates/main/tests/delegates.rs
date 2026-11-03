@@ -7862,22 +7862,21 @@ fn row_focused(grid: &Grid, needle: &str) -> bool {
 /// panel's first stop, and Down walks the panel's stops top to bottom.
 fn focus_row(run: &mut Run, needle: &str) {
     run.write(b"\t");
-    run.wait_screen("the panel takes focus", |grid| {
+    let mut grid = run.wait_screen("the panel takes focus", |grid| {
         !focused_rows(grid).is_empty()
     });
     for _ in 0..60 {
-        let grid = run.screen();
         if row_focused(&grid, needle) {
             return;
         }
         let before = focused_rows(&grid);
         // Down steps to the next stop, holding at the panel's end.
         run.write(b"\x1b[B");
-        run.wait_screen("focus steps down", |grid| {
+        grid = run.wait_screen("focus steps down", |grid| {
             row_focused(grid, needle) || focused_rows(grid) != before
         });
     }
-    panic!("{needle:?} never took focus in\n{}", run.screen().contents);
+    panic!("{needle:?} never took focus in\n{}", grid.contents);
 }
 
 /// Quits the terminal: two interrupts and Enter, then the exit.
