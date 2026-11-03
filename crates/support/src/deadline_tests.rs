@@ -11,13 +11,17 @@ use std::time::{Duration, Instant};
 
 use fakes::MUST_SUCCEED_WITHIN;
 
-use crate::clock::{Clock, Manual as FakeClock};
+use crate::clock::{Clock, Manual as FakeClock, System};
 
 use super::{BUDGET, CLEANUP, Deadline, WAIT, WAITS};
 
 /// The span `after_ten_seconds_left_stays_within_its_span` asserts on: the
 /// must-succeed floor, with the base's one-second slack kept below.
 const SPAN: Duration = Duration::from_secs(10);
+
+/// The bound the `within` tests derive: the must-succeed floor, so
+/// `cargo xtask must-succeed` does not flag it, as `SPAN` is not flagged.
+const DERIVED: Duration = Duration::from_secs(10);
 
 /// A fake clock that lives as long as the test process, as a deadline's
 /// clock must.
@@ -352,5 +356,96 @@ fn recv_or_fail_says_the_sender_hung_up() {
     assert!(
         message.contains("the sender for a late reply hung up before sending"),
         "{message}"
+    );
+}
+
+#[test]
+fn within_keeps_the_fake_clock_and_never_waits_on_the_wall_clock() {
+    let clock = fake_clock();
+    let root = Deadline::on(&**clock);
+    let child = root.within(DERIVED);
+    assert_eq!(child.left(), DERIVED);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(DERIVED);
+    assert_eq!(child.left(), Duration::ZERO);
+    // The sender stays alive, so the receive below can only time out, never
+    // disconnect.
+    let (_tx, rx) = mpsc::channel::<()>();
+    let before = System.now();
+    let arrived = child.recv(&rx);
+    let elapsed = System.now().saturating_duration_since(before);
+    assert_eq!(arrived, Err(mpsc::RecvTimeoutError::Timeout));
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "waited {elapsed:?} on the wall clock"
+    );
+}
+
+#[test]
+fn within_is_capped_by_what_the_parent_has_left() {
+    let clock = fake_clock();
+    let root = Deadline::on(&**clock);
+    // Past the guard's whole-wait mark: 5 s of the guard remain.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_secs(85));
+    assert_eq!(root.left(), Duration::from_secs(5));
+    let child = root.within(DERIVED);
+    assert_eq!(child.left(), Duration::from_secs(5));
+    assert_eq!(child.cleanup(), Duration::from_secs(5));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_secs(5));
+    assert_eq!(child.left(), Duration::ZERO);
+    // The longest bound still fits: nothing panics, and the child offers no
+    // more than the spent root has left.
+    assert_eq!(root.within(Duration::MAX).left(), root.left());
+}
+
+#[test]
+fn within_starts_fresh_and_forgets_a_started_wait() {
+    let clock = fake_clock();
+    let root = Deadline::on(&**clock);
+    let parent = root.start_wait();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_secs(20));
+    assert_eq!(parent.left(), Duration::from_secs(20));
+    let child = parent.within(DERIVED);
+    assert_eq!(child.left(), DERIVED);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(DERIVED);
+    assert_eq!(child.left(), Duration::ZERO);
+}
+
+#[test]
+fn within_a_spent_root_is_a_zero_bound() {
+    let clock = fake_clock();
+    let root = Deadline::on(&**clock);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "no code under test waits on the clock (ruling 6179406086)"
+    )]
+    clock.advance(Duration::from_secs(91));
+    let child = root.within(DERIVED);
+    assert_eq!(child.left(), Duration::ZERO);
+    assert_eq!(child.cleanup(), Duration::ZERO);
+    assert_eq!(root.cleanup(), Duration::from_secs(9));
+    // A zero bound on a fresh root is zero too.
+    assert_eq!(
+        Deadline::on(&**fake_clock()).within(Duration::ZERO).left(),
+        Duration::ZERO
     );
 }

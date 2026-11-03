@@ -77,6 +77,25 @@ impl Deadline {
         }
     }
 
+    /// A shorter deadline derived from this one, keeping this deadline's
+    /// clock: it starts now on that clock, with `wait` for its wait, guard
+    /// and cleanup alike, capped by what this deadline has
+    /// [`left`](Deadline::left). Derived from a
+    /// [`Manual`](crate::clock::Manual) root with a ten-second bound, it
+    /// reads ten seconds at once and zero once the fake clock advances ten
+    /// seconds.
+    pub fn within(&self, wait: Duration) -> Self {
+        let bound = wait.min(self.left());
+        Self {
+            start: self.clock.now(),
+            wait: bound,
+            waits: bound,
+            cleanup: bound,
+            clock: self.clock,
+            wait_start: None,
+        }
+    }
+
     /// Starts one wait now: the returned deadline's
     /// [`left`](Deadline::left) is [`WAIT`] minus the span since this call
     /// (`wait` for an [`after`](Deadline::after) deadline), still capped by
