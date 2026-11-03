@@ -4,7 +4,6 @@
 //! a check of whether the machine can build cannot need a build
 //! (`docs/testing.md`); these tests run that script on supplied inputs.
 
-use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
 
@@ -34,20 +33,18 @@ fn run_check_resources(args: &[&str], envs: &[(&str, &str)], what: &str) -> std:
     fakes::wait_output(child, what)
 }
 
-/// Writes `bin/df`, a stub printing one fixed `df -Pk` table with
-/// `avail_kib` free, and returns a `PATH` value with `bin` first.
-fn df_path(dir: &TempDir, avail_kib: u64) -> String {
-    let bin = dir.path().join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let stub = format!(
-        "#!/usr/bin/env bash\nprintf 'Filesystem  1024-blocks  Used Available Capacity Mounted on\\n'\nprintf 'testfs  200000000  100000000  {avail_kib}  50%%  /testmnt\\n'\n"
-    );
-    let df = bin.join("df");
-    std::fs::write(&df, stub).unwrap();
-    std::fs::set_permissions(&df, std::fs::Permissions::from_mode(0o755)).unwrap();
+/// Returns a `PATH` value with the checked-in `df` stub first
+/// (`tests/check_resources/df`). The stub prints one fixed `df -Pk` table
+/// with the free space from `CHECK_RESOURCES_DF_AVAIL_KIB`, which each
+/// preflight test sets; the stub is checked in (rather than written per run)
+/// because a test never executes a file it wrote in the same run
+/// (`docs/testing.md`, "Waits and timeouts").
+fn df_path() -> String {
+    let stub_dir =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/check_resources");
     format!(
         "{}:{}",
-        bin.display(),
+        stub_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     )
 }
@@ -64,12 +61,13 @@ fn scratch_and_target(dir: &TempDir) -> (std::path::PathBuf, std::path::PathBuf)
 fn preflight_refuses_when_df_reports_too_little_space() {
     let dir = TempDir::new("xtask-check-resources");
     let (scratch, target) = scratch_and_target(&dir);
-    let path = df_path(&dir, 0);
+    let path = df_path();
     // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
     let output = run_check_resources(
         &["preflight"],
         &[
             ("PATH", path.as_str()),
+            ("CHECK_RESOURCES_DF_AVAIL_KIB", "0"),
             ("TMPDIR", scratch.to_str().expect("scratch path is UTF-8")),
             (
                 "CARGO_TARGET_DIR",
@@ -118,12 +116,13 @@ fn preflight_refuses_when_df_reports_too_little_space() {
 fn preflight_passes_when_df_reports_generous_space() {
     let dir = TempDir::new("xtask-check-resources");
     let (scratch, target) = scratch_and_target(&dir);
-    let path = df_path(&dir, 100_000_000);
+    let path = df_path();
     // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
     let output = run_check_resources(
         &["preflight"],
         &[
             ("PATH", path.as_str()),
+            ("CHECK_RESOURCES_DF_AVAIL_KIB", "100000000"),
             ("TMPDIR", scratch.to_str().expect("scratch path is UTF-8")),
             (
                 "CARGO_TARGET_DIR",

@@ -200,7 +200,7 @@ preflight() {
 
 # has_marker: the log names a cargo build failure, so a `signal: N, SIG...`
 # line in it is cargo reporting the kill, not some other program's output.
-# debt: a `cargo` killed while a compile or link step is in flight prints no marker, so the gate returns a plain red where docs/workflow.md promises a 75. Upgrade trigger: a sighting of such a red in a real log.
+# debt: a `cargo` killed while a compile or link step is in flight prints no marker, and the gate cannot tell a resource kill from a deliberate one; docs/workflow.md promises 75 only for a kill known to be resource-caused, so a marker-less kill is a gap in evidence, not a broken promise. Upgrade trigger: a sighting of a marker-less killed cargo in a real log where the cause is known.
 has_marker() {
   [[ $classify_clean == *'error: could not compile'* || $classify_clean == *'error: linking with'* || $classify_clean == *'error: failed to run custom build command'* ]]
 }
