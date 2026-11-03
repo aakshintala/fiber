@@ -137,6 +137,11 @@ macOS arm64 runs `scripts/check`, the gate CI applies (`docs/workflow.md`,
 "The gate"). A draft pull request skips the jobs "Runners" names; marking it
 ready runs every job it skipped. Each job:
 
+- first checks free space in the scratch directory and on the `target`
+  filesystem (`scripts/check-resources preflight`), and exits 75 without
+  building when either is too low (`docs/workflow.md`)
+- exits 75 when a compile or link step is killed for lack of resources
+  (`scripts/check-resources classify`)
 - compiles the selected crates with the debug profile, every target,
   through clippy and nextest; the whole workspace is built by the backstop
   ("The backstop on `main`")
