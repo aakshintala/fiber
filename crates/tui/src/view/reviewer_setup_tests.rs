@@ -120,7 +120,7 @@ impl Fixture {
         app.attach(contract::SessionId(SESSION.to_owned()));
         let fake = Arc::new(Fake::new(Vec::new()));
         *fake.notes.lock().expect("notes lock") = Ok(notes(global, project));
-        app.set_configure(Some(fake.clone() as Arc<dyn crate::Configure>));
+        app.set_configure(fake.clone() as Arc<dyn crate::Configure>);
         Self { app, fake }
     }
 

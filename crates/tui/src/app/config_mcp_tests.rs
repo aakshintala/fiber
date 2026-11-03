@@ -34,7 +34,7 @@ fn fake() -> Arc<Fake> {
 }
 
 /// An app on home at 80x24 in `/w`, with `seam`.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -44,13 +44,13 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         },
         ..Default::default()
     });
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app.set_size(80, 24);
     app
 }
 
 /// An app on home with the hub up and attached to [`SESSION`].
-fn connected(seam: Option<Arc<Fake>>) -> App {
+fn connected(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
         kind: "hub_hello".to_owned(),
@@ -109,20 +109,8 @@ fn answer_servers(app: &mut App, id: &str) {
 }
 
 #[test]
-fn without_a_seam_mcp_says_not_available() {
-    let mut app = connected(None);
-    assert_eq!(slash_mcp(&mut app), Effect::None);
-    let frame = app.config_view_screen().expect("the view is open");
-    assert_eq!(frame.title, "MCP servers");
-    assert_eq!(
-        frame.below,
-        vec!["Not available in this terminal.".to_owned()]
-    );
-}
-
-#[test]
 fn slash_mcp_sends_mcp_servers_for_the_session_on_screen() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_mcp(&mut app);
     assert!(id.starts_with("c_"), "{id}");
     assert!(app.config_view_open());
@@ -139,7 +127,7 @@ fn slash_mcp_sends_mcp_servers_for_the_session_on_screen() {
 
 #[test]
 fn the_answer_to_the_sent_id_fills_the_rows() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_mcp(&mut app);
     answer_servers(&mut app, &id);
     let frame = app.config_view_screen().expect("the view is open");
@@ -160,7 +148,7 @@ fn the_answer_to_the_sent_id_fills_the_rows() {
 
 #[test]
 fn enter_on_failed_sends_mcp_reconnect_and_its_answer_requeries() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_mcp(&mut app);
     answer_servers(&mut app, &id);
     let lines = sent(app.on_key(Key::Enter, now()));
@@ -184,7 +172,7 @@ fn enter_on_failed_sends_mcp_reconnect_and_its_answer_requeries() {
 fn the_requery_after_a_reconnect_refills_the_rows() {
     // `expect` names the re-sent command: a mutant dropping it leaves
     // the rows stale, and the answered reconnect never shows.
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_mcp(&mut app);
     answer_servers(&mut app, &id);
     let lines = sent(app.on_key(Key::Enter, now()));
@@ -228,7 +216,7 @@ fn the_requery_after_a_reconnect_refills_the_rows() {
 
 #[test]
 fn enter_on_needs_login_sends_mcp_login_and_a_rejection_says() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_mcp(&mut app);
     answer_servers(&mut app, &id);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
@@ -249,7 +237,7 @@ fn enter_on_needs_login_sends_mcp_login_and_a_rejection_says() {
 
 #[test]
 fn a_server_event_requeries_while_quiet_but_not_mid_answer() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_mcp(&mut app);
     // The answer is still in flight: the event changes nothing.
     let lines = sent_lines(app.on_line(session_line(
@@ -273,7 +261,7 @@ fn a_server_event_requeries_while_quiet_but_not_mid_answer() {
 
 #[test]
 fn enter_on_unapproved_says_approve_and_sends_nothing() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_mcp(&mut app);
     app.on_line(session_line(
         SESSION,

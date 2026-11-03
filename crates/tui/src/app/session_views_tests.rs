@@ -91,7 +91,7 @@ fn open_usage(app: &mut App) {
 
 fn with_settings_seam(app: &mut App) {
     let seam: Arc<dyn crate::Configure> = Arc::new(crate::configure_fake::Fake::new(Vec::new()));
-    app.set_configure(Some(seam));
+    app.set_configure(seam);
 }
 
 #[test]

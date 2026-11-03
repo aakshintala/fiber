@@ -3982,11 +3982,16 @@ fn wheel_inside_the_approval_rectangle_is_swallowed_outside_scrolls_the_offer() 
 /// The surfaces on top: two open in either order give the same keys,
 /// Esc, wheel and drawn top frame (`docs/tui.md`, "Keys", "Overlays").
 mod stacked {
+    use std::sync::Arc;
+
     use super::{id, rendered, turn};
+    use crate::Configure;
     use crate::app::top::tests::{
         ON_HOME, ON_SESSION, SESSION, home_app, open, session_app, stacked,
     };
     use crate::app::{App, Effect, Surface};
+    use crate::configure::{Shown, WriteScope};
+    use crate::configure_fake::{Fake, row};
     use crate::keys::{Key, Mouse, MouseKind};
     use crate::stroke::Stroke;
     use contract::clock::Clock;
@@ -4354,6 +4359,20 @@ mod stacked {
         app
     }
 
+    /// A seam over more rows than either view draws, so a wheel step
+    /// that reached the list would move its window.
+    fn fake() -> Fake {
+        Fake::new(vec![
+            row(
+                "handoff.tokens",
+                Shown::Value("400000".to_owned()),
+                "default",
+                WriteScope::Any { repo: true },
+            );
+            40
+        ])
+    }
+
     #[test]
     fn a_home_question_or_picker_takes_the_wheel_over_the_list() {
         let mut app = short_home();
@@ -4415,10 +4434,10 @@ mod stacked {
     fn a_swapped_view_on_home_gives_the_notice_frame_the_whole_screen() {
         for kind in ["keys", "settings", "picker"] {
             let mut app = short_home();
-            app.set_configure(Some(
+            app.set_configure(
                 std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]))
                     as std::sync::Arc<dyn crate::Configure>,
-            ));
+            );
             match kind {
                 "picker" => {
                     app.on_key(Key::CtrlL, now());
@@ -4534,25 +4553,31 @@ mod stacked {
     #[test]
     fn keymap_over_a_swapped_view_swallows_the_view_region_only() {
         let mut app = panel_session();
+        app.set_configure(Arc::new(fake()) as Arc<dyn Configure>);
         app.on_wheel(&wheel(30, 5, false));
         assert!(app.top().is_some(), "setup scrolled the conversation up");
-        // No seam: Settings opens as Unavailable, still a swapped view
-        // over the conversation area.
         app.open_config_view(crate::app::ConfigView::Settings);
         assert!(app.config_view_open(), "the view opened");
         open(&mut app, Surface::Keymap);
         let top = app.top();
         assert!(top.is_some(), "opening keeps the scrolled conversation");
+        let frame = app.config_view_screen().expect("the view stays open");
+        let (window, marked) = (frame.list.top(), frame.list.selected());
         // The view region: swallowed, view and conversation unchanged.
+        // A wheel that reached the list would move its window over this
+        // many rows.
         app.on_wheel(&wheel(30, 5, true));
         assert_eq!(app.top(), top, "the wheel left the conversation");
+        let frame = app.config_view_screen().expect("the view stays open");
         assert_eq!(
-            app.config_view_screen()
-                .expect("the view stays open")
-                .list
-                .selected(),
-            0,
-            "the wheel left the view"
+            frame.list.top(),
+            window,
+            "the wheel moved the view's window"
+        );
+        assert_eq!(
+            frame.list.selected(),
+            marked,
+            "the wheel moved the view's selection"
         );
         assert!(app.top_surfaces().contains(&Surface::Keymap));
         // The panel region: the panel scrolls instead.
@@ -4580,11 +4605,10 @@ mod stacked {
     #[test]
     fn keymap_over_a_home_config_view_swallows_the_list_region() {
         let mut app = short_home();
+        app.set_configure(Arc::new(fake()) as Arc<dyn Configure>);
         app.on_wheel(&wheel(2, 5, true));
         let scrolled = app.home_list_scroll();
         assert!(scrolled > 0, "setup scrolled the home list down");
-        // No seam: Settings opens as Unavailable, still a swapped view
-        // over the whole screen.
         app.open_config_view(crate::app::ConfigView::Settings);
         assert!(app.config_view_open(), "the view opened");
         open(&mut app, Surface::Keymap);
@@ -4593,20 +4617,27 @@ mod stacked {
             scrolled,
             "opening keeps the scrolled list"
         );
-        // The list region: swallowed, view and list unchanged.
+        let frame = app.config_view_screen().expect("the view stays open");
+        let (window, marked) = (frame.list.top(), frame.list.selected());
+        // The list region: swallowed, view and list unchanged. A wheel
+        // that reached the list would move its window over this many
+        // rows.
         app.on_wheel(&wheel(2, 5, true));
         assert_eq!(
             app.home_list_scroll(),
             scrolled,
             "the wheel left the home list"
         );
+        let frame = app.config_view_screen().expect("the view stays open");
         assert_eq!(
-            app.config_view_screen()
-                .expect("the view stays open")
-                .list
-                .selected(),
-            0,
-            "the wheel left the view"
+            frame.list.top(),
+            window,
+            "the wheel moved the view's window"
+        );
+        assert_eq!(
+            frame.list.selected(),
+            marked,
+            "the wheel moved the view's selection"
         );
         assert!(app.top_surfaces().contains(&Surface::Keymap));
         // The rail region: the rail takes it, not the list.
@@ -4761,7 +4792,7 @@ mod outside_click {
                 kind: LoginKind::Key,
             }]);
         }
-        app.set_configure(Some(Arc::new(fake) as Arc<dyn Configure>));
+        app.set_configure(Arc::new(fake) as Arc<dyn Configure>);
         let _ = app.open_config_view(ConfigView::Login);
         assert!(
             app.top_surfaces().contains(&Surface::ConfigView),
@@ -4784,7 +4815,7 @@ mod outside_click {
                 siblings: Vec::new(),
             }]);
         }
-        app.set_configure(Some(Arc::new(fake) as Arc<dyn Configure>));
+        app.set_configure(Arc::new(fake) as Arc<dyn Configure>);
         let _ = app.open_config_view(ConfigView::Logout);
         assert!(
             app.top_surfaces().contains(&Surface::ConfigView),

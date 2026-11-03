@@ -33,8 +33,7 @@ fn screen(lp: &super::Loop<TestBackend>) -> String {
 /// and `openai` not installed, and the picker open on the row.
 fn loop_on_row(seam: &Arc<Fake>) -> (super::Loop<TestBackend>, Receiver<Input>) {
     let (mut lp, _) = new_loop(TestBackend::new(100, 30), None);
-    lp.app
-        .set_configure(Some(Arc::clone(seam) as Arc<dyn Configure>));
+    lp.app.set_configure(Arc::clone(seam) as Arc<dyn Configure>);
     lp.app.set_home(crate::Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),

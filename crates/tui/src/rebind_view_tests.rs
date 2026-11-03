@@ -148,7 +148,7 @@ fn keys_failed_save_80x24() {
         *refuse = Some("disk full".to_owned());
     }
     let mut app = attached(80, 24);
-    app.set_configure(Some(fake as Arc<dyn crate::Configure>));
+    app.set_configure(fake as Arc<dyn crate::Configure>);
     slash_keys(&mut app);
     for _ in 0..5 {
         tap(&mut app, "down");
