@@ -428,8 +428,10 @@ fn built(window: u64, tools: Vec<contract::events::SentTool>) -> contract::event
 }
 
 #[test]
-fn definitions_notice_names_the_three_largest_sources_by_size() {
+fn definitions_notice_names_the_largest_source_and_the_disabling_configuration() {
     // Each definition is its pad plus 10 bytes of JSON: {"pad":"..."}.
+    // `docs/tools.md`, "Size warning", promises only the largest sources
+    // and the disabling configuration: no count, no order.
     let tools = vec![
         sent("a", "small", false, 10),
         sent("b", "big", false, 300),
@@ -438,11 +440,8 @@ fn definitions_notice_names_the_three_largest_sources_by_size() {
     ];
     let notice = super::definitions_notice(&built(100, tools), true).unwrap();
     let text = notice.message;
-    let big = text.find("big (310 bytes)").unwrap();
-    let mid = text.find("mid (110 bytes)").unwrap();
-    let smaller = text.find("smaller (30 bytes)").unwrap();
-    assert!(big < mid && mid < smaller, "{text}");
-    assert!(!text.contains("small ("), "{text}");
+    assert!(text.contains("big (310 bytes)"), "{text}");
+    assert!(text.contains("tools.disabled"), "{text}");
 }
 
 #[test]
@@ -462,17 +461,6 @@ fn definitions_notice_says_deferral_is_off_only_when_not_deferring() {
         super::definitions_notice(&event, false).unwrap().message,
         format!("{on} Deferral is off for this model, so every tool is declared in full.")
     );
-}
-
-#[test]
-fn definitions_notice_at_exactly_ten_percent_is_none_in_both_states() {
-    // 20 serialized bytes (`{"pad":"xxxxxxxxxx"}`) are exactly 10% of a
-    // 50-token window at four bytes a token, and over 10% of 49.
-    let tools = vec![sent("a", "s", false, 10)];
-    assert!(super::definitions_notice(&built(50, tools.clone()), true).is_none());
-    assert!(super::definitions_notice(&built(50, tools.clone()), false).is_none());
-    assert!(super::definitions_notice(&built(49, tools.clone()), true).is_some());
-    assert!(super::definitions_notice(&built(49, tools), false).is_some());
 }
 
 /// A test tool with a fixed definition and guidelines, for build tests.

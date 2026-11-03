@@ -421,6 +421,9 @@ fn an_oversize_notice_says_deferral_is_off_for_a_model_without_deferred_tools() 
         "{message}"
     );
     let requests = server.requests();
+    // One step is one round-trip, and a reply with no tool call ends the
+    // turn without a next one (`docs/loop.md`, "One step"): the hello
+    // reply takes exactly one request.
     assert_eq!(requests.len(), 1);
     let tools = request_tools(&requests[0].body);
     assert!(!has_native_search(&tools), "{tools:?}");
@@ -455,6 +458,9 @@ fn an_oversize_notice_leaves_the_off_sentence_out_for_a_model_with_deferred_tool
     );
     assert!(!message.contains("Deferral is off"), "{message}");
     let requests = server.requests();
+    // One step is one round-trip, and a reply with no tool call ends the
+    // turn without a next one (`docs/loop.md`, "One step"): the hello
+    // reply takes exactly one request.
     assert_eq!(requests.len(), 1);
     let tools = request_tools(&requests[0].body);
     assert!(has_native_search(&tools), "{tools:?}");

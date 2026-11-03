@@ -2431,6 +2431,27 @@ fn an_oversize_notice_on_a_deferring_model_leaves_the_off_sentence_out() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
+    // The full stream as a multiset, so a missing or duplicated
+    // non-notice event fails (`docs/testing.md`, "Event streams").
+    let mut stream: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    stream.sort_unstable();
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "notice",
+    ];
+    expected.sort_unstable();
+    assert_eq!(stream, expected);
     let notices: Vec<&Envelope> = lines.iter().filter(|line| line.kind == "notice").collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].payload["code"], "tool_definitions_large");

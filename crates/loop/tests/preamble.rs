@@ -618,8 +618,16 @@ fn an_oversize_notice_on_a_deferring_model_without_a_search_factory_says_deferra
     );
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
-    let notices: Vec<Value> = session
-        .lines()
+    let lines = session.lines();
+    // The full stream as a multiset, so a missing or duplicated
+    // non-notice event fails (`docs/testing.md`, "Event streams").
+    let mut stream = kinds(&lines);
+    stream.sort_unstable();
+    let mut expected = TURN_KINDS.to_vec();
+    expected.push("notice");
+    expected.sort_unstable();
+    assert_eq!(stream, expected);
+    let notices: Vec<Value> = lines
         .into_iter()
         .filter(|line| line.kind == "notice")
         .map(|line| Value::Object(line.payload))
