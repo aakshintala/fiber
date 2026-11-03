@@ -620,6 +620,14 @@ impl App {
         out
     }
 
+    /// Test-only `home_answer` without a prebuilt answer: builds the
+    /// answer from the outbox, as `on_line_inner` does.
+    #[cfg(test)]
+    pub(super) fn home_line(&mut self, line: &Line) -> Option<Vec<String>> {
+        let answer = super::answer::Answer::of(line, &self.outbox);
+        self.home_answer(line, answer.as_ref())
+    }
+
     /// Folds one hub line into the session list, with the lines to send;
     /// `None` means `on_line` dispatches the unconsumed line to its hub or session handler. A hub `session_left` and
     /// every `session_status` fold into the rows; the answers to `feed`
@@ -629,12 +637,6 @@ impl App {
     /// until the last subscribe's acknowledgement. `attention` and other
     /// hub lines pass through untouched, and a status still reaches the
     /// conversation below.
-    #[cfg(test)]
-    pub(super) fn home_line(&mut self, line: &Line) -> Option<Vec<String>> {
-        let answer = super::answer::Answer::of(line, &self.outbox);
-        self.home_answer(line, answer.as_ref())
-    }
-
     pub(super) fn home_answer(
         &mut self,
         line: &Line,
@@ -731,8 +733,9 @@ impl App {
                         Some(super::Waiting::ChangeWorkspace(_)) => return None,
                         Some(super::Waiting::ClearClose) => return None,
                         Some(super::Waiting::History) => return None,
-                        Some(super::Waiting::ImageFetch) => return None,
-                        Some(super::Waiting::ImageDisplay) => return None,
+                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                            return None;
+                        }
                         Some(super::Waiting::Abandoned) => return None,
                         None => {}
                     }

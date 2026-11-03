@@ -1571,12 +1571,7 @@ impl App {
                             return lines;
                         }
                     }
-                    Some(Waiting::ImageFetch) => {
-                        if self.image_answered(id, answer.payload.get("result")) {
-                            return Vec::new();
-                        }
-                    }
-                    Some(Waiting::ImageDisplay) => {
+                    Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
                         if self.image_answered(id, answer.payload.get("result")) {
                             return Vec::new();
                         }
@@ -1627,23 +1622,13 @@ impl App {
                             }
                         }
                         Some(Waiting::ClearClose) => self.clear_close_settled(id),
-                        Some(Waiting::ImageFetch) => {
+                        Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
                             if self.image_rejected(id, &message) {
                                 return Vec::new();
                             }
                         }
-                        Some(Waiting::ImageDisplay) => {
-                            if self.image_rejected(id, &message) {
-                                return Vec::new();
-                            }
-                        }
-                        Some(Waiting::Fork) => {
-                            if self.rewind_hub_refused(id, &code, &message, true) {
-                                return Vec::new();
-                            }
-                        }
-                        Some(Waiting::RewindSend) => {
-                            if self.rewind_hub_refused(id, &code, &message, false) {
+                        Some(waiting @ (Waiting::Fork | Waiting::RewindSend)) => {
+                            if self.rewind_hub_refused(id, &code, &message, waiting) {
                                 return Vec::new();
                             }
                         }
@@ -1843,8 +1828,7 @@ impl App {
             Some(Waiting::RewindSend) => None,
             Some(Waiting::ClearStart) => None,
             Some(Waiting::History) => None,
-            Some(Waiting::ImageFetch) => None,
-            Some(Waiting::ImageDisplay) => None,
+            Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => None,
             Some(Waiting::Sessions) => None,
             Some(Waiting::Abandoned) => None,
             None => None,

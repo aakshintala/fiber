@@ -891,14 +891,9 @@ impl App {
             "command_accepted" => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
                     match answer.and_then(|answer| answer.waiting.as_ref()) {
-                        Some(super::Waiting::Fork) => {
+                        Some(waiting @ (super::Waiting::Fork | super::Waiting::RewindSend)) => {
                             return self
-                                .rewind_send_accepted(&accepted, true)
-                                .unwrap_or_default();
-                        }
-                        Some(super::Waiting::RewindSend) => {
-                            return self
-                                .rewind_send_accepted(&accepted, false)
+                                .rewind_send_accepted(&accepted, waiting)
                                 .unwrap_or_default();
                         }
                         Some(super::Waiting::RewindHistory) => {
@@ -909,8 +904,9 @@ impl App {
                         Some(super::Waiting::ClearStart) => return Vec::new(),
                         Some(super::Waiting::ClearClose) => return Vec::new(),
                         Some(super::Waiting::History) => return Vec::new(),
-                        Some(super::Waiting::ImageFetch) => return Vec::new(),
-                        Some(super::Waiting::ImageDisplay) => return Vec::new(),
+                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                            return Vec::new();
+                        }
                         Some(super::Waiting::Sessions) => return Vec::new(),
                         Some(super::Waiting::Abandoned) => return Vec::new(),
                         None => {}
@@ -945,8 +941,9 @@ impl App {
                         Some(super::Waiting::ClearStart) => return Vec::new(),
                         Some(super::Waiting::ClearClose) => return Vec::new(),
                         Some(super::Waiting::History) => return Vec::new(),
-                        Some(super::Waiting::ImageFetch) => return Vec::new(),
-                        Some(super::Waiting::ImageDisplay) => return Vec::new(),
+                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                            return Vec::new();
+                        }
                         Some(super::Waiting::Sessions) => return Vec::new(),
                         Some(super::Waiting::Abandoned) => return Vec::new(),
                         None => {}

@@ -2931,3 +2931,37 @@ fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
         ]
     );
 }
+
+/// A hub refusal for a fork settles, while any other wait leaves the
+/// send alone: flipping the two returns the wrong settlement.
+#[test]
+fn rewind_hub_refused_tells_fork_from_other_waits() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    assert!(app.rewind_hub_refused("c_fork", "busy", "busy happened", &Waiting::Fork));
+    assert!(!app.rewind_hub_refused("c_other", "busy", "busy happened", &Waiting::History));
+}
+
+/// A fork's accept attaches without a send match, while any other wait
+/// falls through: flipping the two attaches the wrong command.
+#[test]
+fn rewind_send_accepted_tells_fork_from_other_waits() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let accepted = contract::events::CommandAccepted {
+        command_id: contract::CommandId("c_fork".to_owned()),
+        result: Some(contract::events::CommandResult::Rewind {
+            new_session_id: contract::SessionId(NEW.to_owned()),
+        }),
+    };
+    assert!(
+        app.rewind_send_accepted(&accepted, &Waiting::Fork)
+            .is_some(),
+        "a fork attaches without a send match"
+    );
+    assert!(
+        app.rewind_send_accepted(&accepted, &Waiting::History)
+            .is_none(),
+        "any other wait falls through"
+    );
+}

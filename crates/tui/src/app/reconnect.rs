@@ -171,11 +171,12 @@ impl App {
         self.reconnect.fresh.clear();
     }
 
-    /// The `sessions` answer with `id`: when it is the one waiting, drop
-    /// every live row its running set omits, except one with a feed line
-    /// after `sessions` was sent, and take the wait off. A stale id, from
-    /// before a later `sessions`, changes nothing. True when handled.
-    pub(super) fn sessions_accepted(&mut self, id: &str, result: &Value) -> bool {
+    /// The `sessions` answer for the waiting id: drop every live row
+    /// its running set omits, except one with a feed line after
+    /// `sessions` was sent, and take the wait off. The router matches
+    /// `Waiting::Sessions` before calling, so a stale id never reaches
+    /// here.
+    pub(super) fn sessions_accepted(&mut self, id: &str, result: &Value) {
         self.outbox.settled(id);
         let running: HashSet<SessionId> = result
             .get("live")
@@ -201,15 +202,14 @@ impl App {
             }
         }
         self.reconnect.fresh.clear();
-        true
     }
 
-    /// A rejected `sessions` with `id`: when it is the one waiting, take
-    /// the wait off and keep the rows. True when handled.
-    pub(super) fn sessions_rejected(&mut self, id: &str) -> bool {
+    /// A rejected `sessions` for the waiting id: take the wait off and
+    /// keep the rows. The router matches `Waiting::Sessions` before
+    /// calling.
+    pub(super) fn sessions_rejected(&mut self, id: &str) {
         self.outbox.settled(id);
         self.reconnect.fresh.clear();
-        true
     }
 
     /// Whether a failed connect says so in a notice: only the first of a

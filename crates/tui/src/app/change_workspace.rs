@@ -37,12 +37,14 @@ impl App {
         }
     }
 
-    /// A hub refusal keeps generic settlement and its notice.
-    pub(in crate::app) fn change_workspace_hub_refused(&mut self, id: &str, code: &str) -> bool {
+    /// A hub refusal for the waiting move: a `duplicate_command` keeps
+    /// the first command's claim until it answers, any other code
+    /// settles the wait. Generic settlement and its notice run on the
+    /// caller side.
+    pub(in crate::app) fn change_workspace_hub_refused(&mut self, id: &str, code: &str) {
         if code != "duplicate_command" {
             self.outbox.settled(id);
         }
-        false
     }
 
     /// An unwritten move has no answer still to come.

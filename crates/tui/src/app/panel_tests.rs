@@ -1863,3 +1863,25 @@ fn switch_and_reset_clear_thinking_now() {
     app.panel_state.reset();
     assert!(!app.panel_state().thinking_now());
 }
+
+/// A hub rejection for a shell id settles the generic refusal before
+/// the panel's: the notice names the refusal and the branch query
+/// clears, so deleting either call fails. The shell shares the branch
+/// query's id so one rejection exercises both paths.
+#[test]
+fn panel_refused_runs_after_rejected_for_a_shell_id() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let lines = ack(&mut app, &out);
+    let shell_id = branch_query(&lines);
+    app.outbox.pending.insert(
+        shell_id.clone(),
+        (crate::app::Kind::Shell, crate::input::Draft::default()),
+    );
+    assert_eq!(app.panel_state.asked.as_deref(), Some(shell_id.as_str()));
+    let returned = app.on_line(refused(&shell_id));
+    assert_eq!(app.notice(), Some("no"));
+    assert!(!app.outbox.pending.contains_key(&shell_id));
+    assert!(app.panel_state.asked.is_none());
+    assert!(returned.is_empty());
+}
