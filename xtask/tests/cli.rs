@@ -622,13 +622,28 @@ fn stress_plan_with_no_touched_tests_summarises_the_empty_selection() {
     );
 }
 
+/// A linked flake issue's text as the plan step writes it: the filer's marker
+/// sentence, a `tested` line, fenced failure text carrying a stray backticked
+/// span, then a closing fence, a reopened fence, and a marker-looking line
+/// that stays inside the open fence and names nothing.
+const ISSUE_BODY: &str = "The test `b fold::tests::second` passed after a retry on linux.\n\
+     tested deadbeef\n\
+     ```\n\
+     failure text quoting `other::t`\n\
+     ```\n\
+     ```\n\
+     The test `sneaky::inside` passed after a retry on linux.\n";
+
+/// A marker for a test the selection does not contain.
+const GHOST_MARKER: &str = "The test `b missing::ghost` passed after a retry on linux.\n";
+
 #[test]
 fn stress_plan_with_only_named_plans_the_named_tests() {
     let dir = stress_branch();
     let home = home(&dir);
-    dir.write("names.txt", "fold::tests::second\n");
-    let names = dir.path().join("names.txt");
-    let names = names.to_str().unwrap();
+    dir.write("issue.txt", ISSUE_BODY);
+    let issue = dir.path().join("issue.txt");
+    let issue = issue.to_str().unwrap();
     dir.write("summary.md", "");
     let summary = dir.path().join("summary.md");
     let summary = summary.to_str().unwrap();
@@ -640,8 +655,8 @@ fn stress_plan_with_only_named_plans_the_named_tests() {
             "main",
             "--labels",
             "test-only",
-            "--names-file",
-            names,
+            "--issue-text",
+            issue,
             "--only",
             "named",
             "--summary",
@@ -672,9 +687,9 @@ fn stress_plan_with_only_named_plans_the_named_tests() {
 fn stress_plan_with_only_rest_plans_the_rest_at_thirty() {
     let dir = stress_branch();
     let home = home(&dir);
-    dir.write("names.txt", "fold::tests::second\n");
-    let names = dir.path().join("names.txt");
-    let names = names.to_str().unwrap();
+    dir.write("issue.txt", ISSUE_BODY);
+    let issue = dir.path().join("issue.txt");
+    let issue = issue.to_str().unwrap();
     dir.write("summary.md", "");
     let summary = dir.path().join("summary.md");
     let summary = summary.to_str().unwrap();
@@ -686,8 +701,8 @@ fn stress_plan_with_only_rest_plans_the_rest_at_thirty() {
             "main",
             "--labels",
             "test-only",
-            "--names-file",
-            names,
+            "--issue-text",
+            issue,
             "--only",
             "rest",
             "--summary",
@@ -718,9 +733,9 @@ fn stress_plan_with_only_rest_plans_the_rest_at_thirty() {
 fn stress_plan_with_only_rest_reports_names_matching_no_test() {
     let dir = stress_branch();
     let home = home(&dir);
-    dir.write("names.txt", "fold::tests::second\nmissing::ghost\n");
-    let names = dir.path().join("names.txt");
-    let names = names.to_str().unwrap();
+    dir.write("issue.txt", &[GHOST_MARKER, ISSUE_BODY].concat());
+    let issue = dir.path().join("issue.txt");
+    let issue = issue.to_str().unwrap();
     dir.write("summary.md", "");
     let summary = dir.path().join("summary.md");
     let summary = summary.to_str().unwrap();
@@ -732,8 +747,8 @@ fn stress_plan_with_only_rest_reports_names_matching_no_test() {
             "main",
             "--labels",
             "test-only",
-            "--names-file",
-            names,
+            "--issue-text",
+            issue,
             "--only",
             "rest",
             "--summary",
@@ -765,9 +780,9 @@ fn stress_plan_with_only_rest_reports_names_matching_no_test() {
 fn stress_plan_with_only_named_and_no_match_skips_the_run() {
     let dir = stress_branch();
     let home = home(&dir);
-    dir.write("names.txt", "missing::ghost\n");
-    let names = dir.path().join("names.txt");
-    let names = names.to_str().unwrap();
+    dir.write("issue.txt", &[GHOST_MARKER, "tested deadbeef\n"].concat());
+    let issue = dir.path().join("issue.txt");
+    let issue = issue.to_str().unwrap();
     dir.write("summary.md", "");
     let summary = dir.path().join("summary.md");
     let summary = summary.to_str().unwrap();
@@ -779,8 +794,8 @@ fn stress_plan_with_only_named_and_no_match_skips_the_run() {
             "main",
             "--labels",
             "test-only",
-            "--names-file",
-            names,
+            "--issue-text",
+            issue,
             "--only",
             "named",
             "--summary",
@@ -803,9 +818,9 @@ fn stress_plan_with_only_named_and_no_match_skips_the_run() {
 fn stress_plan_without_only_plans_every_test_at_the_label_count() {
     let dir = stress_branch();
     let home = home(&dir);
-    dir.write("names.txt", "fold::tests::second\n");
-    let names = dir.path().join("names.txt");
-    let names = names.to_str().unwrap();
+    dir.write("issue.txt", ISSUE_BODY);
+    let issue = dir.path().join("issue.txt");
+    let issue = issue.to_str().unwrap();
     dir.write("summary.md", "");
     let summary = dir.path().join("summary.md");
     let summary = summary.to_str().unwrap();
@@ -817,8 +832,8 @@ fn stress_plan_without_only_plans_every_test_at_the_label_count() {
             "main",
             "--labels",
             "test-only",
-            "--names-file",
-            names,
+            "--issue-text",
+            issue,
             "--summary",
             summary,
         ],
@@ -870,10 +885,10 @@ fn stress_plan_with_a_bad_only_is_an_error() {
 }
 
 #[test]
-fn stress_plan_with_a_missing_names_file_is_an_error() {
+fn stress_plan_with_a_missing_issue_text_file_is_an_error() {
     let dir = stress_branch();
     let home = home(&dir);
-    let missing = dir.path().join("names-missing.txt");
+    let missing = dir.path().join("issue-missing.txt");
     let missing = missing.to_str().unwrap();
     let (code, out) = xtask(
         &dir,
@@ -881,7 +896,7 @@ fn stress_plan_with_a_missing_names_file_is_an_error() {
             "stress-plan",
             "--base",
             "main",
-            "--names-file",
+            "--issue-text",
             missing,
             "--only",
             "named",
@@ -890,7 +905,62 @@ fn stress_plan_with_a_missing_names_file_is_an_error() {
         "",
     );
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("names-missing.txt"), "{out}");
+    assert!(out.contains("issue-missing.txt"), "{out}");
+}
+
+#[test]
+fn stress_plan_with_an_empty_issue_text_file_plans_every_test_at_the_label_count() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write("issue.txt", "");
+    let issue = dir.path().join("issue.txt");
+    let issue = issue.to_str().unwrap();
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    // An empty issue-text file yields no names: the all-100 fallback.
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--labels",
+            "test-only",
+            "--issue-text",
+            issue,
+            "--summary",
+            summary,
+        ],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    let mut head = Vec::new();
+    let mut rest = Vec::new();
+    for line in out.lines() {
+        if line.starts_with("run\t") || line.starts_with("count\t") {
+            head.push(line.to_owned());
+        } else {
+            rest.push(line.to_owned());
+        }
+    }
+    head.sort();
+    rest.sort();
+    assert_eq!(head, ["count\t100".to_owned(), "run\ttrue".to_owned()]);
+    assert!(rest.contains(&"test\ta::t new_test".to_owned()), "{rest:?}");
+    assert!(
+        rest.contains(&"test\tb fold::tests::second".to_owned()),
+        "{rest:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "### Stress job: 2 tests, 100 runs each\n\
+         ```\n\
+         test\ta::t new_test\n\
+         test\tb fold::tests::second\n\
+         ```\n"
+    );
 }
 
 #[test]

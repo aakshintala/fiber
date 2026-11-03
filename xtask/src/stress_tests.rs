@@ -502,13 +502,22 @@ fn unmatched_names_lists_names_matching_no_touched_test() {
 }
 
 #[test]
-fn names_file_lines_split_on_newlines_with_nothing_else_stripped() {
-    let temp = fakes::TempDir::new("xtask-stress-names");
-    temp.write("names.txt", "bash::registers\n\n padded\n");
-    let path = temp.path().join("names.txt").to_string_lossy().into_owned();
+fn issue_text_names_are_extracted_by_issue_test_names() {
+    let temp = fakes::TempDir::new("xtask-stress-issue-text");
+    temp.write(
+        "issue.txt",
+        "The test `main bash::registers` passed after a retry on linux.\n\
+         tested deadbeef\n\
+         ```\n\
+         failure text quoting `other::t`\n\
+         ```\n\
+         ```\n\
+         The test `sneaky::inside` passed after a retry on linux.\n",
+    );
+    let path = temp.path().join("issue.txt").to_string_lossy().into_owned();
     assert_eq!(
-        read_names_file(&path),
-        Ok(vec!["bash::registers".to_owned(), " padded".to_owned()])
+        names_from_issue_text(&path),
+        Ok(vec!["bash::registers".to_owned()])
     );
     let missing = temp
         .path()
@@ -516,9 +525,17 @@ fn names_file_lines_split_on_newlines_with_nothing_else_stripped() {
         .to_string_lossy()
         .into_owned();
     assert!(
-        read_names_file(&missing).is_err_and(|error| error.contains("missing.txt")),
+        names_from_issue_text(&missing).is_err_and(|error| error.contains("missing.txt")),
         "{missing}"
     );
+}
+
+#[test]
+fn an_empty_issue_text_file_yields_no_names() {
+    let temp = fakes::TempDir::new("xtask-stress-issue-text-empty");
+    temp.write("issue.txt", "");
+    let path = temp.path().join("issue.txt").to_string_lossy().into_owned();
+    assert_eq!(names_from_issue_text(&path), Ok(Vec::<String>::new()));
 }
 
 const CI_STRESS_OUTPUT_RAW: &str = include_str!("stress_tests/nextest-ci-30.raw");

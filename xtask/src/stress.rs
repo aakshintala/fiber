@@ -1,7 +1,9 @@
 //! The stress job's helpers (`docs/ci.md`, "On every pull request that changes code").
 
 use crate::rules::RustFile;
-use crate::select::{Members, TestRef, filter, has_test_functions, spec, split_named_tests};
+use crate::select::{
+    Members, TestRef, filter, has_test_functions, issue_test_names, spec, split_named_tests,
+};
 use crate::test_index::TestIndex;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
@@ -381,8 +383,8 @@ fn group_summary(count: u32, lines: &[String], only: Only) -> String {
     block
 }
 
-/// Names in `--names-file` that match no touched test, in file order: they
-/// run nowhere, and the rest call names them.
+/// Names from the issue text that match no touched test, in file order:
+/// they run nowhere, and the rest call names them.
 fn unmatched_names(names: &[String], touched: &[TestRef]) -> Vec<String> {
     names
         .iter()
@@ -391,15 +393,14 @@ fn unmatched_names(names: &[String], touched: &[TestRef]) -> Vec<String> {
         .collect()
 }
 
-/// The compared names in `--names-file`: one per line, empty lines
-/// dropped, nothing else stripped, folded or split again.
-fn read_names_file(path: &str) -> Result<Vec<String>, String> {
-    let contents = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
-    Ok(contents
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect())
+/// The normalised names in `--issue-text` FILE: the linked issue's body
+/// then each comment body, as `issue_test_names` extracts them. Nothing
+/// else in this command parses FILE: no trimming, no case folding, no
+/// prefix stripping here, because normalisation already happened inside
+/// `issue_test_names`.
+fn names_from_issue_text(path: &str) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+    Ok(issue_test_names(&text))
 }
 
 pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
@@ -407,8 +408,8 @@ pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     let labels = crate::optional(args, "--labels").unwrap_or_default();
     let summary = crate::optional(args, "--summary");
     let filter_file = crate::optional(args, "--filter-file");
-    let names = match crate::optional(args, "--names-file") {
-        Some(path) => read_names_file(&path)?,
+    let names = match crate::optional(args, "--issue-text") {
+        Some(path) => names_from_issue_text(&path)?,
         None => Vec::new(),
     };
     let only = parse_only(crate::optional(args, "--only"))?;
