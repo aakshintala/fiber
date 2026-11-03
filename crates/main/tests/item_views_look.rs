@@ -532,11 +532,21 @@ fn the_job_pty_view_matches_the_doc() {
     // completion — not `turn_finished` — is the readiness signal here.
     // No session event lands between the two clicks; only the first
     // click's own expansion changes the screen.
-    let grid = run.wait_screen("the tty job starts", |grid| {
-        grid.contents.contains("Jobs")
-            && grid.contents.contains("Done.")
-            && grid.contents.contains("completed")
-    });
+    // A frame with "READY", no Jobs card and a collapsed "Ran 1 command"
+    // means either the shell call opened no job or the job ended before
+    // step 2; the event path cannot lose a job that opened. The
+    // session-log tail shows which: `job_started` and `job_completed`
+    // carry `exit_code`, `signal` and `error.code` in the raw lines.
+    let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    let grid = run.wait_screen_reporting(
+        "the tty job starts",
+        |grid| {
+            grid.contents.contains("Jobs")
+                && grid.contents.contains("Done.")
+                && grid.contents.contains("completed")
+        },
+        || support::session_logs_tail(&sessions_dir),
+    );
     let title = row_with(&grid, "Jobs");
     click(&mut run, col_at(&grid, title, "Jobs"), title);
     let grid = run.wait_screen("the job row draws", |grid| {
