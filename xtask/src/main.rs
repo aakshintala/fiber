@@ -50,6 +50,9 @@
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `crate-edges`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
+//! - `doc-citations --print`: prints the allow table for code citations
+//!   (`xtask/doc-citations.allow`); `check-docs` fails what the table
+//!   does not list
 //! - `flake-report-events`: reads one JSON object on stdin carrying the
 //!   flake titles and the complete open and closed exact-title issue
 //!   lookups with their completeness, and prints the unique closed issue
@@ -112,6 +115,7 @@ mod bench;
 mod budget_bounds;
 mod census_ratchet;
 mod ci_needs;
+mod doc_citations;
 mod docs;
 mod flake_report;
 mod logo;
@@ -503,7 +507,16 @@ fn run(args: &[String]) -> Result<bool, String> {
             for path in docs::checked_files(root)? {
                 failures.extend(docs::check_file(root, &path)?);
             }
+            failures.extend(doc_citations::check(root)?);
             report("check-docs", &failures, "ok")
+        }
+        "doc-citations" => {
+            if rest == ["--print"] {
+                print!("{}", doc_citations::table(Path::new("."))?);
+                Ok(true)
+            } else {
+                Err("usage: cargo xtask doc-citations --print".to_owned())
+            }
         }
         "kinds-ratchet" => {
             let max: usize = flag(rest, "--max")?

@@ -3841,7 +3841,7 @@ fn platform_watch_catches_write_before_first_wait() {
         done_tx.send(exit).unwrap_or(());
     });
     // The verdict comes from `ParkExit`, never from elapsed time: 20 s is a
-    // hang guard under `docs/testing.md:13`, not a timing assertion.
+    // hang guard under `docs/testing.md, "Testing"`, not a timing assertion.
     let exit = Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2) // ruling: #4075
         .recv_or_fail(
             &done,
