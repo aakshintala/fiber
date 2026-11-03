@@ -17,3 +17,11 @@ crates/main/tests/tool_search.rs	fiber-4039	plan	2026-11-03T06:05:36Z	roundhouse
 crates/tui/src/screen.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/screen_tests.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/main/tests/wheel_garble.rs	fiber-4072	plan	2026-11-03T06:20:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/fakes/src/hold.rs	fiber-4067	plan	2026-11-03T07:23:36Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/fakes/src/hold_tests.rs	fiber-4067	plan	2026-11-03T07:23:36Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+docs/testing/running.md	fiber-4067	plan	2026-11-03T07:23:36Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+drop_reaps_a_parked_holder|reap\(self\.|fn reap\(|reap\(pattern|hold\.rs|hold_tests\.rs	fiber-4067	plan	2026-11-03T07:23:36Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+kill_matching|matching_exits	fiber-4067	plan	2026-11-03T07:23:36Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+Hold::park|Hold::on|fakes::Hold	fiber-4067	plan	2026-11-03T07:23:36Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+reap	fiber-4067	plan	2026-11-03T07:23:36Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+docs/testing/mutants.md	fiber-4067	plan	2026-11-03T07:23:36Z	roundhouse-7010-plus-1:/home/aakshintala/work	
