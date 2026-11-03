@@ -1328,12 +1328,8 @@ fn a_focused_link_keeps_surface_raised_when_a_line_hover_covers_it() {
     let pointer = (convo.left()..convo.right())
         .map(|x| (x, first.y))
         .find(|&(x, y)| {
-            !link_rects.iter().any(|rect| {
-                x >= rect.x
-                    && x < rect.x.saturating_add(rect.width)
-                    && y >= rect.y
-                    && y < rect.y.saturating_add(rect.height)
-            }) && matches!(hit(&targets, x, y), Some(TargetId::Line(_)))
+            !link_rects.iter().any(|rect| rect.contains((x, y).into()))
+                && matches!(hit(&targets, x, y), Some(TargetId::Line(_)))
         })
         .expect("an off-link cell on the focused row under a line target");
     // Hovering the covering line leaves the focused link's cells on

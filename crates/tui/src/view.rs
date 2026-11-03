@@ -113,18 +113,13 @@ fn paint_tints(
     // the focused link's cells too, so put them back on
     // `surface_raised`, keeping the marks pass's foreground and
     // modifiers (`docs/tui.md`, "Links").
-    if let Some(id) = focused
-        && matches!(id, TargetId::Link { .. })
-    {
+    if let Some(id) = focused {
         for target in targets.iter().filter(|target| target.id == id) {
-            restore_focused_link(buf, target.rect);
-        }
-    }
-    if let Some(id) = focused
-        && !matches!(id, TargetId::Link { .. })
-    {
-        for target in targets.iter().filter(|target| target.id == id) {
-            focus_style(buf, target.rect);
+            if matches!(id, TargetId::Link { .. }) {
+                restore_focused_link(buf, target.rect);
+            } else {
+                focus_style(buf, target.rect);
+            }
         }
     }
 }
