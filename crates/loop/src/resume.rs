@@ -370,6 +370,7 @@ impl Loop {
             ..
         } = resumed;
         let mut lines = crate::history::read_window(&session.log, window, end)?;
+        let kept = crate::kept::collect(&lines)?;
         // The suspended turn, if any: its batch stays open, so the rebuild
         // writes no fixed result for it; the finishing turn completes it.
         let halted = suspended(&lines)?;
@@ -460,6 +461,7 @@ impl Loop {
                 mode: crate::Mode::of(is_delegate, supervised),
             },
         )?;
+        resumed.kept = kept;
         let backfill = resumed.prepare_backfill(&delegate_sessions, &orphans)?;
         resumed.mark_orphans(orphans)?;
         // The backfill's missing copies, after the orphaned `job_completed`
