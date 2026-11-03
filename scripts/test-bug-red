@@ -164,7 +164,7 @@ rc=0
 LINUX_RESULT=cancelled MACOS_RESULT=success "$bug_red" --collect "" 100 >"$tmp/out-collect-cancelled.txt" 2>&1 || rc=$?
 [ "$rc" -eq 1 ] || { cat "$tmp/out-collect-cancelled.txt" >&2; fail "cancelled linux leg exited $rc, want 1"; }
 grep -Fq "linux leg ended cancelled with no result" "$tmp/out-collect-cancelled.txt" || { cat "$tmp/out-collect-cancelled.txt" >&2; fail "cancelled linux leg misses \"linux leg ended cancelled with no result\""; }
-if grep -Fq "missing or invalid platform result" "$tmp/out-collect-cancelled.txt"; then cat "$tmp/out-collect-cancelled.txt" >&2; fail "cancelled linux leg misses \"linux leg ended cancelled with no result\""; fi
+if grep -Fq "missing or invalid platform result" "$tmp/out-collect-cancelled.txt"; then cat "$tmp/out-collect-cancelled.txt" >&2; fail "cancelled linux leg reported \"missing or invalid platform result\" instead of naming the cancellation"; fi
 rc=0
 LINUX_RESULT=success MACOS_RESULT=cancelled "$bug_red" --collect 100 "" >"$tmp/out-collect-cancelled-macos.txt" 2>&1 || rc=$?
 [ "$rc" -eq 1 ] || { cat "$tmp/out-collect-cancelled-macos.txt" >&2; fail "cancelled macos leg exited $rc, want 1"; }
@@ -172,8 +172,8 @@ grep -Fq "macos leg ended cancelled with no result" "$tmp/out-collect-cancelled-
 rc=0
 LINUX_RESULT=failure MACOS_RESULT=cancelled "$bug_red" --collect "" "" >"$tmp/out-collect-both-empty.txt" 2>&1 || rc=$?
 [ "$rc" -eq 1 ] || { cat "$tmp/out-collect-both-empty.txt" >&2; fail "both-empty collect exited $rc, want 1"; }
-grep -Fq "linux leg ended failure with no result" "$tmp/out-collect-both-empty.txt" || { cat "$tmp/out-collect-both-empty.txt" >&2; fail "both-empty collect misses \"linux leg ended failure with no result\" or \"macos leg ended cancelled with no result\""; }
-grep -Fq "macos leg ended cancelled with no result" "$tmp/out-collect-both-empty.txt" || { cat "$tmp/out-collect-both-empty.txt" >&2; fail "both-empty collect misses \"linux leg ended failure with no result\" or \"macos leg ended cancelled with no result\""; }
+grep -Fq "linux leg ended failure with no result" "$tmp/out-collect-both-empty.txt" || { cat "$tmp/out-collect-both-empty.txt" >&2; fail "both-empty collect misses \"linux leg ended failure with no result\""; }
+grep -Fq "macos leg ended cancelled with no result" "$tmp/out-collect-both-empty.txt" || { cat "$tmp/out-collect-both-empty.txt" >&2; fail "both-empty collect misses \"macos leg ended cancelled with no result\""; }
 rc=0
 LINUX_RESULT=cancelled MACOS_RESULT=success "$bug_red" --collect "" docs >"$tmp/out-collect-cancelled-docs.txt" 2>&1 || rc=$?
 [ "$rc" -eq 1 ] || { cat "$tmp/out-collect-cancelled-docs.txt" >&2; fail "cancelled-with-docs collect exited $rc, want 1"; }
