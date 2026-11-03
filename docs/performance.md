@@ -158,7 +158,7 @@ plain-number samples of the fast class's stored files
 (`xtask/tests/class_data/9v45-session-list.json`). `scripts/class-data`
 regenerates that file from the `benchmarks-<sha>` artifacts of `main`
 runs; entries whose artifacts have expired, and entries from non-main runs,
-stay in the committed file by hand.
+stay in the committed file by hand. The attaching first-frame row's two tolerance cells are not pinned by a test. They were measured on 2026-11-03 from the stored `main` artifacts of the window since #3572 (2026-10-30 07:47 UTC) up to `715eef36c`, over the 26 9V45 and 51 7763 stored files carrying `terminal_attach_ms`, and #4061 records the run ids and the arithmetic.
 
 The busy-or-resumed ceiling holds on three workloads:
 
