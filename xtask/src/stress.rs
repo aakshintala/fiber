@@ -355,10 +355,13 @@ fn parse_only(value: Option<String>) -> Result<Option<Only>, String> {
 
 /// Runs for one planned group: the named tests keep the flaky-fix count
 /// from the labels, every other selected test runs the pilot default.
-fn group_count(only: Option<Only>, labels: &str) -> u32 {
-    match only {
-        Some(Only::Rest) => STRESS_COUNT,
-        None | Some(Only::Named) => stress_count(labels),
+/// When the issue names nothing there is no split to count, so every
+/// group falls back to the labels count: a test-only fix with no names
+/// still runs every selected test 100 times.
+fn group_count(only: Option<Only>, labels: &str, has_names: bool) -> u32 {
+    match (only, has_names) {
+        (Some(Only::Rest), true) => STRESS_COUNT,
+        _ => stress_count(labels),
     }
 }
 
@@ -425,7 +428,7 @@ pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
             (rest, unmatched_names(&names, &touched))
         }
     };
-    let count = group_count(only, &labels);
+    let count = group_count(only, &labels, !names.is_empty());
     let filter = filter(&group);
     if let Some(path) = filter_file {
         std::fs::write(&path, stress_config(&filter))
@@ -445,19 +448,24 @@ pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
         println!("{line}");
     }
     if let Some(path) = summary {
+        // The named call with no names prints no group: the rest call
+        // carries the fallback, so there is nothing to name here.
         let block = match only {
-            None => plan_summary(count, &lines),
-            Some(group) => group_summary(count, &lines, group),
+            None => Some(plan_summary(count, &lines)),
+            Some(Only::Named) if names.is_empty() => None,
+            Some(group) => Some(group_summary(count, &lines, group)),
         };
-        std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&path)
-            .and_then(|mut file| {
-                use std::io::Write as _;
-                file.write_all(block.as_bytes())
-            })
-            .map_err(|e| format!("{path}: {e}"))?;
+        if let Some(block) = block {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&path)
+                .and_then(|mut file| {
+                    use std::io::Write as _;
+                    file.write_all(block.as_bytes())
+                })
+                .map_err(|e| format!("{path}: {e}"))?;
+        }
     }
     for name in &unmatched {
         println!("Unmatched: {name}");

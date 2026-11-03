@@ -871,6 +871,117 @@ fn stress_plan_without_only_plans_every_test_at_the_label_count() {
 }
 
 #[test]
+fn stress_plan_with_only_rest_and_no_names_falls_back_to_the_label_count() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write(
+        "issue.txt",
+        "A note about the flake, naming no test.\n\
+         tested deadbeef\n\
+         ```\n\
+         a fenced failure excerpt\n\
+         ```\n",
+    );
+    let issue = dir.path().join("issue.txt");
+    let issue = issue.to_str().unwrap();
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    // No marker names no test: every selected test runs the label count,
+    // here 100, in the rest group that carries them all.
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--labels",
+            "test-only",
+            "--issue-text",
+            issue,
+            "--only",
+            "rest",
+            "--summary",
+            summary,
+        ],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    let mut head = Vec::new();
+    let mut rest = Vec::new();
+    for line in out.lines() {
+        if line.starts_with("run\t") || line.starts_with("count\t") {
+            head.push(line.to_owned());
+        } else {
+            rest.push(line.to_owned());
+        }
+    }
+    head.sort();
+    rest.sort();
+    assert_eq!(head, ["count\t100".to_owned(), "run\ttrue".to_owned()]);
+    assert!(rest.contains(&"test\ta::t new_test".to_owned()), "{rest:?}");
+    assert!(
+        rest.contains(&"test\tb fold::tests::second".to_owned()),
+        "{rest:?}"
+    );
+    assert!(
+        !rest.iter().any(|line| line.starts_with("Unmatched:")),
+        "{rest:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "### Stress job: 2 tests, 100 runs each (rest)\n\
+         ```\n\
+         test\ta::t new_test\n\
+         test\tb fold::tests::second\n\
+         ```\n"
+    );
+}
+
+#[test]
+fn stress_plan_with_only_named_and_no_names_prints_no_group() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write(
+        "issue.txt",
+        "A note about the flake, naming no test.\n\
+         tested deadbeef\n\
+         ```\n\
+         a fenced failure excerpt\n\
+         ```\n",
+    );
+    let issue = dir.path().join("issue.txt");
+    let issue = issue.to_str().unwrap();
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    // No names means no named group: the rest call carries the fallback,
+    // so the named call appends nothing to the summary.
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--labels",
+            "test-only",
+            "--issue-text",
+            issue,
+            "--only",
+            "named",
+            "--summary",
+            summary,
+        ],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "run\tfalse\ncount\t100\nfilter\t\n");
+    assert_eq!(std::fs::read_to_string(summary).unwrap(), "");
+}
+
+#[test]
 fn stress_plan_with_a_bad_only_is_an_error() {
     let dir = stress_branch();
     let home = home(&dir);
