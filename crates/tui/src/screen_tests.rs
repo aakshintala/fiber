@@ -567,6 +567,247 @@ fn repaint_clears_the_backend_and_invalidates_the_frame() {
     );
 }
 
+/// A backend recording each draw call's cells in order: one entry per
+/// call, each holding `(x, y, symbol)`, so the draw-order tests see which
+/// call carried each cell to the inner backend.
+#[derive(Default)]
+struct Order(Vec<Vec<(u16, u16, String)>>);
+
+impl SyncEmit for Order {
+    fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl Backend for Order {
+    type Error = std::io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.0.push(
+            content
+                .map(|(x, y, cell)| (x, y, cell.symbol().to_owned()))
+                .collect(),
+        );
+        Ok(())
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn get_cursor_position(&mut self) -> Result<ratatui::layout::Position, Self::Error> {
+        Ok(ratatui::layout::Position::new(3, 4))
+    }
+
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        _position: P,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> Result<(), Self::Error> {
+        let _ = clear_type;
+        Ok(())
+    }
+
+    fn size(&self) -> Result<ratatui::layout::Size, Self::Error> {
+        Ok(ratatui::layout::Size::new(1, 1))
+    }
+
+    fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
+        Ok(ratatui::backend::WindowSize {
+            columns_rows: ratatui::layout::Size::new(1, 1),
+            pixels: ratatui::layout::Size::new(1, 1),
+        })
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// A `TtySized` over the recording backend: the draw-order tests' backend.
+fn ordered() -> super::TtySized<Order> {
+    super::TtySized {
+        inner: Order::default(),
+        size: ratatui::layout::Size::new(40, 10),
+        open: false,
+        emit: Order::emit,
+        touched: false,
+    }
+}
+
+/// A cell holding `symbol`.
+fn held(symbol: &str) -> ratatui::buffer::Cell {
+    let mut cell = ratatui::buffer::Cell::default();
+    cell.set_symbol(symbol);
+    cell
+}
+
+/// The emoji, its trailing cell and the next cell reach the inner backend
+/// as three calls, trailing first: on a terminal giving the emoji two
+/// cells, the trailing blank would otherwise print one column right.
+#[test]
+fn a_variation_selector_emoji_trades_places_with_its_trailing_cell() {
+    let emoji = held("⚠️");
+    let trailing = held(" ");
+    let after = held("c");
+    let mut backend = ordered();
+    Backend::draw(
+        &mut backend,
+        [(3, 0, &emoji), (4, 0, &trailing), (5, 0, &after)].into_iter(),
+    )
+    .unwrap();
+    assert_eq!(
+        backend.inner.0,
+        [
+            vec![(4, 0, " ".to_owned())],
+            vec![(3, 0, "⚠️".to_owned())],
+            vec![(5, 0, "c".to_owned())],
+        ]
+    );
+}
+
+/// The emoji with no trailing cell yielded still ends its call: the cell
+/// after it starts a new one, so a later trailing yield cannot join it.
+#[test]
+fn a_variation_selector_emoji_without_a_trailing_cell_still_splits_the_next_call() {
+    let emoji = held("⚠️");
+    let after = held("c");
+    let mut backend = ordered();
+    Backend::draw(&mut backend, [(3, 0, &emoji), (5, 0, &after)].into_iter()).unwrap();
+    assert_eq!(
+        backend.inner.0,
+        [vec![(3, 0, "⚠️".to_owned())], vec![(5, 0, "c".to_owned())],]
+    );
+}
+
+/// Two emoji in a row each trade places with their own trailing cell: the
+/// second pair is untouched by the first one's swap.
+#[test]
+fn two_variation_selector_emojis_each_trade_places() {
+    let first = held("⚠️");
+    let first_trailing = held(" ");
+    let second = held("❤️");
+    let second_trailing = held(" ");
+    let after = held("d");
+    let mut backend = ordered();
+    Backend::draw(
+        &mut backend,
+        [
+            (3, 0, &first),
+            (4, 0, &first_trailing),
+            (5, 0, &second),
+            (6, 0, &second_trailing),
+            (7, 0, &after),
+        ]
+        .into_iter(),
+    )
+    .unwrap();
+    assert_eq!(
+        backend.inner.0,
+        [
+            vec![(4, 0, " ".to_owned())],
+            vec![(3, 0, "⚠️".to_owned())],
+            vec![(6, 0, " ".to_owned())],
+            vec![(5, 0, "❤️".to_owned())],
+            vec![(7, 0, "d".to_owned())],
+        ]
+    );
+}
+
+/// A wide cell with no variation selector keeps the run whole: only the
+/// selector pair reorders, never every wide cell.
+#[test]
+fn a_wide_cell_without_a_variation_selector_stays_in_one_call() {
+    let wide = held("界");
+    let after = held("c");
+    let mut backend = ordered();
+    Backend::draw(&mut backend, [(3, 0, &wide), (5, 0, &after)].into_iter()).unwrap();
+    assert_eq!(
+        backend.inner.0,
+        [vec![(3, 0, "界".to_owned()), (5, 0, "c".to_owned())]]
+    );
+}
+
+/// A trailing emoji with nothing after it draws in one call, with no panic
+/// on the missing next cell.
+#[test]
+fn a_trailing_variation_selector_emoji_draws_alone() {
+    let emoji = held("⚠️");
+    let mut backend = ordered();
+    Backend::draw(&mut backend, [(3, 0, &emoji)].into_iter()).unwrap();
+    assert_eq!(backend.inner.0, [vec![(3, 0, "⚠️".to_owned())]]);
+}
+
+/// The emoji does not pair with the next row's first cell: only the cell
+/// at the next column of the same row is its trailing cell.
+#[test]
+fn a_variation_selector_emoji_does_not_pair_with_the_next_rows_first_cell() {
+    let emoji = held("⚠️");
+    let next_row = held("a");
+    let mut backend = ordered();
+    Backend::draw(
+        &mut backend,
+        [(3, 0, &emoji), (0, 1, &next_row)].into_iter(),
+    )
+    .unwrap();
+    assert_eq!(
+        backend.inner.0,
+        [vec![(3, 0, "⚠️".to_owned())], vec![(0, 1, "a".to_owned())],]
+    );
+}
+
+/// The emoji does not pair with an earlier column of its row: the swap
+/// needs the next column exactly, not at most it.
+#[test]
+fn a_variation_selector_emoji_does_not_pair_with_an_earlier_column() {
+    let emoji = held("⚠️");
+    let earlier = held("a");
+    let mut backend = ordered();
+    Backend::draw(&mut backend, [(3, 0, &emoji), (2, 0, &earlier)].into_iter()).unwrap();
+    assert_eq!(
+        backend.inner.0,
+        [vec![(3, 0, "⚠️".to_owned())], vec![(2, 0, "a".to_owned())],]
+    );
+}
+
+/// The emoji does not pair with the cell under its trailing column on the
+/// next row: the swap needs the same row, not just the next column.
+#[test]
+fn a_variation_selector_emoji_does_not_pair_with_the_cell_below_its_trailing_column() {
+    let emoji = held("⚠️");
+    let below = held("b");
+    let mut backend = ordered();
+    Backend::draw(&mut backend, [(3, 0, &emoji), (4, 1, &below)].into_iter()).unwrap();
+    assert_eq!(
+        backend.inner.0,
+        [vec![(3, 0, "⚠️".to_owned())], vec![(4, 1, "b".to_owned())],]
+    );
+}
+
+/// Empty content still reaches the inner backend once, as before: no
+/// cursor-only frame turns into a missing call.
+#[test]
+fn empty_content_still_reaches_the_inner_backend_once() {
+    let mut backend = ordered();
+    let empty: [(u16, u16, &ratatui::buffer::Cell); 0] = [];
+    Backend::draw(&mut backend, empty.into_iter()).unwrap();
+    assert_eq!(backend.inner.0, [Vec::new()]);
+}
+
 /// Take_touched consumes the mark: true once after a frame wrote,
 /// false right after, with no wait.
 #[test]
