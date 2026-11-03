@@ -111,3 +111,29 @@ fn classify_reports_bus_error_linker_death_as_resource_exhaustion() {
         "the build was killed for lack of resources (matched \"terminated with signal 7\"); the code is unproven, not broken; rerun once the machine has memory.\n"
     );
 }
+
+#[test]
+fn classify_ignores_bare_linker_signal_without_build_marker() {
+    let dir = TempDir::new("xtask-check-resources");
+    dir.write(
+        "bare-signal.log",
+        "collect2: fatal error: ld terminated with signal 7\n",
+    );
+    let log = dir.path().join("bare-signal.log");
+    let output = Command::new(script())
+        .args(["classify", &log.to_string_lossy()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "bare signal without marker refused: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).is_empty(),
+        "bare signal without marker printed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
