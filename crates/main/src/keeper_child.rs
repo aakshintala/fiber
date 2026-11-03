@@ -179,7 +179,9 @@ impl Runtime {
                 Step::Exit => {
                     self.discard();
                     *log = None;
-                    let _ = self.done.send(Ok(()));
+                    match self.done.send(Ok(())) {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
             }
         }
@@ -220,7 +222,9 @@ impl Runtime {
         let mut state = lock(&process.state);
         if state.stopping.is_none() && !state.ended {
             state.stopping = Some(self.clock.now());
-            let _ = support::group::signal(process.pgid, Signal::TERM);
+            match support::group::signal(process.pgid, Signal::TERM) {
+                Ok(()) | Err(_) => {}
+            }
             state.seq = state.seq.wrapping_add(1);
             process.cv.notify_all();
         }
@@ -343,14 +347,18 @@ impl Runtime {
                 };
                 drop(state);
                 // Reader completion precedes exit, and the log mutex precedes sup.
-                let _ = runtime.send(FromKeeper::Exit {
+                match runtime.send(FromKeeper::Exit {
                     id: spec.id.clone(),
                     exit: exit.clone(),
-                });
+                }) {
+                    Ok(()) | Err(_) => {}
+                }
                 runtime.decide(|sup| sup.exited(&spec.id, exit))
             });
             if let Err(error) = result {
-                let _ = runtime.done.send(Err(error));
+                match runtime.done.send(Err(error)) {
+                    Ok(()) | Err(_) => {}
+                }
             }
         });
         Ok(())
@@ -386,11 +394,13 @@ impl Runtime {
                     }
                     match &mut state.sink {
                         Sink::Control => {
-                            let _ = runtime.send(FromKeeper::Output {
+                            match runtime.send(FromKeeper::Output {
                                 id: id.clone(),
                                 stream,
                                 bytes: base64::engine::general_purpose::STANDARD.encode(kept),
-                            });
+                            }) {
+                                Ok(()) | Err(_) => {}
+                            }
                         }
                         Sink::Hold(held) => held.push((stream, kept.to_vec())),
                         sink @ (Sink::Files { .. } | Sink::Discard) => {
@@ -411,7 +421,9 @@ impl Runtime {
             process.cv.notify_all();
             drop(state);
             if let Err(error) = result {
-                let _ = runtime.done.send(Err(error));
+                match runtime.done.send(Err(error)) {
+                    Ok(()) | Err(_) => {}
+                }
             }
         });
     }
@@ -434,7 +446,9 @@ impl Runtime {
                 .stopping
                 .and_then(|at| at.checked_add(support::group::GRACE));
             if kill_at.is_some_and(|at| now >= at) {
-                let _ = support::group::signal(process.pgid, Signal::KILL);
+                match support::group::signal(process.pgid, Signal::KILL) {
+                    Ok(()) | Err(_) => {}
+                }
                 return;
             }
             let until = if state.stopping.is_some() {

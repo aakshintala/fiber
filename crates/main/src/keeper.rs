@@ -90,8 +90,12 @@ impl Host {
                 support::group::detach(&mut command, false);
                 let mut child = command.spawn()?;
                 let Some(lifeline) = child.stdin.take() else {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    match child.kill() {
+                        Ok(()) | Err(_) => {}
+                    }
+                    match child.wait() {
+                        Ok(_) | Err(_) => {}
+                    }
                     return Err(io::Error::other("keeper lifeline missing"));
                 };
                 Ok(Connection {
@@ -112,13 +116,17 @@ impl Host {
                 && let Some(client) = lock(&host.slot).as_ref()
                 && let Some(id) = lock(&client.adopted).remove(&end.job_id)
             {
-                let _ = client.send(&ToKeeper::Confirmed(id));
+                match client.send(&ToKeeper::Confirmed(id)) {
+                    Ok(()) | Err(_) => {}
+                }
             }
         }))
     }
     pub(crate) fn send_shutdown(&self) {
         if let Some(client) = lock(&self.slot).as_ref() {
-            let _ = client.send(&ToKeeper::Shutdown(true));
+            match client.send(&ToKeeper::Shutdown(true)) {
+                Ok(()) | Err(_) => {}
+            }
         }
     }
     fn live(&self, id: &str) -> Result<Arc<Client>, HostError> {
@@ -234,7 +242,9 @@ impl Client {
             dead: AtomicBool::new(false),
         });
         #[cfg(test)]
-        let _ = host.client_sender.send(Arc::downgrade(&client));
+        match host.client_sender.send(Arc::downgrade(&client)) {
+            Ok(()) | Err(_) => {}
+        }
         let weak = Arc::downgrade(&client);
         let slot = Arc::downgrade(&host.slot);
         thread::spawn(move || {
@@ -267,7 +277,9 @@ impl Client {
                 }
             }
             if let Some(mut child) = connection.child {
-                let _ = child.wait();
+                match child.wait() {
+                    Ok(_) | Err(_) => {}
+                }
             }
         });
         Ok(client)
@@ -284,7 +296,9 @@ impl Client {
             if result.is_ok() {
                 lock(&self.waiters).insert(id.to_owned(), pending.events);
             }
-            let _ = pending.reply.send(result);
+            match pending.reply.send(result) {
+                Ok(()) | Err(_) => {}
+            }
             self.changed.bump();
         }
     }
@@ -297,12 +311,16 @@ impl Client {
                     .decode(bytes)
                     .map_err(io::Error::other)?;
                 if let Some(events) = lock(&self.waiters).get(&id) {
-                    let _ = events.send(HostEvent::Output { stream, bytes });
+                    match events.send(HostEvent::Output { stream, bytes }) {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
             }
             FromKeeper::Exit { id, exit } => {
                 if let Some(events) = lock(&self.waiters).remove(&id) {
-                    let _ = events.send(HostEvent::Exit(exit));
+                    match events.send(HostEvent::Exit(exit)) {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
             }
         }
