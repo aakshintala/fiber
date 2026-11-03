@@ -3363,7 +3363,7 @@ fn held_wait_passes_after_release<R: Send + 'static>(
     let what = what.to_owned();
     let (entered_tx, entered) = mpsc::channel::<()>();
     let (done_tx, done) = mpsc::channel::<Result<R, String>>();
-    let deadline = Deadline::after(inner);
+    let deadline = Deadline::after(inner); // ruling: #4075
     let thread_what = what.clone();
     let waiter = thread::spawn(move || {
         entered_tx.send(()).unwrap_or(());
@@ -3382,7 +3382,7 @@ fn held_wait_passes_after_release<R: Send + 'static>(
     });
     // The waiter signals it entered before the release goes out, so the wait
     // below answers the release, never a thread that never ran.
-    Deadline::after(inner)
+    Deadline::after(inner) // ruling: #4075
         .recv(&entered)
         .expect("the waiter entered its wait");
     release();
