@@ -1106,6 +1106,10 @@ fn terminal(
         return code;
     }
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
+    // The startup span starts here, at terminal entry: the guard built
+    // below stamps this instant, so its line covers entry through
+    // `run_with` entry.
+    let t0 = clock.now();
     let (home, workspace) = match startup::startup() {
         Ok(directories) => directories,
         Err(e) => return fail(e),
@@ -1168,6 +1172,10 @@ fn terminal(
         },
         Arc::clone(&clock),
     ));
+    // The startup guard stamps the terminal-entry instant above and is
+    // dropped at `run_with` entry; at info levels `timed` returns `None`
+    // before any write, so timed runs stay silent.
+    let startup = log::diag::timed(&diag, contract::diag::Op::TuiStartup, None, Some(t0));
     let models = model_list::reader(
         home.clone(),
         workspace.clone(),
@@ -1261,6 +1269,7 @@ fn terminal(
         Box::new(log::crash::attach),
         Arc::clone(&clock),
         Arc::clone(&diag),
+        startup,
     ) {
         Ok(code) => code,
         Err(error) => {
