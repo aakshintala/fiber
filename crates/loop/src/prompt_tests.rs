@@ -428,27 +428,39 @@ fn built(window: u64, tools: Vec<contract::events::SentTool>) -> contract::event
 }
 
 #[test]
-fn definitions_notice_names_the_three_largest_sources_by_size() {
+fn definitions_notice_names_the_largest_source_and_the_disabling_configuration() {
     // Each definition is its pad plus 10 bytes of JSON: {"pad":"..."}.
+    // `docs/tools.md`, "Size warning", promises only the largest sources
+    // and the disabling configuration: no count, no order.
     let tools = vec![
         sent("a", "small", false, 10),
         sent("b", "big", false, 300),
         sent("c", "mid", false, 100),
         sent("d", "smaller", false, 20),
     ];
-    let notice = super::definitions_notice(&built(100, tools)).unwrap();
+    let notice = super::definitions_notice(&built(100, tools), true).unwrap();
     let text = notice.message;
-    let big = text.find("big (310 bytes)").unwrap();
-    let mid = text.find("mid (110 bytes)").unwrap();
-    let smaller = text.find("smaller (30 bytes)").unwrap();
-    assert!(big < mid && mid < smaller, "{text}");
-    assert!(!text.contains("small ("), "{text}");
+    assert!(text.contains("big (310 bytes)"), "{text}");
+    assert!(text.contains("tools.disabled"), "{text}");
 }
 
 #[test]
 fn definitions_notice_ignores_deferred_tools() {
     let deferred = vec![sent("a", "mcp__s", true, 10_000)];
-    assert!(super::definitions_notice(&built(100, deferred)).is_none());
+    assert!(super::definitions_notice(&built(100, deferred), false).is_none());
+}
+
+#[test]
+fn definitions_notice_says_deferral_is_off_only_when_not_deferring() {
+    // One definition of 310 serialized bytes (`{"pad":"..."}` with a
+    // 300-byte pad): 77 tokens, over 10% of a 100-token window.
+    let event = built(100, vec![sent("a", "big", false, 300)]);
+    let on = "Tool definitions declared in full are about 77 tokens, over 10% of the 100-token context window. Largest: big (310 bytes). Leave tools out with `tools.disabled` in an MCP server's or extension's configuration, or defer one with `tools.\"<name>\".deferred`.";
+    assert_eq!(super::definitions_notice(&event, true).unwrap().message, on);
+    assert_eq!(
+        super::definitions_notice(&event, false).unwrap().message,
+        format!("{on} Deferral is off for this model, so every tool is declared in full.")
+    );
 }
 
 /// A test tool with a fixed definition and guidelines, for build tests.

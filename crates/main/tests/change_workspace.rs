@@ -1410,8 +1410,11 @@ fn until_moved(setup: &Setup) -> (String, String) {
 #[track_caller]
 #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
 fn until_pwd_shows(run: &mut pty::Run, target: &str, deadline: Deadline) {
+    let mut grid = run.wait_screen("the switched terminal's input line", |grid| {
+        grid.contents.contains("›")
+    });
     loop {
-        let before = run.screen().contents.clone();
+        let before = grid.contents.clone();
         if before.contains(target) {
             return;
         }
@@ -1420,8 +1423,8 @@ fn until_pwd_shows(run: &mut pty::Run, target: &str, deadline: Deadline) {
             "waited until the deadline for the target workspace {target} in a notice; screen:\n{before}"
         );
         run.write(b"/pwd\r");
-        run.wait_screen("the answered `/pwd` notice", |grid| {
-            grid.contents.contains(target) || grid.contents != before
+        grid = run.wait_screen("the answered `/pwd` notice", |next| {
+            next.contents.contains(target) || next.contents != before
         });
     }
 }

@@ -1897,7 +1897,10 @@ its tools are deferred, change only when the preamble is built.
 When the definitions declared in full take more than 10% of the model's
 context window, the preamble build is followed by a `notice` with code
 `tool_definitions_large`. It names the largest sources and the configuration
-that disables tools. The session runs anyway.
+that disables tools. When deferral is off for the model (provider data that
+does not set `deferred_tools`, or a protocol that cannot defer; "Deferral is
+a property of the model"), the notice also says so: "Deferral is off for this
+model, so every tool is declared in full." The session runs anyway.
 
 ### Seeing the tools
 

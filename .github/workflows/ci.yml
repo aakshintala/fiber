@@ -558,14 +558,12 @@ jobs:
             # A failed lookup fails the step rather than skipping the run.
             labels=$(gh issue view "$number" --json labels -q '.labels[].name')
           fi
-          plan=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --summary "$GITHUB_STEP_SUMMARY")
+          plan=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --summary "$GITHUB_STEP_SUMMARY" --filter-file "$RUNNER_TEMP/stress.toml")
           echo "$plan"
           {
             echo "run=$(sed -n 's/^run\t//p' <<<"$plan")"
             echo "count=$(sed -n 's/^count\t//p' <<<"$plan")"
-            echo "filter<<FILTER_EOF"
-            sed -n 's/^filter\t//p' <<<"$plan"
-            echo "FILTER_EOF"
+            # Packages are bounded by the workspace crate count.
             echo "packages<<PACKAGES_EOF"
             sed -n 's/^package\t//p' <<<"$plan"
             echo "PACKAGES_EOF"
@@ -576,11 +574,12 @@ jobs:
         id: run
         if: steps.plan.outputs.run == 'true'
         env:
-          FILTER: ${{ steps.plan.outputs.filter }}
+          FILTER_FILE: ${{ runner.temp }}/stress.toml
           COUNT: ${{ steps.plan.outputs.count }}
           TESTS: ${{ steps.plan.outputs.tests }}
           PACKAGES: ${{ steps.plan.outputs.packages }}
         run: |
+          : > "$RUNNER_TEMP/stress-started"
           package_args=()
           while IFS= read -r package; do
             if [ -n "$package" ]; then
@@ -588,12 +587,15 @@ jobs:
             fi
           done <<<"$PACKAGES"
           run_log=/dev/shm/stress-run.log
-          # Fail an empty filter or stress output whose iteration/test counts differ from the plan.
-          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=fail; } 2>&1 | tee "$run_log"; then
+          # Fail a missing filter config or stress output whose iteration/test counts differ from the plan.
+          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" --tool-config-file "fiber-stress:$FILTER_FILE" --stress-count "$COUNT" --no-tests=fail; } 2>&1 | tee "$run_log"; then
             :
           else
             status=$?
             echo
+            if grep -sFq 'Argument list too long' "$run_log"; then
+              echo "::error title=Stress run could not start::an argument or environment string over 128 KiB (MAX_ARG_STRLEN) reached the run"
+            fi
             if grep -sFq 'No space left on device' "$run_log"; then
               echo "::error title=Runner out of disk::Stress run did not complete: the runner ran out of disk; no test result"
             fi
@@ -612,7 +614,11 @@ jobs:
           COUNT: ${{ steps.plan.outputs.count }}
           TESTS: ${{ steps.plan.outputs.tests }}
           OUTCOME: ${{ steps.run.outcome }}
-        run: cargo xtask stress-cost --start "$START" --end "$(date +%s)" --count "$COUNT" --tests "$TESTS" --outcome "$OUTCOME" >>"$GITHUB_STEP_SUMMARY"
+        run: |
+          if [ "$OUTCOME" = failure ] && [ ! -e "$RUNNER_TEMP/stress-started" ]; then
+            echo "::error title=Stress step did not start::the runner failed before the run step's first line, most likely an environment or argument string over 128 KiB (MAX_ARG_STRLEN) at step start; no test ran"
+          fi
+          cargo xtask stress-cost --start "$START" --end "$(date +%s)" --count "$COUNT" --tests "$TESTS" --outcome "$OUTCOME" >>"$GITHUB_STEP_SUMMARY"
 
   # Decides what the flake report writes (docs/testing.md, "Flaky tests").
   # It holds `contents: read` and `issues: read`, checks out the tested

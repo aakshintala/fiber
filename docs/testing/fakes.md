@@ -96,6 +96,8 @@ is a real child session process, because it is Fiber. The fakes are:
   one lock, and every other `Jobs` method is inert, opening, stopping or
   delivering nothing
 
+A fake keeps the order of what it replaces. Where the real thing makes one effect visible before another (a job listed before its first output, a release before the next hold, a reply after the request it answers), the fake does too, and a test in the fake's own crate pins that order. A test synchronises on the fake's order only where the fake's test pins it.
+
 The fakes live in one crate, `fakes`, which depends only on `contract` and `support` and
 is a test-only dependency of the crates that use it (`docs/architecture.md`,
 "The call rules").
