@@ -21,7 +21,6 @@ use crate::rules::RustFile;
 use crate::select::is_test_file;
 
 /// The four closed-set names the census tracks.
-/// The four closed-set names the census tracks.
 const NAMES: &[&str] = &["kind", "code", "view", "format"];
 /// Files in scope: Rust files under `crates/`, outside test files.
 const SCOPE_PREFIX: &str = "crates/";
@@ -81,23 +80,16 @@ fn match_name(rest: &str) -> Option<&str> {
     None
 }
 
-/// `rest` past its leading whitespace (`\s` in the census pattern).
-fn skip_whitespace(rest: &str) -> &str {
-    let mut current = rest;
-    while let Some(after) = current.strip_prefix(|c: char| c.is_whitespace()) {
-        current = after;
-    }
-    current
-}
-
 /// `kind:`, whitespace, `String`.
 fn match_kind_type(rest: &str) -> Option<&str> {
-    skip_whitespace(rest.strip_prefix("kind:")?).strip_prefix("String")
+    rest.strip_prefix("kind:")?
+        .trim_start()
+        .strip_prefix("String")
 }
 
 /// `code:`, whitespace, `String` or `&str`.
 fn match_code_type(rest: &str) -> Option<&str> {
-    let after = skip_whitespace(rest.strip_prefix("code:")?);
+    let after = rest.strip_prefix("code:")?.trim_start();
     after
         .strip_prefix("String")
         .or_else(|| after.strip_prefix("&str"))
@@ -110,9 +102,9 @@ fn match_as_str(rest: &str) -> Option<&str> {
 
 /// `.` name, whitespace, `==` or `!=`, whitespace, `"`.
 fn match_compare(rest: &str) -> Option<&str> {
-    let after = skip_whitespace(match_name(rest.strip_prefix('.')?)?);
+    let after = match_name(rest.strip_prefix('.')?)?.trim_start();
     let operator = after.strip_prefix(['!', '='])?.strip_prefix('=')?;
-    skip_whitespace(operator).strip_prefix('"')
+    operator.trim_start().strip_prefix('"')
 }
 
 /// `["` name `"]`.
