@@ -143,9 +143,9 @@ impl Drop for Hold {
 /// shapes), else the per-process `hold #` fragment (the relative job
 /// command, one fragment per test process, so a sibling process can match
 /// by pid prefix). The pattern is a substring of the command text, not
-/// necessarily of the live process's command line: bash may exec the last
-/// command and drop the trailing comment (probed on Linux), while a
-/// retained shell keeps it.
+/// necessarily of the live process's command line: on Linux bash 5.3.9 execs
+/// the last command and drops the trailing comment, so the fragment matches
+/// nothing there; whether macOS bash 3.2 keeps it is open.
 #[allow(
     clippy::panic,
     clippy::unwrap_used,
