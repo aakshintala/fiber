@@ -2134,9 +2134,51 @@ const GHOSTTY_BYTES: TerminalBytes = TerminalBytes {
     delete_word: include_bytes!("fixtures/terminal_bytes/ghostty_delete_word.bin"),
 };
 
+/// iTerm2's factory default bytes: with no profile key mapping for
+/// plain Ctrl+letter keys they pass through as C0 bytes, and the factory
+/// option keys send no `ESC`-prefixed Alt bytes (`+Esc` is opt-in), so the
+/// word key is Ctrl+W. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`; the docs state no version.
+const ITERM2_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "iTerm2",
+    provenance: "factory key handling (no Ctrl+letter remaps; +Esc opt-in); C0 per man ascii(7); versions unknown",
+    line_start: include_bytes!("fixtures/terminal_bytes/iterm2_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/iterm2_line_end.bin"),
+    delete_to_line_start: include_bytes!("fixtures/terminal_bytes/iterm2_delete_to_line_start.bin"),
+    delete_word: include_bytes!("fixtures/terminal_bytes/iterm2_delete_word.bin"),
+};
+
+/// Terminal.app's default bytes: it declares `xterm-256color` and forwards
+/// unmapped control keys as C0 bytes, with "Use Option as Meta key" off, so
+/// the word key is Ctrl+W. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`; Apple states no single version.
+const TERMINAL_APP_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "Terminal.app",
+    provenance: "xterm-256color declaration; Apple Control-U guide; C0 per man ascii(7); versions unknown",
+    line_start: include_bytes!("fixtures/terminal_bytes/terminal_app_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/terminal_app_line_end.bin"),
+    delete_to_line_start: include_bytes!(
+        "fixtures/terminal_bytes/terminal_app_delete_to_line_start.bin"
+    ),
+    delete_word: include_bytes!("fixtures/terminal_bytes/terminal_app_delete_word.bin"),
+};
+
+/// Linux terminals' default bytes (xterm, the reference X terminal): 7-bit
+/// C0 controls for Ctrl+letter. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`.
+const LINUX_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "Linux",
+    provenance: "readline C-a/C-e/C-u/C-w defaults; C0 per man ascii(7) (man-pages 6.19)",
+    line_start: include_bytes!("fixtures/terminal_bytes/linux_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/linux_line_end.bin"),
+    delete_to_line_start: include_bytes!("fixtures/terminal_bytes/linux_delete_to_line_start.bin"),
+    delete_word: include_bytes!("fixtures/terminal_bytes/linux_delete_word.bin"),
+};
+
 /// Every tabled terminal: one entry per terminal the ticket names. New
 /// terminals join this table; no test branches on a terminal name.
-const TERMINAL_TABLE: &[TerminalBytes] = &[GHOSTTY_BYTES];
+const TERMINAL_TABLE: &[TerminalBytes] =
+    &[GHOSTTY_BYTES, ITERM2_BYTES, TERMINAL_APP_BYTES, LINUX_BYTES];
 
 /// The scripted `ask_user` step the byte journeys answer through: one
 /// call with three questions, the third answered as free text on its
@@ -2329,8 +2371,8 @@ fn terminal_bytes_table_names_each_terminal_source() {
     }
     assert_eq!(
         TERMINAL_TABLE.len(),
-        1,
-        "one entry per tabled terminal: Ghostty"
+        4,
+        "one entry per tabled terminal: Ghostty, iTerm2, Terminal.app, Linux"
     );
 }
 
@@ -2361,5 +2403,95 @@ fn terminal_bytes_ghostty_delete_word() {
     run_journey(
         "terminal_bytes_ghostty_delete_word",
         std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&GHOSTTY_BYTES)),
+    );
+}
+
+/// iTerm2's factory line bytes through the decoder: Ctrl+A/Ctrl+E pass
+/// through unmapped and move on the cursor's line.
+#[test]
+fn terminal_bytes_iterm2_line_start_end() {
+    run_journey(
+        "terminal_bytes_iterm2_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// iTerm2's factory line bytes through the decoder: Ctrl+U passes through
+/// unmapped and empties the words row.
+#[test]
+fn terminal_bytes_iterm2_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_iterm2_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// iTerm2's factory word bytes through the decoder: Ctrl+W passes through
+/// unmapped and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_iterm2_delete_word() {
+    run_journey(
+        "terminal_bytes_iterm2_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// Terminal.app's line bytes through the decoder: Ctrl+A/Ctrl+E are
+/// forwarded as C0 bytes and move on the cursor's line.
+#[test]
+fn terminal_bytes_terminal_app_line_start_end() {
+    run_journey(
+        "terminal_bytes_terminal_app_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Terminal.app's line bytes through the decoder: Ctrl+U is forwarded as
+/// a C0 byte and empties the words row.
+#[test]
+fn terminal_bytes_terminal_app_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_terminal_app_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Terminal.app's word bytes through the decoder: Ctrl+W is forwarded as
+/// a C0 byte and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_terminal_app_delete_word() {
+    run_journey(
+        "terminal_bytes_terminal_app_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Linux terminals' line bytes through the decoder: Ctrl+A/Ctrl+E arrive
+/// as C0 bytes and move on the cursor's line.
+#[test]
+fn terminal_bytes_linux_line_start_end() {
+    run_journey(
+        "terminal_bytes_linux_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&LINUX_BYTES)),
+    );
+}
+
+/// Linux terminals' line bytes through the decoder: Ctrl+U arrives as a
+/// C0 byte and empties the words row.
+#[test]
+fn terminal_bytes_linux_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_linux_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&LINUX_BYTES)),
+    );
+}
+
+/// Linux terminals' word bytes through the decoder: Ctrl+W arrives as a
+/// C0 byte and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_linux_delete_word() {
+    run_journey(
+        "terminal_bytes_linux_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&LINUX_BYTES)),
     );
 }
