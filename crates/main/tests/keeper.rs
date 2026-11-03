@@ -69,8 +69,8 @@ fn event(lines: &mpsc::Receiver<String>, kind: &str, deadline: Deadline) -> Valu
 }
 fn reap(mut child: Child, deadline: Deadline) -> std::process::ExitStatus {
     let (send, result) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = send.send(child.wait());
+    thread::spawn(move || match send.send(child.wait()) {
+        Ok(()) | Err(_) => {}
     });
     deadline.start_wait().recv(&result).unwrap().unwrap()
 }
