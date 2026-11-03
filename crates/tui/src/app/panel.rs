@@ -634,6 +634,7 @@ impl PanelState {
     /// Whether the panel still holds the branch query `id`: the
     /// test-only order seam reads it, so a test pins the generic
     /// refusal settling before the panel's clears it.
+    #[cfg(test)]
     pub(super) fn asked_is(&self, id: &str) -> bool {
         self.asked.as_deref() == Some(id)
     }
