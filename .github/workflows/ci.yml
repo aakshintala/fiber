@@ -620,7 +620,11 @@ jobs:
           COUNT: ${{ steps.plan.outputs.count }}
           TESTS: ${{ steps.plan.outputs.tests }}
           OUTCOME: ${{ steps.run.outcome }}
-        run: cargo xtask stress-cost --start "$START" --end "$(date +%s)" --count "$COUNT" --tests "$TESTS" --outcome "$OUTCOME" >>"$GITHUB_STEP_SUMMARY"
+        run: |
+          if [ "$OUTCOME" = failure ] && [ ! -e "$RUNNER_TEMP/stress-started" ]; then
+            echo "::error title=Stress step did not start::the runner failed before the run step's first line, most likely an environment or argument string over 128 KiB (MAX_ARG_STRLEN) at step start; no test ran"
+          fi
+          cargo xtask stress-cost --start "$START" --end "$(date +%s)" --count "$COUNT" --tests "$TESTS" --outcome "$OUTCOME" >>"$GITHUB_STEP_SUMMARY"
 
   # Decides what the flake report writes (docs/testing.md, "Flaky tests").
   # It holds `contents: read` and `issues: read`, checks out the tested
