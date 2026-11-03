@@ -31,3 +31,5 @@ crates/provider/tests/support/probe.rs	fiber-3971	plan	2026-11-03T09:13:54Z	Amog
 crates/provider/tests/probe_jig.rs	fiber-3971	plan	2026-11-03T09:13:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/config/tests/provider_deferral.rs	fiber-3971	plan	2026-11-03T09:13:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 providers/openai/providers/openai.json	fiber-3971	grant	2026-11-03T09:14:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/support/src/deadline.rs	fiber-4074	plan	2026-11-03T10:07:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/support/src/deadline_tests.rs	fiber-4074	plan	2026-11-03T10:07:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
