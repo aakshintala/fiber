@@ -856,7 +856,7 @@ fn a_delivered_line_is_in_the_output_file_before_its_fold() {
                     want.push_str(folded);
                     want.push('\n');
                 }
-                let text = std::fs::read_to_string(&output_path).unwrap();
+                let text = std::fs::read_to_string(&output_path).unwrap_or_default();
                 assert_eq!(text, want, "the file holds every line delivered so far");
             },
         )
