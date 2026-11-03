@@ -326,6 +326,40 @@ crates/tui/src/view/notice_rows.rs 5
 crates/tui/src/window.rs 3
 crates/tui/src/window/images.rs 1
 EOF
+    echo "== stale-wait ratchet"
+    # A stale wait answers from the fold's replay instead of the live
+    # stream. Each file under crates/main/tests/ holds at most its inline
+    # maximum of stale-wait occurrences — a `recv_reply` use, a
+    # `fn subscribe(` or a `fn subscribe_full(` definition — and the table
+    # pins the existing sites until Part 2 converts them and empties it:
+    # a new occurrence fails, and so does a file the table does not name.
+    # Each occurrence counts even inside a string literal or a block
+    # comment, while a line whose trimmed start is a `//` comment never
+    # counts. Occurrence detection and the per-file comparison live in
+    # `cargo xtask stale-wait-ratchet`.
+    cargo xtask stale-wait-ratchet <<'EOF'
+crates/main/tests/change_workspace.rs 1
+crates/main/tests/delegates.rs 4
+crates/main/tests/driver_shell_sent.rs 1
+crates/main/tests/extension_ask.rs 1
+crates/main/tests/extension_diagnostics.rs 1
+crates/main/tests/hub_delegate_resume.rs 2
+crates/main/tests/hub_exit_window.rs 1
+crates/main/tests/hub_restart_feed.rs 3
+crates/main/tests/hub_resume.rs 1
+crates/main/tests/hub_service.rs 1
+crates/main/tests/hub_start_overrides.rs 2
+crates/main/tests/hub_start_worktree.rs 2
+crates/main/tests/hub_status.rs 1
+crates/main/tests/mcp_elicit.rs 1
+crates/main/tests/model_switch.rs 1
+crates/main/tests/propose_notes.rs 1
+crates/main/tests/rewind.rs 1
+crates/main/tests/scripted.rs 3
+crates/main/tests/sessions.rs 1
+crates/main/tests/startup_timing.rs 1
+crates/main/tests/tool_timing.rs 1
+EOF
     # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
     # ships shellcheck, so a missing one fails rather than skips.
     if [ "$(uname -s)" = Linux ]; then

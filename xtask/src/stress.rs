@@ -326,15 +326,26 @@ fn touched_against(base: &str, profile: &str) -> Result<(Members, Vec<TestRef>),
     Ok((members, touched))
 }
 
+pub(crate) fn stress_config(filter: &str) -> String {
+    let escaped = filter.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("[profile.stress]\ndefault-filter = \"{escaped}\"\n")
+}
+
 pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     let base = crate::flag(args, "--base")?;
     let labels = crate::optional(args, "--labels").unwrap_or_default();
     let summary = crate::optional(args, "--summary");
+    let filter_file = crate::optional(args, "--filter-file");
     let (members, touched) = touched_against(&base, "stress")?;
     let count = stress_count(&labels);
+    let filter = filter(&touched);
+    if let Some(path) = filter_file {
+        std::fs::write(&path, stress_config(&filter))
+            .map_err(|error| format!("{path}: {error}"))?;
+    }
     println!("run\t{}", if touched.is_empty() { "false" } else { "true" });
     println!("count\t{count}");
-    println!("filter\t{}", filter(&touched));
+    println!("filter\t{filter}");
     let mut packages: Vec<String> = touched.iter().map(|t| spec(&t.package, &members)).collect();
     packages.sort();
     packages.dedup();

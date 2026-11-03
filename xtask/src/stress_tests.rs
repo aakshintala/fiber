@@ -574,3 +574,60 @@ fn stress_check_command_returns_its_parser_result() {
         Err("stress output: expected 30 iteration summaries, found 0".to_owned())
     );
 }
+
+fn large_stress_filter() -> String {
+    let tests = (0..2754)
+        .map(|index| TestRef {
+            package: "xtask".to_owned(),
+            binary: Some("xtask::stress".to_owned()),
+            name: format!("stress_case_{index:04}"),
+            unit: false,
+        })
+        .collect::<Vec<_>>();
+    filter(&tests)
+}
+
+fn assert_same_without_dumping_large_values(actual: &str, expected: &str) {
+    let first_difference = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(actual, expected)| actual != expected)
+        .unwrap_or(actual.len().min(expected.len()));
+    assert!(
+        actual == expected,
+        "config differs at byte {first_difference} (actual {} bytes, expected {} bytes)",
+        actual.len(),
+        expected.len()
+    );
+}
+
+#[test]
+fn stress_config_escapes_toml_basic_string_characters() {
+    let actual = stress_config(r#"test(=a\"b\\c)"#);
+    let expected = "[profile.stress]\ndefault-filter = \"test(=a\\\\\\\"b\\\\\\\\c)\"\n";
+    assert_same_without_dumping_large_values(&actual, expected);
+}
+
+#[test]
+fn stress_config_keeps_the_full_generated_filter() {
+    let filter = large_stress_filter();
+    assert!(
+        filter.len() > 131_072,
+        "generated filter is only {} bytes",
+        filter.len()
+    );
+    let expected = format!("[profile.stress]\ndefault-filter = \"{filter}\"\n");
+    let actual = stress_config(&filter);
+    assert_same_without_dumping_large_values(&actual, &expected);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_rejects_an_argument_over_max_arg_strlen() {
+    let argument = "x".repeat(131_073);
+    let error = std::process::Command::new("/bin/true")
+        .arg(argument)
+        .spawn()
+        .expect_err("Linux must reject an argument longer than MAX_ARG_STRLEN");
+    assert_eq!(error.raw_os_error(), Some(7), "expected E2BIG");
+}
