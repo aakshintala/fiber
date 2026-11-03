@@ -318,9 +318,7 @@ fn a_job_command_with_the_search_prelude_shows_its_hold_fragment_only_if_bash_ke
     // each poll makes at most two listing calls (`matching`'s pgrep and
     // `ps_table`'s ps, each bounded by MUST_SUCCEED_WITHIN), and a blocking
     // predicate would outlive `wait_until`'s outer wait (`wait_until.rs`).
-    // Bounded by MUST_SUCCEED_WITHIN, as a literal: `budget-bounds` reads
-    // only a literal duration or a complete symbolic path.
-    let deadline = Deadline::after(std::time::Duration::from_secs(10));
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let bound = deadline.left();
     // `ps_table` rebuilds each line with `split_whitespace` and `join`,
     // which drops the fragment's trailing space; the rebuilt comparison
