@@ -228,6 +228,41 @@ fn classify_large_log_still_matches() {
 }
 
 #[test]
+fn classify_256k_log_with_signal_at_end_still_matches() {
+    let dir = TempDir::new("xtask-check-resources");
+    // The marker comes first so a `printf | grep -q` pipeline had to match
+    // early and then push at least 256 KiB through the pipe: under
+    // `pipefail` the writer took SIGPIPE and the match was lost. The filler
+    // still sits before the signal line, with no newlines of its own, and
+    // the signal line stays at the end.
+    let filler = "x".repeat(256 * 1024);
+    let content = format!(
+        "error: linking with `cc` failed: exit code: 1\n{filler}\ncollect2: fatal error: ld terminated with signal 7 [Bus error]\n"
+    );
+    dir.write("large-256k.log", &content);
+    let log = dir.path().join("large-256k.log");
+    let log = log.to_string_lossy().into_owned();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = run_check_resources(
+        &["classify", log.as_str()],
+        &[],
+        "classify a 256 KiB log with a bus-error linker death at the end",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(75),
+        "256 KiB log with bus-error linker death not refused: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.as_ref(),
+        "the build was killed for lack of resources (matched \"terminated with signal 7\"); the code is unproven, not broken; rerun once the machine has memory.\n"
+    );
+}
+
+#[test]
 fn classify_guard_bare_killed_compiler_shape_from_test_output_is_ignored() {
     let dir = TempDir::new("xtask-check-resources");
     dir.write(

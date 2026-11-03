@@ -202,7 +202,7 @@ preflight() {
 # line in it is cargo reporting the kill, not some other program's output.
 # debt: a `cargo` killed while a compile or link step is in flight prints no marker, so the gate returns a plain red where docs/workflow.md promises a 75. Upgrade trigger: a sighting of such a red in a real log.
 has_marker() {
-  grep -qF -e 'error: could not compile' -e 'error: linking with' -e 'error: failed to run custom build command' <<<"$classify_clean"
+  [[ $classify_clean == *'error: could not compile'* || $classify_clean == *'error: linking with'* || $classify_clean == *'error: failed to run custom build command'* ]]
 }
 
 classify() {
@@ -220,13 +220,13 @@ classify() {
   # may be some other program's output rather than cargo reporting the kill.
   classify_clean=$(sed $'s/\033\\[[0-9;]*m//g' "$1")
   classify_shape=
-  if grep -qF -e 'terminated with signal 7' <<<"$classify_clean" && has_marker; then
+  if [[ $classify_clean == *'terminated with signal 7'* ]] && has_marker; then
     classify_shape='terminated with signal 7'
-  elif grep -qF -e 'terminated with signal 9' <<<"$classify_clean" && has_marker; then
+  elif [[ $classify_clean == *'terminated with signal 9'* ]] && has_marker; then
     classify_shape='terminated with signal 9'
-  elif grep -qF -e 'signal: 9, SIGKILL' <<<"$classify_clean" && has_marker; then
+  elif [[ $classify_clean == *'signal: 9, SIGKILL'* ]] && has_marker; then
     classify_shape='signal: 9, SIGKILL'
-  elif grep -qF -e 'signal: 7, SIGBUS' <<<"$classify_clean" && has_marker; then
+  elif [[ $classify_clean == *'signal: 7, SIGBUS'* ]] && has_marker; then
     classify_shape='signal: 7, SIGBUS'
   else
     return 0
