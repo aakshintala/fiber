@@ -426,12 +426,12 @@ fn a_summary_with_two_tests_uses_the_plural() {
 
 #[test]
 fn a_named_group_keeps_the_flaky_fix_count_and_rest_runs_the_default() {
-    assert_eq!(group_count(Some(Only::Named), "test-only", true), 100);
-    assert_eq!(group_count(Some(Only::Named), "bug", true), 30);
-    assert_eq!(group_count(Some(Only::Rest), "test-only", true), 30);
-    assert_eq!(group_count(Some(Only::Rest), "", true), 30);
-    assert_eq!(group_count(None, "test-only", true), 100);
-    assert_eq!(group_count(None, "", true), 30);
+    assert_eq!(group_count(Some(Only::Named), "test-only"), 100);
+    assert_eq!(group_count(Some(Only::Named), "bug"), 30);
+    assert_eq!(group_count(Some(Only::Rest), "test-only"), 30);
+    assert_eq!(group_count(Some(Only::Rest), ""), 30);
+    assert_eq!(group_count(None, "test-only"), 100);
+    assert_eq!(group_count(None, ""), 30);
 }
 
 #[test]
@@ -540,10 +540,10 @@ fn an_empty_issue_text_file_yields_no_names() {
 
 #[test]
 fn a_rest_group_without_names_runs_the_pilot_default() {
-    assert_eq!(group_count(Some(Only::Rest), "test-only", false), 30);
-    assert_eq!(group_count(Some(Only::Rest), "bug", false), 30);
-    assert_eq!(group_count(Some(Only::Named), "test-only", false), 100);
-    assert_eq!(group_count(None, "test-only", false), 100);
+    assert_eq!(group_count(Some(Only::Rest), "test-only"), 30);
+    assert_eq!(group_count(Some(Only::Rest), "bug"), 30);
+    assert_eq!(group_count(Some(Only::Named), "test-only"), 100);
+    assert_eq!(group_count(None, "test-only"), 100);
 }
 
 const CI_STRESS_OUTPUT_RAW: &str = include_str!("stress_tests/nextest-ci-30.raw");

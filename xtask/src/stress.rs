@@ -355,9 +355,9 @@ fn parse_only(value: Option<String>) -> Result<Option<Only>, String> {
 
 /// Runs for one planned group: the named tests keep the flaky-fix count
 /// from the labels, every other selected test runs the pilot default.
-fn group_count(only: Option<Only>, labels: &str, has_names: bool) -> u32 {
-    match (only, has_names) {
-        (Some(Only::Rest), _) => STRESS_COUNT,
+fn group_count(only: Option<Only>, labels: &str) -> u32 {
+    match only {
+        Some(Only::Rest) => STRESS_COUNT,
         _ => stress_count(labels),
     }
 }
@@ -425,7 +425,7 @@ pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
             (rest, unmatched_names(&names, &touched))
         }
     };
-    let count = group_count(only, &labels, !names.is_empty());
+    let count = group_count(only, &labels);
     let filter = filter(&group);
     if let Some(path) = filter_file {
         std::fs::write(&path, stress_config(&filter))
