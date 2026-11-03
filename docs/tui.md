@@ -1808,6 +1808,7 @@ copies the URL and shows "Copied". A link is in the accent colour,
 underlined. A focused link sits on the `surface_raised` tint, with "Enter opens
 · y copies" dim under it when the window has a row under it, and opens with Enter and copies with `y`. A hovered
 link takes the `hover` tint.
+A focused link keeps the `surface_raised` tint under hover, whether the pointer is on the link itself or on a wider target that covers its cells.
 
 A copy, link or image command still running after 10 seconds is stopped;
 what it started keeps running. Large images go to the terminal in chunks (Images).
