@@ -134,6 +134,7 @@ cd "$top"
 
 # The collector requires both legs to build and at least one red test to
 # fail; a green leg is allowed when the other leg reproduces the bug.
+unset LINUX_RESULT MACOS_RESULT
 rc=0
 "$bug_red" --collect 100 0 >"$tmp/out-collect-red.txt" 2>&1 || rc=$?
 [ "$rc" -eq 0 ] || { cat "$tmp/out-collect-red.txt" >&2; fail "red on one leg exited $rc, want 0"; }
@@ -155,9 +156,32 @@ rc=0
 rc=0
 "$bug_red" --collect 100 "" >"$tmp/out-collect-missing.txt" 2>&1 || rc=$?
 [ "$rc" -eq 1 ] || { cat "$tmp/out-collect-missing.txt" >&2; fail "missing leg result exited $rc, want 1"; }
+grep -Fq "missing or invalid platform result" "$tmp/out-collect-missing.txt" || { cat "$tmp/out-collect-missing.txt" >&2; fail "missing leg result misses \"missing or invalid platform result\""; }
 rc=0
 "$bug_red" --collect 100 invalid >"$tmp/out-collect-invalid.txt" 2>&1 || rc=$?
 [ "$rc" -eq 1 ] || { cat "$tmp/out-collect-invalid.txt" >&2; fail "invalid leg result exited $rc, want 1"; }
+rc=0
+LINUX_RESULT=cancelled MACOS_RESULT=success "$bug_red" --collect "" 100 >"$tmp/out-collect-cancelled.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-cancelled.txt" >&2; fail "cancelled linux leg exited $rc, want 1"; }
+grep -Fq "linux leg ended cancelled with no result" "$tmp/out-collect-cancelled.txt" || { cat "$tmp/out-collect-cancelled.txt" >&2; fail "cancelled linux leg misses \"linux leg ended cancelled with no result\""; }
+if grep -Fq "missing or invalid platform result" "$tmp/out-collect-cancelled.txt"; then cat "$tmp/out-collect-cancelled.txt" >&2; fail "cancelled linux leg misses \"linux leg ended cancelled with no result\""; fi
+rc=0
+LINUX_RESULT=success MACOS_RESULT=cancelled "$bug_red" --collect 100 "" >"$tmp/out-collect-cancelled-macos.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-cancelled-macos.txt" >&2; fail "cancelled macos leg exited $rc, want 1"; }
+grep -Fq "macos leg ended cancelled with no result" "$tmp/out-collect-cancelled-macos.txt" || { cat "$tmp/out-collect-cancelled-macos.txt" >&2; fail "cancelled macos leg misses \"macos leg ended cancelled with no result\""; }
+rc=0
+LINUX_RESULT=failure MACOS_RESULT=cancelled "$bug_red" --collect "" "" >"$tmp/out-collect-both-empty.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-both-empty.txt" >&2; fail "both-empty collect exited $rc, want 1"; }
+grep -Fq "linux leg ended failure with no result" "$tmp/out-collect-both-empty.txt" || { cat "$tmp/out-collect-both-empty.txt" >&2; fail "both-empty collect misses \"linux leg ended failure with no result\" or \"macos leg ended cancelled with no result\""; }
+grep -Fq "macos leg ended cancelled with no result" "$tmp/out-collect-both-empty.txt" || { cat "$tmp/out-collect-both-empty.txt" >&2; fail "both-empty collect misses \"linux leg ended failure with no result\" or \"macos leg ended cancelled with no result\""; }
+rc=0
+LINUX_RESULT=cancelled MACOS_RESULT=success "$bug_red" --collect "" docs >"$tmp/out-collect-cancelled-docs.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-cancelled-docs.txt" >&2; fail "cancelled-with-docs collect exited $rc, want 1"; }
+grep -Fq "linux leg ended cancelled with no result" "$tmp/out-collect-cancelled-docs.txt" || { cat "$tmp/out-collect-cancelled-docs.txt" >&2; fail "cancelled-with-docs collect misses \"linux leg ended cancelled with no result\""; }
+rc=0
+MACOS_RESULT=success "$bug_red" --collect 100 invalid >"$tmp/out-collect-invalid-result.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out-collect-invalid-result.txt" >&2; fail "invalid-status collect exited $rc, want 1"; }
+grep -Fq "missing or invalid platform result" "$tmp/out-collect-invalid-result.txt" || { cat "$tmp/out-collect-invalid-result.txt" >&2; fail "invalid-status collect misses \"missing or invalid platform result\""; }
 rc=0
 "$bug_red" --collect docs docs >"$tmp/out-collect-docs.txt" 2>&1 || rc=$?
 [ "$rc" -eq 0 ] || { cat "$tmp/out-collect-docs.txt" >&2; fail "docs-only on both legs exited $rc, want 0"; }
