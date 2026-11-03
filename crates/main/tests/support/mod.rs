@@ -16,7 +16,7 @@
 )]
 use std::fs;
 use std::io::{self, BufRead, BufReader, ErrorKind, Write};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -1244,7 +1244,9 @@ pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
 
 /// Collects socket lines until `done`, every line through one wait
 /// started at entry: expiry panics naming `what`, and the socket closing
-/// first panics too.
+/// first panics too. To wait for a live line written after a subscription,
+/// skipping the fold's replay, use [`until_after`]; [`until_replayed`]
+/// waits for a replayed line instead.
 pub(crate) fn until(
     client: &Socket,
     what: &str,
@@ -1277,6 +1279,514 @@ pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
         lines.push(line);
     }
     lines
+}
+
+/// A `full` subscription and the bound its acknowledgement carries: a wait
+/// for a live event starts after this `last_seq`, and an answer is matched
+/// by its command id (`docs/invocation.md`, "What each command does").
+pub(crate) struct Subscribed {
+    /// The `command_accepted` acknowledgement.
+    pub(crate) ack: Value,
+    /// `ack["payload"]["result"]["last_seq"]` as `u64`: the `seq` of the
+    /// last line the fold sends before the stream goes live, `None` when
+    /// `result` is absent on an empty log.
+    pub(crate) last_seq: Option<u64>,
+    /// The `session_id` the subscribe named, `None` on a direct socket.
+    pub(crate) session: Option<String>,
+}
+
+/// Subscribes `full` to `session` through the hub.
+#[track_caller]
+pub(crate) fn subscribe(client: &Socket, session: &str) -> Subscribed {
+    subscribe_as(client, "c_sub", session)
+}
+
+/// Subscribes `full` to `session` through the hub under the caller's
+/// command id.
+#[track_caller]
+pub(crate) fn subscribe_as(client: &Socket, id: &str, session: &str) -> Subscribed {
+    subscribe_through(client, id, Some(session))
+}
+
+/// Subscribes `full` on a session's own socket, which takes no
+/// `session_id`.
+#[track_caller]
+pub(crate) fn subscribe_direct(client: &Socket) -> Subscribed {
+    subscribe_through(client, "c_sub", None)
+}
+
+/// Sends the subscribe line with `id`, naming `session` through the hub
+/// and none on a direct socket, and takes the acknowledgement: lines
+/// before it stay for the caller's next [`recv`] or [`until`] in order
+/// ([`recv_answer`]'s contract).
+fn subscribe_through(client: &Socket, id: &str, session: Option<&str>) -> Subscribed {
+    match session {
+        Some(session) => client.send(&format!(
+            "{{\"id\":\"{id}\",\"session_id\":\"{session}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
+        )),
+        None => client.send(&format!(
+            "{{\"id\":\"{id}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
+        )),
+    }
+    let ack = recv_answer(client, id, "the subscribe acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    accepted(ack, session.map(str::to_owned))
+}
+
+/// The subscription an accepted acknowledgement carries.
+fn accepted(ack: Value, session: Option<String>) -> Subscribed {
+    let last_seq = ack["payload"]["result"]["last_seq"].as_u64();
+    Subscribed {
+        ack,
+        last_seq,
+        session,
+    }
+}
+
+/// Subscribes `full` on a fake session socket, waiting for the
+/// acknowledgement under the caller's deadline alone.
+#[track_caller]
+pub(crate) fn subscribe_client(deadline: Deadline, client: &fakes::Client) -> Subscribed {
+    if let Err(error) = client.send_by(
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+        &|| deadline.left(),
+    ) {
+        panic!("writing the socket: {error}");
+    }
+    let Some(ack) = client.recv_until(deadline, |line| {
+        line.get("kind").and_then(Value::as_str) == Some("command_accepted")
+            && line["payload"]["command_id"] == "c_sub"
+    }) else {
+        panic!("no subscribe acknowledgement arrived before the deadline");
+    };
+    accepted(ack, None)
+}
+
+/// Collects socket lines until `done`, every line through one wait started
+/// at entry, like [`until`]: expiry and the socket closing panic as
+/// [`until`] does. A line the fold replayed never reaches `done`: only a
+/// line written after the subscription's [`Subscribed::last_seq`] for the
+/// subscribed session does. Lines without `seq` reach `done` unchanged, as
+/// do lines of another session on a hub connection. Every line read is
+/// returned, replayed ones included.
+#[track_caller]
+pub(crate) fn until_after(
+    client: &Socket,
+    since: &Subscribed,
+    what: &str,
+    done: impl FnMut(&Value) -> bool,
+) -> Vec<Value> {
+    until_matching(client, since, what, done, false)
+}
+
+/// Collects socket lines until `done`, every line through one wait started
+/// at entry, like [`until_after`], but only a line the fold replayed
+/// reaches `done`: a line carrying a `seq` at or below the subscription's
+/// [`Subscribed::last_seq`] for the subscribed session.
+#[track_caller]
+pub(crate) fn until_replayed(
+    client: &Socket,
+    since: &Subscribed,
+    what: &str,
+    done: impl FnMut(&Value) -> bool,
+) -> Vec<Value> {
+    until_matching(client, since, what, done, true)
+}
+
+/// Collects socket lines through one wait started at entry, like [`until`]:
+/// expiry and the socket closing panic as [`until`] does. When `replayed`
+/// only a replayed line reaches `done`, else only a live one; every line
+/// read is returned either way, ending on the first line `done` accepts.
+fn until_matching(
+    client: &Socket,
+    since: &Subscribed,
+    what: &str,
+    mut done: impl FnMut(&Value) -> bool,
+    replayed: bool,
+) -> Vec<Value> {
+    let wait = client.start_wait();
+    let mut lines = Vec::new();
+    loop {
+        let line = match client.next_through(&wait, what, &lines) {
+            Some(line) => line,
+            None => match &client.diag {
+                Some(diag) => panic!("{}", diag.report_closed(what, &lines)),
+                None => panic!("the socket closed while waiting for {what}; got {lines:?}"),
+            },
+        };
+        if is_reopened(&line, since) {
+            let session = since.session.as_deref().unwrap_or("the session");
+            panic!(
+                "read stream_reopened for {session} while waiting for {what}; \
+                 the new fold restarts seq, so take a new Subscribed"
+            );
+        }
+        let stop = if is_replayed(&line, since) == replayed {
+            done(&line)
+        } else {
+            false
+        };
+        lines.push(line);
+        if stop {
+            return lines;
+        }
+    }
+}
+
+/// Whether `line` is a line the fold replayed: it carries a `seq` at or
+/// below the subscription's bound, for the subscribed session. Without a
+/// bound nothing is replayed; a line without `seq` is ephemeral
+/// (`docs/events.md`, "Durable and ephemeral") and never replayed. A
+/// subscription naming no session matches every line.
+fn is_replayed(line: &Value, since: &Subscribed) -> bool {
+    let Some(bound) = since.last_seq else {
+        return false;
+    };
+    let Some(seq) = line.get("seq").and_then(Value::as_u64) else {
+        return false;
+    };
+    if seq > bound {
+        return false;
+    }
+    match &since.session {
+        None => true,
+        Some(session) => line.get("session_id").and_then(Value::as_str) == Some(session),
+    }
+}
+
+/// Whether `line` reopens the subscribed session with a new fold: a
+/// `stream_reopened` carries no `seq`, and its `payload` holds the
+/// `session_id` the new fold belongs to. A subscription naming no session
+/// matches every reopening.
+fn is_reopened(line: &Value, since: &Subscribed) -> bool {
+    line.get("kind").and_then(Value::as_str) == Some("stream_reopened")
+        && match &since.session {
+            None => true,
+            Some(session) => line["payload"]["session_id"].as_str() == Some(session.as_str()),
+        }
+}
+
+/// A peer that reads the subscribe line, reports it, then writes `lines`:
+/// every assertion on the reported line stays on the test thread, where a
+/// failure fails the test.
+fn subscribe_peer(lines: Vec<&'static str>) -> (Socket, mpsc::Receiver<String>) {
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let (mine, peer) = UnixStream::pair().unwrap();
+    let (sent_tx, sent) = mpsc::channel();
+    thread::spawn(move || {
+        let mut peer = peer;
+        let mut reader = BufReader::new(peer.try_clone().unwrap());
+        let line = read_line(&mut reader, deadline, "the subscribe line")
+            .unwrap()
+            .unwrap();
+        sent_tx.send(line).unwrap_or(());
+        for line in lines {
+            write_line(&mut peer, deadline, line.as_bytes(), "the fixed lines").unwrap();
+        }
+    });
+    (Socket::from(deadline, mine), sent)
+}
+
+/// A peer that writes `lines` without reading: for waits, where the test
+/// sends nothing first.
+fn replay_peer(lines: Vec<&'static str>) -> Socket {
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let (mine, peer) = UnixStream::pair().unwrap();
+    thread::spawn(move || {
+        let mut peer = peer;
+        for line in lines {
+            write_line(&mut peer, deadline, line.as_bytes(), "the fixed lines").unwrap();
+        }
+    });
+    Socket::from(deadline, mine)
+}
+
+fn subscribed_since(last_seq: Option<u64>, session: Option<&str>) -> Subscribed {
+    Subscribed {
+        ack: json!({}),
+        last_seq,
+        session: session.map(str::to_owned),
+    }
+}
+
+#[test]
+fn subscribe_direct_returns_last_seq_and_keeps_the_replay() {
+    let (client, sent) = subscribe_peer(vec![
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":5}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":6}\n",
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_sub\",\"result\":{\"last_seq\":7}}}\n",
+    ]);
+    let sub = subscribe_direct(&client);
+    let sent = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&sent)
+        .expect("the peer read the subscribe line");
+    let sent: Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["id"], "c_sub", "{sent}");
+    assert_eq!(sent["command"], "subscribe", "{sent}");
+    assert!(sent.get("session_id").is_none(), "{sent}");
+    assert_eq!(sub.last_seq, Some(7));
+    assert!(sub.session.is_none());
+    assert_eq!(
+        recv(&client, "the replayed exit")
+            .get("seq")
+            .and_then(Value::as_u64),
+        Some(5)
+    );
+    assert_eq!(
+        recv(&client, "the replayed exit")
+            .get("seq")
+            .and_then(Value::as_u64),
+        Some(6)
+    );
+}
+
+#[test]
+fn subscribe_direct_returns_no_bound_on_an_empty_log() {
+    // The peer reads the subscribe line before answering, so it is still
+    // alive when the send takes the socket timeout: a peer that only
+    // writes can exit first, and on macOS the send then fails with
+    // `EINVAL` instead of reaching the acknowledgement.
+    let (client, sent) = subscribe_peer(vec![
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_sub\"}}\n",
+    ]);
+    let sub = subscribe_direct(&client);
+    let sent = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&sent)
+        .expect("the peer read the subscribe line");
+    let sent: Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["id"], "c_sub", "{sent}");
+    assert_eq!(sub.last_seq, None);
+}
+
+#[test]
+fn subscribe_direct_panics_on_a_rejected_subscribe() {
+    // As above: the peer reads first, so the send cannot race its exit.
+    let (client, _sent) = subscribe_peer(vec![
+        "{\"kind\":\"command_rejected\",\"payload\":{\"command_id\":\"c_sub\",\"code\":\"gone\"}}\n",
+    ]);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        subscribe_direct(&client);
+    }))
+    .unwrap_err();
+    let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.contains("command_rejected"), "{message}");
+}
+
+#[test]
+fn subscribe_names_the_session_and_returns_its_last_seq() {
+    let (client, sent) = subscribe_peer(vec![
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_sub\",\"result\":{\"last_seq\":3}}}\n",
+    ]);
+    let sub = subscribe(&client, "s_9");
+    let sent = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&sent)
+        .expect("the peer read the subscribe line");
+    let sent: Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["id"], "c_sub", "{sent}");
+    assert_eq!(sent["session_id"], "s_9", "{sent}");
+    assert_eq!(sub.last_seq, Some(3));
+    assert_eq!(sub.session, Some("s_9".to_owned()));
+}
+
+#[test]
+fn subscribe_as_sends_the_caller_command_id() {
+    let (client, sent) = subscribe_peer(vec![
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_watch\"}}\n",
+    ]);
+    let sub = subscribe_as(&client, "c_watch", "s_2");
+    let sent = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&sent)
+        .expect("the peer read the subscribe line");
+    let sent: Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["id"], "c_watch", "{sent}");
+    assert_eq!(sent["session_id"], "s_2", "{sent}");
+    assert_eq!(sub.last_seq, None);
+    assert_eq!(sub.session, Some("s_2".to_owned()));
+}
+
+#[test]
+fn subscribe_client_matches_the_acknowledgement_by_command_id() {
+    let dir = fakes::TempDir::new("subscribe-client");
+    let path = dir.path().join("session.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let (sent_tx, sent) = mpsc::channel();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let line = read_line(&mut reader, deadline, "the subscribe line")
+            .unwrap()
+            .unwrap();
+        sent_tx.send(line).unwrap_or(());
+        let mut stream = stream;
+        // A decoy answer for another command, then a decoy rejection of
+        // this one: neither is the acknowledgement.
+        for line in [
+            "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_9\"}}\n",
+            "{\"kind\":\"command_rejected\",\"payload\":{\"command_id\":\"c_sub\"}}\n",
+            "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_sub\",\"result\":{\"last_seq\":11}}}\n",
+        ] {
+            write_line(&mut stream, deadline, line.as_bytes(), "the answers").unwrap();
+        }
+    });
+    let client = fakes::Client::connect(&path).unwrap();
+    let sub = subscribe_client(deadline, &client);
+    let sent = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&sent)
+        .expect("the peer read the subscribe line");
+    let sent: Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["id"], "c_sub", "{sent}");
+    assert!(sent.get("session_id").is_none(), "{sent}");
+    assert_eq!(sub.last_seq, Some(11));
+    assert!(sub.session.is_none());
+}
+
+#[test]
+fn until_after_skips_the_replay_and_ends_on_the_live_line() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":4}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":5}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":6}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let seen = Mutex::new(Vec::new());
+    let lines = until_after(&client, &since, "the live exit", |line| {
+        seen.lock()
+            .unwrap()
+            .push(line.get("seq").and_then(Value::as_u64));
+        line.get("seq").and_then(Value::as_u64) == Some(6)
+    });
+    assert_eq!(*seen.lock().unwrap(), [Some(6)]);
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.get("seq").and_then(Value::as_u64))
+            .collect::<Vec<_>>(),
+        [Some(4), Some(5), Some(6)]
+    );
+}
+
+#[test]
+fn until_after_bounds_nothing_on_an_empty_log() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":1}\n",
+    ]);
+    let since = subscribed_since(None, Some("s_1"));
+    let lines = until_after(&client, &since, "the first exit", |_| true);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].get("seq").and_then(Value::as_u64), Some(1));
+}
+
+#[test]
+fn until_after_passes_ephemeral_and_other_session_lines() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"notice\",\"payload\":{\"message\":\"hi\"}}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_2\",\"seq\":2}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let seen = Mutex::new(Vec::new());
+    let lines = until_after(&client, &since, "the pass-through lines", |line| {
+        seen.lock()
+            .unwrap()
+            .push(line.get("kind").and_then(Value::as_str).unwrap().to_owned());
+        seen.lock().unwrap().len() == 2
+    });
+    assert_eq!(*seen.lock().unwrap(), ["notice", "fiber_exited"]);
+    assert_eq!(lines.len(), 2);
+}
+
+#[test]
+fn until_after_returns_every_line_read() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":4}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":5}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":6}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let lines = until_after(&client, &since, "the live exit", |line| {
+        line.get("seq").and_then(Value::as_u64) == Some(6)
+    });
+    assert_eq!(
+        lines,
+        vec![
+            json!({"kind":"fiber_exited","session_id":"s_1","seq":4}),
+            json!({"kind":"fiber_exited","session_id":"s_1","seq":5}),
+            json!({"kind":"fiber_exited","session_id":"s_1","seq":6}),
+        ]
+    );
+}
+
+#[test]
+fn until_replayed_passes_only_the_replay() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":6}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":5}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let lines = until_replayed(&client, &since, "the replayed exit", |line| {
+        assert_ne!(
+            line.get("seq").and_then(Value::as_u64),
+            Some(6),
+            "a live line never reaches done: {line}"
+        );
+        line.get("seq").and_then(Value::as_u64) == Some(5)
+    });
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.get("seq").and_then(Value::as_u64))
+            .collect::<Vec<_>>(),
+        [Some(6), Some(5)]
+    );
+}
+
+#[test]
+fn until_after_names_the_wait_when_the_socket_closes() {
+    let (mine, peer) = UnixStream::pair().unwrap();
+    drop(peer);
+    let client = Socket::from(Deadline::after(fakes::MUST_SUCCEED_WITHIN), mine);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        until_after(&client, &since, "the live exit", |_| true);
+    }))
+    .unwrap_err();
+    let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert_eq!(
+        message,
+        "the socket closed while waiting for the live exit; got []"
+    );
+}
+
+#[test]
+fn until_after_panics_on_a_new_fold_for_the_session() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"stream_reopened\",\"payload\":{\"session_id\":\"s_1\",\"last_seq\":14}}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        until_after(&client, &since, "the live exit", |_| true);
+    }))
+    .unwrap_err();
+    let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.contains("new Subscribed"), "{message}");
+}
+
+#[test]
+fn until_after_passes_a_new_fold_for_another_session() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"stream_reopened\",\"payload\":{\"session_id\":\"s_2\",\"last_seq\":14}}\n",
+        "{\"kind\":\"fiber_exited\",\"session_id\":\"s_1\",\"seq\":6}\n",
+    ]);
+    let since = subscribed_since(Some(5), Some("s_1"));
+    let seen = Mutex::new(Vec::new());
+    let lines = until_after(&client, &since, "the live exit", |line| {
+        seen.lock()
+            .unwrap()
+            .push(line.get("kind").and_then(Value::as_str).unwrap().to_owned());
+        line.get("seq").and_then(Value::as_u64) == Some(6)
+    });
+    assert_eq!(*seen.lock().unwrap(), ["stream_reopened", "fiber_exited"]);
+    assert_eq!(lines.len(), 2);
 }
 
 /// The `hub.log` lines a startup-failure report shows, matching the
@@ -1591,16 +2101,6 @@ pub(crate) fn await_first_request(server: &ProviderServer, deadline: Deadline) {
         server.await_requests(1, deadline),
         "the session sends its first model request"
     );
-}
-
-/// Subscribes `full` to `session` through the hub.
-#[track_caller]
-pub(crate) fn subscribe(client: &Socket, session: &str) {
-    client.send(&format!(
-        "{{\"id\":\"c_sub\",\"session_id\":\"{session}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
-    ));
-    let ack = recv_answer(client, "c_sub", "the subscribe acknowledgement");
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
 }
 
 /// Closes the session on the direct socket, and waits for it to leave.

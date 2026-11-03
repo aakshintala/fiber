@@ -219,6 +219,8 @@ its completion event logged. A file existing is not that proof. A test never
 waits for a generic sign that things have settled, because "the screen stopped
 changing" is not "the server is listening".
 
+A test waits for a line written after the moment it means, never one the fold replayed: a wait for a live event starts after the subscription's `last_seq` (`docs/invocation.md`, "What each command does"), and an answer is matched by its `command_id`.
+
 Every wait has a deadline on the wall clock, also in a test that drives a fake
 clock: fake time passes only when the test advances it. On expiry the test
 fails with an assertion naming what it waited for. Calling code that blocks is a wait too, so the test runs
