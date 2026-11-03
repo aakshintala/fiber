@@ -551,9 +551,13 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `run_in_background` (optional); `tty` (optional); `monitor` (optional;
   starts a monitor, "Background jobs"); `unconfined` (optional; when true
   the call leaves the OS sandbox and is reviewed exactly as with the
-  sandbox off). Fiber never reruns a failed confined call outside its
-  sandbox: the model retries explicitly with `unconfined: true` as a new
-  reviewed call. On macOS the confined shell prints a
+  sandbox off); `detach` (optional; when true the command starts in a new
+  session and process group, outside the OS sandbox, and the call returns
+  at once with the process ID and the output-log path, "Background jobs").
+  `detach` implies unconfined: with `detach` true, `unconfined: false`
+  fails with `invalid_arguments`. Fiber never reruns a failed confined call
+  outside its sandbox: the model retries explicitly with `unconfined: true`
+  as a new reviewed call. On macOS the confined shell prints a
   start marker before the user program runs; the call fails instead of
   ending normally when the marker never arrives. Each call starts fresh: a
   `cd` does not carry over to the next call.
@@ -562,6 +566,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   with `strict: false`.
 - A monitor takes neither `tty` nor `run_in_background`. Each of these
   fails with `invalid_arguments`, the message naming the argument.
+- `detach` takes neither `run_in_background`, `tty`, `monitor`, nor a
+  `timeout_ms` that is not null. Each of these fails with
+  `invalid_arguments`, the message naming the argument.
 - A bare wait is rejected. When the call is not `run_in_background` and
   the first part of the command is `sleep N` with N of 25 seconds or more,
   alone or followed by other commands, the call completes as `failed` with
@@ -582,6 +589,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - Any other call with no `timeout_ms` gets 600,000 (10 minutes). A
   foreground command's timeout stays with it after the command moves to the
   background.
+- A detached call takes no `timeout_ms` and has no timeout: neither the
+  600,000 default nor any other limit. A detached call with a `timeout_ms`
+  of any value, 0 included, fails with `invalid_arguments` and never
+  starts.
 - `timeout_ms` is at least 1: the schema says `"minimum": 1`. A call with
   0 fails the loop's schema check (`docs/loop.md`), ends `failed` with code
   `invalid_arguments`, and never starts.
@@ -621,8 +632,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   exit code and names what was left running (command names and process
   ids). The job ends when the group is empty, and keeps the command's
   timeout.
-- A process that left the group on purpose (for example with `nohup` or
-  `setsid`) is not tracked.
+- A process that left the group on purpose, for example with `setsid`,
+  is not tracked. `nohup` does not leave the group: the process stays in
+  it, and a timeout, a cancellation, a `jobs stop` and a shutdown stop it
+  with the rest.
 
 ### Stopping a command
 
@@ -637,6 +650,12 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `failed` with code `indeterminate`, never `completed`.
 - A shutdown (`docs/invocation.md`, "Shutdown") uses the same two values, on
   every group at once.
+- A timeout's receipt says Fiber stopped the whole process group ("Result
+  and output").
+- A detached command is never stopped by a timeout, a cancellation, a
+  `jobs stop` or a shutdown: it is not a job, and its group is not on the
+  list a shutdown signals ("Background jobs"). Stopping it is the person's
+  or the model's own `kill`.
 
 ### Result and output
 
@@ -650,7 +669,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   alone. The closing line ends with a newline:
   - `Exit code N.` for an exit, 0 included;
   - `Killed by SIGNAME.` for a signal;
-  - `Timed out after N ms and stopped.` for a timeout;
+  - `Timed out after N ms; Fiber stopped the whole process group.` for a timeout;
   - `The monitor's deadline of N ms passed; start it again if you still need it.` for a monitor's deadline;
   - `Cancelled and stopped.` for a cancellation;
   - `The command was stopped, and Fiber cannot tell whether it completed.` for
@@ -725,7 +744,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   declares `executes`, with no paths. A call that ran inside the OS
   sandbox on Linux or macOS carries `confined`
   (`docs/permissions.md`, "Confinement"); a call with `unconfined: true`
-  leaves the sandbox and is reviewed exactly as with the sandbox off.
+  leaves the sandbox and is reviewed exactly as with the sandbox off. A
+  detached call declares `always_reviewed`: the reviewer or the person sees
+  it as an unconfined call, and it takes no protected-path transaction
+  (`docs/permissions.md`, "Confinement").
 - The recogniser accepts only a listed set of syntax: simple commands,
   pipelines, lists joined by `&&`, `||` and `;`, quoted and unquoted words,
   variable assignments before a command, and the redirects below. Any
@@ -1025,6 +1047,21 @@ The kinds are `docs/events.md`.
 - There is no cap on running jobs, except that a session runs at most 10
   delegates at once (`docs/delegates.md`, "Limits"). Parked threads are
   measured in `docs/architecture.md` ("The threads").
+- A detached command is not a job: no `job_id`, no `jobs` entry, no
+  completion notice, no keeper. The call returns at once with the receipt
+  `Started detached. PID 48213. Output: /home/a/.fiber/detached/d_48200_0.log.
+  Fiber will not stop it.`, naming the process ID and the log path. The
+  command keeps running when the session ends; Fiber never stops it, not at
+  a timeout, not at `jobs stop` and not at shutdown ("Shell", "Stopping a
+  command"). The model reads the log with the ordinary `read` tool
+  ("Bounded results").
+- A detached call's standard input is `/dev/null`; its standard output and
+  standard error go to the log, interleaved in arrival order. Each log lives
+  under `$FIBER_HOME/detached/`, named `d_<fiber-pid>_<n>.log` from 0 up,
+  created mode 0600 in a directory mode 0700. The person owns deleting
+  logs: Fiber never removes them, and a session's deletion or pruning never
+  touches them. Logs hold command output, which may carry sensitive data,
+  until the person deletes them.
 
 ### The keeper
 
