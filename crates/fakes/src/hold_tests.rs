@@ -116,8 +116,9 @@ fn a_release_written_before_the_reader_opens_is_read() {
 fn drop_reaps_a_parked_holder() {
     let dir = TempDir::new("fiber-hold-reap");
     let path = dir.path().join("hold");
-    // Pid-scoped, so parallel tests cannot cross-match; the absolute
-    // path keeps the helper on its hold-path derivation.
+    // Per-process, not per-hold: every hold in this test shares the pid
+    // fragment, and a sibling test process can match by pid prefix; the
+    // absolute path keeps the helper on its hold-path derivation.
     let command = format!("head -n 1 {} #{}", path.display(), std::process::id());
     let hold = Hold::park(&path, &command);
     // A second read+write handle, held open across the drop below: the
@@ -243,7 +244,7 @@ fn the_embedded_path_wins_over_the_hold_fragment() {
     assert_eq!(
         derive_pattern(&command, &path),
         path.to_str().unwrap(),
-        "the embedded path wins over the pid-scoped fragment"
+        "the embedded path wins over the per-process fragment"
     );
 }
 

@@ -109,9 +109,9 @@ fn delegate_setup() -> (Setup, Hold) {
 #[test]
 fn hold_drop_releases_and_reaps_the_holder() {
     let setup = Setup::new();
-    // Pid-scoped like the job command, so parallel tests cannot
-    // cross-match; the absolute path keeps the helper on its hold-path
-    // derivation.
+    // Per-process like the job command, not per-hold: a sibling test
+    // process can match by pid prefix; the absolute path keeps the helper
+    // on its hold-path derivation.
     let command = format!(
         "head -n 1 {} #{}",
         setup.workspace().join("hold").display(),
@@ -158,8 +158,9 @@ fn hold_drop_releases_and_reaps_the_holder() {
 /// it, so the test clicks only the row that names it.
 fn job_setup() -> (Setup, Hold, String) {
     let setup = Setup::new();
-    // A shell comment with this process id keeps the watchdog's
-    // pattern to this test's `head`: parallel tests hold their own.
+    // A shell comment with this process id scopes the watchdog's pattern
+    // to this test process, not to this hold: a sibling test process
+    // whose pid extends this pid still matches by prefix.
     let command = format!("head -n 1 hold #{}", std::process::id());
     let workdir = setup.workspace().to_string_lossy().into_owned();
     write_json(

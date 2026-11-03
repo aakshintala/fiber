@@ -36,8 +36,9 @@ impl Hold {
     /// # Panics
     ///
     /// When the FIFO cannot be made or opened, or when `command` embeds
-    /// neither the hold path nor a pid-scoped `hold #` fragment to derive
-    /// a pattern from.
+    /// neither the hold path nor a per-process `hold #` fragment (one
+    /// fragment per test process, shared by its holds) to derive a pattern
+    /// from.
     #[allow(
         clippy::panic,
         clippy::unwrap_used,
@@ -139,9 +140,12 @@ impl Drop for Hold {
 
 /// The watchdog pattern for `command`: the hold path itself when the
 /// command embeds it (the absolute-path delegate, search, slash and socket
-/// shapes), else the pid-scoped `hold #` fragment (the relative job
-/// command). Either way the pattern is a substring of the spawned holder's
-/// own command line, and unique to this test.
+/// shapes), else the per-process `hold #` fragment (the relative job
+/// command, one fragment per test process, so a sibling process can match
+/// by pid prefix). The pattern is a substring of the command text, not
+/// necessarily of the live process's command line: bash may exec the last
+/// command and drop the trailing comment (probed on Linux), while a
+/// retained shell keeps it.
 #[allow(
     clippy::panic,
     clippy::unwrap_used,
