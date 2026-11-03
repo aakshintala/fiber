@@ -1227,15 +1227,6 @@ impl Running {
     }
 }
 
-/// Subscribes `client` full, for the session's later lines. A late
-/// subscription replays the log first, so lines arrive until the accept.
-#[track_caller]
-fn subscribe(client: &support::Socket) {
-    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let line = support::recv_answer(client, "c_sub", "the subscribe acknowledgement");
-    assert_eq!(line["kind"], "command_accepted", "{line}");
-}
-
 /// Sends `close` with `now` and reads its accept, past whatever the
 /// subscription is still replaying.
 #[track_caller]
@@ -2148,7 +2139,7 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
         line["kind"] == "session_started"
     });
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     for (id, path) in [("c_add_b", &parent_b), ("c_add_a", &parent_a)] {
         client.send(&format!(
             "{{\"id\":{id:?},\"command\":\"add_directory\",\"args\":{{\"path\":{}}}}}",
@@ -2490,7 +2481,7 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
     // socket, so a shutdown that beats a later subscription cannot hide
     // the exit line.
     let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&child_id));
-    subscribe(&child_socket);
+    support::subscribe_direct(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader.
     fakes::kill_group(running.group, "KILL").unwrap();
@@ -2540,7 +2531,7 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
         "the child stalled its model call"
     );
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -3088,7 +3079,7 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // The registry still answers commands: steer the parent, which spawns
     // a third delegate that completes on its released provider.
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     client.send(
         r#"{"id":"c_again","command":"steer","args":{"content":[{"type":"text","text":"scan again"}]}}"#,
     );
@@ -3693,7 +3684,7 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 143);
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -4020,7 +4011,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .to_owned();
     let mut child_socket =
         support::Socket::connect(setup.deadline, &setup.session_socket(&live_child));
-    subscribe(&child_socket);
+    support::subscribe_direct(&child_socket);
     child.release_one();
     assert!(
         child.await_requests(2, setup.deadline),
@@ -4078,7 +4069,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     );
     let grandchild_socket =
         support::Socket::connect(setup.deadline, &setup.session_socket(&live_grandchild));
-    subscribe(&grandchild_socket);
+    support::subscribe_direct(&grandchild_socket);
     // Drain while the tree stops: otherwise the grandchild's socket writer
     // can spend its bounded close grace behind this unread full stream.
     let (grandchild_exit_tx, grandchild_exit_rx) = mpsc::channel();
@@ -4218,7 +4209,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     // A late spawn past the trip never runs: the next turn still fails on
     // the budget before any model call is sent, so no delegate starts.
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     client.send(r#"{"id":"c_late","command":"steer","args":{"content":[{"type":"text","text":"spawn another"}]}}"#);
     let mut late = running.wait_line("the steer starts the late turn", |line| {
         line["kind"] == "turn_started"
@@ -4376,7 +4367,7 @@ fn a_delegate_whose_call_fails_without_a_claimed_trip_keeps_its_own_exit_code() 
         "the failure names its code: {child_exited:?}"
     );
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -7537,7 +7528,7 @@ fn fork_parent() -> ForkParent {
         line["kind"] == "turn_completed"
     });
     let client = parent_running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -10177,7 +10168,7 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     // socket, so a shutdown that beats a later subscription cannot hide
     // the exit line.
     let child_socket = support::Socket::connect(bound, &setup.session_socket(&child_id));
-    subscribe(&child_socket);
+    support::subscribe_direct(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader. The remaining deadline
     // from here is the kill-to-backfilled window the resume asserts on.
@@ -10233,7 +10224,7 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     assert_eq!(copies[1]["payload"]["generation_id"], "c_2");
     assert_eq!(copies[2]["payload"]["generation_id"], "c_3");
     let client = resumed.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);

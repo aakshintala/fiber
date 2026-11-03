@@ -40,7 +40,7 @@ fn command(id: &str, session: Option<&str>, command: &str, args: Value) -> Strin
     serde_json::to_string(&line).unwrap()
 }
 
-fn subscribe(id: &str, session: &str) -> String {
+fn subscribe_line(id: &str, session: &str) -> String {
     command(id, Some(session), "subscribe", json!({"level": "full"}))
 }
 
@@ -227,7 +227,7 @@ impl Hubbed {
             .as_str()
             .expect("the start answers with a session id")
             .to_owned();
-        self.client().send(&subscribe(sub_id, &session));
+        self.client().send(&subscribe_line(sub_id, &session));
         until_ack(self.client(), "the subscribe acknowledgement", sub_id);
         until(self.client(), "the first turn_completed", |line| {
             line["kind"] == "turn_completed" && line["session_id"] == session
@@ -492,7 +492,7 @@ fn a_move_before_any_model_turn_starts_the_child_in_the_target() {
         .as_str()
         .unwrap()
         .to_owned();
-    client.send(&subscribe("c_sub", &old));
+    client.send(&subscribe_line("c_sub", &old));
     until_ack(client, "the subscribe acknowledgement", "c_sub");
     // The old session was never prompted: ended moves are retained even
     // with no model turn, so its `moved` record is still written.
@@ -1521,7 +1521,7 @@ fn the_old_worktree_survives_the_move_and_a_later_prune_removes_it() {
         .as_str()
         .expect("the start answers with a session id")
         .to_owned();
-    client.send(&subscribe("c_sub", &old));
+    client.send(&subscribe_line("c_sub", &old));
     until_ack(client, "the subscribe acknowledgement", "c_sub");
     until(client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed" && line["session_id"] == old

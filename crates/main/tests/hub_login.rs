@@ -136,14 +136,6 @@ fn start(client: &Socket, workspace: &str, content: bool) -> String {
         .unwrap()
         .into()
 }
-fn full(client: &Socket, session: &str, id: &str) {
-    client.send(
-        &json!({"id":id,"session_id":session,"command":"subscribe","args":{"level":"full"}})
-            .to_string(),
-    );
-    let ack = recv_answer(client, id, "full subscribe acknowledgement");
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
-}
 fn prompt(client: &Socket, session: &str, id: &str) {
     client.send(&json!({"id":id,"session_id":session,"command":"prompt","args":{"content":[{"type":"text","text":"hello"}]}}).to_string());
 }
@@ -158,11 +150,15 @@ fn feed(client: &Socket) {
 /// so a caller waiting on the feed afterwards still sees a `session_left`
 /// that arrived first: the hub fans `session_left` out on one path while the
 /// closing session's `fiber_exited` arrives on another, in either order.
-fn close(client: &Socket, session: &str, id: &str) -> Vec<Value> {
+/// A live close waits past the subscription's replayed fold; a scripted
+/// close with no subscription in scope waits every line.
+fn close(client: &Socket, session: &str, id: &str, since: Option<&Subscribed>) -> Vec<Value> {
     client.send(&json!({"id":id,"session_id":session,"command":"close"}).to_string());
-    until(client, "fiber_exited after close", |line| {
-        line["kind"] == "fiber_exited" && line["session_id"] == session
-    })
+    let exited = |line: &Value| line["kind"] == "fiber_exited" && line["session_id"] == session;
+    match since {
+        Some(sub) => until_after(client, sub, "fiber_exited after close", exited),
+        None => until(client, "fiber_exited after close", exited),
+    }
 }
 
 /// Whether `line` reports `session`'s feed departure.
@@ -255,7 +251,7 @@ fn an_attached_full_client_receives_the_mid_session_login_url() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start(&client, &workspace, false);
-    full(&client, &session, "c_full");
+    let sub = subscribe_as(&client, "c_full", &session);
     prompt(&client, &session, "c_prompt");
     let seen = login_url(&client, &oauth);
     assert!(
@@ -264,7 +260,7 @@ fn an_attached_full_client_receives_the_mid_session_login_url() {
     );
     turn(&client, seen);
     oauth.release();
-    close(&client, &session, "c_close");
+    close(&client, &session, "c_close", Some(&sub));
     drop(client);
     stop(&hub, guard);
 }
@@ -282,9 +278,9 @@ fn a_session_with_only_summary_clients_refuses_login_before_any_poll() {
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start(&client, &workspace, true);
     refused(&setup, &server, &oauth);
-    full(&client, &session, "c_full");
+    let sub = subscribe_as(&client, "c_full", &session);
     refusal_snapshot(&client);
-    close(&client, &session, "c_close");
+    close(&client, &session, "c_close", Some(&sub));
     drop(client);
     stop(&hub, guard);
 }
@@ -353,13 +349,13 @@ fn callback_attempt(port: u16, deadline: Deadline) -> bool {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start(&client, &workspace, false);
-    full(&client, &session, "c_full");
+    let sub = subscribe_as(&client, "c_full", &session);
     prompt(&client, &session, "c_prompt");
     let seen = login_url(&client, &oauth);
     turn(&client, seen);
     loop {
         if callback_taken(&server) {
-            close(&client, &session, "c_close_taken");
+            close(&client, &session, "c_close_taken", Some(&sub));
             drop(client);
             stop(&hub, guard);
             return true;
@@ -373,13 +369,13 @@ fn callback_attempt(port: u16, deadline: Deadline) -> bool {
     drop(client);
     let other = connect_hub(&setup, &hub);
     feed(&other);
-    full(&other, &session, "c_other");
+    let sub = subscribe_as(&other, "c_other", &session);
     until(&other, "only the replacement client counts", |line| {
         line["kind"] == "clients" && line["payload"]["count"] == 1
     });
     prompt(&other, &session, "c_second");
     turn(&other, false);
-    close(&other, &session, "c_close");
+    close(&other, &session, "c_close", Some(&sub));
     drop(other);
     stop(&hub, guard);
     callback_taken(&server)
@@ -425,14 +421,14 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start(&client, &workspace, true);
     refused(&setup, &server, &oauth);
-    full(&client, &session, "c_full");
+    let sub = subscribe_as(&client, "c_full", &session);
     refusal_snapshot(&client);
-    let closed = close(&client, &session, "c_close_first");
+    let closed = close(&client, &session, "c_close_first", Some(&sub));
     left_after_close(&client, &session, &closed);
     drop(client);
     let client = connect_hub(&setup, &hub);
     oauth.hold();
-    full(&client, &session, "c_resumed");
+    let resumed = subscribe_as(&client, "c_resumed", &session);
     // A status after the fold proves the old turn has been replayed.
     until(&client, "resumed stream is live", |line| {
         line["kind"] == "session_status"
@@ -445,7 +441,7 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     );
     turn(&client, seen);
     oauth.release();
-    close(&client, &session, "c_close_last");
+    close(&client, &session, "c_close_last", Some(&resumed));
     drop(client);
     stop(&hub, guard);
 }
@@ -501,7 +497,7 @@ fn a_session_left_sent_before_fiber_exited_sits_in_the_close_wait() {
             done_tx,
         );
     });
-    let closed = close(&client, session, "c_close");
+    let closed = close(&client, session, "c_close", None);
     assert!(
         closed
             .iter()
@@ -535,7 +531,7 @@ fn a_session_left_sent_after_fiber_exited_is_waited_for_after_close() {
             done_tx,
         );
     });
-    let closed = close(&client, session, "c_close");
+    let closed = close(&client, session, "c_close", None);
     assert!(
         !closed
             .iter()
@@ -570,7 +566,7 @@ fn a_session_left_for_another_session_does_not_end_the_wait() {
             done_tx,
         );
     });
-    let closed = close(&client, session, "c_close");
+    let closed = close(&client, session, "c_close", None);
     let observed = left_after_close(&client, session, &closed);
     assert_eq!(
         observed,

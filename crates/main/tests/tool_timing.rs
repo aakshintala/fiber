@@ -617,7 +617,7 @@ fn send(client: &support::Socket, line: &Value) {
     client.send(&line.to_string());
 }
 
-fn subscribe(id: &str, session: &str) -> Value {
+fn subscribe_line(id: &str, session: &str) -> Value {
     command(id, session, "subscribe", json!({"level": "full"}))
 }
 
@@ -714,7 +714,7 @@ fn a_debug_escalation_times_two_stages_and_the_wait() {
         .as_str()
         .unwrap()
         .to_owned();
-    send(&client, &subscribe("c_sub", &id));
+    send(&client, &subscribe_line("c_sub", &id));
     support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
@@ -809,7 +809,7 @@ fn a_suspended_approval_resumes_with_a_fresh_segment() {
         .as_str()
         .unwrap()
         .to_owned();
-    send(&client, &subscribe("c_sub", &id));
+    send(&client, &subscribe_line("c_sub", &id));
     support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
@@ -942,7 +942,7 @@ fn a_suspended_interaction_resumes_with_no_second_order() {
         .as_str()
         .unwrap()
         .to_owned();
-    send(&client, &subscribe("c_sub", &id));
+    send(&client, &subscribe_line("c_sub", &id));
     support::until(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });

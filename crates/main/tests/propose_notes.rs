@@ -31,15 +31,6 @@ fn text_reply(text: &str) -> fakes::Response {
     }})])
 }
 
-/// Subscribes `direct` at `full`: the session socket takes no `session_id`.
-#[track_caller]
-fn subscribe_full(direct: &Socket) {
-    direct.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let sub = recv(direct, "the subscribe acknowledgement");
-    assert_eq!(sub["kind"], "command_accepted", "{sub}");
-    assert_eq!(sub["payload"]["command_id"], "c_sub");
-}
-
 /// The hub's session over, the direct socket closed, the hub killed and
 /// every session gone.
 #[track_caller]
@@ -139,7 +130,7 @@ fn propose_notes_reads_evidence_and_proposals_with_no_token_leaking() {
     let session = start_session(&client, &workspace, "first");
     drop(client);
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
-    subscribe_full(&direct);
+    subscribe_direct(&direct);
     until(&direct, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });

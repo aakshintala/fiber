@@ -316,7 +316,7 @@ fn command(id: &str, session: &str, command: &str, args: Value) -> Value {
     json!({"id": id, "session_id": session, "command": command, "args": args})
 }
 
-fn subscribe(id: &str, session: &str) -> Value {
+fn subscribe_line(id: &str, session: &str) -> Value {
     command(id, session, "subscribe", json!({"level": "full"}))
 }
 
@@ -381,7 +381,7 @@ fn a_full_resume_announces_its_fold_without_a_subscribe_acknowledgement() {
     let id = lines[0]["session_id"].as_str().unwrap().to_owned();
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    client.send(&subscribe("c_sub", &id));
+    client.send(&subscribe_line("c_sub", &id));
     until_hub(&client, "the full subscribe", |line| {
         acknowledges(line, "c_sub")
     });
@@ -448,7 +448,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
 
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    client.send(&subscribe("c_sub", &id));
+    client.send(&subscribe_line("c_sub", &id));
     let replay = until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
@@ -475,13 +475,13 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
 
     // A second client finds the session running and attaches.
     let second = connect_hub(&setup, &hub);
-    second.send(&subscribe("c_sub2", &id));
+    second.send(&subscribe_line("c_sub2", &id));
     until_hub(&second, "the second subscribe", |line| {
         acknowledges(line, "c_sub2")
     });
 
     // A valid id with no log names no session.
-    client.send(&subscribe("c_none", "s_0000000000000000"));
+    client.send(&subscribe_line("c_none", "s_0000000000000000"));
     let rejected = until_hub(&client, "the rejection", |line| {
         line["kind"] == "command_rejected"
     });
@@ -514,7 +514,7 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
 
     let hub = Arc::new(Mutex::new(None));
     let first = connect_hub(&setup, &hub);
-    first.send(&subscribe("c_sub", &id));
+    first.send(&subscribe_line("c_sub", &id));
     until_hub(&first, "the first subscribe", |line| {
         acknowledges(line, "c_sub")
     });
@@ -522,7 +522,7 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
     // The session refuses a second connection's subscribe under an id it
     // already took, so this connection holds no level on it.
     let second = connect_hub(&setup, &hub);
-    second.send(&subscribe("c_sub", &id));
+    second.send(&subscribe_line("c_sub", &id));
     let refused = until_hub(&second, "the refusal", |line| {
         line["kind"] == "command_rejected"
     });
@@ -535,7 +535,7 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
 
     // The resumed session sees only this subscribe from the second
     // connection, so it is accepted.
-    second.send(&subscribe("c_sub2", &id));
+    second.send(&subscribe_line("c_sub2", &id));
     let answered = until_hub(&second, "the second subscribe's answer", |line| {
         (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
             && line["payload"]["command_id"] == "c_sub2"
@@ -580,7 +580,7 @@ fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
         .to_owned();
     // Subscribed while the model call is held: the approval's idle wait
     // starts only after it.
-    client.send(&subscribe("c_sub", &id));
+    client.send(&subscribe_line("c_sub", &id));
     until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
@@ -663,7 +663,7 @@ fn a_fresh_connection_answers_a_request_raised_again_on_resume() {
 
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    client.send(&subscribe("c_sub", &id));
+    client.send(&subscribe_line("c_sub", &id));
     let mut resumed = false;
     until_hub(&client, "the re-raised permission_requested", |line| {
         if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
@@ -735,7 +735,7 @@ fn a_subscribe_through_the_hub_to_an_exited_delegate_is_refused() {
 
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    client.send(&subscribe("c_sub", id));
+    client.send(&subscribe_line("c_sub", id));
     let rejected = client.next("the rejection", &[]);
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
     assert_eq!(rejected["payload"]["code"], "session_not_found");
@@ -772,7 +772,7 @@ fn a_resume_of_a_session_whose_workspace_is_gone_is_io_failed_naming_it() {
     // The session exited; its plain workspace cannot be made again. The
     // removal lands after the hub started, which runs in the workspace.
     fs::remove_dir_all(setup.workspace()).unwrap();
-    client.send(&subscribe("c_sub", &id));
+    client.send(&subscribe_line("c_sub", &id));
     let rejected = until_hub(&client, "the rejection", |line| {
         line["kind"] == "command_rejected"
     });

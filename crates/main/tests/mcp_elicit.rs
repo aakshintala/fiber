@@ -23,7 +23,7 @@ use extension_harness::Running;
 use fakes::clock::FakeClock;
 use fakes::{Client, ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, Setup, function_call, hello, stream};
+use support::{Deadline, Setup, function_call, hello, stream, subscribe_client};
 
 /// Kills every process whose command line names `root`, and their groups,
 /// while held: every fixture server runs with its directory under the
@@ -35,15 +35,6 @@ fn guard(setup: &Setup) -> Guard {
     Guard(Watchdog::matching(&setup.root.path().display().to_string()))
 }
 
-fn subscribe(deadline: Deadline, client: &Client) {
-    client
-        .send_by(
-            r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
-            &|| deadline.left(),
-        )
-        .unwrap();
-}
-
 fn prompt(deadline: Deadline, client: &Client) {
     client
         .send_by(
@@ -51,16 +42,6 @@ fn prompt(deadline: Deadline, client: &Client) {
             &|| deadline.left(),
         )
         .unwrap();
-}
-
-/// Waits for the subscribe's `command_accepted`, so the prompt that
-/// follows cannot overtake it.
-fn subscribed(deadline: Deadline, client: &Client) {
-    client
-        .recv_until(deadline, |line| {
-            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub"
-        })
-        .expect("the subscribe is accepted");
 }
 
 fn requested(deadline: Deadline, client: &Client) -> Value {
@@ -301,13 +282,7 @@ fn an_elicitation_raises_one_interaction_per_field_and_the_server_gets_the_answe
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(setup.deadline, &client);
-    client
-        .recv_until(
-            fakes::Deadline::after(std::time::Duration::from_secs(10)),
-            |line| line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub",
-        )
-        .expect("the subscribe is accepted");
+    subscribe_client(setup.deadline, &client);
     prompt(setup.deadline, &client);
     // The call's id rides on the envelope, not the payload.
     let call = client
@@ -494,8 +469,7 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(setup.deadline, &client);
-    subscribed(setup.deadline, &client);
+    subscribe_client(setup.deadline, &client);
     prompt(setup.deadline, &client);
     // `hold` is held first: its acknowledgement proves it is registered,
     // so the elicitation lists it alongside `ask`.
@@ -638,8 +612,7 @@ fn a_hold_that_never_reaches_the_server_is_named() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(setup.deadline, &client);
-    subscribed(setup.deadline, &client);
+    subscribe_client(setup.deadline, &client);
     prompt(setup.deadline, &client);
     let clock = Box::leak(Box::new(FakeClock::new()));
     let spent = Deadline::on(&**clock);

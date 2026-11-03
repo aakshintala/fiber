@@ -35,7 +35,7 @@ fn command(id: &str, session: Option<&str>, command: &str, args: Value) -> Strin
     serde_json::to_string(&line).unwrap()
 }
 
-fn subscribe(id: &str, session: &str) -> String {
+fn subscribe_line(id: &str, session: &str) -> String {
     command(id, Some(session), "subscribe", json!({"level": "full"}))
 }
 
@@ -154,7 +154,7 @@ impl Hubbed {
             .as_str()
             .expect("the start answers with a session id")
             .to_owned();
-        self.client().send(&subscribe(sub_id, &session));
+        self.client().send(&subscribe_line(sub_id, &session));
         until_ack(self.client(), "the subscribe acknowledgement", sub_id);
         until(self.client(), "the first turn_completed", |line| {
             line["kind"] == "turn_completed" && line["session_id"] == session
@@ -1588,7 +1588,7 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
 
     let hubbed = Hubbed::new(&setup);
     let client = hubbed.client();
-    client.send(&subscribe("c7_sub", old));
+    client.send(&subscribe_line("c7_sub", old));
     until_ack(client, "the subscribe acknowledgement", "c7_sub");
     hubbed.prompt("c7_p1", old, "hi");
     client.send(&rewind("c7_rw", old, json!({})));

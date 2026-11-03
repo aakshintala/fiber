@@ -22,7 +22,9 @@ use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{HubProc, SessionGuard, Setup, Socket, bounded, connect_hub, run_to_exit, until};
+use support::{
+    HubProc, SessionGuard, Setup, Socket, bounded, connect_hub, run_to_exit, subscribe_as, until,
+};
 
 /// A session that has run one turn and exited, and a hub that resumes it.
 struct World {
@@ -313,17 +315,6 @@ fn command(id: &str, session: &str, command: &str, args: &Value) -> String {
     json!({"id": id, "session_id": session, "command": command, "args": args}).to_string()
 }
 
-fn subscribe(client: &Socket, id: &str, session: &str) {
-    client.send(&command(
-        id,
-        session,
-        "subscribe",
-        &json!({"level": "full"}),
-    ));
-    let ack = support::recv_answer(client, id, "the subscribe acknowledgement");
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
-}
-
 fn import(id: &str, session: &str) -> String {
     command(id, session, "import", &json!({"source": "codex"}))
 }
@@ -527,14 +518,14 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
     let held = world.session_pids();
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    subscribe_as(&second, "c_sub2", &id);
     // The prompt runs its turn on the free connection before the close, so
     // no command straddles the quiesce reader stop: a line the reader reads
     // after the close is answered `closing` at once, on a path with no
@@ -623,7 +614,7 @@ fn a_crash_with_a_sent_unanswered_command_rejects_it_indeterminate_and_never_run
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
@@ -687,7 +678,7 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
     let world = World::new(3);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
@@ -697,7 +688,7 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
     first.send(&prompt("c_p", &id, "two"));
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    subscribe_as(&second, "c_sub2", &id);
     second.send(&close(&id));
     until(&second, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
@@ -711,7 +702,7 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
     let resumed = world.session_pids();
     assert_eq!(resumed.len(), 1, "one resumed run: {resumed:?}");
     let third = world.client();
-    subscribe(&third, "c_sub3", &id);
+    subscribe_as(&third, "c_sub3", &id);
     third.send(&close(&id));
     // The loop accepts the close before it quiesces: releasing now lets
     // the held import finish inside the quiesce grace, so the resumed run
@@ -768,7 +759,7 @@ fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
@@ -777,7 +768,7 @@ fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
     drop(first);
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    subscribe_as(&second, "c_sub2", &id);
     second.send(&close(&id));
     until(&second, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
@@ -788,7 +779,7 @@ fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
 
     // A later subscribe resumes the session: it finds no turn waiting.
     let third = world.client();
-    subscribe(&third, "c_sub3", &id);
+    subscribe_as(&third, "c_sub3", &id);
     third.send(&close(&id));
     // Read the close's answer: it proves the session heard this close
     // before `finish` sends its own, so the two never race.
@@ -813,14 +804,14 @@ fn a_command_held_past_the_close_grace_is_rejected_indeterminate_once_and_not_re
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
     let held = world.session_pids();
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    subscribe_as(&second, "c_sub2", &id);
     second.send(&close(&id));
     // Never released: the grace passes with the command still running.
     let lines = until(&first, "the cut answer for c_q", |line| {
@@ -867,7 +858,7 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
@@ -875,7 +866,7 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
     assert!(!held.is_empty(), "the held run is a session process");
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    subscribe_as(&second, "c_sub2", &id);
     second.send(&close(&id));
     // Both signals are collected as a set: no doc orders the close
     // acknowledgement against `fiber_exited` (`docs/testing.md`,
@@ -973,7 +964,7 @@ fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     // Resume past the ask run's exit so the session idles: the probe's
     // close then causes a fresh exit of its own.
     first.send(&command("c_after", &id, "tools", &json!({})));
@@ -983,7 +974,7 @@ fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
     let running = world.session_pids();
     assert!(!running.is_empty(), "the resumed run is a session process");
     let probe = world.client();
-    subscribe(&probe, "c_probe_sub", &id);
+    subscribe_as(&probe, "c_probe_sub", &id);
     probe.send(&close(&id));
     // Both signals are collected as a set: no doc orders the close
     // acknowledgement against `fiber_exited` (`docs/testing.md`,
@@ -1033,7 +1024,7 @@ fn a_finish_without_a_close_leaves_no_session_running() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     // Resume the session so it runs idle past the ask run's exit.
     first.send(&command("c_after", &id, "tools", &json!({})));
     until(&first, "c_after's acknowledgement", |line| {
@@ -1042,7 +1033,7 @@ fn a_finish_without_a_close_leaves_no_session_running() {
     let running = world.session_pids();
     assert!(!running.is_empty(), "the resumed session is still running");
     let probe = world.client();
-    subscribe(&probe, "c_probe_sub", &id);
+    subscribe_as(&probe, "c_probe_sub", &id);
     until(
         &probe,
         "the replayed exit while the session is live",
@@ -1063,7 +1054,7 @@ fn a_test_that_ends_early_leaves_no_session_running() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
