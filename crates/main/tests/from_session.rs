@@ -24,7 +24,7 @@ use std::thread;
 use serde_json::{Value, json};
 use support::{
     HubProc, SessionGuard, Setup, Socket, connect_hub, function_call, hello, recv_answer,
-    start_session, stream, subscribe, text_reply, until,
+    start_session, stream, subscribe, text_reply, until, until_after,
 };
 
 /// A probe the session's own `shell` runs: it opens the hub socket, sends
@@ -272,15 +272,21 @@ fn start_hub_and_session(
     setup: &Setup,
     server: &fakes::ProviderServer,
     content: &str,
-) -> (Arc<Mutex<Option<HubProc>>>, Socket, SessionGuard, String) {
+) -> (
+    Arc<Mutex<Option<HubProc>>>,
+    Socket,
+    SessionGuard,
+    String,
+    support::Subscribed,
+) {
     setup.provider(server);
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, content);
-    subscribe(&client, &session);
-    (hub, client, guard, session)
+    let sub = subscribe(&client, &session);
+    (hub, client, guard, session, sub)
 }
 
 #[track_caller]
@@ -289,6 +295,7 @@ fn finish(
     client: Socket,
     guard: SessionGuard,
     sessions: &[&str],
+    since: &support::Subscribed,
 ) {
     for (n, session) in sessions.iter().enumerate() {
         let id = format!("c_close_{n}");
@@ -302,7 +309,7 @@ fn finish(
     // it reads, so a wait per session drops another session's exit when
     // it arrives first and the next wait times out.
     let mut remaining: Vec<&str> = sessions.to_vec();
-    until(&client, "the sessions exited", |line| {
+    until_after(&client, since, "the sessions exited", |line| {
         if line["kind"] == "fiber_exited"
             && let Some(exited) = line["session_id"].as_str()
             && let Some(pos) = remaining.iter().position(|wanted| *wanted == exited)
@@ -530,7 +537,7 @@ fn shell_child_reply_to_approval_is_refused_from_session() {
     .unwrap();
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
-    let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "run it");
+    let (hub, client, guard, session, sub) = start_hub_and_session(&setup, &server, "run it");
     let requested = until(&client, "the approval request", |line| {
         line["kind"] == "permission_requested"
     });
@@ -569,7 +576,7 @@ fn shell_child_reply_to_approval_is_refused_from_session() {
     );
     let resolved = recv_answer(&client, "c_person_reply", "the person's reply");
     assert_eq!(resolved["kind"], "command_accepted", "{resolved}");
-    finish(hub, client, guard, &[&session]);
+    finish(hub, client, guard, &[&session], &sub);
 }
 
 #[test]
@@ -578,7 +585,7 @@ fn shell_child_pairing_code_is_refused_from_session() {
     let server = fakes::ProviderServer::start([hello(), hello()]).unwrap();
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
-    let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "hello");
+    let (hub, client, guard, session, sub) = start_hub_and_session(&setup, &server, "hello");
     let answer = probe_answer_via(
         &client,
         &session,
@@ -589,7 +596,7 @@ fn shell_child_pairing_code_is_refused_from_session() {
     );
     assert_eq!(answer["kind"], "command_rejected", "{answer}");
     assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
-    finish(hub, client, guard, &[&session]);
+    finish(hub, client, guard, &[&session], &sub);
 }
 
 #[test]
@@ -598,7 +605,7 @@ fn shell_child_steer_of_own_session_is_refused_from_session() {
     let server = fakes::ProviderServer::start([hello(), hello(), hello()]).unwrap();
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
-    let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "hello");
+    let (hub, client, guard, session, sub) = start_hub_and_session(&setup, &server, "hello");
     let answer = probe_answer(
         &client,
         &session,
@@ -613,7 +620,7 @@ fn shell_child_steer_of_own_session_is_refused_from_session() {
     );
     assert_eq!(answer["kind"], "command_rejected", "{answer}");
     assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
-    finish(hub, client, guard, &[&session]);
+    finish(hub, client, guard, &[&session], &sub);
 }
 
 #[test]
@@ -622,7 +629,7 @@ fn shell_child_prompt_and_question_reply_to_own_session_are_refused() {
     let server = fakes::ProviderServer::start([hello(), hello(), hello()]).unwrap();
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
-    let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "hello");
+    let (hub, client, guard, session, sub) = start_hub_and_session(&setup, &server, "hello");
     let answer = probe_answer(
         &client,
         &session,
@@ -665,7 +672,7 @@ fn shell_child_prompt_and_question_reply_to_own_session_are_refused() {
             .contains(&session),
         "{answer}"
     );
-    finish(hub, client, guard, &[&session]);
+    finish(hub, client, guard, &[&session], &sub);
 }
 
 #[test]
@@ -682,7 +689,7 @@ fn steer_to_a_hub_started_session_is_allowed() {
     let first = start_session(&client, &workspace, "first");
     subscribe(&client, &first);
     let second = start_session(&client, &workspace, "second");
-    subscribe(&client, &second);
+    let sub = subscribe(&client, &second);
     let answer = probe_answer_to(
         &client,
         &first,
@@ -697,7 +704,7 @@ fn steer_to_a_hub_started_session_is_allowed() {
         }),
     );
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
-    finish(hub, client, guard, &[&first, &second]);
+    finish(hub, client, guard, &[&first, &second], &sub);
 }
 
 #[test]
@@ -734,7 +741,7 @@ fn question_reply_to_a_hub_started_session_is_allowed() {
     let first = start_session(&client, &workspace, "first");
     subscribe(&client, &first);
     let second = start_session(&client, &workspace, "second");
-    subscribe(&client, &second);
+    let sub = subscribe(&client, &second);
     let asked = until(&client, "the question was asked", |line| {
         line["kind"] == "interaction_requested" && line["session_id"] == second
     });
@@ -764,7 +771,7 @@ fn question_reply_to_a_hub_started_session_is_allowed() {
         request_id.as_str(),
         "{resolved:?}"
     );
-    finish(hub, client, guard, &[&first, &second]);
+    finish(hub, client, guard, &[&first, &second], &sub);
 }
 
 #[test]
@@ -801,7 +808,7 @@ fn session_message_to_itself_is_delivered() {
     .unwrap();
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
-    let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "hello");
+    let (hub, client, guard, session, sub) = start_hub_and_session(&setup, &server, "hello");
     let asked_lines = until(&client, "the question was asked", |line| {
         line["kind"] == "interaction_requested" && line["session_id"] == session
     });
@@ -859,7 +866,7 @@ fn session_message_to_itself_is_delivered() {
         seen_self.load(std::sync::atomic::Ordering::SeqCst),
         "the self-message reaches the model's next request"
     );
-    finish(hub, client, guard, &[&session]);
+    finish(hub, client, guard, &[&session], &sub);
 }
 
 /// The parent's `delegate_message` to its running delegate is accepted and
@@ -920,7 +927,7 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let parent = start_session(&client, &workspace, "run it");
-    subscribe(&client, &parent);
+    let sub = subscribe(&client, &parent);
     let started = until(&client, "the delegate started", |line| {
         line["kind"] == "delegate_started"
     });
@@ -1021,7 +1028,7 @@ fn delegate_message_to_a_running_delegate_is_accepted() {
     );
     let closed = recv_answer(&client, "c_close_parent", "the close acknowledgement");
     assert_eq!(closed["kind"], "command_accepted", "{closed}");
-    until(&client, "the parent exited", |line| {
+    until_after(&client, &sub, "the parent exited", |line| {
         line["kind"] == "fiber_exited" && line["session_id"] == parent
     });
     drop(client);
@@ -1161,7 +1168,7 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
     // Subscribe only now: the replay delivers the requested call. The
     // completion waits past the probes: the steered turn starts only
     // after the release ends the grandchild's first turn.
-    subscribe(&client, &delegate);
+    let sub = subscribe(&client, &delegate);
     let requested = until(&client, "the nested delegate_message call", |line| {
         line["kind"] == "tool_call_requested"
             && line["session_id"] == delegate
@@ -1234,7 +1241,7 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
     );
     let closed = recv_answer(&client, "c_close_nested", "the close acknowledgement");
     assert_eq!(closed["kind"], "command_accepted", "{closed}");
-    until(&client, "the parent exited", |line| {
+    until_after(&client, &sub, "the parent exited", |line| {
         line["kind"] == "fiber_exited" && line["session_id"] == parent
     });
     drop(client);
@@ -1259,7 +1266,7 @@ fn fake_session_argv_ancestor_adds_refusal() {
     let first = start_session(&client, &workspace, "first");
     subscribe(&client, &first);
     let second = start_session(&client, &workspace, "second");
-    subscribe(&client, &second);
+    let sub = subscribe(&client, &second);
     let fake = "s_abcdef0123456789";
     // A fake `fiber` executable: a symlink to the shell, so the kernel
     // runs the shell with argv[0] naming `fiber`. The shell then runs the
@@ -1315,7 +1322,7 @@ fn fake_session_argv_ancestor_adds_refusal() {
         }),
     );
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
-    finish(hub, client, guard, &[&first, &second]);
+    finish(hub, client, guard, &[&first, &second], &sub);
 }
 
 /// Files under `run/` change nothing: a stray file comes and goes, and the
@@ -1326,7 +1333,7 @@ fn run_directory_edits_change_nothing() {
     let server = fakes::ProviderServer::start([hello(), hello(), hello()]).unwrap();
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
-    let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "hello");
+    let (hub, client, guard, session, sub) = start_hub_and_session(&setup, &server, "hello");
     let run = setup.hub_socket().parent().unwrap().to_path_buf();
     fs::write(run.join("stray-test-file"), "stray").unwrap();
     fs::remove_file(run.join("stray-test-file")).unwrap();
@@ -1344,7 +1351,7 @@ fn run_directory_edits_change_nothing() {
     );
     assert_eq!(answer["kind"], "command_rejected", "{answer}");
     assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
-    finish(hub, client, guard, &[&session]);
+    finish(hub, client, guard, &[&session], &sub);
 }
 
 /// A shell under `fiber ask` answers an approval on the hub: the kernel
@@ -1579,7 +1586,7 @@ fn ask_descendant_steering_an_unrelated_hub_started_session_is_allowed() {
     subscribe(&client, &first);
     let ask = spawn_ask(&setup, &["ask", &format!("sleeper run it in {workspace}")]);
     let session = ask_session_id(&ask, setup.deadline);
-    subscribe(&client, &session);
+    let sub = subscribe(&client, &session);
     assert!(
         server.await_requests(1, setup.deadline),
         "the ask reaches its provider"
@@ -1622,7 +1629,7 @@ fn ask_descendant_steering_an_unrelated_hub_started_session_is_allowed() {
     let closed = recv_answer(&client, "c_close_ask", "the close acknowledgement");
     assert_eq!(closed["kind"], "command_accepted", "{closed}");
     wait_ask(ask, setup.deadline, "the ask child");
-    finish(hub, client, guard, &[&first]);
+    finish(hub, client, guard, &[&first], &sub);
 }
 
 /// A session's shell starts `fiber ask` in the background and steers it
@@ -1718,14 +1725,14 @@ fn shell_started_ask_steered_by_the_shell_is_refused_from_session() {
         "{answer}"
     );
 
-    subscribe(&client, &ask_id);
+    let sub = subscribe(&client, &ask_id);
     client.send(
         &json!({"id": "c_close_ask", "session_id": ask_id, "command": "close", "args": {"now": true}})
             .to_string(),
     );
     let closed = recv_answer(&client, "c_close_ask", "the close acknowledgement");
     assert_eq!(closed["kind"], "command_accepted", "{closed}");
-    finish(hub, client, guard, &[&session]);
+    finish(hub, client, guard, &[&session], &sub);
 }
 
 /// A client under a root-owned `sudo` prompts a session that is not its
@@ -1767,7 +1774,7 @@ fn root_ancestor_prompt_to_another_session_is_accepted() {
     let server = fakes::ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
     let probe = write_probe(&setup);
     let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
-    let (hub, client, guard, session) = start_hub_and_session(&setup, &server, "run it");
+    let (hub, client, guard, session, sub) = start_hub_and_session(&setup, &server, "run it");
     // The prompt lands once the first turn ends: the turn's end proves the
     // session is idle, so the prompt is queued on an idle loop.
     let first_turn = until(&client, "the session's first turn to end", |line| {
@@ -1796,5 +1803,5 @@ fn root_ancestor_prompt_to_another_session_is_accepted() {
         ],
     );
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
-    finish(hub, client, guard, &[&session]);
+    finish(hub, client, guard, &[&session], &sub);
 }

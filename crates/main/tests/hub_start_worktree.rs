@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use support::{
     Deadline, HubProc, SessionGuard, Setup, Socket, assert_one_continued_log, complete_lines,
     connect_hub, function_call, git, recv_answer, run_to_exit, session_dir, stream, subscribe,
-    until,
+    until, until_after,
 };
 
 /// The verbatim count rules the multiset calls cite
@@ -79,7 +79,7 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
         .expect("the start answers with a session id")
         .to_owned();
 
-    subscribe(&client, &id);
+    let sub = subscribe(&client, &id);
     // The preamble and opening message are read once at the first turn
     // (`crates/loop/src/opening.rs`), so a session started with no
     // content parks after `clients`: closing then races nothing the loop
@@ -99,7 +99,7 @@ fn hub_start_with_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     assert!(Path::new(&path).exists(), "the worktree exists");
 
     client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
-    let tail = until(&client, "fiber_exited", |line| {
+    let tail = until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     stream.extend(tail);
@@ -303,7 +303,7 @@ fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let repo_guard = SessionGuard::arm(setup.deadline, &first.repository);
-    subscribe(&client, &first.id);
+    let sub = subscribe(&client, &first.id);
     let mut stream = until_resumed(&client, "the resumed fiber_started");
     // Made again at the same path and branch, from the new HEAD.
     assert!(first.path.exists(), "the worktree exists again");
@@ -329,7 +329,7 @@ fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
         "hi\n"
     );
     send_close(&client, &first.id);
-    stream.extend(until(&client, "fiber_exited", |line| {
+    stream.extend(until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     }));
     let clients = stream
@@ -421,7 +421,7 @@ fn a_hub_resume_removes_a_clean_recreated_worktree_at_the_end() {
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let repo_guard = SessionGuard::arm(setup.deadline, &first.repository);
-    subscribe(&client, &first.id);
+    let sub = subscribe(&client, &first.id);
     let mut stream = until_resumed(&client, "the resumed fiber_started");
     assert!(first.path.exists(), "the worktree exists again");
     assert_eq!(
@@ -429,7 +429,7 @@ fn a_hub_resume_removes_a_clean_recreated_worktree_at_the_end() {
         head
     );
     send_close(&client, &first.id);
-    stream.extend(until(&client, "fiber_exited", |line| {
+    stream.extend(until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     }));
     let clients = stream
@@ -509,7 +509,7 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
     let (client, _) = connect_hub(&setup, &hub);
     let path_text = first.path.to_string_lossy().into_owned();
     let path_guard = SessionGuard::arm(setup.deadline, &path_text);
-    subscribe(&client, &first.id);
+    let sub = subscribe(&client, &first.id);
     let mut stream = until_resumed(&client, "the resumed fiber_started");
     send_prompt(&client, "c_prompt", &first.id, "write again");
     stream.extend(until(&client, "turn_completed", |line| {
@@ -531,7 +531,7 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
     // Back to clean again.
     fs::remove_file(first.path.join("again.txt")).unwrap();
     send_close(&client, &first.id);
-    stream.extend(until(&client, "fiber_exited", |line| {
+    stream.extend(until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     }));
     let clients = stream

@@ -2481,7 +2481,7 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
     // socket, so a shutdown that beats a later subscription cannot hide
     // the exit line.
     let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&child_id));
-    support::subscribe_direct(&child_socket);
+    let sub = support::subscribe_direct(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader.
     fakes::kill_group(running.group, "KILL").unwrap();
@@ -2489,7 +2489,7 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
     assert_eq!(status.code(), None);
     // End of file on the lifeline is a hangup: the child shuts down with
     // 129 within the bound.
-    let lines = support::until(&child_socket, "the child's exit", |line| {
+    let lines = support::until_after(&child_socket, &sub, "the child's exit", |line| {
         line["kind"] == "fiber_exited"
     });
     let exited = lines.last().unwrap();
@@ -4011,7 +4011,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .to_owned();
     let mut child_socket =
         support::Socket::connect(setup.deadline, &setup.session_socket(&live_child));
-    support::subscribe_direct(&child_socket);
+    let child_sub = support::subscribe_direct(&child_socket);
     child.release_one();
     assert!(
         child.await_requests(2, setup.deadline),
@@ -4069,14 +4069,17 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     );
     let grandchild_socket =
         support::Socket::connect(setup.deadline, &setup.session_socket(&live_grandchild));
-    support::subscribe_direct(&grandchild_socket);
+    let grandchild_sub = support::subscribe_direct(&grandchild_socket);
     // Drain while the tree stops: otherwise the grandchild's socket writer
     // can spend its bounded close grace behind this unread full stream.
     let (grandchild_exit_tx, grandchild_exit_rx) = mpsc::channel();
     thread::spawn(move || {
-        let lines = support::until(&grandchild_socket, "the stopped grandchild exits", |line| {
-            line["kind"] == "fiber_exited"
-        });
+        let lines = support::until_after(
+            &grandchild_socket,
+            &grandchild_sub,
+            "the stopped grandchild exits",
+            |line| line["kind"] == "fiber_exited",
+        );
         grandchild_exit_tx.send(lines).unwrap();
     });
     // Pump the child's socket through the stop, as with the grandchild
@@ -4088,9 +4091,12 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     ));
     let (child_exit_tx, child_exit_rx) = mpsc::channel();
     thread::spawn(move || {
-        let lines = support::until(&child_socket, "the stopped child exits", |line| {
-            line["kind"] == "fiber_exited"
-        });
+        let lines = support::until_after(
+            &child_socket,
+            &child_sub,
+            "the stopped child exits",
+            |line| line["kind"] == "fiber_exited",
+        );
         child_exit_tx.send(lines).unwrap();
     });
     child.release();
@@ -7413,15 +7419,16 @@ fn a_finished_delegate_replays_its_transcript_to_a_full_subscribe() {
     // session replays its transcript from `session_started`.
     let hub_slot = Arc::new(Mutex::new(None));
     let (hub, _) = support::connect_hub(&setup, &hub_slot);
-    hub.send(&format!(
-        "{{\"id\":\"c_dsub\",\"session_id\":\"{delegate}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
-    ));
-    let ack = support::recv_answer(&hub, "c_dsub", "the subscribe acknowledgement");
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    let fold = support::until(&hub, "the finished delegate's replayed fold", |line| {
-        line.get("session_id").and_then(Value::as_str) == Some(delegate.as_str())
-            && line["kind"] == "fiber_exited"
-    });
+    let sub = support::subscribe_as(&hub, "c_dsub", &delegate);
+    let fold = support::until_replayed(
+        &hub,
+        &sub,
+        "the finished delegate's replayed fold",
+        |line| {
+            line.get("session_id").and_then(Value::as_str) == Some(delegate.as_str())
+                && line["kind"] == "fiber_exited"
+        },
+    );
     let started_line = fold
         .iter()
         .find(|line| {
@@ -10168,7 +10175,7 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     // socket, so a shutdown that beats a later subscription cannot hide
     // the exit line.
     let child_socket = support::Socket::connect(bound, &setup.session_socket(&child_id));
-    support::subscribe_direct(&child_socket);
+    let sub = support::subscribe_direct(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader. The remaining deadline
     // from here is the kill-to-backfilled window the resume asserts on.
@@ -10178,7 +10185,7 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     assert_eq!(status.code(), None);
     // End of file on the lifeline is a hangup: the child shuts down with
     // 129 within the bound, releasing its session lock.
-    let lines = support::until(&child_socket, "the child's exit", |line| {
+    let lines = support::until_after(&child_socket, &sub, "the child's exit", |line| {
         line["kind"] == "fiber_exited"
     });
     let exited = lines.last().unwrap();

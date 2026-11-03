@@ -112,7 +112,7 @@ fn hub_start_with_overrides_runs_the_session_with_them_as_dash_c() {
         .expect("the start answers with a session id")
         .to_owned();
 
-    subscribe(&client, &id);
+    let sub = subscribe(&client, &id);
     let mut stream = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -132,7 +132,7 @@ fn hub_start_with_overrides_runs_the_session_with_them_as_dash_c() {
     );
 
     client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
-    let tail = until(&client, "fiber_exited", |line| {
+    let tail = until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     stream.extend(tail);

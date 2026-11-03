@@ -20,7 +20,7 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
     HubProc, Run, SessionGuard, Setup, connect_hub, hello, kinds, recv_answer, run_to_exit,
-    subscribe, until, write_json,
+    subscribe, until, until_after, write_json,
 };
 
 impl Run {
@@ -694,7 +694,7 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
         .as_str()
         .unwrap()
         .to_owned();
-    subscribe(&client, &id);
+    let sub = subscribe(&client, &id);
     let mut stream = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -727,7 +727,7 @@ fn the_credential_command_on_a_scripted_session_is_rejected() {
     stream.extend(rejected);
 
     client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
-    let tail = until(&client, "fiber_exited", |line| {
+    let tail = until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     stream.extend(tail);
@@ -776,7 +776,7 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
         .as_str()
         .unwrap()
         .to_owned();
-    subscribe(&client, &id);
+    let sub = subscribe(&client, &id);
     let stream = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -792,7 +792,7 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
     assert!(message.ends_with("are: none"), "{message}");
 
     client.send(&json!({"id": "c_close", "session_id": id, "command": "close"}).to_string());
-    let _tail = until(&client, "fiber_exited", |line| {
+    let _tail = until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     guard.wait_gone();
