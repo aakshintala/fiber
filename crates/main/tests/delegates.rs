@@ -4099,6 +4099,20 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         });
         grandchild_exit_tx.send(lines).unwrap();
     });
+    // Pump the child's socket through the stop, as with the grandchild
+    // above: a client that stops reading is cut (docs/invocation.md,
+    // "Relay").
+    child_socket.set_diag(support::Diag::new(
+        Arc::clone(&running.stderr_snapshot),
+        sessions_in(&setup.home(), &setup.workspace()).join(&live_child),
+    ));
+    let (child_exit_tx, child_exit_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let lines = support::until(&child_socket, "the stopped child exits", |line| {
+            line["kind"] == "fiber_exited"
+        });
+        child_exit_tx.send(lines).unwrap();
+    });
     child.release();
     // The crossing copy trips the budget while the root waits: the wait
     // ends, the next request is refused, and the turn ends failed.
@@ -4123,17 +4137,10 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     assert_eq!(copies[0]["payload"]["cost"], 100.0);
     let root_started = one(&before, "delegate_started");
     let child_id = root_started["delegate_session_id"].as_str().unwrap();
-    // A close here panics with the dump: the child's own log directory,
-    // the same one read below, plus the root session's stderr snapshot.
-    child_socket.set_diag(support::Diag::new(
-        Arc::clone(&running.stderr_snapshot),
-        sessions_in(&setup.home(), &setup.workspace()).join(child_id),
-    ));
-    observed_child.extend(support::until(
-        &child_socket,
-        "the stopped child exits",
-        |line| line["kind"] == "fiber_exited",
-    ));
+    let stopped_child = setup
+        .deadline
+        .recv_or_fail(&child_exit_rx, "the stopped child exits");
+    observed_child.extend(stopped_child);
     let observed_grandchild = setup
         .deadline
         .recv_or_fail(&grandchild_exit_rx, "the stopped grandchild exits");
