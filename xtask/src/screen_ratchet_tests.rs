@@ -238,6 +238,16 @@ fn a_longer_name_starting_with_a_listed_helper_opens_no_span() {
 }
 
 #[test]
+fn a_name_with_an_alphanumeric_prefix_opens_no_span() {
+    assert_eq!(
+        count_unmarked(
+            "    let grid = xfeed(&mut run, x, |grid| {\n        grid.cell(0, 0).symbol.as_str() == \"x\"\n    });\n"
+        ),
+        1
+    );
+}
+
+#[test]
 fn a_read_after_the_wait_still_counts() {
     assert_eq!(
         count_unmarked(
