@@ -508,6 +508,7 @@
           }
         ]
       },
+      "deferred_tools": true,
       "id": "gpt-5.4",
       "input": [
         "text",
@@ -536,6 +537,7 @@
         "input": 0.75,
         "output": 4.5
       },
+      "deferred_tools": true,
       "id": "gpt-5.4-mini",
       "input": [
         "text",
@@ -635,6 +637,7 @@
           }
         ]
       },
+      "deferred_tools": true,
       "id": "gpt-5.5",
       "input": [
         "text",
@@ -707,6 +710,7 @@
           }
         ]
       },
+      "deferred_tools": true,
       "id": "gpt-5.6-luna",
       "input": [
         "text",
@@ -746,6 +750,7 @@
           }
         ]
       },
+      "deferred_tools": true,
       "id": "gpt-5.6-sol",
       "input": [
         "text",
@@ -785,6 +790,7 @@
           }
         ]
       },
+      "deferred_tools": true,
       "id": "gpt-5.6-terra",
       "input": [
         "text",
@@ -862,6 +868,7 @@
           }
         ]
       },
+      "deferred_tools": true,
       "id": "gpt-6-luna",
       "input": [
         "text",
@@ -901,6 +908,7 @@
           }
         ]
       },
+      "deferred_tools": true,
       "id": "gpt-6-sol",
       "input": [
         "text",

@@ -12,6 +12,7 @@
         "input": 10,
         "output": 50
       },
+      "deferred_tools": true,
       "id": "claude-fable-5",
       "input": [
         "text",
@@ -38,6 +39,7 @@
         "input": 10,
         "output": 50
       },
+      "deferred_tools": true,
       "id": "claude-fable-5-1",
       "input": [
         "text",
@@ -67,6 +69,7 @@
         "input": 1,
         "output": 5
       },
+      "deferred_tools": true,
       "id": "claude-haiku-4-5",
       "input": [
         "text",
@@ -96,6 +99,7 @@
         "input": 1,
         "output": 5
       },
+      "deferred_tools": true,
       "id": "claude-haiku-4-5-20251001",
       "input": [
         "text",
@@ -131,6 +135,7 @@
           }
         ]
       },
+      "deferred_tools": true,
       "id": "claude-haiku-5-5",
       "input": [
         "text",
@@ -160,6 +165,7 @@
         "input": 5,
         "output": 25
       },
+      "deferred_tools": true,
       "id": "claude-opus-4-5",
       "input": [
         "text",
@@ -189,6 +195,7 @@
         "input": 5,
         "output": 25
       },
+      "deferred_tools": true,
       "id": "claude-opus-4-5-20251101",
       "input": [
         "text",
@@ -215,6 +222,7 @@
         "input": 5,
         "output": 25
       },
+      "deferred_tools": true,
       "id": "claude-opus-4-6",
       "input": [
         "text",
@@ -241,6 +249,7 @@
         "input": 5,
         "output": 25
       },
+      "deferred_tools": true,
       "id": "claude-opus-4-7",
       "input": [
         "text",
@@ -268,6 +277,7 @@
         "input": 5,
         "output": 25
       },
+      "deferred_tools": true,
       "id": "claude-opus-4-8",
       "input": [
         "text",
@@ -321,6 +331,7 @@
         "input": 4,
         "output": 20
       },
+      "deferred_tools": true,
       "id": "claude-opus-5-5",
       "input": [
         "text",
@@ -350,6 +361,7 @@
         "input": 3,
         "output": 15
       },
+      "deferred_tools": true,
       "id": "claude-sonnet-4-5",
       "input": [
         "text",
@@ -379,6 +391,7 @@
         "input": 3,
         "output": 15
       },
+      "deferred_tools": true,
       "id": "claude-sonnet-4-5-20250929",
       "input": [
         "text",
@@ -405,6 +418,7 @@
         "input": 3,
         "output": 15
       },
+      "deferred_tools": true,
       "id": "claude-sonnet-4-6",
       "input": [
         "text",
@@ -431,6 +445,7 @@
         "input": 2,
         "output": 10
       },
+      "deferred_tools": true,
       "id": "claude-sonnet-5",
       "input": [
         "text",
@@ -458,6 +473,7 @@
         "input": 2,
         "output": 10
       },
+      "deferred_tools": true,
       "id": "claude-sonnet-5-5",
       "input": [
         "text",
