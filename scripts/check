@@ -153,7 +153,7 @@ crates/main/tests/journeys.rs 19
 crates/main/tests/light_no_color_look.rs 61
 crates/main/tests/line_start_end.rs 6
 crates/main/tests/link_look.rs 21
-crates/main/tests/look.rs 166
+crates/main/tests/look.rs 163
 crates/main/tests/look_diff.rs 6
 crates/main/tests/look_markdown.rs 29
 crates/main/tests/main_journeys.rs 63

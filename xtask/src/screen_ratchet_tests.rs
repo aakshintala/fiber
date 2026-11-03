@@ -198,6 +198,46 @@ fn a_nested_closure_inside_a_wait_does_not_end_the_span() {
 }
 
 #[test]
+fn a_read_inside_a_listed_helper_call_does_not_count() {
+    assert_eq!(
+        count_unmarked(
+            "    let grid = feed(&mut run, &mut terminal, b\"x\", |grid| {\n        grid.cell(0, 0).symbol.as_str() == \"x\"\n    });\n"
+        ),
+        0
+    );
+}
+
+#[test]
+fn the_same_read_under_an_unlisted_name_counts() {
+    assert_eq!(
+        count_unmarked(
+            "    let grid = fetch(&mut run, &mut terminal, b\"x\", |grid| {\n        grid.cell(0, 0).symbol.as_str() == \"x\"\n    });\n"
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_listed_helper_definition_opens_no_span() {
+    assert_eq!(
+        count_unmarked(
+            "fn feed(run: &mut Run, bytes: &[u8]) -> Grid {\n    let grid = run.screen();\n}\n"
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_longer_name_starting_with_a_listed_helper_opens_no_span() {
+    assert_eq!(
+        count_unmarked(
+            "    let grid = feed_more(&mut run, x, |grid| {\n        grid.cell(0, 0).symbol.as_str() == \"x\"\n    });\n"
+        ),
+        1
+    );
+}
+
+#[test]
 fn a_read_after_the_wait_still_counts() {
     assert_eq!(
         count_unmarked(
