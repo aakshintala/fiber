@@ -255,6 +255,7 @@ impl App {
 
     /// Updates the clear's pending start id when the hooks offer resends
     /// it. Returns whether a clear start is still pending.
+    // debt: the feature's command_id copy kept in step with the outbox tag by hand here (outbox.settled(refused_id), outbox.wait(&retry_id, ..) and pending.command_id = retry_id), the outbox tag becomes the sole record once the id lookup runs the other way for all five features (clear, history, images, rewind, and the dismiss path) once #4115 lands.
     pub(super) fn retry_clear_start(&mut self, refused_id: &str, retry_id: String) -> bool {
         let Some(pending) = self.clear.pending.as_mut() else {
             return false;
