@@ -2,6 +2,8 @@
 //! and anchors that do not resolve, section citations naming a heading the
 //! file does not have, and backticked repository paths that do not exist.
 //! pulldown-cmark reads the Markdown; the citation grammar is Fiber's own.
+//! It also serves the code scan, which resolves heading citations through
+//! the same index.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,8 +18,9 @@ const PATH_ROOTS: [&str; 5] = ["docs/", "crates/", "scripts/", "research/", ".gi
 /// What the checks need from one Markdown file. Offsets are into its source.
 #[derive(Debug, Default)]
 struct Parsed {
-    /// Each heading as written, without its `#` marks, and as rendered text.
-    headings: Vec<(String, String)>,
+    /// Each heading as written, without its `#` marks, and as rendered text,
+    /// with the byte offset where the heading starts.
+    headings: Vec<(usize, String, String)>,
     /// Inline link and image destinations, and reference definitions.
     links: Vec<(usize, String)>,
     /// Full and collapsed references whose label has no definition.
@@ -51,9 +54,10 @@ fn parse(markdown: &str) -> Parsed {
             .collect(),
         ..Parsed::default()
     };
-    let mut heading: Option<(String, String)> = None;
+    let mut heading: Option<(usize, String, String)> = None;
     for (event, range) in parser {
         if let Event::Start(Tag::Heading { .. }) = &event {
+            let start = range.start;
             let source = markdown
                 .get(range.clone())
                 .and_then(|s| s.lines().next())
@@ -64,7 +68,7 @@ fn parse(markdown: &str) -> Parsed {
                 .trim()
                 .trim_end_matches('#')
                 .trim_end();
-            heading = Some((written.to_owned(), String::new()));
+            heading = Some((start, written.to_owned(), String::new()));
         } else if let Event::End(TagEnd::Heading(_)) = &event {
             parsed.headings.extend(heading.take());
         } else if let Event::Start(
@@ -84,7 +88,7 @@ fn parse(markdown: &str) -> Parsed {
         } else if let Event::Code(text) = &event {
             parsed.code.push((range.start, range.end, text.to_string()));
         }
-        if let (Some((_, rendered)), Event::Text(text) | Event::Code(text)) =
+        if let (Some((_, _, rendered)), Event::Text(text) | Event::Code(text)) =
             (heading.as_mut(), &event)
         {
             rendered.push_str(text);
@@ -94,13 +98,65 @@ fn parse(markdown: &str) -> Parsed {
     parsed
 }
 
+/// One parse of a doc: each heading as written, with its 1-based line.
+pub(crate) struct HeadingIndex {
+    names: Vec<String>,
+    lines: Vec<usize>,
+}
+
+impl HeadingIndex {
+    /// Every heading as written, in document order.
+    pub(crate) fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// The nearest heading starting at or above the 1-based line.
+    pub(crate) fn above(&self, line: usize) -> Option<&str> {
+        let mut out: Option<&str> = None;
+        for (name, start) in self.names.iter().zip(self.lines.iter()) {
+            if *start <= line {
+                out = Some(name.as_str());
+            } else {
+                break;
+            }
+        }
+        out
+    }
+}
+
+/// The one parse of a doc; both the Markdown path and the code scan query
+/// this index, so a cited doc is read and parsed once.
+pub(crate) fn heading_index(markdown: &str) -> HeadingIndex {
+    let parsed = parse(markdown);
+    let mut names = Vec::with_capacity(parsed.headings.len());
+    let mut lines = Vec::with_capacity(parsed.headings.len());
+    for (offset, written, _) in parsed.headings {
+        lines.push(line_of(markdown, offset));
+        names.push(written);
+    }
+    HeadingIndex { names, lines }
+}
+
 /// Every heading as written, which is what a citation quotes.
 pub(crate) fn headings(markdown: &str) -> Vec<String> {
-    parse(markdown)
-        .headings
-        .into_iter()
-        .map(|(written, _)| written)
-        .collect()
+    heading_index(markdown).names().to_vec()
+}
+
+/// The failure for a heading citation, shared by the Markdown path and the
+/// code scan so the two message texts exist once. `None` found means the
+/// cited file is absent.
+pub(crate) fn heading_failure(
+    cited: &str,
+    heading: &str,
+    found: Option<&[String]>,
+) -> Option<String> {
+    match found {
+        None => Some(format!("citation of {cited}: no such file")),
+        Some(names) if !names.contains(&heading.to_owned()) => Some(format!(
+            "citation of {cited}, \"{heading}\": no such heading"
+        )),
+        Some(_) => None,
+    }
 }
 
 /// GitHub's anchor for a heading's rendered text.
@@ -124,7 +180,7 @@ pub(crate) fn heading_ids(markdown: &str) -> Vec<String> {
     parse(markdown)
         .headings
         .iter()
-        .map(|(_, rendered)| {
+        .map(|(_, _, rendered)| {
             let base = slug(rendered);
             let count = seen.entry(base.clone()).or_insert(0);
             let anchor = if *count == 0 {
@@ -139,22 +195,24 @@ pub(crate) fn heading_ids(markdown: &str) -> Vec<String> {
 }
 
 /// The quoted heading after a cited file: `, "Heading"`, whitespace (line
-/// breaks included) normalised.
-fn cited_heading(after: &str) -> Option<String> {
+/// breaks included) normalised. Returns the heading and the byte length of
+/// `after` consumed through the closing quote, so the code scan can cut the
+/// key from the source.
+pub(crate) fn cited_heading(after: &str) -> Option<(String, usize)> {
     let rest = after.strip_prefix(',')?;
     let quoted = rest.trim_start();
-    if quoted.len() == rest.len() {
+    let spaces = rest.len() - quoted.len();
+    if spaces == 0 {
         return None;
     }
     let inner = quoted.strip_prefix('"')?;
     let end = inner.find('"')?;
-    Some(
-        inner
-            .get(..end)?
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
+    let heading = inner
+        .get(..end)?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some((heading, 1 + spaces + 1 + end + 1))
 }
 
 pub(crate) fn is_external(target: &str) -> bool {
@@ -231,20 +289,17 @@ pub(crate) fn check_file(root: &Path, path: &str) -> Result<Vec<String>, String>
     for (start, end, cited) in &parsed.code {
         let is_markdown_file = cited.ends_with(".md") && !cited.contains(char::is_whitespace);
         if is_markdown_file
-            && let Some(heading) = cited_heading(text.get(*end..).unwrap_or_default())
+            && let Some((heading, _)) = cited_heading(text.get(*end..).unwrap_or_default())
         {
             let target = [root.join(cited), join(&dir, cited)]
                 .into_iter()
                 .find(|c| c.is_file());
-            match target {
-                None => fail(*start, format!("citation of {cited}: no such file")),
-                Some(target) if !headings(&read(&target)?).contains(&heading) => {
-                    fail(
-                        *start,
-                        format!("citation of {cited}, \"{heading}\": no such heading"),
-                    );
-                }
-                Some(_) => {}
+            let found = match &target {
+                None => None,
+                Some(target) => Some(heading_index(&read(target)?).names().to_vec()),
+            };
+            if let Some(message) = heading_failure(cited, &heading, found.as_deref()) {
+                fail(*start, message);
             }
         }
         let placeholder =

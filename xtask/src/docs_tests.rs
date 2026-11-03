@@ -1,6 +1,8 @@
 use super::*;
 use fakes::TempDir;
 
+const SOURCE: &str = "docs/source.md";
+
 const TARGET: &str = "# Target
 
 ## The gate
@@ -15,9 +17,9 @@ const TARGET: &str = "# Target
 fn check(source: &str) -> Vec<String> {
     let dir = TempDir::new("xtask-docs");
     dir.write("docs/target.md", TARGET);
-    dir.write("docs/source.md", source);
+    dir.write(SOURCE, source);
     dir.write("scripts/.keep", "");
-    check_file(dir.path(), "docs/source.md").unwrap()
+    check_file(dir.path(), SOURCE).unwrap()
 }
 
 #[test]
@@ -41,9 +43,9 @@ fn a_link_to_a_missing_file_or_anchor_fails() {
     assert_eq!(
         check("[a](missing.md) [b](target.md#nope) [c](#nope)\n"),
         [
-            "docs/source.md:1: link to missing.md: no such file",
-            "docs/source.md:1: link to target.md#nope: no such anchor",
-            "docs/source.md:1: link to #nope: no such anchor",
+            format!("{SOURCE}:1: link to missing.md: no such file"),
+            format!("{SOURCE}:1: link to target.md#nope: no such anchor"),
+            format!("{SOURCE}:1: link to #nope: no such anchor"),
         ]
     );
 }
@@ -54,8 +56,8 @@ fn a_reference_link_to_a_missing_file_or_anchor_fails() {
     assert_eq!(
         check(source),
         [
-            "docs/source.md:3: link to missing.md: no such file",
-            "docs/source.md:4: link to target.md#nope: no such anchor",
+            format!("{SOURCE}:3: link to missing.md: no such file"),
+            format!("{SOURCE}:4: link to target.md#nope: no such anchor"),
         ]
     );
 }
@@ -66,8 +68,8 @@ fn a_definition_whose_target_is_on_the_next_line_is_checked() {
     assert_eq!(
         check(source),
         [
-            "docs/source.md:3: link to missing.md: no such file",
-            "docs/source.md:5: link to target.md#nope: no such anchor",
+            format!("{SOURCE}:3: link to missing.md: no such file"),
+            format!("{SOURCE}:5: link to target.md#nope: no such anchor"),
         ]
     );
 }
@@ -82,8 +84,8 @@ fn a_reference_with_no_definition_fails() {
     assert_eq!(
         check("[a][nowhere] and [Else][]\n"),
         [
-            "docs/source.md:1: reference [nowhere]: no definition",
-            "docs/source.md:1: reference [else]: no definition"
+            format!("{SOURCE}:1: reference [nowhere]: no definition"),
+            format!("{SOURCE}:1: reference [else]: no definition")
         ]
     );
 }
@@ -100,7 +102,7 @@ fn brackets_that_are_not_a_reference_are_ignored() {
 fn a_reference_label_may_break_across_lines() {
     assert_eq!(
         check("[a][b\nc] [d][e\nf]\n\n[e f]: target.md\n"),
-        ["docs/source.md:1: reference [b c]: no definition"]
+        [format!("{SOURCE}:1: reference [b c]: no definition")]
     );
 }
 
@@ -119,8 +121,8 @@ fn a_citation_of_a_missing_heading_fails_even_across_lines() {
     assert_eq!(
         check(source),
         [
-            "docs/source.md:2: citation of docs/target.md, \"The old gate\": no such heading",
-            "docs/source.md:5: citation of docs/target.md, \"Not a heading\": no such heading",
+            format!("{SOURCE}:2: citation of docs/target.md, \"The old gate\": no such heading"),
+            format!("{SOURCE}:5: citation of docs/target.md, \"Not a heading\": no such heading"),
         ]
     );
 }
@@ -130,8 +132,8 @@ fn a_citation_of_a_missing_file_fails() {
     assert_eq!(
         check("(`docs/gone.md`, \"The gate\")\n"),
         [
-            "docs/source.md:1: citation of docs/gone.md: no such file",
-            "docs/source.md:1: path docs/gone.md: does not exist",
+            format!("{SOURCE}:1: citation of docs/gone.md: no such file"),
+            format!("{SOURCE}:1: path docs/gone.md: does not exist"),
         ]
     );
 }
@@ -148,7 +150,7 @@ fn a_file_name_without_a_quoted_heading_is_not_a_citation() {
 fn a_backticked_path_that_does_not_exist_fails() {
     assert_eq!(
         check("`not a path` `scripts/check`\n"),
-        ["docs/source.md:1: path scripts/check: does not exist"]
+        [format!("{SOURCE}:1: path scripts/check: does not exist")]
     );
 }
 
@@ -213,4 +215,50 @@ fn anchors_collects_heading_ids() {
     for id in &ordered {
         assert!(collected.contains(id), "{id} is collected");
     }
+}
+
+#[test]
+fn heading_failure_names_a_missing_file_or_heading() {
+    assert_eq!(
+        heading_failure("docs/x.md", "H", None),
+        Some("citation of docs/x.md: no such file".to_owned())
+    );
+    assert_eq!(
+        heading_failure("docs/x.md", "H", Some(&["A".to_owned()])),
+        Some("citation of docs/x.md, \"H\": no such heading".to_owned())
+    );
+    assert_eq!(
+        heading_failure("docs/x.md", "H", Some(&["H".to_owned()])),
+        None
+    );
+}
+
+#[test]
+fn heading_index_names_the_heading_at_or_above_each_line() {
+    let index = heading_index("intro\n# A\n\ntext\n## B\nmore\n");
+    assert_eq!(index.above(1), None);
+    assert_eq!(index.above(2), Some("A"));
+    assert_eq!(index.above(3), Some("A"));
+    assert_eq!(index.above(4), Some("A"));
+    assert_eq!(index.above(5), Some("B"));
+    assert_eq!(index.above(6), Some("B"));
+    assert_eq!(index.above(99), Some("B"));
+    let target = heading_index(TARGET);
+    assert_eq!(target.above(8), Some("`unsafe`"));
+}
+
+#[test]
+fn heading_index_names_match_headings() {
+    for markdown in ["intro\n# A\n\ntext\n## B\nmore\n", TARGET] {
+        assert_eq!(heading_index(markdown).names(), &headings(markdown));
+    }
+}
+
+#[test]
+fn cited_heading_returns_the_heading_and_its_length() {
+    assert_eq!(
+        cited_heading(", \"A  b\" tail"),
+        Some(("A b".to_owned(), 8))
+    );
+    assert_eq!(cited_heading(", \"no end"), None);
 }
