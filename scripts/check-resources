@@ -33,8 +33,7 @@ PREFLIGHT_TMPDIR_MIN_MIB_LINUX=3746
 # from CI (surveyor RULING-3954-1, step 3); see #4027.
 # debt: Darwin TMPDIR floor stays equal to the Linux floor, upgrade trigger:
 # the macOS harvest result replaces PREFLIGHT_TMPDIR_MIN_MIB_DARWIN.
-# SCRATCH HARVEST ONLY: never merge.
-PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=1
+PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=3746
 # Minimum free `target` space for one gate run, in MiB, on Linux. Peak
 # target growth of the same measured run (cold target, same commit, date
 # and environment as above): 28019224 KiB, rounded up to 27363 MiB and
@@ -45,8 +44,7 @@ PREFLIGHT_TARGET_MIN_MIB_LINUX=54726
 # from CI (surveyor RULING-3954-1, step 3); see #4027.
 # debt: Darwin target floor stays equal to the Linux floor, upgrade trigger:
 # the macOS harvest result replaces PREFLIGHT_TARGET_MIN_MIB_DARWIN.
-# SCRATCH HARVEST ONLY: never merge.
-PREFLIGHT_TARGET_MIN_MIB_DARWIN=1
+PREFLIGHT_TARGET_MIN_MIB_DARWIN=54726
 # The active pair is keyed by platform: `release.yml` gates both Linux and
 # macOS on this script, so one shared pair would leave macOS unmeasured.
 # Any other `uname -s` value keeps the Linux pair.
