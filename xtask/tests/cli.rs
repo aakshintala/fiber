@@ -623,6 +623,277 @@ fn stress_plan_with_no_touched_tests_summarises_the_empty_selection() {
 }
 
 #[test]
+fn stress_plan_with_only_named_plans_the_named_tests() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write("names.txt", "fold::tests::second\n");
+    let names = dir.path().join("names.txt");
+    let names = names.to_str().unwrap();
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--labels",
+            "test-only",
+            "--names-file",
+            names,
+            "--only",
+            "named",
+            "--summary",
+            summary,
+        ],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "run\ttrue\n\
+         count\t100\n\
+         filter\t(package(b) & test(=fold::tests::second))\n\
+         package\tb@0.0.0\n\
+         test\tb fold::tests::second\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "### Stress job: 1 test, 100 runs each (named by the linked flake issue)\n\
+         ```\n\
+         test\tb fold::tests::second\n\
+         ```\n"
+    );
+}
+
+#[test]
+fn stress_plan_with_only_rest_plans_the_rest_at_thirty() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write("names.txt", "fold::tests::second\n");
+    let names = dir.path().join("names.txt");
+    let names = names.to_str().unwrap();
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--labels",
+            "test-only",
+            "--names-file",
+            names,
+            "--only",
+            "rest",
+            "--summary",
+            summary,
+        ],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "run\ttrue\n\
+         count\t30\n\
+         filter\t(binary_id(a::t) & test(=new_test))\n\
+         package\ta@0.0.0\n\
+         test\ta::t new_test\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "### Stress job: 1 test, 30 runs each (rest)\n\
+         ```\n\
+         test\ta::t new_test\n\
+         ```\n"
+    );
+}
+
+#[test]
+fn stress_plan_with_only_rest_reports_names_matching_no_test() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write("names.txt", "fold::tests::second\nmissing::ghost\n");
+    let names = dir.path().join("names.txt");
+    let names = names.to_str().unwrap();
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--labels",
+            "test-only",
+            "--names-file",
+            names,
+            "--only",
+            "rest",
+            "--summary",
+            summary,
+        ],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "run\ttrue\n\
+         count\t30\n\
+         filter\t(binary_id(a::t) & test(=new_test))\n\
+         package\ta@0.0.0\n\
+         test\ta::t new_test\n\
+         Unmatched: missing::ghost\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "### Stress job: 1 test, 30 runs each (rest)\n\
+         ```\n\
+         test\ta::t new_test\n\
+         ```\n"
+    );
+}
+
+#[test]
+fn stress_plan_with_only_named_and_no_match_skips_the_run() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write("names.txt", "missing::ghost\n");
+    let names = dir.path().join("names.txt");
+    let names = names.to_str().unwrap();
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--labels",
+            "test-only",
+            "--names-file",
+            names,
+            "--only",
+            "named",
+            "--summary",
+            summary,
+        ],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "run\tfalse\ncount\t100\nfilter\t\n");
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "### Stress job: 0 tests, 100 runs each (named by the linked flake issue)\n\
+         ```\n\
+         ```\n"
+    );
+}
+
+#[test]
+fn stress_plan_without_only_plans_every_test_at_the_label_count() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write("names.txt", "fold::tests::second\n");
+    let names = dir.path().join("names.txt");
+    let names = names.to_str().unwrap();
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    let (code, out) = xtask_with_nextest(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--labels",
+            "test-only",
+            "--names-file",
+            names,
+            "--summary",
+            summary,
+        ],
+        &home,
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    // The single group holds exactly: the file the plan step wrote changes
+    // nothing without `--only`, so lines compare as a set as above.
+    let mut head = Vec::new();
+    let mut rest = Vec::new();
+    for line in out.lines() {
+        if line.starts_with("run\t") || line.starts_with("count\t") {
+            head.push(line.to_owned());
+        } else {
+            rest.push(line.to_owned());
+        }
+    }
+    head.sort();
+    rest.sort();
+    assert_eq!(head, ["count\t100".to_owned(), "run\ttrue".to_owned()]);
+    assert!(rest.contains(&"test\ta::t new_test".to_owned()), "{rest:?}");
+    assert!(
+        rest.contains(&"test\tb fold::tests::second".to_owned()),
+        "{rest:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "### Stress job: 2 tests, 100 runs each\n\
+         ```\n\
+         test\ta::t new_test\n\
+         test\tb fold::tests::second\n\
+         ```\n"
+    );
+}
+
+#[test]
+fn stress_plan_with_a_bad_only_is_an_error() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    let (code, out) = xtask(
+        &dir,
+        &["stress-plan", "--base", "main", "--only", "bogus"],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.starts_with("xtask: --only"), "{out}");
+}
+
+#[test]
+fn stress_plan_with_a_missing_names_file_is_an_error() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    let missing = dir.path().join("names-missing.txt");
+    let missing = missing.to_str().unwrap();
+    let (code, out) = xtask(
+        &dir,
+        &[
+            "stress-plan",
+            "--base",
+            "main",
+            "--names-file",
+            missing,
+            "--only",
+            "named",
+        ],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("names-missing.txt"), "{out}");
+}
+
+#[test]
 fn stress_plan_with_a_bad_base_is_an_error() {
     let dir = stress_branch();
     git(&dir, &["switch", "main"]);

@@ -424,6 +424,103 @@ fn a_summary_with_two_tests_uses_the_plural() {
     );
 }
 
+#[test]
+fn a_named_group_keeps_the_flaky_fix_count_and_rest_runs_the_default() {
+    assert_eq!(group_count(Some(Only::Named), "test-only"), 100);
+    assert_eq!(group_count(Some(Only::Named), "bug"), 30);
+    assert_eq!(group_count(Some(Only::Rest), "test-only"), 30);
+    assert_eq!(group_count(Some(Only::Rest), ""), 30);
+    assert_eq!(group_count(None, "test-only"), 100);
+    assert_eq!(group_count(None, ""), 30);
+}
+
+#[test]
+fn a_named_summary_names_the_group_and_its_count() {
+    assert_eq!(
+        group_summary(
+            100,
+            &["test\tb fold::tests::second".to_owned()],
+            Only::Named
+        ),
+        "### Stress job: 1 test, 100 runs each (named by the linked flake issue)\n```\ntest\tb fold::tests::second\n```\n"
+    );
+}
+
+#[test]
+fn a_rest_summary_names_the_group_and_its_count() {
+    assert_eq!(
+        group_summary(
+            30,
+            &[
+                "test\ta::t new_test".to_owned(),
+                "test\tb fold::tests::second".to_owned(),
+            ],
+            Only::Rest
+        ),
+        "### Stress job: 2 tests, 30 runs each (rest)\n```\ntest\ta::t new_test\ntest\tb fold::tests::second\n```\n"
+    );
+}
+
+#[test]
+fn an_empty_group_summary_names_the_group_with_zero_tests() {
+    assert_eq!(
+        group_summary(100, &[], Only::Named),
+        "### Stress job: 0 tests, 100 runs each (named by the linked flake issue)\n```\n```\n"
+    );
+    assert_eq!(
+        group_summary(30, &[], Only::Rest),
+        "### Stress job: 0 tests, 30 runs each (rest)\n```\n```\n"
+    );
+}
+
+#[test]
+fn only_parses_the_two_group_names() {
+    assert_eq!(parse_only(None), Ok(None));
+    assert_eq!(parse_only(Some("named".to_owned())), Ok(Some(Only::Named)));
+    assert_eq!(parse_only(Some("rest".to_owned())), Ok(Some(Only::Rest)));
+    assert_eq!(
+        parse_only(Some("bogus".to_owned())),
+        Err("--only \"bogus\" must be named or rest".to_owned())
+    );
+}
+
+#[test]
+fn unmatched_names_lists_names_matching_no_touched_test() {
+    let touched = [binary_test(), unit_test()];
+    assert_eq!(
+        unmatched_names(
+            &["bash::registers".to_owned(), "missing::ghost".to_owned()],
+            &touched
+        ),
+        vec!["missing::ghost".to_owned()]
+    );
+    assert_eq!(
+        unmatched_names(&["bash::registers".to_owned()], &touched),
+        Vec::<String>::new()
+    );
+    assert_eq!(unmatched_names(&[], &touched), Vec::<String>::new());
+}
+
+#[test]
+fn names_file_lines_split_on_newlines_with_nothing_else_stripped() {
+    let temp = fakes::TempDir::new("xtask-stress-names");
+    temp.write("names.txt", "bash::registers\n\n padded\n");
+    let path = temp.path().join("names.txt").to_string_lossy().into_owned();
+    assert_eq!(
+        read_names_file(&path),
+        Ok(vec!["bash::registers".to_owned(), " padded".to_owned()])
+    );
+    let missing = temp
+        .path()
+        .join("missing.txt")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        read_names_file(&missing).is_err_and(|error| error.contains("missing.txt")),
+        "{missing}"
+    );
+}
+
 const CI_STRESS_OUTPUT_RAW: &str = include_str!("stress_tests/nextest-ci-30.raw");
 const CI_STRESS_OUTPUT_STRIPPED: &str = include_str!("stress_tests/nextest-ci-30.txt");
 

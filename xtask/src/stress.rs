@@ -1,7 +1,7 @@
 //! The stress job's helpers (`docs/ci.md`, "On every pull request that changes code").
 
 use crate::rules::RustFile;
-use crate::select::{Members, TestRef, filter, has_test_functions, spec};
+use crate::select::{Members, TestRef, filter, has_test_functions, spec, split_named_tests};
 use crate::test_index::TestIndex;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
@@ -331,41 +331,135 @@ pub(crate) fn stress_config(filter: &str) -> String {
     format!("[profile.stress]\ndefault-filter = \"{escaped}\"\n")
 }
 
+/// Which half of a split plan one `stress-plan` call prints: the tests the
+/// linked flake issue names, or every other selected test. Without `--only`
+/// the call prints today's single group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Only {
+    Named,
+    Rest,
+}
+
+/// The `--only` flag: which half of the split to plan, or no half when the
+/// call plans today's single group.
+fn parse_only(value: Option<String>) -> Result<Option<Only>, String> {
+    match value.as_deref() {
+        None => Ok(None),
+        Some("named") => Ok(Some(Only::Named)),
+        Some("rest") => Ok(Some(Only::Rest)),
+        Some(other) => Err(format!("--only {other:?} must be named or rest")),
+    }
+}
+
+/// Runs for one planned group: the named tests keep the flaky-fix count
+/// from the labels, every other selected test runs the pilot default.
+fn group_count(only: Option<Only>, labels: &str) -> u32 {
+    match only {
+        Some(Only::Rest) => STRESS_COUNT,
+        None | Some(Only::Named) => stress_count(labels),
+    }
+}
+
+/// The `--summary` block one `--only` call appends: one heading per group
+/// with its count, over that group's fenced `test` lines. An empty group
+/// still names itself, with zero tests, so the run step can skip it.
+fn group_summary(count: u32, lines: &[String], only: Only) -> String {
+    let group = match only {
+        Only::Named => " (named by the linked flake issue)",
+        Only::Rest => " (rest)",
+    };
+    let mut block = format!(
+        "### Stress job: {} {}, {count} runs each{group}\n```\n",
+        lines.len(),
+        if lines.len() == 1 { "test" } else { "tests" },
+    );
+    for line in lines {
+        block.push_str(line);
+        block.push('\n');
+    }
+    block.push_str("```\n");
+    block
+}
+
+/// Names in `--names-file` that match no touched test, in file order: they
+/// run nowhere, and the rest call names them.
+fn unmatched_names(names: &[String], touched: &[TestRef]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| !touched.iter().any(|test| test.name == name.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// The compared names in `--names-file`: one per line, empty lines
+/// dropped, nothing else stripped, folded or split again.
+fn read_names_file(path: &str) -> Result<Vec<String>, String> {
+    let contents = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+    Ok(contents
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
 pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     let base = crate::flag(args, "--base")?;
     let labels = crate::optional(args, "--labels").unwrap_or_default();
     let summary = crate::optional(args, "--summary");
     let filter_file = crate::optional(args, "--filter-file");
+    let names = match crate::optional(args, "--names-file") {
+        Some(path) => read_names_file(&path)?,
+        None => Vec::new(),
+    };
+    let only = parse_only(crate::optional(args, "--only"))?;
     let (members, touched) = touched_against(&base, "stress")?;
-    let count = stress_count(&labels);
-    let filter = filter(&touched);
+    let (group, unmatched) = match only {
+        None => (touched, Vec::new()),
+        Some(Only::Named) => {
+            let (named, _) = split_named_tests(&touched, &names);
+            (named, Vec::new())
+        }
+        Some(Only::Rest) => {
+            let (_, rest) = split_named_tests(&touched, &names);
+            (rest, unmatched_names(&names, &touched))
+        }
+    };
+    let count = group_count(only, &labels);
+    let filter = filter(&group);
     if let Some(path) = filter_file {
         std::fs::write(&path, stress_config(&filter))
             .map_err(|error| format!("{path}: {error}"))?;
     }
-    println!("run\t{}", if touched.is_empty() { "false" } else { "true" });
+    println!("run\t{}", if group.is_empty() { "false" } else { "true" });
     println!("count\t{count}");
     println!("filter\t{filter}");
-    let mut packages: Vec<String> = touched.iter().map(|t| spec(&t.package, &members)).collect();
+    let mut packages: Vec<String> = group.iter().map(|t| spec(&t.package, &members)).collect();
     packages.sort();
     packages.dedup();
     for package in &packages {
         println!("package\t{package}");
     }
-    let lines = plan_test_lines(&touched);
+    let lines = plan_test_lines(&group);
     for line in &lines {
         println!("{line}");
     }
     if let Some(path) = summary {
+        let block = match only {
+            None => plan_summary(count, &lines),
+            Some(group) => group_summary(count, &lines, group),
+        };
         std::fs::OpenOptions::new()
             .append(true)
             .create(true)
             .open(&path)
             .and_then(|mut file| {
                 use std::io::Write as _;
-                file.write_all(plan_summary(count, &lines).as_bytes())
+                file.write_all(block.as_bytes())
             })
             .map_err(|e| format!("{path}: {e}"))?;
+    }
+    for name in &unmatched {
+        println!("Unmatched: {name}");
     }
     Ok(true)
 }
