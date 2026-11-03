@@ -418,7 +418,7 @@ fn collect_failing(root: &Path) -> Result<Vec<Failing>, String> {
                     None => {
                         format!("no heading of {target} at or above that line: delete the citation")
                     }
-                    Some(heading) => format!("use \"{target}, \"{heading}\"\""),
+                    Some(heading) => format!("use {target}, \"{heading}\""),
                 };
                 failing.push((file.clone(), *offset, *line, key.clone(), reason));
             }

@@ -1410,7 +1410,7 @@ fn the_docs_check_fails_a_line_number_cite_in_code() {
         (
             1,
             format!(
-                "check-docs: crates/b/src/cite.rs:1: unlisted cite \"{doc}:7\": use \"{doc}, \"Y\"\"\n"
+                "check-docs: crates/b/src/cite.rs:1: unlisted cite \"{doc}:7\": use {doc}, \"Y\"\n"
             )
         )
     );

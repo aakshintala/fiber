@@ -31,13 +31,13 @@ fn a_line_cite_names_the_heading_above_its_line() {
             None
         ),
         [format!(
-            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}:4{q}: use {q}{DOC}, {q}The gate{q}{q}"
+            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}:4{q}: use {DOC}, {q}The gate{q}"
         )]
     );
     assert_eq!(
         run(&[("crates/a/src/x.rs", &format!("// {DOC}:3\n"))], None),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:3{q}: use {q}{DOC}, {q}The gate{q}{q}"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:3{q}: use {DOC}, {q}The gate{q}"
         )]
     );
     assert_eq!(
@@ -49,13 +49,13 @@ fn a_line_cite_names_the_heading_above_its_line() {
     assert_eq!(
         run(&[("crates/a/src/x.rs", &format!("// {DOC}:9\n"))], None),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:9{q}: use {q}{DOC}, {q}`unsafe`{q}{q}"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:9{q}: use {DOC}, {q}`unsafe`{q}"
         )]
     );
     assert_eq!(
         run(&[("crates/a/src/x.rs", &format!("// {DOC}:99\n"))], None),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:99{q}: use {q}{DOC}, {q}`unsafe`{q}{q}"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:99{q}: use {DOC}, {q}`unsafe`{q}"
         )]
     );
     assert_eq!(
@@ -69,8 +69,8 @@ fn a_line_cite_names_the_heading_above_its_line() {
 #[test]
 fn the_three_spellings_and_the_span_are_reported_as_written() {
     let q = '"';
-    let unsafe_use = format!("use {q}{DOC}, {q}`unsafe`{q}{q}");
-    let gate_use = format!("use {q}{DOC}, {q}The gate{q}{q}");
+    let unsafe_use = format!("use {DOC}, {q}`unsafe`{q}");
+    let gate_use = format!("use {DOC}, {q}The gate{q}");
     let fallback = format!("no heading of {DOC} at or above that line: delete the citation");
     let tails: &[(&str, &str, String)] = &[
         (":12", ":12", unsafe_use.clone()),
@@ -119,22 +119,31 @@ fn the_three_spellings_and_the_span_are_reported_as_written() {
     assert_eq!(
         check(dir.path()).unwrap(),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{RESEARCH}:3{q}: use {q}{RESEARCH}, {q}Findings{q}{q}"
+            "crates/a/src/x.rs:1: unlisted cite {q}{RESEARCH}:3{q}: use {RESEARCH}, {q}Findings{q}"
         )]
     );
 }
 
 #[test]
 fn line_suffix_reads_both_prefixes() {
-    assert_eq!(line_suffix("docs/a.md:12", 9), Some((12, 12)));
-    assert_eq!(line_suffix("docs/a.md:74,77", 9), Some((15, 74)));
-    assert_eq!(line_suffix("docs/a.md line 7", 9), Some((16, 7)));
+    assert_eq!(
+        line_suffix(&format!("docs/a.md:{n}", n = 12), 9),
+        Some((12, 12))
+    );
+    assert_eq!(
+        line_suffix(&format!("docs/a.md:{a},{b}", a = 74, b = 77), 9),
+        Some((15, 74))
+    );
+    assert_eq!(
+        line_suffix(&format!("docs/a.md line {n}", n = 7), 9),
+        Some((16, 7))
+    );
     assert_eq!(line_suffix("docs/a.md: x", 9), None);
     assert_eq!(line_suffix("docs/a.md: line 7", 9), None);
     assert_eq!(line_suffix("docs/a.md line x", 9), None);
     assert_eq!(line_suffix("docs/a.md", 9), None);
     assert_eq!(line_suffix("docs/a.md, \"H\"", 9), None);
-    assert_eq!(line_suffix("docs/a.md:12", 99), None);
+    assert_eq!(line_suffix(&format!("docs/a.md:{n}", n = 12), 99), None);
 }
 
 #[test]
@@ -390,7 +399,7 @@ fn a_pair_allowed_twice_passes_at_two_and_fails_the_third() {
             Some(&entry)
         ),
         [format!(
-            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}:4{q}: use {q}{DOC}, {q}The gate{q}{q}"
+            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}:4{q}: use {DOC}, {q}The gate{q}"
         )]
     );
     assert_eq!(
@@ -418,9 +427,7 @@ fn a_new_text_cannot_take_a_deleted_texts_slot() {
     assert_eq!(
         failures,
         [
-            format!(
-                "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:9{q}: use {q}{DOC}, {q}`unsafe`{q}{q}"
-            ),
+            format!("crates/a/src/x.rs:1: unlisted cite {q}{DOC}:9{q}: use {DOC}, {q}`unsafe`{q}"),
             format!(
                 "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 1, found 0: lower or delete the entry"
             ),
