@@ -106,8 +106,22 @@ fn meter_sums_input_and_output_across_replies() {
 
 #[test]
 fn exit_code_prefers_refusal_then_failure_then_cannot_tell() {
-    assert_eq!(exit_code(&Outcome::KeyRefused(401)), 4);
-    assert_eq!(exit_code(&Outcome::KeyRefused(403)), 4);
+    assert_eq!(
+        exit_code(&Outcome::KeyRefused {
+            status: 401,
+            spend_input: 0,
+            spend_output: 0,
+        }),
+        4
+    );
+    assert_eq!(
+        exit_code(&Outcome::KeyRefused {
+            status: 403,
+            spend_input: 0,
+            spend_output: 0,
+        }),
+        4
+    );
     let verdicts = [
         Verdict::Fail("no".into()),
         Verdict::Inconclusive("no".into()),
@@ -424,7 +438,11 @@ fn report_prints_an_inconclusive_baseline() {
 
 #[test]
 fn report_prints_a_refused_key_and_hides_it() {
-    let outcome = Outcome::KeyRefused(401);
+    let outcome = Outcome::KeyRefused {
+        status: 401,
+        spend_input: 0,
+        spend_output: 0,
+    };
     let lines = report("anthropic-messages", "probe-model", &outcome);
     assert_eq!(
         lines,
@@ -439,4 +457,28 @@ fn report_prints_a_refused_key_and_hides_it() {
     for line in &lines {
         assert!(!line.contains("sekrit-value"), "{line}");
     }
+}
+
+#[test]
+fn refusal_after_one_metered_reply_reports_that_reply_spend() {
+    let outcome = failed_outcome(Some(403), Step::Deferred, "key refused", (12000, 3));
+    assert_eq!(
+        outcome,
+        Outcome::KeyRefused {
+            status: 403,
+            spend_input: 12000,
+            spend_output: 3,
+        }
+    );
+    assert_eq!(
+        report("anthropic-messages", "probe-model", &outcome),
+        vec![
+            "probe: anthropic-messages probe-model",
+            "load: fail (not established: key refused)",
+            "cache: fail (not established: key refused)",
+            "probe: key refused (HTTP 403)",
+            "spend: 12000 input, 3 output tokens",
+        ]
+    );
+    assert_eq!(exit_code(&outcome), 4);
 }

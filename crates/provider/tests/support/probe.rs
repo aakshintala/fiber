@@ -90,8 +90,16 @@ pub(crate) enum Verdict {
 /// exit code cannot disagree about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    /// The key was refused, with the refused status.
-    KeyRefused(u16),
+    /// The key was refused, with the refused status and the metered tokens
+    /// of the replies received before the refusal.
+    KeyRefused {
+        /// The refused status.
+        status: u16,
+        /// The metered input tokens of the replies received so far.
+        spend_input: u64,
+        /// The metered output tokens of the replies received so far.
+        spend_output: u64,
+    },
     /// Both checks' verdicts.
     Decided {
         /// Whether the model searched first and called the loaded tool after.
@@ -484,7 +492,11 @@ fn send(provider: &dyn Provider, request: &ModelRequest) -> Result<Reply, (Optio
 /// `spend` carries the metered tokens of the replies received so far.
 fn failed(step: Step, status: Option<u16>, message: &str, spend: (u64, u64)) -> Outcome {
     if let Some(code @ (401 | 403)) = status {
-        return Outcome::KeyRefused(code);
+        return Outcome::KeyRefused {
+            status: code,
+            spend_input: spend.0,
+            spend_output: spend.1,
+        };
     }
     let detail = match status {
         Some(code) => format!("HTTP {code}: {message}"),
@@ -596,14 +608,23 @@ fn check_line(check: &str, verdict: &Verdict) -> String {
 
 /// The probe's report lines: the header, both checks, the verdict, then
 /// the run's spend: input and output tokens summed over every reply the
-/// run received. A refused key meters nothing, so it prints no spend line.
+/// run received. A refusal with no prior replies prints no spend line.
 pub(crate) fn report(protocol: &str, model: &str, outcome: &Outcome) -> Vec<String> {
     let mut lines = vec![format!("probe: {protocol} {model}")];
     match outcome {
-        Outcome::KeyRefused(status) => {
+        Outcome::KeyRefused {
+            status,
+            spend_input,
+            spend_output,
+        } => {
             lines.push("load: fail (not established: key refused)".into());
             lines.push("cache: fail (not established: key refused)".into());
             lines.push(format!("probe: key refused (HTTP {status})"));
+            if *spend_input > 0 || *spend_output > 0 {
+                lines.push(format!(
+                    "spend: {spend_input} input, {spend_output} output tokens"
+                ));
+            }
         }
         Outcome::Decided {
             load,
@@ -646,7 +667,7 @@ pub(crate) fn report(protocol: &str, model: &str, outcome: &Outcome) -> Vec<Stri
 /// 3 when it cannot tell, else 0.
 pub(crate) fn exit_code(outcome: &Outcome) -> u8 {
     match outcome {
-        Outcome::KeyRefused(_) => 4,
+        Outcome::KeyRefused { .. } => 4,
         Outcome::Decided { load, cache, .. } => {
             if matches!(load, Verdict::Fail(_)) || matches!(cache, Verdict::Fail(_)) {
                 return 1;
