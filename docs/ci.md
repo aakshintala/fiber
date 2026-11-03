@@ -253,6 +253,7 @@ On Linux x86_64 alone:
   (`cargo xtask crate-edges`)
 - no crate enables serde_json's `preserve_order` feature in any crate linked into a workspace binary or test, over every target and feature; build-dependency edges are excluded (`cargo xtask
   preserve-order`), so prompt bytes stay cacheable (`docs/prompt-cache.md`)
+- string-typed closed-set sites stay capped per production file under `crates/` (`cargo xtask census-ratchet`): a file whose count rises above its inline maximum in `scripts/check` fails, a file missing from the list holds none, and lowering a count never fails; `cargo xtask census-ratchet --print` prints the current per-file counts
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in
   `research/tui-prototype`, when the diff touches it. The prototype is not a
   workspace member, so the checks above never reach it; it has its own
