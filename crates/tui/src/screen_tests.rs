@@ -567,11 +567,21 @@ fn repaint_clears_the_backend_and_invalidates_the_frame() {
     );
 }
 
-/// A backend recording each draw call's cells in order: one entry per
-/// call, each holding `(x, y, symbol)`, so the draw-order tests see which
-/// call carried each cell to the inner backend.
+/// A backend recording the cells it receives in order, and how many
+/// draw calls carried them: the draw-order tests assert the cell order,
+/// not which call carried each cell, except the empty test which asserts
+/// the single empty call still reaches the inner backend.
 #[derive(Default)]
-struct Order(Vec<Vec<(u16, u16, String)>>);
+struct Order {
+    calls: usize,
+    cells: Vec<(u16, u16, String)>,
+}
+
+impl Order {
+    fn ordered_cells(&self) -> &[(u16, u16, String)] {
+        &self.cells
+    }
+}
 
 impl SyncEmit for Order {
     fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
@@ -586,11 +596,9 @@ impl Backend for Order {
     where
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
-        self.0.push(
-            content
-                .map(|(x, y, cell)| (x, y, cell.symbol().to_owned()))
-                .collect(),
-        );
+        self.calls = self.calls.saturating_add(1);
+        self.cells
+            .extend(content.map(|(x, y, cell)| (x, y, cell.symbol().to_owned())));
         Ok(())
     }
 
@@ -657,8 +665,8 @@ fn held(symbol: &str) -> ratatui::buffer::Cell {
 }
 
 /// The emoji, its trailing cell and the next cell reach the inner backend
-/// as three calls, trailing first: on a terminal giving the emoji two
-/// cells, the trailing blank would otherwise print one column right.
+/// trailing first: on a terminal giving the emoji two cells, the trailing
+/// blank would otherwise print one column right.
 #[test]
 fn a_variation_selector_emoji_trades_places_with_its_trailing_cell() {
     let emoji = held("⚠️");
@@ -671,26 +679,26 @@ fn a_variation_selector_emoji_trades_places_with_its_trailing_cell() {
     )
     .unwrap();
     assert_eq!(
-        backend.inner.0,
+        backend.inner.ordered_cells(),
         [
-            vec![(4, 0, " ".to_owned())],
-            vec![(3, 0, "⚠️".to_owned())],
-            vec![(5, 0, "c".to_owned())],
+            (4, 0, " ".to_owned()),
+            (3, 0, "⚠️".to_owned()),
+            (5, 0, "c".to_owned()),
         ]
     );
 }
 
-/// The emoji with no trailing cell yielded still ends its call: the cell
-/// after it starts a new one, so a later trailing yield cannot join it.
+/// The emoji with no adjacent trailing cell keeps its place: the next
+/// cell at a gap stays after it, so a later trailing yield cannot join it.
 #[test]
-fn a_variation_selector_emoji_without_a_trailing_cell_still_splits_the_next_call() {
+fn a_variation_selector_emoji_without_a_trailing_cell_keeps_order() {
     let emoji = held("⚠️");
     let after = held("c");
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &emoji), (5, 0, &after)].into_iter()).unwrap();
     assert_eq!(
-        backend.inner.0,
-        [vec![(3, 0, "⚠️".to_owned())], vec![(5, 0, "c".to_owned())],]
+        backend.inner.ordered_cells(),
+        [(3, 0, "⚠️".to_owned()), (5, 0, "c".to_owned()),]
     );
 }
 
@@ -717,39 +725,60 @@ fn two_variation_selector_emojis_each_trade_places() {
     )
     .unwrap();
     assert_eq!(
-        backend.inner.0,
+        backend.inner.ordered_cells(),
         [
-            vec![(4, 0, " ".to_owned())],
-            vec![(3, 0, "⚠️".to_owned())],
-            vec![(6, 0, " ".to_owned())],
-            vec![(5, 0, "❤️".to_owned())],
-            vec![(7, 0, "d".to_owned())],
+            (4, 0, " ".to_owned()),
+            (3, 0, "⚠️".to_owned()),
+            (6, 0, " ".to_owned()),
+            (5, 0, "❤️".to_owned()),
+            (7, 0, "d".to_owned()),
         ]
     );
 }
 
-/// A wide cell with no variation selector keeps the run whole: only the
-/// selector pair reorders, never every wide cell.
+/// A wide cell with no variation selector keeps its order even when the
+/// next cell is adjacent: only the selector pair reorders, never every
+/// wide cell.
 #[test]
-fn a_wide_cell_without_a_variation_selector_stays_in_one_call() {
+fn a_wide_cell_without_a_variation_selector_keeps_order() {
     let wide = held("界");
     let after = held("c");
     let mut backend = ordered();
-    Backend::draw(&mut backend, [(3, 0, &wide), (5, 0, &after)].into_iter()).unwrap();
+    Backend::draw(&mut backend, [(3, 0, &wide), (4, 0, &after)].into_iter()).unwrap();
     assert_eq!(
-        backend.inner.0,
-        [vec![(3, 0, "界".to_owned()), (5, 0, "c".to_owned())]]
+        backend.inner.ordered_cells(),
+        [(3, 0, "界".to_owned()), (4, 0, "c".to_owned())]
     );
 }
 
-/// A trailing emoji with nothing after it draws in one call, with no panic
-/// on the missing next cell.
+/// A cell one column wide that still holds a variation selector keeps its
+/// order: the width check needs more than one column, not at least one.
+#[test]
+fn a_narrow_cell_holding_a_variation_selector_keeps_order() {
+    use ratatui::buffer::CellWidth as _;
+    let narrow = held("a\u{FE0F}");
+    assert_eq!(
+        narrow.symbol().cell_width(),
+        1,
+        "the narrow variation-selector cell measures one column"
+    );
+    let after = held("c");
+    let mut backend = ordered();
+    Backend::draw(&mut backend, [(3, 0, &narrow), (4, 0, &after)].into_iter()).unwrap();
+    assert_eq!(
+        backend.inner.ordered_cells(),
+        [(3, 0, "a\u{FE0F}".to_owned()), (4, 0, "c".to_owned()),]
+    );
+}
+
+/// A trailing emoji with nothing after it draws alone, with no panic on
+/// the missing next cell.
 #[test]
 fn a_trailing_variation_selector_emoji_draws_alone() {
     let emoji = held("⚠️");
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &emoji)].into_iter()).unwrap();
-    assert_eq!(backend.inner.0, [vec![(3, 0, "⚠️".to_owned())]]);
+    assert_eq!(backend.inner.ordered_cells(), [(3, 0, "⚠️".to_owned())]);
 }
 
 /// The emoji does not pair with the next row's first cell: only the cell
@@ -765,8 +794,8 @@ fn a_variation_selector_emoji_does_not_pair_with_the_next_rows_first_cell() {
     )
     .unwrap();
     assert_eq!(
-        backend.inner.0,
-        [vec![(3, 0, "⚠️".to_owned())], vec![(0, 1, "a".to_owned())],]
+        backend.inner.ordered_cells(),
+        [(3, 0, "⚠️".to_owned()), (0, 1, "a".to_owned()),]
     );
 }
 
@@ -779,8 +808,8 @@ fn a_variation_selector_emoji_does_not_pair_with_an_earlier_column() {
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &emoji), (2, 0, &earlier)].into_iter()).unwrap();
     assert_eq!(
-        backend.inner.0,
-        [vec![(3, 0, "⚠️".to_owned())], vec![(2, 0, "a".to_owned())],]
+        backend.inner.ordered_cells(),
+        [(3, 0, "⚠️".to_owned()), (2, 0, "a".to_owned()),]
     );
 }
 
@@ -793,8 +822,8 @@ fn a_variation_selector_emoji_does_not_pair_with_the_cell_below_its_trailing_col
     let mut backend = ordered();
     Backend::draw(&mut backend, [(3, 0, &emoji), (4, 1, &below)].into_iter()).unwrap();
     assert_eq!(
-        backend.inner.0,
-        [vec![(3, 0, "⚠️".to_owned())], vec![(4, 1, "b".to_owned())],]
+        backend.inner.ordered_cells(),
+        [(3, 0, "⚠️".to_owned()), (4, 1, "b".to_owned()),]
     );
 }
 
@@ -805,7 +834,8 @@ fn empty_content_still_reaches_the_inner_backend_once() {
     let mut backend = ordered();
     let empty: [(u16, u16, &ratatui::buffer::Cell); 0] = [];
     Backend::draw(&mut backend, empty.into_iter()).unwrap();
-    assert_eq!(backend.inner.0, [Vec::new()]);
+    assert_eq!(backend.inner.calls, 1);
+    assert!(backend.inner.ordered_cells().is_empty());
 }
 
 /// Take_touched consumes the mark: true once after a frame wrote,
