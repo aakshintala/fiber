@@ -1088,6 +1088,36 @@ fn carded(app: &App, session: &str) -> bool {
 }
 
 #[test]
+fn a_dismiss_answer_reaches_rail_answered_by_tag_and_clears_it() {
+    let mut app = crashed();
+    let out = cross(&mut app, B);
+    let id = out[0]["id"].as_str().unwrap();
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::outbox::Waiting::Dismiss(SessionId(
+            B.to_owned()
+        )))
+    );
+    app.on_line(hub_answer("command_accepted", id, ""));
+    assert_eq!(app.outbox.waiting(id), None);
+    assert!(!carded(&app, B));
+    assert!(carded(&app, C));
+}
+
+#[test]
+fn a_second_dismiss_answer_changes_nothing() {
+    let mut app = crashed();
+    let out = cross(&mut app, B);
+    let id = out[0]["id"].as_str().unwrap();
+    app.on_line(hub_answer("command_rejected", id, "still running"));
+    assert_eq!(app.outbox.waiting(id), None);
+    assert_eq!(app.notice(), Some("still running"));
+    app.on_line(hub_answer("command_accepted", id, ""));
+    assert!(carded(&app, B));
+    assert!(carded(&app, C));
+}
+
+#[test]
 fn x_sends_dismiss_and_an_accept_removes_the_card() {
     let mut app = crashed();
     let out = cross(&mut app, B);

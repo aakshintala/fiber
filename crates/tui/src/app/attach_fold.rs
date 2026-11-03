@@ -471,12 +471,15 @@ impl App {
 
     /// Updates pass boundaries before any view consumes the line. Returns
     /// true only for an abandoned answer, which must fold nowhere.
-    pub(super) fn pass_line(&mut self, line: &Line) -> bool {
+    pub(super) fn pass_line(
+        &mut self,
+        line: &Line,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> bool {
         match line {
             Line::Session(line) => {
-                if matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
-                    && let Some(id) = line.payload.get("command_id").and_then(Value::as_str)
-                    && self.abandoned_history.remove(id)
+                if let Some(answer) = answer
+                    && self.abandoned_history.remove(answer.id)
                 {
                     return true;
                 }

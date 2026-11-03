@@ -11,6 +11,43 @@ use super::{Kind, Link, Outbox};
 use crate::app::testkit::{SESSION, hello, now};
 use crate::input::Draft;
 
+#[test]
+fn wait_then_settled_returns_the_tag_once() {
+    let mut outbox = up();
+    let tag = super::Waiting::Dismiss(contract::SessionId(SESSION.to_owned()));
+    assert_eq!(outbox.wait("c_wait", tag.clone()), None);
+    assert_eq!(outbox.waiting("c_wait"), Some(tag.clone()));
+    assert_eq!(outbox.settled("c_other"), None);
+    assert_eq!(outbox.settled("c_wait"), Some(tag));
+    assert_eq!(outbox.waiting("c_wait"), None);
+    assert_eq!(outbox.settled("c_wait"), None);
+}
+
+#[test]
+fn a_second_wait_replaces_and_returns_the_first() {
+    let mut outbox = up();
+    let first = super::Waiting::Dismiss(contract::SessionId(SESSION.to_owned()));
+    let second = super::Waiting::Dismiss(contract::SessionId("s_other".to_owned()));
+    assert_eq!(outbox.wait("c_wait", first.clone()), None);
+    assert_eq!(outbox.wait("c_wait", second.clone()), Some(first));
+    assert_eq!(outbox.waiting("c_wait"), Some(second.clone()));
+    assert_eq!(outbox.settled("c_wait"), Some(second));
+}
+
+#[test]
+fn answered_and_fail_leave_the_tag() {
+    let mut outbox = up();
+    let tag = super::Waiting::Dismiss(contract::SessionId(SESSION.to_owned()));
+    for id in ["c_answer", "c_fail"] {
+        outbox.wait(id, tag.clone());
+        outbox.insert(id.to_owned(), Kind::Command, Draft::default());
+    }
+    assert!(outbox.answered("c_answer").is_some());
+    assert_eq!(outbox.waiting("c_answer"), Some(tag.clone()));
+    assert!(outbox.fail("c_fail").is_some());
+    assert_eq!(outbox.waiting("c_fail"), Some(tag));
+}
+
 /// An outbox with the link up.
 fn up() -> Outbox {
     Outbox {

@@ -6,7 +6,7 @@
 //! The outbox owns only this correlation state: applying a failure stays
 //! with `App`, which owns the queue, the offer, the phase and the draft.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
 
 use contract::SessionId;
@@ -51,6 +51,13 @@ pub(crate) enum Kind {
     Import(ImportSource),
 }
 
+/// The feature waiting for a command's answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Waiting {
+    /// A rail card's dismiss, carrying the target session.
+    Dismiss(SessionId),
+}
+
 /// The hub connection, as the terminal sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Link {
@@ -88,6 +95,8 @@ pub(crate) struct Kept {
 /// command id: the hooks install offer's retry resends them unchanged.
 #[derive(Debug, Default)]
 pub(crate) struct Outbox {
+    /// Feature owners, independent of generic draft settlement.
+    waits: BTreeMap<String, Waiting>,
     /// The hub connection, as the terminal sees it.
     pub(crate) link: Link,
     /// The constructed `start` lines with no answer yet, by command id.
@@ -102,6 +111,21 @@ pub(crate) struct Outbox {
 }
 
 impl Outbox {
+    /// Registers the feature owning an id, returning any replaced owner.
+    pub(crate) fn wait(&mut self, id: &str, waiting: Waiting) -> Option<Waiting> {
+        self.waits.insert(id.to_owned(), waiting)
+    }
+
+    /// Peeks at the owner before any observer settles the answer.
+    pub(crate) fn waiting(&self, id: &str) -> Option<Waiting> {
+        self.waits.get(id).cloned()
+    }
+
+    /// Takes a feature's wait once, without settling its draft.
+    pub(crate) fn settled(&mut self, id: &str) -> Option<Waiting> {
+        self.waits.remove(id)
+    }
+
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
     /// connection has not ended since.
     pub(crate) fn is_up(&self) -> bool {

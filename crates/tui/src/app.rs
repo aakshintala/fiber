@@ -45,6 +45,7 @@ mod notices;
 #[path = "steering.rs"]
 mod steering;
 
+mod answer;
 mod attach_fold;
 mod attention;
 mod call_view;
@@ -732,17 +733,18 @@ impl App {
 
     /// Handles the route without settling; the caller owns the layout pass.
     pub(crate) fn on_line_inner(&mut self, line: Line) -> Vec<String> {
+        let answer = answer::Answer::of(&line, &self.outbox);
         if let Line::Session(envelope) = &line {
             self.observe_session_status(envelope);
         }
-        if self.pass_line(&line) {
+        if self.pass_line(&line, answer.as_ref()) {
             return Vec::new();
         }
-        let mut lines = match self.home_line(&line) {
+        let mut lines = match self.home_answer(&line, answer.as_ref()) {
             Some(consumed) => consumed,
-            None => match line {
-                Line::Hub(hub) => self.on_hub(&hub),
-                Line::Session(envelope) => self.on_session(&envelope),
+            None => match &line {
+                Line::Hub(hub) => self.on_hub(hub),
+                Line::Session(envelope) => self.on_session(envelope),
             },
         };
         lines.extend(self.home_outgoing());

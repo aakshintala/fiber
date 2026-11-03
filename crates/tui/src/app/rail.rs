@@ -89,9 +89,6 @@ pub(crate) struct RailState {
     /// A card to scroll into view once the rail is drawn, by its row's
     /// key.
     reveal: Option<u64>,
-    /// The `dismiss` commands waiting for their answers: command id and
-    /// session.
-    dismissing: Vec<(String, SessionId)>,
     /// The sessions whose CANNOT ATTACH card the person hid with its ✕.
     /// Never cleared: the hide lasts until the terminal exits, and a card
     /// for the session shows again only when its status reads or it
@@ -787,24 +784,20 @@ impl App {
     pub(super) fn rail_answered(
         &mut self,
         id: &str,
+        session: &SessionId,
         accepted: bool,
         payload: &Map<String, Value>,
     ) -> Option<Vec<String>> {
-        let at = self
-            .rail_state
-            .dismissing
-            .iter()
-            .position(|(sent, _)| sent == id)?;
-        let (_, session) = self.rail_state.dismissing.remove(at);
+        self.outbox.settled(id);
         if accepted {
             if let Some(home) = self.home.as_mut() {
-                home.sessions.remove(&session);
+                home.sessions.remove(session);
             }
         } else {
             let code = super::home::refusal_code(payload);
             let message = super::home::refusal(payload);
             if let Some(home) = self.home.as_mut() {
-                home.sessions.note(&session, message.clone());
+                home.sessions.note(session, message.clone());
             }
             self.notices.push(&code, message);
         }
@@ -837,7 +830,8 @@ impl App {
         let session = row.id.clone();
         let id = mint();
         let line = json!({"id": id, "command": "dismiss", "args": {"session": session.0}});
-        self.rail_state.dismissing.push((id, session));
+        self.outbox
+            .wait(&id, super::outbox::Waiting::Dismiss(session));
         Effect::Send(vec![line.to_string()])
     }
 

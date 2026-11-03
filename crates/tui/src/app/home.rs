@@ -629,7 +629,17 @@ impl App {
     /// until the last subscribe's acknowledgement. `attention` and other
     /// hub lines pass through untouched, and a status still reaches the
     /// conversation below.
+    #[cfg(test)]
     pub(super) fn home_line(&mut self, line: &Line) -> Option<Vec<String>> {
+        let answer = super::answer::Answer::of(line, &self.outbox);
+        self.home_answer(line, answer.as_ref())
+    }
+
+    pub(super) fn home_answer(
+        &mut self,
+        line: &Line,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> Option<Vec<String>> {
         self.home.as_ref()?;
         match line {
             Line::Hub(hub) => match hub.kind.as_str() {
@@ -672,8 +682,15 @@ impl App {
                     Some(lines)
                 }
                 "command_accepted" | "command_rejected" => {
-                    let id = hub.payload.get("command_id").and_then(Value::as_str)?;
-                    let accepted = hub.kind.as_str() == "command_accepted";
+                    let answer = answer?;
+                    let id = answer.id;
+                    let accepted = answer.accepted;
+                    match &answer.waiting {
+                        Some(super::outbox::Waiting::Dismiss(session)) => {
+                            return self.rail_answered(id, session, accepted, answer.payload);
+                        }
+                        None => {}
+                    }
                     // The picker's `directories` answers fold in first,
                     // while home exists: an id the open picker sent is
                     // consumed here, any other id falls through untouched.
@@ -697,9 +714,6 @@ impl App {
                     }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &hub.payload));
-                    }
-                    if let Some(lines) = self.rail_answered(id, accepted, &hub.payload) {
-                        return Some(lines);
                     }
                     // A rejected `start` is home's blocker text, above the
                     // box until the next `start` goes out. Reading
@@ -808,8 +822,9 @@ impl App {
                     envelope.kind.as_str(),
                     "command_accepted" | "command_rejected"
                 ) {
-                    let accepted = envelope.kind == "command_accepted";
-                    let id = envelope.payload.get("command_id").and_then(Value::as_str)?;
+                    let answer = answer?;
+                    let accepted = answer.accepted;
+                    let id = answer.id;
                     if let Some(lines) = self.subscribe_answer(id, accepted, &envelope.payload) {
                         return if accepted {
                             self.subscribe_accepted(&envelope.session_id, id)
