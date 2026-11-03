@@ -111,6 +111,7 @@ mod bench;
 mod budget_bounds;
 mod census_ratchet;
 mod ci_needs;
+mod doc_citations;
 mod docs;
 mod flake_report;
 mod logo;
