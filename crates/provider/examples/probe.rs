@@ -2,7 +2,7 @@
 //! model"): runs the probe's three requests against one model and prints
 //! pass or fail for `load` and `cache`.
 //!
-//! `cargo run -p provider --example probe -- PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE | @FILE]...`
+//! `cargo run -p provider --example probe -- PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE]...`
 //!
 //! PROTOCOL is `anthropic-messages` or `openai-responses`. KEY is a file
 //! holding the key, or `env:NAME` to read it from that environment
@@ -34,15 +34,6 @@ fn main() -> ExitCode {
         Ok(key) => key,
         Err(message) => return usage(&message),
     };
-    let extra_body = match parsed
-        .body_file
-        .as_deref()
-        .map(support::extra_body)
-        .transpose()
-    {
-        Ok(body) => body.unwrap_or_default(),
-        Err(message) => return usage(&message),
-    };
     let endpoint = Endpoint {
         provider: "probe".into(),
         model: parsed.model.clone(),
@@ -54,7 +45,6 @@ fn main() -> ExitCode {
             store: parsed.store,
             ..Compat::default()
         },
-        extra_body,
         ..Endpoint::default()
     };
     let reference = endpoint.reference();
@@ -81,7 +71,7 @@ fn main() -> ExitCode {
 fn usage(message: &str) -> ExitCode {
     eprintln!("{message}");
     eprintln!(
-        "usage: cargo run -p provider --example probe -- PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE | @FILE]..."
+        "usage: cargo run -p provider --example probe -- PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE]..."
     );
     ExitCode::from(2)
 }

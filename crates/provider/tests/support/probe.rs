@@ -1,8 +1,8 @@
 //! What the `probe` jig shares with its binary test: the probe's logic
 //! (argument parsing, request builders, the three-step run, verdicts,
 //! report lines, exit code). The jig includes this file with `#[path]`,
-//! and `tests/probe_jig.rs` does the same, so the tests below run inside
-//! that binary.
+//! and `tests/probe_jig.rs` does the same; the unit tests live in
+//! `probe_tests.rs`, so they run inside that binary.
 
 #![allow(dead_code, reason = "each user of this module needs only part of it")]
 
@@ -83,19 +83,22 @@ pub(crate) enum Verdict {
     Inconclusive(String),
     /// The run stopped before the check.
     NotEstablished(String),
-    /// The key was refused.
-    KeyRefused(u16),
 }
 
-/// The probe's outcome: both checks' verdicts and the refused status.
+/// The probe's outcome: either the key was refused, or both checks'
+/// verdicts. The refusal lives in this one place, so the report and the
+/// exit code cannot disagree about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Outcome {
-    /// Whether the model searched first and called the loaded tool after.
-    pub(crate) load: Verdict,
-    /// Whether the request after the load read the cache.
-    pub(crate) cache: Verdict,
-    /// The refused status, when the key was refused.
-    pub(crate) refused: Option<u16>,
+pub(crate) enum Outcome {
+    /// The key was refused, with the refused status.
+    KeyRefused(u16),
+    /// Both checks' verdicts.
+    Decided {
+        /// Whether the model searched first and called the loaded tool after.
+        load: Verdict,
+        /// Whether the request after the load read the cache.
+        cache: Verdict,
+    },
 }
 
 /// Whether the request after the load read the cache: any read at all.
@@ -110,7 +113,10 @@ pub(crate) fn total_input(tokens: &Tokens) -> u64 {
 }
 
 /// The jig's parsed arguments.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` redacts header values: a header may carry a credential
+/// (`Authorization: Bearer …`), so only header names print.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Parsed {
     /// `anthropic-messages` or `openai-responses`.
     pub(crate) protocol: String,
@@ -126,15 +132,34 @@ pub(crate) struct Parsed {
     pub(crate) store: Option<bool>,
     /// The `NAME:VALUE` headers to send.
     pub(crate) headers: Vec<(String, String)>,
-    /// The `@FILE` body object's path, when passed.
-    pub(crate) body_file: Option<String>,
+}
+
+impl std::fmt::Debug for Parsed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Parsed")
+            .field("protocol", &self.protocol)
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("key_spec", &self.key_spec)
+            .field("bearer", &self.bearer)
+            .field("store", &self.store)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| (name, "[redacted]"))
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 /// Parses the jig's arguments: the four fixed words, then options in any
 /// order. Anything else is rejected before any request is sent.
 pub(crate) fn parse_args(args: &[String]) -> Result<Parsed, String> {
     let [protocol, base_url, model, key_spec, rest @ ..] = args else {
-        return Err("probe: expected PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE | @FILE]...".into());
+        return Err("probe: expected PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE]...".into());
     };
     match protocol.as_str() {
         "anthropic-messages" | "openai-responses" => {}
@@ -152,7 +177,6 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Parsed, String> {
         bearer: false,
         store: None,
         headers: Vec::new(),
-        body_file: None,
     };
     for arg in rest {
         if arg == "--bearer" {
@@ -168,16 +192,6 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Parsed, String> {
         }
         if let Some(flag) = arg.strip_prefix("--") {
             return Err(format!("probe: unknown option --{flag}"));
-        }
-        if let Some(path) = arg.strip_prefix('@') {
-            if path.is_empty() {
-                return Err("probe: @FILE names a file holding a JSON object".into());
-            }
-            if parsed.body_file.is_some() {
-                return Err("probe: one @FILE only".into());
-            }
-            parsed.body_file = Some(path.to_owned());
-            continue;
         }
         let Some((name, value)) = arg.split_once(':') else {
             return Err(format!("probe: a header is NAME:VALUE, not {arg}"));
@@ -203,17 +217,6 @@ pub(crate) fn key_from(spec: &str, env: &dyn Fn(&str) -> Option<String>) -> Resu
         return Err("probe: the key is empty".into());
     }
     Ok(key)
-}
-
-/// The `@FILE` JSON object, sent as the endpoint's `extra_body`.
-pub(crate) fn extra_body(path: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("probe: {path}: {e}"))?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|e| format!("probe: {path}: {e}"))?;
-    value
-        .as_object()
-        .cloned()
-        .ok_or_else(|| format!("probe: {path} (@FILE) must hold a JSON object"))
 }
 
 /// The probe's system prompt: filler over every Anthropic cache minimum.
@@ -467,7 +470,7 @@ fn send(provider: &dyn Provider, request: &ModelRequest) -> Result<Reply, (Optio
 /// The outcome when `step`'s request fails with `status` and `message`.
 fn failed(step: Step, status: Option<u16>, message: &str) -> Outcome {
     if let Some(code @ (401 | 403)) = status {
-        return key_refused(code);
+        return Outcome::KeyRefused(code);
     }
     let detail = match status {
         Some(code) => format!("HTTP {code}: {message}"),
@@ -495,20 +498,7 @@ fn failed(step: Step, status: Option<u16>, message: &str) -> Outcome {
             ),
         },
     };
-    Outcome {
-        load,
-        cache,
-        refused: None,
-    }
-}
-
-/// The outcome when the key is refused with `status`.
-fn key_refused(status: u16) -> Outcome {
-    Outcome {
-        load: Verdict::KeyRefused(status),
-        cache: Verdict::KeyRefused(status),
-        refused: Some(status),
-    }
+    Outcome::Decided { load, cache }
 }
 
 /// Runs the probe: the baseline with the tools in full, the first request
@@ -524,10 +514,9 @@ pub(crate) fn run(provider: &dyn Provider, reference: &str) -> Outcome {
         Err((status, message)) => return failed(Step::Deferred, status, &message),
     };
     if let Err(verdict) = check_calls(&first.actions, &[], true) {
-        return Outcome {
+        return Outcome::Decided {
             load: verdict,
             cache: Verdict::NotEstablished("load did not complete".into()),
-            refused: None,
         };
     }
     let after = match send(provider, &after_load_request(reference, &first)) {
@@ -560,11 +549,7 @@ pub(crate) fn run(provider: &dyn Provider, reference: &str) -> Outcome {
     } else {
         Verdict::Fail(detail)
     };
-    Outcome {
-        load,
-        cache,
-        refused: None,
-    }
+    Outcome::Decided { load, cache }
 }
 
 /// One check's line: `pass` or `fail` with its detail.
@@ -574,486 +559,65 @@ fn check_line(check: &str, verdict: &Verdict) -> String {
         Verdict::Fail(detail) => format!("{check}: fail ({detail})"),
         Verdict::Inconclusive(detail) => format!("{check}: fail (inconclusive: {detail})"),
         Verdict::NotEstablished(detail) => format!("{check}: fail (not established: {detail})"),
-        Verdict::KeyRefused(_) => format!("{check}: fail (not established: key refused)"),
     }
 }
 
 /// The probe's report lines: the header, both checks, then the verdict.
 pub(crate) fn report(protocol: &str, model: &str, outcome: &Outcome) -> Vec<String> {
-    let mut lines = vec![
-        format!("probe: {protocol} {model}"),
-        check_line("load", &outcome.load),
-        check_line("cache", &outcome.cache),
-    ];
-    lines.push(match outcome.refused {
-        Some(status) => format!("probe: key refused (HTTP {status})"),
-        None => {
-            let inconclusive = match &outcome.load {
+    let mut lines = vec![format!("probe: {protocol} {model}")];
+    match outcome {
+        Outcome::KeyRefused(status) => {
+            lines.push("load: fail (not established: key refused)".into());
+            lines.push("cache: fail (not established: key refused)".into());
+            lines.push(format!("probe: key refused (HTTP {status})"));
+        }
+        Outcome::Decided { load, cache } => {
+            lines.push(check_line("load", load));
+            lines.push(check_line("cache", cache));
+            let inconclusive = match load {
                 Verdict::Inconclusive(detail) => Some(detail),
-                Verdict::Pass(_)
-                | Verdict::Fail(_)
-                | Verdict::NotEstablished(_)
-                | Verdict::KeyRefused(_) => match &outcome.cache {
+                Verdict::Pass(_) | Verdict::Fail(_) | Verdict::NotEstablished(_) => match cache {
                     Verdict::Inconclusive(detail) => Some(detail),
-                    Verdict::Pass(_)
-                    | Verdict::Fail(_)
-                    | Verdict::NotEstablished(_)
-                    | Verdict::KeyRefused(_) => None,
+                    Verdict::Pass(_) | Verdict::Fail(_) | Verdict::NotEstablished(_) => None,
                 },
             };
-            match inconclusive {
+            lines.push(match inconclusive {
                 Some(detail) => format!("probe: cannot tell ({detail})"),
-                None => match &outcome.load {
+                None => match load {
                     Verdict::Fail(_) => "probe: fail".into(),
-                    Verdict::Pass(_)
-                    | Verdict::Inconclusive(_)
-                    | Verdict::NotEstablished(_)
-                    | Verdict::KeyRefused(_) => match &outcome.cache {
-                        Verdict::Fail(_) => "probe: fail".into(),
-                        Verdict::Pass(_)
-                        | Verdict::Inconclusive(_)
-                        | Verdict::NotEstablished(_)
-                        | Verdict::KeyRefused(_) => "probe: pass".into(),
-                    },
+                    Verdict::Pass(_) | Verdict::Inconclusive(_) | Verdict::NotEstablished(_) => {
+                        match cache {
+                            Verdict::Fail(_) => "probe: fail".into(),
+                            Verdict::Pass(_)
+                            | Verdict::Inconclusive(_)
+                            | Verdict::NotEstablished(_) => "probe: pass".into(),
+                        }
+                    }
                 },
-            }
+            });
         }
-    });
+    }
     lines
 }
 
 /// The jig's exit code: 4 when the key was refused, 1 when a check failed,
 /// 3 when it cannot tell, else 0.
 pub(crate) fn exit_code(outcome: &Outcome) -> u8 {
-    if outcome.refused.is_some()
-        || matches!(outcome.load, Verdict::KeyRefused(_))
-        || matches!(outcome.cache, Verdict::KeyRefused(_))
-    {
-        return 4;
+    match outcome {
+        Outcome::KeyRefused(_) => 4,
+        Outcome::Decided { load, cache } => {
+            if matches!(load, Verdict::Fail(_)) || matches!(cache, Verdict::Fail(_)) {
+                return 1;
+            }
+            if matches!(load, Verdict::Inconclusive(_)) || matches!(cache, Verdict::Inconclusive(_))
+            {
+                return 3;
+            }
+            0
+        }
     }
-    if matches!(outcome.load, Verdict::Fail(_)) || matches!(outcome.cache, Verdict::Fail(_)) {
-        return 1;
-    }
-    if matches!(outcome.load, Verdict::Inconclusive(_))
-        || matches!(outcome.cache, Verdict::Inconclusive(_))
-    {
-        return 3;
-    }
-    0
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use contract::ActionId;
-    use contract::events::{ReasoningCompleted, TextCompleted, ToolCallRequested};
-    use contract::provider::{Finish, Input, InputSize};
-    use contract::shapes::Tokens;
-    use serde_json::json;
-
-    use super::*;
-
-    fn words(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    }
-
-    fn failed_outcome(status: Option<u16>, step: Step, message: &str) -> Outcome {
-        failed(step, status, message)
-    }
-
-    #[test]
-    fn refusal_status_is_auth_at_every_step() {
-        for step in [Step::Baseline, Step::Deferred, Step::AfterLoad] {
-            assert_eq!(classify(Some(401), step), Kind::Auth);
-            assert_eq!(classify(Some(403), step), Kind::Auth);
-        }
-    }
-
-    #[test]
-    fn deferral_rejection_fails_only_past_the_baseline() {
-        for step in [Step::Deferred, Step::AfterLoad] {
-            assert_eq!(classify(Some(400), step), Kind::Fail);
-            assert_eq!(classify(Some(422), step), Kind::Fail);
-        }
-        assert_eq!(classify(Some(400), Step::Baseline), Kind::Inconclusive);
-        assert_eq!(classify(Some(422), Step::Baseline), Kind::Inconclusive);
-    }
-
-    #[test]
-    fn every_other_status_and_no_status_cannot_tell() {
-        for status in [
-            Some(200),
-            Some(402),
-            Some(404),
-            Some(408),
-            Some(413),
-            Some(429),
-            Some(499),
-            Some(500),
-            Some(503),
-            None,
-        ] {
-            for step in [Step::Baseline, Step::Deferred, Step::AfterLoad] {
-                assert_eq!(
-                    classify(status, step),
-                    Kind::Inconclusive,
-                    "{status:?} {step:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn any_cache_read_holds() {
-        assert!(!cache_held(0));
-        assert!(cache_held(1));
-        assert!(cache_held(u64::MAX));
-    }
-
-    #[test]
-    fn total_input_sums_input_reads_and_every_write_class() {
-        let tokens = Tokens {
-            input: 300,
-            cache_read: 5120,
-            cache_write: BTreeMap::from([("1h".to_owned(), 7), ("5m".to_owned(), 11)]),
-            output: 999,
-        };
-        assert_eq!(total_input(&tokens), 300 + 5120 + 7 + 11);
-    }
-
-    #[test]
-    fn exit_code_prefers_refusal_then_failure_then_cannot_tell() {
-        let refused = || Outcome {
-            load: Verdict::KeyRefused(401),
-            cache: Verdict::KeyRefused(401),
-            refused: Some(401),
-        };
-        let verdicts = [
-            Verdict::Fail("no".into()),
-            Verdict::Inconclusive("no".into()),
-            Verdict::Pass("yes".into()),
-            Verdict::NotEstablished("no".into()),
-        ];
-        for load in &verdicts {
-            for cache in &verdicts {
-                let outcome = Outcome {
-                    load: load.clone(),
-                    cache: cache.clone(),
-                    refused: None,
-                };
-                let expected =
-                    if matches!(load, Verdict::Fail(_)) || matches!(cache, Verdict::Fail(_)) {
-                        1
-                    } else if matches!(load, Verdict::Inconclusive(_))
-                        || matches!(cache, Verdict::Inconclusive(_))
-                    {
-                        3
-                    } else {
-                        0
-                    };
-                assert_eq!(exit_code(&outcome), expected, "{load:?} {cache:?}");
-                assert_eq!(
-                    exit_code(&Outcome {
-                        load: load.clone(),
-                        cache: cache.clone(),
-                        refused: Some(403),
-                    }),
-                    4,
-                    "{load:?} {cache:?}"
-                );
-            }
-        }
-        assert_eq!(exit_code(&refused()), 4);
-        assert_eq!(
-            exit_code(&Outcome {
-                load: Verdict::KeyRefused(403),
-                cache: Verdict::Pass("yes".into()),
-                refused: None,
-            }),
-            4
-        );
-    }
-
-    #[test]
-    fn parse_args_rejects_too_few_unknown_and_bad_options() {
-        assert!(parse_args(&words(&[])).is_err());
-        assert!(parse_args(&words(&["anthropic-messages", "https://x", "m"])).is_err());
-        let base = ["anthropic-messages", "https://x", "m", "key", "--unknown"];
-        let error = parse_args(&words(&base)).unwrap_err();
-        assert!(error.contains("--unknown"), "{error}");
-        let bad_store = ["openai-responses", "https://x", "m", "key", "--store=maybe"];
-        let error = parse_args(&words(&bad_store)).unwrap_err();
-        assert!(error.contains("--store"), "{error}");
-        let bare = ["anthropic-messages", "https://x", "m", "key", "no-colon"];
-        let error = parse_args(&words(&bare)).unwrap_err();
-        assert!(error.contains("NAME:VALUE"), "{error}");
-        let bad_protocol = ["smtp", "https://x", "m", "key"];
-        let error = parse_args(&words(&bad_protocol)).unwrap_err();
-        assert!(error.contains("smtp"), "{error}");
-    }
-
-    #[test]
-    fn parse_args_accepts_options_in_any_order() {
-        let args = words(&[
-            "openai-responses",
-            "https://x",
-            "m",
-            "env:KEY",
-            "X-A: 1",
-            "--store=false",
-            "@body.json",
-            "--bearer",
-        ]);
-        assert_eq!(
-            parse_args(&args).unwrap(),
-            Parsed {
-                protocol: "openai-responses".into(),
-                base_url: "https://x".into(),
-                model: "m".into(),
-                key_spec: "env:KEY".into(),
-                bearer: true,
-                store: Some(false),
-                headers: vec![("X-A".into(), "1".into())],
-                body_file: Some("body.json".into()),
-            }
-        );
-    }
-
-    #[test]
-    fn key_from_reads_env_and_files_and_names_what_is_missing() {
-        let env = |name: &str| {
-            if name == "PRESENT" {
-                Some("  secret \n".to_owned())
-            } else {
-                None
-            }
-        };
-        assert_eq!(key_from("env:PRESENT", &env).unwrap(), "secret");
-        let missing = key_from("env:ABSENT", &env).unwrap_err();
-        assert!(missing.contains("ABSENT"), "{missing}");
-        assert!(!missing.contains("secret"));
-        let dir = fakes::TempDir::new("fiber-probe-key");
-        let path = dir.path().join("key");
-        std::fs::write(&path, "file-secret\n").unwrap();
-        let text = path.display().to_string();
-        assert_eq!(key_from(&text, &env).unwrap(), "file-secret");
-        let absent = dir.path().join("absent");
-        let error = key_from(&absent.display().to_string(), &env).unwrap_err();
-        assert!(error.contains("absent"), "{error}");
-        std::fs::write(&path, "  \n").unwrap();
-        assert!(key_from(&text, &env).unwrap_err().contains("empty"));
-    }
-
-    #[test]
-    fn baseline_declares_every_tool_in_full() {
-        let request = baseline_request("probe/m");
-        let names: Vec<&str> = request
-            .tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect();
-        assert_eq!(
-            names,
-            vec![
-                "tool_search",
-                "probe_calendar_create",
-                "probe_calendar_list",
-                "probe_calendar_delete"
-            ]
-        );
-        assert!(request.tools.iter().all(|tool| !tool.deferred));
-        assert!(request.system_prompt.len() >= SYSTEM_MIN_CHARS);
-        for tool in &request.tools {
-            assert!(tool.description.len() >= TOOL_MIN_CHARS, "{}", tool.name);
-        }
-        assert_eq!(request.max_output_tokens, Some(2000));
-        assert!(request.thinking.is_none());
-        assert_eq!(request.tool_choice, "auto");
-        assert_eq!(request.cache_key, "probe-probe/m");
-        assert!(request.previous_end.is_none());
-        assert!(request.sent_tools.is_none());
-        assert!(!request.system_prompt.contains("defer_loading"));
-        assert!(!request.system_prompt.contains("tool_reference"));
-        assert!(!request.system_prompt.contains("tool_search_output"));
-    }
-
-    #[test]
-    fn first_request_defers_only_the_calendar_tools() {
-        let request = first_request("probe/m");
-        for tool in &request.tools {
-            assert_eq!(tool.deferred, tool.name != "tool_search", "{}", tool.name);
-        }
-        assert_eq!(request.cache_key, baseline_request("probe/m").cache_key);
-    }
-
-    fn search_call() -> ToolCallRequested {
-        ToolCallRequested {
-            name: "tool_search".into(),
-            arguments: json!({"query": "calendar"}),
-            provider_id: None,
-            repair: None,
-            ran_by: None,
-            provider_item: None,
-        }
-    }
-
-    fn first_reply(actions: Vec<ReplyAction>) -> Reply {
-        Reply {
-            actions,
-            finish: Finish::Completed,
-            generation_id: None,
-            tokens: Tokens {
-                input: 0,
-                cache_read: 0,
-                cache_write: BTreeMap::new(),
-                output: 0,
-            },
-            web_searches: None,
-            cost: None,
-            input_size: InputSize {
-                bytes: 0,
-                media: false,
-            },
-        }
-    }
-
-    #[test]
-    fn after_load_replays_the_first_reply_and_answers_its_search() {
-        let first = first_reply(vec![
-            ReplyAction::Reasoning(ReasoningCompleted {
-                text: "on it".into(),
-                provider_item: Some(json!({"type": "reasoning"})),
-            }),
-            ReplyAction::ToolCall(search_call()),
-        ]);
-        let after = after_load_request("probe/m", &first);
-        assert_eq!(after.previous_end, Some(1));
-        assert_eq!(after.cache_key, first_request("probe/m").cache_key);
-        assert_eq!(after.tools, first_request("probe/m").tools);
-        let conversation: Vec<&Input> = after.conversation.iter().collect();
-        assert_eq!(conversation.len(), 4);
-        assert!(matches!(conversation[0], Input::User { .. }));
-        assert!(matches!(conversation[1], Input::Reasoning { .. }));
-        let Input::ToolCall {
-            action_id,
-            call,
-            model,
-        } = conversation[2]
-        else {
-            panic!("{conversation:?}");
-        };
-        assert_eq!(action_id, &ActionId("probe-2".into()));
-        assert_eq!(call.name, "tool_search");
-        assert_eq!(model, "probe/m");
-        assert_eq!(
-            conversation[3],
-            &Input::ToolSearchResult {
-                action_id: ActionId("probe-2".into()),
-                loaded: vec!["probe_calendar_create".into()],
-            }
-        );
-    }
-
-    #[test]
-    fn after_load_marks_an_unsearched_call_as_not_run() {
-        let mut other = search_call();
-        other.name = "probe_calendar_list".into();
-        let first = first_reply(vec![
-            ReplyAction::Text(TextCompleted {
-                text: "hi".into(),
-                provider_item: None,
-            }),
-            ReplyAction::ToolCall(search_call()),
-            ReplyAction::ToolCall(other),
-        ]);
-        let after = after_load_request("probe/m", &first);
-        let conversation: Vec<&Input> = after.conversation.iter().collect();
-        assert_eq!(conversation.len(), 6);
-        assert!(matches!(conversation[1], Input::Assistant { .. }));
-        let Input::ToolResult {
-            action_id,
-            text,
-            is_error,
-            ..
-        } = conversation[5]
-        else {
-            panic!("{conversation:?}");
-        };
-        assert_eq!(action_id, &ActionId("probe-3".into()));
-        assert_eq!(text, "not run by the probe");
-        assert!(is_error);
-    }
-
-    #[test]
-    fn report_prints_a_passing_run() {
-        let outcome = Outcome {
-            load: Verdict::Pass("searched, loaded probe_calendar_create, then called it".into()),
-            cache: Verdict::Pass("cache read 5120 of 5420 input tokens".into()),
-            refused: None,
-        };
-        assert_eq!(
-            report("openai-responses", "gpt-5.4", &outcome),
-            vec![
-                "probe: openai-responses gpt-5.4",
-                "load: pass (searched, loaded probe_calendar_create, then called it)",
-                "cache: pass (cache read 5120 of 5420 input tokens)",
-                "probe: pass",
-            ]
-        );
-        assert_eq!(exit_code(&outcome), 0);
-    }
-
-    #[test]
-    fn report_prints_a_failed_load() {
-        let outcome = Outcome {
-            load: Verdict::Fail("HTTP 400: defer_loading is not supported".into()),
-            cache: Verdict::NotEstablished("load rejected".into()),
-            refused: None,
-        };
-        assert_eq!(
-            report("anthropic-messages", "probe-model", &outcome),
-            vec![
-                "probe: anthropic-messages probe-model",
-                "load: fail (HTTP 400: defer_loading is not supported)",
-                "cache: fail (not established: load rejected)",
-                "probe: fail",
-            ]
-        );
-        assert_eq!(exit_code(&outcome), 1);
-    }
-
-    #[test]
-    fn report_prints_an_inconclusive_baseline() {
-        let outcome = failed_outcome(Some(404), Step::Baseline, "not found");
-        assert_eq!(
-            report("anthropic-messages", "probe-model", &outcome),
-            vec![
-                "probe: anthropic-messages probe-model",
-                "load: fail (inconclusive: baseline: HTTP 404)",
-                "cache: fail (not established: baseline inconclusive)",
-                "probe: cannot tell (baseline: HTTP 404)",
-            ]
-        );
-        assert_eq!(exit_code(&outcome), 3);
-    }
-
-    #[test]
-    fn report_prints_a_refused_key_and_hides_it() {
-        let outcome = key_refused(401);
-        let lines = report("anthropic-messages", "probe-model", &outcome);
-        assert_eq!(
-            lines,
-            vec![
-                "probe: anthropic-messages probe-model",
-                "load: fail (not established: key refused)",
-                "cache: fail (not established: key refused)",
-                "probe: key refused (HTTP 401)",
-            ]
-        );
-        assert_eq!(exit_code(&outcome), 4);
-        for line in &lines {
-            assert!(!line.contains("sekrit-value"), "{line}");
-        }
-    }
-}
+#[path = "probe_tests.rs"]
+mod tests;

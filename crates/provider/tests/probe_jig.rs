@@ -1,7 +1,7 @@
 //! The `probe` jig through its built binary: the probe's own checks and
 //! the binary's behaviour against fakes. The unit tests live in
-//! `tests/support/probe.rs`, included below, so they run inside this
-//! binary.
+//! `tests/support/probe_tests.rs`, included through `support/probe.rs`
+//! below, so they run inside this binary.
 
 #![allow(
     clippy::unwrap_used,
