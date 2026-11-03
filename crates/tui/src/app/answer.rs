@@ -1,6 +1,6 @@
 //! Command answers normalised before any feature or draft settlement.
 
-use contract::SessionId;
+use contract::{SessionId, events::EventKind};
 use serde_json::{Map, Value};
 
 use super::outbox::{Outbox, Waiting};
@@ -25,17 +25,19 @@ impl<'a> Answer<'a> {
     /// Reads only command answers with a string command id.
     pub(super) fn of(line: &'a Line, outbox: &Outbox) -> Option<Self> {
         let (kind, payload, from) = match line {
-            Line::Hub(hub) => (hub.kind.as_str(), &hub.payload, Source::Hub),
+            Line::Hub(hub) => (EventKind::from_name(&hub.kind), &hub.payload, Source::Hub),
             Line::Session(envelope) => (
-                envelope.kind.as_str(),
+                EventKind::from_name(&envelope.kind),
                 &envelope.payload,
                 Source::Session(&envelope.session_id),
             ),
         };
-        let accepted = match kind {
-            "command_accepted" => true,
-            "command_rejected" => false,
-            _ => return None,
+        let accepted = if kind == EventKind::CommandAccepted {
+            true
+        } else if kind == EventKind::CommandRejected {
+            false
+        } else {
+            return None;
         };
         let id = payload.get("command_id")?.as_str()?;
         Some(Self {
