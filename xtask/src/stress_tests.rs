@@ -539,8 +539,8 @@ fn an_empty_issue_text_file_yields_no_names() {
 }
 
 #[test]
-fn a_rest_group_without_names_falls_back_to_the_label_count() {
-    assert_eq!(group_count(Some(Only::Rest), "test-only", false), 100);
+fn a_rest_group_without_names_runs_the_pilot_default() {
+    assert_eq!(group_count(Some(Only::Rest), "test-only", false), 30);
     assert_eq!(group_count(Some(Only::Rest), "bug", false), 30);
     assert_eq!(group_count(Some(Only::Named), "test-only", false), 100);
     assert_eq!(group_count(None, "test-only", false), 100);

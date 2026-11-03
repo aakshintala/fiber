@@ -871,7 +871,7 @@ fn stress_plan_without_only_plans_every_test_at_the_label_count() {
 }
 
 #[test]
-fn stress_plan_with_only_rest_and_no_names_falls_back_to_the_label_count() {
+fn stress_plan_with_only_rest_and_no_names_plans_the_rest_at_thirty() {
     let dir = stress_branch();
     let home = home(&dir);
     dir.write(
@@ -887,8 +887,8 @@ fn stress_plan_with_only_rest_and_no_names_falls_back_to_the_label_count() {
     dir.write("summary.md", "");
     let summary = dir.path().join("summary.md");
     let summary = summary.to_str().unwrap();
-    // No marker names no test: every selected test runs the label count,
-    // here 100, in the rest group that carries them all.
+    // No marker names no test: every selected test runs the pilot default,
+    // here 30, in the rest group that carries them all.
     let (code, out) = xtask_with_nextest(
         &dir,
         &[
@@ -919,7 +919,7 @@ fn stress_plan_with_only_rest_and_no_names_falls_back_to_the_label_count() {
     }
     head.sort();
     rest.sort();
-    assert_eq!(head, ["count\t100".to_owned(), "run\ttrue".to_owned()]);
+    assert_eq!(head, ["count\t30".to_owned(), "run\ttrue".to_owned()]);
     assert!(rest.contains(&"test\ta::t new_test".to_owned()), "{rest:?}");
     assert!(
         rest.contains(&"test\tb fold::tests::second".to_owned()),
@@ -931,7 +931,7 @@ fn stress_plan_with_only_rest_and_no_names_falls_back_to_the_label_count() {
     );
     assert_eq!(
         std::fs::read_to_string(summary).unwrap(),
-        "### Stress job: 2 tests, 100 runs each (rest)\n\
+        "### Stress job: 2 tests, 30 runs each (rest)\n\
          ```\n\
          test\ta::t new_test\n\
          test\tb fold::tests::second\n\

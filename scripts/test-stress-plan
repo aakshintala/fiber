@@ -217,6 +217,7 @@ else
   true
 fi
 expect_ghout "$dir" "run=true"
+expect_ghout "$dir" "count=30"
 expect_ghout "$dir" "tests=2"
 
 # A failed issue-text lookup fails the step rather than skipping the run.

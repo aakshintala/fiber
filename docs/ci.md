@@ -234,7 +234,7 @@ than the plan names, fails the job. The count is read from the linked issue's
 labels, which decide whether the pull request fixes a flaky test. Which tests
 run 100 times is decided by the names: each test the linked flake issue names
 runs 100 times and every other selected test runs 30; when the issue names no
-test, every selected test runs 100 times. Nothing caps the test set: the job stresses
+test, every selected test runs 30 times. Nothing caps the test set: the job stresses
 every test the plan selects. The job is in `ci`'s `needs`,
 so one failure stops the merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched

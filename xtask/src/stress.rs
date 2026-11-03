@@ -355,12 +355,9 @@ fn parse_only(value: Option<String>) -> Result<Option<Only>, String> {
 
 /// Runs for one planned group: the named tests keep the flaky-fix count
 /// from the labels, every other selected test runs the pilot default.
-/// When the issue names nothing there is no split to count, so every
-/// group falls back to the labels count: a test-only fix with no names
-/// still runs every selected test 100 times.
 fn group_count(only: Option<Only>, labels: &str, has_names: bool) -> u32 {
     match (only, has_names) {
-        (Some(Only::Rest), true) => STRESS_COUNT,
+        (Some(Only::Rest), _) => STRESS_COUNT,
         _ => stress_count(labels),
     }
 }
