@@ -5191,6 +5191,8 @@ struct Opened {
     server_a: ProviderServer,
     server_b: ProviderServer,
     lines: Vec<Value>,
+    parent_sub: support::Subscribed,
+    delegate_sub: support::Subscribed,
 }
 
 /// Whether `line` is a session line for `id`.
@@ -5288,6 +5290,7 @@ fn open_delegate(
         "command_accepted",
         "{batch:?}"
     );
+    let parent_sub = support::Subscribed::from_ack(Some(&parent), batch.last().unwrap().clone());
     lines.append(&mut batch);
     let mut batch = support::until(&main, "the parent's delegate_started", |line| {
         line["kind"] == "delegate_started" && is_session(line, &parent)
@@ -5330,6 +5333,23 @@ fn open_delegate(
     // The delegate's subscribe is acknowledged once the session answers;
     // later batches carry it, and the test asserts it with the steer.
     lines.append(&mut batch);
+    // Take the acknowledgement for the bound below, keeping every line
+    // for the caller: the ack may sit in the lines read so far, or still
+    // be on the wire.
+    let ack = match lines.iter().find(|line| is_answer(line, "c_dsub")).cloned() {
+        Some(ack) => ack,
+        None => {
+            let mut batch =
+                support::until(&main, "the delegate subscribe acknowledgement", |line| {
+                    is_answer(line, "c_dsub")
+                });
+            let ack = batch.last().unwrap().clone();
+            lines.append(&mut batch);
+            ack
+        }
+    };
+    assert_eq!(ack["kind"], "command_accepted", "{ack:?}");
+    let delegate_sub = support::Subscribed::from_ack(Some(&delegate), ack);
     Opened {
         main,
         parent,
@@ -5338,6 +5358,8 @@ fn open_delegate(
         server_a,
         server_b,
         lines,
+        parent_sub,
+        delegate_sub,
     }
 }
 
@@ -5427,6 +5449,8 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
         server_a,
         server_b,
         mut lines,
+        parent_sub,
+        delegate_sub,
     } = open_delegate(&setup, &hub, server_a, server_b);
     // The steer goes to the delegate on its own connection, then a `tools`
     // probe on the same connection: the session's reader hands each line
@@ -5466,9 +5490,12 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     );
     assert!(bodies[1].contains(MARK), "the steer joined the next call");
     server_b.release();
-    let mut batch = support::until(&main, "the delegate's fiber_exited", |line| {
-        line["kind"] == "fiber_exited" && is_session(line, &delegate)
-    });
+    let mut batch = support::until_after(
+        &main,
+        &delegate_sub,
+        "the delegate's fiber_exited",
+        |line| line["kind"] == "fiber_exited" && is_session(line, &delegate),
+    );
     lines.append(&mut batch);
     let delegate_lines = for_session(&lines, &delegate);
     assert_eq!(answered(&lines, "c_steer")["kind"], "command_accepted");
@@ -5675,7 +5702,7 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     main.send(&format!(
         "{{\"id\":\"c_pclose\",\"session_id\":\"{parent}\",\"command\":\"close\",\"args\":{{\"now\":false}}}}"
     ));
-    let mut batch = support::until(&main, "the parent's fiber_exited", |line| {
+    let mut batch = support::until_after(&main, &parent_sub, "the parent's fiber_exited", |line| {
         line["kind"] == "fiber_exited" && is_session(line, &parent)
     });
     lines.append(&mut batch);
@@ -5723,6 +5750,7 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
         server_a: _server_a,
         server_b,
         lines,
+        ..
     } = opened;
     drop(lines);
     // The hub's stop ends no session: the parent and the delegate keep
@@ -9067,6 +9095,7 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
         "command_accepted",
         "{lines:?}"
     );
+    let parent_sub = support::Subscribed::from_ack(Some(&parent_id), lines.last().unwrap().clone());
     let mut batch = support::until(&main, "the parent's delegate_started", |line| {
         line["kind"] == "delegate_started" && is_session(line, &parent_id)
     });
@@ -9363,7 +9392,7 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     main.send(&format!(
         "{{\"id\":\"c_pclose\",\"session_id\":\"{parent_id}\",\"command\":\"close\",\"args\":{{\"now\":false}}}}"
     ));
-    let mut batch = support::until(&main, "the parent's fiber_exited", |line| {
+    let mut batch = support::until_after(&main, &parent_sub, "the parent's fiber_exited", |line| {
         line["kind"] == "fiber_exited" && is_session(line, &parent_id)
     });
     lines.append(&mut batch);

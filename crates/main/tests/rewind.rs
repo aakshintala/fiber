@@ -142,7 +142,9 @@ impl Hubbed {
 
     /// Starts a session with `content` under command `id`, subscribes
     /// `sub_id` full to it, and waits for its first turn to complete.
-    fn start(&self, id: &str, sub_id: &str, content: &str) -> String {
+    /// Returns the session with the subscription its acknowledgement
+    /// carries, for waits that must start past the fold.
+    fn start(&self, id: &str, sub_id: &str, content: &str) -> (String, Subscribed) {
         self.client().send(&command(
             id,
             None,
@@ -155,11 +157,12 @@ impl Hubbed {
             .expect("the start answers with a session id")
             .to_owned();
         self.client().send(&subscribe_line(sub_id, &session));
-        until_ack(self.client(), "the subscribe acknowledgement", sub_id);
+        let acked = until_ack(self.client(), "the subscribe acknowledgement", sub_id);
+        let sub = Subscribed::from_ack(Some(&session), acked.last().unwrap().clone());
         until(self.client(), "the first turn_completed", |line| {
             line["kind"] == "turn_completed" && line["session_id"] == session
         });
-        session
+        (session, sub)
     }
 
     /// Prompts `session` with `text` under command `id`, and waits for the
@@ -173,12 +176,18 @@ impl Hubbed {
     }
 
     /// Closes `session` under command `id`, and waits for its `fiber_exited`.
-    fn close(&self, id: &str, session: &str) {
+    /// A subscription bounds the wait past the fold; a session never
+    /// subscribed on this client has no replayed exit, so it waits every
+    /// line.
+    fn close(&self, id: &str, session: &str, since: Option<&Subscribed>) {
         self.client()
             .send(&command(id, Some(session), "close", json!({})));
-        until(self.client(), "the fiber_exited", |line| {
-            line["kind"] == "fiber_exited" && line["session_id"] == session
-        });
+        let exited = |line: &Value| line["kind"] == "fiber_exited" && line["session_id"] == session;
+        match since {
+            Some(sub) => until_after(self.client(), sub, "the fiber_exited", exited),
+            // live: the fold holds only lines written before the subscribe, which hold no exit of a session alive until this close or never subscribed on this client.
+            None => until(self.client(), "the fiber_exited", exited),
+        };
     }
 
     fn finish(self) {
@@ -198,7 +207,7 @@ fn history_pages_a_rewound_sessions_chain_back_to_the_root() {
     let server = ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c_start", "c_sub", "one");
+    let (old, _sub) = hubbed.start("c_start", "c_sub", "one");
     hubbed.prompt("c_two", &old, "two");
     let client = hubbed.client();
     client.send(&rewind("c_middle", &old, json!({})));
@@ -220,7 +229,7 @@ fn history_pages_a_rewound_sessions_chain_back_to_the_root() {
     until(client, "the next session's extensions", |line| {
         line["session_id"] == next && line["kind"] == "extensions_loaded"
     });
-    let other = hubbed.start("c_other", "c_other_sub", "unrelated");
+    let (other, other_sub) = hubbed.start("c_other", "c_other_sub", "unrelated");
     let snapshots = [&old, &middle].map(|id| fs::read(session_log_path(&setup, id)).unwrap());
 
     client.send(&command("c_history", Some(&next), "history", json!({})));
@@ -286,8 +295,8 @@ fn history_pages_a_rewound_sessions_chain_back_to_the_root() {
         assert_eq!(after.len(), snapshot.len());
         assert!(after == snapshot, "paging must not resume {id}");
     }
-    hubbed.close("c_close_next", &next);
-    hubbed.close("c_close_other", &other);
+    hubbed.close("c_close_next", &next, None);
+    hubbed.close("c_close_other", &other, Some(&other_sub));
     hubbed.finish();
 }
 
@@ -297,7 +306,7 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c1_start", "c1_sub", "one");
+    let (old, _sub) = hubbed.start("c1_start", "c1_sub", "one");
     let client = hubbed.client();
     hubbed.prompt("c1_p2", &old, "two");
 
@@ -422,7 +431,7 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
         after[4]
     );
 
-    hubbed.close("c1_close", &next);
+    hubbed.close("c1_close", &next, None);
     hubbed.finish();
 }
 
@@ -432,7 +441,7 @@ fn a_point_based_person_fork_before_directory_added_does_not_inherit_it() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c_fork_start", "c_fork_sub", "one");
+    let (old, _sub) = hubbed.start("c_fork_start", "c_fork_sub", "one");
     let parent_lines = session_log(&setup, &old);
     let first_turn = parent_lines
         .iter()
@@ -487,7 +496,7 @@ fn a_point_based_person_fork_before_directory_added_does_not_inherit_it() {
         "the continued session writes no directory_added event from after its point"
     );
 
-    hubbed.close("c_fork_close_next", &next);
+    hubbed.close("c_fork_close_next", &next, None);
     hubbed.finish();
 }
 
@@ -497,7 +506,7 @@ fn an_at_end_rewind_continues_the_session_from_the_latest_point() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c1_start", "c1_sub", "one");
+    let (old, _sub) = hubbed.start("c1_start", "c1_sub", "one");
     let client = hubbed.client();
     hubbed.prompt("c1_p2", &old, "two");
 
@@ -649,7 +658,7 @@ fn an_at_end_rewind_continues_the_session_from_the_latest_point() {
     let old_log = session_log(&setup, &old);
     assert_eq!(old_log.last().unwrap()["kind"], "rewound");
 
-    hubbed.close("c1_close", &next);
+    hubbed.close("c1_close", &next, None);
     hubbed.finish();
 }
 
@@ -673,7 +682,7 @@ fn a_rewind_stops_a_running_job_and_the_note_names_it() {
     )
     .unwrap();
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c3_start", "c3_sub", "one");
+    let (old, _sub) = hubbed.start("c3_start", "c3_sub", "one");
     let client = hubbed.client();
     // The background shell started during the first turn: its
     // `job_started` is in the old log.
@@ -723,7 +732,7 @@ fn a_rewind_stops_a_running_job_and_the_note_names_it() {
             .any(|item| serde_json::to_string(item).unwrap().contains(&job)),
         "the first request carries the note: {last:?}"
     );
-    hubbed.close("c3_close", &next);
+    hubbed.close("c3_close", &next, None);
     hubbed.finish();
 }
 
@@ -737,7 +746,7 @@ fn a_summary_crosses_the_process_boundary_between_history_and_note() {
     let server = ProviderServer::start([hello(), hello(), reply, hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("sum_start", "sum_sub", "one");
+    let (old, _sub) = hubbed.start("sum_start", "sum_sub", "one");
     hubbed.prompt("sum_two", &old, "two");
     let before = session_log(&setup, &old).len();
     let client = hubbed.client();
@@ -797,7 +806,7 @@ fn a_summary_crosses_the_process_boundary_between_history_and_note() {
     let note = new_log[0]["payload"]["rewind"]["note"].as_str().unwrap();
     assert_eq!(input[4], json!({"role":"user", "content":note}));
     assert_eq!(input[5], json!({"role":"user", "content":"three"}));
-    hubbed.close("sum_close", &next);
+    hubbed.close("sum_close", &next, None);
     hubbed.finish();
 }
 
@@ -813,7 +822,7 @@ fn a_failed_summary_creates_no_session_and_the_old_conversation_continues() {
     .unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("fail_start", "fail_sub", "one");
+    let (old, old_sub) = hubbed.start("fail_start", "fail_sub", "one");
     hubbed.prompt("fail_two", &old, "two");
     let before = session_log(&setup, &old).len();
     let directory = session_log_path(&setup, &old)
@@ -873,7 +882,7 @@ fn a_failed_summary_creates_no_session_and_the_old_conversation_continues() {
     expected.push(json!({"type":"message", "content":[{"type":"output_text", "text":"Hello."}]}));
     expected.push(json!({"role":"user", "content":"three"}));
     assert_eq!(next["input"], json!(expected));
-    hubbed.close("fail_close", &old);
+    hubbed.close("fail_close", &old, Some(&old_sub));
     hubbed.finish();
 }
 
@@ -883,9 +892,9 @@ fn refusals_leave_the_session_running_and_its_log_unchanged() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c2_start", "c2_sub", "one");
+    let (old, old_sub) = hubbed.start("c2_start", "c2_sub", "one");
     let client = hubbed.client();
-    let other = hubbed.start("c2_start_other", "c2_sub_other", "other");
+    let (other, other_sub) = hubbed.start("c2_start_other", "c2_sub_other", "other");
     let before = fs::read(session_log_path(&setup, &old)).unwrap();
 
     // Before the first line's turn: not a step boundary.
@@ -922,8 +931,8 @@ fn refusals_leave_the_session_running_and_its_log_unchanged() {
 
     // The session is still running: its next prompt turns.
     hubbed.prompt("c2_p2", &old, "two");
-    hubbed.close("c2_close_old", &old);
-    hubbed.close("c2_close_other", &other);
+    hubbed.close("c2_close_old", &old, Some(&old_sub));
+    hubbed.close("c2_close_other", &other, Some(&other_sub));
     hubbed.finish();
 }
 
@@ -933,9 +942,9 @@ fn a_rewind_through_the_hub_resumes_an_exited_session() {
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c3_start", "c3_sub", "one");
+    let (old, old_sub) = hubbed.start("c3_start", "c3_sub", "one");
     let client = hubbed.client();
-    hubbed.close("c3_close", &old);
+    hubbed.close("c3_close", &old, Some(&old_sub));
     fakes::try_matching_exits(&hubbed.workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the old session process to exit: {err}")
     });
@@ -961,7 +970,7 @@ fn a_rewind_through_the_hub_resumes_an_exited_session() {
     assert_eq!(new_log[0]["kind"], "session_started");
     assert_eq!(new_log[0]["payload"]["forked_from"]["session_id"], old);
 
-    hubbed.close("c3_close_next", &next);
+    hubbed.close("c3_close_next", &next, None);
     hubbed.finish();
 }
 
@@ -971,7 +980,7 @@ fn the_feed_starts_a_rewind_no_client_relayed() {
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     let mut hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c4_start", "c4_sub", "one");
+    let (old, _sub) = hubbed.start("c4_start", "c4_sub", "one");
     hubbed.prompt("c4_p2", &old, "two");
 
     // A second hub client holds a feed subscription only: it relays no
@@ -1053,7 +1062,7 @@ fn an_unprompted_rewound_session_is_kept_and_resumes() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c5_start", "c5_sub", "one");
+    let (old, _sub) = hubbed.start("c5_start", "c5_sub", "one");
     let client = hubbed.client();
     hubbed.prompt("c5_p2", &old, "two");
     client.send(&rewind("c5_rw", &old, json!({})));
@@ -1067,7 +1076,7 @@ fn an_unprompted_rewound_session_is_kept_and_resumes() {
     });
 
     // Never prompted: closing it still keeps its directory.
-    hubbed.close("c5_close", &next);
+    hubbed.close("c5_close", &next, None);
     let dir = session_log_path(&setup, &next).parent().unwrap().to_owned();
     assert!(dir.is_dir(), "the rewound session is kept");
     // The prompt must reach a gone session, not one still shutting down:
@@ -1078,7 +1087,7 @@ fn an_unprompted_rewound_session_is_kept_and_resumes() {
 
     // A prompt through the hub resumes it like any exited session.
     hubbed.prompt("c5_p3", &next, "three");
-    hubbed.close("c5_close_again", &next);
+    hubbed.close("c5_close_again", &next, None);
     hubbed.finish();
 }
 
@@ -1088,7 +1097,7 @@ fn a_rewound_session_rewinds_to_an_ancestor_point() {
     let server = ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c6_start", "c6_sub", "one");
+    let (old, _sub) = hubbed.start("c6_start", "c6_sub", "one");
     let client = hubbed.client();
     hubbed.prompt("c6_p2", &old, "two");
     client.send(&rewind("c6_rw", &old, json!({})));
@@ -1161,9 +1170,9 @@ fn a_rewound_session_rewinds_to_an_ancestor_point() {
         input[2]
     );
 
-    hubbed.close("c6_close_old", &old);
-    hubbed.close("c6_close_middle", &middle);
-    hubbed.close("c6_close_next", &next);
+    hubbed.close("c6_close_old", &old, None);
+    hubbed.close("c6_close_middle", &middle, None);
+    hubbed.close("c6_close_next", &next, None);
     hubbed.finish();
 }
 
@@ -1211,9 +1220,9 @@ fn a_rewind_keeps_the_person_name_and_its_pin() {
     .unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("n1_start", "n1_sub", "one");
+    let (old, old_sub) = hubbed.start("n1_start", "n1_sub", "one");
     let client = hubbed.client();
-    hubbed.close("n1_close_old", &old);
+    hubbed.close("n1_close_old", &old, Some(&old_sub));
     fakes::try_matching_exits(&hubbed.workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the old session process to exit: {err}")
     });
@@ -1299,7 +1308,7 @@ fn a_rewind_keeps_the_person_name_and_its_pin() {
     assert_eq!(last["payload"]["error"]["code"], "name_pinned");
     assert_eq!(listed_name(&setup, &next), "Mine");
 
-    hubbed.close("n1_close", &next);
+    hubbed.close("n1_close", &next, None);
     hubbed.finish();
 }
 
@@ -1324,7 +1333,7 @@ fn a_rewind_to_an_ancestor_point_keeps_the_rewound_sessions_person_name() {
     .unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("a1_start", "a1_sub", "one");
+    let (old, _sub) = hubbed.start("a1_start", "a1_sub", "one");
     let client = hubbed.client();
     hubbed.prompt("a1_p2", &old, "two");
     client.send(&rewind("a1_rw", &old, json!({})));
@@ -1340,7 +1349,7 @@ fn a_rewind_to_an_ancestor_point_keeps_the_rewound_sessions_person_name() {
         line["session_id"] == middle && line["kind"] == "fiber_started"
     });
     hubbed.prompt("a1_p3", &middle, "three");
-    hubbed.close("a1_close_middle", &middle);
+    hubbed.close("a1_close_middle", &middle, None);
     fakes::try_matching_exits(&hubbed.workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the middle session process to exit: {err}")
     });
@@ -1424,8 +1433,8 @@ fn a_rewind_to_an_ancestor_point_keeps_the_rewound_sessions_person_name() {
     assert_eq!(last["payload"]["status"], "failed");
     assert_eq!(last["payload"]["error"]["code"], "name_pinned");
 
-    hubbed.close("a1_close_old", &old);
-    hubbed.close("a1_close_next", &next);
+    hubbed.close("a1_close_old", &old, None);
+    hubbed.close("a1_close_next", &next, None);
     hubbed.finish();
 }
 
@@ -1449,7 +1458,7 @@ fn a_rewind_carries_the_model_name_and_the_new_session_renames_it() {
     .unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("m1_start", "m1_sub", "one");
+    let (old, _sub) = hubbed.start("m1_start", "m1_sub", "one");
     let client = hubbed.client();
     let old_log = session_log(&setup, &old);
     let old_named = named_lines(&old_log);
@@ -1513,7 +1522,7 @@ fn a_rewind_carries_the_model_name_and_the_new_session_renames_it() {
         Some("New name".to_owned())
     );
 
-    hubbed.close("m1_close", &next);
+    hubbed.close("m1_close", &next, None);
     hubbed.finish();
 }
 
@@ -1660,7 +1669,7 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
     drop(probe);
 
     // Closing the new session never removes the worktree either.
-    hubbed.close("c7_close", &next);
+    hubbed.close("c7_close", &next, None);
     assert!(Path::new(&worktree).is_dir(), "the worktree is still there");
     assert!(
         !git_clean_env(
@@ -1693,7 +1702,7 @@ fn a_rewind_inherits_a_handoff_by_position() {
     .unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("h1_start", "h1_sub", "one");
+    let (old, _sub) = hubbed.start("h1_start", "h1_sub", "one");
     let client = hubbed.client();
     hubbed.prompt("h1_p2", &old, "two");
 
@@ -1838,8 +1847,8 @@ fn a_rewind_inherits_a_handoff_by_position() {
         earlier_input[k + 1]
     );
 
-    hubbed.close("h1_close_after", &after);
-    hubbed.close("h1_close_before", &before);
+    hubbed.close("h1_close_after", &after, None);
+    hubbed.close("h1_close_before", &before, None);
     hubbed.finish();
 }
 
@@ -1907,7 +1916,7 @@ fn a_rewind_rebuilds_seen_files_up_to_its_point() {
     .unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("c_read_start", "c_read_sub", "one");
+    let (old, _sub) = hubbed.start("c_read_start", "c_read_sub", "one");
     hubbed.prompt("c_read_prompt", &old, "read the note");
 
     // The rewind drops the turn that read the file: the new session
@@ -1944,6 +1953,6 @@ fn a_rewind_rebuilds_seen_files_up_to_its_point() {
         fs::read(setup.workspace().join("note.txt")).unwrap(),
         b"replaced\n"
     );
-    hubbed.close("c_read_close", &after);
+    hubbed.close("c_read_close", &after, None);
     hubbed.finish();
 }

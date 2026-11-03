@@ -1325,6 +1325,16 @@ fn accepted(ack: Value, session: Option<String>) -> Subscribed {
     }
 }
 
+impl Subscribed {
+    /// The subscription a hand-sent subscribe's accepted acknowledgement
+    /// carries: the bound for waits after a subscribe the caller sent and
+    /// read itself instead of through [`subscribe`]. The caller checked
+    /// the acknowledgement; only its `result.last_seq` is read here.
+    pub(crate) fn from_ack(session: Option<&str>, ack: Value) -> Subscribed {
+        accepted(ack, session.map(str::to_owned))
+    }
+}
+
 /// Subscribes `full` on a fake session socket, waiting for the
 /// acknowledgement under the caller's deadline alone.
 #[track_caller]
@@ -1568,6 +1578,24 @@ fn subscribe_names_the_session_and_returns_its_last_seq() {
     assert_eq!(sent["session_id"], "s_9", "{sent}");
     assert_eq!(sub.last_seq, Some(3));
     assert_eq!(sub.session, Some("s_9".to_owned()));
+}
+
+#[test]
+fn from_ack_bounds_a_hand_sent_subscribe_with_and_without_last_seq() {
+    let ack: Value = serde_json::from_str(
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_x\",\"result\":{\"last_seq\":7}}}",
+    )
+    .unwrap();
+    let sub = Subscribed::from_ack(Some("s_1"), ack);
+    assert_eq!(sub.last_seq, Some(7));
+    assert_eq!(sub.session, Some("s_1".to_owned()));
+    let ack: Value = serde_json::from_str(
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_x\"}}",
+    )
+    .unwrap();
+    let sub = Subscribed::from_ack(None, ack);
+    assert_eq!(sub.last_seq, None);
+    assert!(sub.session.is_none());
 }
 
 #[test]

@@ -205,8 +205,15 @@ impl Hubbed {
 
     /// Starts a session in `workspace` with `content` under command `id`,
     /// subscribes `sub_id` full to it, and waits for its first turn to
-    /// complete.
-    fn start_in(&self, id: &str, sub_id: &str, workspace: &Path, content: &str) -> String {
+    /// complete. Returns the session with the subscription its
+    /// acknowledgement carries, for waits that must start past the fold.
+    fn start_in(
+        &self,
+        id: &str,
+        sub_id: &str,
+        workspace: &Path,
+        content: &str,
+    ) -> (String, Subscribed) {
         self.client().send(&command(
             id,
             None,
@@ -228,11 +235,12 @@ impl Hubbed {
             .expect("the start answers with a session id")
             .to_owned();
         self.client().send(&subscribe_line(sub_id, &session));
-        until_ack(self.client(), "the subscribe acknowledgement", sub_id);
+        let acked = until_ack(self.client(), "the subscribe acknowledgement", sub_id);
+        let sub = Subscribed::from_ack(Some(&session), acked.last().unwrap().clone());
         until(self.client(), "the first turn_completed", |line| {
             line["kind"] == "turn_completed" && line["session_id"] == session
         });
-        session
+        (session, sub)
     }
 
     /// Prompts `session` with `text` under command `id`, and waits for the
@@ -267,12 +275,18 @@ impl Hubbed {
     }
 
     /// Closes `session` under command `id`, and waits for its `fiber_exited`.
-    fn close(&self, id: &str, session: &str) {
+    /// A subscription bounds the wait past the fold; a session never
+    /// subscribed on this client has no replayed exit, so it waits every
+    /// line.
+    fn close(&self, id: &str, session: &str, since: Option<&Subscribed>) {
         self.client()
             .send(&command(id, Some(session), "close", json!({})));
-        until(self.client(), "the fiber_exited", |line| {
-            line["kind"] == "fiber_exited" && line["session_id"] == session
-        });
+        let exited = |line: &Value| line["kind"] == "fiber_exited" && line["session_id"] == session;
+        match since {
+            Some(sub) => until_after(self.client(), sub, "the fiber_exited", exited),
+            // live: the fold holds only lines written before the subscribe, which hold no exit of a session alive until this close or never subscribed on this client.
+            None => until(self.client(), "the fiber_exited", exited),
+        };
     }
 
     fn finish(self) {
@@ -534,7 +548,7 @@ fn a_move_before_any_model_turn_starts_the_child_in_the_target() {
         "no name to copy"
     );
     assert!(server.requests().is_empty(), "no model call yet");
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close", &child, None);
     hubbed.finish();
 }
 
@@ -545,7 +559,7 @@ fn moving_between_two_folders_of_one_git_project_records_no_project() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, &[layout.shared_a.clone(), layout.shared_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.shared_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.shared_a, "one");
     let child = hubbed.move_to("c_mv", &old, &layout.shared_b);
     until_child_started(hubbed.client(), &child);
     let child_log = session_log(&setup, &child);
@@ -568,7 +582,7 @@ fn moving_between_two_folders_of_one_git_project_records_no_project() {
                 .to_string_lossy()
                 .contains(&key)
     );
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close", &child, None);
     hubbed.finish();
 }
 
@@ -579,7 +593,7 @@ fn moving_between_two_real_projects_records_the_parent_project() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
     until_child_started(hubbed.client(), &child);
     let child_log = session_log(&setup, &child);
@@ -593,7 +607,7 @@ fn moving_between_two_real_projects_records_the_parent_project() {
             .to_string_lossy()
             .contains(&project_key_of(&layout.repo_b))
     );
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close", &child, None);
     hubbed.finish();
 }
 
@@ -614,7 +628,7 @@ fn the_moved_child_inherits_the_conversation_without_a_summary() {
     .unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     let old_log = session_log(&setup, &old);
     let named = old_log
         .iter()
@@ -641,7 +655,7 @@ fn the_moved_child_inherits_the_conversation_without_a_summary() {
         serde_json::to_string(&body).unwrap().contains("one"),
         "the parent's prompt reaches the child's request"
     );
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close", &child, None);
     hubbed.finish();
 }
 
@@ -719,7 +733,7 @@ fn target_repository_code_loads_fresh_with_its_own_version() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     let old_loaded = session_log(&setup, &old)
         .into_iter()
         .find(|line| line["kind"] == "extensions_loaded")
@@ -759,7 +773,7 @@ fn target_repository_code_loads_fresh_with_its_own_version() {
             "each project holds its own approvals: {approvals:?}"
         );
     }
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close", &child, None);
     hubbed.finish();
 }
 
@@ -770,7 +784,7 @@ fn two_successive_target_requests_keep_a_stable_prefix() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
     until_child_started(hubbed.client(), &child);
     hubbed.prompt("c_two", &child, "two");
@@ -781,7 +795,7 @@ fn two_successive_target_requests_keep_a_stable_prefix() {
     let second: Value = serde_json::from_slice(&requests[2].body).unwrap();
     assert_eq!(first["instructions"], second["instructions"]);
     assert_eq!(first["tools"], second["tools"]);
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close", &child, None);
     hubbed.finish();
 }
 
@@ -992,7 +1006,7 @@ fn a_missing_required_extension_fails_the_start_and_a_fixed_target_retries() {
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     // The hub-log watch registers before the move: the first reread
     // after registration closes the lost-wakeup window, and each native
     // file-change signal rereads, so neither the initial failure nor the
@@ -1079,7 +1093,7 @@ fn old_session_commands_resume_the_old_workspace() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, old_sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
     until_child_started(hubbed.client(), &child);
     // The child's startup settles before the snapshot: only then is its
@@ -1095,8 +1109,8 @@ fn old_session_commands_resume_the_old_workspace() {
     assert_eq!(old_log.last().unwrap()["kind"], "turn_completed");
     assert_eq!(old_log.last().unwrap()["session_id"], old);
     assert_eq!(session_log(&setup, &child).len(), child_len);
-    hubbed.close("c_close_old", &old);
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close_old", &old, Some(&old_sub));
+    hubbed.close("c_close", &child, None);
     hubbed.finish();
 }
 
@@ -1107,7 +1121,7 @@ fn same_workspace_rewind_records_no_project() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup, std::slice::from_ref(&layout.repo_a));
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     hubbed.prompt("c_two", &old, "two");
     hubbed
         .client()
@@ -1134,7 +1148,7 @@ fn same_workspace_rewind_records_no_project() {
         "the rewind control records nothing: {:?}",
         child_log[0]["payload"]["forked_from"]
     );
-    hubbed.close("c_close", &next);
+    hubbed.close("c_close", &next, None);
     hubbed.finish();
 }
 
@@ -1145,7 +1159,7 @@ fn a_rewind_to_a_pre_move_point_reads_across_projects() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let mut hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     hubbed.prompt("c_two", &old, "two");
     // The pre-move point: the old session's latest turn start.
     let point = session_log(&setup, &old)
@@ -1188,7 +1202,7 @@ fn a_rewind_to_a_pre_move_point_reads_across_projects() {
     );
     // Resume works on the rewind child, and the leaf deletes clean.
     hubbed.prompt("c_three", &next, "three");
-    hubbed.close("c_close_next", &next);
+    hubbed.close("c_close_next", &next, None);
     wait_for_leaf_unheld(&mut hubbed, &next, |_| {}, || {});
     let log = session_log_path(&setup, &next);
     let output = delete(&setup, &layout.repo_b, &next);
@@ -1204,7 +1218,7 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let mut hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, "one");
     hubbed.prompt("c_two", &old, "two");
     // The pre-move point: the old session's latest turn start.
     let point = session_log(&setup, &old)
@@ -1249,7 +1263,7 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
         "the project comes from the ancestor's directory, not its moved workspace"
     );
     hubbed.prompt("c_three", &next, "three");
-    hubbed.close("c_close_next", &next);
+    hubbed.close("c_close_next", &next, None);
     // A second writer may retain the lock after exit evidence. The Hub
     // refuses deletion while that writer holds it (docs/invocation.md,
     // "Deleting a session").
@@ -1324,7 +1338,7 @@ fn known_hosts_carry_over_the_move() {
     let hubbed = Hubbed::new(&setup, &[layout.repo_a.clone(), layout.repo_b.clone()]);
     // The prompt names the host, so the first fetch takes the fast path
     // and surfaces the host to the conversation.
-    let old = hubbed.start_in("c_start", "c_sub", &layout.repo_a, &format!("read {url}"));
+    let (old, _sub) = hubbed.start_in("c_start", "c_sub", &layout.repo_a, &format!("read {url}"));
     hubbed.prompt("c_fetch", &old, &format!("read {url}"));
     let child = hubbed.move_to("c_mv", &old, &layout.repo_b);
     until_child_started(hubbed.client(), &child);
@@ -1344,7 +1358,7 @@ fn known_hosts_carry_over_the_move() {
         "no permission gate on a known host"
     );
     assert_eq!(site.requests().len(), 3);
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close", &child, None);
     hubbed.finish();
 }
 
@@ -1540,7 +1554,7 @@ fn the_old_worktree_survives_the_move_and_a_later_prune_removes_it() {
     // With the leaf deleted, a later normal prune removes the clean old
     // worktree under the unchanged shared-lock and dirty rules, while the
     // plain target workspace and the young old log stay.
-    hubbed.close("c_close", &child);
+    hubbed.close("c_close", &child, None);
     wait_for_leaf_unheld(&mut hubbed, &child, |_| {}, || {});
     let output = delete(&setup, &layout.repo_b, &child);
     assert!(output.status.success(), "delete the leaf: {output:?}");
