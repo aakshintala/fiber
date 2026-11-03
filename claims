@@ -23,6 +23,4 @@ crates/tui/src/app/answer_tests.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhou
 crates/tui/src/app.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/home.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/clear.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
-crates/tui/src/app/home/workspace.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/session_views.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
-crates/tui/src/app/find.rs	fiber-3696	plan	2026-11-03T09:12:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
