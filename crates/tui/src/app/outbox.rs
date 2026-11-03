@@ -56,6 +56,17 @@ pub(crate) enum Kind {
 pub(crate) enum Waiting {
     /// A rail card's dismiss, carrying the target session.
     Dismiss(SessionId),
+    Fork,
+    RewindHistory,
+    RewindSend,
+    ChangeWorkspace(SessionId),
+    ClearStart,
+    ClearClose,
+    History,
+    ImageFetch,
+    ImageDisplay,
+    Sessions,
+    Abandoned,
 }
 
 /// The hub connection, as the terminal sees it.
@@ -124,6 +135,19 @@ impl Outbox {
     /// Takes a feature's wait once, without settling its draft.
     pub(crate) fn settled(&mut self, id: &str) -> Option<Waiting> {
         self.waits.remove(id)
+    }
+
+    /// Whether any id waits for this feature, regardless of its payload.
+    pub(crate) fn waiting_any(&self, waiting: &Waiting) -> bool {
+        self.waits
+            .values()
+            .any(|owner| std::mem::discriminant(owner) == std::mem::discriminant(waiting))
+    }
+
+    /// Forgets a feature at the same reset that drops its request details.
+    pub(crate) fn forget(&mut self, waiting: &Waiting) {
+        self.waits
+            .retain(|_, owner| std::mem::discriminant(owner) != std::mem::discriminant(waiting));
     }
 
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the

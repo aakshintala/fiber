@@ -538,7 +538,8 @@ impl App {
         };
         let (effect, id) = self.send_command("change_workspace", Some(json!({"path": rest})));
         if let Some(id) = id {
-            self.change_workspace.begin(id, session);
+            self.outbox
+                .wait(&id, super::outbox::Waiting::ChangeWorkspace(session));
         }
         effect
     }

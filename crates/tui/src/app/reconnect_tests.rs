@@ -457,6 +457,37 @@ fn the_first_hub_hello_reopens_nothing() {
 }
 
 #[test]
+fn sessions_answer_reaches_its_handler_and_takes_its_tag() {
+    for accepted in [false, true] {
+        let mut app = home();
+        linked(&mut app);
+        app.on_line(live(S_A, "stale session"));
+        let requests = parsed(&reconnect(&mut app));
+        let request = requests
+            .iter()
+            .find(|line| line["command"] == "sessions")
+            .unwrap();
+        let id = id_of(request);
+        assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Sessions));
+        let answer = if accepted {
+            hub(
+                "command_accepted",
+                json!({"command_id":id,"result":{"live":[]}}),
+            )
+        } else {
+            hub(
+                "command_rejected",
+                json!({"command_id":id,"code":"busy","message":"refused"}),
+            )
+        };
+        app.on_line(answer);
+        assert_eq!(app.outbox.waiting(&id), None);
+        let has_row = rows(&app).iter().any(|row| row.contains("stale session"));
+        assert_eq!(has_row, !accepted);
+    }
+}
+
+#[test]
 fn reconnecting_sends_feed_and_recent_again() {
     let mut app = home();
     let before = linked(&mut app);

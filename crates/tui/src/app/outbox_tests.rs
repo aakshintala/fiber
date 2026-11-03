@@ -48,6 +48,23 @@ fn answered_and_fail_leave_the_tag() {
     assert_eq!(outbox.waiting("c_fail"), Some(tag));
 }
 
+#[test]
+fn waiting_any_and_forget_match_variants_not_payloads() {
+    let mut outbox = up();
+    let first = super::Waiting::ChangeWorkspace(contract::SessionId("s_first".to_owned()));
+    let other = super::Waiting::ChangeWorkspace(contract::SessionId("s_other".to_owned()));
+    assert!(!outbox.waiting_any(&other));
+    outbox.wait("c_first", first);
+    outbox.wait("c_fork", super::Waiting::Fork);
+    assert!(outbox.waiting_any(&other));
+    outbox.wait("c_other", other.clone());
+    outbox.forget(&other);
+    assert!(!outbox.waiting_any(&other));
+    assert_eq!(outbox.waiting("c_first"), None);
+    assert_eq!(outbox.waiting("c_other"), None);
+    assert_eq!(outbox.waiting("c_fork"), Some(super::Waiting::Fork));
+}
+
 /// An outbox with the link up.
 fn up() -> Outbox {
     Outbox {

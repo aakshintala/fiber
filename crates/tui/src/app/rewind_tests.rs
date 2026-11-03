@@ -239,6 +239,88 @@ fn point(app: &crate::app::App) -> Option<(String, u64)> {
 }
 
 #[test]
+fn rewind_history_answers_and_refusals_settle_their_tags() {
+    use crate::app::Waiting;
+    for accepted in [false, true] {
+        let clock = fakes::clock::FakeClock::new();
+        let mut app = attached();
+        let requests = open(&mut app, &clock);
+        let id = requests[0]["id"].as_str().unwrap();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::RewindHistory));
+        if accepted {
+            let next = accept(&mut app, &requests[0]["id"], segment_a());
+            let next: Value = serde_json::from_str(&next[0]).unwrap();
+            assert_eq!(
+                app.outbox.waiting(next["id"].as_str().unwrap()),
+                Some(Waiting::RewindHistory)
+            );
+            assert!(rows(&app).iter().any(|row| row.contains("before: first")));
+        } else {
+            refuse(&mut app, &requests[0]["id"], "busy");
+            assert_eq!(
+                app.session_view_screen(80).unwrap().below,
+                ["busy happened"]
+            );
+        }
+        assert_eq!(app.outbox.waiting(id), None);
+    }
+}
+
+#[test]
+fn rewind_send_answers_and_refusals_settle_their_tags() {
+    use crate::app::Waiting;
+    for accepted in [false, true] {
+        let clock = fakes::clock::FakeClock::new();
+        let mut app = attached();
+        let first = open(&mut app, &clock);
+        let next = accept(&mut app, &first[0]["id"], segment_a());
+        let next: Value = serde_json::from_str(&next[0]).unwrap();
+        accept(&mut app, &next["id"], segment_b());
+        let request = send_rewind(&mut app, &clock);
+        let id = request[0]["id"].as_str().unwrap();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::RewindSend));
+        if accepted {
+            app.on_line(session_line(
+                "command_accepted",
+                json!({"command_id":id,"result":{"new_session_id":NEW}}),
+            ));
+            assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+        } else {
+            refuse(&mut app, &request[0]["id"], "busy");
+            assert!(rows(&app).iter().any(|row| row.contains("busy happened")));
+        }
+        assert_eq!(app.outbox.waiting(id), None);
+    }
+}
+
+#[test]
+fn an_untagged_answer_with_the_rewind_view_open_changes_nothing() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let requests = open(&mut app, &clock);
+    let before = rows(&app);
+    accept(&mut app, &json!("c_unknown"), segment_a());
+    assert_eq!(rows(&app), before);
+    accept(&mut app, &requests[0]["id"], segment_a());
+    assert!(rows(&app).iter().any(|row| row.contains("before: first")));
+}
+
+#[test]
+fn an_untagged_refusal_with_the_rewind_view_open_changes_nothing() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let requests = open(&mut app, &clock);
+    let before = rows(&app);
+    refuse(&mut app, &json!("c_unknown"), "busy");
+    assert_eq!(rows(&app), before);
+    refuse(&mut app, &requests[0]["id"], "busy");
+    assert_eq!(
+        app.session_view_screen(80).unwrap().below,
+        ["busy happened"]
+    );
+}
+
+#[test]
 fn rewind_asks_history_on_open() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();

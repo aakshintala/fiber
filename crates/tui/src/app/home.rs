@@ -689,6 +689,51 @@ impl App {
                         Some(super::outbox::Waiting::Dismiss(session)) => {
                             return self.rail_answered(id, session, accepted, answer.payload);
                         }
+                        Some(super::Waiting::Sessions) => {
+                            if accepted {
+                                self.sessions_accepted(
+                                    id,
+                                    answer.payload.get("result").unwrap_or(&Value::Null),
+                                );
+                            } else {
+                                self.sessions_rejected(id);
+                            }
+                            return Some(Vec::new());
+                        }
+                        Some(super::Waiting::ClearStart) => {
+                            if accepted {
+                                return None;
+                            }
+                            // Settlement removes the generic entry, but home still
+                            // observes this start's refusal after its owner does.
+                            let start =
+                                matches!(self.outbox.pending.get(id), Some((Kind::Start, _)));
+                            let code = super::hub_code(answer.payload);
+                            let message =
+                                super::hub_string(answer.payload, "message").unwrap_or_default();
+                            let consumed = if self.intercept_hooks_offer(id, &code, &message) {
+                                true
+                            } else {
+                                self.clear_rejected(id, &code, &message)
+                            };
+                            if start
+                                && let Some(message) =
+                                    answer.payload.get("message").and_then(Value::as_str)
+                                && let Some(home) = self.home.as_mut()
+                            {
+                                home.blockers = message.lines().map(str::to_owned).collect();
+                            }
+                            return consumed.then(Vec::new);
+                        }
+                        Some(super::Waiting::Fork) => return None,
+                        Some(super::Waiting::RewindHistory) => return None,
+                        Some(super::Waiting::RewindSend) => return None,
+                        Some(super::Waiting::ChangeWorkspace(_)) => return None,
+                        Some(super::Waiting::ClearClose) => return None,
+                        Some(super::Waiting::History) => return None,
+                        Some(super::Waiting::ImageFetch) => return None,
+                        Some(super::Waiting::ImageDisplay) => return None,
+                        Some(super::Waiting::Abandoned) => return None,
                         None => {}
                     }
                     // The picker's `directories` answers fold in first,
@@ -732,15 +777,6 @@ impl App {
                     // other command owners and before generic session asks.
                     if let Some(lines) = self.recent_answer(id, accepted, &hub.payload) {
                         return Some(lines);
-                    }
-                    if accepted {
-                        let result = hub.payload.get("result");
-                        let result = result.unwrap_or(&serde_json::Value::Null);
-                        if self.sessions_accepted(id, result) {
-                            return Some(Vec::new());
-                        }
-                    } else if self.sessions_rejected(id) {
-                        return Some(Vec::new());
                     }
                     None
                 }

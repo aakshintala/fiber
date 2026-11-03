@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::Rewind;
 use super::view::{EnterAction, Vis};
-use crate::app::{App, Effect, history_args, mint, session_command};
+use crate::app::{App, Effect, Waiting, history_args, mint, session_command};
 use crate::home::Level;
 use crate::keys::Key;
 use crate::link::history_answer;
@@ -142,6 +142,7 @@ impl App {
             &session,
             Some(history_args(&session, &session, None, None)),
         );
+        self.outbox.wait(&id, Waiting::RewindHistory);
         self.rewind
             .fold
             .begin_wait(id.clone(), self.motion().now_instant());
@@ -160,6 +161,7 @@ impl App {
         if !self.rewind.fold.take_wait(&accepted.command_id.0) {
             return Vec::new();
         }
+        self.outbox.settled(&accepted.command_id.0);
         match history_answer(envelope) {
             Err(message) => self.rewind.fold.fail_walk(message),
             Ok(older) => match self.rewind.append_page(older) {
@@ -178,6 +180,7 @@ impl App {
         };
         let id = mint();
         let line = session_command(&id, "history", &session, Some(args));
+        self.outbox.wait(&id, Waiting::RewindHistory);
         self.rewind
             .fold
             .begin_wait(id.clone(), self.motion().now_instant());
@@ -193,8 +196,10 @@ impl App {
             return;
         };
         if self.rewind.fold.take_wait(&id.0) {
+            self.outbox.settled(&id.0);
             self.rewind.fold.fail_walk(rejected.message.clone());
         } else if self.rewind.send.matches(&id.0) {
+            self.outbox.settled(&id.0);
             self.rewind.send.refuse(
                 rejected.message.clone(),
                 rejected.code == ErrorCode::SummaryFailed,
@@ -212,17 +217,14 @@ impl App {
         id: &str,
         code: &str,
         message: &str,
+        fork: bool,
     ) -> bool {
         // The hub carries the code as text; an unknown one still
         // settles, read as itself.
         let parsed = serde_json::from_value(Value::String(code.to_owned()))
             .unwrap_or_else(|_| ErrorCode::Other(code.to_owned()));
-        if self
-            .fork_pending
-            .as_ref()
-            .is_some_and(|pending| pending.0 == id)
-        {
-            self.settle_fork_refusal(&parsed, message);
+        if fork {
+            self.settle_fork_refusal(id, &parsed, message);
             return true;
         }
         if !self.rewind.send.matches(id) {
@@ -246,8 +248,8 @@ impl App {
     pub(in crate::app) fn rewind_send_accepted(
         &mut self,
         accepted: &CommandAccepted,
+        fork: bool,
     ) -> Option<Vec<String>> {
-        let fork = self.fork_pending.as_ref() == Some(&accepted.command_id);
         if !fork && !self.rewind.send.matches(&accepted.command_id.0) {
             return None;
         }
@@ -260,9 +262,7 @@ impl App {
         let lines = vec![self.subscribe(&new, Level::Full), self.ask_commands(&new)];
         self.attach(new);
         self.close_session_view();
-        if fork {
-            self.fork_pending = None;
-        }
+        self.outbox.settled(&accepted.command_id.0);
         Some(lines)
     }
 
@@ -272,7 +272,7 @@ impl App {
     /// dropping the fork. One fork at a time: a second `/fork` while
     /// one waits sends nothing.
     pub(in crate::app) fn send_fork(&mut self) -> Effect {
-        if self.fork_pending.is_some() {
+        if self.outbox.waiting_any(&Waiting::Fork) {
             return Effect::None;
         }
         let Some(serving) = self.session().cloned() else {
@@ -285,7 +285,7 @@ impl App {
             &serving,
             Some(serde_json::json!({"at_end": true})),
         );
-        self.fork_pending = Some(CommandId(id.clone()));
+        self.outbox.wait(&id, Waiting::Fork);
         Effect::Send(vec![line.to_string()])
     }
 
@@ -303,10 +303,7 @@ impl App {
         let Some(id) = rejected.command_id.as_ref() else {
             return false;
         };
-        if self.fork_pending.as_ref() != Some(id) {
-            return false;
-        }
-        self.settle_fork_refusal(&rejected.code, &rejected.message);
+        self.settle_fork_refusal(&id.0, &rejected.code, &rejected.message);
         true
     }
 
@@ -314,8 +311,8 @@ impl App {
     /// ruled text for `not_step_boundary`, the rejection's own text for
     /// any other code. Both the session and hub refusal paths settle
     /// through here, so retrying sends again either way.
-    fn settle_fork_refusal(&mut self, code: &ErrorCode, message: &str) {
-        self.fork_pending = None;
+    fn settle_fork_refusal(&mut self, id: &str, code: &ErrorCode, message: &str) {
+        self.outbox.settled(id);
         if *code == ErrorCode::NotStepBoundary {
             self.push_notice("not_step_boundary", Self::FORK_NOT_STEP_BOUNDARY.to_owned());
         } else {
@@ -330,12 +327,14 @@ impl App {
     /// The connection ended: the pending `history` drops, and its late
     /// answer folds nowhere.
     pub(in crate::app) fn rewind_lost(&mut self) {
+        self.outbox.forget(&Waiting::RewindHistory);
         self.rewind.fold.abort_wait();
     }
 
     /// The stream reopened: a `history` wait ends at once, and its late
     /// answer folds nowhere.
     pub(in crate::app) fn rewind_reopened(&mut self) {
+        self.outbox.forget(&Waiting::RewindHistory);
         self.rewind.fold.abort_wait();
     }
 
@@ -513,6 +512,7 @@ impl App {
         .unwrap_or(Value::Null);
         let id = mint();
         let line = session_command(&id, "rewind", &serving, Some(args));
+        self.outbox.wait(&id, Waiting::RewindSend);
         self.rewind.send.begin(id.clone());
         Effect::Send(vec![line.to_string()])
     }

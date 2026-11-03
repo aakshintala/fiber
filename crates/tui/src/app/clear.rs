@@ -121,6 +121,7 @@ impl App {
             Some(line) => Effect::Send(vec![line]),
             None => Effect::None,
         };
+        self.outbox.wait(&id, super::outbox::Waiting::ClearStart);
         self.clear.pending = Some(ClearPending {
             old,
             command_id: id,
@@ -155,6 +156,7 @@ impl App {
             .clear
             .pending
             .take_if(|pending| pending.command_id == id)?;
+        self.outbox.settled(id);
         Some(self.clear_started(pending, session))
     }
 
@@ -180,6 +182,7 @@ impl App {
         .to_string();
         self.outbox
             .insert(id.clone(), Kind::Command, Draft::default());
+        self.outbox.wait(&id, super::outbox::Waiting::ClearClose);
         self.clear.close = Some(id);
         vec![
             self.subscribe(&session, Level::Full),
@@ -194,6 +197,7 @@ impl App {
     pub(super) fn clear_close_settled(&mut self, id: &str) {
         if self.clear.close.as_deref() == Some(id) {
             self.clear.close = None;
+            self.outbox.settled(id);
         }
     }
 
@@ -219,6 +223,7 @@ impl App {
         }
         if self.clear.close.as_deref() == Some(id) {
             self.clear.close = None;
+            self.outbox.settled(id);
             self.notices.push(
                 "connection_failed",
                 "The link to the old session was lost before its `close` went out.".to_owned(),
@@ -244,6 +249,7 @@ impl App {
             return false;
         };
         self.outbox.answered(id);
+        self.outbox.settled(id);
         true
     }
 
@@ -254,6 +260,9 @@ impl App {
             return false;
         };
         if pending.command_id == refused_id {
+            self.outbox.settled(refused_id);
+            self.outbox
+                .wait(&retry_id, super::outbox::Waiting::ClearStart);
             pending.command_id = retry_id;
         }
         true

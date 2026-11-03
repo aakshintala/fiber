@@ -125,7 +125,7 @@ pub(super) struct History {
 
 impl History {
     /// Sets the project key.
-    pub(super) fn set_project(&mut self, project: Option<String>) {
+    pub(super) fn set_project(&mut self, project: Option<String>) -> bool {
         if self.project != project {
             self.project = project;
             self.hub.clear();
@@ -136,7 +136,9 @@ impl History {
             self.ended = false;
             self.browse = None;
             self.cancel();
+            return true;
         }
+        false
     }
 
     /// Records the prompts `session` took in one `turn_started`: messages a
@@ -314,13 +316,17 @@ impl App {
     /// at each workspace choice.
     pub(crate) fn sync_project(&mut self) {
         let project = self.home.as_ref().and_then(|home| home.history_project());
-        self.history.set_project(project);
+        if self.history.set_project(project) {
+            self.outbox.forget(&crate::app::Waiting::History);
+        }
     }
 
     /// Sets the project key `prompt_history` names.
     #[cfg(test)]
     pub(crate) fn set_project(&mut self, project: String) {
-        self.history.set_project(Some(project));
+        if self.history.set_project(Some(project)) {
+            self.outbox.forget(&crate::app::Waiting::History);
+        }
     }
 
     /// Whether the draft is still the entry recall put there: a
@@ -460,6 +466,15 @@ impl App {
         self.history.search.take().is_some()
     }
 
+    /// Registers the history owner's id before its command leaves the app.
+    fn fetch_history(&mut self, up: bool) -> Option<String> {
+        let line = self.history.fetch(up)?;
+        if let Some(id) = self.history.pending.as_deref() {
+            self.outbox.wait(id, crate::app::Waiting::History);
+        }
+        Some(line)
+    }
+
     /// The next page while the search panel is open, one at a time until
     /// the history ends.
     fn more(&mut self) -> Effect {
@@ -468,7 +483,7 @@ impl App {
             .history
             .search
             .is_some()
-            .then(|| self.history.fetch(up))
+            .then(|| self.fetch_history(up))
             .flatten();
         send(line.into_iter().collect())
     }
@@ -518,15 +533,15 @@ impl App {
         let up = self.outbox.is_up();
         let mut lines = Vec::new();
         if !self.history.started {
-            lines.extend(self.history.fetch(up));
+            lines.extend(self.fetch_history(up));
         }
         let next = self.history.browse.as_ref().map_or(0, |(at, _)| at + 1);
         if let Some(entry) = self.history.entry(self.session(), next) {
             self.draft.set(&entry);
             self.history.browse = Some((next, entry));
         } else {
-            lines.extend(self.history.fetch(up));
-            self.history.waiting = self.history.pending.is_some();
+            lines.extend(self.fetch_history(up));
+            self.history.waiting = self.outbox.waiting_any(&crate::app::Waiting::History);
             self.history.cover = None;
         }
         send(lines)
@@ -561,6 +576,7 @@ impl App {
         if !self.history.answered(id, result) {
             return None;
         }
+        self.outbox.settled(id);
         let mut lines = Vec::new();
         let unchanged = self.history.cover.is_none_or(|cover| cover == self.cover());
         if std::mem::take(&mut self.history.waiting)
@@ -662,6 +678,7 @@ impl App {
             return false;
         }
         self.history.pending = None;
+        self.outbox.settled(id);
         self.history.ended = true;
         self.history.cancel();
         self.notices.push(code, message.to_owned());

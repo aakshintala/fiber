@@ -163,6 +163,171 @@ fn reply(app: &mut App, text: &str) {
     }
 }
 
+#[test]
+fn clear_start_and_close_tags_follow_answers_refusals_and_lost_lines() {
+    use crate::app::outbox::Waiting;
+    for ending in ["answer", "refusal", "lost"] {
+        let mut app = homed();
+        app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+        let request = sent(enter(&mut app, "/clear"));
+        let start = start_line(&request);
+        let id = start["id"].as_str().unwrap();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::ClearStart));
+        if ending == "answer" {
+            let out = accept_start(&mut app, &start["id"], NEW);
+            assert_eq!(app.outbox.waiting(id), None);
+            let close = out.iter().find(|line| line["command"] == "close").unwrap();
+            let close_id = close["id"].as_str().unwrap();
+            assert_eq!(app.outbox.waiting(close_id), Some(Waiting::ClearClose));
+            app.on_line(old_line(
+                SESSION,
+                "command_accepted",
+                json!({"command_id":close_id}),
+            ));
+            assert_eq!(app.outbox.waiting(close_id), None);
+            assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+        } else if ending == "refusal" {
+            app.on_line(hub_line(
+                "command_rejected",
+                json!({"command_id":id,"code":"busy","message":"clear refused"}),
+            ));
+            assert_eq!(app.outbox.waiting(id), None);
+            assert_eq!(app.notice(), Some("clear refused"));
+        } else {
+            app.write_failed(&[start.to_string()]);
+            assert_eq!(app.outbox.waiting(id), None);
+            assert_eq!(
+                app.session(),
+                Some(&contract::SessionId(SESSION.to_owned()))
+            );
+        }
+    }
+}
+
+#[test]
+fn a_hooks_retry_of_a_clear_start_keeps_the_clear_tag_on_the_new_id_and_the_accept_closes_the_old_session()
+ {
+    use crate::app::outbox::Waiting;
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let request = sent(enter(&mut app, "/clear"));
+    let start = start_line(&request);
+    let id = start["id"].as_str().unwrap();
+    assert!(app.retry_clear_start(id, "c_retry".to_owned()));
+    assert_eq!(app.outbox.waiting(id), None);
+    assert_eq!(app.outbox.waiting("c_retry"), Some(Waiting::ClearStart));
+    app.outbox.insert(
+        "c_retry".to_owned(),
+        crate::app::Kind::Start,
+        crate::input::Draft::default(),
+    );
+    let out = accept_start(&mut app, &json!("c_retry"), NEW);
+    assert!(
+        out.iter()
+            .any(|line| line["command"] == "close" && line["session_id"] == SESSION)
+    );
+    assert_eq!(app.outbox.waiting("c_retry"), None);
+}
+
+#[test]
+fn a_refused_clear_start_still_reaches_the_home_start_blocker() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let request = sent(enter(&mut app, "/clear"));
+    let id = start_line(&request)["id"].clone();
+    app.on_line(hub_line(
+        "command_rejected",
+        json!({"command_id":id,"code":"busy","message":"clear blocked"}),
+    ));
+    app.leave();
+    assert_eq!(app.home_screen().unwrap().blockers, ["clear blocked"]);
+    assert_eq!(app.notice(), Some("clear blocked"));
+}
+
+#[test]
+fn clear_close_tag_is_gone_after_refusal_and_lost_line() {
+    for refused in [false, true] {
+        let mut app = homed();
+        app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+        let requests = sent(enter(&mut app, "/clear"));
+        let out = accept_start(&mut app, &start_line(&requests)["id"], NEW);
+        let close = out.iter().find(|line| line["command"] == "close").unwrap();
+        let id = close["id"].as_str().unwrap();
+        assert_eq!(
+            app.outbox.waiting(id),
+            Some(crate::app::Waiting::ClearClose)
+        );
+        if refused {
+            app.on_line(old_line(
+                SESSION,
+                "command_rejected",
+                json!({"command_id":id,"code":"busy","message":"close refused"}),
+            ));
+            assert_eq!(app.notice(), Some("close refused"));
+        } else {
+            app.write_failed(&[close.to_string()]);
+            assert_eq!(
+                app.notice(),
+                Some("The link to the old session was lost before its `close` went out.")
+            );
+        }
+        assert_eq!(app.outbox.waiting(id), None);
+        assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+    }
+}
+
+#[test]
+fn a_held_line_registers_at_queue_time() {
+    let mut app = homed();
+    let Line::Session(status) = clear_status(SESSION, "/w", "fake/m", None) else {
+        unreachable!()
+    };
+    let status = serde_json::from_value(Value::Object(status.payload)).unwrap();
+    app.outbox.link = crate::app::Link::Waiting;
+    assert_eq!(
+        app.clear_send(status, contract::SessionId(SESSION.to_owned()), false),
+        Effect::None
+    );
+    let id = app.clear_pending_command_id().unwrap().to_owned();
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(crate::app::Waiting::ClearStart)
+    );
+    let out = app.on_line(crate::app::testkit::hello());
+    assert!(
+        out.iter()
+            .any(|line| serde_json::from_str::<Value>(line).unwrap()["id"] == id)
+    );
+    accept_start(&mut app, &json!(id), NEW);
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+}
+
+#[test]
+fn a_stale_clear_start_id_keeps_the_pending_clear_and_its_tag() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let requests = sent(enter(&mut app, "/clear"));
+    let id = start_line(&requests)["id"].as_str().unwrap();
+    assert!(
+        app.clear_start_accepted("c_stale", contract::SessionId(NEW.to_owned()))
+            .is_none()
+    );
+    assert_eq!(app.clear_pending_command_id(), Some(id));
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::Waiting::ClearStart)
+    );
+    assert!(app.retry_clear_start("c_stale", "c_unrelated_retry".to_owned()));
+    assert_eq!(app.outbox.waiting("c_unrelated_retry"), None);
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::Waiting::ClearStart)
+    );
+    accept_start(&mut app, &json!(id), NEW);
+    assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+}
+
 const NEW: &str = "s_nnnnnnnnnnnnnnnn";
 
 /// The `/clear` start carries the old session's wire state

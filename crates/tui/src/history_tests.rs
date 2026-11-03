@@ -11,6 +11,66 @@ const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
 const KEY: &str = "-Users-me-work-fiber-.git";
 
+#[test]
+fn sync_project_with_an_unchanged_project_keeps_the_history_tag_and_paging_still_waits() {
+    let mut app = connected();
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: KEY.to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    with_own(&mut app, &[]);
+    let request = asks(&mut app, Key::Up);
+    let id = request["id"].as_str().unwrap();
+    app.sync_project();
+    assert_eq!(app.outbox.waiting(id), Some(crate::app::Waiting::History));
+    assert!(sent(press(&mut app, Key::Up)).is_empty());
+    answer(&mut app, &request, &[line(S_B, "remembered")], None);
+    assert_eq!(app.outbox.waiting(id), None);
+    assert_eq!(app.draft(), "remembered");
+}
+
+#[test]
+fn sync_project_with_a_changed_project_forgets_the_history_tag() {
+    let mut app = connected();
+    let request = asks(&mut app, Key::Up);
+    let id = request["id"].as_str().unwrap();
+    assert_eq!(app.outbox.waiting(id), Some(crate::app::Waiting::History));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/other"),
+            project: "-other".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    assert_eq!(app.outbox.waiting(id), None);
+    with_own(&mut app, &[]);
+    let fresh = asks(&mut app, Key::Up);
+    assert_eq!(fresh["args"]["project"], "-other");
+    assert_eq!(
+        app.outbox.waiting(fresh["id"].as_str().unwrap()),
+        Some(crate::app::Waiting::History)
+    );
+}
+
+#[test]
+fn history_refusal_reaches_its_handler_and_drops_the_tag() {
+    let mut app = connected();
+    let request = asks(&mut app, Key::Up);
+    let id = request["id"].as_str().unwrap();
+    app.on_line(hub(
+        "command_rejected",
+        json!({"command_id":id,"code":"io_failed","message":"history refused"}),
+    ));
+    assert_eq!(app.outbox.waiting(id), None);
+    assert_eq!(app.notice(), Some("history refused"));
+    assert!(sent(press(&mut app, Key::Up)).is_empty());
+}
+
 /// An app in `/w` with the project key, 60 columns wide.
 fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
