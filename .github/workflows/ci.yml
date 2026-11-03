@@ -558,14 +558,12 @@ jobs:
             # A failed lookup fails the step rather than skipping the run.
             labels=$(gh issue view "$number" --json labels -q '.labels[].name')
           fi
-          plan=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --summary "$GITHUB_STEP_SUMMARY")
+          plan=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --summary "$GITHUB_STEP_SUMMARY" --filter-file "$RUNNER_TEMP/stress.toml")
           echo "$plan"
           {
             echo "run=$(sed -n 's/^run\t//p' <<<"$plan")"
             echo "count=$(sed -n 's/^count\t//p' <<<"$plan")"
-            echo "filter<<FILTER_EOF"
-            sed -n 's/^filter\t//p' <<<"$plan"
-            echo "FILTER_EOF"
+            # Packages are bounded by the workspace crate count.
             echo "packages<<PACKAGES_EOF"
             sed -n 's/^package\t//p' <<<"$plan"
             echo "PACKAGES_EOF"
