@@ -264,6 +264,10 @@ fn a_command_with_neither_panics() {
 /// line drops the trailing comment, the fragment matches nothing, and the
 /// holder still ends when the release handle closes and `head` reads EOF.
 #[test]
+#[allow(
+    clippy::print_stderr,
+    reason = "the macOS CI log keeps this classification line as that leg's evidence"
+)]
 fn a_job_command_with_the_search_prelude_shows_its_hold_fragment_only_if_bash_keeps_the_shell() {
     let test_pid = std::process::id();
     // A literal copy of `prelude::define(Some("/opt/fiber/fiber"))`
