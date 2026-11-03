@@ -54,6 +54,8 @@ step runs in order, a retry or a cache check included. Logic that wiring
 calls, anything that parses, computes or decides from data a test could
 supply, lives in `xtask` or a crate, and is tested there like any other code.
 
+The one exception is logic the gate must run before a build, or after a build has died: it stays in a script, because a check of whether the machine can build cannot need a build. A Rust test in `xtask` runs that script on supplied inputs, such as a fixed `df` output or a recorded build log, and asserts its exit code and output.
+
 A binary-level test needs no test-only switch in the shipped binary. It sets
 `FIBER_HOME` to its own temporary directory, which holds an ordinary provider
 definition whose base URL points at a local fake server, or it names the
