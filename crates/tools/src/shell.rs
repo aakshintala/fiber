@@ -23,6 +23,7 @@ use crate::tool_util::{cancelled_before, errored};
 mod background;
 
 mod command;
+mod detached;
 mod drive;
 mod moved;
 mod process_group;
@@ -1079,3 +1080,7 @@ fn with_process(text: String, error: Option<Failure>, process: Process) -> Outpu
 #[cfg(test)]
 #[path = "shell_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "shell/detached_tests.rs"]
+mod detached_tests;
