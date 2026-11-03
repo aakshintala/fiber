@@ -48,6 +48,7 @@ pub(super) struct Run {
     /// until the drive lists the group.
     pub(super) members: Option<GroupMembers>,
     pub(super) pgid: u32,
+    pub(super) hosted: Option<super::hosted::Hosted>,
     /// The run's registration in the process-wide list, boxed so the run
     /// stays small. A run whose group was never seen empty drops it; the
     /// entry stays until the shared kill prunes it.
@@ -104,7 +105,7 @@ pub(super) fn pump_inner(
     loop {
         let view = view(&progress.shared, cancel);
         // Empty only counts after the shell is reaped, so its zombie is gone.
-        if view.reaped && !alive(progress.pgid) {
+        if view.reaped && (progress.hosted.is_some() || !alive(progress.pgid)) {
             progress.seen_empty = true;
         }
         // Stopping or draining: a later `background` moves nothing.
@@ -144,8 +145,14 @@ pub(super) fn pump_inner(
             ) {
                 Step::Stop(kind) => {
                     progress.stop = Some(kind);
-                    progress.sent_signal =
-                        send_term(progress.pgid, progress.sent_signal, progress.seen_empty);
+                    progress.sent_signal = send_term(
+                        progress.hosted.as_ref().map_or(
+                            super::process_group::Stop::Group(progress.pgid),
+                            super::process_group::Stop::Host,
+                        ),
+                        progress.sent_signal,
+                        progress.seen_empty,
+                    );
                     progress.phase = Phase::Stopping {
                         kill_at: after(clock, support::group::GRACE),
                     };
@@ -198,8 +205,10 @@ pub(super) fn pump_inner(
                     };
                 } else if clock.now() >= kill_at {
                     // One SIGKILL. The next state is the drain, so it is not sent again.
-                    match support::group::signal(progress.pgid, Signal::KILL) {
-                        Ok(()) | Err(_) => {}
+                    if progress.hosted.is_none() {
+                        match support::group::signal(progress.pgid, Signal::KILL) {
+                            Ok(()) | Err(_) => {}
+                        }
                     }
                     progress.sent_signal = true;
                     progress.phase = Phase::Draining {
@@ -307,12 +316,27 @@ pub(super) fn finish(
     // The queue's rest goes out lossily, so below the cap the concatenated
     // delta texts equal the lossy whole output.
     stream_rest(shared, emit, carry);
+    let inner = lock(&shared.inner);
+    let stop = if inner
+        .hosted_exit
+        .as_ref()
+        .is_some_and(|exit| exit.timed_out)
+    {
+        Some(StopKind::Timeout)
+    } else {
+        stop
+    };
+    let capped = capped
+        || inner
+            .hosted_exit
+            .as_ref()
+            .is_some_and(|exit| exit.output_cap);
     let stopped = stop.is_some();
     Finished {
         output,
         status,
         stop,
-        indeterminate: stopped && (!eof || !seen_empty),
+        indeterminate: inner.host_lost || (stopped && (!eof || !seen_empty)),
         held_open: !stopped && !eof && seen_empty,
         sent_signal,
         capped,

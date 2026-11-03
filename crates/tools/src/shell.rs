@@ -21,6 +21,7 @@ use crate::error::{ShellError, ToolError};
 use crate::tool_util::{cancelled_before, errored};
 
 mod background;
+pub(crate) mod hosted;
 
 mod command;
 mod detached;
@@ -125,6 +126,7 @@ pub struct Shell {
     /// "Background jobs"). `None` in a session that offers no detached
     /// commands, such as the driver shell.
     detached: Option<PathBuf>,
+    host: Option<Arc<dyn contract::keeper::CommandHost>>,
 }
 
 impl Shell {
@@ -152,6 +154,15 @@ impl Shell {
             spill_wrap: None,
             protection: None,
             detached: None,
+            host: None,
+        }
+    }
+
+    /// Runs non-detached commands through the session's keeper.
+    pub fn with_host(self, host: Arc<dyn contract::keeper::CommandHost>) -> Self {
+        Self {
+            host: Some(host),
+            ..self
         }
     }
 
@@ -579,22 +590,45 @@ impl Shell {
             }
             (Some(_), _) | (None, _) => None,
         };
-        let mut output = match command::execute(
-            program,
-            &command,
-            &parsed.workdir,
-            parsed.timeout_ms.map(Duration::from_millis),
-            self.clock.as_ref(),
-            cancel,
-            emit,
-            policy,
-            self.jobs.as_deref(),
-            spill,
-            side.as_deref(),
-            settings,
-            &self.workspace,
-            protection,
-        ) {
+        let execute = |host| {
+            hosted::execute(
+                host,
+                program,
+                &command,
+                &parsed.workdir,
+                parsed.timeout_ms.map(Duration::from_millis),
+                self.clock.as_ref(),
+                cancel,
+                emit,
+                policy,
+                self.jobs.as_deref(),
+                spill.clone(),
+                side.as_deref(),
+                settings,
+                &self.workspace,
+                protection,
+            )
+        };
+        let ran = match &self.host {
+            Some(host) => execute(Arc::clone(host)),
+            None => command::execute(
+                program,
+                &command,
+                &parsed.workdir,
+                parsed.timeout_ms.map(Duration::from_millis),
+                self.clock.as_ref(),
+                cancel,
+                emit,
+                policy,
+                self.jobs.as_deref(),
+                spill,
+                side.as_deref(),
+                settings,
+                &self.workspace,
+                protection,
+            ),
+        };
+        let mut output = match ran {
             Ok(command::Ran::Finished(finished, report)) => {
                 from_spawn_reported(Ok(finished), limit, &parsed.command, report)
             }
@@ -988,6 +1022,12 @@ pub(crate) fn assemble(
 
 fn assemble_output(limit: Option<Limit>, finished: Finished, extra: Option<&str>) -> Output {
     let timed_out = finished.stop == Some(StopKind::Timeout);
+    if finished.capped {
+        let process = process_of(&finished, timed_out);
+        let failure = Failure::from(&ToolError::from(ShellError::Capped));
+        let line = failure.message.clone();
+        return end(finished, extra, &line, Some(failure), process, false);
+    }
     if finished.indeterminate {
         let process = process_of(&finished, timed_out);
         return end(

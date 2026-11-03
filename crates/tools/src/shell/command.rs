@@ -5,7 +5,6 @@ use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
@@ -16,7 +15,7 @@ use contract::tool::Cancel;
 use super::background::MoveAsk;
 use super::drive::{LoopEnd, Phase, Run, pump_inner};
 use super::moved::{CancelBridge, Moved};
-use super::output::{Errors, OUTPUT_CAP, Shared, bump, lock, read_errors, read_output};
+use super::output::{Errors, OUTPUT_CAP, Shared, bump, lock};
 use super::sandbox::protected::{
     Guard as ProtectionGuard, ProtectedPaths, Report as ProtectedReport,
 };
@@ -184,7 +183,7 @@ impl std::error::Error for SandboxApply {}
 /// macOS Seatbelt one gated on the confinement marker. A gated call hands
 /// nothing off before its marker is observed or the wrapper exits; a
 /// missing marker at the end fails closed instead of ending normally.
-enum Drive {
+pub(super) enum Drive {
     /// The existing pipeline: one drive pass, then the end.
     Plain,
     /// The Seatbelt pipeline: every handoff waits for the marker.
@@ -193,10 +192,13 @@ enum Drive {
 }
 
 /// The streams one spawn holds open for the shared driver below.
-struct SpawnStreams {
-    input: Option<contract::jobs::Input>,
-    errors: Option<std::io::PipeReader>,
-    read: Box<dyn Read + Send>,
+pub struct SpawnStreams {
+    /// The command's terminal input, if any.
+    pub input: Option<contract::jobs::Input>,
+    /// Standard error, kept separate for monitor jobs.
+    pub errors: Option<std::io::PipeReader>,
+    /// Standard output, or a combined ordinary stream.
+    pub read: Box<dyn Read + Send>,
 }
 
 /// Takes the protection guard for a confined Linux spawn: the baseline is
@@ -205,7 +207,7 @@ struct SpawnStreams {
 /// closed before spawn, as a sandbox-apply failure. Unconfined spawns, and
 /// builds without the Linux sandbox, take no guard.
 #[cfg(target_os = "linux")]
-fn acquire_protection(
+pub(super) fn acquire_protection(
     sandbox_settings: &super::sandbox::Settings,
     sandbox_workspace: &Path,
     protection: Option<&ProtectedPaths>,
@@ -227,7 +229,7 @@ fn acquire_protection(
 // Mutants run on Linux, where this stub is not compiled.
 #[cfg_attr(false, mutants::skip)]
 #[cfg(not(target_os = "linux"))]
-fn acquire_protection(
+pub(super) fn acquire_protection(
     sandbox_settings: &super::sandbox::Settings,
     sandbox_workspace: &Path,
     protection: Option<&ProtectedPaths>,
@@ -277,10 +279,8 @@ fn open_streams(cmd: &mut Command, policy: MovePolicy) -> std::io::Result<SpawnS
     clippy::too_many_arguments,
     reason = "spawn, the deadline, the move policy, the spill and the drive gate are one call"
 )]
-fn finish_spawned(
-    child: std::process::Child,
-    listing: support::group::Listing,
-    streams: SpawnStreams,
+pub(super) fn finish_spawned(
+    spawned: super::hosted::Waiter,
     timeout: Option<Duration>,
     clock: &dyn Clock,
     cancel: &dyn Cancel,
@@ -293,7 +293,7 @@ fn finish_spawned(
     ps: &Path,
     drive: Drive,
 ) -> Result<Ran, std::io::Error> {
-    let pgid = child.id();
+    let pgid = spawned.pgid();
     let shared = Arc::new(Shared::default());
     // The marker observation wakes the drive loop parked in
     // `drive_confined`: the wake bumps under the same lock the park
@@ -311,8 +311,7 @@ fn finish_spawned(
     }
     {
         let mut inner = lock(&shared.inner);
-        inner.input = streams.input;
-        if streams.errors.is_some() {
+        if spawned.monitor() {
             inner.lines = Some(Vec::new());
             inner.errors = Some(Errors::default());
         }
@@ -323,15 +322,7 @@ fn finish_spawned(
             inner.spill_config = spill.clone();
         }
     }
-    let reader = Arc::clone(&shared);
-    let read = streams.read;
-    thread::spawn(move || read_output(read, &reader));
-    if let Some(read_err) = streams.errors {
-        let reader = Arc::clone(&shared);
-        thread::spawn(move || read_errors(read_err, &reader));
-    }
-    let waiter = Arc::clone(&shared);
-    thread::spawn(move || wait_child(child, &waiter));
+    let (listing, hosted) = spawned.watch(&shared);
 
     // The clock watches the command. The call's cancel watches a bridge, so
     // dropping the bridge after a move stops that cancel reaching the job.
@@ -357,7 +348,11 @@ fn finish_spawned(
         sent_signal: false,
         seen_empty: false,
         stream_carry: Vec::new(),
-        timeout_at: timeout.and_then(|timeout| start.checked_add(timeout)),
+        timeout_at: if hosted.is_some() {
+            None
+        } else {
+            timeout.and_then(|timeout| start.checked_add(timeout))
+        },
         move_at: match policy {
             MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
             MovePolicy::Stay
@@ -367,7 +362,8 @@ fn finish_spawned(
         },
         members: None,
         pgid,
-        listing: Some(Box::new(listing)),
+        listing: listing.map(Box::new),
+        hosted,
         shared,
         job: None,
         feed: None,
@@ -512,14 +508,136 @@ fn execute_inner(
     // baseline that cannot be read or recorded stops the call here, so no
     // confined command runs unprotected. Unconfined spawns take none.
     let guard = acquire_protection(sandbox_settings, sandbox_workspace, protection)?;
+    let spec = contract::keeper::Spawn {
+        id: String::new(),
+        program: program.to_path_buf(),
+        args: vec!["-c".into(), command.into()],
+        cwd: workdir.to_path_buf(),
+        env: matches
+            .map(|path| {
+                vec![(
+                    crate::search::matches::MATCHES_ENV.into(),
+                    path.to_string_lossy().into_owned(),
+                )]
+            })
+            .unwrap_or_default(),
+        stdin: if policy == MovePolicy::Terminal {
+            contract::keeper::HostStdin::Pty
+        } else {
+            contract::keeper::HostStdin::Null
+        },
+        timeout_ms: None,
+        output_cap: OUTPUT_CAP,
+        sandbox: None,
+    };
+    let (child, listing, streams) = build_inner(
+        &spec,
+        policy,
+        sandbox_settings,
+        sandbox_workspace,
+        guard.as_ref().map(|guard| guard.dir.baseline.as_path()),
+        install,
+    )?;
+    finish_spawned(
+        super::hosted::Waiter::Child {
+            child,
+            listing,
+            streams,
+        },
+        timeout,
+        clock,
+        cancel,
+        emit,
+        policy,
+        jobs,
+        spill,
+        guard,
+        alive,
+        ps,
+        Drive::Plain,
+    )
+}
+
+/// Builds a keeper process with explicit environment, streams and confinement.
+pub(crate) fn build(
+    spec: &contract::keeper::Spawn,
+) -> std::io::Result<(std::process::Child, support::group::Listing, SpawnStreams)> {
+    let empty = super::sandbox::Settings {
+        enabled: false,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: std::path::PathBuf::new(),
+    };
+    let settings = spec
+        .sandbox
+        .as_ref()
+        .map(|sandbox| super::sandbox::Settings {
+            enabled: sandbox.enabled,
+            allow_write: sandbox.allow_write.clone(),
+            deny_read: sandbox.deny_read.clone(),
+            fiber_home: sandbox.fiber_home.clone(),
+        });
+    let workspace = spec
+        .sandbox
+        .as_ref()
+        .map_or(spec.cwd.as_path(), |sandbox| sandbox.workspace.as_path());
+    let baseline = spec
+        .sandbox
+        .as_ref()
+        .and_then(|sandbox| sandbox.baseline.as_deref());
+    let policy = match spec.stdin {
+        contract::keeper::HostStdin::Pty => MovePolicy::Terminal,
+        contract::keeper::HostStdin::Null => MovePolicy::Monitor,
+    };
+    build_inner(
+        spec,
+        policy,
+        settings.as_ref().unwrap_or(&empty),
+        workspace,
+        baseline,
+        super::sandbox::install,
+    )
+}
+
+fn build_inner(
+    spec: &contract::keeper::Spawn,
+    policy: MovePolicy,
+    sandbox_settings: &super::sandbox::Settings,
+    sandbox_workspace: &Path,
+    baseline: Option<&Path>,
+    install: fn(&mut super::sandbox::Prepared) -> Result<(), i32>,
+) -> std::io::Result<(std::process::Child, support::group::Listing, SpawnStreams)> {
     let tty = policy == MovePolicy::Terminal;
-    let mut cmd = Command::new(program);
-    cmd.arg("-c").arg(command).current_dir(workdir);
+    let mut cmd = Command::new(&spec.program);
+    cmd.args(&spec.args).current_dir(&spec.cwd);
+    #[cfg(target_os = "macos")]
+    if sandbox_settings.enabled {
+        super::sandbox::check_available(sandbox_settings, sandbox_workspace).map_err(|error| {
+            std::io::Error::other(SandboxApply {
+                cause: error.to_string(),
+            })
+        })?;
+        let prepared = super::sandbox::prepare(sandbox_settings, sandbox_workspace, baseline)
+            .map_err(|error| {
+                std::io::Error::other(SandboxApply {
+                    cause: error.to_string(),
+                })
+            })?;
+        cmd = Command::new(super::sandbox::SANDBOX_EXEC);
+        cmd.arg("-p").arg(&prepared.profile);
+        for (name, value) in &prepared.bindings {
+            cmd.arg("-D").arg(format!("{name}={value}"));
+        }
+        cmd.arg("--")
+            .arg(&spec.program)
+            .args(&spec.args)
+            .current_dir(&spec.cwd);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (install, baseline, sandbox_settings, sandbox_workspace);
     let streams = open_streams(&mut cmd, policy)?;
     scrub_env(&mut cmd);
-    if let Some(path) = matches {
-        cmd.env(crate::search::matches::MATCHES_ENV, path);
-    }
+    cmd.envs(spec.env.iter().map(|(key, value)| (key, value)));
     #[cfg(target_os = "linux")]
     let prepared = if sandbox_settings.enabled {
         match super::sandbox::check_available(sandbox_settings, sandbox_workspace) {
@@ -528,18 +646,16 @@ fn execute_inner(
                     cause: unavailable.to_string(),
                 }));
             }
-            Ok(()) => match super::sandbox::prepare(
-                sandbox_settings,
-                sandbox_workspace,
-                guard.as_ref().map(|guard| guard.dir.baseline.as_path()),
-            ) {
-                Ok(prepared) => Some(prepared),
-                Err(cause) => {
-                    return Err(std::io::Error::other(SandboxApply {
-                        cause: cause.to_string(),
-                    }));
+            Ok(()) => {
+                match super::sandbox::prepare(sandbox_settings, sandbox_workspace, baseline) {
+                    Ok(prepared) => Some(prepared),
+                    Err(cause) => {
+                        return Err(std::io::Error::other(SandboxApply {
+                            cause: cause.to_string(),
+                        }));
+                    }
                 }
-            },
+            }
         }
     } else {
         None
@@ -600,22 +716,7 @@ fn execute_inner(
     // when the last holder exits.
     drop(cmd);
 
-    finish_spawned(
-        child,
-        listing,
-        streams,
-        timeout,
-        clock,
-        cancel,
-        emit,
-        policy,
-        jobs,
-        spill,
-        guard,
-        alive,
-        ps,
-        Drive::Plain,
-    )
+    Ok((child, listing, streams))
 }
 
 /// Runs one confined call on macOS: the shell spawns wrapped through
@@ -700,9 +801,11 @@ pub(crate) fn execute_confined(
     drop(cmd);
 
     finish_spawned(
-        child,
-        listing,
-        streams,
+        super::hosted::Waiter::Child {
+            child,
+            listing,
+            streams,
+        },
         timeout,
         clock,
         cancel,
@@ -822,7 +925,7 @@ fn read_sentinel(parent: std::os::unix::net::UnixStream) -> Option<std::io::Erro
     }
 }
 
-fn wait_child(mut child: std::process::Child, shared: &Shared) {
+pub(super) fn wait_child(mut child: std::process::Child, shared: &Shared) {
     let status = child.wait().ok();
     let mut inner = lock(&shared.inner);
     inner.reaped = true;

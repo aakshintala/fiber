@@ -241,6 +241,7 @@ fn hand_off_with_saved(
             move_at: None,
             members: Some(members),
             pgid: 99,
+            hosted: None,
             listing: None,
             shared,
             ask: None,
