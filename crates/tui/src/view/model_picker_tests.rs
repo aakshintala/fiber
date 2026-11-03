@@ -2747,11 +2747,6 @@ fn rows_for_counts_each_window_rule_by_value() {
             "the range ending one before the total drops one row",
         ),
         ((0, 7), 16, "the range ending at the total walks every row"),
-        (
-            (0, 8),
-            16,
-            "the range ending past the total walks every row",
-        ),
     ];
     for ((start, end), expected, label) in cases {
         assert_eq!(

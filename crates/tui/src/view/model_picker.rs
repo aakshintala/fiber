@@ -461,59 +461,77 @@ fn items(view: &PickerView) -> Vec<Item<'_>> {
     out
 }
 
-/// One rendered body row of an item: the walk decides the pieces, and
-/// the display maps each piece to exactly one row, so the count agrees
-/// with the renderer by construction.
-enum Part {
-    ModelFirst,
-    ModelSecond,
-    ScopeFirst,
-    ScopeSecond,
-    SessionNote,
-    Count,
-    LoggedOut,
-    Install,
-    InstallError,
+/// One rendered body row: each variant carries the row it renders, so
+/// the renderer matches on the part alone and no incompatible slot/part
+/// pair is representable. The walk emits only the parts its slot's data
+/// supports, so the count agrees with the renderer by construction.
+enum Part<'view> {
+    ModelFirst(&'view Flat<'view>),
+    ModelSecond(&'view Flat<'view>),
+    ScopeFirst(&'view Flat<'view>),
+    ScopeSecond(&'view Flat<'view>),
+    SessionNote(&'view Flat<'view>),
+    Count(&'view Count<'view>),
+    LoggedOut(&'view LoggedOutRow),
+    Install(&'view InstallRow),
+    InstallError(&'view InstallRow),
 }
 
 /// One laid-out step: an item or an install in draw order.
+#[derive(Clone, Copy)]
 enum Slot<'view> {
     Item(&'view Item<'view>),
     Install(&'view InstallRow),
 }
 
-impl Slot<'_> {
+impl<'view> Slot<'view> {
     /// The only place an item's own row count is decided: a plain model
     /// takes two rows and a third for a session-only choice, a checklist
     /// model takes two dim rows whatever the third-row flag says, and a
     /// count, a logged-out row or an install takes one, two with its
     /// error. Every list is non-empty, so a step always emits at least
-    /// one row.
-    fn parts(&self) -> &'static [Part] {
-        match self {
-            Slot::Item(Item::Model(flat)) if flat.row.mark.is_some() => {
-                &[Part::ScopeFirst, Part::ScopeSecond]
-            }
-            Slot::Item(Item::Model(flat)) if flat.row.session_only => {
-                &[Part::ModelFirst, Part::ModelSecond, Part::SessionNote]
-            }
-            Slot::Item(Item::Model(_)) => &[Part::ModelFirst, Part::ModelSecond],
-            Slot::Item(Item::Count(_)) => &[Part::Count],
-            Slot::Item(Item::LoggedOut(_)) => &[Part::LoggedOut],
-            Slot::Install(install) if install::error_row(install).is_some() => {
-                &[Part::Install, Part::InstallError]
-            }
-            Slot::Install(_) => &[Part::Install],
-        }
+    /// one row. Each part carries its row's data, so only the part that
+    /// matches this slot's data can be built.
+    fn parts(self) -> impl Iterator<Item = Part<'view>> {
+        let (first, second, third): (
+            Option<Part<'view>>,
+            Option<Part<'view>>,
+            Option<Part<'view>>,
+        ) = match self {
+            Slot::Item(item) => match item {
+                Item::Model(flat) if flat.row.mark.is_some() => (
+                    Some(Part::ScopeFirst(flat)),
+                    Some(Part::ScopeSecond(flat)),
+                    None,
+                ),
+                Item::Model(flat) if flat.row.session_only => (
+                    Some(Part::ModelFirst(flat)),
+                    Some(Part::ModelSecond(flat)),
+                    Some(Part::SessionNote(flat)),
+                ),
+                Item::Model(flat) => (
+                    Some(Part::ModelFirst(flat)),
+                    Some(Part::ModelSecond(flat)),
+                    None,
+                ),
+                Item::Count(count) => (Some(Part::Count(count)), None, None),
+                Item::LoggedOut(row) => (Some(Part::LoggedOut(row)), None, None),
+            },
+            Slot::Install(install) if install::error_row(install).is_some() => (
+                Some(Part::Install(install)),
+                Some(Part::InstallError(install)),
+                None,
+            ),
+            Slot::Install(install) => (Some(Part::Install(install)), None, None),
+        };
+        [first, second, third].into_iter().flatten()
     }
 }
 
-/// One windowed step in draw order: its flat item position, its heading
-/// when it opens a provider section, and whether a blank separates it
-/// from the earlier rows inside the window. `at` orders steps and bounds
-/// the window; it is never a `focus` value.
+/// One windowed step in draw order: an item or an install with its
+/// heading when it opens a provider section, and whether a blank
+/// separates it from the earlier rows inside the window.
 struct Step<'view> {
-    at: usize,
     slot: Slot<'view>,
     heading: Option<(&'view str, &'view Fresh)>,
     blank: bool,
@@ -522,7 +540,7 @@ struct Step<'view> {
 impl Step<'_> {
     /// A step's rows: its blank, its heading and one row per part.
     fn rows(&self) -> usize {
-        usize::from(self.blank) + usize::from(self.heading.is_some()) + self.slot.parts().len()
+        usize::from(self.blank) + usize::from(self.heading.is_some()) + self.slot.parts().count()
     }
 }
 
@@ -571,7 +589,6 @@ fn walk<'view>(
                 && (heading.is_some()
                     || at == logged_out_start && matches!(item, Item::LoggedOut(_)));
             Some(Step {
-                at,
                 slot: Slot::Item(item),
                 heading,
                 blank,
@@ -579,7 +596,6 @@ fn walk<'view>(
         } else if let Some(install) = view.installs.get(at.saturating_sub(items.len())) {
             let blank = at > span.start && at == items.len();
             Some(Step {
-                at,
                 slot: Slot::Install(install),
                 heading: None,
                 blank,
@@ -725,7 +741,6 @@ fn display_rows(view: &PickerView, priced: bool) -> DisplayRows {
     let mut rows = Vec::new();
     let mut item_starts = Vec::new();
     for step in walk(view, &items, 0..total) {
-        debug_assert!(step.at < total);
         if let Some((provider, state)) = step.heading {
             // A headed step starts at its blank, while the first
             // logged-out and install rows start past theirs, so the
@@ -746,118 +761,71 @@ fn display_rows(view: &PickerView, priced: bool) -> DisplayRows {
             }
             item_starts.push(rows.len());
         }
-        let parts = step.slot.parts();
-        match step.slot {
-            Slot::Item(Item::Model(flat)) => {
-                let focused = Some(flat.row.at) == view.focused;
-                for part in parts {
-                    rows.push(match part {
-                        Part::ModelFirst => DisplayRow {
-                            row: model_first_row(flat.row, focused, priced),
-                            focus: Some(flat.row.at),
-                            trim_count: false,
-                        },
-                        Part::ScopeFirst => DisplayRow {
-                            row: scope_row(flat.row, focused, priced),
-                            focus: Some(flat.row.at),
-                            trim_count: false,
-                        },
-                        Part::ModelSecond => DisplayRow {
-                            row: model_second_row(flat.row, focused),
-                            focus: None,
-                            trim_count: false,
-                        },
-                        Part::ScopeSecond => DisplayRow {
-                            row: scope_second_row(flat.row),
-                            focus: None,
-                            trim_count: false,
-                        },
-                        Part::SessionNote => DisplayRow {
-                            row: session_row(flat.row),
-                            focus: None,
-                            trim_count: false,
-                        },
-                        Part::Count | Part::LoggedOut | Part::Install | Part::InstallError => {
-                            unreachable!("a model step emits only model parts")
-                        }
-                    });
-                }
-            }
-            Slot::Item(Item::Count(count)) => {
-                for part in parts {
-                    match part {
-                        Part::Count => rows.push(DisplayRow {
-                            row: count_row(count.row),
-                            focus: None,
-                            trim_count: true,
-                        }),
-                        Part::ModelFirst
-                        | Part::ModelSecond
-                        | Part::ScopeFirst
-                        | Part::ScopeSecond
-                        | Part::SessionNote
-                        | Part::LoggedOut
-                        | Part::Install
-                        | Part::InstallError => {
-                            unreachable!("a count step emits only its count row")
-                        }
+        for part in step.slot.parts() {
+            rows.push(match part {
+                Part::ModelFirst(flat) => {
+                    let focused = Some(flat.row.at) == view.focused;
+                    DisplayRow {
+                        row: model_first_row(flat.row, focused, priced),
+                        focus: Some(flat.row.at),
+                        trim_count: false,
                     }
                 }
-            }
-            Slot::Item(Item::LoggedOut(logged_out)) => {
-                for part in parts {
-                    match part {
-                        Part::LoggedOut => rows.push(DisplayRow {
-                            row: logged_out_row(logged_out, Some(logged_out.at) == view.focused),
-                            focus: Some(logged_out.at),
-                            trim_count: false,
-                        }),
-                        Part::ModelFirst
-                        | Part::ModelSecond
-                        | Part::ScopeFirst
-                        | Part::ScopeSecond
-                        | Part::SessionNote
-                        | Part::Count
-                        | Part::Install
-                        | Part::InstallError => {
-                            unreachable!("a logged-out step emits only its row")
-                        }
+                Part::ModelSecond(flat) => {
+                    let focused = Some(flat.row.at) == view.focused;
+                    DisplayRow {
+                        row: model_second_row(flat.row, focused),
+                        focus: None,
+                        trim_count: false,
                     }
                 }
-            }
-            Slot::Install(install) => {
-                let focused = Some(install.at) == view.focused;
-                for part in parts {
-                    match part {
-                        Part::Install => rows.push(DisplayRow {
-                            row: install_row(install, focused, &view.spinner),
-                            focus: Some(install.at),
-                            trim_count: false,
-                        }),
-                        Part::InstallError => {
-                            let Some(row) = error_row(install) else {
-                                unreachable!(
-                                    "the walk emits an error part only for a failed install"
-                                )
-                            };
-                            rows.push(DisplayRow {
-                                row,
-                                focus: None,
-                                trim_count: false,
-                            });
-                        }
-                        Part::ModelFirst
-                        | Part::ModelSecond
-                        | Part::ScopeFirst
-                        | Part::ScopeSecond
-                        | Part::SessionNote
-                        | Part::Count
-                        | Part::LoggedOut => {
-                            unreachable!("an install step emits only its row and its error")
-                        }
+                Part::ScopeFirst(flat) => {
+                    let focused = Some(flat.row.at) == view.focused;
+                    DisplayRow {
+                        row: scope_row(flat.row, focused, priced),
+                        focus: Some(flat.row.at),
+                        trim_count: false,
                     }
                 }
-            }
+                Part::ScopeSecond(flat) => DisplayRow {
+                    row: scope_second_row(flat.row),
+                    focus: None,
+                    trim_count: false,
+                },
+                Part::SessionNote(flat) => DisplayRow {
+                    row: session_row(flat.row),
+                    focus: None,
+                    trim_count: false,
+                },
+                Part::Count(count) => DisplayRow {
+                    row: count_row(count.row),
+                    focus: None,
+                    trim_count: true,
+                },
+                Part::LoggedOut(row) => DisplayRow {
+                    row: logged_out_row(row, Some(row.at) == view.focused),
+                    focus: Some(row.at),
+                    trim_count: false,
+                },
+                Part::Install(install) => {
+                    let focused = Some(install.at) == view.focused;
+                    DisplayRow {
+                        row: install_row(install, focused, &view.spinner),
+                        focus: Some(install.at),
+                        trim_count: false,
+                    }
+                }
+                Part::InstallError(install) => {
+                    let Some(row) = error_row(install) else {
+                        unreachable!("the walk emits an error part only for a failed install")
+                    };
+                    DisplayRow {
+                        row,
+                        focus: None,
+                        trim_count: false,
+                    }
+                }
+            });
         }
     }
     DisplayRows { rows, item_starts }
