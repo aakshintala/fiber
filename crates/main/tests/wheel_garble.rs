@@ -36,7 +36,7 @@ fn item_number(row: &str) -> Option<usize> {
 /// list items, so the row's first `N` is always the item marker.
 fn letters(count: usize, seed: usize) -> String {
     (0..count)
-        .map(|i| (b'a' + ((seed + i) % 26) as u8) as char)
+        .map(|i| (b'a' + u8::try_from((seed + i) % 26).unwrap()) as char)
         .collect()
 }
 
@@ -99,9 +99,19 @@ fn replay(bytes: &[u8]) -> vt100::Screen {
     parser.screen().clone()
 }
 
-/// Asserts the two wide-model grids match cell for cell: the row text
-/// first, then every cell's contents and wide continuation, naming the
-/// first differing row, column and both rows.
+/// What the terminal shows in `cell`: a never-written cell reads as a
+/// blank, the way the harness's own grid reads one (`support/pty.rs`,
+/// `Grid::of`), so the repaint skipping a blank the frame holds still
+/// matches a scrolled frame that once wrote it.
+fn shown(cell: &vt100::Cell) -> &str {
+    // settled: the replayed cell comes from bytes ending at a frame boundary taken after the grid wait
+    let contents = cell.contents();
+    if contents.is_empty() { " " } else { contents }
+}
+
+/// Asserts the two wide-model grids show the same rows: the
+/// trailing-trimmed row text first, then every cell's shown contents and
+/// wide continuation, naming the first differing row, column and both rows.
 fn assert_same_grid(scrolled: &vt100::Screen, repainted: &vt100::Screen) {
     // settled: the replayed bytes end at a frame boundary taken after the grid wait
     let left: Vec<String> = scrolled.rows(0, 100).collect();
@@ -110,14 +120,15 @@ fn assert_same_grid(scrolled: &vt100::Screen, repainted: &vt100::Screen) {
     for y in 0..30u16 {
         let left_row = left.get(usize::from(y)).cloned().unwrap_or_default();
         let right_row = right.get(usize::from(y)).cloned().unwrap_or_default();
-        assert_eq!(left_row, right_row, "row {y} differs");
+        // Trailing blanks are not shown: a scrolled frame that once wrote
+        // a cell the repaint skips still draws the same row.
+        assert_eq!(left_row.trim_end(), right_row.trim_end(), "row {y} differs");
         for x in 0..100u16 {
             // settled: the replayed bytes end at a frame boundary taken after the grid wait
             let before = scrolled.cell(y, x).unwrap();
             // settled: the replayed bytes end at a frame boundary taken after the grid wait
             let after = repainted.cell(y, x).unwrap();
-            // settled: the replayed bytes end at a frame boundary taken after the grid wait
-            let same_contents = before.contents() == after.contents();
+            let same_contents = shown(before) == shown(after);
             // settled: the replayed bytes end at a frame boundary taken after the grid wait
             let same_wide = before.is_wide_continuation() == after.is_wide_continuation();
             assert!(
