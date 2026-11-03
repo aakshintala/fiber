@@ -296,6 +296,46 @@ impl Remote {
         decode::read_config(&decode::result(&line, "read_config")?)
             .ok_or_else(|| decode::io_error("read_config"))
     }
+    /// Fetches one workspace file with its version. Answers a missing
+    /// file as empty text with version `missing`, like the hub does.
+    pub(crate) fn fetch_workspace_file(
+        &self,
+        workspace: &Path,
+        file: &Path,
+    ) -> Result<(String, String), ConfigureError> {
+        let workspace = self.workspace(workspace)?;
+        let line = self
+            .router
+            .ask(
+                "read_workspace_file",
+                json!({"workspace": workspace, "path": file}),
+                Caller::Loop,
+            )
+            .map_err(ask_error)?;
+        decode::read_config(&decode::result(&line, "read_workspace_file")?)
+            .ok_or_else(|| decode::io_error("read_workspace_file"))
+    }
+    /// Stores `text` in the workspace file only while the file still has
+    /// `version`: a mismatch stores nothing and answers the hub's
+    /// `stale_request` rejection as-is.
+    pub(crate) fn store_workspace_file(
+        &self,
+        workspace: &Path,
+        file: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), ConfigureError> {
+        let workspace = self.workspace(workspace)?;
+        let line = self
+            .router
+            .ask(
+                "write_workspace_file",
+                json!({"workspace": workspace, "path": file, "text": text, "version": version}),
+                Caller::Loop,
+            )
+            .map_err(ask_error)?;
+        decode::result(&line, "write_workspace_file").map(|_| ())
+    }
     /// Writes only the hub version that the editor originally fetched.
     pub(crate) fn store_file(
         &self,

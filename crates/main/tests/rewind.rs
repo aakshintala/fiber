@@ -1842,3 +1842,108 @@ fn a_rewind_inherits_a_handoff_by_position() {
     hubbed.close("h1_close_before", &before);
     hubbed.finish();
 }
+
+/// The `write` call's completion in `log`: completions carry no tool
+/// name, so the request's `action_id` names it.
+fn write_completed_in(log: &[Value]) -> &Value {
+    let action = log
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested" && line["payload"]["name"] == "write")
+        .expect("the session called write")["action_id"]
+        .clone();
+    log.iter()
+        .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == action)
+        .expect("the write completed")
+}
+
+fn read_reply() -> fakes::Response {
+    stream(&[function_call(
+        "c_read",
+        "read",
+        &json!({"path": "note.txt", "offset": null, "limit": null, "pages": null}),
+    )])
+}
+
+fn write_reply() -> fakes::Response {
+    stream(&[function_call(
+        "c_write",
+        "write",
+        &json!({"path": "note.txt", "content": "replaced\n"}),
+    )])
+}
+
+/// Rewinds `old` to its latest turn boundary and waits for the new
+/// session's start, returning its id.
+fn rewind_latest(hubbed: &Hubbed, id: &str, session: &str) -> String {
+    let client = hubbed.client();
+    client.send(&rewind(id, session, json!({})));
+    let ack = until_ack(client, "the rewind acknowledgement", id);
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .expect("the rewind answers with a session id")
+        .to_owned();
+    until(client, "the new session's start", |line| {
+        line["session_id"] == next && line["kind"] == "session_started"
+    });
+    next
+}
+
+#[test]
+fn a_rewind_rebuilds_seen_files_up_to_its_point() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("note.txt"), "v1\n").unwrap();
+    let server = ProviderServer::start([
+        hello(),
+        read_reply(),
+        hello(),
+        write_reply(),
+        hello(),
+        read_reply(),
+        hello(),
+        hello(),
+        write_reply(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("c_read_start", "c_read_sub", "one");
+    hubbed.prompt("c_read_prompt", &old, "read the note");
+
+    // The rewind drops the turn that read the file: the new session
+    // continues from the turn before it, so the replacement is refused
+    // as not read.
+    let next = rewind_latest(&hubbed, "c_read_rw", &old);
+    hubbed.prompt("c_write_prompt", &next, "replace the note");
+    let log = session_log(&setup, &next);
+    let completed = write_completed_in(&log);
+    assert_eq!(completed["payload"]["status"], "failed", "{completed}");
+    assert_eq!(completed["payload"]["error"]["code"], "stale_file");
+    assert!(
+        completed["payload"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("was not read"),
+        "{completed}"
+    );
+    assert_eq!(
+        fs::read(setup.workspace().join("note.txt")).unwrap(),
+        b"v1\n"
+    );
+
+    // The session reads the file again, then turns once more: rewinding
+    // past that last turn keeps the read, so the replacement lands.
+    hubbed.prompt("c_reread_prompt", &next, "read the note again");
+    hubbed.prompt("c_smalltalk_prompt", &next, "small talk");
+    let after = rewind_latest(&hubbed, "c_reread_rw", &next);
+    hubbed.prompt("c_replace_prompt", &after, "replace the note");
+    let log = session_log(&setup, &after);
+    let completed = write_completed_in(&log);
+    assert_eq!(completed["payload"]["status"], "completed", "{completed}");
+    assert_eq!(
+        fs::read(setup.workspace().join("note.txt")).unwrap(),
+        b"replaced\n"
+    );
+    hubbed.close("c_read_close", &after);
+    hubbed.finish();
+}

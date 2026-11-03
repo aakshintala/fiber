@@ -387,8 +387,9 @@ fn parsed_view<'a>(call: &'a Call, parsed: &'a Option<Value>) -> View<'a> {
 /// `command` present in its `details` decides, and a malformed one
 /// falls to plain, never to a later key. `matches` wins over `command`
 /// on a shell `grep`, which carries both. Only a missing or null
-/// `details` reads the `content` argument; any other value that is not
-/// recognised shows the content.
+/// `details`, or one holding only the reserved `file_seen`, reads the
+/// `content` argument; any other value that is not recognised shows the
+/// content.
 fn view_of<'a>(call: &'a Call, details: Option<&'a Value>) -> View<'a> {
     let Some(details) = details.filter(|details| !details.is_null()) else {
         return write_or_plain(call);
@@ -396,6 +397,12 @@ fn view_of<'a>(call: &'a Call, details: Option<&'a Value>) -> View<'a> {
     let Some(object) = details.as_object() else {
         return View::Plain(call.content());
     };
+    // The reserved `file_seen` is the history fold's, not display data
+    // (`docs/tools.md`, "What a result carries"): details holding only it
+    // are none, so a write still shows its content.
+    if object.len() == 1 && object.contains_key("file_seen") {
+        return write_or_plain(call);
+    }
     if let Some(diff) = object.get("diff") {
         if let Some(diff) = diff.as_str() {
             return View::Diff(diff);

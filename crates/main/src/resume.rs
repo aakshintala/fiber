@@ -415,7 +415,7 @@ fn resumed_session(
         &log::history(dir.path()).map_err(|error| failed(error.code(), error))?,
     )
     .map_err(|error| failed(error.code(), error))?;
-    let parts = crate::parts_with_session(
+    let mut parts = crate::parts_with_session(
         overrides,
         folded.model.as_deref(),
         crate::credential::Labels::new(credential.as_deref(), folded.credential.as_deref()),
@@ -436,6 +436,9 @@ fn resumed_session(
         },
         fiber_path.clone(),
     )?;
+    // The resumed context keeps what the log's completed file calls saw,
+    // through the point it continues from (`docs/tools.md`, "Stale files").
+    parts.seen_files = folded.seen_files().clone();
     let resume = crate::session_command::ResumeStart::new(
         log::SessionDir::new(sessions, &id),
         Arc::clone(&log),

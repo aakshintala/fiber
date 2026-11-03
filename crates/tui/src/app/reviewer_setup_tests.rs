@@ -39,7 +39,7 @@ fn app() -> (App, Arc<Fake>) {
     let mut app = session_app();
     let fake = Arc::new(Fake::new(Vec::new()));
     set_notes(&fake, notes("", ""));
-    app.set_configure(Some(fake.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(fake.clone() as Arc<dyn crate::Configure>);
     (app, fake)
 }
 
@@ -269,9 +269,7 @@ fn the_command_clears_the_draft_reads_the_notes_and_shows_topic_ones_question() 
 #[test]
 fn with_no_session_a_notice_says_so_and_nothing_opens() {
     let mut app = crate::app::commands::commands_testkit::connected();
-    app.set_configure(Some(
-        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>);
     assert_eq!(enter(&mut app, "/reviewer-setup"), Effect::None);
     assert!(app.reviewer_setup().is_none());
     assert_eq!(
@@ -292,20 +290,6 @@ fn with_the_link_down_nothing_opens_and_the_draft_stays() {
     assert!(app.reviewer_setup().is_none());
     assert!(notices(&app).iter().all(|(code, _)| code != "io_failed"));
     assert!(on_screen(&mut app).contains("/reviewer-setup"));
-}
-
-#[test]
-fn with_no_seam_the_not_available_notice_shows() {
-    let mut app = session_app();
-    assert_eq!(enter(&mut app, "/reviewer-setup"), Effect::None);
-    assert!(app.reviewer_setup().is_none());
-    assert_eq!(
-        notices(&app),
-        [(
-            "io_failed".to_owned(),
-            "Not available in this terminal.".to_owned()
-        )]
-    );
 }
 
 #[test]
@@ -339,18 +323,14 @@ fn opens_nothing_with(app: &mut App, expect: &str) {
 #[test]
 fn with_no_home_the_session_has_not_loaded() {
     let mut app = crate::app::commands::commands_testkit::attached();
-    app.set_configure(Some(
-        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>);
     opens_nothing_with(&mut app, NOT_LOADED);
 }
 
 #[test]
 fn with_no_row_for_the_session_it_has_not_loaded() {
     let mut app = home_app();
-    app.set_configure(Some(
-        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>);
     app.attach(SessionId(OTHER.to_owned()));
     opens_nothing_with(&mut app, NOT_LOADED);
 }
@@ -1464,18 +1444,9 @@ fn a_session_with_no_project_shows_no_notice_and_is_not_marked() {
 #[test]
 fn a_session_with_no_row_shows_no_notice() {
     let mut app = home_app();
-    app.set_configure(Some(
-        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>);
     app.attach(SessionId(OTHER.to_owned()));
     app.on_line(with_session(OTHER, reviewer_deny()));
-    assert!(app.reviewer_setup().is_none());
-}
-
-#[test]
-fn with_no_seam_the_block_shows_no_notice() {
-    let mut app = session_app();
-    app.on_line(reviewer_deny());
     assert!(app.reviewer_setup().is_none());
 }
 

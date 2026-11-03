@@ -2,6 +2,7 @@
 //! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent`,
 //! `sessions`, `delete`, `directories`, `read_file`, `pairing_code`, `devices`
 //! and `revoke`, the machine's `configure`, `read_config`, `write_config`,
+//! `read_workspace_file`, `write_workspace_file`,
 //! `search_files`, `device_login`, `device_login_result` and `device_login_cancel`,
 //! and the relay to session sockets. Every connection also hears
 //! `attention` and `device_changed` (`crate::attention`) after its hello.
@@ -1058,6 +1059,18 @@ fn on_command(
             hub,
             &line.id,
             crate::machine::on_write_config(hub, &line.args),
+        ),
+        "read_workspace_file" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_read_workspace_file(hub, &line.args),
+        ),
+        "write_workspace_file" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_write_workspace_file(hub, &line.args),
         ),
         "pairing_code" => {
             if attribution.session_owned() {

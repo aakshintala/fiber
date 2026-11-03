@@ -7,7 +7,8 @@
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
 //! `refresh`, `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete`,
 //! `directories`, `read_file`, `pairing_code`, `devices`, `revoke`,
-//! `configure`, `read_config`, `write_config`, `search_files`, `device_login`,
+//! `configure`, `read_config`, `write_config`, `read_workspace_file`,
+//! `write_workspace_file`, `search_files`, `device_login`,
 //! `device_login_result` and `device_login_cancel`, and relays
 //! session commands to `run/<session_id>` (`docs/invocation.md`, "What the hub speaks").
 //! It sends `attention` and `device_changed` to every connection
@@ -56,6 +57,7 @@ mod tick;
 #[cfg(test)]
 #[path = "timing_tests.rs"]
 mod timing_tests;
+pub mod workspace_file;
 
 use std::io;
 use std::path::Path;

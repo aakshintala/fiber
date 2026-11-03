@@ -182,8 +182,8 @@ pub(crate) fn run_with(
     let models = seams.models;
     if let Some(remote) = seams.remote {
         app.set_remote(remote);
-    } else {
-        app.set_configure(seams.seam);
+    } else if let Some(seam) = seams.seam {
+        app.set_configure(seam);
     }
     app.set_models(models.clone());
     // The feedback writer `main` injected: taken out before home keeps
@@ -218,9 +218,7 @@ pub(crate) fn run_with(
     app.set_home(launch);
     // The first-run import offer resolves once, through the same seam
     // the views read: no receipts means the home foot asks.
-    let pending = app
-        .configure_seam()
-        .is_some_and(|seam| seam.import_pending());
+    let pending = app.configure_seam().import_pending();
     app.set_import_offer(pending);
     app.set_launch_overrides(launch_overrides);
     if pick_at_start {
@@ -1787,9 +1785,10 @@ impl<B: Backend> Loop<B> {
             // resume lines.
             if let editor::Outcome::Done(done) = result {
                 if line.is_some() {
-                    // A Changed files row or diff: the view reads the
-                    // file's diff and figures again, and the loop sends
-                    // both request lines.
+                    // A Changed files row or diff: a returned remote
+                    // copy writes back to its hub file first, then the
+                    // view reads the file's diff and figures again,
+                    // and the loop sends both request lines.
                     let lines = self.app.changed_file_closed(&path, done);
                     self.send_inner(&lines);
                 } else {

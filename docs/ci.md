@@ -18,10 +18,10 @@ CI is GitHub Actions on GitHub-hosted runners: `ubuntu-24.04` for Linux
 x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
-by every repository on the account. A draft pull request runs only the
-Linux x86_64 leg, so its run uses no macOS job. A ready pull request's run
-uses one macOS job, so five ready pull requests can run before a sixth
-queues for macOS. The 40-job cap is the one CI reaches: from 2026-10-07 to
+by every repository on the account. A draft skips `release`, `test` and
+`stress`, so it uses no macOS job unless it is a bug pull request, which uses
+one (`bug_red_macos`). A ready pull request uses one (`test`), and a ready bug
+pull request two. The 40-job cap is the one CI reaches: from 2026-10-07 to
 2026-10-09 every job that queued for more than 15 minutes waited while 38 or
 more jobs ran, and the macOS cap held jobs back for 85 of 3,250 queued
 minutes. A change that saves jobs, such as fewer mutants shards, shortens the
@@ -35,8 +35,9 @@ Every runner has a C compiler, which `mlua` needs to build Lua
 One check is required to merge: `CI`. It passes only when every job the
 selection chose succeeded and every job it did not choose was skipped. If
 the selection itself fails, `CI` fails. On a draft pull request the verdict
-job reports as `CI (draft)`, so the required `CI` check stays pending until
-the pull request is marked ready, which starts the full run.
+job reports as `CI (draft)`, so the required `CI` check stays pending. A
+draft does not select `release`. Marking the pull request ready runs every
+job the draft skipped.
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report without gating it
@@ -112,16 +113,18 @@ A pull request runs only what its diff can affect.
   Binary-level tests depend on every crate that ships, so any change to one
   runs them. `xtask` ships in no binary, so a change to it alone runs its
   own tests.
-- Every diff that runs the binary-level tests also runs the release-profile
-  job, `release` ("On every pull request that changes code"), and `fiber extension test`
-  for every first-party package that has cases, not only the changed ones
-  ("Testing an extension"). A change to Fiber's own code can break a package
-  that did not change.
-- A diff that touches the code the release job runs or the table it judges
-  against, `crates/bench`, `xtask/src/bench*`, `scripts/release-size`,
-  `scripts/stored-results` or `docs/performance.md`, also runs `release`, so
-  a broken harness or judge fails its own pull request rather than the
-  backstop.
+- On a ready pull request, every diff that runs the binary-level tests also
+  runs the release-profile job, `release` ("On every pull request that changes
+  code"), and `fiber extension test` for every first-party package that has
+  cases, not only the changed ones ("Testing an extension"). A change to
+  Fiber's own code can break a package that did not change.
+- On a ready pull request, a diff that touches the code the release job runs
+  or the table it judges against, `crates/bench`, `xtask/src/bench*`,
+  `scripts/release-size`, `scripts/stored-results` or `docs/performance.md`
+  also runs `release`, so a broken harness or judge fails the pull request
+  instead of waiting for the backstop. A draft that touches
+  `scripts/release-size` or `crates/bench` first sees size and benchmark
+  failures when marked ready.
 - A diff that touches `crates/loop`, `crates/bench` or `xtask/src/bench*` also runs the "Session, memory kept after 10 busy turns" workload (`docs/performance.md`) in `release`. Any other pull request skips it, and the job summary says so. The loop holds the session's state, so a diff elsewhere rarely moves the row, and the backstop catches one that does.
 - On a pull request, the head and base binaries run only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row on both passes. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log`, `crates/worktree` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`; `sandbox setup` on `crates/tools/`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A diff touching only `docs/performance.md` selects no row, since the selector treats a docs file as selecting nothing: none of the seven timing rows is measured on either pass, and the pull request is gated by the table checks and the `main` backstop alone. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
 
@@ -131,8 +134,8 @@ The selector has its own tests.
 
 On a ready pull request, one job on each of Linux x86_64, Linux arm64 and
 macOS arm64 runs `scripts/check`, the gate CI applies (`docs/workflow.md`,
-"The gate"). A draft pull request runs only the Linux x86_64 leg, because `cargo xtask plan` leaves its `test` job unselected. Each
-job:
+"The gate"). A draft pull request skips the jobs "Runners" names; marking it
+ready runs every job it skipped. Each job:
 
 - compiles the selected crates with the debug profile, every target,
   through clippy and nextest; the whole workspace is built by the backstop
@@ -362,6 +365,10 @@ On Linux x86_64 alone:
   `cargo check -p main --bins --tests --features dhat-heap`, so neither
   stops compiling unnoticed. The job's `timeout-minutes` is 10 to leave
   room for the two uncached checks alongside `scripts/check`.
+
+A draft never runs `release`; a ready pull request runs it when the
+selection chooses it. The backstop still runs it on every push to `main`
+("The backstop on `main`").
 
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull

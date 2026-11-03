@@ -5,7 +5,7 @@
 //! refuses it as headless when no person can answer), finishes the turn,
 //! and then runs the prompt as the next turn.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -97,6 +97,10 @@ pub struct Resumed {
     /// "`directory_added`"). A resume, fork or rewind restores them
     /// from the fold through the point it continues from.
     pub(crate) added: Vec<PathBuf>,
+    /// What the model's context has seen, folded from the reserved
+    /// `details.file_seen` on completed calls (`docs/tools.md`,
+    /// "Stale files").
+    pub(crate) seen_files: BTreeMap<PathBuf, u64>,
     /// Known hosts folded over the complete history chain.
     pub(crate) known_hosts: crate::known_hosts::KnownHosts,
     /// The reviewer's blocks this session.
@@ -152,6 +156,16 @@ impl Resumed {
     /// "`directory_added`").
     pub fn added(&self) -> &[PathBuf] {
         &self.added
+    }
+
+    /// What the model's context has seen: each resolved path the log's
+    /// completed file calls recorded with its whole-file hash, the last
+    /// hash-bearing entry winning (`docs/tools.md`, "Stale files"). A
+    /// completed handoff clears it; a missing or malformed legacy entry
+    /// creates nothing and erases nothing. The main crate seeds the
+    /// session's file tools from this, and replay never touches disk bytes.
+    pub fn seen_files(&self) -> &BTreeMap<PathBuf, u64> {
+        &self.seen_files
     }
 }
 
