@@ -637,7 +637,10 @@ fn an_absolute_workdir_that_is_a_directory_is_accepted_by_parsing() {
 fn result_lines_name_what_was_observed() {
     assert_eq!(exit_line(0), "Exit code 0.");
     assert_eq!(exit_line(3), "Exit code 3.");
-    assert_eq!(timeout_line(1000), "Timed out after 1000 ms and stopped.");
+    assert_eq!(
+        timeout_line(1000),
+        "Timed out after 1000 ms; Fiber stopped the whole process group."
+    );
     // Wiring: a signalled status reads its name through the shared helper.
     let mut cmd = Command::new("sh");
     cmd.args(["-c", "kill -TERM $$"]).process_group(0);

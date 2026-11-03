@@ -1046,7 +1046,7 @@ pub(crate) fn killed_line(name: &str) -> String {
 }
 
 pub(crate) fn timeout_line(timeout_ms: u64) -> String {
-    format!("Timed out after {timeout_ms} ms and stopped.")
+    format!("Timed out after {timeout_ms} ms; Fiber stopped the whole process group.")
 }
 
 /// What a monitor stopped at its deadline says (`docs/tools.md`,
