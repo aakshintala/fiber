@@ -150,11 +150,17 @@ fn names_of(variables: &Value) -> Vec<String> {
 /// Ends the test's session, hub and every session in the guarded
 /// workspace: the close is accepted, which proves a relayed command still
 /// reaches the session, then everything is reaped.
-fn finish(hub: &Arc<Mutex<Option<HubProc>>>, guard: SessionGuard, client: Socket, session: &str) {
+fn finish(
+    hub: &Arc<Mutex<Option<HubProc>>>,
+    guard: SessionGuard,
+    client: Socket,
+    session: &str,
+    since: &Subscribed,
+) {
     client.send(&format!(
         "{{\"id\":\"c_close\",\"session_id\":\"{session}\",\"command\":\"close\"}}"
     ));
-    until(&client, "fiber_exited", |line| {
+    until_after(&client, since, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     drop(client);
@@ -184,7 +190,7 @@ fn a_session_runs_with_the_login_shell_capture() {
         setup.session_socket(&session).exists(),
         "the session bound in the hub's home"
     );
-    subscribe(&client, &session);
+    let sub = subscribe(&client, &session);
     until(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -208,7 +214,7 @@ fn a_session_runs_with_the_login_shell_capture() {
     client.send(&format!(
         "{{\"id\":\"c_close\",\"session_id\":\"{session}\",\"command\":\"close\"}}"
     ));
-    until(&client, "fiber_exited", |line| {
+    until_after(&client, &sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     // Until the session process is gone it still holds its connections
@@ -252,7 +258,7 @@ fn a_session_runs_with_the_login_shell_capture() {
         }
         thread::yield_now();
     }
-    finish(&hub, guard, client, &session);
+    finish(&hub, guard, client, &session, &sub);
 }
 
 #[test]
@@ -266,7 +272,7 @@ fn a_session_runs_with_the_inherited_environment_when_the_capture_fails() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, PROMPT);
-    subscribe(&client, &session);
+    let sub = subscribe(&client, &session);
     until(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -280,7 +286,7 @@ fn a_session_runs_with_the_inherited_environment_when_the_capture_fails() {
         "the hub records why: {}",
         setup.hub_log()
     );
-    finish(&hub, guard, client, &session);
+    finish(&hub, guard, client, &session, &sub);
 }
 
 #[test]
@@ -309,7 +315,7 @@ fn a_session_without_a_shell_runs_with_the_inherited_environment() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, PROMPT);
-    subscribe(&client, &session);
+    let sub = subscribe(&client, &session);
     let turn = until(&client, "the shell call's turn", |line| {
         line["kind"] == "turn_completed"
     });
@@ -341,7 +347,7 @@ fn a_session_without_a_shell_runs_with_the_inherited_environment() {
         "the hub records why: {}",
         setup.hub_log()
     );
-    finish(&hub, guard, client, &session);
+    finish(&hub, guard, client, &session, &sub);
 }
 
 /// The successful capture's body exporting `mark`, for the refresh tests:
@@ -403,7 +409,7 @@ fn hub_refresh_rebuilds_the_environment_for_new_sessions() {
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     // The first session runs with the first capture.
     let first = start_session(&client, &workspace, PROMPT);
-    subscribe(&client, &first);
+    let first_sub = subscribe(&client, &first);
     until(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -414,7 +420,7 @@ fn hub_refresh_rebuilds_the_environment_for_new_sessions() {
     client.send(&format!(
         "{{\"id\":\"c_close\",\"session_id\":\"{first}\",\"command\":\"close\"}}"
     ));
-    until(&client, "fiber_exited", |line| {
+    until_after(&client, &first_sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     // A rewritten shell and `fiber hub refresh`: exit 0 with the login
@@ -437,7 +443,7 @@ fn hub_refresh_rebuilds_the_environment_for_new_sessions() {
     );
     // A session started after it records the new mark, not the old one.
     let second = start_session(&client, &workspace, PROMPT);
-    subscribe(&client, &second);
+    let sub = subscribe(&client, &second);
     until(&client, "the second turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -446,7 +452,7 @@ fn hub_refresh_rebuilds_the_environment_for_new_sessions() {
     let names = names_of(&variables);
     assert!(names.contains(&"REFRESH_MARK_TWO".to_owned()), "{names:?}");
     assert!(!names.contains(&"REFRESH_MARK_ONE".to_owned()), "{names:?}");
-    finish(&hub, guard, client, &second);
+    finish(&hub, guard, client, &second, &sub);
 }
 
 #[test]

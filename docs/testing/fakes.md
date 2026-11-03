@@ -197,6 +197,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `config` | `resolve` | Prints the merged configuration for a Fiber home and project. |
 | `provider` | `decode` | Runs a recorded stream through one protocol's decoder and prints what it produced. |
 | `provider` | `record` | Captures a live response as a recorded stream, with live keys, response bytes only. |
+| `provider` | `probe` | Sends one model the requests that show whether a deferred tool loads through `tool_search` and the cache holds across the load, with live keys, and prints pass or fail for each check (`docs/tools.md`, "Deferral is a property of the model"). |
 | `fakes` | `provider-server` | Serves a scripted or recorded stream on a free local port, prints that address, then prints each request it receives. |
 | `tools` | `call` | Runs one tool call with the given arguments and prints its result. |
 | `tui` | `draw` | Draws an events file at a given width and prints the screen as text. |

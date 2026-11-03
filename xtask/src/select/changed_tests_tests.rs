@@ -1380,3 +1380,126 @@ fn the_program_test_fixture_keeps_the_source_plan() {
         vec![refer("log", None, true, "second")]
     );
 }
+
+/// The filer writes one marker sentence per sighting, a `tested` line, and
+/// the failure text inside a fence; a later unclosed fence keeps its
+/// marker-looking line from naming a test. Only the marker outside any
+/// fence comes out, normalised past the binary prefix.
+#[test]
+fn issue_test_names_reads_only_the_marker_outside_fences() {
+    let body = "The test `main reviewer_setup::the_setup_saves` passed after a retry on linux.\n\
+        tested deadbeef\n\
+        ```\n\
+        failure text quoting `other::t`\n\
+        ```\n\
+        ```\n\
+        The test `sneaky::inside` passed after a retry on linux.\n";
+    assert_eq!(
+        super::issue_test_names(body),
+        vec!["reviewer_setup::the_setup_saves".to_owned()]
+    );
+}
+
+#[test]
+fn issue_test_names_empty_text_yields_nothing() {
+    assert_eq!(super::issue_test_names(""), Vec::<String>::new());
+}
+
+#[test]
+fn issue_test_names_keeps_an_id_with_no_space_whole() {
+    let body = "The test `lonely` passed after a retry on linux.\n";
+    assert_eq!(super::issue_test_names(body), vec!["lonely".to_owned()]);
+}
+
+#[test]
+fn issue_test_names_drops_a_marker_without_a_closing_backtick() {
+    let body = "The test `unclosed\n";
+    assert_eq!(super::issue_test_names(body), Vec::<String>::new());
+}
+
+#[test]
+fn issue_test_names_drops_an_empty_marker() {
+    let body = "The test `` passed after a retry on linux.\n";
+    assert_eq!(super::issue_test_names(body), Vec::<String>::new());
+}
+
+#[test]
+fn issue_test_names_dedups_keeping_first_order() {
+    let body = "The test `main bravo::two` passed after a retry on linux.\n\
+        The test `main alpha::one` passed after a retry on linux.\n\
+        The test `main bravo::two` passed after a retry on linux.\n";
+    assert_eq!(
+        super::issue_test_names(body),
+        vec!["bravo::two".to_owned(), "alpha::one".to_owned()]
+    );
+}
+
+#[test]
+fn test_name_matches_keeps_its_exact_and_suffix_arms() {
+    assert!(test_name_matches(
+        "reviewer_setup::the_setup_saves",
+        "reviewer_setup::the_setup_saves"
+    ));
+    assert!(test_name_matches(
+        "reviewer_setup::the_setup_saves",
+        "the_setup_saves"
+    ));
+    assert!(!test_name_matches(
+        "reviewer_setup::the_setup_saves",
+        "other"
+    ));
+}
+
+#[test]
+fn split_named_tests_partitions_in_diff_order() {
+    let touched = vec![
+        refer("main", Some("main::driver"), false, "alpha::one"),
+        refer(
+            "main",
+            Some("main::driver"),
+            false,
+            "reviewer_setup::the_setup_saves",
+        ),
+        refer("main", Some("main::driver"), false, "alpha::two"),
+    ];
+    let (named, rest) =
+        super::split_named_tests(&touched, &["reviewer_setup::the_setup_saves".to_owned()]);
+    assert_eq!(named, vec![touched[1].clone()]);
+    assert_eq!(rest, vec![touched[0].clone(), touched[2].clone()]);
+}
+
+#[test]
+fn split_named_tests_matches_by_exact_equality_only() {
+    let touched = vec![refer(
+        "main",
+        Some("main::driver"),
+        false,
+        "reviewer_setup::the_setup_saves",
+    )];
+    let (named, rest) = super::split_named_tests(&touched, &["the_setup_saves".to_owned()]);
+    assert!(named.is_empty());
+    assert_eq!(rest, touched);
+}
+
+#[test]
+fn split_named_tests_keeps_everything_when_nothing_matches() {
+    let touched = vec![
+        refer("main", Some("main::driver"), false, "alpha::one"),
+        refer("main", Some("main::driver"), false, "alpha::two"),
+    ];
+    let (named, rest) = super::split_named_tests(&touched, &["missing::test".to_owned()]);
+    assert!(named.is_empty());
+    assert_eq!(rest, touched);
+}
+
+#[test]
+fn split_named_tests_names_everything_when_all_match() {
+    let touched = vec![
+        refer("main", Some("main::driver"), false, "alpha::one"),
+        refer("main", Some("main::driver"), false, "alpha::two"),
+    ];
+    let names = vec!["alpha::one".to_owned(), "alpha::two".to_owned()];
+    let (named, rest) = super::split_named_tests(&touched, &names);
+    assert_eq!(named, touched);
+    assert!(rest.is_empty());
+}

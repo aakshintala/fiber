@@ -316,7 +316,7 @@ fn command(id: &str, session: &str, command: &str, args: Value) -> Value {
     json!({"id": id, "session_id": session, "command": command, "args": args})
 }
 
-fn subscribe(id: &str, session: &str) -> Value {
+fn subscribe_line(id: &str, session: &str) -> Value {
     command(id, session, "subscribe", json!({"level": "full"}))
 }
 
@@ -360,10 +360,20 @@ fn echo_call() -> Response {
 
 /// Waits for the relayed `fiber_exited`, then for the session process to
 /// be gone: until then it still holds its connections and its log, and
-/// answers a command `closing`.
-fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
+/// answers a command `closing`. A subscription bounds the exit wait past
+/// the fold.
+fn until_exited(client: &Socket, setup: &Setup, since: Option<&support::Subscribed>) -> Vec<Value> {
+    // One bound for the subscribed session: a line the fold replayed for
+    // it never ends the wait, mirroring [`until_after`]'s skip rule, which
+    // cannot take this file's own [`Socket`].
     let lines = until_hub(client, "fiber_exited", |line| {
-        line["kind"] == "fiber_exited"
+        let replayed = line.get("seq").and_then(Value::as_u64).is_some_and(|seq| {
+            since.is_some_and(|sub| {
+                sub.session.as_deref() == line.get("session_id").and_then(Value::as_str)
+                    && sub.last_seq.is_some_and(|last| seq <= last)
+            })
+        });
+        !replayed && line["kind"] == "fiber_exited"
     });
     fakes::try_matching_exits(&setup.workspace_text(), setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the session process to exit: {err}")
@@ -381,12 +391,13 @@ fn a_full_resume_announces_its_fold_without_a_subscribe_acknowledgement() {
     let id = lines[0]["session_id"].as_str().unwrap().to_owned();
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    client.send(&subscribe("c_sub", &id));
-    until_hub(&client, "the full subscribe", |line| {
+    client.send(&subscribe_line("c_sub", &id));
+    let acked = until_hub(&client, "the full subscribe", |line| {
         acknowledges(line, "c_sub")
     });
+    let sub = support::Subscribed::from_ack(Some(&id), acked.last().unwrap().clone());
     client.send(&close(&id));
-    until_exited(&client, &setup);
+    until_exited(&client, &setup, Some(&sub));
     client.send(&command("c_tools", &id, "tools", json!({})));
     let reopened = until_hub(&client, "the reopened stream", |line| {
         line["kind"] == "stream_reopened"
@@ -432,7 +443,7 @@ fn a_full_resume_announces_its_fold_without_a_subscribe_acknowledgement() {
         0
     );
     client.send(&close(&id));
-    until_exited(&client, &setup);
+    until_exited(&client, &setup, Some(&sub));
     drop(client);
     hub.lock().unwrap().take().expect("the hub ran").finish();
 }
@@ -448,7 +459,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
 
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    client.send(&subscribe("c_sub", &id));
+    client.send(&subscribe_line("c_sub", &id));
     let replay = until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
@@ -457,6 +468,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
         1,
         "the acknowledgement comes first: {replay:?}"
     );
+    let sub = support::Subscribed::from_ack(Some(&id), replay.last().unwrap().clone());
     client.send(&prompt("c_prompt", &id, "two"));
     // The replay holds the first turn; the prompt's turn follows its
     // acknowledgement, after the resumed `fiber_started`.
@@ -475,13 +487,13 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
 
     // A second client finds the session running and attaches.
     let second = connect_hub(&setup, &hub);
-    second.send(&subscribe("c_sub2", &id));
+    second.send(&subscribe_line("c_sub2", &id));
     until_hub(&second, "the second subscribe", |line| {
         acknowledges(line, "c_sub2")
     });
 
     // A valid id with no log names no session.
-    client.send(&subscribe("c_none", "s_0000000000000000"));
+    client.send(&subscribe_line("c_none", "s_0000000000000000"));
     let rejected = until_hub(&client, "the rejection", |line| {
         line["kind"] == "command_rejected"
     });
@@ -490,7 +502,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     assert_eq!(rejected["payload"]["command_id"], "c_none");
 
     client.send(&close(&id));
-    until_exited(&client, &setup);
+    until_exited(&client, &setup, Some(&sub));
     drop((client, second));
     assert_one_continued_log(&setup.log(&id), 2);
     let log = setup.hub_log();
@@ -514,15 +526,16 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
 
     let hub = Arc::new(Mutex::new(None));
     let first = connect_hub(&setup, &hub);
-    first.send(&subscribe("c_sub", &id));
-    until_hub(&first, "the first subscribe", |line| {
+    first.send(&subscribe_line("c_sub", &id));
+    let acked = until_hub(&first, "the first subscribe", |line| {
         acknowledges(line, "c_sub")
     });
+    let sub = support::Subscribed::from_ack(Some(&id), acked.last().unwrap().clone());
 
     // The session refuses a second connection's subscribe under an id it
     // already took, so this connection holds no level on it.
     let second = connect_hub(&setup, &hub);
-    second.send(&subscribe("c_sub", &id));
+    second.send(&subscribe_line("c_sub", &id));
     let refused = until_hub(&second, "the refusal", |line| {
         line["kind"] == "command_rejected"
     });
@@ -531,20 +544,21 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
     assert_eq!(refused["payload"]["code"], "duplicate_command", "{refused}");
 
     first.send(&close(&id));
-    until_exited(&first, &setup);
+    until_exited(&first, &setup, Some(&sub));
 
     // The resumed session sees only this subscribe from the second
     // connection, so it is accepted.
-    second.send(&subscribe("c_sub2", &id));
+    second.send(&subscribe_line("c_sub2", &id));
     let answered = until_hub(&second, "the second subscribe's answer", |line| {
         (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
             && line["payload"]["command_id"] == "c_sub2"
     });
     let answered = answered.last().unwrap();
     assert!(acknowledges(answered, "c_sub2"), "{answered}");
+    let second_sub = support::Subscribed::from_ack(Some(&id), answered.clone());
 
     second.send(&close(&id));
-    until_exited(&second, &setup);
+    until_exited(&second, &setup, Some(&second_sub));
     drop((first, second));
     let log = setup.hub_log();
     assert_eq!(
@@ -580,10 +594,11 @@ fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
         .to_owned();
     // Subscribed while the model call is held: the approval's idle wait
     // starts only after it.
-    client.send(&subscribe("c_sub", &id));
-    until_hub(&client, "the subscribe acknowledgement", |line| {
+    client.send(&subscribe_line("c_sub", &id));
+    let acked = until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
+    let sub = support::Subscribed::from_ack(Some(&id), acked.last().unwrap().clone());
     server.release();
     let asked = until_hub(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
@@ -592,7 +607,7 @@ fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
         .as_str()
         .unwrap()
         .to_owned();
-    let exited = until_exited(&client, &setup);
+    let exited = until_exited(&client, &setup, Some(&sub));
     assert_eq!(
         exited.last().unwrap()["payload"]["suspended_on"],
         request.as_str()
@@ -631,7 +646,7 @@ fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
     assert_eq!(completed["payload"]["status"], "completed");
 
     client.send(&close(&id));
-    until_exited(&client, &setup);
+    until_exited(&client, &setup, Some(&sub));
     drop(client);
     assert_one_continued_log(&setup.log(&id), 2);
     hub.lock().unwrap().take().expect("the hub ran").finish();
@@ -663,7 +678,11 @@ fn a_fresh_connection_answers_a_request_raised_again_on_resume() {
 
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    client.send(&subscribe("c_sub", &id));
+    client.send(&subscribe_line("c_sub", &id));
+    let acked = until_hub(&client, "the subscribe acknowledgement", |line| {
+        acknowledges(line, "c_sub")
+    });
+    let sub = support::Subscribed::from_ack(Some(&id), acked.last().unwrap().clone());
     let mut resumed = false;
     until_hub(&client, "the re-raised permission_requested", |line| {
         if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
@@ -691,7 +710,7 @@ fn a_fresh_connection_answers_a_request_raised_again_on_resume() {
     );
 
     client.send(&close(&id));
-    until_exited(&client, &setup);
+    until_exited(&client, &setup, Some(&sub));
     drop(client);
     assert_one_continued_log(&setup.log(&id), 2);
     hub.lock().unwrap().take().expect("the hub ran").finish();
@@ -735,7 +754,7 @@ fn a_subscribe_through_the_hub_to_an_exited_delegate_is_refused() {
 
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
-    client.send(&subscribe("c_sub", id));
+    client.send(&subscribe_line("c_sub", id));
     let rejected = client.next("the rejection", &[]);
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
     assert_eq!(rejected["payload"]["code"], "session_not_found");
@@ -772,7 +791,7 @@ fn a_resume_of_a_session_whose_workspace_is_gone_is_io_failed_naming_it() {
     // The session exited; its plain workspace cannot be made again. The
     // removal lands after the hub started, which runs in the workspace.
     fs::remove_dir_all(setup.workspace()).unwrap();
-    client.send(&subscribe("c_sub", &id));
+    client.send(&subscribe_line("c_sub", &id));
     let rejected = until_hub(&client, "the rejection", |line| {
         line["kind"] == "command_rejected"
     });

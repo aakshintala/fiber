@@ -109,11 +109,33 @@ fn paint_tints(
             lift_hover(buf, target.rect);
         }
     }
-    if let Some(id) = focused
-        && !matches!(id, TargetId::Link { .. })
-    {
+    // Focus wins every cell it shares with hover: the hover pass lifts
+    // the focused link's cells too, so put them back on
+    // `surface_raised`, keeping the marks pass's foreground and
+    // modifiers (`docs/tui.md`, "Links").
+    if let Some(id) = focused {
         for target in targets.iter().filter(|target| target.id == id) {
-            focus_style(buf, target.rect);
+            if matches!(id, TargetId::Link { .. }) {
+                restore_focused_link(buf, target.rect);
+            } else {
+                focus_style(buf, target.rect);
+            }
+        }
+    }
+}
+
+/// Puts `rect` back on the `surface_raised` tint, keeping each cell's
+/// foreground and modifiers: a background-only reset, not a full style,
+/// so a selection's reversal survives it. Placeholder cells keep their
+/// colours, as in [`lift_hover`] (`docs/tui.md`, "Links").
+fn restore_focused_link(buf: &mut Buffer, rect: Rect) {
+    let area = buf.area.intersection(rect);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if crate::graphics::is_placeholder(buf[(x, y)].symbol()) {
+                continue;
+            }
+            buf[(x, y)].set_bg(Role::SurfaceRaised.color());
         }
     }
 }

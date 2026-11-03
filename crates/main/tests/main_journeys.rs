@@ -2100,3 +2100,399 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
         }),
     );
 }
+
+/// One terminal's recorded or documented-default bytes per #4097 row,
+/// each loaded from `fixtures/terminal_bytes/` at compile time. A new
+/// terminal is a new entry, never a branch on the terminal name; a new
+/// row is a new field on every entry.
+struct TerminalBytes {
+    /// The terminal the bytes were recorded or documented for.
+    terminal: &'static str,
+    /// Where the bytes come from; see `fixtures/terminal_bytes/PROVENANCE.md`.
+    provenance: &'static str,
+    /// The bytes that move to the start of the cursor's line.
+    line_start: &'static [u8],
+    /// The bytes that move to the end of the cursor's line.
+    line_end: &'static [u8],
+    /// The bytes that delete to the start of the line.
+    delete_to_line_start: &'static [u8],
+    /// The bytes that delete one word back, when the terminal has a
+    /// default; `None` when it has none (Ghostty).
+    delete_word: Option<&'static [u8]>,
+}
+
+/// Ghostty's #3751/#3754 bytes: Super+Left/Right arrive as Ctrl+A/Ctrl+E
+/// and Super+Backspace as Ctrl+U. No `delete_word` default: Option+Backspace
+/// is plain `0x7f` since 1.2 (PR #7320, discussion #9560) and `ESC 0x7f` is
+/// a user keybind (1.2 removed the builtin, discussion #8677). The bug
+/// reports state no Ghostty version.
+const GHOSTTY_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "Ghostty",
+    provenance: "bug reports #3751 and #3754; versions unknown (reports state none)",
+    line_start: include_bytes!("fixtures/terminal_bytes/ghostty_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/ghostty_line_end.bin"),
+    delete_to_line_start: include_bytes!(
+        "fixtures/terminal_bytes/ghostty_delete_to_line_start.bin"
+    ),
+    delete_word: None,
+};
+
+/// iTerm2's factory default bytes: with no profile key mapping for
+/// plain Ctrl+letter keys they pass through as C0 bytes, and the factory
+/// option keys send no `ESC`-prefixed Alt bytes (`+Esc` is opt-in), so the
+/// word key is Ctrl+W. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`; the docs state no version.
+const ITERM2_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "iTerm2",
+    provenance: "factory key handling (no Ctrl+letter remaps; +Esc opt-in); C0 per man ascii(7); versions unknown",
+    line_start: include_bytes!("fixtures/terminal_bytes/iterm2_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/iterm2_line_end.bin"),
+    delete_to_line_start: include_bytes!("fixtures/terminal_bytes/iterm2_delete_to_line_start.bin"),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/iterm2_delete_word.bin"
+    )),
+};
+
+/// Terminal.app's default bytes: it declares `xterm-256color` and forwards
+/// unmapped control keys as C0 bytes, with "Use Option as Meta key" off, so
+/// the word key is Ctrl+W. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`; Apple states no single version.
+const TERMINAL_APP_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "Terminal.app",
+    provenance: "xterm-256color declaration; Apple Control-U guide; C0 per man ascii(7); versions unknown",
+    line_start: include_bytes!("fixtures/terminal_bytes/terminal_app_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/terminal_app_line_end.bin"),
+    delete_to_line_start: include_bytes!(
+        "fixtures/terminal_bytes/terminal_app_delete_to_line_start.bin"
+    ),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/terminal_app_delete_word.bin"
+    )),
+};
+
+/// Linux terminals' default bytes (xterm, the reference X terminal): 7-bit
+/// C0 controls for Ctrl+letter. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`.
+const LINUX_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "Linux",
+    provenance: "readline C-a/C-e/C-u/C-w defaults; C0 per man ascii(7) (man-pages 6.19)",
+    line_start: include_bytes!("fixtures/terminal_bytes/linux_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/linux_line_end.bin"),
+    delete_to_line_start: include_bytes!("fixtures/terminal_bytes/linux_delete_to_line_start.bin"),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/linux_delete_word.bin"
+    )),
+};
+
+/// Every tabled terminal: one entry per terminal the ticket names. New
+/// terminals join this table; no test branches on a terminal name.
+const TERMINAL_TABLE: &[TerminalBytes] =
+    &[GHOSTTY_BYTES, ITERM2_BYTES, TERMINAL_APP_BYTES, LINUX_BYTES];
+
+/// The scripted `ask_user` step the byte journeys answer through: one
+/// call with three questions, the third answered as free text on its
+/// words row. Same surface as the `journeys.rs` question-form journey.
+fn byte_form_step() -> Value {
+    json!({"tool_calls": [{"name": "ask_user", "arguments": {"questions": [
+        {"header": "Scope", "question": "Which crates should the change touch?",
+         "multiSelect": true, "options": [
+            {"label": "hub", "description": "the session host"},
+            {"label": "tui", "description": "the terminal"}]},
+        {"header": "Tests", "question": "Which tests cover it?",
+         "options": [{"label": "unit"}, {"label": "pty"}]},
+        {"header": "Docs", "question": "Which docs change?"},
+    ]}}]})
+}
+
+/// Whether the grid draws the three-question form's title and first
+/// question after the `run it` turn reaches the scripted step.
+fn byte_form_drawn(grid: &Grid) -> bool {
+    shows(
+        grid,
+        "Question from run it · 3 questions, any can be skipped",
+    ) && shows(grid, "Which crates should the change touch?")
+}
+
+/// A TUI journey's terminal: ready, kitty flags pushed, the unseeded
+/// home's first-run import offer declined, so regression bytes go out
+/// only once the binary is ready for input.
+fn start_byte_journey(setup: &Setup, bin: &Path) -> Run {
+    let mut run = Run::spawn_journey(setup, 160, 48, bin, &[], &support::TRUECOLOUR);
+    run.ready();
+    run.wait_bytes(0, support::pty::KITTY_PUSH, "kitty keyboard flags pushed");
+    dismiss_first_run_offer(&mut run);
+    run
+}
+
+/// The question form open on its free-text words row: the `run it` turn
+/// asked, the first question's option toggled, then Right and Tab across
+/// to the Docs words row, exactly like the `journeys.rs` form journey.
+fn open_words_row(run: &mut Run) {
+    run.write(b"run it\r");
+    run.wait_screen("the question form", byte_form_drawn);
+    run.write(b"2");
+    run.wait_screen("the toggled option", |grid| shows(grid, "2 [x] tui"));
+    run.write(b"\x1b[C");
+    run.wait_screen("the Tests tab", |grid| shows(grid, "Which tests cover it?"));
+    run.write(b"\t");
+    run.wait_screen("the Docs words row", |grid| {
+        shows(grid, "Which docs change?") && shows(grid, "Type an answer")
+    });
+}
+
+/// The declined form, then the person-visible exit: Esc declines the
+/// open form, and the usual sequence quits from the declined turn.
+fn decline_and_quit(mut run: Run) {
+    run.write(b"\x1b[27u");
+    run.wait_screen("the declined form", |grid| {
+        shows(grid, "declined") && !shows(grid, "Question from")
+    });
+    quit_journey(run);
+}
+
+/// The line start and end bytes through the real decoder (#3751): a
+/// two-line input-box draft, then the entry's bytes move on the
+/// cursor's line exactly like the `line_start_end.rs` journey, asserting
+/// only inside wait predicates.
+fn line_start_end_bytes_journey(entry: &TerminalBytes) {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [{"text": ["Complete."]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
+            "tui": support::journey::tui_off()}),
+    );
+    let bin = journey_bin();
+    let mut run = start_byte_journey(&setup, &bin);
+    // A two-line draft with the cursor at its end.
+    run.write(b"qx\x0ajz");
+    run.wait_screen("the two-line draft", |grid| {
+        shows(grid, "qx") && shows(grid, "jz")
+    });
+    // The entry's bytes move to the start of the cursor's line: typing
+    // lands before it, not at the draft's start.
+    let mut start = entry.line_start.to_vec();
+    start.push(b'X');
+    run.write(&start);
+    run.wait_screen("the line-start edit", |grid| {
+        shows(grid, "Xjz") && !shows(grid, "Xqx")
+    });
+    // The entry's bytes move to the end of the cursor's line.
+    let mut end = entry.line_end.to_vec();
+    end.push(b'Y');
+    run.write(&end);
+    run.wait_screen("the line-end edit", |grid| shows(grid, "XjzY"));
+    // From the first line, the end bytes stay on it instead of jumping
+    // to the draft's end.
+    let mut first = b"\x1b[A".to_vec();
+    first.extend_from_slice(entry.line_end);
+    first.push(b'Q');
+    run.write(&first);
+    run.wait_screen("the first line's end", |grid| {
+        shows(grid, "qxQ")
+            && !grid
+                .rows
+                .iter()
+                .map(|row| row.replace('█', ""))
+                .any(|row| row.contains("YQ"))
+    });
+    // One Ctrl+C clears the draft, and the usual sequence quits from
+    // the empty box.
+    run.write(b"\x03");
+    run.wait_screen("the cleared draft", |grid| !shows(grid, "XjzY"));
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored terminal", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+/// The delete-to-line-start bytes on a question form's words row
+/// (#3754): "one two three" typed, the entry's bytes empty the row.
+fn delete_to_line_start_bytes_journey(entry: &TerminalBytes) {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [byte_form_step(), {"text": ["Thanks."]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
+            "tui": support::journey::tui_off()}),
+    );
+    let bin = journey_bin();
+    let mut run = start_byte_journey(&setup, &bin);
+    open_words_row(&mut run);
+    run.write(b"one two three");
+    run.wait_screen("the typed words row", |grid| shows(grid, "✎ one two three"));
+    run.write(entry.delete_to_line_start);
+    run.wait_screen("the emptied words row", |grid| {
+        shows(grid, "Type an answer") && !shows(grid, "one two three")
+    });
+    decline_and_quit(run);
+}
+
+/// The delete-word bytes on a question form's words row (#3754): "one
+/// two" typed, the entry's bytes cut "two" while "one" stays. The entry
+/// must have a word-delete byte; Ghostty has none, so it has no test.
+fn delete_word_bytes_journey(entry: &TerminalBytes) {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [byte_form_step(), {"text": ["Thanks."]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
+            "tui": support::journey::tui_off()}),
+    );
+    let bin = journey_bin();
+    let mut run = start_byte_journey(&setup, &bin);
+    open_words_row(&mut run);
+    run.write(b"one two");
+    run.wait_screen("the typed words row", |grid| shows(grid, "✎ one two"));
+    let delete_word = entry
+        .delete_word
+        .expect("tabled terminal has a word-delete byte");
+    run.write(delete_word);
+    run.wait_screen("the cut words row", |grid| {
+        shows(grid, "✎ one") && !shows(grid, "one two")
+    });
+    decline_and_quit(run);
+}
+
+/// The closed terminal table: every entry names its terminal and cites
+/// its bytes' source, so a new terminal joins the table with its
+/// provenance instead of a branch.
+#[test]
+fn terminal_bytes_table_names_each_terminal_source() {
+    for entry in TERMINAL_TABLE {
+        assert!(!entry.terminal.is_empty(), "each entry names its terminal");
+        assert!(
+            !entry.provenance.is_empty(),
+            "each entry cites its bytes' source"
+        );
+    }
+    assert_eq!(
+        TERMINAL_TABLE.len(),
+        4,
+        "one entry per tabled terminal: Ghostty, iTerm2, Terminal.app, Linux"
+    );
+}
+
+/// Ghostty's #3751 bytes through the decoder: Super+Left/Right arrive
+/// as Ctrl+A/Ctrl+E and move on the cursor's line.
+#[test]
+fn terminal_bytes_ghostty_line_start_end() {
+    run_journey(
+        "terminal_bytes_ghostty_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&GHOSTTY_BYTES)),
+    );
+}
+
+/// Ghostty's #3754 line bytes through the decoder: Super+Backspace
+/// arrives as Ctrl+U and empties the words row.
+#[test]
+fn terminal_bytes_ghostty_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_ghostty_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&GHOSTTY_BYTES)),
+    );
+}
+
+// Ghostty has no `delete_word` default to feed: Option+Backspace is plain
+// `0x7f` since 1.2 and `ESC 0x7f` is a user keybind, so the word row is
+// covered for iTerm2, Terminal.app and Linux only.
+
+/// iTerm2's factory line bytes through the decoder: Ctrl+A/Ctrl+E pass
+/// through unmapped and move on the cursor's line.
+#[test]
+fn terminal_bytes_iterm2_line_start_end() {
+    run_journey(
+        "terminal_bytes_iterm2_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// iTerm2's factory line bytes through the decoder: Ctrl+U passes through
+/// unmapped and empties the words row.
+#[test]
+fn terminal_bytes_iterm2_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_iterm2_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// iTerm2's factory word bytes through the decoder: Ctrl+W passes through
+/// unmapped and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_iterm2_delete_word() {
+    run_journey(
+        "terminal_bytes_iterm2_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// Terminal.app's line bytes through the decoder: Ctrl+A/Ctrl+E are
+/// forwarded as C0 bytes and move on the cursor's line.
+#[test]
+fn terminal_bytes_terminal_app_line_start_end() {
+    run_journey(
+        "terminal_bytes_terminal_app_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Terminal.app's line bytes through the decoder: Ctrl+U is forwarded as
+/// a C0 byte and empties the words row.
+#[test]
+fn terminal_bytes_terminal_app_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_terminal_app_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Terminal.app's word bytes through the decoder: Ctrl+W is forwarded as
+/// a C0 byte and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_terminal_app_delete_word() {
+    run_journey(
+        "terminal_bytes_terminal_app_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Linux terminals' line bytes through the decoder: Ctrl+A/Ctrl+E arrive
+/// as C0 bytes and move on the cursor's line.
+#[test]
+fn terminal_bytes_linux_line_start_end() {
+    run_journey(
+        "terminal_bytes_linux_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&LINUX_BYTES)),
+    );
+}
+
+/// Linux terminals' line bytes through the decoder: Ctrl+U arrives as a
+/// C0 byte and empties the words row.
+#[test]
+fn terminal_bytes_linux_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_linux_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&LINUX_BYTES)),
+    );
+}
+
+/// Linux terminals' word bytes through the decoder: Ctrl+W arrives as a
+/// C0 byte and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_linux_delete_word() {
+    run_journey(
+        "terminal_bytes_linux_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&LINUX_BYTES)),
+    );
+}

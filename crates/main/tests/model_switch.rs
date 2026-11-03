@@ -266,17 +266,6 @@ fn reasoning_hello(thought: &str) -> Response {
 }
 
 #[track_caller]
-fn subscribe(client: &Socket) -> Value {
-    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let sub = until(client, "the subscribe acknowledgement", |line| {
-        line["kind"] == "command_accepted"
-    });
-    assert_eq!(sub.len(), 1);
-    assert_eq!(sub[0]["payload"]["command_id"], "c_sub");
-    sub.into_iter().next().unwrap()
-}
-
-#[track_caller]
 fn prompt(client: &Socket, id: &str, text: &str) {
     client.send(&format!(
         r#"{{"id":"{id}","command":"prompt","args":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
@@ -326,7 +315,7 @@ fn a_model_sent_between_turns_applies_at_the_next_turn_boundary() {
 
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     prompt(&client, "c_prompt", "hi");
     stream.extend(until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -438,7 +427,7 @@ fn reasoning_stays_with_the_model_that_produced_it() {
 
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     prompt(&client, "c_first", "hi");
     stream.extend(until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -568,7 +557,7 @@ fn an_unknown_model_is_rejected_and_changes_nothing() {
 
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     prompt(&client, "c_prompt", "hi");
     stream.extend(until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -633,7 +622,7 @@ fn an_unsupported_thinking_level_is_rejected() {
 
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     prompt(&client, "c_prompt", "hi");
     stream.extend(until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -699,7 +688,7 @@ fn a_resume_restores_the_switched_model_and_level() {
 
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     prompt(&client, "c_first", "hi");
     stream.extend(until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -770,7 +759,7 @@ fn a_resume_restores_the_switched_model_and_level() {
 
     let resumed = start_session(&setup, &id, &["--resume"]);
     let again = resumed.connect(&setup.session_socket(&id));
-    let mut second = vec![subscribe(&again)];
+    let mut second = vec![subscribe_direct(&again).ack];
     second.extend(until(&again, "resumed fiber_started", |line| {
         line["kind"] == "fiber_started" && line["payload"]["resumed"] == true
     }));
@@ -987,7 +976,7 @@ fn switch_and_list(from: &str, to: &str, replies: [Response; 2]) -> Switched {
     let running = start_session(&setup, &id, &[]);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     prompt(&client, "c_prompt", "hi");
     stream.extend(until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -1223,7 +1212,7 @@ fn a_switch_to_an_unloaded_lua_provider_sends_its_token() {
     let running = start_session(&setup, &id, &[]);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     model(&client, "c_model", "lp/lm", None);
     stream.extend(until(&client, "model_changed", |line| {
         line["kind"] == "model_changed"
@@ -1304,7 +1293,7 @@ fn a_provider_only_package_waits_until_its_model_is_used() {
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
     assert!(!marker.exists(), "session start loaded the unused provider");
-    let _ = subscribe(&client);
+    subscribe_direct(&client);
     model(&client, "c_model", "lp/lm", None);
     until(&client, "model_changed", |line| {
         line["kind"] == "model_changed"
@@ -1340,7 +1329,7 @@ fn a_command_source_runs_once_across_switches() {
     let running = start_session(&setup, &id, &[]);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     for (command, reference) in [("c_1", "other/om"), ("c_2", "fake/m"), ("c_3", "other/om")] {
         model(&client, command, reference, None);
         stream.extend(until(&client, "model_changed", |line| {
@@ -1415,7 +1404,7 @@ fn a_failed_read_is_rejected_with_its_code_and_read_again_later() {
     let running = start_session(&setup, &id, &[]);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     model(&client, "c_1", "other/om", None);
     stream.extend(until(&client, "command_rejected", |line| {
         line["kind"] == "command_rejected"
@@ -1485,7 +1474,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
     let running = start_session(&setup, &id, &[]);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let _subscribed = subscribe(&client);
+    let _subscribed = subscribe_direct(&client);
     // A turn first: a session never prompted leaves no log behind.
     prompt(&client, "c_prompt", "hi");
     until(&client, "turn_completed", |line| {
@@ -1557,7 +1546,7 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
     let running = start_session(&setup, &id, &[]);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let _subscribed = subscribe(&client);
+    let _subscribed = subscribe_direct(&client);
     // A turn first: a session never prompted leaves no log behind.
     prompt(&client, "c_prompt", "hi");
     until(&client, "turn_completed", |line| {
@@ -1638,7 +1627,7 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
     let running = start_session(&setup, &id, &[]);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let _subscribed = subscribe(&client);
+    let _subscribed = subscribe_direct(&client);
     // A turn first: a session never prompted leaves no log behind.
     prompt(&client, "c_prompt", "hi");
     until(&client, "turn_completed", |line| {
@@ -1727,7 +1716,7 @@ fn the_file_a_switch_read_is_denied_after_its_link_moves() {
     let running = start_session(&setup, &id, &[]);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     // Started against `c`; the switch reads `a`; the link then moves on.
     let repoint = |target: &str| {
         fs::remove_file(&link).unwrap();
@@ -1892,7 +1881,7 @@ fn a_credential_sent_between_turns_switches_the_label() {
 
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     prompt(&client, "c_prompt", "hi");
     stream.extend(until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -2029,7 +2018,7 @@ fn a_credential_naming_no_label_is_rejected_and_changes_nothing() {
 
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     prompt(&client, "c_prompt", "hi");
     stream.extend(until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -2148,10 +2137,10 @@ fn a_credential_switch_changes_no_other_running_session() {
 
     let client = running.connect(&setup.session_socket(&first));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     let peer = other.connect(&setup.session_socket(&second));
     other.wait_for("extensions_loaded");
-    let mut peer_stream = vec![subscribe(&peer)];
+    let mut peer_stream = vec![subscribe_direct(&peer).ack];
 
     prompt(&client, "a_prompt", "hi");
     stream.extend(until(&client, "turn_completed", |line| {

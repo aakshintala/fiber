@@ -125,6 +125,8 @@ impl App {
             "args": {"session": session.0, "path": path},
         })
         .to_string();
+        self.outbox
+            .wait(&command_id, super::outbox::Waiting::ImageFetch);
         self.images.fetches.insert(
             command_id,
             Fetch {
@@ -149,11 +151,13 @@ impl App {
             .find(|(_, fetch)| fetch.command == id)
             .map(|(key, _)| key.clone());
         if let Some(key) = display {
+            self.outbox.settled(id);
             return self.display_answered(key, result);
         }
         let Some(fetch) = self.images.fetches.remove(id) else {
             return false;
         };
+        self.outbox.settled(id);
         let name = file_name(&fetch.path);
         let Some(data) = result
             .and_then(|result| result.get("data"))
@@ -376,6 +380,7 @@ impl App {
             .find(|(_, fetch)| fetch.command == id)
             .map(|(key, fetch)| (key.clone(), (*fetch).clone()));
         if let Some((key, fetch)) = failed {
+            self.outbox.settled(id);
             self.images.display.remove(&key);
             // Only an asked image fails: a converting image's worker
             // decides, so a duplicate or late rejection changes nothing.
@@ -389,6 +394,7 @@ impl App {
         let Some(fetch) = self.images.fetches.remove(id) else {
             return false;
         };
+        self.outbox.settled(id);
         let name = file_name(&fetch.path);
         self.images
             .refused
@@ -459,6 +465,8 @@ impl App {
             })
             .to_string();
             self.images.out.display.push(line);
+            self.outbox
+                .wait(&command_id, super::outbox::Waiting::ImageDisplay);
             fetch.command = command_id;
             fetch.state = DisplayState::Asked;
         }
@@ -485,6 +493,8 @@ impl App {
             .filter(|fetch| fetch.state == DisplayState::Shown)
             .map(|fetch| fetch.id)
             .collect();
+        self.outbox.forget(&super::outbox::Waiting::ImageFetch);
+        self.outbox.forget(&super::outbox::Waiting::ImageDisplay);
         self.images.fetches.clear();
         self.images.refused.clear();
         self.images.display.clear();
@@ -560,6 +570,8 @@ impl App {
                 "args": {"session": part.session.0, "path": part.path},
             })
             .to_string();
+            self.outbox
+                .wait(&command_id, super::outbox::Waiting::ImageDisplay);
             self.images.display.insert(
                 key,
                 Display {
@@ -579,6 +591,7 @@ impl App {
     /// again when drawn with the link up. That is a new connection,
     /// not a retry.
     pub(in crate::app) fn images_disconnected(&mut self) {
+        self.outbox.forget(&super::outbox::Waiting::ImageFetch);
         self.images.fetches.clear();
     }
 

@@ -1180,3 +1180,169 @@ fn a_swapped_view_on_home_tints_the_focused_row_and_lifts_the_hovered_row() {
         );
     }
 }
+
+/// An app at 60x16 with one finished tool call whose ledger row shows a
+/// bare URL: `turn_started` plus `step_started` plus a
+/// `tool_call_requested` for an `Other` tool plus a
+/// `tool_call_completed` carrying the URL, with the group opened so the
+/// ledger row draws (`docs/tui.md`, "Tool groups and the ledger").
+fn call_with_bare_link() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 16);
+    assert!(app.on_line(hello()).is_empty());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.on_line(line(
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(line("assistant_message_started", json!({}), Some("a_m")));
+    app.on_line(line("step_started", json!({}), None));
+    app.on_line(line(
+        "tool_call_requested",
+        json!({"name": "fetch", "arguments": {"url": "http://example.com/a"}}),
+        Some("a_c0"),
+    ));
+    app.on_line(line(
+        "tool_call_completed",
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": "see http://example.com/a here"}]}),
+        Some("a_c0"),
+    ));
+    app.on_line(line(
+        "assistant_message_completed",
+        json!({"outcome": "completed"}),
+        Some("a_m"),
+    ));
+    app.on_line(line(
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    app.set_opener(true);
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, crate::app::Target::Group(_)).then_some(target))
+        .expect("a group target");
+    app.open(group);
+    app
+}
+
+/// The screen with the pointer at `at`, then a rule, then a mask: `#`
+/// where the hovered `turn` tint lifts, `.` elsewhere. The mask keys on
+/// the `turn` lift, so a focused link's own cells never mark it: the
+/// snapshot pins the rest of the frame while the cell assertions pin
+/// the link.
+fn focused_hover_shown(app: &App, width: u16, height: u16, at: (u16, u16)) -> String {
+    use crate::theme::{Role, hover_bg};
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, Some(at));
+    let mut mask = String::new();
+    let tint = hover_bg(Role::Turn.color());
+    for y in 0..height {
+        for x in 0..width {
+            let lit = buf.cell((x, y)).is_some_and(|cell| cell.bg == tint);
+            mask.push(if lit { '#' } else { '.' });
+        }
+        mask.push('\n');
+    }
+    format!("{}\n---\n{mask}", crate::view::text(&buf))
+}
+
+/// Every cell of every rect of the focused link `id` in `buf`: accent,
+/// underlined, on `surface_raised`.
+fn assert_focused_link_cells(buf: &Buffer, app: &App, id: TargetId) {
+    use crate::theme::Role;
+    use ratatui::style::Modifier;
+    let area = app.conversation_area();
+    let link = app
+        .visible_links(area)
+        .into_iter()
+        .find(|link| link.id == id)
+        .expect("the focused link");
+    assert!(!link.rects.is_empty(), "the focused link has cells");
+    for rect in &link.rects {
+        for dx in 0..rect.width {
+            for dy in 0..rect.height {
+                let at = (rect.x.saturating_add(dx), rect.y.saturating_add(dy));
+                let cell = &buf[at];
+                assert_eq!(cell.fg, Role::Accent.color(), "link cell {at:?}");
+                assert_eq!(cell.bg, Role::SurfaceRaised.color(), "link cell {at:?}");
+                assert!(
+                    cell.modifier.contains(Modifier::UNDERLINED),
+                    "link cell {at:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_focused_link_keeps_surface_raised_when_hovered_itself() {
+    // Focus wins every cell it shares with hover, including when the
+    // pointer sits on the focused link itself (`docs/tui.md`, "Links").
+    let mut app = replied(60, 12, "[docs](https://example.com/a) tail");
+    app.set_opener(true);
+    let (id, _) = link_for(&app, "https://example.com/a");
+    app.focus = Some(id);
+    let area = Rect::new(0, 0, 60, 12);
+    // The fixture: the pointer on the link's own cell hits the link.
+    let (_, first) = link_for(&app, "https://example.com/a");
+    let pointer = (first.x, first.y);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, Some(pointer));
+    assert_eq!(hit(&targets, pointer.0, pointer.1), Some(id));
+    insta::assert_snapshot!(
+        "a_focused_link_keeps_surface_raised_when_hovered_itself",
+        focused_hover_shown(&app, 60, 12, pointer)
+    );
+    // The focused link keeps `surface_raised` under its own hover.
+    assert_focused_link_cells(&buf, &app, id);
+}
+
+#[test]
+fn a_focused_link_keeps_surface_raised_when_a_line_hover_covers_it() {
+    // Focus wins every cell it shares with hover when a wider target
+    // covers the focused link's cells (`docs/tui.md`, "Links").
+    let mut app = call_with_bare_link();
+    let url = "http://example.com/a";
+    let (id, _) = link_for(&app, url);
+    app.focus = Some(id);
+    let area = Rect::new(0, 0, 60, 16);
+    let (_, first) = link_for(&app, url);
+    // The fixture: the link's own cell hits the link, and an off-link
+    // cell on the same row hits the covering line target.
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    assert_eq!(hit(&targets, first.x, first.y), Some(id));
+    let link_rects: Vec<Rect> = app
+        .visible_links(app.conversation_area())
+        .into_iter()
+        .find(|link| link.id == id)
+        .expect("the focused link")
+        .rects;
+    let convo = app.conversation_area();
+    let pointer = (convo.left()..convo.right())
+        .map(|x| (x, first.y))
+        .find(|&(x, y)| {
+            !link_rects.iter().any(|rect| rect.contains((x, y).into()))
+                && matches!(hit(&targets, x, y), Some(TargetId::Line(_)))
+        })
+        .expect("an off-link cell on the focused row under a line target");
+    // Hovering the covering line leaves the focused link's cells on
+    // `surface_raised`.
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, Some(pointer));
+    assert!(
+        matches!(hit(&targets, pointer.0, pointer.1), Some(TargetId::Line(_))),
+        "the pointer still hovers the line"
+    );
+    insta::assert_snapshot!(
+        "a_focused_link_keeps_surface_raised_when_a_line_hover_covers_it",
+        focused_hover_shown(&app, 60, 16, pointer)
+    );
+    assert_focused_link_cells(&buf, &app, id);
+}

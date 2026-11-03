@@ -25,10 +25,11 @@
 //! - `narrow-plan --list FILE --filter EXPR`: reads `planned` lines on stdin and the
 //!   `cargo nextest list --message-format json` in FILE, drops tests the list did
 //!   not match, and prints `dropped`, `run` and `filter` lines
-//! - `stress-plan --base REV [--labels L] [--summary FILE] [--filter-file PATH]`: the test functions the
-//!   working tree adds or changes against the merge base with REV that this runner
+//! - `stress-plan --base REV [--labels L] [--summary FILE] [--filter-file PATH] [--issue-text FILE] [--only named|rest]`:
+//!   the test functions the working tree adds or changes against the merge base with REV that this runner
 //!   compiles, as tab-separated lines, naming each dropped test, appending the
-//!   job-summary block to FILE when given
+//!   job-summary block to FILE when given; with `--only`, plans only the named
+//!   tests or only the rest, read from the issue text in FILE
 //! - `touched-retries --base REV --list FILE`: whether any test the working tree adds or
 //!   changes passed only on retry, reading the retry list in FILE; exit 1 when one did
 //! - `stress-check --log FILE --count N --tests T`: checks the nextest stress output
@@ -49,6 +50,9 @@
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `crate-edges`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
+//! - `doc-citations --print`: prints the allow table for code citations
+//!   (`xtask/doc-citations.allow`); `check-docs` fails what the table
+//!   does not list
 //! - `flake-report-events`: reads one JSON object on stdin carrying the
 //!   flake titles and the complete open and closed exact-title issue
 //!   lookups with their completeness, and prints the unique closed issue
@@ -111,6 +115,7 @@ mod bench;
 mod budget_bounds;
 mod census_ratchet;
 mod ci_needs;
+mod doc_citations;
 mod docs;
 mod flake_report;
 mod logo;
@@ -502,7 +507,16 @@ fn run(args: &[String]) -> Result<bool, String> {
             for path in docs::checked_files(root)? {
                 failures.extend(docs::check_file(root, &path)?);
             }
+            failures.extend(doc_citations::check(root)?);
             report("check-docs", &failures, "ok")
+        }
+        "doc-citations" => {
+            if rest == ["--print"] {
+                print!("{}", doc_citations::table(Path::new("."))?);
+                Ok(true)
+            } else {
+                Err("usage: cargo xtask doc-citations --print".to_owned())
+            }
         }
         "kinds-ratchet" => {
             let max: usize = flag(rest, "--max")?
@@ -989,6 +1003,8 @@ fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
     Ok(files)
 }
 
+#[cfg(test)]
+mod check_resources_tests;
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;

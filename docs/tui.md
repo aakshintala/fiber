@@ -1808,6 +1808,7 @@ copies the URL and shows "Copied". A link is in the accent colour,
 underlined. A focused link sits on the `surface_raised` tint, with "Enter opens
 · y copies" dim under it when the window has a row under it, and opens with Enter and copies with `y`. A hovered
 link takes the `hover` tint.
+A focused link keeps the `surface_raised` tint under hover, whether the pointer is on the link itself or on a wider target that covers its cells.
 
 A copy, link or image command still running after 10 seconds is stopped;
 what it started keeps running. Large images go to the terminal in chunks (Images).
@@ -3438,6 +3439,10 @@ CPU and time to first frame. The design keeps to them this way:
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**
 - **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.
+
+### Wide variation-selector cells
+
+A cell holding a variation selector (for example `⚠️`) that measures two columns is written with its trailing cell first, then the cell itself. `ratatui-crossterm` moves the cursor whenever a cell is not at the last column plus one on the same row, so the reordered pair still moves before each cell and draws the frame on terminals giving the emoji one cell and on those giving it two alike. Cells that are not such a pair keep their order.
 
 
 ## Configuration
