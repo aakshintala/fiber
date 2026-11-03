@@ -11,7 +11,9 @@
 # Every descendant of scripts/check inherits FIBER_CHECK_RUN, so a process
 # whose environment still holds FIBER_CHECK_RUN=NONCE started under this run
 # and outlived the tests. A sibling run carries another nonce and never
-# matches.
+# matches. A shared build-cache server the toolchain starts (today only
+# sccache) outlives the run by design: the scan lists it in a warning
+# instead of failing; see report_match below.
 set -euo pipefail
 
 nonce=${1-}
@@ -72,6 +74,32 @@ holds_token() {
   [[ " $1 " == *" $2 "* ]]
 }
 
+# Executable basenames of shared build-cache servers the toolchain starts
+# that outlive the run by design. A new name joins this list only through
+# a pull request that cites the process.
+daemons="sccache"
+
+# Report one nonce-carrying process: a listed server warns without
+# counting as a leak, and anything else fails the scan. The executable is
+# the first word of the command line, reduced to its basename; the match
+# is exact on the space-padded list, so sccache-not and a path through a
+# directory named sccache still fail.
+report_match() {
+  local pid=$1
+  local cmd=$2
+  local word=${cmd%% *}
+  local base=${word##*/}
+  case " $daemons " in
+  *" $base "*)
+    echo "warning: shared build-cache server $pid: $cmd (not counted as a leak)" >&2
+    ;;
+  *)
+    echo "leaked process $pid: $cmd" >&2
+    leaks=$((leaks + 1))
+    ;;
+  esac
+}
+
 leaks=0
 if [ "$(uname -s)" = Darwin ]; then
   table=$(env -u FIBER_CHECK_RUN ps -E -ww -o pid=,command= -U "$USER")
@@ -95,8 +123,7 @@ if [ "$(uname -s)" = Darwin ]; then
       if [ -z "$cmd" ]; then
         cmd="(no command line)"
       fi
-      echo "leaked process $pid: $cmd" >&2
-      leaks=$((leaks + 1))
+      report_match "$pid" "$cmd"
     fi
   done <<<"$table"
 else
@@ -128,8 +155,7 @@ else
       if [ -z "$cmd" ]; then
         cmd="(no command line)"
       fi
-      echo "leaked process $pid: $cmd" >&2
-      leaks=$((leaks + 1))
+      report_match "$pid" "$cmd"
     fi
   done
 fi

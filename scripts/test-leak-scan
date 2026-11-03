@@ -26,6 +26,7 @@ leaker4=
 leaker5=
 leaker6=
 leaker7=
+leaker8=
 
 # True while ps still lists the PID. Read-only: this sends nothing.
 pid_alive() {
@@ -72,6 +73,28 @@ await_orphan() {
   printf '%s' "$found"
 }
 
+# Wait up to 10 s for PID $1 to exec into the basename $2, polling
+# read-only. A bash -c fixture carries the nonce from fork but shows its
+# argv0 only after the exec; the scan reads the live command line, so a
+# pre-exec shell would misreport the name under test.
+await_basename() {
+  local target=$1
+  local want=$2
+  local tries=0 cmd word base
+  while [ "$tries" -lt 50 ]; do
+    cmd=$(env -u FIBER_CHECK_RUN ps -o command= -p "$target" 2>/dev/null || true)
+    cmd=${cmd#"${cmd%%[![:space:]]*}"}
+    word=${cmd%% *}
+    base=${word##*/}
+    if [ "$base" = "$want" ]; then
+      return 0
+    fi
+    tries=$((tries + 1))
+    sleep 0.2
+  done
+  return 1
+}
+
 # Touch the stop file, reap the fixtures this shell spawned, and require
 # every given PID gone within 10 s. A PID still listed is reported with
 # its PID and command, and the test fails; nothing is signalled. Orphaned
@@ -104,7 +127,7 @@ cleanup() {
     touch "$stop" 2>/dev/null || true
   fi
   local pid
-  for pid in "$leaker1" "$leaker2" "$leaker5" "$leaker7"; do
+  for pid in "$leaker1" "$leaker2" "$leaker5" "$leaker7" "$leaker8"; do
     if [ -n "$pid" ]; then
       if wait "$pid" 2>/dev/null; then
         :
@@ -112,7 +135,7 @@ cleanup() {
     fi
   done
   local stray=
-  for pid in "$leaker1" "$leaker2" "$leaker3" "$leaker4" "$leaker5" "$leaker6" "$leaker7"; do
+  for pid in "$leaker1" "$leaker2" "$leaker3" "$leaker4" "$leaker5" "$leaker6" "$leaker7" "$leaker8"; do
     if [ -n "$pid" ] && pid_alive "$pid"; then
       # 25 s leaves room for a slow poll loop to notice the stop file.
       if require_gone "$pid" 25; then
@@ -228,7 +251,121 @@ if [ "$empty_rc" -ne 2 ]; then
   exit 1
 fi
 
+# A shared build-cache server the toolchain starts (today only sccache)
+# outlives the run by design: it carries the nonce, is listed in a
+# warning, and does not fail the scan. The other leakers stop first so
+# the server fixture below stands alone.
 stop_and_require_gone "$leaker1" "$leaker2" "$leaker5"
+leaker1=
+leaker2=
+leaker5=
+rm -f "$stop"
+FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" STOP="$stop" bash -c 'exec -a sccache python3 -c "import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ[\"STOP\"]; end = time.time() + 120; exec(\"while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)\")"' &
+leaker8=$!
+if ! await_basename "$leaker8" sccache; then
+  echo "scripts/test-leak-scan: sccache fixture $leaker8 never took argv0 sccache: $(pid_command "$leaker8")" >&2
+  exit 1
+fi
+# Alone, the server warns and the scan stays green.
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
+  :
+else
+  echo "scripts/test-leak-scan: leak-scan failed on shared build-cache server $leaker8:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if ! grep -Fq "warning: shared build-cache server $leaker8:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not warn on sccache fixture $leaker8:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if grep -Fq "leaked process $leaker8:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan counted sccache fixture $leaker8 as a leak:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if grep -Fq "$secret" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan printed an environment value for $leaker8:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+# Beside a real leaker the scan still fails, naming the leaker and
+# warning on the server only.
+FIBER_CHECK_RUN=$n STOP="$stop" python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ["STOP"]; end = time.time() + 120; exec("while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)")' &
+leaker1=$!
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
+  echo "scripts/test-leak-scan: leak-scan exited 0 with real leaker $leaker1 alive beside sccache $leaker8" >&2
+  exit 1
+fi
+if ! grep -Fq "leaked process $leaker1:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not name real leaker $leaker1 beside sccache:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if grep -Fq "leaked process $leaker8:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan counted sccache fixture $leaker8 as a leak beside $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if ! grep -Fq "warning: shared build-cache server $leaker8:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not warn on sccache fixture $leaker8 beside $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+stop_and_require_gone "$leaker1" "$leaker8"
+leaker1=
+leaker8=
+rm -f "$stop"
+# An argv0 that merely contains the name is still a leak: sccache-not as
+# the basename first, then a path through a directory named sccache.
+FIBER_CHECK_RUN=$n STOP="$stop" bash -c 'exec -a sccache-not python3 -c "import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ[\"STOP\"]; end = time.time() + 120; exec(\"while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)\")"' &
+leaker1=$!
+if ! await_basename "$leaker1" sccache-not; then
+  echo "scripts/test-leak-scan: sccache-not fixture $leaker1 never took its argv0: $(pid_command "$leaker1")" >&2
+  exit 1
+fi
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
+  echo "scripts/test-leak-scan: leak-scan exited 0 with sccache-not leaker $leaker1 alive" >&2
+  exit 1
+fi
+if ! grep -Fq "leaked process $leaker1:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not name sccache-not leaker $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if grep -Fq "warning: shared build-cache server $leaker1:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan warned instead of failing on sccache-not leaker $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+stop_and_require_gone "$leaker1"
+leaker1=
+rm -f "$stop"
+FIBER_CHECK_RUN=$n STOP="$stop" bash -c 'exec -a /tmp/sccache/leaker python3 -c "import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); stop = os.environ[\"STOP\"]; end = time.time() + 120; exec(\"while time.time() < end and not os.path.exists(stop):\n time.sleep(0.05)\")"' &
+leaker1=$!
+if ! await_basename "$leaker1" leaker; then
+  echo "scripts/test-leak-scan: sccache-path fixture $leaker1 never took its argv0: $(pid_command "$leaker1")" >&2
+  exit 1
+fi
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
+  echo "scripts/test-leak-scan: leak-scan exited 0 with sccache-path leaker $leaker1 alive" >&2
+  exit 1
+fi
+if ! grep -Fq "leaked process $leaker1:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan did not name sccache-path leaker $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+if grep -Fq "warning: shared build-cache server $leaker1:" "$err"; then
+  echo "scripts/test-leak-scan: leak-scan warned instead of failing on sccache-path leaker $leaker1:" >&2
+  cat "$err" >&2
+  exit 1
+fi
+stop_and_require_gone "$leaker1"
+leaker1=
+rm -f "$stop"
+
+stop_and_require_gone "$leaker1" "$leaker2" "$leaker5" "$leaker8"
 leaker1=
 leaker2=
 leaker5=
