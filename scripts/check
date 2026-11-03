@@ -153,7 +153,7 @@ crates/main/tests/journeys.rs 19
 crates/main/tests/light_no_color_look.rs 61
 crates/main/tests/line_start_end.rs 6
 crates/main/tests/link_look.rs 21
-crates/main/tests/look.rs 183
+crates/main/tests/look.rs 166
 crates/main/tests/look_diff.rs 6
 crates/main/tests/look_markdown.rs 29
 crates/main/tests/main_journeys.rs 63
@@ -170,7 +170,7 @@ crates/main/tests/rail_focus.rs 17
 crates/main/tests/rail_look.rs 18
 crates/main/tests/rail_shown.rs 2
 crates/main/tests/rail_state_tints.rs 3
-crates/main/tests/release_notes.rs 4
+crates/main/tests/release_notes.rs 5
 crates/main/tests/reviewer_setup.rs 15
 crates/main/tests/search_look.rs 91
 crates/main/tests/slash_aliases.rs 8

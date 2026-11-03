@@ -71,6 +71,16 @@ fn rows_with(grid: &support::pty::Grid, needle: &str) -> Vec<String> {
         .collect()
 }
 
+/// The rows whose every cell reports inverse: the swapped view paints
+/// its list selection by reversing the whole row (`crates/tui/src/swapped.rs`,
+/// `render`), so a page that moves only the selection changes no text row.
+fn selected_rows(grid: &support::pty::Grid) -> Vec<u16> {
+    let (cols, height) = grid.size();
+    (0..height)
+        .filter(|y| (0..cols).all(|x| grid.cell(x, *y).inverse))
+        .collect()
+}
+
 #[test]
 fn release_notes_show_the_stub_view_with_the_url_and_make_no_request() {
     let proxy = fakes::ConnectProxy::start().unwrap();
@@ -270,14 +280,18 @@ fn synthetic_long_notes_wrap_and_page_on_a_narrow_pty() {
         grid.contents.contains("Release notes")
     });
     // The bullet draws its accent marker with hanging continuations.
-    run.wait_screen("the wrapped bullet", |grid| {
+    let mut prev = run.wait_screen("the wrapped bullet", |grid| {
         grid.rows.iter().any(|row| row.contains("• "))
             && grid.rows.iter().any(|row| row.starts_with("  "))
     });
     // The entries overflow the short screen: paging reaches each tail.
     // No page pins a tail: each tail pages until it shows, bounded so a
     // stuck page fails instead of hanging. The tails run in the
-    // fixture's source order, which the view draws top to bottom.
+    // fixture's source order, which the view draws top to bottom. Each
+    // page proves the frame moved, the selection moved, or the tail
+    // showed: the first page moves only the style-only selection, so a
+    // text-only step proof would stall on it. The tail assert reads the
+    // carried grid.
     for tail in [
         "synthetic-bullet-one-tail",
         "synthetic-bullet-two-tail",
@@ -287,17 +301,17 @@ fn synthetic_long_notes_wrap_and_page_on_a_narrow_pty() {
         for _ in 0..10 {
             // The unbroken url splits across physical rows: join them to
             // read the tail whole.
-            if run.screen().rows.join("").contains(tail) {
+            if prev.rows.join("").contains(tail) {
                 break;
             }
-            let from = run.output().len();
             run.write(b"\x1b[6~");
-            run.wait_bytes(from, FRAME_END, "the page frame");
+            prev = run.wait_screen("the page frame", |next| {
+                next.rows != prev.rows
+                    || selected_rows(next) != selected_rows(&prev)
+                    || next.rows.join("").contains(tail)
+            });
         }
-        assert!(
-            run.screen().rows.join("").contains(tail),
-            "paging reaches {tail}"
-        );
+        assert!(prev.rows.join("").contains(tail), "paging reaches {tail}");
     }
     // Esc returns home; reopening shows the view again.
     run.write(b"\x1b[27u");
