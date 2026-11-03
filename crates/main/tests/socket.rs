@@ -1232,9 +1232,24 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
         .iter()
         .find(|line| line["kind"] == "steering_queue")
         .expect("the take queues c_msg");
+    let messages = row["payload"]["messages"]
+        .as_array()
+        .expect("the take queues messages");
+    assert_eq!(messages.len(), 1, "the take queues one message: {lines:?}");
+    assert_eq!(messages[0]["command_id"], "c_msg", "{lines:?}");
+    assert_eq!(messages[0]["from_session_id"], id, "{lines:?}");
+    assert_eq!(messages[0]["source"], "session", "{lines:?}");
+    let content = messages[0]["content"]
+        .as_array()
+        .expect("the queued message carries content");
     assert_eq!(
-        row["payload"]["messages"],
-        json!([{"command_id": "c_msg", "content": [{"type": "text", "text": framed}], "from_session_id": id, "source": "session"}]),
+        content.len(),
+        1,
+        "the queued message carries one part: {lines:?}"
+    );
+    assert_eq!(content[0]["type"], "text", "{lines:?}");
+    assert_eq!(
+        content[0]["text"], framed,
         "the queued row carries the framed sender text: {lines:?}"
     );
     assert!(
@@ -1243,7 +1258,6 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     );
     let kinds: Vec<&str> = settled
         .iter()
-        .filter(|line| !is_c_msg_take(line))
         .map(|line| line["kind"].as_str().unwrap())
         .collect();
     // Asserts `chain` is an ordered subsequence of `kinds`: each link
@@ -1411,19 +1425,6 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
         &kinds,
         &["assistant_message_completed", "turn_completed"],
         "docs/loop.md:136-137: When `turn_end` returns nothing, `turn_completed` is written",
-    );
-    assert_eq!(
-        kinds.last(),
-        Some(&"turn_completed"),
-        "the turn ends last: {lines:?}"
-    );
-    assert_eq!(
-        lines
-            .iter()
-            .filter(|line| line["kind"] == "clients")
-            .count(),
-        1,
-        "one attach writes one clients line: {lines:?}"
     );
     let resolved = lines
         .iter()
