@@ -535,8 +535,9 @@ fn the_job_pty_view_matches_the_doc() {
     // A frame with "READY", no Jobs card and a collapsed "Ran 1 command"
     // means either the shell call opened no job or the job ended before
     // step 2; the event path cannot lose a job that opened. The
-    // session-log tail shows which: `job_started` and `job_completed`
-    // carry `exit_code`, `signal` and `error.code` in the raw lines.
+    // session-log tail shows which: `job_started` shows the job opened;
+    // `job_completed` carries `process.exit_code`, `process.signal` and
+    // `error.code` in the raw lines.
     let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let grid = run.wait_screen_reporting(
         "the tty job starts",
