@@ -86,6 +86,11 @@
 //!   `crates/main/tests/` outside `support/` holds more unmarked `.screen()`
 //!   call lines than its maximum (0 when absent)
 //!   (`docs/testing/screens.md`, "Screens")
+//! - `stale-wait-ratchet`: reads the inline per-file maxima from stdin as one
+//!   `<path> <maximum>` per line, and fails when a file under
+//!   `crates/main/tests/` outside `support/` holds more stale-wait
+//!   occurrences (`recv_reply` uses, `fn subscribe(`, `fn subscribe_full(`)
+//!   than its maximum (0 when absent)
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
@@ -110,6 +115,7 @@ mod rules;
 mod screen_ratchet;
 mod select;
 mod site;
+mod stale_wait_ratchet;
 mod stress;
 mod test_index;
 mod threads;
@@ -384,6 +390,18 @@ fn run(args: &[String]) -> Result<bool, String> {
             report(
                 "screen-ratchet",
                 &screen_ratchet::check(&rust_files(&workspace_members()?)?, &maxima),
+                "ok",
+            )
+        }
+        "stale-wait-ratchet" => {
+            let mut input = String::new();
+            std::io::stdin()
+                .read_to_string(&mut input)
+                .map_err(|e| format!("stdin: {e}"))?;
+            let maxima = screen_ratchet::parse_maxima(&input)?;
+            report(
+                "stale-wait-ratchet",
+                &stale_wait_ratchet::check(&rust_files(&workspace_members()?)?, &maxima),
                 "ok",
             )
         }

@@ -1881,3 +1881,43 @@ fn kinds_ratchet_passes_at_both_caps_and_fails_above_them() {
     // A missing flag is a usage error, proving argument parsing.
     assert_eq!(xtask(&dir, &["kinds-ratchet", "--max", "2"], &[], "").0, 2);
 }
+
+#[test]
+fn stale_wait_ratchet_fails_an_unlisted_site_and_passes_at_its_maximum() {
+    // The ticket's acceptance ("The doc line, the shared helper and the
+    // check, with a test that the check fails on a new `recv_reply`."): a
+    // file missing from the stdin table fails, and one named at its count
+    // passes. The fixture workspace holds a `main` member so the rule's
+    // `crates/main/tests/` scope has a file to scan.
+    let dir = TempDir::new("xtask-stale-wait");
+    dir.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/main\"]\nresolver = \"3\"\n",
+    );
+    dir.write(".gitignore", "target/\nCargo.lock\n");
+    dir.write(
+        "crates/main/Cargo.toml",
+        "[package]\nname = \"main\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
+    dir.write("crates/main/src/lib.rs", "//! main\n");
+    dir.write(
+        "crates/main/tests/a.rs",
+        "fn subscribe(client: &Socket, session: &str) {}\n",
+    );
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "base"]);
+    let (code, out) = xtask(&dir, &["stale-wait-ratchet"], &[], "");
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("crates/main/tests/a.rs") && out.contains("maximum 0"),
+        "{out}"
+    );
+    let (code, out) = xtask(
+        &dir,
+        &["stale-wait-ratchet"],
+        &[],
+        "crates/main/tests/a.rs 1\n",
+    );
+    assert_eq!((code, out.as_str()), (0, "stale-wait-ratchet: ok\n"));
+}
