@@ -326,8 +326,64 @@ fn resolve(
     Ok(Some(FileTests::Functions(tests)))
 }
 
-fn test_name_matches(test: &str, function: &str) -> bool {
+pub(crate) fn test_name_matches(test: &str, function: &str) -> bool {
     test == function || test.ends_with(&format!("::{function}"))
+}
+
+/// The test ids the linked flake issue names, one per marker line outside
+/// any fenced block, normalised past the binary prefix and de-duplicated
+/// in first-sighting order. A marker line starts with "The test `" and
+/// names the span to the next backtick on that line; every other line,
+/// and every line inside a fence, names nothing.
+pub(crate) fn issue_test_names(bodies: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut fenced = false;
+    for line in bodies.lines() {
+        if line.contains("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("The test `") else {
+            continue;
+        };
+        let Some(end) = rest.find('`') else {
+            continue;
+        };
+        let id = rest[..end].trim();
+        if id.is_empty() {
+            continue;
+        }
+        let compared = match id.find(' ') {
+            Some(space) => &id[space + 1..],
+            None => id,
+        };
+        if !names.iter().any(|name| name == compared) {
+            names.push(compared.to_owned());
+        }
+    }
+    names
+}
+
+/// The touched tests split into the named ones and the rest, each in diff
+/// order. The names step matches by exact equality between the marker
+/// id's compared name and the test's nextest name.
+pub(crate) fn split_named_tests(
+    touched: &[TestRef],
+    names: &[String],
+) -> (Vec<TestRef>, Vec<TestRef>) {
+    let mut named = Vec::new();
+    let mut rest = Vec::new();
+    for test in touched {
+        if names.iter().any(|name| name == &test.name) {
+            named.push(test.clone());
+        } else {
+            rest.push(test.clone());
+        }
+    }
+    (named, rest)
 }
 
 /// What the open file's hunks have resolved to: no test file, or its
