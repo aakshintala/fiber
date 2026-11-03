@@ -89,9 +89,6 @@ const MEDIUM_HIGH_XHIGH: &[&str] = &["medium", "high", "xhigh"];
 const HIGH_ONLY: &[&str] = &["high"];
 const OFF_MINIMAL_LOW_MEDIUM_HIGH: &[&str] = &["off", "minimal", "low", "medium", "high"];
 
-/// The compat layer of an Anthropic model that takes a token budget.
-const THINKING_BUDGET: &str = r#"{"compat":{"thinking_budget":true}}"#;
-
 /// The layer a probed model carries: deferral works through its provider.
 const DEFERRED: &str = r#"{"deferred_tools":true}"#;
 
