@@ -12,8 +12,8 @@ fn words(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
 
-fn failed_outcome(status: Option<u16>, step: Step, message: &str) -> Outcome {
-    failed(step, status, message)
+fn failed_outcome(status: Option<u16>, step: Step, message: &str, spend: (u64, u64)) -> Outcome {
+    failed(step, status, message, spend)
 }
 
 #[test]
@@ -77,6 +77,34 @@ fn total_input_sums_input_reads_and_every_write_class() {
 }
 
 #[test]
+fn meter_sums_input_and_output_across_replies() {
+    let mut spend = (0u64, 0u64);
+    for tokens in [
+        Tokens {
+            input: 12000,
+            cache_read: 0,
+            cache_write: BTreeMap::new(),
+            output: 3,
+        },
+        Tokens {
+            input: 5200,
+            cache_read: 0,
+            cache_write: BTreeMap::new(),
+            output: 5,
+        },
+        Tokens {
+            input: 300,
+            cache_read: 5120,
+            cache_write: BTreeMap::from([("5m".to_owned(), 11)]),
+            output: 7,
+        },
+    ] {
+        meter(&mut spend, &tokens);
+    }
+    assert_eq!(spend, (12000 + 5200 + 300 + 5120 + 11, 3 + 5 + 7));
+}
+
+#[test]
 fn exit_code_prefers_refusal_then_failure_then_cannot_tell() {
     assert_eq!(exit_code(&Outcome::KeyRefused(401)), 4);
     assert_eq!(exit_code(&Outcome::KeyRefused(403)), 4);
@@ -91,6 +119,8 @@ fn exit_code_prefers_refusal_then_failure_then_cannot_tell() {
             let outcome = Outcome::Decided {
                 load: load.clone(),
                 cache: cache.clone(),
+                spend_input: 0,
+                spend_output: 0,
             };
             let expected = if matches!(load, Verdict::Fail(_)) || matches!(cache, Verdict::Fail(_))
             {
@@ -339,6 +369,8 @@ fn report_prints_a_passing_run() {
     let outcome = Outcome::Decided {
         load: Verdict::Pass("searched, loaded probe_calendar_create, then called it".into()),
         cache: Verdict::Pass("cache read 5120 of 5420 input tokens".into()),
+        spend_input: 22620,
+        spend_output: 15,
     };
     assert_eq!(
         report("openai-responses", "gpt-5.4", &outcome),
@@ -347,6 +379,7 @@ fn report_prints_a_passing_run() {
             "load: pass (searched, loaded probe_calendar_create, then called it)",
             "cache: pass (cache read 5120 of 5420 input tokens)",
             "probe: pass",
+            "spend: 22620 input, 15 output tokens",
         ]
     );
     assert_eq!(exit_code(&outcome), 0);
@@ -357,6 +390,8 @@ fn report_prints_a_failed_load() {
     let outcome = Outcome::Decided {
         load: Verdict::Fail("HTTP 400: defer_loading is not supported".into()),
         cache: Verdict::NotEstablished("load rejected".into()),
+        spend_input: 12000,
+        spend_output: 3,
     };
     assert_eq!(
         report("anthropic-messages", "probe-model", &outcome),
@@ -365,6 +400,7 @@ fn report_prints_a_failed_load() {
             "load: fail (HTTP 400: defer_loading is not supported)",
             "cache: fail (not established: load rejected)",
             "probe: fail",
+            "spend: 12000 input, 3 output tokens",
         ]
     );
     assert_eq!(exit_code(&outcome), 1);
@@ -372,7 +408,7 @@ fn report_prints_a_failed_load() {
 
 #[test]
 fn report_prints_an_inconclusive_baseline() {
-    let outcome = failed_outcome(Some(404), Step::Baseline, "not found");
+    let outcome = failed_outcome(Some(404), Step::Baseline, "not found", (0, 0));
     assert_eq!(
         report("anthropic-messages", "probe-model", &outcome),
         vec![
@@ -380,6 +416,7 @@ fn report_prints_an_inconclusive_baseline() {
             "load: fail (inconclusive: baseline: HTTP 404)",
             "cache: fail (not established: baseline inconclusive)",
             "probe: cannot tell (baseline: HTTP 404)",
+            "spend: 0 input, 0 output tokens",
         ]
     );
     assert_eq!(exit_code(&outcome), 3);

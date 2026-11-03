@@ -98,6 +98,12 @@ pub(crate) enum Outcome {
         load: Verdict,
         /// Whether the request after the load read the cache.
         cache: Verdict,
+        /// The run's metered input tokens: uncached input plus reads plus
+        /// every write class, summed over the replies the run received.
+        spend_input: u64,
+        /// The run's metered output tokens, summed over the replies the
+        /// run received.
+        spend_output: u64,
     },
 }
 
@@ -110,6 +116,13 @@ pub(crate) fn cache_held(cache_read: u64) -> bool {
 /// plus reads plus every write class.
 pub(crate) fn total_input(tokens: &Tokens) -> u64 {
     tokens.input + tokens.cache_read + tokens.cache_write.values().sum::<u64>()
+}
+
+/// Adds one reply's metered tokens to the run's spend: the `(input,
+/// output)` pair both `run` and the tests below fold over.
+fn meter(spend: &mut (u64, u64), tokens: &Tokens) {
+    spend.0 += total_input(tokens);
+    spend.1 += tokens.output;
 }
 
 /// The jig's parsed arguments.
@@ -468,7 +481,8 @@ fn send(provider: &dyn Provider, request: &ModelRequest) -> Result<Reply, (Optio
 }
 
 /// The outcome when `step`'s request fails with `status` and `message`.
-fn failed(step: Step, status: Option<u16>, message: &str) -> Outcome {
+/// `spend` carries the metered tokens of the replies received so far.
+fn failed(step: Step, status: Option<u16>, message: &str, spend: (u64, u64)) -> Outcome {
     if let Some(code @ (401 | 403)) = status {
         return Outcome::KeyRefused(code);
     }
@@ -498,31 +512,44 @@ fn failed(step: Step, status: Option<u16>, message: &str) -> Outcome {
             ),
         },
     };
-    Outcome::Decided { load, cache }
+    Outcome::Decided {
+        load,
+        cache,
+        spend_input: spend.0,
+        spend_output: spend.1,
+    }
 }
 
 /// Runs the probe: the baseline with the tools in full, the first request
 /// with them deferred, then the request after the load. At most three
 /// requests, one each, stopping at the first refusal, rejection or
-/// inconclusive step.
+/// inconclusive step. Every reply received is metered into the outcome's
+/// spend, so the printed summary covers all three requests, not just the
+/// last one.
 pub(crate) fn run(provider: &dyn Provider, reference: &str) -> Outcome {
-    if let Err((status, message)) = send(provider, &baseline_request(reference)) {
-        return failed(Step::Baseline, status, &message);
+    let mut spend = (0u64, 0u64);
+    match send(provider, &baseline_request(reference)) {
+        Ok(reply) => meter(&mut spend, &reply.tokens),
+        Err((status, message)) => return failed(Step::Baseline, status, &message, spend),
     }
     let first = match send(provider, &first_request(reference)) {
         Ok(reply) => reply,
-        Err((status, message)) => return failed(Step::Deferred, status, &message),
+        Err((status, message)) => return failed(Step::Deferred, status, &message, spend),
     };
+    meter(&mut spend, &first.tokens);
     if let Err(verdict) = check_calls(&first.actions, &[], true) {
         return Outcome::Decided {
             load: verdict,
             cache: Verdict::NotEstablished("load did not complete".into()),
+            spend_input: spend.0,
+            spend_output: spend.1,
         };
     }
     let after = match send(provider, &after_load_request(reference, &first)) {
         Ok(reply) => reply,
-        Err((status, message)) => return failed(Step::AfterLoad, status, &message),
+        Err((status, message)) => return failed(Step::AfterLoad, status, &message, spend),
     };
+    meter(&mut spend, &after.tokens);
     let loaded = [CREATE];
     let load = match check_calls(&after.actions, &loaded, false) {
         Err(verdict) => verdict,
@@ -549,7 +576,12 @@ pub(crate) fn run(provider: &dyn Provider, reference: &str) -> Outcome {
     } else {
         Verdict::Fail(detail)
     };
-    Outcome::Decided { load, cache }
+    Outcome::Decided {
+        load,
+        cache,
+        spend_input: spend.0,
+        spend_output: spend.1,
+    }
 }
 
 /// One check's line: `pass` or `fail` with its detail.
@@ -562,7 +594,9 @@ fn check_line(check: &str, verdict: &Verdict) -> String {
     }
 }
 
-/// The probe's report lines: the header, both checks, then the verdict.
+/// The probe's report lines: the header, both checks, the verdict, then
+/// the run's spend: input and output tokens summed over every reply the
+/// run received. A refused key meters nothing, so it prints no spend line.
 pub(crate) fn report(protocol: &str, model: &str, outcome: &Outcome) -> Vec<String> {
     let mut lines = vec![format!("probe: {protocol} {model}")];
     match outcome {
@@ -571,7 +605,12 @@ pub(crate) fn report(protocol: &str, model: &str, outcome: &Outcome) -> Vec<Stri
             lines.push("cache: fail (not established: key refused)".into());
             lines.push(format!("probe: key refused (HTTP {status})"));
         }
-        Outcome::Decided { load, cache } => {
+        Outcome::Decided {
+            load,
+            cache,
+            spend_input,
+            spend_output,
+        } => {
             lines.push(check_line("load", load));
             lines.push(check_line("cache", cache));
             let inconclusive = match load {
@@ -595,6 +634,9 @@ pub(crate) fn report(protocol: &str, model: &str, outcome: &Outcome) -> Vec<Stri
                     }
                 },
             });
+            lines.push(format!(
+                "spend: {spend_input} input, {spend_output} output tokens"
+            ));
         }
     }
     lines
@@ -605,7 +647,7 @@ pub(crate) fn report(protocol: &str, model: &str, outcome: &Outcome) -> Vec<Stri
 pub(crate) fn exit_code(outcome: &Outcome) -> u8 {
     match outcome {
         Outcome::KeyRefused(_) => 4,
-        Outcome::Decided { load, cache } => {
+        Outcome::Decided { load, cache, .. } => {
             if matches!(load, Verdict::Fail(_)) || matches!(cache, Verdict::Fail(_)) {
                 return 1;
             }

@@ -254,14 +254,16 @@ fn rejects_deferral() {
                     "load: fail (HTTP 400: defer_loading is not supported)",
                     "cache: fail (not established: load rejected)",
                     "probe: fail",
+                    "spend: 12000 input, 3 output tokens",
                 ]
             );
         } else {
-            assert_eq!(lines.len(), 4);
+            assert_eq!(lines.len(), 5);
             assert_eq!(lines[0], "probe: openai-responses probe-model");
             assert!(lines[1].starts_with(expected_load), "{}", lines[1]);
             assert_eq!(lines[2], "cache: fail (not established: load rejected)");
             assert_eq!(lines[3], "probe: fail");
+            assert_eq!(lines[4], "spend: 12000 input, 5 output tokens");
         }
         assert_eq!(server.requests().len(), 2);
         let bodies: Vec<String> = (0..2).map(|n| body_text(&server, n)).collect();
@@ -301,6 +303,10 @@ fn ignores_deferral() {
         };
         let (out, count, _) = probe_once(protocol, responder, &[]);
         assert_eq!(out.status.code(), Some(1), "{protocol}");
+        let spend = match protocol {
+            "anthropic-messages" => "spend: 17200 input, 8 output tokens",
+            _ => "spend: 17200 input, 10 output tokens",
+        };
         assert_eq!(
             stdout_lines(&out),
             vec![
@@ -308,6 +314,7 @@ fn ignores_deferral() {
                 "load: fail (called probe_calendar_create before loading it)".to_owned(),
                 "cache: fail (not established: load did not complete)".to_owned(),
                 "probe: fail".to_owned(),
+                spend.to_owned(),
             ]
         );
         assert_eq!(count, 2);
@@ -358,6 +365,10 @@ fn passes() {
         let url = format!("{}/v1", server.url());
         let out = run_jig(&[protocol, &url, "probe-model", &key]);
         assert_eq!(out.status.code(), Some(0), "{protocol}");
+        let spend = match protocol {
+            "anthropic-messages" => "spend: 22620 input, 13 output tokens",
+            _ => "spend: 22620 input, 15 output tokens",
+        };
         assert_eq!(
             stdout_lines(&out),
             vec![
@@ -365,6 +376,7 @@ fn passes() {
                 "load: pass (searched, loaded probe_calendar_create, then called it)".to_owned(),
                 "cache: pass (cache read 5120 of 5420 input tokens)".to_owned(),
                 "probe: pass".to_owned(),
+                spend.to_owned(),
             ]
         );
         assert_eq!(server.requests().len(), 3);
@@ -420,6 +432,10 @@ fn calls_unloaded_after_load() {
         };
         let (out, count, _) = probe_once(protocol, responder, &[]);
         assert_eq!(out.status.code(), Some(1), "{protocol}");
+        let spend = match protocol {
+            "anthropic-messages" => "spend: 22620 input, 13 output tokens",
+            _ => "spend: 22620 input, 15 output tokens",
+        };
         assert_eq!(
             stdout_lines(&out),
             vec![
@@ -427,6 +443,7 @@ fn calls_unloaded_after_load() {
                 "load: fail (called probe_calendar_delete before loading it)".to_owned(),
                 "cache: pass (cache read 5120 of 5420 input tokens)".to_owned(),
                 "probe: fail".to_owned(),
+                spend.to_owned(),
             ]
         );
         assert_eq!(count, 3);
@@ -477,6 +494,11 @@ fn cache_miss() {
         assert_eq!(lines[0], format!("probe: {protocol} probe-model"));
         assert_eq!(lines[2], "cache: fail (cache read 0 of 300 input tokens)");
         assert_eq!(lines[3], "probe: fail");
+        let spend = match protocol {
+            "anthropic-messages" => "spend: 17500 input, 13 output tokens",
+            _ => "spend: 17500 input, 15 output tokens",
+        };
+        assert_eq!(lines[4], spend);
         assert_eq!(count, 3);
     }
 }
@@ -523,6 +545,11 @@ fn cache_one() {
         assert_eq!(out.status.code(), Some(0), "{protocol}");
         let lines = stdout_lines(&out);
         assert_eq!(lines[2], "cache: pass (cache read 1 of 301 input tokens)");
+        let spend = match protocol {
+            "anthropic-messages" => "spend: 17501 input, 13 output tokens",
+            _ => "spend: 17501 input, 15 output tokens",
+        };
+        assert_eq!(lines[4], spend);
         assert_eq!(count, 3);
     }
 }
@@ -570,6 +597,7 @@ fn cannot_tell() {
                     format!("load: fail (inconclusive: {baseline})"),
                     "cache: fail (not established: baseline inconclusive)".to_owned(),
                     format!("probe: cannot tell ({baseline})"),
+                    "spend: 0 input, 0 output tokens".to_owned(),
                 ]
             );
             assert_eq!(count, 1);
@@ -588,6 +616,10 @@ fn cannot_tell() {
         };
         let (out, count, _) = probe_once(protocol, responder, &[]);
         assert_eq!(out.status.code(), Some(3), "{protocol}");
+        let spend = match protocol {
+            "anthropic-messages" => "spend: 17200 input, 6 output tokens",
+            _ => "spend: 17200 input, 10 output tokens",
+        };
         assert_eq!(
             stdout_lines(&out),
             vec![
@@ -595,6 +627,7 @@ fn cannot_tell() {
                 "load: fail (inconclusive: the model made no tool call)".to_owned(),
                 "cache: fail (not established: load did not complete)".to_owned(),
                 "probe: cannot tell (the model made no tool call)".to_owned(),
+                spend.to_owned(),
             ]
         );
         assert_eq!(count, 2);
