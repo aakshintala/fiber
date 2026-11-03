@@ -107,7 +107,7 @@ written when its implementation tickets are.
 
 A test that subscribes to a session socket reads it continuously until
 `fiber_exited`: a client that stops reading is cut (`docs/invocation.md`,
-"Relay").
+"What the hub speaks").
 
 ## Testing an extension
 

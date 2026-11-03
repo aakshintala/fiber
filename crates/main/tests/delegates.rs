@@ -4101,7 +4101,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     });
     // Pump the child's socket through the stop, as with the grandchild
     // above: a client that stops reading is cut (docs/invocation.md,
-    // "Relay").
+    // "What the hub speaks").
     child_socket.set_diag(support::Diag::new(
         Arc::clone(&running.stderr_snapshot),
         sessions_in(&setup.home(), &setup.workspace()).join(&live_child),
