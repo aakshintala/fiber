@@ -1851,6 +1851,7 @@ its tools are deferred, change only when the preamble is built.
   deferred and kept the cache, while OpenRouter's accepted the same request for
   GPT-6 Luna, sent every definition in full and let the model call a deferred
   tool without loading it.
+- The probe is `cargo run -p provider --example probe -- PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE | @FILE]...` (`docs/testing/fakes.md`, "Jigs"). It sends the model one request with the probe's tools in full and two with them deferred, and prints `pass` or `fail` for `load` (the model searches first, and calls the loaded tool only after the load) and `cache` (the request after the load reads cache tokens); a check the run did not establish prints `fail` with the reason. It exits 0 when all pass, 1 when a check fails, 2 on a usage error, 3 when it cannot tell and 4 when the key is refused. A model's data sets `deferred_tools` only for a `pass` recorded below.
 - Anthropic and OpenAI Responses (gpt-5.4 and later) both defer natively.
   `openai-completions` and `google-generative-ai` do not.
 - On a model without deferral, every tool is declared in full and
