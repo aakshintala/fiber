@@ -184,8 +184,8 @@ impl Hubbed {
             .send(&command(id, Some(session), "close", json!({})));
         let exited = |line: &Value| line["kind"] == "fiber_exited" && line["session_id"] == session;
         match since {
-            Some(sub) => until_after(self.client(), sub, "the fiber_exited", exited),
-            // live: the fold holds only lines written before the subscribe, which hold no exit of a session alive until this close or never subscribed on this client.
+            Some(sub) => until_after_reopen(self.client(), sub, "the fiber_exited", exited),
+            // live: this session was never subscribed on this client, so its `fiber_exited` is not in a fold.
             None => until(self.client(), "the fiber_exited", exited),
         };
     }
@@ -1097,7 +1097,7 @@ fn a_rewound_session_rewinds_to_an_ancestor_point() {
     let server = ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let (old, _sub) = hubbed.start("c6_start", "c6_sub", "one");
+    let (old, old_sub) = hubbed.start("c6_start", "c6_sub", "one");
     let client = hubbed.client();
     hubbed.prompt("c6_p2", &old, "two");
     client.send(&rewind("c6_rw", &old, json!({})));
@@ -1170,7 +1170,7 @@ fn a_rewound_session_rewinds_to_an_ancestor_point() {
         input[2]
     );
 
-    hubbed.close("c6_close_old", &old, None);
+    hubbed.close("c6_close_old", &old, Some(&old_sub));
     hubbed.close("c6_close_middle", &middle, None);
     hubbed.close("c6_close_next", &next, None);
     hubbed.finish();
@@ -1333,7 +1333,7 @@ fn a_rewind_to_an_ancestor_point_keeps_the_rewound_sessions_person_name() {
     .unwrap();
     setup.provider(&server);
     let hubbed = Hubbed::new(&setup);
-    let (old, _sub) = hubbed.start("a1_start", "a1_sub", "one");
+    let (old, old_sub) = hubbed.start("a1_start", "a1_sub", "one");
     let client = hubbed.client();
     hubbed.prompt("a1_p2", &old, "two");
     client.send(&rewind("a1_rw", &old, json!({})));
@@ -1433,7 +1433,7 @@ fn a_rewind_to_an_ancestor_point_keeps_the_rewound_sessions_person_name() {
     assert_eq!(last["payload"]["status"], "failed");
     assert_eq!(last["payload"]["error"]["code"], "name_pinned");
 
-    hubbed.close("a1_close_old", &old, None);
+    hubbed.close("a1_close_old", &old, Some(&old_sub));
     hubbed.close("a1_close_next", &next, None);
     hubbed.finish();
 }

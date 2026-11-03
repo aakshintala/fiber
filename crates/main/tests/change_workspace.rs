@@ -283,8 +283,8 @@ impl Hubbed {
             .send(&command(id, Some(session), "close", json!({})));
         let exited = |line: &Value| line["kind"] == "fiber_exited" && line["session_id"] == session;
         match since {
-            Some(sub) => until_after(self.client(), sub, "the fiber_exited", exited),
-            // live: the fold holds only lines written before the subscribe, which hold no exit of a session alive until this close or never subscribed on this client.
+            Some(sub) => until_after_reopen(self.client(), sub, "the fiber_exited", exited),
+            // live: this session was never subscribed on this client, so its `fiber_exited` is not in a fold.
             None => until(self.client(), "the fiber_exited", exited),
         };
     }
