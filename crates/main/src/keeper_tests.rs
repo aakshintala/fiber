@@ -67,8 +67,8 @@ fn start(
     let id = id.to_owned();
     let (send, result) = mpsc::channel();
     let (events, output) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        let _ = send.send(host.start(spec(&id), events));
+    let worker = thread::spawn(move || match send.send(host.start(spec(&id), events)) {
+        Ok(()) | Err(_) => {}
     });
     (worker.thread().id(), result, output)
 }
